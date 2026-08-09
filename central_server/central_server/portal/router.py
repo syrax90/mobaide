@@ -51,32 +51,63 @@ def _set_portal_cookie(response, token: str, ttl_minutes: int) -> None:
     )
 
 
-_GOOGLE_NONCE_COOKIE = "portal_google_nonce"
-_GOOGLE_NONCE_TTL_SECONDS = 10 * 60
+_SIGNIN_NONCE_COOKIE = "portal_signin_nonce"
+_SIGNIN_NONCE_TTL_SECONDS = 10 * 60
 
 
-def _issue_google_nonce(response: Response) -> str:
-    """Generate a fresh Google nonce and set the matching httponly cookie.
+def _issue_signin_nonce(response: Response) -> str:
+    """Generate a fresh sign-in nonce and set the matching httponly cookie.
 
-    The portal inlines the nonce into the GIS ``initialize`` config; Google
-    echoes it back inside the ID token's ``nonce`` claim. On callback we
-    compare cookie nonce vs ID-token nonce to defeat replay.
+    One nonce per page render serves both providers. On callback we compare
+    cookie nonce vs ID-token nonce to defeat replay. Only one of the two
+    buttons can be in flight at a time, and whichever completes deletes the
+    cookie.
     """
     nonce = secrets.token_urlsafe(32)
     response.set_cookie(
-        key=_GOOGLE_NONCE_COOKIE,
+        key=_SIGNIN_NONCE_COOKIE,
         value=nonce,
         httponly=True,
         secure=True,
         samesite="lax",
-        max_age=_GOOGLE_NONCE_TTL_SECONDS,
+        max_age=_SIGNIN_NONCE_TTL_SECONDS,
     )
     return nonce
 
 
+def _signin_failed(
+    request: Request, provider: str, status_code: int
+) -> HTMLResponse:
+    """Re-render the login page after a failed social sign-in.
+
+    One message for every failure mode — missing credential, stale nonce,
+    rejected token. The user's only recourse is to retry either way, and a
+    specific message would describe our internals to an unauthenticated
+    caller.
+    """
+    return _render_with_csrf(
+        request,
+        "portal_login.html",
+        error=f"{provider} sign-in failed — please try again.",
+        issue_signin_nonce=True,
+        status_code=status_code,
+    )
+
+
+def _signin_succeeded(request: Request, token: str) -> RedirectResponse:
+    """Adopt a freshly minted portal session and land on the account page."""
+    ttl = request.app.state.config.portal_token_expire_minutes
+    response = RedirectResponse(
+        url="/portal/account", status_code=status.HTTP_303_SEE_OTHER
+    )
+    _set_portal_cookie(response, token, ttl)
+    response.delete_cookie(_SIGNIN_NONCE_COOKIE)
+    return response
+
+
 def _portal_context(request: Request, **extra) -> dict:
-    """Build a base Jinja context with CSRF, Google client ID and the shared
-    asset version prefilled.
+    """Build a base Jinja context with CSRF, the sign-in client IDs and the
+    shared asset version prefilled.
 
     ``asset_version`` is the ``?v=`` cache-busting query ``portal_base.html``
     stamps on both stylesheets and the wordmark. It must be the same value the
@@ -87,6 +118,7 @@ def _portal_context(request: Request, **extra) -> dict:
     return {
         "csrf_token": getattr(request.state, "csrf_token", ""),
         "google_client_id": config.google_client_id,
+        "apple_web_client_id": config.apple_web_client_id,
         "asset_version": request.app.state.asset_version,
         **extra,
     }
@@ -112,7 +144,7 @@ async def login_page(
         "portal_login.html",
         error=error,
         notice=notice,
-        issue_google_nonce=True,
+        issue_signin_nonce=True,
     )
 
 
@@ -136,7 +168,7 @@ async def login_submit(
             error="Please verify your email before signing in. Check your inbox.",
             notice=None,
             status_code=status.HTTP_403_FORBIDDEN,
-            issue_google_nonce=True,
+            issue_signin_nonce=True,
         )
     except ValueError:
         return _render_with_csrf(
@@ -145,7 +177,7 @@ async def login_submit(
             error="Invalid email or password.",
             notice=None,
             status_code=status.HTTP_401_UNAUTHORIZED,
-            issue_google_nonce=True,
+            issue_signin_nonce=True,
         )
 
     ttl = request.app.state.config.portal_token_expire_minutes
@@ -171,7 +203,7 @@ async def signup_page(request: Request, error: str | None = None):
         request,
         "portal_signup.html",
         error=error,
-        issue_google_nonce=True,
+        issue_signin_nonce=True,
     )
 
 
@@ -184,22 +216,16 @@ async def google_auth_submit(
 
     The portal renders ``portal_login.html`` / ``portal_signup.html`` with
     GIS initialised against a server-generated nonce stored in the
-    ``portal_google_nonce`` cookie. On callback we verify the cookie nonce
+    ``portal_signin_nonce`` cookie. On callback we verify the cookie nonce
     matches the ID-token claim. ``google_authenticate`` then creates-or-links
     the user (same logic as the mobile path); we set the portal session
     cookie and 303 to ``/portal/account``.
     """
     form = await request.form()
     credential = str(form.get("credential", ""))
-    expected_nonce = request.cookies.get(_GOOGLE_NONCE_COOKIE)
+    expected_nonce = request.cookies.get(_SIGNIN_NONCE_COOKIE)
     if not credential or not expected_nonce:
-        return _render_with_csrf(
-            request,
-            "portal_login.html",
-            error="Google sign-in failed — please try again.",
-            issue_google_nonce=True,
-            status_code=status.HTTP_400_BAD_REQUEST,
-        )
+        return _signin_failed(request, "Google", status.HTTP_400_BAD_REQUEST)
 
     auth_service = request.app.state.auth_service
     try:
@@ -209,21 +235,48 @@ async def google_auth_submit(
         )
     except ValueError as exc:
         logger.warning("portal_google_auth.failed reason=%s", exc)
-        return _render_with_csrf(
-            request,
-            "portal_login.html",
-            error="Google sign-in failed — please try again.",
-            issue_google_nonce=True,
-            status_code=status.HTTP_401_UNAUTHORIZED,
-        )
+        return _signin_failed(request, "Google", status.HTTP_401_UNAUTHORIZED)
 
-    ttl = request.app.state.config.portal_token_expire_minutes
-    response = RedirectResponse(
-        url="/portal/account", status_code=status.HTTP_303_SEE_OTHER
-    )
-    _set_portal_cookie(response, token, ttl)
-    response.delete_cookie(_GOOGLE_NONCE_COOKIE)
-    return response
+    return _signin_succeeded(request, token)
+
+
+@router.post("/auth/apple", response_class=HTMLResponse)
+async def apple_auth_submit(
+    request: Request,
+    _csrf: None = Depends(require_csrf),
+):
+    """Exchange an Apple identity token (from Sign in with Apple JS) for a
+    portal session.
+
+    ``portal.js`` runs Apple's SDK in popup mode, so the credential reaches us
+    through a same-origin form POST that carries the CSRF token and the nonce
+    cookie. Apple's own redirect mode would arrive here cross-site, where
+    ``SameSite=Lax`` withholds both.
+    """
+    # Gate on the *web* id specifically. `apple_authenticate` only checks that
+    # some Apple audience is configured, so without this an instance that set
+    # `APPLE_CLIENT_ID` for the iOS app alone would still mint portal sessions
+    # from bundle-id-audience tokens through this route.
+    if not request.app.state.config.apple_web_client_id:
+        return _signin_failed(request, "Apple", status.HTTP_400_BAD_REQUEST)
+
+    form = await request.form()
+    credential = str(form.get("credential", ""))
+    expected_nonce = request.cookies.get(_SIGNIN_NONCE_COOKIE)
+    if not credential or not expected_nonce:
+        return _signin_failed(request, "Apple", status.HTTP_400_BAD_REQUEST)
+
+    auth_service = request.app.state.auth_service
+    try:
+        _user_id, _role, token, _is_new = await auth_service.apple_authenticate(
+            credential,
+            nonce=expected_nonce,
+        )
+    except ValueError as exc:
+        logger.warning("portal_apple_auth.failed reason=%s", exc)
+        return _signin_failed(request, "Apple", status.HTTP_401_UNAUTHORIZED)
+
+    return _signin_succeeded(request, token)
 
 
 @router.post("/signup")
@@ -242,7 +295,7 @@ async def signup_submit(
             "portal_signup.html",
             error="Email and password are required.",
             status_code=status.HTTP_400_BAD_REQUEST,
-            issue_google_nonce=True,
+            issue_signin_nonce=True,
         )
     if password != confirm_password:
         return _render_with_csrf(
@@ -250,7 +303,7 @@ async def signup_submit(
             "portal_signup.html",
             error="Passwords don't match.",
             status_code=status.HTTP_400_BAD_REQUEST,
-            issue_google_nonce=True,
+            issue_signin_nonce=True,
         )
 
     auth_service = request.app.state.auth_service
@@ -262,7 +315,7 @@ async def signup_submit(
             "portal_signup.html",
             error=str(exc),
             status_code=status.HTTP_409_CONFLICT,
-            issue_google_nonce=True,
+            issue_signin_nonce=True,
         )
 
     if result.status == "verification_required":
@@ -441,9 +494,19 @@ async def account_page(
 
 
 def _delete_modal_context(user_row: dict, config) -> dict:
-    """Compute the shared context used by both delete-modal GET and POST-error."""
+    """Compute the shared context used by both delete-modal GET and POST-error.
+
+    The three ``has_*`` flags mean *offerable*, not merely *linked*: a social
+    method whose client id is unconfigured cannot mount its button, so offering
+    it would render a re-auth panel with nothing in it and no way forward.
+    """
     has_password = user_row.get("password_hash") is not None
-    has_google = user_row.get("google_sub") is not None
+    has_google = user_row.get("google_sub") is not None and bool(
+        config.google_client_id
+    )
+    has_apple = user_row.get("apple_sub") is not None and bool(
+        config.apple_web_client_id
+    )
     is_seed_admin = (
         config.admin_seed_email is not None
         and user_row["email"] == config.admin_seed_email
@@ -453,6 +516,7 @@ def _delete_modal_context(user_row: dict, config) -> dict:
         "is_seed_admin": is_seed_admin,
         "has_password": has_password,
         "has_google": has_google,
+        "has_apple": has_apple,
         "grace_days": config.account_deletion_grace_days,
     }
 
@@ -472,7 +536,7 @@ async def delete_modal(
         request,
         "_portal_delete_modal.html",
         agents=agents,
-        issue_google_nonce=True,
+        issue_signin_nonce=True,
         **_delete_modal_context(user_row, config),
     )
 
@@ -501,7 +565,7 @@ async def delete_submit(
             "_portal_delete_modal.html",
             agents=[],
             error=message,
-            issue_google_nonce=True,
+            issue_signin_nonce=True,
             status_code=status_code,
             **_delete_modal_context(user_row, config),
         )
@@ -512,7 +576,7 @@ async def delete_submit(
             mode=mode,  # type: ignore[arg-type]
             password=str(form.get("password")) if form.get("password") else None,
             id_token=str(form.get("credential")) if form.get("credential") else None,
-            nonce=request.cookies.get(_GOOGLE_NONCE_COOKIE),
+            nonce=request.cookies.get(_SIGNIN_NONCE_COOKIE),
         )
     except ValueError as exc:
         return _rerender(
@@ -539,7 +603,7 @@ async def delete_submit(
     response = HTMLResponse("")
     response.headers["HX-Redirect"] = "/portal/login?deleted=1"
     response.delete_cookie("portal_token")
-    response.delete_cookie(_GOOGLE_NONCE_COOKIE)
+    response.delete_cookie(_SIGNIN_NONCE_COOKIE)
     return response
 
 
@@ -645,16 +709,16 @@ def _render_with_csrf(
     template_name: str,
     *,
     status_code: int = 200,
-    issue_google_nonce: bool = False,
+    issue_signin_nonce: bool = False,
     **context,
 ) -> HTMLResponse:
-    """Render a Jinja template with CSRF (always) and an optional Google
+    """Render a Jinja template with CSRF (always) and an optional social
     sign-in nonce threaded in.
 
-    Set ``issue_google_nonce=True`` on any page that mounts a GIS button.
-    The fresh nonce is exposed to the template as ``google_nonce`` and stored
-    in a short-TTL httponly cookie; the matching POST handler verifies the
-    cookie against the ID-token claim.
+    Set ``issue_signin_nonce=True`` on any page that mounts a Google or Apple
+    button. The fresh nonce is exposed to the template as ``signin_nonce`` and
+    stored in a short-TTL httponly cookie; the matching POST handler verifies
+    the cookie against the ID-token claim.
     """
     config = request.app.state.config
     # Issue (or reuse) the CSRF cookie via a throwaway response we then
@@ -663,8 +727,8 @@ def _render_with_csrf(
     probe = HTMLResponse("")
     token = ensure_csrf_cookie(request, probe, config)
     request.state.csrf_token = token
-    if issue_google_nonce:
-        context["google_nonce"] = _issue_google_nonce(probe)
+    if issue_signin_nonce:
+        context["signin_nonce"] = _issue_signin_nonce(probe)
     rendered = templates.TemplateResponse(
         request,
         template_name,

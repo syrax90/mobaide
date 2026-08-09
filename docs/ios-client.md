@@ -621,10 +621,19 @@ Apple needs no client-side config beyond the entitlement.
   provisions users through the same find-or-create/link-by-verified-email
   path as Google (`users.apple_sub`, migration `0012` / user_version 14).
   Account-deletion re-auth accepts `method="apple"` (consumed by iOS-08).
-- **Nonce scheme (both providers)**: `AuthNonce.generateNonce()` (SHA-256 hex
-  of 32 CSPRNG bytes, Android parity) is embedded verbatim in the provider ID
-  token; for Apple the client also POSTs it so the server can verify the
-  match plus `iat` freshness.
+  Since CLA-198 the audience check accepts a **list**: `APPLE_CLIENT_ID`
+  alongside `APPLE_WEB_CLIENT_ID`, the Services ID browser tokens carry. Both
+  identifiers resolve to the same account because the Services ID is grouped
+  under the bundle id as its primary App ID, which is what fixes Apple's
+  `sub`. Setting only the web one breaks iOS sign-in; see
+  [docs/deployment.md](deployment.md).
+- **Nonce scheme (all three clients)**: `AuthNonce.generateNonce()` (SHA-256
+  hex of 32 CSPRNG bytes, Android and web parity) is embedded verbatim in the
+  provider ID token; for Apple the client also POSTs it so the server can
+  verify the match plus `iat` freshness. This holds in the browser too — Sign
+  in with Apple JS forwards the nonce to the authorize endpoint untouched and
+  Apple echoes the claim back unchanged, so there is no second hash anywhere
+  in the scheme.
 
 ## Protocol-parity approach
 

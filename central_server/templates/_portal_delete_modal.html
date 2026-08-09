@@ -1,9 +1,18 @@
-{# Dismissal, the mode/method wiring and the Google re-auth button are all in
+{# Dismissal, the mode/method wiring and the social re-auth buttons are all in
    static/site/portal.js: this fragment is swapped into #modal-root by htmx, and
    `/portal/*` runs under a script-src with no 'unsafe-inline', so neither an
    inline <script> nor an onclick= attribute would execute here. portal.js
    listens for [data-modal-close] and for a click landing on .modal-overlay
-   itself, and initialises this form from htmx.onLoad. #}
+   itself, and initialises this form from htmx.onLoad.
+
+   `has_password` / `has_google` / `has_apple` mean *offerable* (linked AND
+   configured), so `methods` lists the paths this account can actually
+   complete. Exactly one means no chooser and a hidden `method`; the first
+   entry is the pre-selected one. #}
+{% set methods = [] %}
+{% if has_password %}{% set _ = methods.append('password') %}{% endif %}
+{% if has_google %}{% set _ = methods.append('google') %}{% endif %}
+{% if has_apple %}{% set _ = methods.append('apple') %}{% endif %}
 <div class="modal-overlay">
     <div class="modal-card">
         <h2>Delete your account</h2>
@@ -43,9 +52,8 @@
               hx-swap="innerHTML">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="credential" value="">
-            {% if not (has_password and has_google) %}
-            <input type="hidden" name="method"
-                   value="{{ 'password' if has_password else 'google' }}">
+            {% if methods | length == 1 %}
+            <input type="hidden" name="method" value="{{ methods[0] }}">
             {% endif %}
 
             <fieldset class="choice-set">
@@ -62,17 +70,30 @@
                 </label>
             </fieldset>
 
-            {% if has_password and has_google %}
+            {% if methods | length > 1 %}
             <fieldset class="choice-set">
                 <legend>Re-verify with</legend>
+                {% if has_password %}
                 <label class="choice-option">
-                    <input type="radio" name="method" value="password" checked>
+                    <input type="radio" name="method" value="password"
+                           {% if methods[0] == 'password' %}checked{% endif %}>
                     <strong>Your password</strong>
                 </label>
+                {% endif %}
+                {% if has_google %}
                 <label class="choice-option">
-                    <input type="radio" name="method" value="google">
+                    <input type="radio" name="method" value="google"
+                           {% if methods[0] == 'google' %}checked{% endif %}>
                     <strong>Google sign-in</strong>
                 </label>
+                {% endif %}
+                {% if has_apple %}
+                <label class="choice-option">
+                    <input type="radio" name="method" value="apple"
+                           {% if methods[0] == 'apple' %}checked{% endif %}>
+                    <strong>Sign in with Apple</strong>
+                </label>
+                {% endif %}
             </fieldset>
             {% endif %}
 
@@ -99,13 +120,33 @@
             {% if has_google %}
             <div id="reauth-google-panel" class="reauth-panel">
                 <p id="confirm-delete-google-hint" class="delete-mode-hint"></p>
+                {# The wrapper carries aria-disabled because GIS renders its
+                   button inside a cross-origin iframe that we cannot disable;
+                   portal.js drops the credential on the floor until the typed
+                   email matches. The Apple button below is ours, so it takes
+                   a real `disabled` instead. #}
                 <div id="confirm-delete-google-wrapper"
                      class="google-verify-wrapper"
                      aria-disabled="true">
                     <div id="confirm-delete-google-btn"
                          data-gis-client-id="{{ google_client_id or '' }}"
-                         data-gis-nonce="{{ google_nonce or '' }}"></div>
+                         data-gis-nonce="{{ signin_nonce or '' }}"></div>
                 </div>
+            </div>
+            {% endif %}
+
+            {% if has_apple %}
+            <div id="reauth-apple-panel" class="reauth-panel">
+                <p id="confirm-delete-apple-hint" class="delete-mode-hint"></p>
+                <button type="button"
+                        id="confirm-delete-apple-btn"
+                        class="apple-btn"
+                        disabled
+                        data-apple-client-id="{{ apple_web_client_id or '' }}"
+                        data-apple-nonce="{{ signin_nonce or '' }}">
+                    {% include "_portal_apple_mark.html" %}
+                    <span>Continue with Apple</span>
+                </button>
             </div>
             {% endif %}
 

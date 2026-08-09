@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from dataclasses import replace
 
 import jwt
 import pytest
@@ -27,6 +28,8 @@ from central_server.templates.service import TemplateService
 from .conftest import TEST_JWT_SECRET
 
 APPLE_CLIENT_ID = "com.mobaide.app"
+# The Apple *Services ID*: what a browser identity token carries as `aud`.
+APPLE_WEB_CLIENT_ID = "com.mobaide.app.web"
 NONCE = "a" * 64
 APPLE_SUB = "001234.abcdef1234567890.5678"
 
@@ -225,6 +228,40 @@ class TestAppleEndpoint:
         assert resp.status_code == 401
         assert "nonce mismatch" in resp.json()["detail"].lower()
 
+    async def test_non_ascii_nonce_returns_401_not_500(
+        self, apple_client, monkeypatch
+    ):
+        """``nonce`` is an unauthenticated request-body field with no charset
+        constraint, and ``compare_digest`` *raises* ``TypeError`` on a ``str``
+        holding a non-ASCII character rather than returning False.
+        """
+        _patch_decode(monkeypatch, _idinfo())
+
+        resp = await apple_client.post(
+            "/api/auth/apple",
+            json={"id_token": "tok", "nonce": "nónce-Ω-" + "a" * 56},
+        )
+
+        assert resp.status_code == 401
+        assert "nonce mismatch" in resp.json()["detail"].lower()
+
+    async def test_non_string_nonce_claim_returns_401(
+        self, apple_client, monkeypatch
+    ):
+        """The claim side is untyped too: ``_decode_apple_id_token`` returns
+        whatever JSON the token carried, and a non-empty non-``str`` value
+        clears the truthiness guard and reaches the comparison, where
+        ``.encode`` does not exist. A malformed token is a 401, not a crash.
+        """
+        _patch_decode(monkeypatch, _idinfo(nonce=12345))
+
+        resp = await apple_client.post(
+            "/api/auth/apple", json={"id_token": "tok", "nonce": NONCE}
+        )
+
+        assert resp.status_code == 401
+        assert "nonce mismatch" in resp.json()["detail"].lower()
+
     async def test_stale_iat_returns_401(self, apple_client, monkeypatch):
         _patch_decode(monkeypatch, _idinfo(iat=int(time.time()) - 600))
         resp = await apple_client.post(
@@ -276,6 +313,32 @@ class TestAppleEndpoint:
         )
         assert resp.status_code == 401
         assert "different account" in resp.json()["detail"].lower()
+
+    async def test_email_already_bound_to_another_apple_identity_is_refused(
+        self, apple_client, apple_db, monkeypatch
+    ):
+        """``link_apple_to_user`` is an unconditional UPDATE, so the
+        link-by-verified-email branch would silently rebind an account that
+        already carries a *different* ``apple_sub``. Fail loudly, change
+        nothing.
+        """
+        user_id = await apple_db.create_user(
+            email="two-identities@example.com",
+            apple_sub="001111.firstidentity0000.1111",
+            email_verified=True,
+        )
+        _patch_decode(monkeypatch, _idinfo(email="two-identities@example.com"))
+
+        resp = await apple_client.post(
+            "/api/auth/apple", json={"id_token": "tok", "nonce": NONCE}
+        )
+
+        assert resp.status_code == 401
+        assert "different apple identity" in resp.json()["detail"].lower()
+        user = await apple_db.get_user_by_id(user_id)
+        assert user["apple_sub"] == "001111.firstidentity0000.1111"
+        # Nor may the refusal leak into a second account for the same address.
+        assert await apple_db.get_user_by_apple_sub(APPLE_SUB) is None
 
     async def test_missing_nonce_field_returns_422(self, apple_client):
         resp = await apple_client.post("/api/auth/apple", json={"id_token": "tok"})
@@ -486,3 +549,160 @@ class TestAppleSubStorage:
         assert user is not None
         assert user["apple_sub"] is None
         await db.close()
+
+
+class _FakeSigningKey:
+    key = "fake-apple-public-key"
+
+
+class _FakeJwkClient:
+    """Stand-in for ``jwt.PyJWKClient`` — the JWKS fetch is blocking urllib."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    def get_signing_key_from_jwt(self, token_str: str) -> _FakeSigningKey:
+        return _FakeSigningKey()
+
+
+class _AudienceEnforcingDecoder:
+    """A ``jwt.decode`` that actually honours the ``audience=`` it is handed.
+
+    Every other test in this module replaces ``_decode_apple_id_token``
+    wholesale, which walks straight past the argument the native/web audience
+    split lives in. Here the real method runs and only PyJWT's key handling is
+    replaced, so the audience list has to reach an enforcer to matter.
+    """
+
+    def __init__(self, claims_by_token: dict[str, dict]) -> None:
+        self._claims_by_token = claims_by_token
+        self.audiences: list[list[str]] = []
+
+    def __call__(self, token_str, key, *, algorithms, audience, issuer):
+        # A bare string would make PyJWT match one id only, and would turn the
+        # membership test below into a substring check.
+        assert isinstance(audience, list), f"audience must be a list: {audience!r}"
+        self.audiences.append(audience)
+        claims = self._claims_by_token[token_str]
+        if claims["aud"] not in audience:
+            raise jwt.InvalidAudienceError("Audience doesn't match")
+        if claims["iss"] != issuer:
+            raise jwt.InvalidIssuerError("Invalid issuer")
+        return dict(claims)
+
+
+def _install_decoder(monkeypatch, claims_by_token) -> _AudienceEnforcingDecoder:
+    decoder = _AudienceEnforcingDecoder(claims_by_token)
+    monkeypatch.setattr(jwt, "PyJWKClient", _FakeJwkClient)
+    monkeypatch.setattr(jwt, "decode", decoder)
+    return decoder
+
+
+class TestAppleAudiences:
+    """One endpoint, two Apple identifiers.
+
+    iOS tokens carry the bundle id and browser tokens the Services ID, and
+    both must resolve to the same account — the whole point of grouping the
+    Services ID under the app's primary App ID.
+    """
+
+    def _service(self, apple_config, apple_db, *, native, web) -> AuthService:
+        return AuthService(
+            replace(
+                apple_config, apple_client_id=native, apple_web_client_id=web
+            ),
+            apple_db,
+        )
+
+    async def test_both_configured_ids_are_offered_to_pyjwt(
+        self, apple_config, apple_db, monkeypatch
+    ):
+        decoder = _install_decoder(monkeypatch, {"native-tok": _idinfo()})
+        svc = self._service(
+            apple_config, apple_db, native=APPLE_CLIENT_ID, web=APPLE_WEB_CLIENT_ID
+        )
+
+        await svc.apple_authenticate("native-tok", nonce=NONCE)
+
+        assert decoder.audiences == [[APPLE_CLIENT_ID, APPLE_WEB_CLIENT_ID]]
+
+    async def test_a_browser_token_lands_on_the_account_ios_created(
+        self, apple_config, apple_db, monkeypatch
+    ):
+        """Signing in on the web with the Apple ID already used in the app
+        must reach the same user row, not a second account. Both tokens carry
+        the same ``sub`` and differ only in ``aud``."""
+        _install_decoder(
+            monkeypatch,
+            {
+                "native-tok": _idinfo(),
+                "web-tok": _idinfo(aud=APPLE_WEB_CLIENT_ID),
+            },
+        )
+        svc = self._service(
+            apple_config, apple_db, native=APPLE_CLIENT_ID, web=APPLE_WEB_CLIENT_ID
+        )
+
+        native_user, _role, _token, was_new = await svc.apple_authenticate(
+            "native-tok", nonce=NONCE
+        )
+        web_user, _role, _token, was_new_again = await svc.apple_authenticate(
+            "web-tok", nonce=NONCE
+        )
+
+        assert was_new is True
+        assert was_new_again is False
+        assert web_user == native_user
+
+    async def test_a_browser_token_is_refused_without_the_services_id(
+        self, apple_config, apple_db, monkeypatch
+    ):
+        """The state of the world before this change, and the reason it is
+        needed: a deployment that configures only the bundle id rejects every
+        web token."""
+        decoder = _install_decoder(
+            monkeypatch, {"web-tok": _idinfo(aud=APPLE_WEB_CLIENT_ID)}
+        )
+        svc = self._service(
+            apple_config, apple_db, native=APPLE_CLIENT_ID, web=None
+        )
+
+        with pytest.raises(ValueError, match="Invalid Apple ID token"):
+            await svc.apple_authenticate("web-tok", nonce=NONCE)
+
+        assert decoder.audiences == [[APPLE_CLIENT_ID]]
+
+    async def test_a_web_only_instance_authenticates(
+        self, apple_config, apple_db, monkeypatch
+    ):
+        """The "is Apple configured" guard hangs off the audience list now, so
+        a server that runs the web surface without shipping an iOS app is a
+        configured server."""
+        decoder = _install_decoder(
+            monkeypatch, {"web-tok": _idinfo(aud=APPLE_WEB_CLIENT_ID)}
+        )
+        svc = self._service(
+            apple_config, apple_db, native=None, web=APPLE_WEB_CLIENT_ID
+        )
+
+        user_id, _role, token, was_new = await svc.apple_authenticate(
+            "web-tok", nonce=NONCE
+        )
+
+        assert was_new is True
+        assert token
+        assert (await apple_db.get_user_by_apple_sub(APPLE_SUB))["id"] == user_id
+        assert decoder.audiences == [[APPLE_WEB_CLIENT_ID]]
+
+    async def test_neither_configured_fails_before_any_decode(
+        self, apple_config, apple_db, monkeypatch
+    ):
+        decoder = _install_decoder(
+            monkeypatch, {"web-tok": _idinfo(aud=APPLE_WEB_CLIENT_ID)}
+        )
+        svc = self._service(apple_config, apple_db, native=None, web=None)
+
+        with pytest.raises(ValueError, match="not configured"):
+            await svc.apple_authenticate("web-tok", nonce=NONCE)
+
+        assert decoder.audiences == []

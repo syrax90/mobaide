@@ -27,7 +27,12 @@ three CRUD surfaces: projects with accessible reorder and three-state updates,
 the per-project git branch/worktree list with its deferred delete, and prompt
 template management. WEB-10 (CLA-196) added the last live surfaces: the
 Auto Scan monitor with its ANSI log pane, the attention-notification
-surface, and the settings hub. The series is tracked in
+surface, and the settings hub. WEB-11 (CLA-198) added Sign in with Apple to
+login, register and the delete-account re-auth — the gate that lets an
+account created in the iOS app, private-relay address and no password, reach
+the web client at all; the same button also landed on `/portal/*`, and the
+server's Apple audience check grew to accept the browser Services ID
+alongside the iOS bundle id. The series is tracked in
 Linear project "Web Client (React)" (CLA-188…CLA-200): deploy/relay
 readiness (WEB-02), auth (WEB-03), WS protocol core (WEB-04), terminal
 (WEB-05), keyboard/shortcuts (WEB-06), sessions (WEB-07), pairing (WEB-08),
@@ -69,9 +74,11 @@ web/
 │   ├── terminal/             # framework-free terminal core (WEB-05): session model,
 │   │                         #   replay/follow/paste/submit/key reducers, clipboard,
 │   │                         #   renderer ladder, theme, model store
-│   ├── auth/                 # session store + transport, user/agent token axes, single-flight refresh, GIS loader
+│   ├── auth/                 # session store + transport, user/agent token axes, single-flight refresh,
+│   │                         #   GIS + Sign in with Apple loaders
 │   ├── components/toast/     # zero-dependency toast primitives
-│   ├── components/form/      # react-hook-form fields (+ auth/ Google button, account/ grace banner)
+│   ├── components/form/      # react-hook-form fields (+ auth/ Google and Apple buttons,
+│   │                         #   account/ grace banner)
 │   ├── protocol/             # framework-free wire layer (WEB-04): terminal codec,
 │   │                         #   relay URL/path builder, wire JSON + Zod schemas,
 │   │                         #   autoscan frames, SGR parser, __fixtures__/ loader
@@ -955,6 +962,58 @@ who learned the app on a phone finds what they expect; `Devices` left the top
 nav in exchange. There is **no** terminal display-mode picker — web ships
 Full display only, the WEB-05 divergence above.
 
+## Sign in with Apple (WEB-11)
+
+Accounts created with Sign in with Apple on iOS usually carry a private-relay
+address and **no password**, so before this milestone they could not reach the
+web client at all. The endpoint they need already existed — `POST
+/api/auth/apple`, the one iOS uses — but it verified the identity token
+against a single audience, the iOS bundle id, and browser tokens carry an
+Apple **Services ID** instead. The server now checks a *list*, so one endpoint
+serves both clients, and the two identifiers resolve to the same account
+because the Services ID is grouped under the bundle id as its primary App ID
+(the Apple-side setup, including domain verification, is in
+[deployment.md](deployment.md)).
+
+Three findings out of the shipped `appleid.auth.js` bundle shaped the client,
+none of them stated in Apple's docs:
+
+- **The SDK does not hash the nonce.** It URL-encodes the value onto the
+  authorize URL and Apple echoes the claim back verbatim — there is no
+  `crypto`, `subtle` or `sha256` symbol in the bundle. So the browser reuses
+  `generateNonce()` and the server's byte-for-byte `compare_digest` unchanged,
+  and the no-double-hash convention now spans all three clients.
+- **`usePopup: true` opens a real window, not an iframe**: the SDK appends
+  `response_mode=web_message`, calls `window.open`, and resolves from a
+  `postMessage` listener. That is why the SPA's CSP grows exactly one
+  `script-src` entry and no `frame-src`/`connect-src` — and why COOP
+  `same-origin-allow-popups` now protects two flows. Without the flag the SDK
+  calls `window.location.assign`, which would destroy SPA state and return as
+  a cross-site POST.
+- **`redirectURI` is mandatory even in popup mode**, where it is never
+  navigated to; Apple only matches it against the registered Return URLs. It
+  is derived from `window.location.origin`, so one Services ID covers every
+  host the SPA is deployed to.
+
+The button is hand-drawn rather than `AppleID.auth.renderButton`: Apple's
+rendered button binds its own click handler to the *globally* initialised
+nonce and reports through document events, which leaves nowhere to bind a
+per-attempt nonce, and it cannot be disabled mid-request. Only the flow comes
+from the SDK. Two consequences shape `AppleSignInButton`: the SDK load, the
+`init` call and the nonce all happen **at mount**, because anything awaited
+inside the click spends the user activation and the popup gets blocked; and
+the button ships disabled until the SDK answers. Dismissing the popup
+resolves as `AppleSignInCancelledError` and is swallowed — only a
+browser-blocked popup produces a message, because it is the one the user can
+act on.
+
+The delete-account panel gains a third re-auth branch for the same reason the
+sign-in exists: an Apple-only account has no password and no Google identity,
+so without it this milestone would create users who can sign in and never
+delete themselves. Unlike Google it needs no `disableAutoSelect` equivalent —
+Apple's popup always runs a fresh authorization, so the token is inside the
+server's five-minute freshness window by construction.
+
 ## CI — `.github/workflows/web-ci.yml`
 
 Runs on every PR and push to main (no paths filter — schema drift is caused
@@ -1020,8 +1079,10 @@ restart, `--rollback` repoints at the previously-live release. Runbook: the
   parallel, a parent middleware short-circuits the whole match — and the
   wanted path survives the bounce as `?next=`. `GET /api/version` is the
   single anonymous bootstrap call: protocol gate *and* the
-  `google_client_id` the Google Identity Services button initialises with,
-  so the SPA needs no build-time env var.
+  `google_client_id` and `apple_web_client_id` the two sign-in buttons
+  initialise with, so the SPA needs no build-time env var. Each button
+  mounts only when its id is present, so a deployment configures either
+  provider, both, or neither, entirely server-side.
 
 ## Parity policy
 

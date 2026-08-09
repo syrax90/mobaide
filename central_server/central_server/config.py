@@ -142,6 +142,14 @@ class CentralServerConfig:
     # expected `aud` of Apple identity tokens on /api/auth/apple.
     apple_client_id: str | None = None
 
+    # Sign in with Apple on the web (optional) — the Apple *Services ID*.
+    # Browser tokens minted by Sign in with Apple JS carry the Services ID as
+    # `aud`, never the native bundle id, so /api/auth/apple accepts both. The
+    # Services ID must be grouped under `apple_client_id` as its primary App
+    # ID in the Apple developer portal; that grouping is what makes Apple
+    # issue the same `sub` on web as on iOS, so one person is one account.
+    apple_web_client_id: str | None = None
+
     jwt_algorithm: str = "HS256"
     # TTLs are in minutes. 0 = never expires. The zero sentinel is
     # translated in each consumer:
@@ -319,6 +327,7 @@ class CentralServerConfig:
             admin_seed_password=os.getenv("ADMIN_SEED_PASSWORD"),
             google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
             apple_client_id=os.getenv("APPLE_CLIENT_ID"),
+            apple_web_client_id=os.getenv("APPLE_WEB_CLIENT_ID"),
             jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
             mobile_token_expire_minutes=int(
                 os.getenv("MOBILE_TOKEN_EXPIRE_MINUTES", "0"),

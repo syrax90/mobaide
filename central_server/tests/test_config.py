@@ -42,6 +42,27 @@ def test_from_env_custom_values(monkeypatch):
     assert config.google_client_id == "my-client-id.apps.googleusercontent.com"
 
 
+def test_the_two_apple_ids_are_read_from_their_own_env_vars(monkeypatch):
+    """Distinct values on purpose: the bundle id and the Services ID are
+    different Apple identifiers, and one ``os.getenv`` copied without editing
+    the key would make ``_apple_audiences()`` offer the same id twice — a
+    server that still rejects every browser token."""
+    monkeypatch.setenv("JWT_SECRET_KEY", "s")
+    monkeypatch.setenv("APPLE_CLIENT_ID", "com.mobaide.app")
+    monkeypatch.setenv("APPLE_WEB_CLIENT_ID", "com.mobaide.app.web")
+    config = CentralServerConfig.from_env()
+    assert config.apple_client_id == "com.mobaide.app"
+    assert config.apple_web_client_id == "com.mobaide.app.web"
+
+
+def test_apple_web_client_id_is_absent_by_default(monkeypatch):
+    """Unset hides the button on both surfaces, which is the right local
+    behaviour — Apple rejects ``localhost`` Return URLs outright."""
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.delenv("APPLE_WEB_CLIENT_ID", raising=False)
+    assert CentralServerConfig.from_env().apple_web_client_id is None
+
+
 def test_heartbeat_flush_interval_default_and_env(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
     monkeypatch.delenv("HEARTBEAT_FLUSH_INTERVAL_SECONDS", raising=False)

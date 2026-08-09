@@ -8,6 +8,7 @@ import {
 } from '../../api/authRepository';
 import { disableGoogleAutoSelect } from '../../auth/googleSignIn';
 import { useSessionStore } from '../../auth/sessionStore';
+import { AppleSignInButton } from '../../components/auth/AppleSignInButton';
 import { GoogleSignInButton } from '../../components/auth/GoogleSignInButton';
 
 /**
@@ -15,13 +16,17 @@ import { GoogleSignInButton } from '../../components/auth/GoogleSignInButton';
  * `DeleteAccountDialogState` and iOS's `DeleteAccountStep`.
  *
  * Re-auth is not optional and not skippable: the server rejects the session
- * JWT alone, requiring either the current password or a Google `id_token`
- * minted within the last 5 minutes (bound to the nonce sent with it).
+ * JWT alone, requiring either the current password or a Google/Apple
+ * `id_token` minted within the last 5 minutes (bound to the nonce sent with
+ * it). Apple is not a nicety here: an account created with Sign in with Apple
+ * has no password and no Google identity, so without this branch it would have
+ * no way to delete itself at all.
  */
 type Step =
   | { name: 'explain' }
   | { name: 'reauthPassword' }
   | { name: 'reauthGoogle' }
+  | { name: 'reauthApple' }
   | {
       name: 'confirmEmail';
       method: DeletionMethod;
@@ -160,6 +165,20 @@ export function DeleteAccountPanel({ email, onClose }: DeleteAccountPanelProps) 
                 Continue with Google
               </button>
             )}
+            {serverInfo?.appleWebClientId != null && (
+              // Apple has no auto-select to disable: its popup always runs a
+              // fresh authorization, so the token is inside the server's
+              // 5-minute window by construction.
+              <button
+                type="button"
+                className="button"
+                onClick={() => {
+                  setStep({ name: 'reauthApple' });
+                }}
+              >
+                Continue with Apple
+              </button>
+            )}
           </div>
           <button type="button" className="button button-block" onClick={onClose}>
             Cancel
@@ -218,6 +237,32 @@ export function DeleteAccountPanel({ email, onClose }: DeleteAccountPanelProps) 
                 name: 'confirmEmail',
                 method: 'google',
                 idToken: credential,
+                nonce,
+              });
+            }}
+          />
+          <button type="button" className="button button-block" onClick={onClose}>
+            Cancel
+          </button>
+        </>
+      )}
+
+      {step.name === 'reauthApple' && (
+        <>
+          <p>
+            Sign in with Apple again to confirm it&apos;s you. A fresh sign-in
+            is required — your existing session alone is not enough to confirm
+            this destructive action.
+          </p>
+          <AppleSignInButton
+            clientId={serverInfo?.appleWebClientId ?? null}
+            onError={setError}
+            onCredential={(idToken, nonce) => {
+              setError(null);
+              setStep({
+                name: 'confirmEmail',
+                method: 'apple',
+                idToken,
                 nonce,
               });
             }}

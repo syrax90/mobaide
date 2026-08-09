@@ -190,6 +190,59 @@ class TestPortalCsrf:
         )
         assert resp.status_code == 403
 
+    async def test_non_ascii_form_token_returns_403_not_500(self, client) -> None:
+        """A wrong token is a 403 whatever bytes it holds.
+
+        ``compare_digest`` *raises* ``TypeError`` on a ``str`` operand carrying
+        a non-ASCII character rather than returning False, and every operand
+        here is peer-supplied text. ``require_csrf`` translates only its own
+        ``HTTPException``, so an unencoded comparison turned one non-ASCII byte
+        in this field into an unhandled error on every portal POST route — and
+        under ASGI that escapes the transport instead of becoming a response,
+        which is why the bare status assertion is the whole test.
+        """
+        await _grab_csrf(client)
+
+        resp = await client.post(
+            "/portal/cancel-deletion",
+            data={"token": "anything", "csrf_token": "csrf-tökén-Ω"},
+        )
+
+        assert resp.status_code == 403
+
+    async def test_non_ascii_header_token_returns_403_not_500(self, client) -> None:
+        """Same for the HTMX path: ``X-CSRF-Token`` is attacker-chosen too, and
+        it is checked before the form field is ever consulted.
+
+        Header values go over the wire as bytes and ASGI hands them up decoded
+        as latin-1, so any octet above 0x7f arrives as a non-ASCII ``str``;
+        httpx would reject the same value typed as ``str`` before it ever left
+        the client, which no real caller is bound by.
+        """
+        await _grab_csrf(client)
+
+        resp = await client.post(
+            "/portal/cancel-deletion",
+            data={"token": "anything"},
+            headers={"X-CSRF-Token": "csrf-tökén-Ω".encode()},
+        )
+
+        assert resp.status_code == 403
+
+    async def test_non_ascii_cookie_token_returns_403_not_500(self, client) -> None:
+        """And for the cookie half, which is compared against a freshly
+        computed HMAC before the presented token is looked at. The value is
+        shaped like a real token (``<nonce>.<digest>``) so the check reaches
+        that comparison instead of bailing out on the missing separator.
+        """
+        resp = await client.post(
+            "/portal/cancel-deletion",
+            data={"token": "anything", "csrf_token": "irrelevant"},
+            headers={"Cookie": "portal_csrf=nonce.dïgest-Ω".encode()},
+        )
+
+        assert resp.status_code == 403
+
 
 # ---- Owned-data isolation -----------------------------------------------
 

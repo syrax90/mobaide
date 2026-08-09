@@ -24,6 +24,7 @@ vi.mock('./clients', () => ({
 
 const {
   login,
+  loginWithApple,
   loginWithGoogle,
   register,
   resendVerification,
@@ -85,10 +86,12 @@ describe('session-minting calls', () => {
     succeed(okBody);
     succeed(okBody);
     succeed(okBody);
+    succeed(okBody);
 
     await register('user@example.com', 'hunter22');
     await login('user@example.com', 'hunter22');
     await loginWithGoogle('google-id-token');
+    await loginWithApple('apple-id-token', 'nonce-1');
     await verifyEmail('user@example.com', '123456');
 
     expect(relay.calls.map((call) => call.body.refreshable)).toEqual([
@@ -96,6 +99,22 @@ describe('session-minting calls', () => {
       true,
       true,
       true,
+      true,
+    ]);
+  });
+
+  it('sends the Apple nonce alongside the token it was minted with', async () => {
+    succeed(okBody);
+
+    await loginWithApple('apple-id-token', 'nonce-1');
+
+    // Where the Google twin sends none: the server verifies this against the
+    // token's own claim on every Apple sign-in, not only on re-auth.
+    expect(relay.calls).toEqual([
+      {
+        path: '/api/auth/apple',
+        body: { id_token: 'apple-id-token', nonce: 'nonce-1', refreshable: true },
+      },
     ]);
   });
 
@@ -121,6 +140,14 @@ describe('admin rejection', () => {
     succeed({ ...okBody, role: 'admin' });
 
     await expect(loginWithGoogle('google-id-token')).rejects.toThrow(
+      ADMIN_LOGIN_MESSAGE,
+    );
+  });
+
+  it('rejects an admin arriving through Apple with the shared copy', async () => {
+    succeed({ ...okBody, role: 'admin' });
+
+    await expect(loginWithApple('apple-id-token', 'nonce-1')).rejects.toThrow(
       ADMIN_LOGIN_MESSAGE,
     );
   });

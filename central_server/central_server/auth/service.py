@@ -106,6 +106,26 @@ class AccountDeletionForbiddenError(Exception):
     """Account deletion refused for policy reasons (e.g., seed admin)."""
 
 
+def _nonces_match(id_nonce: object, expected_nonce: str) -> bool:
+    """Constant-time compare of an ID token's ``nonce`` claim.
+
+    Encoded first because ``compare_digest`` raises ``TypeError`` — it does not
+    return False — when a ``str`` operand holds a non-ASCII character. Callers
+    only handle ``ValueError``, so the raw comparison would turn
+    attacker-chosen input into a 500.
+    """
+    if not isinstance(id_nonce, str):
+        return False
+    try:
+        return secrets.compare_digest(
+            id_nonce.encode("utf-8"), expected_nonce.encode("utf-8")
+        )
+    except UnicodeEncodeError:
+        # A lone surrogate survives JSON decoding into a `str` but has no
+        # UTF-8 encoding. It is simply not the nonce.
+        return False
+
+
 @dataclass
 class RegisterResult:
     """Outcome of ``AuthService.register_user``.
@@ -586,7 +606,7 @@ class AuthService:
             raise ValueError("Google identity does not match this account")
         if expected_nonce is not None:
             id_nonce = idinfo.get("nonce")
-            if not id_nonce or not secrets.compare_digest(id_nonce, expected_nonce):
+            if not id_nonce or not _nonces_match(id_nonce, expected_nonce):
                 raise ValueError("Nonce mismatch")
             iat = idinfo.get("iat")
             if not isinstance(iat, int):
@@ -657,6 +677,23 @@ class AuthService:
     _APPLE_ISSUER = "https://appleid.apple.com"
     _APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
 
+    def _apple_audiences(self) -> list[str]:
+        """Every `aud` an Apple identity token may legitimately carry here.
+
+        The native app and the browser authenticate against the same endpoint
+        but are different Apple identifiers: iOS tokens carry the bundle id,
+        Sign in with Apple JS tokens carry the Services ID. Both grouped under
+        one primary App ID, so the `sub` is the same either way.
+        """
+        return [
+            client_id
+            for client_id in (
+                self._config.apple_client_id,
+                self._config.apple_web_client_id,
+            )
+            if client_id
+        ]
+
     def _decode_apple_id_token(self, token_str: str) -> dict:
         """Blocking JWKS fetch + signature/aud/iss/exp verification.
 
@@ -666,14 +703,22 @@ class AuthService:
         """
         if self._apple_jwk_client is None:
             self._apple_jwk_client = jwt.PyJWKClient(
-                self._APPLE_JWKS_URL, cache_keys=True
+                self._APPLE_JWKS_URL,
+                cache_keys=True,
+                # PyJWT defaults to 30 s. A token with an unknown `kid` forces
+                # an uncached refetch, and this runs on the shared default
+                # executor, so a stalled Apple CDN would hold a worker the
+                # Google path also draws from for the whole window.
+                timeout=5,
             )
         signing_key = self._apple_jwk_client.get_signing_key_from_jwt(token_str)
         return jwt.decode(
             token_str,
             signing_key.key,
             algorithms=["RS256"],
-            audience=self._config.apple_client_id,
+            # A list makes PyJWT accept a token matching any one entry, which
+            # is what lets the native and web identifiers share this endpoint.
+            audience=self._apple_audiences(),
             issuer=self._APPLE_ISSUER,
         )
 
@@ -684,7 +729,7 @@ class AuthService:
         not validate. Callers layer nonce/freshness/sub checks on top via
         ``_verify_apple_token_claims``.
         """
-        if not self._config.apple_client_id:
+        if not self._apple_audiences():
             raise ValueError("Apple authentication is not configured")
 
         # Default executor on purpose (never queues behind argon2); the JWKS
@@ -708,13 +753,15 @@ class AuthService:
 
         The client embeds its generated nonce verbatim in the identity token
         (same convention as the Google flow), so the comparison is direct —
-        no extra hashing. Freshness reuses the Google re-auth window.
+        no extra hashing. That holds on the browser too: Sign in with Apple JS
+        appends the nonce to the authorize URL untouched, and Apple echoes the
+        claim back unchanged. Freshness reuses the Google re-auth window.
         """
         if expected_sub is not None and idinfo.get("sub") != expected_sub:
             raise ValueError("Apple identity does not match this account")
         if expected_nonce is not None:
             id_nonce = idinfo.get("nonce")
-            if not id_nonce or not secrets.compare_digest(id_nonce, expected_nonce):
+            if not id_nonce or not _nonces_match(id_nonce, expected_nonce):
                 raise ValueError("Nonce mismatch")
             iat = idinfo.get("iat")
             if not isinstance(iat, int):
@@ -762,6 +809,19 @@ class AuthService:
         if email_verified:
             user = await self._db.get_user_by_email(email)
             if user is not None:
+                # `link_apple_to_user` is an unconditional UPDATE, so without
+                # this an account already bound to a different Apple identity
+                # would be silently rebound — and since delete re-auth pins
+                # `sub` to the stored `apple_sub`, the displaced identity would
+                # lose the ability to delete its own account. Reachable only if
+                # Apple ever issues two `sub`s for one address, which is what a
+                # Services ID registered outside the primary App ID's group
+                # does; fail loudly instead of corrupting the binding.
+                existing_sub = user.get("apple_sub")
+                if existing_sub is not None and existing_sub != apple_sub:
+                    raise ValueError(
+                        "Email already registered with a different Apple identity"
+                    )
                 await self._db.link_apple_to_user(user["id"], apple_sub)
                 if not user.get("email_verified"):
                     await self._db.mark_user_verified(user["id"])

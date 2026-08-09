@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { APP_PROTOCOL_VERSION, checkVersionGate, type ServerInfo } from './bootstrap';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  APP_PROTOCOL_VERSION,
+  checkVersionGate,
+  fetchServerInfo,
+  type ServerInfo,
+} from './bootstrap';
 
 function serverInfo(overrides: Partial<ServerInfo> = {}): ServerInfo {
   return {
@@ -7,9 +12,66 @@ function serverInfo(overrides: Partial<ServerInfo> = {}): ServerInfo {
     protocolVersions: [6, 7],
     minClientVersion: 6,
     googleClientId: null,
+    appleWebClientId: null,
     ...overrides,
   };
 }
+
+function stubVersionProbe(body: Record<string, unknown>): void {
+  vi.stubGlobal('fetch', () =>
+    Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ),
+  );
+}
+
+const VERSION_BODY = {
+  server_version: '1.2.3',
+  protocol_versions: [7],
+  min_client_version: 7,
+};
+
+describe('fetchServerInfo', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reads each provider id out of the one anonymous probe', async () => {
+    stubVersionProbe({
+      ...VERSION_BODY,
+      google_client_id: 'web-client.apps.googleusercontent.com',
+      apple_web_client_id: 'com.mobaide.app.web',
+    });
+
+    const info = await fetchServerInfo();
+
+    // The SPA is static files with no build-time config channel, so this call
+    // is the only place either id can come from.
+    expect(info.googleClientId).toBe('web-client.apps.googleusercontent.com');
+    expect(info.appleWebClientId).toBe('com.mobaide.app.web');
+  });
+
+  it('reports an unconfigured provider as null, never undefined', async () => {
+    // A server older than this feature omits the key outright.
+    stubVersionProbe(VERSION_BODY);
+
+    const info = await fetchServerInfo();
+
+    // `AppleSignInButton` hides itself on `=== null`; leaving it undefined
+    // would mount a button that initialises the SDK with no client id.
+    expect(info.appleWebClientId).toBeNull();
+    expect(info.googleClientId).toBeNull();
+  });
+
+  it('maps an explicit null the same way', async () => {
+    stubVersionProbe({ ...VERSION_BODY, apple_web_client_id: null });
+
+    expect((await fetchServerInfo()).appleWebClientId).toBeNull();
+  });
+});
 
 describe('checkVersionGate', () => {
   it('passes when the client version is offered and at or above the minimum', () => {

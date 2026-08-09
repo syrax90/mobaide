@@ -37,6 +37,7 @@ from starlette.datastructures import Headers
 
 from central_server.config import CentralServerConfig
 from central_server.security_headers import (
+    APPLE_JS_SCRIPT_URL,
     SecurityHeadersMiddleware,
     portal_csp,
     portal_permissions_policy,
@@ -44,6 +45,8 @@ from central_server.security_headers import (
 from central_server.templates_dir import resolve_templates_dir
 
 GOOGLE_CLIENT_ID = "test-client-id.apps.googleusercontent.com"
+# The Apple *Services ID*, the browser half of Sign in with Apple.
+APPLE_WEB_CLIENT_ID = "com.mobaide.app.web"
 
 # Byte-identical to ``test_marketing.EXPECTED_CSP`` on purpose — see the module
 # docstring. Keep the two in sync by changing neither.
@@ -67,6 +70,29 @@ SAME_ORIGIN_CSP = (
 GOOGLE_PORTAL_CSP = (
     "default-src 'none'; "
     "script-src 'self' https://accounts.google.com/gsi/client; "
+    "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; "
+    "img-src 'self'; font-src 'self'; "
+    "connect-src 'self' https://accounts.google.com/gsi/; "
+    "frame-src https://accounts.google.com/gsi/; "
+    "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+)
+
+# Sign in with Apple JS costs one ``script-src`` entry and nothing else: under
+# ``usePopup`` the SDK calls ``window.open`` and reads the answer off a
+# ``postMessage`` listener.
+APPLE_PORTAL_CSP = (
+    "default-src 'none'; "
+    f"script-src 'self' {APPLE_JS_SCRIPT_URL}; "
+    "style-src 'self'; "
+    "img-src 'self'; font-src 'self'; "
+    "connect-src 'self'; "
+    "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+)
+
+BOTH_PROVIDERS_PORTAL_CSP = (
+    "default-src 'none'; "
+    "script-src 'self' https://accounts.google.com/gsi/client "
+    f"{APPLE_JS_SCRIPT_URL}; "
     "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; "
     "img-src 'self'; font-src 'self'; "
     "connect-src 'self' https://accounts.google.com/gsi/; "
@@ -171,10 +197,14 @@ _CADDY_SNIPPET_RE = re.compile(
     r"^\(app_mobaide\) \{\n(.*?)^\}$", re.DOTALL | re.MULTILINE
 )
 
-# The one cross-origin subresource any policy in this app permits. Anything else
-# in a template — a CDN htmx, a remote font, an analytics beacon — is blocked at
-# runtime by the very policy that makes this suite pass.
-ALLOWED_CROSS_ORIGIN_SUBRESOURCES = ("https://accounts.google.com/gsi/client",)
+# The only cross-origin subresources any policy in this app permits, and both are
+# named by the policy itself rather than spelled again here. Anything else — a
+# CDN htmx, a remote font, an analytics beacon — is blocked at runtime by the
+# very policy that makes this suite pass.
+ALLOWED_CROSS_ORIGIN_SUBRESOURCES = (
+    "https://accounts.google.com/gsi/client",
+    APPLE_JS_SCRIPT_URL,
+)
 
 # Top-level glob only: ``templates/email/`` is deliberately excluded. Mail
 # clients strip <style> blocks, so those templates have to inline every
@@ -200,6 +230,23 @@ def config(config, request):
 
 with_google = pytest.mark.parametrize(
     "config", [{"google_client_id": GOOGLE_CLIENT_ID}], indirect=True, ids=["google"]
+)
+with_apple = pytest.mark.parametrize(
+    "config",
+    [{"apple_web_client_id": APPLE_WEB_CLIENT_ID}],
+    indirect=True,
+    ids=["apple"],
+)
+with_both_providers = pytest.mark.parametrize(
+    "config",
+    [
+        {
+            "google_client_id": GOOGLE_CLIENT_ID,
+            "apple_web_client_id": APPLE_WEB_CLIENT_ID,
+        }
+    ],
+    indirect=True,
+    ids=["google+apple"],
 )
 report_only = pytest.mark.parametrize(
     "config", [{"csp_report_only": True}], indirect=True, ids=["report_only"]
@@ -462,6 +509,84 @@ class TestPortalPolicyWithoutGoogle:
         assert portal_permissions_policy(client_id) == BASELINE_PERMISSIONS_POLICY
 
 
+class TestPortalPolicyProviderMatrix:
+    """``portal_csp`` is composed per provider now, not enumerated per
+    combination, so the four cases are the contract.
+
+    The Google-only row is the one that matters most: it has to stay
+    byte-identical to what shipped before Apple existed, or a portal that
+    configures only Google silently changes policy on deploy.
+    """
+
+    @pytest.mark.parametrize(
+        "google_client_id,apple_web_client_id,expected",
+        (
+            (None, None, SAME_ORIGIN_CSP),
+            # ``GOOGLE_CLIENT_ID=`` in an .env is empty, not unset.
+            ("", "", SAME_ORIGIN_CSP),
+            (GOOGLE_CLIENT_ID, None, GOOGLE_PORTAL_CSP),
+            (None, APPLE_WEB_CLIENT_ID, APPLE_PORTAL_CSP),
+            (GOOGLE_CLIENT_ID, APPLE_WEB_CLIENT_ID, BOTH_PROVIDERS_PORTAL_CSP),
+        ),
+        ids=["neither", "neither-empty", "google-only", "apple-only", "both"],
+    )
+    def test_each_combination_earns_exactly_its_own_relaxations(
+        self, google_client_id, apple_web_client_id, expected
+    ) -> None:
+        assert portal_csp(google_client_id, apple_web_client_id) == expected
+
+    def test_apple_alone_concedes_nothing_google_needs(self) -> None:
+        """Stated as properties as well as by value: ``'unsafe-inline'`` is
+        forced by the ``<style>`` block the GIS client injects, and the
+        ``frame-src`` by the iframe it renders the button into. Apple's SDK
+        does neither, so an Apple-only instance must not inherit either."""
+        policy = portal_csp(None, APPLE_WEB_CLIENT_ID)
+        assert "'unsafe-inline'" not in policy
+        assert "frame-src" not in policy
+        assert "accounts.google.com" not in policy
+
+
+@with_apple
+class TestAppleSignInRelaxations:
+    async def test_the_services_id_reaches_the_portal_policy(self, client) -> None:
+        """End to end through ``create_app``: the middleware only learns about
+        Apple because ``create_app`` threads ``apple_web_client_id`` into it.
+        A dropped kwarg leaves ``portal_base.html`` emitting a script the
+        policy blocks, with nothing to show for it server-side."""
+        response = await client.get("/portal/login")
+        assert response.headers["Content-Security-Policy"] == APPLE_PORTAL_CSP
+
+    async def test_apple_never_switches_fedcm_on(self, client) -> None:
+        """``portal_permissions_policy`` still takes the Google id alone, and
+        must: Apple's SDK uses ``window.open`` and ``postMessage``, never
+        FedCM, so an Apple-only instance advertises an origin it does not talk
+        to if this ever grows an Apple arm."""
+        response = await client.get("/portal/login")
+        assert response.headers["Permissions-Policy"] == BASELINE_PERMISSIONS_POLICY
+
+    @pytest.mark.parametrize("path", ("/", "/dashboard/login", "/api/version"))
+    async def test_no_other_surface_inherits_the_apple_origin(
+        self, client, path
+    ) -> None:
+        response = await client.get(path)
+        assert "appleid.cdn-apple.com" not in response.headers[
+            "Content-Security-Policy"
+        ]
+
+
+@with_both_providers
+class TestBothProvidersConfigured:
+    async def test_the_portal_carries_both_scripts_and_only_googles_extras(
+        self, client
+    ) -> None:
+        response = await client.get("/portal/login")
+        assert response.headers["Content-Security-Policy"] == BOTH_PROVIDERS_PORTAL_CSP
+
+    async def test_the_fedcm_allowance_is_unchanged_by_apple(self, client) -> None:
+        response = await client.get("/portal/login")
+        assert response.headers["Permissions-Policy"] == GIS_PERMISSIONS_POLICY
+
+
 @report_only
 class TestReportOnlyMode:
     @pytest.mark.parametrize("path,policy", (("/portal/login", SAME_ORIGIN_CSP),))
@@ -595,12 +720,13 @@ class TestTemplatesCarryNoInlineCode:
         assert _INLINE_STYLE_RE.search(_template_source(path)) is None
 
     @pytest.mark.parametrize("path", SERVED_TEMPLATES)
-    def test_the_only_cross_origin_subresource_is_the_gis_client(
+    def test_the_only_cross_origin_subresources_are_the_identity_provider_scripts(
         self, path
     ) -> None:
         """The dashboard used to pull htmx from ``unpkg.com``; under
         ``script-src 'self'`` that is a blank page, not a slow one. Google's
-        sign-in client is the single origin any policy here allows."""
+        and Apple's sign-in clients are the only origins any policy here
+        allows."""
         offenders = []
         for tag in _SUBRESOURCE_TAG_RE.findall(_template_source(path)):
             url = _SUBRESOURCE_URL_RE.search(tag)
@@ -663,6 +789,21 @@ class TestCaddySpaHeadersMirrorThePortal:
         snippet = _app_mobaide_snippet(filename)
         value = _caddy_header_value(snippet, "Permissions-Policy")
         assert value == GIS_PERMISSIONS_POLICY
+
+    @pytest.mark.parametrize("filename", PROD_CADDYFILES)
+    def test_the_spa_script_src_carries_the_apple_bundle(self, filename) -> None:
+        """The SPA mounts the Apple button on ``/login``, ``/register`` and
+        ``/account`` and loads the SDK itself, so Caddy has to allow the exact
+        URL ``appleSignIn.ts`` injects. An origin-only entry would not match
+        it, and the button would render onto a script that never runs."""
+        snippet = _app_mobaide_snippet(filename)
+        policy = _caddy_header_value(snippet, "Content-Security-Policy")
+        script_src = next(
+            directive.strip()
+            for directive in policy.split(";")
+            if directive.strip().startswith("script-src ")
+        )
+        assert APPLE_JS_SCRIPT_URL in script_src.split()
 
     @pytest.mark.parametrize("filename", PROD_CADDYFILES)
     def test_the_spa_opener_policy_matches_the_middlewares(self, filename) -> None:

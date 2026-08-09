@@ -75,6 +75,13 @@
     {% if google_client_id %}
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     {% endif %}
+    {# Apple serves one bundle per locale; the portal is English-only, so the
+       exact URL is nameable and security_headers.APPLE_JS_SCRIPT_URL lists it
+       rather than the whole origin. Changing the locale segment here means
+       changing it there too. #}
+    {% if apple_web_client_id %}
+    <script src="https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js" async defer></script>
+    {% endif %}
 </head>
 <body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
     <a class="skip" href="#main">Skip to content</a>

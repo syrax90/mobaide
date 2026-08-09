@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router';
 import { useServerInfo } from '../../api/useServerInfo';
 import {
   login,
+  loginWithApple,
   loginWithGoogle,
   VerificationRequiredError,
   type AuthOutcome,
@@ -11,6 +12,7 @@ import {
 import { AdminLoginNotSupportedError } from '../../api/errors';
 import { INVALIDATION_MESSAGES } from '../../auth/authState';
 import { useSessionStore } from '../../auth/sessionStore';
+import { AppleSignInButton } from '../../components/auth/AppleSignInButton';
 import { GoogleSignInButton } from '../../components/auth/GoogleSignInButton';
 import { PasswordField } from '../../components/form/PasswordField';
 import { TextField } from '../../components/form/TextField';
@@ -116,26 +118,45 @@ export function Login() {
         </button>
       </form>
 
+      {(serverInfo?.googleClientId != null ||
+        serverInfo?.appleWebClientId != null) && (
+        <div className="auth-divider">
+          <span>or</span>
+        </div>
+      )}
       {serverInfo?.googleClientId != null && (
-        <>
-          <div className="auth-divider">
-            <span>or</span>
-          </div>
-          <GoogleSignInButton
-            clientId={serverInfo.googleClientId}
-            text="signin_with"
-            onCredential={(credential) => {
-              setError(null);
-              setBusy(true);
-              void loginWithGoogle(credential)
-                .then(settle)
-                .catch(handleFailure)
-                .finally(() => {
-                  setBusy(false);
-                });
-            }}
-          />
-        </>
+        <GoogleSignInButton
+          clientId={serverInfo.googleClientId}
+          text="signin_with"
+          onCredential={(credential) => {
+            setError(null);
+            setBusy(true);
+            void loginWithGoogle(credential)
+              .then(settle)
+              .catch(handleFailure)
+              .finally(() => {
+                setBusy(false);
+              });
+          }}
+        />
+      )}
+      {serverInfo?.appleWebClientId != null && (
+        <AppleSignInButton
+          clientId={serverInfo.appleWebClientId}
+          label="Sign in with Apple"
+          disabled={busy}
+          onError={setError}
+          onCredential={(idToken, nonce) => {
+            setError(null);
+            setBusy(true);
+            void loginWithApple(idToken, nonce)
+              .then(settle)
+              .catch(handleFailure)
+              .finally(() => {
+                setBusy(false);
+              });
+          }}
+        />
       )}
 
       <p className="auth-footer">

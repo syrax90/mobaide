@@ -562,6 +562,54 @@ input[type="radio"]:checked {
   pointer-events: none;
 }
 
+/* Apple's button is ours to draw — the JS SDK only supplies the flow — so it
+   follows Apple's Human Interface Guidelines directly: black fill, white mark
+   and label, and the 320px/40px box the GIS button next to it renders at, so
+   the two stack without a visible width step.
+
+   Square, per invariant 2 above, and that is not a compromise: Apple's own
+   renderButton takes a `data-border-radius` anywhere from 0 to 50, so zero is
+   a shape Apple ships itself.
+
+   It deliberately does NOT take .btn: that class carries this system's pixel
+   offset-shadow, and Apple's guidelines do not permit decorating the button. */
+.apple-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 320px;
+  max-width: 100%;
+  height: 40px;
+  margin: 16px auto 0;
+  padding: 0 16px;
+  border: 0;
+  background: #000;
+  color: #fff;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* Disabled while Apple's SDK is still loading, while a sign-in is in flight,
+   and (in the delete modal) until the typed email matches. Both ship
+   `disabled` in the markup, so a click that lands before the script does has
+   nothing to fire. */
+.apple-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.apple-btn-logo {
+  width: 15px;
+  height: 18px;
+  /* The mark's own optical centre sits below the cap height of the label. */
+  margin-bottom: 2px;
+  flex: none;
+}
+
 /* ---------- tables ---------- */
 
 /* A wrapper rather than `table { display: block }`, which would break width:100%

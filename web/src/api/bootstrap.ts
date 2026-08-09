@@ -1,10 +1,10 @@
 /**
  * The anonymous startup probe: `GET /api/version`.
  *
- * One call covers two needs — the protocol version gate, and the Google client
- * id the sign-in button initialises with. The endpoint is untyped in the
- * OpenAPI schema (`dict[str, object]`), so the shape is pinned here with Zod
- * rather than trusted from the generated types.
+ * One call covers two needs — the protocol version gate, and the client ids
+ * the Google and Apple sign-in buttons initialise with. The endpoint is
+ * untyped in the OpenAPI schema (`dict[str, object]`), so the shape is pinned
+ * here with Zod rather than trusted from the generated types.
  */
 import { z } from 'zod';
 import type { IncompatibleServerInfo } from '../auth/authState';
@@ -24,6 +24,7 @@ const versionSchema = z.object({
   protocol_versions: z.array(z.number()).default([]),
   min_client_version: z.number().default(0),
   google_client_id: z.string().nullish(),
+  apple_web_client_id: z.string().nullish(),
 });
 
 export interface ServerInfo {
@@ -31,6 +32,12 @@ export interface ServerInfo {
   protocolVersions: number[];
   minClientVersion: number;
   googleClientId: string | null;
+  /**
+   * The Apple *Services ID*, not the iOS bundle id: browser identity tokens
+   * carry it as `aud`. A server that only configures the native client id
+   * leaves this null and the Apple button never mounts.
+   */
+  appleWebClientId: string | null;
 }
 
 export async function fetchServerInfo(): Promise<ServerInfo> {
@@ -46,6 +53,7 @@ export async function fetchServerInfo(): Promise<ServerInfo> {
     protocolVersions: parsed.protocol_versions,
     minClientVersion: parsed.min_client_version,
     googleClientId: parsed.google_client_id ?? null,
+    appleWebClientId: parsed.apple_web_client_id ?? null,
   };
 }
 

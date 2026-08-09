@@ -105,6 +105,22 @@ export async function loginWithGoogle(idToken: string): Promise<AuthOutcome> {
   return toOutcome(data);
 }
 
+/**
+ * `nonce` is required here where the Google twin sends none: the server
+ * verifies it against the token's own claim on every Apple sign-in, not just
+ * on re-auth.
+ */
+export async function loginWithApple(
+  idToken: string,
+  nonce: string,
+): Promise<AuthOutcome> {
+  const { data, error, response } = await relayClient.POST('/api/auth/apple', {
+    body: { id_token: idToken, nonce, refreshable: true },
+  });
+  if (error !== undefined || data === undefined) fail(response, error);
+  return toOutcome(data);
+}
+
 export async function verifyEmail(
   email: string,
   code: string,
@@ -163,7 +179,7 @@ export async function resetPassword(
   if (error !== undefined) fail(response, error);
 }
 
-export type DeletionMethod = 'password' | 'google';
+export type DeletionMethod = 'password' | 'google' | 'apple';
 export type DeletionMode = 'scheduled' | 'immediate';
 
 export interface DeleteAccountInput {
