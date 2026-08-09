@@ -137,7 +137,14 @@ class AgentRepository(
             requestId,
         )
 
-    /** Approve a redeemed code; refreshes the agent list like a QR claim does. */
+    /**
+     * Approve a redeemed code; refreshes the agent list like a QR claim does.
+     *
+     * The refresh is best-effort, matching iOS: the confirm has already landed
+     * server-side, so letting a transient list fetch throw would report a
+     * failure for a pairing that succeeded — and the retry would 410, because
+     * the request is no longer open.
+     */
     suspend fun confirmDeviceCode(
         requestId: String,
         mobileDeviceId: String,
@@ -155,7 +162,7 @@ class AgentRepository(
                 friendly_name = friendlyName,
             ),
         )
-        refreshAgents()
+        runCatching { refreshAgents() }
         return response
     }
 

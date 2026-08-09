@@ -14,6 +14,14 @@ final class ManualSleeper: Sleeper, @unchecked Sendable {
 
     var durations: [Duration] { lock.withLock { recorded } }
 
+    /// Whether a `sleep` is blocked right now. `tick()` only resumes what is
+    /// already registered here — a caller driving a loop one iteration at a
+    /// time needs this to tell "the loop has reached its next `sleep` and is
+    /// ready to be ticked" from "the loop (or the task that starts it) just
+    /// hasn't been scheduled yet", since a `tick()` fired into an empty
+    /// `waiters` resumes nothing and is silently lost.
+    var isWaiting: Bool { lock.withLock { !waiters.isEmpty } }
+
     func sleep(for duration: Duration) async throws {
         lock.withLock { recorded.append(duration) }
         let id = UUID()
@@ -43,6 +51,21 @@ final class ManualSleeper: Sleeper, @unchecked Sendable {
     func release() {
         let pending: [CheckedContinuation<Void, Error>] = lock.withLock {
             released = true
+            let values = Array(waiters.values)
+            waiters.removeAll()
+            return values
+        }
+        pending.forEach { $0.resume() }
+    }
+
+    /// Resume exactly the sleeps blocked right now, without arming
+    /// `released`. A `sleep` call that starts after this returns still
+    /// blocks — so a caller driving a loop that itself decides when to stop
+    /// sleeping (rather than running out and returning, like the deferred
+    /// undo `release()` was written for) can advance it one iteration at a
+    /// time instead of letting every future sleep resolve for free.
+    func tick() {
+        let pending: [CheckedContinuation<Void, Error>] = lock.withLock {
             let values = Array(waiters.values)
             waiters.removeAll()
             return values

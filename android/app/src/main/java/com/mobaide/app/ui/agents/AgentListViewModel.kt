@@ -360,9 +360,16 @@ class AgentListViewModel @Inject constructor(
         // Bounded by the request's own deadline, not by `while (true)`: a
         // client that loses connectivity with the dialog open would otherwise
         // wake the radio every two seconds for the life of the process.
-        val deadline = parseInstantMillis(expiresAt)
+        //
+        // Re-read on every poll because the deadline *moves*: before redemption
+        // it is the code's expiry, and once a machine redeems, the relay swaps
+        // in the nonce's — a different, later clock. Pinning the mint value
+        // would declare a still-confirmable request expired.
+        var deadline = parseInstantMillis(expiresAt)
         deviceCodePollJob = viewModelScope.launch {
-            while (deadline == null || nowMillis() < deadline) {
+            // `let` binds a stable local: `deadline` is reassigned from inside
+            // this closure, so it cannot smart-cast in the condition itself.
+            while (deadline.let { it == null || nowMillis() < it }) {
                 delay(DEVICE_CODE_POLL_INTERVAL_MS)
                 val status = try {
                     agentRepository.getDeviceCodeStatus(requestId)
@@ -384,6 +391,7 @@ class AgentListViewModel @Inject constructor(
                 ) {
                     return@launch
                 }
+                parseInstantMillis(status.expires_at)?.let { deadline = it }
                 when (status.status) {
                     "redeemed" -> {
                         _uiState.update {

@@ -85,18 +85,29 @@ final class AgentListModelDeviceCodeTests: XCTestCase {
         #"[{"agent_id":"\#(id)","name":"Workstation","online":\#(online),"created_at":"t"}]"#
     }
 
-    /// Mint, then let the poll tick once against the enqueued status body.
+    /// Mint, then tick the poll until it leaves `.waitingForHost`.
     ///
-    /// The poll no longer returns on its own once redeemed — it keeps
-    /// watching `.confirming` for a later expiry (see
-    /// `testPollKeepsPollingThroughConfirmingUntilTheRequestSettles`). A
-    /// caller that only wants this one tick's result has to stop the task
-    /// itself, or — now that `sleeper` never blocks again once released —
-    /// it spins through the rest of this test's (and the next test's)
-    /// `StubURLProtocol` queue as fast as the scheduler lets it. Cancelling
-    /// alone is not enough: cancellation is cooperative, so without
-    /// awaiting the task's own completion a caller can still race a
-    /// spurious extra request against whatever it does next.
+    /// Drives the poll with `sleeper.tick()`, not `release()`: the poll no
+    /// longer returns on its own once redeemed — it keeps watching
+    /// `.confirming` for a later expiry (see
+    /// `testPollKeepsPollingThroughConfirmingUntilTheRequestSettles`) — and
+    /// `release()` unblocks every *future* sleep too, so the loop would free
+    /// -run past the intended tick(s) and eat whatever is next in
+    /// `StubURLProtocol`'s queue before `cancel()` below ever lands.
+    ///
+    /// Usually one tick suffices, but `testPollSurvivesADroppedRequestAndKeepsWatching`
+    /// needs two: a dropped fetch is caught-and-retried without leaving
+    /// `.waitingForHost`, so the loop goes straight back to `sleep` for
+    /// another tick rather than settling. Looping on that state — not a
+    /// fixed tick count — is what makes this correct for both shapes: it
+    /// never ticks *more* than the caller's enqueued stubs call for, because
+    /// it stops the instant the state actually moves on.
+    ///
+    /// Each tick is gated on `sleeper.isWaiting` first: `.waitingForHost`
+    /// becomes true the moment the poll `Task` is *created*, not once it has
+    /// actually run far enough to register its next `sleep`, so a `tick()`
+    /// fired right after observing state (or right after the previous tick)
+    /// can land on an empty `waiters` and be silently lost.
     private func pollOnce(
         _ model: AgentListModel,
         sleeper: ManualSleeper
@@ -106,10 +117,15 @@ final class AgentListModelDeviceCodeTests: XCTestCase {
             if case .waitingForHost = model.deviceCodePairing { return true }
             return false
         }
-        sleeper.release()
-        await waitUntil {
-            if case .waitingForHost = model.deviceCodePairing { return false }
-            return true
+        while case .waitingForHost = model.deviceCodePairing {
+            await waitUntil { sleeper.isWaiting }
+            sleeper.tick()
+            await waitUntil {
+                if case .waitingForHost = model.deviceCodePairing {
+                    return sleeper.isWaiting
+                }
+                return true
+            }
         }
         model.deviceCodePollTask?.cancel()
         await model.deviceCodePollTask?.value
@@ -249,18 +265,61 @@ final class AgentListModelDeviceCodeTests: XCTestCase {
         StubURLProtocol.enqueue(status: 200, body: statusJSON("expired"))
         let sleeper = ManualSleeper()
         model = AgentHarness().makeAgentListModel(sleeper: sleeper)
-        let requestsBefore = StubURLProtocol.requests.count
 
         model.startDeviceCodePairing()
         await waitUntil {
             if case .waitingForHost = model.deviceCodePairing { return true }
             return false
         }
-        sleeper.release()
+        var seen = StubURLProtocol.requests.count // mint
+
+        // Three explicit ticks, one per enqueued status — not `release()`,
+        // which would resume every future sleep too and let the loop race
+        // ahead of this test's own synchronization. Each tick is gated on
+        // `sleeper.isWaiting`: `.waitingForHost`/`.confirming` become true
+        // the moment the poll `Task` is *created*, not once it has actually
+        // run far enough to register its next `sleep`, so a `tick()` fired
+        // right after observing state can land on an empty `waiters` and be
+        // silently lost. Between ticks, waiting on the request count alone
+        // is not enough either: `StubURLProtocol` records the request on
+        // URLSession's loading thread strictly before the response is
+        // delivered, which is strictly before the poll's `@MainActor` state
+        // update runs — so a count-only wait can resolve a beat before
+        // `deviceCodePairing` actually reflects it. Waiting on both closes
+        // that gap.
+        await waitUntil { sleeper.isWaiting }
+        sleeper.tick()
+        await waitUntil {
+            guard StubURLProtocol.requests.count > seen else { return false }
+            if case .confirming = model.deviceCodePairing { return true }
+            return false
+        }
+        guard StubURLProtocol.requests.count > seen, case .confirming = model.deviceCodePairing else {
+            return XCTFail(
+                "expected confirming after the first redeemed tick, got \(model.deviceCodePairing)"
+            )
+        }
+        seen = StubURLProtocol.requests.count
+
+        await waitUntil { sleeper.isWaiting }
+        sleeper.tick()
+        await waitUntil {
+            guard StubURLProtocol.requests.count > seen else { return false }
+            if case .confirming = model.deviceCodePairing { return true }
+            return false
+        }
+        guard StubURLProtocol.requests.count > seen, case .confirming = model.deviceCodePairing else {
+            return XCTFail(
+                "expected confirming after the second redeemed tick, got \(model.deviceCodePairing)"
+            )
+        }
+        seen = StubURLProtocol.requests.count
 
         // The nonce can still die while the user is sitting on the confirm
         // screen, so the poll must keep watching for that from `.confirming`
         // too, instead of stopping the moment it first arrives there.
+        await waitUntil { sleeper.isWaiting }
+        sleeper.tick()
         await waitUntil {
             if case .error = model.deviceCodePairing { return true }
             return false
@@ -270,9 +329,9 @@ final class AgentListModelDeviceCodeTests: XCTestCase {
             return XCTFail("expected error, got \(model.deviceCodePairing)")
         }
         XCTAssertTrue(message.contains("before it was confirmed"), message)
-        // mint + 3 polls: both "redeemed" stubs had to be consumed before the
+        // mint + 3 polls: both "redeemed" ticks had to land before the
         // "expired" one, proving the loop did not stop at the first redeem.
-        XCTAssertEqual(StubURLProtocol.requests.count, requestsBefore + 4)
+        XCTAssertEqual(StubURLProtocol.requests.count, seen + 1)
     }
 
     func testConfirmHandsOffToTheSharedWaitingForOnlineTail() async {

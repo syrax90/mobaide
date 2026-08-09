@@ -392,6 +392,19 @@ def pending_device_code_path(layout) -> Path:
     return Path(layout.prefix) / "run" / "pending_device_code.json"
 
 
+def canonical_device_code(code: str) -> str:
+    """Fold a typed code to the form the relay hashes.
+
+    The relay upper-cases and strips everything outside its alphabet, so
+    ``wdjb-mjht`` and ``WDJB MJHT`` name the same code. The local pending
+    record has to agree, or a resume typed in a different case looks like a
+    *different* code: the record is discarded, the fresh redeem is refused
+    as already-used, and the error path then deletes the very
+    ``redeemer_id`` and nonce that could have completed the pairing.
+    """
+    return "".join(ch for ch in code.upper() if ch.isalnum())
+
+
 def device_code_fingerprint(code: str) -> str:
     """Digest identifying which code a pending record belongs to.
 
@@ -399,7 +412,9 @@ def device_code_fingerprint(code: str) -> str:
     request I started" from "the operator typed a different code", without
     leaving a live pairing code at rest on the agent host.
     """
-    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        canonical_device_code(code).encode("utf-8")
+    ).hexdigest()
 
 
 def save_pending_device_code(

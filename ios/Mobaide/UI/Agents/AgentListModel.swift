@@ -335,7 +335,11 @@ final class AgentListModel {
         // `isoformat()` can emit). A shape it cannot read yields nil, which
         // leaves the loop unbounded — the same behaviour as before this bound
         // existed, so an unparseable deadline degrades rather than breaks.
-        let deadline = CountdownView.parse(expiresAt)
+        // Re-read on every poll because the deadline *moves*: before
+        // redemption it is the code's expiry, and once a machine redeems the
+        // relay swaps in the nonce's — a different, later clock. Pinning the
+        // mint value would declare a still-confirmable request expired.
+        var deadline = CountdownView.parse(expiresAt)
         deviceCodePollTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -359,6 +363,9 @@ final class AgentListModel {
                         continue
                     }
                     guard self.isDeviceCodePollable else { return }
+                    if let moved = CountdownView.parse(status.expires_at) {
+                        deadline = moved
+                    }
                     switch status.status {
                     case "redeemed":
                         self.deviceCodePairing = .confirming(
