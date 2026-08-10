@@ -463,8 +463,12 @@ class CreateSessionViewModel @Inject constructor(
         }
         val scope = agentScopeKey() ?: return
         viewModelScope.launch {
-            val recents = preferencesStore.getRecentCustomPaths(scope)
-            _uiState.update { it.copy(recentCustomPaths = recents) }
+            // Guarded like removeRecentCustomPath below: a DataStore fault on the
+            // entry path must leave the chip row empty, not kill the wizard.
+            runCatching {
+                val recents = preferencesStore.getRecentCustomPaths(scope)
+                _uiState.update { it.copy(recentCustomPaths = recents) }
+            }
         }
     }
 
@@ -473,8 +477,12 @@ class CreateSessionViewModel @Inject constructor(
         it.copy(
             customPathDraft = value,
             customPathError = error,
+            // The draft stays as typed so the field never fights the user
+            // mid-keystroke; only the committed selection — the value that
+            // becomes the request cwd and the stored recent — is trimmed (iOS
+            // CreateSessionModel.setCustomPath does the same).
             selection = if (error == null && value.isNotBlank()) {
-                ProjectSelection.CustomPath(value)
+                ProjectSelection.CustomPath(value.trim())
             } else {
                 ProjectSelection.CustomPath("")
             },
@@ -482,6 +490,26 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     fun pickRecentCustomPath(path: String) = setCustomPathDraft(path)
+
+    /**
+     * Forgets one recent path for the current agent. The store read afterwards
+     * is authoritative, so the chip row cannot drift from what a later
+     * [selectCustomPath] would load.
+     */
+    fun removeRecentCustomPath(path: String) {
+        val scope = agentScopeKey() ?: return
+        viewModelScope.launch {
+            // Recents persistence is a UX nicety (TerminalViewModel.sendChord
+            // makes the same call): a DataStore fault must not take the wizard
+            // down mid-flow, and leaving the chip visible stays truthful — the
+            // store still holds it.
+            runCatching {
+                preferencesStore.removeRecentCustomPath(scope, path)
+                val recents = preferencesStore.getRecentCustomPaths(scope)
+                _uiState.update { it.copy(recentCustomPaths = recents) }
+            }
+        }
+    }
 
     fun confirmProject() = _uiState.update { state ->
         when (val sel = state.selection) {
@@ -1240,9 +1268,14 @@ class CreateSessionViewModel @Inject constructor(
     private fun agentScopeKey(): String? = tokenStore.getAgentId() ?: tokenStore.getAgentUrl()
 
     private fun validateCustomPath(input: String): String? {
-        if (input.isBlank()) return "Path is required"
+        // Judge the same string that gets launched, not the raw draft: the
+        // selection is trimmed, so validating the untrimmed text would reject
+        // " /tmp/x" as non-absolute while iOS accepts it (CreateSessionModel
+        // .validateCustomPath trims first too).
+        val trimmed = input.trim()
+        if (trimmed.isEmpty()) return "Path is required"
         return try {
-            if (Paths.get(input).isAbsolute || isWindowsAbsolute(input)) null
+            if (Paths.get(trimmed).isAbsolute || isWindowsAbsolute(trimmed)) null
             else "Path must be absolute"
         } catch (_: InvalidPathException) {
             "Path is invalid"

@@ -455,7 +455,8 @@ ported alongside the rest of `PreferencesStore` in CLA-98 but never wired into
 production. Selecting "Custom path…" now loads a "Recent paths" section of up
 to 5 previously launched per-agent directories, monospaced and head-truncated
 so the trailing folder stays visible; tapping a row fills the field, and swipe
-or long-press removes it, a capability Android (CLA-60) lacks. A path is
+or long-press removes it — Android reached parity in CLA-255 with a ✕ on the
+chip, and both clients trim the path before storing it. A path is
 recorded only after the session is actually created and never becomes the
 last-used project.
 

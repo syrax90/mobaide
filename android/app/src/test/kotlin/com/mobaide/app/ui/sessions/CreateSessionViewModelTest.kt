@@ -111,6 +111,7 @@ class CreateSessionViewModelTest {
         coEvery { prefs.setLastUsedAntigravityOptions(any()) } just Runs
         coEvery { prefs.getRecentCustomPaths(any()) } returns recentCustomPaths
         coEvery { prefs.addRecentCustomPath(any(), any()) } just Runs
+        coEvery { prefs.removeRecentCustomPath(any(), any()) } just Runs
         every { autoScanRepo.getAutoScanPrompt() } returns autoScanPrompt
         every { tokenStore.getAgentId() } returns agentId
         every { tokenStore.getAgentUrl() } returns agentUrl
@@ -1223,6 +1224,148 @@ class CreateSessionViewModelTest {
         assertEquals(hostAbsolutePath, s.customPathDraft)
         assertNull(s.customPathError)
         assertEquals(hostAbsolutePath, (s.selection as ProjectSelection.CustomPath).path)
+    }
+
+    @Test
+    fun setCustomPathDraft_trimsIntoSelection_butLeavesTheDraftAsTyped() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        val typed = "$hostAbsolutePath  "
+        vm.setCustomPathDraft(typed)
+
+        val s = vm.uiState.value
+        assertEquals(
+            "the field must not fight the user mid-keystroke",
+            typed,
+            s.customPathDraft,
+        )
+        assertNull(s.customPathError)
+        // The committed selection is what becomes the request `cwd` and the
+        // stored recent, so it — not the draft — carries the trim.
+        assertEquals(hostAbsolutePath, (s.selection as ProjectSelection.CustomPath).path)
+    }
+
+    @Test
+    fun setCustomPathDraft_leadingWhitespace_validatesAsAbsolute_andTrimsIntoSelection() = runTest {
+        // Validation must judge the same string that gets launched. Leading
+        // whitespace used to reach `Paths.get(...)` untrimmed, so " /srv/work"
+        // reported "Path must be absolute" and held the selection at "" — while
+        // iOS accepted it (CreateSessionModel.validateCustomPath trims first).
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        val typed = "  $hostAbsolutePath"
+        vm.setCustomPathDraft(typed)
+
+        val s = vm.uiState.value
+        assertNull(
+            "a leading space must not make an absolute path look relative",
+            s.customPathError,
+        )
+        assertEquals("the field must not fight the user mid-keystroke", typed, s.customPathDraft)
+        assertEquals(hostAbsolutePath, (s.selection as ProjectSelection.CustomPath).path)
+    }
+
+    @Test
+    fun setCustomPathDraft_leadingWhitespaceWindowsPath_validatesViaRegexFallback() = runTest {
+        // The Windows shape is matched by an `^`-anchored regex, so untrimmed
+        // input misses it on every host — this is the second of the two
+        // absolute-ness checks and it has to see the trimmed string too.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        vm.setCustomPathDraft("  C:/ML/Projects")
+
+        val s = vm.uiState.value
+        assertNull(s.customPathError)
+        assertEquals("C:/ML/Projects", (s.selection as ProjectSelection.CustomPath).path)
+    }
+
+    @Test
+    fun confirmProject_customPathWithLeadingWhitespace_advancesToModePick() = runTest {
+        // The user-visible half of the fix: Continue gates on
+        // `selection.path.isNotBlank() && customPathError == null`, so before
+        // the trim a leading-space paste left the wizard stuck on
+        // ProjectSelect with a disabled button and no way forward but editing.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        vm.setCustomPathDraft("  $hostAbsolutePath  ")
+        vm.confirmProject()
+
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+    }
+
+    @Test
+    fun removeRecentCustomPath_deletesFromStore_andRefreshesStateFromTheReRead() = runTest {
+        val fx = newFixture(recentCustomPaths = listOf("/tmp/gone", "/tmp/kept"))
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        assertEquals(listOf("/tmp/gone", "/tmp/kept"), vm.uiState.value.recentCustomPaths)
+
+        // "/tmp/fresh" is unreachable by filtering the old list locally, so
+        // this pins that the chip row comes from the post-write store read.
+        coEvery { fx.prefs.getRecentCustomPaths("agent-1") } returns
+            listOf("/tmp/kept", "/tmp/fresh")
+
+        vm.removeRecentCustomPath("/tmp/gone")
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fx.prefs.removeRecentCustomPath("agent-1", "/tmp/gone") }
+        assertEquals(listOf("/tmp/kept", "/tmp/fresh"), vm.uiState.value.recentCustomPaths)
+    }
+
+    @Test
+    fun removeRecentCustomPath_noScopeKey_isSilentNoOp() = runTest {
+        // No agent_id AND no agent_url ⇒ there is no bucket to write to. The
+        // VM must skip the store entirely rather than key off null.
+        val fx = newFixture(agentId = null, agentUrl = null)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        vm.removeRecentCustomPath("/tmp/gone")
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { fx.prefs.removeRecentCustomPath(any(), any()) }
+        assertTrue(vm.uiState.value.recentCustomPaths.isEmpty())
+    }
+
+    @Test
+    fun removeRecentCustomPath_leavesDraftErrorAndSelectionUntouched() = runTest {
+        val fx = newFixture(recentCustomPaths = listOf("/tmp/gone", hostAbsolutePath))
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft(hostAbsolutePath)
+
+        coEvery { fx.prefs.getRecentCustomPaths("agent-1") } returns listOf(hostAbsolutePath)
+
+        vm.removeRecentCustomPath("/tmp/gone")
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals("removing a chip must not disturb a typed draft", hostAbsolutePath, s.customPathDraft)
+        assertNull(s.customPathError)
+        assertEquals(hostAbsolutePath, (s.selection as ProjectSelection.CustomPath).path)
+        assertEquals(listOf(hostAbsolutePath), s.recentCustomPaths)
     }
 
     @Test
