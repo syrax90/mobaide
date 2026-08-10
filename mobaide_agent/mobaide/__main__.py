@@ -10,6 +10,12 @@ Subcommands:
                          terminal, and (with ``--wait``) block until the
                          mobile app claims it. Replaces the legacy
                          ``pair --id ... --token ...`` flow.
+* ``pair <code>``      — redeem a short pairing code minted in the Mobaide
+                         app and wait for the account holder to confirm
+                         this host. The direction that survives an air gap:
+                         nothing has to be copied *off* this machine.
+* ``show-trust-fp``    — print the fingerprint of the pinned relay signing
+                         key, for comparing against what the app shows.
 * ``show-qr``          — re-render the most-recent pending QR (or initiate
                          a fresh one if expired). Helpful for SSH-attached
                          operators who lost the install-time render.
@@ -36,6 +42,8 @@ import subprocess
 import sys
 import time
 import urllib.error as urllib_error
+from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 import uvicorn
@@ -135,6 +143,58 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-restart",
         action="store_true",
         help="Skip the best-effort service restart after a successful claim.",
+    )
+
+    pair = sub.add_parser(
+        "pair",
+        help=(
+            "Redeem a pairing code shown in the Mobaide app and wait for "
+            "the account holder to confirm this machine."
+        ),
+    )
+    pair.add_argument(
+        "code",
+        help="The code the app displayed, e.g. WDJB-MJHT (case-insensitive).",
+    )
+    pair.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Skip the interactive 'pair this machine to <account>?' prompt. "
+            "Required when stdin is not a terminal. Only pass this when the "
+            "code came from your own Mobaide account: pairing hands whoever "
+            "owns that account shell sessions on this machine."
+        ),
+    )
+    pair.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Pair even though this host already has relay credentials. "
+            "Without it an already-paired agent refuses, so a code sent by "
+            "someone else cannot silently move a working host."
+        ),
+    )
+    pair.add_argument(
+        "--prefix",
+        help="Override install prefix (default: install_paths.default_prefix()).",
+    )
+    pair.add_argument(
+        "--no-restart",
+        action="store_true",
+        help="Skip the best-effort service restart after a successful pairing.",
+    )
+
+    show_trust_fp = sub.add_parser(
+        "show-trust-fp",
+        help=(
+            "Print the fingerprint of the relay signing key pinned on this "
+            "host, for comparison against the one the app shows."
+        ),
+    )
+    show_trust_fp.add_argument(
+        "--prefix",
+        help="Override install prefix (default: install_paths.default_prefix()).",
     )
 
     show_qr = sub.add_parser(
@@ -240,6 +300,10 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(_run_update())
     elif command == "pair-qr":
         sys.exit(_run_pair_qr(args))
+    elif command == "pair":
+        sys.exit(_run_pair(args))
+    elif command == "show-trust-fp":
+        sys.exit(_run_show_trust_fp(args))
     elif command == "show-qr":
         sys.exit(_run_show_qr(args))
     elif command == "re-pair":
@@ -647,6 +711,309 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
     if args.no_restart:
         return 0
     return _try_restart_service()
+
+
+def _confirm_device_pairing(account_hint: str, hostname: str) -> bool:
+    """Ask the operator whether to hand this machine to ``account_hint``.
+
+    This prompt is the reversed flow's primary safeguard, not a courtesy.
+    Because the *browser* mints the code, a confirmation shown only in the
+    browser is answered by whoever minted it — so an attacker who talks
+    someone into running this command with the attacker's code would be
+    confirming their own request while the victim's machine becomes an
+    agent they own. The account name has to be read here, on the terminal
+    of the machine being given away.
+    """
+    sys.stdout.write(
+        f"\n[mobaide-agent] Pair '{hostname}' with Mobaide account "
+        f"{account_hint}?\n"
+        "[mobaide-agent] That account will be able to open terminal "
+        "sessions on this machine.\n"
+        "[mobaide-agent] If you did not just request this code in your own "
+        "Mobaide app, answer no.\n"
+    )
+    try:
+        answer = input("[mobaide-agent] Pair this machine? [y/N] ")
+    except EOFError:
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
+def _run_pair(args: argparse.Namespace) -> int:
+    """Redeem a device code and wait for the account holder's confirmation.
+
+    Returns:
+        0   paired.
+        2   ``.env`` missing or RELAY_SERVER_URL unset.
+        3   network error talking to the central server.
+        4   trust key not pinned (run ``mobaide-agent fetch-trust-key``).
+        5   trust-key fingerprint mismatch with the relay's current key.
+        6   pairing WebSocket failed (signature, transport, TTL); the
+            redemption stays on file so a re-run can reconnect to it.
+        8   the relay refused the code (unknown, expired, already used).
+        9   refused locally: already paired, or the operator declined.
+    """
+    from mobaide.agent._env_writer import (
+        env_path_for_prefix,
+        parse_env_file,
+    )
+    from mobaide.agent.install_paths import (
+        default_prefix,
+        read_trust_public_key,
+    )
+    from mobaide.agent.pairing_monitor import (
+        DeviceCodeRejected,
+        PairingMonitorError,
+        accept_device_code,
+        redeem_device_code,
+        write_credentials_to_env,
+    )
+    from mobaide.agent.pairing_qr import (
+        PendingDeviceCode,
+        clear_pending_device_code,
+        compute_trust_key_fp,
+        device_code_fingerprint,
+        load_pending_device_code,
+        new_redeemer_id,
+        save_pending_device_code,
+    )
+    from mobaide.agent.pairing_ws import PairingWsClient, PairingWsError
+    from mobaide.agent.updater import InstallLayout
+
+    prefix = Path(args.prefix) if args.prefix else default_prefix()
+    layout = InstallLayout(prefix=prefix)
+
+    env_file = env_path_for_prefix(prefix)
+    if not env_file.exists():
+        sys.stderr.write(
+            f"mobaide-agent pair: {env_file} does not exist.\n"
+            f"Run: python -m mobaide.agent.config init-env\n"
+        )
+        return 2
+    env_kv = parse_env_file(env_file)
+    relay_server_url = env_kv.get("RELAY_SERVER_URL", "").strip()
+    if not relay_server_url:
+        sys.stderr.write(
+            f"mobaide-agent pair: RELAY_SERVER_URL is empty in {env_file}.\n"
+            f"Set it before pairing.\n"
+        )
+        return 2
+    current_agent_id = env_kv.get("RELAY_AGENT_ID", "").strip() or None
+    if (
+        current_agent_id
+        and env_kv.get("RELAY_AGENT_TOKEN", "").strip()
+        and not args.force
+    ):
+        sys.stderr.write(
+            "mobaide-agent pair: this host already has relay credentials. "
+            "Re-pairing it would move it to whichever account issued the "
+            "code. If that is what you want, re-run with --force; to hand "
+            "the host to a different account, run 'mobaide-agent re-pair' "
+            "first.\n"
+        )
+        return 9
+
+    # Checked before the redeem, not after: redeeming spends the code, and
+    # a run that could never show the confirmation prompt must not spend it.
+    if not args.yes and not sys.stdin.isatty():
+        sys.stderr.write(
+            "mobaide-agent pair: stdin is not a terminal, so the "
+            "confirmation prompt cannot be shown. Re-run with --yes only "
+            "if the code came from your own Mobaide account.\n"
+        )
+        return 9
+
+    pinned_pub_key = read_trust_public_key(layout)
+    if not pinned_pub_key:
+        sys.stderr.write(
+            f"mobaide-agent pair: trust key not pinned at "
+            f"{layout.trust_public_key}.\n"
+            f"Run: mobaide-agent fetch-trust-key\n"
+        )
+        return 4
+    pinned_fp = compute_trust_key_fp(pinned_pub_key)
+
+    # Resume a redemption this host already won: the relay hands the nonce
+    # out exactly once, so a run interrupted between redeem and claim can
+    # only continue from the local record.
+    code_fp = device_code_fingerprint(args.code)
+    stored = load_pending_device_code(layout, code_fp)
+    record = stored or PendingDeviceCode(
+        redeemer_id=new_redeemer_id(), code_fp=code_fp
+    )
+    hostname = socket.gethostname()
+    is_repair = bool(current_agent_id)
+
+    if record.pending is None:
+        save_pending_device_code(layout, record)
+        try:
+            pending, account_hint, is_repair = redeem_device_code(
+                relay_server_url,
+                pinned_fp,
+                code=args.code,
+                redeemer_id=record.redeemer_id,
+                hostname=hostname,
+                os_name=platform.system(),
+                current_agent_id=current_agent_id,
+            )
+        except DeviceCodeRejected as exc:
+            sys.stderr.write(f"mobaide-agent pair: {exc}\n")
+            clear_pending_device_code(layout)
+            return 8
+        except PairingMonitorError as exc:
+            sys.stderr.write(f"mobaide-agent pair: {exc}\n")
+            clear_pending_device_code(layout)
+            return 5
+        except (urllib_error.URLError, OSError) as exc:
+            sys.stderr.write(
+                f"mobaide-agent pair: cannot reach central server: {exc}\n"
+            )
+            return 3
+
+        if pending is None:
+            sys.stderr.write(
+                "mobaide-agent pair: this code was already redeemed from "
+                "this machine, and the pairing nonce is not recoverable. "
+                "Request a new code in the Mobaide app and run this "
+                "command again.\n"
+            )
+            clear_pending_device_code(layout)
+            return 8
+
+        # Persisted before the prompt, not after: the prompt blocks on human
+        # input, and a Ctrl-C or a dropped SSH session there would otherwise
+        # leave a code the relay has already spent with no local nonce to
+        # resume from. ``confirmed`` stays false, so the resume below still
+        # has to ask.
+        record = replace(record, pending=pending, account_hint=account_hint)
+        save_pending_device_code(layout, record)
+    else:
+        sys.stdout.write(
+            "[mobaide-agent] Resuming the pairing request this machine "
+            "already started.\n"
+        )
+
+    # Runs on every path, including a resume. This prompt is the reversed
+    # flow's primary control, so an interrupted run must not be able to slip
+    # past it by coming back with a nonce already on disk.
+    if not record.confirmed:
+        account_hint = record.account_hint or "an unknown account"
+        if not args.yes and not _confirm_device_pairing(account_hint, hostname):
+            sys.stderr.write(
+                "mobaide-agent pair: declined. The code has been used up "
+                "and cannot be redeemed again.\n"
+            )
+            clear_pending_device_code(layout)
+            return 9
+        if args.yes:
+            sys.stdout.write(
+                f"[mobaide-agent] Pairing '{hostname}' with Mobaide account "
+                f"{account_hint} (--yes).\n"
+            )
+        record = replace(record, confirmed=True)
+        save_pending_device_code(layout, record)
+
+    # Sent on every path that gets past the prompt, resume included, and
+    # before the wait: until the relay has it the request still polls as
+    # pending, so the account holder's confirm button does not exist and
+    # nothing can be registered or rotated behind this operator's back.
+    try:
+        accept_device_code(
+            relay_server_url, code=args.code, redeemer_id=record.redeemer_id
+        )
+    except DeviceCodeRejected as exc:
+        sys.stderr.write(f"mobaide-agent pair: {exc}\n")
+        clear_pending_device_code(layout)
+        return 8
+    except (urllib_error.URLError, OSError) as exc:
+        sys.stderr.write(
+            f"mobaide-agent pair: cannot reach central server: {exc}\n"
+            f"mobaide-agent pair: the approval was not recorded. Re-run "
+            f"'mobaide-agent pair {args.code}' to resume — it will not ask "
+            "again.\n"
+        )
+        return 3
+
+    if is_repair:
+        sys.stdout.write(
+            "[mobaide-agent] Re-pairing the existing agent "
+            f"{current_agent_id}.\n"
+        )
+
+    pending = record.pending
+
+    sys.stdout.write(
+        "[mobaide-agent] Waiting for the pairing to be confirmed in the "
+        f"Mobaide app (until {pending.expires_at}). Press Ctrl-C to "
+        "abort.\n"
+    )
+    timeout_s = max(
+        1.0, datetime.fromisoformat(pending.expires_at).timestamp() - time.time()
+    )
+    try:
+        claim = asyncio.run(
+            PairingWsClient().wait_for_claim(
+                ws_url=pending.ws_url,
+                timeout_s=timeout_s,
+                trust_pub_key_b64=pinned_pub_key,
+                expected_relay_url=pending.relay_url,
+            )
+        )
+    except PairingWsError as exc:
+        # The record deliberately survives a WebSocket failure. The relay
+        # holds the claimed credentials in ``claimed_token_raw`` for a
+        # reconnect on this same nonce, and the raw nonce exists nowhere
+        # else — clearing it here would turn a dropped connection into a
+        # burnt code, because a re-run would redeem under a fresh
+        # ``redeemer_id`` and be refused. A resume whose nonce has since
+        # expired is dropped by ``load_pending_device_code`` instead.
+        sys.stderr.write(
+            f"mobaide-agent pair: {exc}\n"
+            f"mobaide-agent pair: this redemption is still on file. Re-run "
+            f"'mobaide-agent pair {args.code}' before {pending.expires_at} "
+            "to reconnect and pick up the credentials.\n"
+        )
+        return 6
+
+    asyncio.run(write_credentials_to_env(env_file, claim))
+    clear_pending_device_code(layout)
+    sys.stdout.write(
+        f"[mobaide-agent] Paired as agent_id={claim.agent_id} "
+        f"({claim.agent_friendly_name}).\n"
+    )
+    if args.no_restart:
+        return 0
+    return _try_restart_service()
+
+
+def _run_show_trust_fp(args: argparse.Namespace) -> int:
+    """Print the fingerprint of the pinned relay signing key.
+
+    Returns:
+        0   fingerprint printed.
+        4   trust key not pinned (run ``mobaide-agent fetch-trust-key``).
+    """
+    from mobaide.agent.install_paths import default_prefix
+    from mobaide.agent.pairing_qr import read_pinned_trust_key_fp
+    from mobaide.agent.updater import InstallLayout
+
+    prefix = Path(args.prefix) if args.prefix else default_prefix()
+    layout = InstallLayout(prefix=prefix)
+    fingerprint = read_pinned_trust_key_fp(layout)
+    if fingerprint is None:
+        sys.stderr.write(
+            f"mobaide-agent show-trust-fp: no usable trust key at "
+            f"{layout.trust_public_key}.\n"
+            f"Run: mobaide-agent fetch-trust-key\n"
+        )
+        return 4
+    sys.stdout.write(f"{fingerprint}\n")
+    sys.stdout.write(
+        f"[mobaide-agent] Pinned from {layout.trust_public_key}. This must "
+        "match the relay fingerprint shown in the Mobaide app; if it does "
+        "not, stop and investigate before pairing.\n"
+    )
+    return 0
 
 
 def _run_show_qr(args: argparse.Namespace) -> int:

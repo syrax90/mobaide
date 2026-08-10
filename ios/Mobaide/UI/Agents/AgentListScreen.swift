@@ -43,6 +43,13 @@ private struct AgentListContent: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        // Above the install commands because this is the path
+                        // that works when the agent's screen is not somewhere a
+                        // camera can see it — an SSH session, a VM console, a
+                        // machine in another room.
+                        Button { model.startDeviceCodePairing() } label: {
+                            Label("Pair with a code", systemImage: "keyboard")
+                        }
                         Button { model.startAdd() } label: {
                             Label("Add agent manually", systemImage: "plus")
                         }
@@ -78,6 +85,12 @@ private struct AgentListContent: View {
             .task { await model.refresh() }
             .sheet(isPresented: $model.pairingSheetPresented, onDismiss: { model.resetPairing() }) {
                 PairingSheet(model: model)
+            }
+            .sheet(
+                isPresented: $model.deviceCodeSheetPresented,
+                onDismiss: { model.resetDeviceCodePairing() }
+            ) {
+                DeviceCodePairingSheet(model: model)
             }
             .sheet(item: $model.credentials) { creds in
                 AgentCredentialsSheet(credentials: creds) { model.credentials = nil }
@@ -330,6 +343,146 @@ private struct PairingFlowView: View {
                 .foregroundStyle(.secondary)
             Button("Close") { model.dismissPairing() }
                 .buttonStyle(.borderedProminent)
+        }
+    }
+}
+
+/// The reversed direction.
+///
+/// There is no waiting-for-online case here — once the confirm lands the flow
+/// hands off to `PairingSheet`.
+private struct DeviceCodePairingSheet: View {
+    @Bindable var model: AgentListModel
+
+    var body: some View {
+        NavigationStack {
+            content
+                .padding()
+                .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.medium])
+        .interactiveDismissDisabled(model.deviceCodePairing.isClaiming)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch model.deviceCodePairing {
+        case .idle:
+            EmptyView()
+        case .minting:
+            VStack(spacing: 16) {
+                ProgressView()
+                Text("Getting a code…").font(.headline)
+            }
+        case .waitingForHost(_, let code, let command):
+            waitingForHost(code: code, command: command)
+        case .confirming(_, let hostname, let os, let repairAgentName, let blocked):
+            confirming(
+                hostname: hostname,
+                os: os,
+                repairAgentName: repairAgentName,
+                blocked: blocked
+            )
+        case .claiming:
+            VStack(spacing: 16) {
+                ProgressView()
+                Text("Pairing…").font(.headline)
+            }
+        case .error(let message):
+            VStack(spacing: 16) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 40))
+                    .foregroundStyle(MobaideColors.warningYellow)
+                Text("Pairing failed").font(.title3.bold())
+                Text(message)
+                    .font(.callout)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                Button("Close") { model.dismissDeviceCodePairing() }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    private func waitingForHost(code: String, command: String) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "keyboard")
+                .font(.system(size: 40))
+                .foregroundStyle(.tint)
+            Text("On the computer you want to pair, run:").font(.headline)
+            CopyableCodeBlock(label: "Pairing command", code: command)
+            Text(
+                "The code is \(code) if you would rather type it yourself. The agent "
+                + "will name this account and ask you to confirm before it pairs — only "
+                + "enter it on a machine you own."
+            )
+            .font(.footnote)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.secondary)
+            ProgressView()
+            Text("Waiting for a machine to enter the code…")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Button("Cancel", role: .cancel) { model.dismissDeviceCodePairing() }
+        }
+    }
+
+    private func confirming(
+        hostname: String,
+        os: String?,
+        repairAgentName: String?,
+        blocked: DeviceCodeBlockedReason?
+    ) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "desktopcomputer")
+                .font(.system(size: 40))
+                .foregroundStyle(.tint)
+            Text(
+                repairAgentName.map { "Move ‘\($0)’ to this machine?" }
+                    ?? "Is this your machine?"
+            )
+            .font(.title3.bold())
+            VStack(alignment: .leading, spacing: 6) {
+                LabeledContent("Hostname", value: hostname)
+                if let os {
+                    LabeledContent("System", value: os)
+                }
+            }
+            .font(.callout)
+            // The name above is whatever the machine that entered the code
+            // reported, over an endpoint that authenticates nobody — it helps a
+            // user recognise their own host and proves nothing by itself.
+            Text(
+                "A machine calling itself \(hostname) entered your code. If that is not "
+                + "the computer you just typed it into, do not continue."
+            )
+            .font(.footnote)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.secondary)
+            if let repairAgentName {
+                Text(
+                    "That machine reported it is already ‘\(repairAgentName)’. "
+                    + "Continuing rotates that agent’s credentials onto it — if the "
+                    + "real ‘\(repairAgentName)’ is a different computer, that one "
+                    + "goes offline."
+                )
+                .font(.footnote)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            }
+            if let blocked {
+                Text(blocked.message)
+                    .font(.footnote)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(MobaideColors.warningYellow)
+            }
+            HStack {
+                Button("Cancel", role: .cancel) { model.dismissDeviceCodePairing() }
+                Button("Pair this machine") { model.confirmDeviceCode() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(blocked != nil)
+            }
+            .padding(.top, 4)
         }
     }
 }

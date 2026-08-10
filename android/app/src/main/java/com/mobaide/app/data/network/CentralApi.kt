@@ -9,6 +9,9 @@ import com.mobaide.app.data.network.dto.CreateShortcutRequest
 import com.mobaide.app.data.network.dto.CreateTemplateRequest
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.DeleteAccountRequest
+import com.mobaide.app.data.network.dto.DeviceCodeConfirmRequest
+import com.mobaide.app.data.network.dto.DeviceCodeMintResponse
+import com.mobaide.app.data.network.dto.DeviceCodeStatusResponse
 import com.mobaide.app.data.network.dto.DeviceResponse
 import com.mobaide.app.data.network.dto.ForgotPasswordRequest
 import com.mobaide.app.data.network.dto.ForgotPasswordResponse
@@ -24,6 +27,7 @@ import com.mobaide.app.data.network.dto.ResetPasswordRequest
 import com.mobaide.app.data.network.dto.ResetPasswordResponse
 import com.mobaide.app.data.network.dto.ShortcutDto
 import com.mobaide.app.data.network.dto.TemplateDto
+import com.mobaide.app.data.network.dto.TrustPinResponse
 import com.mobaide.app.data.network.dto.UpdateCustomAgentTypeRequest
 import com.mobaide.app.data.network.dto.UpdateShortcutRequest
 import com.mobaide.app.data.network.dto.UpdateTemplateRequest
@@ -255,6 +259,72 @@ class CentralApi(
         val request = Request.Builder()
             .url("${baseUrl()}/api/pairing/claim")
             .post(payload)
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    /**
+     * Mint a short pairing code for the operator to retype on the agent host.
+     *
+     * Supersedes this account's previous unredeemed code, so the set of live
+     * codes stays at one — part of what keeps the ~34.6-bit code space safe.
+     */
+    suspend fun mintDeviceCode(userToken: String): DeviceCodeMintResponse {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/pairing/device-code")
+            .post("".toRequestBody(jsonMediaType))
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun getDeviceCodeStatus(
+        userToken: String,
+        requestId: String,
+    ): DeviceCodeStatusResponse {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/pairing/device-code/$requestId")
+            .get()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    /**
+     * Approve a redeemed code, releasing credentials to the waiting agent.
+     *
+     * Throws [ApiException] with HTTP 409 when the target agent belongs to
+     * another account or the relay's trust key no longer matches this
+     * account's pin, and 410 once the request has expired or settled.
+     */
+    suspend fun confirmDeviceCode(
+        userToken: String,
+        requestId: String,
+        body: DeviceCodeConfirmRequest,
+    ): PairingClaimResponse {
+        val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/pairing/device-code/$requestId/confirm")
+            .post(payload)
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun cancelDeviceCode(userToken: String, requestId: String) {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/pairing/device-code/$requestId")
+            .delete()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        executeNoContent(request)
+    }
+
+    suspend fun getTrustPin(userToken: String): TrustPinResponse {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/pairing/trust-pin")
+            .get()
             .header("Authorization", "Bearer $userToken")
             .build()
         return execute(request)

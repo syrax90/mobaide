@@ -2,6 +2,7 @@ package com.mobaide.app.ui.sessions
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
@@ -34,7 +36,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardColors
 import androidx.compose.material3.CardDefaults
@@ -48,6 +49,8 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
+import androidx.compose.material3.InputChipDefaults
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemColors
 import androidx.compose.material3.ListItemDefaults
@@ -63,6 +66,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -227,6 +231,7 @@ fun CreateSessionScreen(
                     onCustomPathSelected = viewModel::selectCustomPath,
                     onCustomPathChange = viewModel::setCustomPathDraft,
                     onPickRecentCustomPath = viewModel::pickRecentCustomPath,
+                    onRemoveRecentCustomPath = viewModel::removeRecentCustomPath,
                     onCreateProjectClicked = projectsViewModel::openCreateSheet,
                     onContinue = viewModel::confirmProject,
                 )
@@ -444,6 +449,7 @@ private fun ProjectSelectSection(
     onCustomPathSelected: () -> Unit,
     onCustomPathChange: (String) -> Unit,
     onPickRecentCustomPath: (String) -> Unit,
+    onRemoveRecentCustomPath: (String) -> Unit,
     onCreateProjectClicked: () -> Unit,
     onContinue: () -> Unit,
 ) {
@@ -487,7 +493,7 @@ private fun ProjectSelectSection(
                     Column {
                         Text("Custom path…")
                         Text(
-                            text = "Run once, don't save",
+                            text = "Run once — no project is created",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -553,6 +559,7 @@ private fun ProjectSelectSection(
             state = state,
             onDraftChange = onCustomPathChange,
             onPickRecent = onPickRecentCustomPath,
+            onRemoveRecent = onRemoveRecentCustomPath,
         )
     }
 
@@ -571,12 +578,15 @@ private fun ProjectSelectSection(
     }
 }
 
+// Internal, not private, so the chip's pick-vs-remove split is click-testable
+// directly (ShortcutPickerContent is exposed for the same reason).
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CustomPathPanel(
+internal fun CustomPathPanel(
     state: CreateSessionUiState,
     onDraftChange: (String) -> Unit,
     onPickRecent: (String) -> Unit,
+    onRemoveRecent: (String) -> Unit,
 ) {
     OutlinedTextField(
         value = state.customPathDraft,
@@ -608,9 +618,28 @@ private fun CustomPathPanel(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             state.recentCustomPaths.forEach { path ->
-                AssistChip(
+                InputChip(
+                    selected = false,
                     onClick = { onPickRecent(path) },
                     label = { Text(path) },
+                    trailingIcon = {
+                        // The ✕ needs real 48dp layout bounds: an ancestor's
+                        // in-bounds hit does not suppress a descendant's near hit
+                        // — so taps meant to PICK would silently REMOVE instead.
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .clickable(role = Role.Button) { onRemoveRecent(path) },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "Remove $path from recent paths",
+                                modifier = Modifier.size(InputChipDefaults.IconSize),
+                            )
+                        }
+                    },
+                    modifier = Modifier.testTag("recent_custom_path_chip"),
                 )
             }
         }

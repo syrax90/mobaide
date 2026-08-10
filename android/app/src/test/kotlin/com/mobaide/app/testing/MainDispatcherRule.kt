@@ -3,6 +3,7 @@ package com.mobaide.app.testing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -23,6 +24,14 @@ import org.junit.runner.Description
 class MainDispatcherRule(
     private val testDispatcher: TestDispatcher = StandardTestDispatcher(),
 ) : TestWatcher() {
+
+    /**
+     * The virtual clock `delay` advances. Exposed so a test can point
+     * production code's wall-clock seam at it — a loop that compares
+     * `System.currentTimeMillis()` against a deadline never terminates under
+     * `advanceUntilIdle`, because only this scheduler moves.
+     */
+    val scheduler: TestCoroutineScheduler get() = testDispatcher.scheduler
 
     override fun starting(description: Description) {
         Dispatchers.setMain(testDispatcher)

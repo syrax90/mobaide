@@ -447,6 +447,11 @@ long-press action, reachable through a new `Route.createAutoScan(projectName:)`.
 No wire field, endpoint, protocol version or dependency changes —
 `ClaudeOptionsModel` already carried `plan_mode` / `initial_prompt` / `worktree`,
 and `ProjectInfo.has_linear_key` / `auto_scan_prompt` were decoded but unread.
+CLA-199 adds the reversed device-code pairing direction: a new "Pair with a
+code" action in the Agents screen's overflow menu opens a guarded mint →
+wait → confirm flow (`DeviceCodePairingState`) beside the CLA-102 QR
+scanner; the account-level `trust_key_fp` pin behind it is documented in
+[docs/qr-pairing.md](qr-pairing.md).
 Remaining feature screens land in later issues.
 The create-session wizard's custom-path step now calls `PreferencesStore`'s
 recent-launch-directories persistence (`getRecentCustomPaths`/
@@ -455,7 +460,8 @@ ported alongside the rest of `PreferencesStore` in CLA-98 but never wired into
 production. Selecting "Custom path…" now loads a "Recent paths" section of up
 to 5 previously launched per-agent directories, monospaced and head-truncated
 so the trailing folder stays visible; tapping a row fills the field, and swipe
-or long-press removes it, a capability Android (CLA-60) lacks. A path is
+or long-press removes it — Android reached parity in CLA-255 with a ✕ on the
+chip, and both clients trim the path before storing it. A path is
 recorded only after the session is actually created and never becomes the
 last-used project.
 

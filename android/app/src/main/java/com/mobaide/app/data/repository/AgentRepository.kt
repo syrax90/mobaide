@@ -6,11 +6,15 @@ import com.mobaide.app.data.auth.requireAccessToken
 import com.mobaide.app.data.network.CentralApi
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.CreateAgentResponse
+import com.mobaide.app.data.network.dto.DeviceCodeConfirmRequest
+import com.mobaide.app.data.network.dto.DeviceCodeMintResponse
+import com.mobaide.app.data.network.dto.DeviceCodeStatusResponse
 import com.mobaide.app.data.network.dto.MobileTokenRequest
 import com.mobaide.app.data.network.dto.MobileTokenResponse
 import com.mobaide.app.data.network.dto.PairingClaimRequest
 import com.mobaide.app.data.network.dto.PairingClaimResponse
 import com.mobaide.app.data.network.dto.ReRegisterAgentResponse
+import com.mobaide.app.data.network.dto.TrustPinResponse
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -118,4 +122,57 @@ class AgentRepository(
         return response
     }
 
+    /**
+     * Mint a short pairing code to retype on the machine being paired.
+     *
+     * The reverse of [claimAgentByPairing]: nothing has to be copied *off* the
+     * agent host, which is what makes it work where a camera cannot reach.
+     */
+    suspend fun mintDeviceCode(): DeviceCodeMintResponse =
+        centralApi.mintDeviceCode(userIdentityStore.requireAccessToken())
+
+    suspend fun getDeviceCodeStatus(requestId: String): DeviceCodeStatusResponse =
+        centralApi.getDeviceCodeStatus(
+            userIdentityStore.requireAccessToken(),
+            requestId,
+        )
+
+    /**
+     * Approve a redeemed code; refreshes the agent list like a QR claim does.
+     *
+     * The refresh is best-effort, matching iOS: the confirm has already landed
+     * server-side, so letting a transient list fetch throw would report a
+     * failure for a pairing that succeeded — and the retry would 410, because
+     * the request is no longer open.
+     */
+    suspend fun confirmDeviceCode(
+        requestId: String,
+        mobileDeviceId: String,
+        mobileDeviceName: String?,
+        friendlyName: String?,
+    ): PairingClaimResponse {
+        val token = userIdentityStore.requireAccessToken()
+        val response = centralApi.confirmDeviceCode(
+            token,
+            requestId,
+            DeviceCodeConfirmRequest(
+                mobile_device_id = mobileDeviceId,
+                mobile_device_name = mobileDeviceName,
+                platform = DeviceIdentityStore.DEVICE_PLATFORM,
+                friendly_name = friendlyName,
+            ),
+        )
+        runCatching { refreshAgents() }
+        return response
+    }
+
+    suspend fun cancelDeviceCode(requestId: String) {
+        centralApi.cancelDeviceCode(
+            userIdentityStore.requireAccessToken(),
+            requestId,
+        )
+    }
+
+    suspend fun getTrustPin(): TrustPinResponse =
+        centralApi.getTrustPin(userIdentityStore.requireAccessToken())
 }

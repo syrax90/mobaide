@@ -1,15 +1,21 @@
-"""REST + WebSocket endpoints for mobile token refresh and QR pairing.
+"""REST + WebSocket endpoints for mobile token refresh and agent pairing.
 
-QR pairing flow:
+QR pairing (agent-first):
 * ``POST /api/pairing/initiate``    — agent gets a nonce + QR payload (anon)
-* ``POST /api/pairing/claim``       — mobile claims a scanned nonce (auth)
+* ``POST /api/pairing/claim``       — a client claims a scanned nonce (auth)
 * ``WS   /ws/pairing/{nonce}``      — agent awaits the claim push (anon, single-use)
+
+Device-code pairing (browser-first) mints a short retypeable code, redeems
+it into an ordinary pairing nonce, and rejoins the flow above at the same
+WebSocket. Both directions finish through ``_complete_pairing`` so the
+ownership, device-registry and trust-pin rules cannot drift apart.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import (
@@ -17,6 +23,7 @@ from fastapi import (
     Depends,
     HTTPException,
     Request,
+    Response,
     WebSocket,
     status,
 )
@@ -28,16 +35,33 @@ from ..auth.models import (
     MobileTokenResponse,
     UserTokenPayload,
 )
+from ..relay.routing import WS_CLOSE_AGENT_TRANSIENT_OFFLINE
 from ..ws_origin import enforce_ws_origin
+from .device_code import (
+    format_code,
+    generate_code,
+    hash_device_code,
+    mask_email,
+    normalize_code,
+)
 from .models import (
+    DeviceCodeAcceptRequest,
+    DeviceCodeConfirmRequest,
+    DeviceCodeMintResponse,
+    DeviceCodeRedeemRequest,
+    DeviceCodeRedeemResponse,
+    DeviceCodeStatusResponse,
     PairingClaimRequest,
     PairingClaimResponse,
     PairingInitiateRequest,
     PairingInitiateResponse,
     PairingPushPayload,
+    TrustPinResponse,
 )
 from .qr_signer import (
     compute_trust_key_fp,
+    encode_pairing_payload,
+    hash_pairing_nonce,
     sign_pairing_payload,
 )
 
@@ -97,6 +121,32 @@ def _server_keys_or_503(request: Request) -> tuple[str, str]:
     return pub, priv
 
 
+def _agent_metadata_json(
+    *,
+    hostname: str | None,
+    os_name: str | None,
+    current_agent_id: str | None,
+) -> str | None:
+    """Serialise initiate/redeem hints into ``pairing_tokens.agent_metadata``.
+
+    Sorted keys so the stored blob is stable, and ``None`` when nothing was
+    reported so the column stays NULL rather than holding ``"{}"``. Both
+    pairing directions write it and ``_complete_pairing`` is the only
+    reader, which is what keeps first-pair vs re-pair intent identical
+    across the two front halves.
+    """
+    metadata = {
+        k: v
+        for k, v in {
+            "hostname": hostname,
+            "os": os_name,
+            "current_agent_id": current_agent_id,
+        }.items()
+        if v is not None
+    }
+    return json.dumps(metadata, sort_keys=True) if metadata else None
+
+
 @router.post(
     "/api/pairing/initiate",
     response_model=PairingInitiateResponse,
@@ -115,16 +165,11 @@ async def initiate_pairing(
     config = request.app.state.config
     db = request.app.state.db
 
-    metadata = {
-        k: v
-        for k, v in {
-            "hostname": body.hostname,
-            "os": body.os,
-            "current_agent_id": body.current_agent_id,
-        }.items()
-        if v is not None
-    }
-    metadata_json = json.dumps(metadata, sort_keys=True) if metadata else None
+    metadata_json = _agent_metadata_json(
+        hostname=body.hostname,
+        os_name=body.os,
+        current_agent_id=body.current_agent_id,
+    )
     relay_url = _resolve_public_base_url(request)
     raw_nonce, expires_at = await db.create_pairing_token(
         agent_id=None,
@@ -135,8 +180,8 @@ async def initiate_pairing(
 
     trust_key_fp = compute_trust_key_fp(pub_key_b64)
     exp_unix = int(datetime.fromisoformat(expires_at).timestamp())
-    qr_payload = (
-        f"MOBA1|{relay_url}|{raw_nonce}|{trust_key_fp}|{exp_unix}"
+    qr_payload = encode_pairing_payload(
+        relay_url, raw_nonce, trust_key_fp, exp_unix
     )
 
     logger.info(
@@ -144,7 +189,7 @@ async def initiate_pairing(
         "metadata_keys=%s",
         raw_nonce[:8],
         expires_at,
-        sorted(metadata.keys()),
+        sorted(json.loads(metadata_json)) if metadata_json else [],
     )
 
     return PairingInitiateResponse(
@@ -172,21 +217,125 @@ async def claim_pairing(
     nonce is the single-flight authority: replays return 410 Gone.
     """
     pub_key_b64, priv_key_b64 = _server_keys_or_503(request)
-    if body.trust_key_fp != compute_trust_key_fp(pub_key_b64):
+    current_fp = compute_trust_key_fp(pub_key_b64)
+    if body.trust_key_fp != current_fp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="trust_key_fp does not match relay's current trust key",
         )
 
     db = request.app.state.db
-    registry = request.app.state.pairing_ws_registry
-
     pre = await db.lookup_pairing_token_metadata(body.nonce)
     if pre is None:
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Unknown pairing nonce",
         )
+    return await _complete_pairing(
+        request=request,
+        user=user,
+        pre=pre,
+        mobile_device_id=body.mobile_device_id,
+        mobile_device_name=body.mobile_device_name,
+        platform=body.platform,
+        hostname_hint=body.hostname_hint,
+        friendly_name=body.friendly_name,
+        priv_key_b64=priv_key_b64,
+        current_fp=current_fp,
+    )
+
+
+async def _enforce_account_trust_pin(
+    request: Request, user_id: str, current_fp: str
+) -> None:
+    """Compare the account's recorded signing fingerprint with the live one.
+
+    Records the fingerprint an account first paired against, then refuses
+    a later claim carrying a different one. Since a claim whose
+    ``trust_key_fp`` disagrees with the relay's current key is already a
+    400, this only ever fires when the relay's own signing key changed —
+    it is a rotation tripwire, not an MITM detector (the relay both stores
+    the pin and serves the value it is compared against).
+
+    Two escape hatches, because the incident that forces a rotation is
+    exactly the one this would otherwise brick: ``TRUST_KEY_PIN_ENFORCED``
+    turns enforcement off (and lets the stale pin be replaced as accounts
+    re-pair), and an account that currently owns no agents has nothing for
+    the pin to protect, so it re-pins instead of locking out.
+    """
+    db = request.app.state.db
+    config = request.app.state.config
+    pinned = await db.get_user_trust_key_fp(user_id)
+    if pinned is None or pinned == current_fp:
+        return
+    if not config.trust_key_pin_enforced:
+        await db.clear_user_trust_key_fp(user_id)
+        logger.warning(
+            "pairing.trust_pin_cleared_unenforced user=%s pinned_prefix=%s",
+            user_id,
+            pinned[:8],
+        )
+        return
+    if await db.count_agents_for_owner(user_id) == 0:
+        await db.clear_user_trust_key_fp(user_id)
+        logger.info(
+            "pairing.trust_pin_reset_no_agents user=%s pinned_prefix=%s",
+            user_id,
+            pinned[:8],
+        )
+        return
+    logger.warning(
+        "pairing.trust_pin_mismatch user=%s pinned_prefix=%s current_prefix=%s",
+        user_id,
+        pinned[:8],
+        current_fp[:8],
+    )
+    # Structured detail rather than a bare string: 409 already carries the
+    # "agent belongs to another account" refusal, and the two need
+    # different copy. Clients read the discriminator out of ``detail.error``
+    # (see ``ApiError.code`` on web) instead of matching on prose.
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "trust_key_pin_mismatch",
+            "message": (
+                "This relay's trust key differs from the one this account "
+                "first paired against. Pairing is refused."
+            ),
+        },
+    )
+
+
+async def _complete_pairing(
+    *,
+    request: Request,
+    user: UserTokenPayload,
+    pre: dict,
+    mobile_device_id: str,
+    mobile_device_name: str | None,
+    platform: str | None,
+    hostname_hint: str | None,
+    friendly_name: str | None,
+    priv_key_b64: str,
+    current_fp: str,
+) -> PairingClaimResponse:
+    """Consume a pairing nonce and deliver credentials to its agent.
+
+    The shared back half of both pairing directions: a QR claim and a
+    device-code confirm differ only in how they came by ``pre`` (the
+    ``pairing_tokens`` row). Everything security-relevant — trust pin,
+    agent ownership, device handover, the single-flight CAS — lives here so
+    the two front halves cannot drift.
+
+    Addresses the token row by ``pre["token_hash"]`` throughout. The
+    device-code row deliberately never stores a raw nonce, and the same
+    hash keys the WebSocket waiter registry, so a raw nonce is only ever in
+    flight between the server and the agent that redeemed it.
+    """
+    db = request.app.state.db
+    registry = request.app.state.pairing_ws_registry
+    token_hash = pre["token_hash"]
+
     if pre["consumed_at"] is not None:
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
@@ -198,6 +347,8 @@ async def claim_pairing(
             status_code=status.HTTP_410_GONE,
             detail="Pairing nonce expired",
         )
+
+    await _enforce_account_trust_pin(request, user.sub, current_fp)
 
     metadata: dict = json.loads(pre["agent_metadata"]) if pre["agent_metadata"] else {}
     current_agent_id = metadata.get("current_agent_id")
@@ -238,15 +389,15 @@ async def claim_pairing(
     # the nonce race still leaves a completed handover — harmless, the
     # retrying user already owns the device.
     previous_owner = await db.upsert_mobile_device(
-        device_id=body.mobile_device_id,
+        device_id=mobile_device_id,
         user_id=user.sub,
-        name=body.mobile_device_name,
-        platform=body.platform,
+        name=mobile_device_name,
+        platform=platform,
     )
     if previous_owner is not None:
         logger.info(
             "mobile_device.handover device_id=%s from_user=%s to_user=%s",
-            body.mobile_device_id,
+            mobile_device_id,
             previous_owner,
             user.sub,
         )
@@ -257,26 +408,26 @@ async def claim_pairing(
         new_token = await db.reregister_agent(current_agent_id)
         agent_id = current_agent_id
         agent_row = await db.get_agent(agent_id)
-        friendly_name = (
+        resolved_name = (
             (agent_row or {}).get("name")
-            or body.friendly_name
+            or friendly_name
             or hostname_meta
             or "agent"
         )
     else:
-        friendly_name = (
-            body.friendly_name
-            or body.hostname_hint
+        resolved_name = (
+            friendly_name
+            or hostname_hint
             or hostname_meta
             or "agent"
         )
         agent_id, new_token = await db.register_agent(
-            name=friendly_name, owner_user_id=user.sub
+            name=resolved_name, owner_user_id=user.sub
         )
 
-    claimed = await db.claim_pairing_nonce(
-        raw_token=body.nonce,
-        mobile_device_id=body.mobile_device_id,
+    claimed = await db.claim_pairing_nonce_by_hash(
+        token_hash=token_hash,
+        mobile_device_id=mobile_device_id,
         claimed_agent_id=agent_id,
         claimed_token_raw=new_token,
     )
@@ -285,6 +436,34 @@ async def claim_pairing(
             status_code=status.HTTP_410_GONE,
             detail="Pairing nonce already consumed",
         )
+
+    # Take the account's trust pin only once the claim has actually landed,
+    # so a pairing that fails the ownership guard or loses the CAS race
+    # cannot leave a pin behind. No-op when the account already has one.
+    await db.pin_user_trust_key_fp(user.sub, current_fp)
+
+    if current_agent_id:
+        # Drop the tunnel the rotated token used to authenticate. Two
+        # things depended on this: an agent whose credentials were revoked
+        # kept a live authenticated socket until its process happened to
+        # restart, and every client's "waiting for it to come online"
+        # watcher reads exactly this registration — so a re-pair of an
+        # online agent reported success the instant it was asked, whether
+        # or not the redeeming host ever received or wrote the new
+        # credentials. 4012, not 4010: the agent is expected back, and the
+        # mobile sockets closed alongside it must keep reconnecting rather
+        # than treat this as a destructive revocation.
+        routing = getattr(request.app.state, "routing", None)
+        if routing is not None:
+            closed = await routing.disconnect_agent(
+                agent_id, WS_CLOSE_AGENT_TRANSIENT_OFFLINE, "credentials_rotated"
+            )
+            if closed:
+                logger.info(
+                    "pairing.repair_disconnected_agent agent_id=%s sockets=%d",
+                    agent_id,
+                    closed,
+                )
 
     # Echo the relay_url persisted at initiate time, not whatever
     # ``request.base_url`` happens to resolve to now. Two reasons:
@@ -303,7 +482,7 @@ async def claim_pairing(
         "agent_id": agent_id,
         "agent_token": new_token,
         "relay_url": relay_url,
-        "agent_friendly_name": friendly_name,
+        "agent_friendly_name": resolved_name,
         "issued_at": issued_at,
     }
     signature_b64 = sign_pairing_payload(priv_key_b64, push_payload_unsigned)
@@ -311,7 +490,7 @@ async def claim_pairing(
         **push_payload_unsigned, signature_b64=signature_b64
     )
     delivered = await registry.dispatch_to_waiter(
-        body.nonce, push_payload.model_dump_json().encode("utf-8")
+        token_hash, push_payload.model_dump_json().encode("utf-8")
     )
     logger.info(
         "pairing.claim_completed agent_id=%s by_user=%s repair=%s "
@@ -324,8 +503,481 @@ async def claim_pairing(
 
     return PairingClaimResponse(
         agent_id=agent_id,
-        agent_friendly_name=friendly_name,
+        agent_friendly_name=resolved_name,
         ws_delivered=delivered,
+    )
+
+
+def _rate_limited(wait: int) -> HTTPException:
+    """The 429 both device-code limiters raise."""
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={
+            "error": "device_code_rate_limited",
+            "retry_after_seconds": wait,
+        },
+        headers={"Retry-After": str(wait)},
+    )
+
+
+async def _require_device_code_redeem_quota(request: Request) -> None:
+    """Per-IP throttle on the anonymous redeem endpoint.
+
+    Runs as a dependency, so it charges every redeem — which is right for
+    a per-IP bucket, where a legitimate operator makes one or two attempts.
+    The global circuit breaker deliberately does *not* live here: as a
+    dependency it would charge successful pairings too, turning a
+    guessing defence into a deployment-wide throughput ceiling. It is
+    consumed in the handler, on failures only — see
+    ``_charge_failed_device_code_redeem``.
+
+    Falls open when unwired, matching ``_require_reset_ip_quota``.
+    """
+    limiter = getattr(request.app.state, "device_code_ip_limiter", None)
+    if limiter is None:
+        return
+    ip = request.client.host if request.client else "unknown"
+    wait = await limiter.try_acquire(f"ip:{ip}")
+    if wait is not None:
+        raise _rate_limited(wait)
+
+
+async def _charge_failed_device_code_redeem(request: Request) -> None:
+    """Consume a slot from the global breaker after a rejected redeem.
+
+    The bucket a distributed guesser cannot sidestep: per-IP collapses to
+    one shared bucket behind a proxy that does not forward the client
+    address, and ``ResendRateLimiter`` evicts least-recently-used keys
+    under an address spray. Charged only on failure, so a busy deployment
+    pairing legitimately never trips it, while a spray of wrong codes does
+    — regardless of how many source addresses it comes from.
+
+    Best-effort: the caller is already raising, so a tripped breaker here
+    only means the *next* redeem is refused. Falls open when unwired.
+    """
+    limiter = getattr(request.app.state, "device_code_global_limiter", None)
+    if limiter is None:
+        return
+    await limiter.try_acquire("global")
+
+
+async def _require_global_device_code_quota(request: Request) -> None:
+    """Refuse a redeem while the global breaker is tripped.
+
+    Uses ``peek`` rather than ``try_acquire`` so the check itself costs
+    nothing: only failed redeems are charged.
+    """
+    limiter = getattr(request.app.state, "device_code_global_limiter", None)
+    if limiter is None:
+        return
+    wait = await limiter.peek("global")
+    if wait is not None:
+        raise _rate_limited(wait)
+
+
+async def _require_device_code_mint_quota(
+    request: Request, user: UserTokenPayload
+) -> None:
+    """Cooldown-only throttle on minting, keyed by account.
+
+    Deliberately not an hourly cap: minting invalidates the account's
+    previous code, so a user who reloads the pairing screen re-mints, and a
+    cap would lock them out of pairing for an hour with no way forward. The
+    limiter treats ``hourly_cap=0`` as "no cap" (see the ``> 0`` guard in
+    ``ResendRateLimiter.try_acquire``), leaving just the cooldown to absorb
+    double-submits.
+    """
+    limiter = getattr(request.app.state, "device_code_mint_limiter", None)
+    if limiter is None:
+        return
+    wait = await limiter.try_acquire(f"user:{user.sub}")
+    if wait is not None:
+        raise _rate_limited(wait)
+
+
+@router.post(
+    "/api/pairing/device-code",
+    response_model=DeviceCodeMintResponse,
+    tags=["pairing"],
+)
+async def mint_device_code(
+    request: Request,
+    user: UserTokenPayload = Depends(get_non_admin_api_user),
+) -> DeviceCodeMintResponse:
+    """Mint a short code for the operator to retype on the agent host."""
+    _server_keys_or_503(request)
+    await _require_device_code_mint_quota(request, user)
+    config = request.app.state.config
+    db = request.app.state.db
+
+    code = generate_code()
+    display_code = format_code(code)
+    request_id = str(uuid.uuid4())
+    expires_at = await db.create_device_code(
+        request_id=request_id,
+        code_hash=hash_device_code(config.jwt_secret_key, code),
+        user_id=user.sub,
+        ttl_seconds=config.pairing_device_code_ttl_seconds,
+    )
+    logger.info(
+        "pairing.device_code_minted request_id=%s by_user=%s expires_at=%s",
+        request_id,
+        user.sub,
+        expires_at,
+    )
+    return DeviceCodeMintResponse(
+        request_id=request_id,
+        code=display_code,
+        expires_at=expires_at,
+        verification_command=f"mobaide-agent pair {display_code}",
+    )
+
+
+@router.post(
+    "/api/pairing/device-code/redeem",
+    response_model=DeviceCodeRedeemResponse,
+    tags=["pairing"],
+)
+async def redeem_device_code(
+    request: Request,
+    body: DeviceCodeRedeemRequest,
+    _ip_quota: None = Depends(_require_device_code_redeem_quota),
+    _global_quota: None = Depends(_require_global_device_code_quota),
+) -> DeviceCodeRedeemResponse:
+    """Exchange a retyped code for a pairing nonce. Anonymous by necessity.
+
+    The agent has no credentials yet — that is the whole point of pairing —
+    so this endpoint authenticates nothing. It hands back no secret beyond
+    a nonce that is worthless without the account owner's separate confirm,
+    plus the masked account name the operator needs to decide whether to
+    grant this machine to that account at all.
+    """
+    pub_key_b64, _ = _server_keys_or_503(request)
+    config = request.app.state.config
+    db = request.app.state.db
+
+    normalized = normalize_code(body.code)
+    if normalized is None:
+        await _charge_failed_device_code_redeem(request)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Malformed pairing code",
+        )
+
+    outcome = await db.redeem_device_code(
+        code_hash=hash_device_code(config.jwt_secret_key, normalized),
+        redeemer_id=body.redeemer_id,
+        hostname=body.hostname,
+        os_name=body.os,
+        current_agent_id=body.current_agent_id,
+        agent_metadata=_agent_metadata_json(
+            hostname=body.hostname,
+            os_name=body.os,
+            current_agent_id=body.current_agent_id,
+        ),
+        nonce_ttl_seconds=config.pairing_device_code_confirm_ttl_seconds,
+        relay_url=_resolve_public_base_url(request),
+    )
+    if outcome is None:
+        await _charge_failed_device_code_redeem(request)
+        logger.info("pairing.device_code_redeem_rejected")
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=(
+                "That pairing code is not valid. It may have expired, "
+                "already been used by another machine, or been replaced by "
+                "a newer code."
+            ),
+        )
+
+    owner = await db.get_user_by_id(outcome["user_id"])
+    logger.info(
+        "pairing.device_code_redeemed request_id=%s replayed=%s",
+        outcome["request_id"],
+        outcome["replayed"],
+    )
+    return DeviceCodeRedeemResponse(
+        nonce=outcome["nonce"],
+        expires_at=outcome["expires_at"],
+        trust_key_fp=compute_trust_key_fp(pub_key_b64),
+        relay_url=_resolve_public_base_url(request),
+        account_hint=mask_email((owner or {}).get("email", "")),
+        is_repair=bool(body.current_agent_id),
+        replayed=outcome["replayed"],
+    )
+
+
+@router.post(
+    "/api/pairing/device-code/accept",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["pairing"],
+)
+async def accept_device_code(
+    request: Request,
+    body: DeviceCodeAcceptRequest,
+    _ip_quota: None = Depends(_require_device_code_redeem_quota),
+    _global_quota: None = Depends(_require_global_device_code_quota),
+) -> Response:
+    """Record the operator's yes on the terminal of the machine being paired.
+
+    The gate that makes that prompt real. The browser mints the code, so a
+    confirmation it shows is answered by whoever minted it — which is why
+    the agent asks on its own terminal before writing anything. Without
+    this call the browser could still confirm while that prompt was
+    unanswered, and ``_complete_pairing`` would register an agent or rotate
+    an existing agent's token regardless of how the operator replied: a
+    decline then left an orphan agent, or a working host locked out of a
+    relay it never agreed to leave.
+
+    Anonymous, like the redeem it follows, and rate-limited by the same two
+    buckets: it takes the code *and* the ``redeemer_id`` that redeemed it,
+    so only the machine already holding both can approve.
+    """
+    config = request.app.state.config
+    db = request.app.state.db
+
+    normalized = normalize_code(body.code)
+    if normalized is None:
+        await _charge_failed_device_code_redeem(request)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Malformed pairing code",
+        )
+    approved = await db.approve_device_code(
+        code_hash=hash_device_code(config.jwt_secret_key, normalized),
+        redeemer_id=body.redeemer_id,
+    )
+    if not approved:
+        await _charge_failed_device_code_redeem(request)
+        logger.info("pairing.device_code_accept_rejected")
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=(
+                "That pairing request is no longer open. It may have "
+                "expired, been canceled, or been redeemed by another "
+                "machine."
+            ),
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def _device_code_repair_verdict(
+    db, current_agent_id, user_id
+) -> tuple[str | None, str | None]:
+    """Resolve a re-pair target into ``(blocked_reason, agent_name)``.
+
+    Two jobs, one lookup. The blocked reason is surfaced in the poll
+    response so a re-pair destined to 404 or 409 says so while the code and
+    nonce are still spendable, rather than burning both on a click.
+
+    The name matters just as much: when the redeeming host claims an
+    ``agent_id`` the confirming account already owns, approving does not
+    add a machine — it *moves* that agent, rotating its token onto the
+    redeemer and knocking the real host offline. "Is this your machine?" is
+    the wrong question there, so the clients need something to name.
+    """
+    if not current_agent_id:
+        return None, None
+    existing_owner = await db.get_agent_owner(current_agent_id)
+    if existing_owner is None:
+        return "unknown_agent", None
+    if existing_owner != user_id:
+        return "owned_by_other", None
+    agent_row = await db.get_agent(current_agent_id)
+    return None, (agent_row or {}).get("name")
+
+
+@router.get(
+    "/api/pairing/device-code/{request_id}",
+    response_model=DeviceCodeStatusResponse,
+    tags=["pairing"],
+)
+async def get_device_code_status(
+    request: Request,
+    request_id: str,
+    user: UserTokenPayload = Depends(get_non_admin_api_user),
+) -> DeviceCodeStatusResponse:
+    """Poll a minted code. Owner-scoped: a foreign ``request_id`` is a 404."""
+    db = request.app.state.db
+    row = await db.get_device_code(request_id, user.sub)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Unknown pairing request",
+        )
+
+    now = datetime.now(timezone.utc)
+    expires_at = row["expires_at"]
+    if row["canceled_at"] is not None:
+        state = "canceled"
+    elif row["confirmed_at"] is not None:
+        state = "confirmed"
+    elif row["redeemed_at"] is not None:
+        # Past redeem the deadline that matters is the *nonce's*, not the
+        # code's: the confirm CAS tests ``pairing_tokens.expires_at``.
+        # Reporting the code's window here would leave the browser offering
+        # a confirm button that is guaranteed to 410.
+        token = await db.lookup_pairing_token_metadata_by_hash(
+            row["pairing_nonce_hash"] or ""
+        )
+        if token is None or datetime.fromisoformat(token["expires_at"]) <= now:
+            state = "expired"
+        else:
+            expires_at = token["expires_at"]
+            # A machine has the code but its operator has not answered the
+            # terminal prompt yet, so there is nothing for the browser to
+            # confirm: reporting "redeemed" here would light up a button
+            # whose whole purpose is to come *after* that answer.
+            state = "redeemed" if row["approved_at"] else "pending"
+    elif datetime.fromisoformat(expires_at) <= now:
+        state = "expired"
+    else:
+        state = "pending"
+
+    blocked_reason = None
+    repair_agent_name = None
+    if state == "redeemed":
+        blocked_reason, repair_agent_name = await _device_code_repair_verdict(
+            db, row["redeem_agent_id"], user.sub
+        )
+    return DeviceCodeStatusResponse(
+        status=state,
+        expires_at=expires_at,
+        hostname=row["redeem_hostname"],
+        os=row["redeem_os"],
+        is_repair=bool(row["redeem_agent_id"]),
+        repair_agent_name=repair_agent_name,
+        blocked_reason=blocked_reason,
+    )
+
+
+@router.post(
+    "/api/pairing/device-code/{request_id}/confirm",
+    response_model=PairingClaimResponse,
+    tags=["pairing"],
+)
+async def confirm_device_code(
+    request: Request,
+    request_id: str,
+    body: DeviceCodeConfirmRequest,
+    user: UserTokenPayload = Depends(get_non_admin_api_user),
+) -> PairingClaimResponse:
+    """Approve a redeemed code and release credentials to the waiting agent."""
+    pub_key_b64, priv_key_b64 = _server_keys_or_503(request)
+    db = request.app.state.db
+
+    row = await db.get_device_code(request_id, user.sub)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Unknown pairing request",
+        )
+    if row["canceled_at"] is not None or row["confirmed_at"] is not None:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="This pairing request is no longer open",
+        )
+    if row["redeemed_at"] is None or row["pairing_nonce_hash"] is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No machine has entered this code yet",
+        )
+    # The poll never offers a confirm before this, so reaching it means a
+    # client went around the flow. Refused rather than trusted: the whole
+    # point of the terminal prompt is that nothing is created or rotated
+    # until the machine being paired has agreed to it.
+    if row["approved_at"] is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That machine has not accepted this pairing yet",
+        )
+
+    pre = await db.lookup_pairing_token_metadata_by_hash(
+        row["pairing_nonce_hash"]
+    )
+    if pre is None:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Pairing nonce expired",
+        )
+
+    # Reserve the request before issuing anything. This CAS and cancel's are
+    # both single statements over the one connection and both require
+    # ``confirmed_at IS NULL AND canceled_at IS NULL``, so exactly one of
+    # confirm and cancel can win. Marking afterwards instead left a window
+    # where a DELETE landing mid-``_complete_pairing`` answered 204 to one
+    # client while the other still received credentials for the same code.
+    if not await db.mark_device_code_confirmed(request_id, user.sub):
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="This pairing request is no longer open",
+        )
+    try:
+        return await _complete_pairing(
+            request=request,
+            user=user,
+            pre=pre,
+            mobile_device_id=body.mobile_device_id,
+            mobile_device_name=body.mobile_device_name,
+            platform=body.platform,
+            hostname_hint=row["redeem_hostname"],
+            friendly_name=body.friendly_name,
+            priv_key_b64=priv_key_b64,
+            current_fp=compute_trust_key_fp(pub_key_b64),
+        )
+    except Exception:
+        # Reserving early must not cost what the late marking gave: a
+        # confirm the ownership guard or the trust pin refuses leaves the
+        # request open for a retry.
+        await db.reopen_device_code(request_id, user.sub)
+        raise
+
+
+@router.delete(
+    "/api/pairing/device-code/{request_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["pairing"],
+)
+async def cancel_device_code(
+    request: Request,
+    request_id: str,
+    user: UserTokenPayload = Depends(get_non_admin_api_user),
+) -> Response:
+    """Abandon a pairing request and expire any nonce it handed out."""
+    db = request.app.state.db
+    if not await db.cancel_device_code(request_id, user.sub):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Unknown pairing request",
+        )
+    logger.info(
+        "pairing.device_code_canceled request_id=%s by_user=%s",
+        request_id,
+        user.sub,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/api/pairing/trust-pin",
+    response_model=TrustPinResponse,
+    tags=["pairing"],
+)
+async def get_trust_pin(
+    request: Request,
+    user: UserTokenPayload = Depends(get_non_admin_api_user),
+) -> TrustPinResponse:
+    """Report the relay's signing fingerprint and the account's recorded pin.
+
+    Advisory only. Clients may display the pair and warn when they differ,
+    but must not copy ``account_trust_key_fp`` into a local trust store.
+    """
+    pub_key_b64, _ = _server_keys_or_503(request)
+    db = request.app.state.db
+    return TrustPinResponse(
+        relay_url=_resolve_public_base_url(request),
+        relay_trust_key_fp=compute_trust_key_fp(pub_key_b64),
+        account_trust_key_fp=await db.get_user_trust_key_fp(user.sub),
     )
 
 
@@ -384,7 +1036,12 @@ async def pairing_ws(websocket: WebSocket, nonce: str) -> None:
     registry = app.state.pairing_ws_registry
     config = app.state.config
 
-    pre = await db.lookup_pairing_token_metadata(nonce)
+    # Hashing at the boundary keeps the raw nonce out of server memory and
+    # lets the device-code confirm path — which only ever holds the hash —
+    # dispatch to this same waiter.
+    token_hash = hash_pairing_nonce(nonce)
+
+    pre = await db.lookup_pairing_token_metadata_by_hash(token_hash)
     if pre is None:
         await websocket.close(code=4404, reason="Unknown nonce")
         return
@@ -395,7 +1052,7 @@ async def pairing_ws(websocket: WebSocket, nonce: str) -> None:
         return
 
     try:
-        queue = await registry.register_waiter(nonce)
+        queue = await registry.register_waiter(token_hash)
     except KeyError:
         await websocket.close(code=4001, reason="duplicate")
         return
@@ -479,7 +1136,7 @@ async def pairing_ws(websocket: WebSocket, nonce: str) -> None:
         if websocket.client_state == WebSocketState.CONNECTED:
             await websocket.close(code=1011, reason="server error")
     finally:
-        await registry.unregister_waiter(nonce)
+        await registry.unregister_waiter(token_hash)
 
 
 def _resolve_public_base_url_from_app(websocket: WebSocket) -> str:

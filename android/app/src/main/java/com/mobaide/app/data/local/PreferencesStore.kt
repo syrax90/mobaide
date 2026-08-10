@@ -189,15 +189,41 @@ class PreferencesStore(private val context: Context) {
     }
 
     suspend fun addRecentCustomPath(agentKey: String, path: String) {
-        if (path.isBlank()) return
+        val trimmed = path.trim()
+        if (trimmed.isEmpty()) return
         context.dataStore.edit { prefs ->
             val existing = prefs[keyRecentCustomPaths(agentKey)]?.let { raw ->
                 runCatching {
                     cacheJson.decodeFromString(stringListSerializer, raw)
                 }.getOrDefault(emptyList())
             } ?: emptyList()
-            val merged = (listOf(path) + existing.filter { it != path }).take(MAX_RECENT_CUSTOM_PATHS)
+            val merged =
+                (listOf(trimmed) + existing.filter { it != trimmed }).take(MAX_RECENT_CUSTOM_PATHS)
             prefs[keyRecentCustomPaths(agentKey)] = cacheJson.encodeToString(stringListSerializer, merged)
+        }
+    }
+
+    /**
+     * Drops [path] from the agent's bucket. Matches the trimmed form (the key
+     * [addRecentCustomPath] dedupes on) and the raw argument, so entries stored
+     * untrimmed before that trim existed are still removable — the chip hands
+     * back whatever string it rendered.
+     */
+    suspend fun removeRecentCustomPath(agentKey: String, path: String) {
+        val trimmed = path.trim()
+        context.dataStore.edit { prefs ->
+            val key = keyRecentCustomPaths(agentKey)
+            val existing = prefs[key]?.let { raw ->
+                runCatching {
+                    cacheJson.decodeFromString(stringListSerializer, raw)
+                }.getOrDefault(emptyList())
+            } ?: return@edit
+            val remaining = existing.filter { it != path && it != trimmed }
+            // Drop the key outright once emptied rather than parking an "[]" blob
+            // under an agent URL that may never come back (mirrors iOS, and the
+            // remove-don't-blank precedent of setLastUsedProjectName above).
+            if (remaining.isEmpty()) prefs.remove(key)
+            else prefs[key] = cacheJson.encodeToString(stringListSerializer, remaining)
         }
     }
 

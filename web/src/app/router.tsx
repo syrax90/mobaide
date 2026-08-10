@@ -9,6 +9,7 @@ import { VerifyEmail } from '../routes/auth/VerifyEmail';
 import { Agents } from '../routes/agents/Agents';
 import { AutoScanDetailScreen } from '../routes/autoscan/AutoScanDetailScreen';
 import { Pair } from '../routes/pair/Pair';
+import { PairHost } from '../routes/pair/PairHost';
 import { SettingsScreen } from '../routes/settings/SettingsScreen';
 import { ProjectsScreen } from '../routes/projects/ProjectsScreen';
 import { GitScreen } from '../routes/projects/git/GitScreen';
@@ -64,6 +65,10 @@ export const router = createBrowserRouter([
               { path: 'devices', element: <Devices /> },
               { path: 'settings', element: <SettingsScreen /> },
               { path: 'agents', element: <Agents /> },
+              // Guarded, unlike `/pair`: this direction has no payload in the
+              // URL to rescue before sign-in, and minting a code needs a
+              // session anyway.
+              { path: 'agents/pair', element: <PairHost /> },
               { path: 'projects', element: <ProjectsScreen /> },
               { path: 'templates', element: <TemplatesScreen /> },
               // Agent- and project-scoped, so both ids ride in the path: a git

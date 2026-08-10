@@ -1,21 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../../api/errors';
 import {
+  TRUST_PIN_MISMATCH_CODE,
   WAIT_FOR_ONLINE_TIMEOUT_SECONDS,
   claimErrorMessage,
+  deviceCodeErrorMessage,
   expiredMessage,
   expiresInMessage,
+  trustPinMismatchMessage,
   waitTimeoutMessage,
 } from './pairCopy';
 
 const NOW = 1_700_000_000;
 
 /** Same shape `toApiError` builds, minus the fields this copy never reads. */
-function apiError(status: number, message: string): ApiError {
+function apiError(status: number, message: string, code: string | null = null): ApiError {
   return new ApiError({
     status,
     message,
-    code: null,
+    code,
     retryAfterSeconds: null,
     detail: message,
   });
@@ -97,6 +100,78 @@ describe('claimErrorMessage', () => {
 
   it('handles a thrown non-Error', () => {
     expect(claimErrorMessage('nope')).toBe('Pairing failed.');
+  });
+});
+
+describe('deviceCodeErrorMessage', () => {
+  it.each([
+    [404, 'no longer exists'],
+    [409, 'different account'],
+    [410, 'expired or was already used'],
+    [429, 'Too many pairing attempts'],
+    [503, 'not configured on this relay'],
+  ])('names a remedy for %i', (status, fragment) => {
+    expect(deviceCodeErrorMessage(apiError(status, 'raw server detail'))).toContain(
+      fragment,
+    );
+  });
+
+  it('never sends the user to the agent for a fresh code', () => {
+    // Every dead end in this direction is fixed by minting again in the
+    // browser; `mobaide-agent show-qr` is the other flow's remedy and would
+    // send the user to the machine they cannot copy anything off.
+    for (const status of [404, 409, 410, 429, 503]) {
+      expect(deviceCodeErrorMessage(apiError(status, 'detail'))).not.toContain(
+        'show-qr',
+      );
+    }
+  });
+
+  it('reads the account-pin refusal off the code, not the status', () => {
+    // 409 already means "that machine belongs to another account" here, so
+    // only the discriminator separates the two.
+    const pinned = apiError(409, 'raw server detail', TRUST_PIN_MISMATCH_CODE);
+
+    expect(deviceCodeErrorMessage(pinned)).toBe(trustPinMismatchMessage());
+    expect(deviceCodeErrorMessage(pinned)).not.toContain('different account');
+  });
+
+  it('passes an unmapped status detail through', () => {
+    expect(deviceCodeErrorMessage(apiError(418, 'teapot'))).toBe('teapot');
+  });
+
+  it('falls back to a generic line when an unmapped status carries no detail', () => {
+    expect(deviceCodeErrorMessage(apiError(500, ''))).toBe('Pairing failed.');
+  });
+
+  it('handles a transport failure that never reached the relay', () => {
+    expect(deviceCodeErrorMessage(new TypeError('Failed to fetch'))).toBe(
+      'Failed to fetch',
+    );
+  });
+
+  it('handles a thrown non-Error', () => {
+    expect(deviceCodeErrorMessage('nope')).toBe('Pairing failed.');
+  });
+});
+
+describe('trustPinMismatchMessage', () => {
+  it('offers verification rather than an override', () => {
+    // Recovery is deliberately not self-service: nobody in a browser can
+    // tell an intended key rotation from a compromise.
+    const message = trustPinMismatchMessage();
+
+    expect(message).toContain('mobaide-agent show-trust-fp');
+    expect(message).toContain('refused');
+    expect(message).not.toMatch(/pair anyway|continue anyway|override/i);
+  });
+
+  it('is reachable from the QR claim path too', () => {
+    // The account pin is enforced in the shared completion path, so a QR
+    // claim can hit it as readily as a device-code confirm.
+    expect(
+      claimErrorMessage(apiError(409, 'raw detail', TRUST_PIN_MISMATCH_CODE)),
+    ).toBe(trustPinMismatchMessage());
   });
 });
 

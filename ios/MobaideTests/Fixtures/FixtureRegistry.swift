@@ -115,6 +115,10 @@ enum FixtureRegistry {
         // PairingDtos.swift
         "PairingClaimRequest": runner(PairingClaimRequest.self),
         "PairingClaimResponse": runner(PairingClaimResponse.self),
+        "DeviceCodeMintResponse": runner(DeviceCodeMintResponse.self),
+        "DeviceCodeStatusResponse": runner(DeviceCodeStatusResponse.self),
+        "DeviceCodeConfirmRequest": runner(DeviceCodeConfirmRequest.self),
+        "TrustPinResponse": runner(TrustPinResponse.self),
         // ProjectInfo.swift
         "ProjectInfo": runner(ProjectInfo.self),
         // ProjectOrderRequest.swift

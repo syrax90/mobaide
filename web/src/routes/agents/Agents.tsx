@@ -141,8 +141,11 @@ export function Agents() {
       </ul>
 
       <div className="button-row">
-        <Link className="button button-primary" to="/pair">
-          Pair an agent
+        <Link className="button button-primary" to="/agents/pair">
+          Add an agent
+        </Link>
+        <Link className="button" to="/pair">
+          Pair from a code
         </Link>
         <button
           type="button"

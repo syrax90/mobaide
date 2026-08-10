@@ -18,6 +18,16 @@ export const queryKeys = {
   templates: () => ['templates'] as const,
   shortcuts: () => ['shortcuts'] as const,
   customAgentTypes: () => ['custom-agent-types'] as const,
+  /**
+   * One in-flight device-code pairing request.
+   *
+   * Polled rather than pushed: pairing is a short foreground handshake with no
+   * entity behind it to carry a `*.changed` event, and the poll stops as soon
+   * as the request settles.
+   */
+  devicePairing: (requestId: string) => ['device-pairing', requestId] as const,
+  /** The relay's signing fingerprint and this account's recorded pin. */
+  trustPin: () => ['trust-pin'] as const,
 
   agent: (agentId: string) => ['agent', agentId] as const,
   sessions: (agentId: string) => ['agent', agentId, 'sessions'] as const,
