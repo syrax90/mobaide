@@ -465,6 +465,26 @@ chip, and both clients trim the path before storing it. A path is
 recorded only after the session is actually created and never becomes the
 last-used project.
 
+Signing out drops every agent's bucket (CLA-258).
+`SessionManager.invalidateUserSession` calls
+`PreferencesStore.removeAllRecentCustomPaths()`, which
+sweeps the `recent_custom_paths::` prefix through the same
+`removeAll(withPrefix:)` helper `removeAllAttentionSeen()` uses. The hook is
+the session teardown itself rather than an observer, so the purge does not
+depend on the notifications subsystem being alive, and it covers account
+deletion too (WS 4010 routes to the same method). `agentDisconnect()` must not
+purge — per-agent recents are meant to survive an agent switch — which is also
+why the token store is the wrong hook: it is cleared on both paths.
+
+The scope key stays plaintext in the key name, deliberately (CLA-258 item 6).
+In DIRECT mode there is no `agent_id`, so `TokenStore.getAgentScopeKey()` falls
+back to the agent URL and an internal hostname becomes part of a preference key
+(`recent_custom_paths::https://build-box.example.internal:8765`). Hashing it
+would protect nothing — the *values* in the same unencrypted bucket are
+absolute workstation paths, at least as revealing as the host — while breaking
+the key format all three clients share and orphaning every existing bucket with
+no migration. The sign-out purge removes the key outright, name included.
+
 ## Layout
 
 ```

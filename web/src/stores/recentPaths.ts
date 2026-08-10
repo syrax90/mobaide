@@ -17,8 +17,11 @@
 /** Android `PreferencesStore.MAX_RECENT_CUSTOM_PATHS`, iOS `maxRecentCustomPaths`. */
 export const MAX_RECENT_CUSTOM_PATHS = 5;
 
+/** Android `PreferencesStore.RECENT_CUSTOM_PATHS_PREFIX`, iOS `recentCustomPathsPrefix`. */
+export const RECENT_CUSTOM_PATHS_PREFIX = 'recent_custom_paths::';
+
 function storageKey(agentId: string): string {
-  return `recent_custom_paths::${agentId}`;
+  return `${RECENT_CUSTOM_PATHS_PREFIX}${agentId}`;
 }
 
 function writePaths(agentId: string, paths: readonly string[]): void {
@@ -96,4 +99,29 @@ export function forgetRecentPath(agentId: string, path: string): void {
 export function clearRecentPaths(agentId: string): void {
   if (agentId === '') return;
   writePaths(agentId, []);
+}
+
+/**
+ * Drop every agent's bucket at sign-out. The paths name the user's workstation,
+ * so they must not outlive the account that typed them — an agent switch keeps
+ * them (`sessionStore.agentDisconnect` deliberately does not call this).
+ *
+ * Swept by prefix rather than by agent id: sign-out has no agent list to
+ * enumerate, and the ids of previously-paired agents are already gone. Keys are
+ * collected before any removal because `removeItem` reindexes the store, and via
+ * `length`/`key(i)` rather than `Object.keys`, which under the test stub would
+ * return its method names.
+ */
+export function clearAllRecentPaths(): void {
+  try {
+    const doomed: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key !== null && key.startsWith(RECENT_CUSTOM_PATHS_PREFIX)) doomed.push(key);
+    }
+    for (const key of doomed) localStorage.removeItem(key);
+  } catch {
+    // Storage refused, same as `writePaths`. Nothing was written either, so
+    // there is nothing to leak.
+  }
 }

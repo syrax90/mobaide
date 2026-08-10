@@ -1,5 +1,6 @@
 package com.mobaide.app.data.auth
 
+import com.mobaide.app.data.local.PreferencesStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -12,6 +13,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -76,6 +78,7 @@ import javax.inject.Singleton
 class SessionManager @Inject constructor(
     private val tokenStore: TokenStore,
     private val userIdentityStore: UserIdentityStore,
+    private val preferencesStore: PreferencesStore,
     @Named("refresh") private val refreshClient: OkHttpClient,
 ) {
 
@@ -272,6 +275,11 @@ class SessionManager @Inject constructor(
     fun invalidateUserSession(reason: InvalidationReason) {
         if (_authState.value is AuthState.Unauthenticated) return
         userIdentityStore.clearUserSession()
+        // Off the critical section: this method is @Synchronized and the
+        // DataStore write suspends. This runs on the forced-logout path too,
+        // where an unhandled DataStore fault would reach the thread's
+        // uncaught handler and turn a 401 into a crash.
+        scope.launch { runCatching { preferencesStore.removeAllRecentCustomPaths() } }
         tokenStore.clear()
         _authState.value = AuthState.Unauthenticated
         inFlight.getAndSet(null)?.cancel()

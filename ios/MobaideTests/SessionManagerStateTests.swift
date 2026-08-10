@@ -77,6 +77,43 @@ final class SessionManagerStateTests: XCTestCase {
         XCTAssertEqual(event, .tokenRejected)
     }
 
+    func testManualLogoutPurgesEveryAgentRecentCustomPathBucket() async {
+        // The paths name the user's own workstation, so a second account on
+        // this device must not be offered the first account's directories.
+        let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
+        harness.preferencesStore.addRecentCustomPath(agentKey: "a1", path: "/srv/app")
+        harness.preferencesStore.addRecentCustomPath(agentKey: "a2", path: "/home/alice/work")
+
+        await harness.sessionManager.userLogout()
+
+        XCTAssertEqual(harness.preferencesStore.getRecentCustomPaths(agentKey: "a1"), [])
+        XCTAssertEqual(
+            harness.preferencesStore.getRecentCustomPaths(agentKey: "a2"), [],
+            "a bucket for an agent other than the current one goes too"
+        )
+    }
+
+    func testAccountRemovedPurgesRecentCustomPaths() async {
+        let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
+        harness.preferencesStore.addRecentCustomPath(agentKey: "a1", path: "/srv/app")
+
+        await harness.sessionManager.invalidateUserSession(.accountRemoved)
+
+        XCTAssertEqual(harness.preferencesStore.getRecentCustomPaths(agentKey: "a1"), [])
+    }
+
+    func testAgentDisconnectKeepsRecentCustomPaths() async {
+        // An agent switch is not an identity change: the recents survive it
+        // even though agentDisconnect clears the agent tokens next to them.
+        let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
+        harness.preferencesStore.addRecentCustomPath(agentKey: "a1", path: "/srv/app")
+
+        await harness.sessionManager.agentDisconnect()
+
+        XCTAssertEqual(harness.preferencesStore.getRecentCustomPaths(agentKey: "a1"), ["/srv/app"])
+        XCTAssertNil(harness.tokenStore.getAccessToken())
+    }
+
     func testInvalidateUserSessionIsIdempotent() async throws {
         let harness = SessionHarness(userLoggedIn: true)
         await harness.sessionManager.invalidateUserSession(.tokenRejected)

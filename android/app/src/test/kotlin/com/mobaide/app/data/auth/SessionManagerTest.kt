@@ -1,6 +1,9 @@
 package com.mobaide.app.data.auth
 
 import app.cash.turbine.test
+import com.mobaide.app.data.local.PreferencesStore
+import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -22,10 +25,14 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Unit tests for [SessionManager] — covers:
@@ -78,6 +85,14 @@ class SessionManagerTest {
         return store
     }
 
+    private fun newSessionManager(
+        tokenStore: TokenStore,
+        userIdentityStore: UserIdentityStore,
+        refreshClient: OkHttpClient,
+        preferencesStore: PreferencesStore = mockk(relaxed = true),
+    ): SessionManager =
+        SessionManager(tokenStore, userIdentityStore, preferencesStore, refreshClient)
+
     // ---- Initial state ------------------------------------------------------
 
     @Test
@@ -85,7 +100,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         assertTrue(sm.isLoggedIn())
         assertTrue(sm.isUserAuthenticated())
@@ -97,7 +112,7 @@ class SessionManagerTest {
         val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         assertEquals(false, sm.isLoggedIn())
         assertTrue(sm.isUserAuthenticated())
@@ -109,7 +124,7 @@ class SessionManagerTest {
         val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
         val userStore = stubUserIdentityStore(loggedIn = false)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         assertEquals(false, sm.isLoggedIn())
         assertEquals(false, sm.isUserAuthenticated())
@@ -123,7 +138,7 @@ class SessionManagerTest {
         val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
         val userStore = stubUserIdentityStore(loggedIn = false)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
         assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
 
         sm.markUserLoggedIn()
@@ -138,7 +153,7 @@ class SessionManagerTest {
         val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
         val userStore = stubUserIdentityStore(loggedIn = false)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         sm.markUserLoggedIn()
         sm.markAgentConnected()
@@ -153,7 +168,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
         assertEquals(SessionManager.AuthState.FullyConnected, sm.authState.value)
 
         sm.agentDisconnect()
@@ -167,7 +182,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         sm.userLogout()
 
@@ -181,7 +196,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         sm.forceLogout()
 
@@ -195,7 +210,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         sm.forceLogout()
         sm.forceLogout()
@@ -206,6 +221,96 @@ class SessionManagerTest {
         // Unauthenticated after the first call — so store.clear() is called exactly once.
         verify(exactly = 1) { store.clear() }
         assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
+    }
+
+    // The purge is launched on the manager's own IO scope (invalidateUserSession
+    // is @Synchronized and the DataStore write suspends), so these verifications
+    // wait for it rather than running on runTest's virtual clock.
+
+    @Test
+    fun userLogout_purgesEveryAgentRecentCustomPathBucket() {
+        val store = stubTokenStore()
+        val userStore = stubUserIdentityStore(loggedIn = true)
+        val client = mockk<OkHttpClient>()
+        val prefs = mockk<PreferencesStore>(relaxed = true)
+        val sm = newSessionManager(store, userStore, client, prefs)
+
+        sm.userLogout()
+
+        coVerify(timeout = 2000, exactly = 1) { prefs.removeAllRecentCustomPaths() }
+    }
+
+    @Test
+    fun invalidateUserSession_onAccountRemoved_purgesRecentCustomPaths() {
+        // The paths name the user's own workstation, so a deleted account must
+        // not leave them for whoever signs in on this device next.
+        val store = stubTokenStore()
+        val userStore = stubUserIdentityStore(loggedIn = true)
+        val client = mockk<OkHttpClient>()
+        val prefs = mockk<PreferencesStore>(relaxed = true)
+        val sm = newSessionManager(store, userStore, client, prefs)
+
+        sm.invalidateUserSession(SessionManager.InvalidationReason.AccountRemoved)
+
+        coVerify(timeout = 2000, exactly = 1) { prefs.removeAllRecentCustomPaths() }
+    }
+
+    @Test
+    fun agentDisconnect_keepsRecentCustomPaths() {
+        // An agent switch is not an identity change: the recents survive it even
+        // though agentDisconnect clears the agent tokens next to them. The
+        // sign-out below is the barrier that makes the count meaningful.
+        val store = stubTokenStore()
+        val userStore = stubUserIdentityStore(loggedIn = true)
+        val client = mockk<OkHttpClient>()
+        val prefs = mockk<PreferencesStore>(relaxed = true)
+        val sm = newSessionManager(store, userStore, client, prefs)
+
+        sm.agentDisconnect()
+        sm.userLogout()
+
+        coVerify(timeout = 2000, exactly = 1) { prefs.removeAllRecentCustomPaths() }
+    }
+
+    @Test
+    fun invalidateUserSession_whenPurgeFails_signsOutWithoutEscapingTheCoroutine() {
+        // The purge is a bare `launch` on a scope with no
+        // CoroutineExceptionHandler: an unguarded DataStore fault would reach
+        // the thread's uncaught handler, so a corrupt prefs file would turn
+        // every token expiry into a crash instead of a sign-out.
+        val purgeFailure = "recent-custom-paths purge failed"
+        val store = stubTokenStore()
+        val userStore = stubUserIdentityStore(loggedIn = true)
+        val client = mockk<OkHttpClient>()
+        val prefs = mockk<PreferencesStore>(relaxed = true)
+        coEvery { prefs.removeAllRecentCustomPaths() } throws IOException(purgeFailure)
+        val sm = newSessionManager(store, userStore, client, prefs)
+
+        val escaped = AtomicReference<Throwable?>(null)
+        val escapeSeen = CountDownLatch(1)
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, thrown ->
+            if (generateSequence(thrown) { it.cause }.any { it.message == purgeFailure }) {
+                escaped.set(thrown)
+                escapeSeen.countDown()
+            } else {
+                previousHandler?.uncaughtException(thread, thrown)
+            }
+        }
+        try {
+            sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
+            coVerify(timeout = 2000, exactly = 1) { prefs.removeAllRecentCustomPaths() }
+            // The throw unwinds on the IO thread just after the mock records the
+            // call, so wait for it rather than racing it.
+            escapeSeen.await(500, TimeUnit.MILLISECONDS)
+        } finally {
+            Thread.setDefaultUncaughtExceptionHandler(previousHandler)
+        }
+
+        assertNull("purge failure reached the thread's uncaught handler", escaped.get())
+        assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
+        verify { userStore.clearUserSession() }
+        verify { store.clear() }
     }
 
     // ---- Refresh: happy path -----------------------------------------------
@@ -229,7 +334,7 @@ class SessionManagerTest {
             )
         }
 
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         val result = sm.refresh()
 
@@ -254,7 +359,7 @@ class SessionManagerTest {
             responseFor(reqSlot.captured, 401, """{"detail":"invalid_token"}""")
         }
 
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         val result = sm.refresh()
 
@@ -276,7 +381,7 @@ class SessionManagerTest {
             responseFor(reqSlot.captured, 401, """{"detail":"invalid_token"}""")
         }
 
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         val result = sm.refresh()
 
@@ -292,7 +397,7 @@ class SessionManagerTest {
         every { store.getRefreshToken() } returns null
         val client = mockk<OkHttpClient>()
 
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         val result = sm.refresh()
 
@@ -313,7 +418,7 @@ class SessionManagerTest {
         every { client.newCall(any()) } returns call
         every { call.execute() } throws IOException("network down")
 
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         val result = sm.refresh()
 
@@ -334,7 +439,7 @@ class SessionManagerTest {
             responseFor(reqSlot.captured, 500, """{"detail":"internal"}""")
         }
 
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         val result = sm.refresh()
 
@@ -366,7 +471,7 @@ class SessionManagerTest {
             )
         }
 
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         val results = (1..10)
             .map { async { sm.refresh() } }
@@ -405,7 +510,7 @@ class SessionManagerTest {
             )
         }
 
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         runBlocking {
             val winner = async(Dispatchers.IO) { sm.refresh() }
@@ -427,7 +532,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
 
@@ -441,7 +546,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         sm.sessionEvents.test {
             sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
@@ -465,7 +570,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         sm.sessionEvents.test {
             sm.invalidateUserSession(SessionManager.InvalidationReason.AccountRemoved)
@@ -487,7 +592,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         sm.sessionEvents.test {
             sm.invalidateUserSession(SessionManager.InvalidationReason.Manual)
@@ -504,7 +609,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         sm.sessionEvents.test {
             sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
@@ -529,7 +634,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         sm.sessionEvents.test {
             sm.userLogout()
@@ -552,7 +657,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         // 1. Server invalidates — event cached in replay slot.
         sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
@@ -581,7 +686,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         // 1. Server invalidates — event cached in replay slot.
         sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
@@ -615,7 +720,7 @@ class SessionManagerTest {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)
         val client = mockk<OkHttpClient>()
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
 
         // 1. First server-forced invalidation (cached in replay slot).
         sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
@@ -660,7 +765,7 @@ class SessionManagerTest {
             )
         }
 
-        val sm = SessionManager(store, userStore, client)
+        val sm = newSessionManager(store, userStore, client)
         sm.refresh()
 
         val buffer = okio.Buffer()

@@ -40,7 +40,7 @@ class PreferencesStore(private val context: Context) {
         stringPreferencesKey("linear_states::$projectName")
 
     private fun keyRecentCustomPaths(agentKey: String) =
-        stringPreferencesKey("recent_custom_paths::$agentKey")
+        stringPreferencesKey("$RECENT_CUSTOM_PATHS_PREFIX$agentKey")
 
     private fun keyRecentShortcutChords(sessionKindKey: String) =
         stringPreferencesKey("recent_shortcut_chords::$sessionKindKey")
@@ -228,6 +228,20 @@ class PreferencesStore(private val context: Context) {
     }
 
     /**
+     * Drops every agent's recent-directory bucket at sign-out. An agent switch keeps them (see
+     * [com.mobaide.app.data.auth.SessionManager.agentDisconnect]). Swept by prefix rather than
+     * by the current agent key, which sign-out clears from the token store concurrently with
+     * this write, and which would in any case strand every previously-connected agent's bucket.
+     */
+    suspend fun removeAllRecentCustomPaths() {
+        context.dataStore.edit { prefs ->
+            prefs.asMap().keys
+                .filter { it.name.startsWith(RECENT_CUSTOM_PATHS_PREFIX) }
+                .forEach { prefs -= it }
+        }
+    }
+
+    /**
      * Most-recently-used shortcut chords for one session kind, newest first.
      * Entries are opaque chord tokens (see KeyChord.token()); unparseable entries
      * are the caller's concern, keeping this store free of UI types.
@@ -256,6 +270,7 @@ class PreferencesStore(private val context: Context) {
     }
 
     companion object {
+        const val RECENT_CUSTOM_PATHS_PREFIX: String = "recent_custom_paths::"
         const val MAX_RECENT_CUSTOM_PATHS: Int = 5
         const val MAX_RECENT_SHORTCUT_CHORDS: Int = 10
     }

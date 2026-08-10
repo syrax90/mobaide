@@ -178,11 +178,23 @@ struct PreferencesStore: @unchecked Sendable {
         encodeBlob(record, forKey: Self.attentionSeenKey(agentKey: agentKey))
     }
 
-    /// Drop every agent's attention bucket at sign-out. Cleared by prefix
-    /// rather than by the current agent key, which may already be gone.
+    /// Drop every agent's attention bucket at sign-out.
     func removeAllAttentionSeen() {
-        for key in defaults.dictionaryRepresentation().keys
-        where key.hasPrefix(Self.attentionSeenPrefix) {
+        removeAll(withPrefix: Self.attentionSeenPrefix)
+    }
+
+    /// Drop every agent's recent-directory bucket at sign-out. The paths name
+    /// the user's workstation, so they must not outlive the account that typed
+    /// them — an agent switch keeps them (see `SessionManager.agentDisconnect`).
+    func removeAllRecentCustomPaths() {
+        removeAll(withPrefix: Self.recentCustomPathsPrefix)
+    }
+
+    /// Sweep a per-agent key family. Cleared by prefix rather than by the
+    /// current agent key, which may already be gone by sign-out, and which
+    /// would in any case strand every previously-connected agent's bucket.
+    private func removeAll(withPrefix prefix: String) {
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(prefix) {
             defaults.removeObject(forKey: key)
         }
     }
