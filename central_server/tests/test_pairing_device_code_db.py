@@ -255,6 +255,26 @@ class TestConfirmAndCancel:
             is False
         )
 
+    async def test_reopening_hands_a_reservation_back(self, db, owner_id):
+        # The confirm endpoint reserves before it issues credentials, so a
+        # pairing it then refuses has to leave the request confirmable.
+        request_id = await _mint(db, owner_id)
+        await _redeem(db)
+        await db.mark_device_code_confirmed(request_id, owner_id)
+
+        assert await db.reopen_device_code(request_id, owner_id) is True
+        assert await db.mark_device_code_confirmed(request_id, owner_id) is True
+
+    async def test_reopening_cannot_revive_a_canceled_request(
+        self, db, owner_id
+    ):
+        request_id = await _mint(db, owner_id)
+        await _redeem(db)
+        await db.cancel_device_code(request_id, owner_id)
+
+        assert await db.reopen_device_code(request_id, owner_id) is False
+        assert await db.mark_device_code_confirmed(request_id, owner_id) is False
+
     async def test_cancel_refuses_a_confirmed_request(self, db, owner_id):
         request_id = await _mint(db, owner_id)
         await _redeem(db)

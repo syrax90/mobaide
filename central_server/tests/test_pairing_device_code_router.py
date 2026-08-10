@@ -241,6 +241,23 @@ class TestConfirm:
 
         assert resp.status_code == 404
 
+    async def test_a_refused_confirm_leaves_the_request_open_for_a_retry(
+        self, client, dc_app, api_auth_headers, db, viewer_user, registered_agent
+    ):
+        # The reservation is taken before the pairing runs, so the refusal
+        # path has to hand it back — otherwise one 409 burns a code that
+        # the operator can still legitimately confirm.
+        await db.pin_user_trust_key_fp(viewer_user["id"], _STALE_FP)
+        minted = await _mint(client, api_auth_headers)
+        await _redeem(client, minted["code"], "redeemer-reopen")
+        refused = await _confirm(client, api_auth_headers, minted["request_id"])
+        assert refused.status_code == 409, refused.text
+
+        _override_config(dc_app, trust_key_pin_enforced=False)
+        again = await _confirm(client, api_auth_headers, minted["request_id"])
+
+        assert again.status_code == 200, again.text
+
 
 class TestRedeemIdempotency:
     async def test_same_redeemer_replays_without_reissuing_the_nonce(
@@ -444,6 +461,37 @@ class TestCancel:
         ).json()
 
         assert body["status"] == "canceled"
+
+    async def test_a_cancel_landing_mid_confirm_cannot_also_win(
+        self, client, dc_app, api_auth_headers, monkeypatch
+    ):
+        # The dangerous ordering: the DELETE arrives after the confirm has
+        # been admitted but before the credentials exist. Cancel used to
+        # answer 204 there while the confirm went on to hand the machine an
+        # agent, so both clients were told they had won.
+        from central_server.pairing import router as router_mod
+
+        minted = await _mint(client, api_auth_headers)
+        await _redeem(client, minted["code"], "redeemer-race")
+        original = router_mod._complete_pairing
+        cancel_codes: list[int] = []
+
+        async def cancel_then_complete(**kwargs):
+            resp = await client.delete(
+                f"/api/pairing/device-code/{minted['request_id']}",
+                headers=api_auth_headers,
+            )
+            cancel_codes.append(resp.status_code)
+            return await original(**kwargs)
+
+        monkeypatch.setattr(
+            router_mod, "_complete_pairing", cancel_then_complete
+        )
+
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+
+        assert resp.status_code == 200, resp.text
+        assert cancel_codes == [404]
 
     async def test_cancelling_twice_is_not_found(
         self, client, dc_app, api_auth_headers

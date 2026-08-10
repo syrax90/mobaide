@@ -234,6 +234,30 @@ class TestRunPairResume:
         # confirm gate without a prompt, not just that nothing crashed.
         assert rc == 6
 
+    def test_a_dropped_websocket_keeps_the_record_for_a_reconnect(
+        self, tmp_path, capsys
+    ):
+        # The relay parks the claimed credentials in ``claimed_token_raw``
+        # for a reconnect on the same nonce, and that nonce exists nowhere
+        # but this file — clearing it on a transport failure would turn a
+        # dropped connection into a code that can never be completed.
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        _seed_pending_device_code(tmp_path, confirmed=True)
+
+        with patch("sys.stdin.isatty", return_value=True), patch(
+            "mobaide.agent.pairing_ws.PairingWsClient"
+        ) as mock_ws_cls:
+            mock_ws_cls.return_value.wait_for_claim = AsyncMock(
+                side_effect=PairingWsError("connection reset")
+            )
+            rc = _run_pair(_ns(prefix=str(tmp_path), yes=False))
+
+        assert rc == 6
+        assert (tmp_path / "run" / "pending_device_code.json").exists()
+        # And the operator is told how to use it.
+        assert "still on file" in capsys.readouterr().err
+
     def test_a_code_typed_with_a_discarded_character_resumes_the_record(
         self, tmp_path, capsys
     ):

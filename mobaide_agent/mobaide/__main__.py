@@ -748,7 +748,8 @@ def _run_pair(args: argparse.Namespace) -> int:
         3   network error talking to the central server.
         4   trust key not pinned (run ``mobaide-agent fetch-trust-key``).
         5   trust-key fingerprint mismatch with the relay's current key.
-        6   pairing WebSocket failed (signature, transport, TTL).
+        6   pairing WebSocket failed (signature, transport, TTL); the
+            redemption stays on file so a re-run can reconnect to it.
         8   the relay refused the code (unknown, expired, already used).
         9   refused locally: already paired, or the operator declined.
     """
@@ -936,8 +937,19 @@ def _run_pair(args: argparse.Namespace) -> int:
             )
         )
     except PairingWsError as exc:
-        sys.stderr.write(f"mobaide-agent pair: {exc}\n")
-        clear_pending_device_code(layout)
+        # The record deliberately survives a WebSocket failure. The relay
+        # holds the claimed credentials in ``claimed_token_raw`` for a
+        # reconnect on this same nonce, and the raw nonce exists nowhere
+        # else — clearing it here would turn a dropped connection into a
+        # burnt code, because a re-run would redeem under a fresh
+        # ``redeemer_id`` and be refused. A resume whose nonce has since
+        # expired is dropped by ``load_pending_device_code`` instead.
+        sys.stderr.write(
+            f"mobaide-agent pair: {exc}\n"
+            f"mobaide-agent pair: this redemption is still on file. Re-run "
+            f"'mobaide-agent pair {args.code}' before {pending.expires_at} "
+            "to reconnect and pick up the credentials.\n"
+        )
         return 6
 
     asyncio.run(write_credentials_to_env(env_file, claim))

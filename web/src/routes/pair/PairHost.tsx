@@ -27,6 +27,19 @@ import { useWaitForOnline } from './useWaitForOnline';
  */
 const POLL_INTERVAL_MS = 2_000;
 
+/**
+ * Longest delay `setTimeout` stores. Anything larger overflows its 32-bit
+ * counter and fires *immediately*, so a deadline further out than this is left
+ * unscheduled — no pairing code lives 24 days.
+ */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+function expiredMessage(kind: 'waitingForHost' | 'confirming'): string {
+  return kind === 'confirming'
+    ? 'This pairing request expired before it was confirmed. Get a new code.'
+    : 'That code expired before any machine used it. Get a new one.';
+}
+
 type Phase =
   | { kind: 'idle' }
   | { kind: 'waitingForHost'; mint: DeviceCodeMint }
@@ -96,6 +109,41 @@ export function PairHost() {
     gcTime: 0,
   });
 
+  // The latest deadline the relay stated: the code's while it is unredeemed,
+  // the nonce's once a machine has entered it. Falls back to the mint until a
+  // poll answers.
+  const expiresAt =
+    status.data?.expiresAt ??
+    (phase.kind === 'waitingForHost' || phase.kind === 'confirming'
+      ? phase.mint.expiresAt
+      : undefined);
+  const deadlineMs = expiresAt === undefined ? null : Date.parse(expiresAt);
+
+  // Expiry is driven locally rather than waited for from a poll. The poll that
+  // would cross the deadline can fail — connectivity, or a 404 once the
+  // request is gone — and React Query then keeps serving the last successful
+  // body, whose `expiresAt` is by now in the past, which disables the interval
+  // for good. Nothing else would move the screen off a confirm button that can
+  // only 410. Android and iOS bound their poll loops the same way.
+  useEffect(() => {
+    if (deadlineMs === null || Number.isNaN(deadlineMs)) return;
+    const delay = deadlineMs - Date.now();
+    if (delay > MAX_TIMEOUT_MS) return;
+    const timer = setTimeout(
+      () => {
+        setPhase((current) =>
+          current.kind === 'waitingForHost' || current.kind === 'confirming'
+            ? { kind: 'error', message: expiredMessage(current.kind) }
+            : current,
+        );
+      },
+      Math.max(0, delay),
+    );
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [deadlineMs]);
+
   const statusKind = status.data?.status;
   const statusHostname = status.data?.hostname ?? null;
   const statusOs = status.data?.os ?? null;
@@ -109,13 +157,7 @@ export function PairHost() {
       // whose only possible outcome is a 410.
       if (current.kind === 'confirming' || current.kind === 'waitingForHost') {
         if (statusKind === 'expired' || statusKind === 'canceled') {
-          return {
-            kind: 'error',
-            message:
-              current.kind === 'confirming'
-                ? 'This pairing request expired before it was confirmed. Get a new code.'
-                : 'That code expired before any machine used it. Get a new one.',
-          };
+          return { kind: 'error', message: expiredMessage(current.kind) };
         }
       }
       if (current.kind !== 'waitingForHost') return current;

@@ -487,6 +487,15 @@ it, rewritten with the nonce as soon as the response lands, so a Ctrl-C during
 the wait resumes rather than restarts. A redeem whose *response* was lost in
 transit is not recoverable: the CLI exits 8 and the operator mints a new code.
 
+A failed pairing WebSocket is the one failure that keeps the file rather than
+clearing it. The relay parks the claimed credentials in
+`pairing_tokens.claimed_token_raw` for a reconnect on the same nonce, and that
+nonce exists nowhere else — so a dropped connection exits 6 and prints the
+command to re-run, which reconnects and takes delivery through the recovery
+branch. Clearing it there would redeem under a fresh `redeemer_id` on the next
+attempt and burn the code. A record whose nonce has since expired is dropped by
+`load_pending_device_code`, so a stale file cannot strand the next run.
+
 The record is keyed by a digest of the code, so typing a *different* code
 starts a fresh redemption rather than silently waiting out the earlier one. It
 is also a **separate file** from `pending_pairing.json` on purpose: on a fresh
@@ -496,8 +505,18 @@ shared file would overwrite the nonce that cycle is waiting on.
 ### Cancelling
 
 `DELETE /api/pairing/device-code/{request_id}` marks the code canceled and
-expires its nonce in the same transaction, so a confirm racing the cancel loses
-the CAS on `expires_at`.
+expires its nonce in the same transaction.
+
+Confirm and cancel are mutually exclusive, and the code row — not the nonce —
+is what decides. `confirm` reserves the request (`confirmed_at`, CAS'd on
+`confirmed_at IS NULL AND canceled_at IS NULL`) *before* it issues any
+credentials, and cancel's update carries the same guard; both are single
+statements over the one shared connection, so exactly one wins. A confirm the
+ownership guard or the trust pin then refuses calls `reopen_device_code`, which
+hands the reservation back so the request stays confirmable. Reserving
+afterwards instead — as this endpoint originally did — left a window where a
+DELETE arriving mid-pairing answered 204 while the confirm went on to hand the
+machine an agent, telling both clients they had won.
 
 It does **not** promptly stop an agent that has already connected. The WS
 handler reads `expires_at` once and then blocks in a single
@@ -582,10 +601,11 @@ it, so the user sees "waiting for the agent" until the timeout. Mitigations:
 | Mobile shows "Trust key changed — possible MITM" | TOFS pin diverges from scanned fingerprint | If you intentionally rotated the relay key, clear the app's data; otherwise treat as a security incident |
 | `pair-qr --wait` exits 6 | Pairing WS transport, TTL, or signature failure | Re-run; check relay logs |
 | `pair <code>` exits 8 | The relay refused the code: unknown, expired, superseded by a newer code, or already redeemed by another machine | Get a fresh code in the app and re-run. A repeated 8 with "already redeemed from this machine" means the first redeem's response was lost — the nonce is unrecoverable, so mint a new code |
+| `pair <code>` exits 6 | The pairing WebSocket dropped, timed out, or delivered a payload that failed signature/`relay_url` verification | Re-run the exact command the error prints, before the deadline it names. The redemption stays on file, so the re-run reconnects to the same nonce and takes delivery of credentials already issued; past the nonce TTL it reports 8 instead and a new code is needed |
 | `pair <code>` exits 9 | Refused locally: the host already has credentials, stdin is not a terminal without `--yes`, or the operator answered no | Use `--force` to re-pair a working host, `--yes` for a non-interactive run — but only when the code came from your own account |
 | `pair <code>` returns 429 | Redeem rate limit tripped (per-IP or the global circuit breaker) | Wait for the `Retry-After` interval. Behind a proxy, check `FORWARDED_ALLOW_IPS` — without it every redeem is attributed to the proxy and shares one bucket |
 | Client shows "This relay's signing key is not the one this account first paired with" (409 `trust_key_pin_mismatch`) | The relay's `MANIFEST_SIGNING_*` keypair was rotated after this account pinned it | Compare fingerprints with `mobaide-agent show-trust-fp` on an already-paired host. If the rotation was intentional, follow the trust-key rotation runbook above; otherwise treat as a security incident |
-| Browser shows "waiting for a machine to enter the code" forever | Nothing redeemed the code, or the relay runs multiple workers and the confirm landed on a worker without the agent's WS | Check the command actually ran on the agent host; confirm the relay is single-worker (see "Multi-worker deployments") |
+| Browser sits on "waiting for a machine to enter the code" until the code expires | Nothing redeemed the code, or the relay runs multiple workers and the confirm landed on a worker without the agent's WS | Check the command actually ran on the agent host; confirm the relay is single-worker (see "Multi-worker deployments"). All three clients now bound this screen with the deadline the relay reported, so it ends in an expiry message rather than waiting forever even if the poll that would have reported it fails |
 | QR scan succeeded but mobile shows "Waiting for agent…" then times out with an error after 60 s | Agent relay client did not come online within the timeout. Possible causes: agent process crashed after writing `.env`, Windows service stdout silenced (pre-v0.1.9), Windows service log file encoded as cp1252/cp437 causing `UnicodeEncodeError` in QR render and aborting the WS before `wait_for_claim` (pre-v0.1.11), or `relay_url` scheme mismatch caused the agent to discard its own credentials. | On the agent host run: `mobaide-agent show-qr` (re-render QR and restart pairing), `Get-Service MobaideAgent` (check service state on Windows), `Get-Content "$env:ProgramFiles\MobaideAgent\logs\agent.err.log" -Tail 50` (Windows error log). Upgrade to v0.1.11+ if on Windows service builds below that version. |
 | QR scan succeeded (mobile shows "Paired") but agent stays offline / `pairing_pending: true` persists | Pre-v0.1.5 agent: post-pairing restart used `sudo -n systemctl restart`, which silently no-op'd when the install user lacked NOPASSWD. v0.1.5–v0.1.6 used `sys.exit(75)` + supervisor restart, which failed when credentials were not flushed before the process exited. v0.1.7–v0.1.8 on Windows service builds: the service host redirected stdout to DEVNULL, silently dropping every structlog line (the issue is visible only after checking `<prefix>\logs\agent.out.log`, which v0.1.9+ captures); a fast mobile scan could also hit the WS-recovery path and receive a push with a `relay_url` scheme that mismatched the initiate-time value (https vs http behind a proxy) — agent strict-equality check discarded its own credentials. | Upgrade to v0.1.9+. The agent now (a) captures stdout to `<prefix>\logs\agent.out.log`, (b) writes `pending_pairing.json` only after the WS is open, and (c) uses `pairing_tokens.relay_url` as the single source of truth for both the dispatch and recovery paths. On older installs: for Linux/macOS, manually run `sudo systemctl restart mobaide-agent` or `launchctl unload … && launchctl load …` once after the initial pairing scan. |
 

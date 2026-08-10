@@ -21,6 +21,7 @@ const api = vi.hoisted((): {
   mint: DeviceCodeMint;
   mintError: Error | null;
   status: DeviceCodeStatus;
+  statusError: Error | null;
   confirmResult: ClaimResult;
   confirmError: Error | null;
   canceled: string[];
@@ -42,6 +43,7 @@ const api = vi.hoisted((): {
     repairAgentName: null,
     blockedReason: null,
   },
+  statusError: null,
   confirmResult: {
     agentId: 'agent-1',
     agentFriendlyName: 'Workstation',
@@ -55,7 +57,10 @@ vi.mock('../../api/agentRepository', () => ({
   listAgents: () => Promise.resolve(api.agents),
   mintDeviceCode: () =>
     api.mintError !== null ? Promise.reject(api.mintError) : Promise.resolve(api.mint),
-  getDeviceCodeStatus: () => Promise.resolve(api.status),
+  getDeviceCodeStatus: () =>
+    api.statusError !== null
+      ? Promise.reject(api.statusError)
+      : Promise.resolve(api.status),
   confirmDeviceCode: () =>
     api.confirmError !== null
       ? Promise.reject(api.confirmError)
@@ -112,6 +117,12 @@ const getCode = () => {
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   api.agents = [agent('agent-1', true)];
+  api.mint = {
+    requestId: 'req-1',
+    code: 'WDJB-MJHT',
+    expiresAt: '2099-01-01T00:00:00Z',
+    verificationCommand: 'mobaide-agent pair WDJB-MJHT',
+  };
   api.mintError = null;
   api.status = {
     status: 'pending',
@@ -128,6 +139,7 @@ beforeEach(() => {
     wsDelivered: true,
   };
   api.confirmError = null;
+  api.statusError = null;
   api.canceled.length = 0;
   useSelectedAgentStore.setState({ selectedAgentId: null });
 });
@@ -317,5 +329,32 @@ describe('PairHost abandonment', () => {
     getCode();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('That code expired');
+  });
+
+  it('gives up on the deadline even when no poll can report it', async () => {
+    // The poll that would cross the deadline is exactly the one that can
+    // fail — and React Query then keeps serving the last successful body,
+    // whose `expiresAt` is by now in the past, so the interval switches
+    // itself off. Without a local deadline the screen waits forever.
+    api.mint = { ...api.mint, expiresAt: new Date(Date.now() + 50).toISOString() };
+    api.statusError = new Error('offline');
+    renderPairHost();
+
+    getCode();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('That code expired');
+  });
+
+  it('closes a confirm screen once the nonce deadline passes', async () => {
+    // Past redemption the deadline is the nonce's, so the confirm button
+    // has to go the same way rather than sit there able only to 410.
+    api.status = redeemed({ expiresAt: new Date(Date.now() + 250).toISOString() });
+    renderPairHost();
+    getCode();
+    await screen.findByRole('dialog');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'expired before it was confirmed',
+    );
   });
 });

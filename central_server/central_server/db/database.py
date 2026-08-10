@@ -1893,7 +1893,14 @@ class Database:
     async def mark_device_code_confirmed(
         self, request_id: str, user_id: str
     ) -> bool:
-        """CAS a redeemed code to confirmed. False if it already moved on."""
+        """CAS a redeemed code to confirmed. False if it already moved on.
+
+        The confirm endpoint runs this *before* issuing credentials, so
+        this statement and :meth:`cancel_device_code`'s — single statements
+        over the same connection, guarded on the same two columns — are
+        what makes confirm and cancel mutually exclusive. A confirm that is
+        then refused calls :meth:`reopen_device_code`.
+        """
         cursor = await self.conn.execute(
             "UPDATE pairing_device_codes SET confirmed_at = ? "
             "WHERE request_id = ? AND user_id = ? "
@@ -1905,13 +1912,33 @@ class Database:
         await self.conn.commit()
         return cursor.rowcount == 1
 
+    async def reopen_device_code(self, request_id: str, user_id: str) -> bool:
+        """Undo a confirm reservation whose pairing was then refused.
+
+        Only the reserving request can reach this, and a cancel cannot have
+        landed in between — cancel's CAS requires ``confirmed_at IS NULL``,
+        which the reservation held for the whole attempt.
+        """
+        cursor = await self.conn.execute(
+            "UPDATE pairing_device_codes SET confirmed_at = NULL "
+            "WHERE request_id = ? AND user_id = ? "
+            "  AND confirmed_at IS NOT NULL "
+            "  AND canceled_at IS NULL",
+            (request_id, user_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
     async def cancel_device_code(self, request_id: str, user_id: str) -> bool:
         """Cancel an owned code and expire its nonce in the same transaction.
 
+        A confirm racing this loses on the ``confirmed_at IS NULL AND
+        canceled_at IS NULL`` guard below, which it reserves through
+        :meth:`mark_device_code_confirmed` before issuing any credentials.
+
         Expiring the ``pairing_tokens`` row rather than leaving it to time
-        out does two things: a confirm racing the cancel loses the CAS on
-        ``expires_at``, and the agent's WebSocket stops waiting at its next
-        TTL check instead of hanging for the rest of the window.
+        out is what stops the agent's WebSocket hanging for the rest of the
+        window: it gives up at its next TTL check.
         """
         now = _now_iso()
         cursor = await self.conn.execute(

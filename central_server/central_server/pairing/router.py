@@ -809,22 +809,36 @@ async def confirm_device_code(
             detail="Pairing nonce expired",
         )
 
-    result = await _complete_pairing(
-        request=request,
-        user=user,
-        pre=pre,
-        mobile_device_id=body.mobile_device_id,
-        mobile_device_name=body.mobile_device_name,
-        platform=body.platform,
-        hostname_hint=row["redeem_hostname"],
-        friendly_name=body.friendly_name,
-        priv_key_b64=priv_key_b64,
-        current_fp=compute_trust_key_fp(pub_key_b64),
-    )
-    # Marked only after the pairing landed, so a confirm rejected by the
-    # ownership guard leaves the request open for a retry.
-    await db.mark_device_code_confirmed(request_id, user.sub)
-    return result
+    # Reserve the request before issuing anything. This CAS and cancel's are
+    # both single statements over the one connection and both require
+    # ``confirmed_at IS NULL AND canceled_at IS NULL``, so exactly one of
+    # confirm and cancel can win. Marking afterwards instead left a window
+    # where a DELETE landing mid-``_complete_pairing`` answered 204 to one
+    # client while the other still received credentials for the same code.
+    if not await db.mark_device_code_confirmed(request_id, user.sub):
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="This pairing request is no longer open",
+        )
+    try:
+        return await _complete_pairing(
+            request=request,
+            user=user,
+            pre=pre,
+            mobile_device_id=body.mobile_device_id,
+            mobile_device_name=body.mobile_device_name,
+            platform=body.platform,
+            hostname_hint=row["redeem_hostname"],
+            friendly_name=body.friendly_name,
+            priv_key_b64=priv_key_b64,
+            current_fp=compute_trust_key_fp(pub_key_b64),
+        )
+    except Exception:
+        # Reserving early must not cost what the late marking gave: a
+        # confirm the ownership guard or the trust pin refuses leaves the
+        # request open for a retry.
+        await db.reopen_device_code(request_id, user.sub)
+        raise
 
 
 @router.delete(
