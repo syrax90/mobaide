@@ -185,6 +185,34 @@ class PreferencesStoreRecentCustomPathsTest {
     }
 
     @Test
+    fun removeAll_clearsEveryAgentBucket_andSparesTheNeighbouringKeys() = runTest {
+        // Sign-out sweeps by prefix because the current agent key is already
+        // gone by then — that scan must not take unrelated preferences with it.
+        // The DataStore instance is shared for this whole class run, so this
+        // test asserts only about keys it uniquely owns.
+        store.addRecentCustomPath("paths-purge-a", "/srv/one")
+        store.addRecentCustomPath("paths-purge-a", "/srv/two")
+        store.addRecentCustomPath("paths-purge-b", "/home/alice/work")
+        store.addRecentShortcutChord("paths-purge-a", "ctrl+c")
+        store.setLastUsedProjectName("paths-purge-project")
+
+        store.removeAllRecentCustomPaths()
+
+        assertEquals(emptyList<String>(), store.getRecentCustomPaths("paths-purge-a"))
+        assertEquals(
+            "a bucket for an agent other than the current one must go too",
+            emptyList<String>(),
+            store.getRecentCustomPaths("paths-purge-b"),
+        )
+        assertEquals(
+            "the shortcut-chord family shares the double-colon shape and must survive",
+            listOf("ctrl+c"),
+            store.getRecentShortcutChords("paths-purge-a"),
+        )
+        assertEquals("paths-purge-project", store.getLastUsedProjectName())
+    }
+
+    @Test
     fun remove_ofAnAbsentPath_isANoOp() = runTest {
         store.removeRecentCustomPath("paths-absent", "/tmp/never-written")
         assertEquals(emptyList<String>(), store.getRecentCustomPaths("paths-absent"))

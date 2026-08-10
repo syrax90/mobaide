@@ -125,16 +125,27 @@ struct SessionHarness {
     let refreshTransport: FakeRefreshTransport
     let tokenStore: TokenStore
     let userIdentityStore: UserIdentityStore
+    let preferencesStore: PreferencesStore
     let sessionManager: SessionManager
+
+    /// A store over a unique UserDefaults suite so harnesses never bleed
+    /// persisted state into each other. Not
+    /// `TerminalTestSupport.isolatedPreferencesStore()`, which is `@MainActor`
+    /// and so unusable as a default argument in these non-isolated tests.
+    static func isolatedPreferencesStore() -> PreferencesStore {
+        PreferencesStore(defaults: UserDefaults(suiteName: "session-tests-\(UUID().uuidString)")!)
+    }
 
     init(
         userLoggedIn: Bool = false,
         agentConnected: Bool = false,
         accessTokenExp: Int64? = nil,
         transport: FakeRefreshTransport = FakeRefreshTransport(),
+        preferencesStore: PreferencesStore = SessionHarness.isolatedPreferencesStore(),
         now: Date = Date()
     ) {
         refreshTransport = transport
+        self.preferencesStore = preferencesStore
         tokenStore = TokenStore(keychain: agentKeychain, now: { now })
         userIdentityStore = UserIdentityStore(keychain: userKeychain)
         if userLoggedIn {
@@ -153,6 +164,7 @@ struct SessionHarness {
         sessionManager = SessionManager(
             tokenStore: tokenStore,
             userIdentityStore: userIdentityStore,
+            preferencesStore: preferencesStore,
             refreshTransport: transport.transport()
         )
     }

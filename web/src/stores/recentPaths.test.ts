@@ -7,6 +7,7 @@ const storage = stubLocalStorage();
 
 const {
   MAX_RECENT_CUSTOM_PATHS,
+  clearAllRecentPaths,
   clearRecentPaths,
   forgetRecentPath,
   noteRecentPath,
@@ -166,6 +167,45 @@ describe('clearRecentPaths', () => {
   });
 });
 
+describe('clearAllRecentPaths', () => {
+  it('drops every agent bucket and leaves the rest of the origin alone', () => {
+    // Sign-out has no agent list to enumerate, so the sweep is by prefix — and
+    // that scan must not take the sibling localStorage keys with it.
+    note('claude', '/one');
+    note('codex', '/two');
+    note('agent-3', '/three');
+    storage.set('mobaide-agent-tokens', '{"agent-3":"token"}');
+    storage.set('mobaide-agent', 'agent-3');
+    storage.set('mobaide-terminal', '{"fontSize":14}');
+
+    clearAllRecentPaths();
+
+    expect([...storage.keys()]).toEqual([
+      'mobaide-agent-tokens',
+      'mobaide-agent',
+      'mobaide-terminal',
+    ]);
+  });
+
+  it('leaves no bucket behind when they sit in adjacent slots', () => {
+    // `removeItem` reindexes the store, so a sweep that removed while walking
+    // `key(i)` forward would skip the bucket that slid into the freed slot.
+    for (const agentId of ['a1', 'a2', 'a3', 'a4']) note(agentId, '/srv/app');
+
+    clearAllRecentPaths();
+
+    expect(storage.size).toBe(0);
+  });
+
+  it('is a no-op when there is nothing to sweep', () => {
+    storage.set('mobaide-theme', 'dark');
+
+    clearAllRecentPaths();
+
+    expect([...storage.keys()]).toEqual(['mobaide-theme']);
+  });
+});
+
 describe('an unresolved agent id', () => {
   it('reads nothing and writes nothing', () => {
     // The web equivalent of mobile's null `agentScopeKey`: an empty id must not
@@ -197,6 +237,9 @@ describe('when storage refuses', () => {
     }).not.toThrow();
     expect(() => {
       clearRecentPaths('claude');
+    }).not.toThrow();
+    expect(() => {
+      clearAllRecentPaths();
     }).not.toThrow();
   });
 

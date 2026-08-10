@@ -147,6 +147,30 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(store.getRecentCustomPaths(agentKey: "a1"), ["/one"])
     }
 
+    func testRemoveAllRecentCustomPathsClearsEveryAgentAndNothingElse() {
+        // Sign-out clears by prefix because the current agent key may already
+        // be gone — that scan must not take unrelated preferences with it.
+        store.addRecentCustomPath(agentKey: "a1", path: "/srv/app")
+        store.addRecentCustomPath(agentKey: "a2", path: "/home/alice/work")
+        store.addRecentShortcutChord(kindKey: "claude", token: "ctrl+c")
+        store.setAttentionSeen(agentKey: "a1", record: AttentionSeenRecord(baselined: true))
+        store.setLastUsedProjectName("proj")
+
+        store.removeAllRecentCustomPaths()
+
+        XCTAssertNil(
+            defaults.dictionaryRepresentation()[PreferencesStore.recentCustomPathsKey(agentKey: "a1")],
+            "the bucket is removed at key level, not parked as an empty blob"
+        )
+        XCTAssertNil(
+            defaults.dictionaryRepresentation()[PreferencesStore.recentCustomPathsKey(agentKey: "a2")],
+            "a bucket for an agent other than the current one goes too"
+        )
+        XCTAssertEqual(store.getRecentShortcutChords(kindKey: "claude"), ["ctrl+c"])
+        XCTAssertEqual(store.getAttentionSeen(agentKey: "a1"), AttentionSeenRecord(baselined: true))
+        XCTAssertEqual(store.getLastUsedProjectName(), "proj")
+    }
+
     func testRecentCustomPathsPrependDedupeAndCap() {
         for path in ["/one", "/two", "/three"] {
             store.addRecentCustomPath(agentKey: "claude", path: path)

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { AuthState, IncompatibleServerInfo, InvalidationReason } from './authState';
 import { clearAgentTokens } from './agentTokens';
+import { clearAllRecentPaths } from '../stores/recentPaths';
 import {
   adoptSession,
   clearSession,
@@ -71,11 +72,18 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     if (state.authState.kind === 'incompatibleServer') {
       clearSession(reason);
       clearAgentTokens();
+      clearAllRecentPaths();
       set({ session: null, lastInvalidation: reason });
       return;
     }
     clearSession(reason);
     clearAgentTokens();
+    // The recents name the user's workstation, so they end with the identity
+    // that typed them. Deliberately not in `agentDisconnect`, which is an agent
+    // switch, nor on a boot that finds no session: the user session lives in
+    // sessionStorage, so closing every tab reaches that path without the user
+    // ever signing out, and unlike agent tokens a recent cannot be re-minted.
+    clearAllRecentPaths();
     set({
       session: null,
       authState: { kind: 'unauthenticated' },
@@ -159,6 +167,7 @@ export function bootstrapSession(): Promise<void> {
         // not echo it back around the channel.
         adoptSession(null);
         clearAgentTokens();
+        clearAllRecentPaths();
         useSessionStore.setState({
           session: null,
           // Same precedence rule as the local `invalidateUserSession`: an

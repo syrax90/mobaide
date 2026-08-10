@@ -163,6 +163,91 @@ describe('sessionStore incompatible-server takeover', () => {
   });
 });
 
+describe('sessionStore recent custom paths', () => {
+  const BUCKET = 'recent_custom_paths::agent-1';
+  const OTHER_BUCKET = 'recent_custom_paths::agent-2';
+  const AGENT_TOKENS = 'mobaide-agent-tokens';
+
+  function seedRecents(): void {
+    localStorage.setItem(BUCKET, JSON.stringify(['/srv/app']));
+    localStorage.setItem(OTHER_BUCKET, JSON.stringify(['/home/alice/work']));
+    localStorage.setItem(AGENT_TOKENS, JSON.stringify({ 'agent-1': 'token' }));
+  }
+
+  it('drops every agent bucket when the user signs out', () => {
+    // The paths name the user's own workstation, so a second account on this
+    // browser must not be offered the first account's directories.
+    seedRecents();
+    useSessionStore.getState().markUserLoggedIn(session());
+
+    useSessionStore.getState().invalidateUserSession('manual');
+
+    expect(localStorage.getItem(BUCKET)).toBeNull();
+    expect(localStorage.getItem(OTHER_BUCKET)).toBeNull();
+  });
+
+  it('drops them when a peer tab signs the user out', async () => {
+    // localStorage is shared across tabs, so the tab that ran the sign-out
+    // sweeps for all of them — but this tab must not be left offering the
+    // previous account's directories either.
+    seedRecents();
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    await bootstrapSession();
+
+    const peer = new BroadcastChannel('mobaide-session');
+    peer.postMessage({ type: 'logout', reason: 'manual' });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    peer.close();
+
+    expect(useSessionStore.getState().session).toBeNull();
+    expect(localStorage.getItem(BUCKET)).toBeNull();
+    expect(localStorage.getItem(OTHER_BUCKET)).toBeNull();
+  });
+
+  it('drops them when the account was removed under a takeover', () => {
+    // The incompatible-server branch returns early, so it needs its own sweep.
+    seedRecents();
+    useSessionStore.getState().markUserLoggedIn(session());
+    useSessionStore
+      .getState()
+      .markIncompatibleServer({ reason: 'Server requires v8+', minClientVersion: 8 });
+
+    useSessionStore.getState().invalidateUserSession('accountRemoved');
+
+    expect(localStorage.getItem(BUCKET)).toBeNull();
+    expect(localStorage.getItem(OTHER_BUCKET)).toBeNull();
+  });
+
+  it('keeps them when the agent disconnects', () => {
+    // An agent switch is not an identity change: the recents outlive it even
+    // though the agent tokens next to them do not.
+    seedRecents();
+    useSessionStore.getState().markUserLoggedIn(session());
+    useSessionStore.getState().markAgentConnected();
+
+    useSessionStore.getState().agentDisconnect();
+
+    expect(localStorage.getItem(BUCKET)).toBe(JSON.stringify(['/srv/app']));
+    expect(localStorage.getItem(OTHER_BUCKET)).toBe(JSON.stringify(['/home/alice/work']));
+    expect(localStorage.getItem(AGENT_TOKENS)).toBeNull();
+  });
+
+  it('keeps them when a boot finds no session', async () => {
+    // The user session lives in sessionStorage, so closing every tab reaches
+    // this path without the user ever signing out. Agent tokens are dropped
+    // there because they can be re-minted; a typed directory cannot.
+    seedRecents();
+
+    await bootstrapSession();
+
+    expect(useSessionStore.getState().session).toBeNull();
+    expect(localStorage.getItem(AGENT_TOKENS)).toBeNull();
+    expect(localStorage.getItem(BUCKET)).toBe(JSON.stringify(['/srv/app']));
+  });
+});
+
 describe('bootstrapSession', () => {
   it('restores the session this tab persisted', async () => {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session()));

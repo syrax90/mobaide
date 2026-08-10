@@ -378,10 +378,22 @@ guards `lastSessionStore` needs apply. An empty agent id is mobile's null
 `agentScopeKey` — reads and writes are both skipped rather than sharing one
 unscoped bucket — and any blank or non-string member voids the whole blob,
 matching the typed mobile decoders rather than salvaging the readable entries.
-Deleting an agent drops its bucket alongside its token and its last-used
-session. Signing out does **not**: recents outlive the session on all three
-clients, and agent ids are server-issued, so a later account cannot collide
-into another's bucket.
+Deleting an agent drops its bucket here, alongside its token and its last-used
+session — mobile has no equivalent yet, which is a known parity gap. Signing
+out drops **every** agent's bucket, on all three clients
+(CLA-258): the paths name the user's own workstation, so they end with the
+identity that typed them. The purge is a prefix sweep driven from each
+client's identity teardown — `clearAllRecentPaths()` from
+`sessionStore.invalidateUserSession` and the peer-tab `logout` branch here,
+`PreferencesStore.removeAllRecentCustomPaths()` from
+`SessionManager.invalidateUserSession` on both mobile clients. It sweeps by
+prefix rather than by agent id because teardown clears the credentials that
+name the current agent in the same breath, and a current-key delete would
+strand every previously-connected agent's bucket. Two paths deliberately do
+**not** purge: `agentDisconnect` (an agent switch is not an identity change),
+and — web only — the boot-with-no-session branch, because the user session
+lives in `sessionStorage`, so closing every tab reaches that branch without the
+user ever signing out and recents, unlike agent tokens, cannot be re-minted.
 
 Custom agent types are listed, launched, created and deleted here; editing
 is CLA-231. A launch sends only `cli: "custom_<id>"` — the relay resolves the
@@ -717,8 +729,9 @@ outlives the tab: `terminalPrefsStore` persists it under `localStorage` key
 `mobaide-terminal`, the second persisted key after `mobaide-theme` (WEB-07
 adds `mobaide-agent` and `mobaide-sessions`; CLA-256 adds the wizard's
 per-agent `recent_custom_paths::<agentId>`, deliberately unprefixed for
-mobile parity — nothing in `src/` sweeps `localStorage` by prefix, so
-sitting outside the namespace costs nothing).
+mobile parity — the one prefix sweep in `src/` is CLA-258's
+`clearAllRecentPaths()`, which keys off `recent_custom_paths::` itself, so
+sitting outside the `mobaide-` namespace still costs nothing).
 
 **OSC 52**: writes allowed, reads refused. The refusal is a handler
 registered *after* `ClipboardAddon` (xterm dispatches OSC handlers

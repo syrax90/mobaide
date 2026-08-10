@@ -74,6 +74,7 @@ final class AppContainer {
         let sessionManager = SessionManager(
             tokenStore: tokenStore,
             userIdentityStore: userIdentityStore,
+            preferencesStore: preferencesStore,
             initialState: initialState
         )
 

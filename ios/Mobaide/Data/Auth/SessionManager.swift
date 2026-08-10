@@ -92,6 +92,7 @@ actor SessionManager {
 
     private let tokenStore: TokenStore
     private let userIdentityStore: UserIdentityStore
+    private let preferencesStore: PreferencesStore
     private let refreshTransport: RefreshTransport
 
     private let authStateBroadcaster = Broadcaster<AuthState>.stateFlow()
@@ -104,11 +105,13 @@ actor SessionManager {
     init(
         tokenStore: TokenStore,
         userIdentityStore: UserIdentityStore,
+        preferencesStore: PreferencesStore,
         initialState: AuthState? = nil,
         refreshTransport: RefreshTransport? = nil
     ) {
         self.tokenStore = tokenStore
         self.userIdentityStore = userIdentityStore
+        self.preferencesStore = preferencesStore
         self.refreshTransport = refreshTransport ?? Self.defaultRefreshTransport()
         let initial = initialState
             ?? AuthState.initial(tokenStore: tokenStore, userIdentityStore: userIdentityStore)
@@ -188,6 +191,7 @@ actor SessionManager {
     func invalidateUserSession(_ reason: InvalidationReason) {
         if state == .unauthenticated { return }
         userIdentityStore.clearUserSession()
+        preferencesStore.removeAllRecentCustomPaths()
         tokenStore.clear()
         setState(.unauthenticated)
         cancelInFlightRefresh()
