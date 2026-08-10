@@ -27,7 +27,8 @@ web portal.
        │  2b. mode=immediate: cascade purge now   │
        │  3. write deletion_audit (status=pending │
        │     or completed, mode column set)       │
-       │  4. revoke all refresh tokens            │
+       │  4. revoke all refresh tokens + clear    │
+       │     every device push token              │
        │  5. WS-4010 close (user + each agent)    │
        │  6. issue cancel-link token + email      │
        │  7. return 204                           │
@@ -113,6 +114,11 @@ A user can restore their account at any time within the grace window:
 Cancelling stamps the existing `deletion_audit` row to `status=cancelled` and
 records the cancellation source (`user_initiated` for in-session cancels,
 `email_link` for the token path).
+
+Push tokens cleared when the deletion request was filed (see the
+architecture diagram, step 4) are **not** restored on cancel. The affected
+client — iOS today, the only platform with a push pipeline — re-registers
+its token automatically on its next launch, so no user action is required.
 
 ## Schema
 

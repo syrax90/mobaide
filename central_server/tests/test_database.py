@@ -838,8 +838,8 @@ class TestMobileDevices:
 
 class TestPushTokens:
     """Push-token lifecycle on ``mobile_devices``: registration,
-    rotation, owner-scoped and token-matched clears, cross-tenant reassign
-    wipe, and the dispatcher's target listing."""
+    rotation, owner-scoped, token-matched and account-wide clears,
+    cross-tenant reassign wipe, and the dispatcher's target listing."""
 
     async def _register(self, db, owner, device_id="dev-1"):
         await db.upsert_mobile_device(
@@ -962,6 +962,56 @@ class TestPushTokens:
 
         targets = await db.list_push_targets(owner)
         assert [t["device_id"] for t in targets] == ["dev-token"]
+
+    async def test_clear_for_user_drops_every_token_and_counts_them(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        await self._register(db, owner, "dev-a")
+        await self._register(db, owner, "dev-b")
+        await self._register(db, owner, "dev-bare")
+        await db.set_push_token("dev-a", owner, "ios", "tok-a", "sandbox")
+        await db.set_push_token("dev-b", owner, "ios", "tok-b", "production")
+
+        # Only devices that actually held a token count — the log line the
+        # deletion path emits must not overstate the blast radius.
+        assert await db.clear_push_tokens_for_user(owner) == 2
+        assert await db.list_push_targets(owner) == []
+        # Idempotent: nothing left to clear on a second pass.
+        assert await db.clear_push_tokens_for_user(owner) == 0
+
+    async def test_clear_for_user_leaves_other_users_tokens(self, db: Database):
+        u1 = await db.create_user(email="u1@test.local", password_hash="h")
+        u2 = await db.create_user(email="u2@test.local", password_hash="h")
+        await self._register(db, u1, "dev-1")
+        await self._register(db, u2, "dev-2")
+        await db.set_push_token("dev-1", u1, "ios", "tok-1", "sandbox")
+        await db.set_push_token("dev-2", u2, "ios", "tok-2", "sandbox")
+
+        assert await db.clear_push_tokens_for_user(u1) == 1
+        assert await db.list_push_targets(u1) == []
+        assert [
+            t["push_token"] for t in await db.list_push_targets(u2)
+        ] == ["tok-2"]
+
+    async def test_clear_for_user_skips_revoked_device_already_cleared(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        await self._register(db, owner, "dev-live")
+        await self._register(db, owner, "dev-revoked")
+        await db.set_push_token("dev-live", owner, "ios", "tok-1", "sandbox")
+        await db.set_push_token("dev-revoked", owner, "ios", "tok-2", "sandbox")
+        await db.revoke_mobile_device("dev-revoked", owner)
+
+        # The statement is deliberately not scoped to ``revoked_at IS NULL``,
+        # but revocation already nulled the columns, so the count stays honest.
+        assert await db.clear_push_tokens_for_user(owner) == 1
+        assert await db.list_push_targets(owner) == []
+        # The revoked row is not resurrected by the clear.
+        assert [
+            d["device_id"] for d in await db.list_user_devices(owner)
+        ] == ["dev-live"]
 
 
 class TestPushColumnsMigration:
