@@ -32,7 +32,11 @@ login, register and the delete-account re-auth — the gate that lets an
 account created in the iOS app, private-relay address and no password, reach
 the web client at all; the same button also landed on `/portal/*`, and the
 server's Apple audience check grew to accept the browser Services ID
-alongside the iOS bundle id. The series is tracked in
+alongside the iOS bundle id. WEB-12 (CLA-199) added pairing phase 2: the
+reversed device-code direction at the guarded `/agents/pair` route,
+`/agents`'s new "Add an agent" / "Pair from a code" button pair, and the
+account-level `trust_key_fp` pin that outlives a wiped browser. The series
+is tracked in
 Linear project "Web Client (React)" (CLA-188…CLA-200): deploy/relay
 readiness (WEB-02), auth (WEB-03), WS protocol core (WEB-04), terminal
 (WEB-05), keyboard/shortcuts (WEB-06), sessions (WEB-07), pairing (WEB-08),
@@ -357,8 +361,9 @@ returns to the list; its monitor screen is WEB-10.
 
 ## Agents and pairing (WEB-08)
 
-Two routes: `/agents` (guarded, in the app shell) lists and manages agents;
-`/pair` completes a pairing.
+Three routes: `/agents` (guarded, in the app shell) lists and manages
+agents; `/pair` completes a pairing from a code printed elsewhere; the
+guarded `/agents/pair` (WEB-12) mints one instead.
 
 **Why `/pair` sits outside both guards.** The payload rides in the URL
 *fragment*, and `requireAuthMiddleware` builds its `?next=` from
@@ -461,6 +466,15 @@ showing of a token — the web analogue of Android's `confirmValueChange` and
 iOS's `interactiveDismissDisabled`. Android's `EXTRA_IS_SENSITIVE` clipboard
 flag has no browser equivalent, so a copied token lands in ordinary clipboard
 history; that is why the panel points at pairing instead.
+
+**Pairing phase 2 (WEB-12).** `/agents/pair` (`PairHost`) is guarded,
+unlike `/pair`: minting a code needs a session, and there is no URL
+payload for a bounce through sign-in to drop. It mints a code from
+`POST /api/pairing/device-code`, polls `GET .../device-code/{id}` for
+the agent's redeem, and confirms through `POST .../confirm` — the same
+completion path `/pair`'s claim uses. See [qr-pairing.md](qr-pairing.md)
+for the protocol and the account-level `trust_key_fp` pin referenced
+above.
 
 ## Projects, git & templates (WEB-09)
 

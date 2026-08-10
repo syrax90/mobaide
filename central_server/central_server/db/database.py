@@ -29,7 +29,12 @@ CREATE TABLE IF NOT EXISTS users (
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
     scheduled_deletion_at   TEXT,
-    deletion_requested_at   TEXT
+    deletion_requested_at   TEXT,
+    -- Fingerprint of the relay signing key this account first paired
+    -- against. Taken on the first successful claim and compared on every
+    -- later one, so a client whose local pin was wiped cannot silently
+    -- re-trust a rotated key. NULL until the account pairs once.
+    trust_key_fp            TEXT
 );
 
 CREATE TABLE IF NOT EXISTS agents (
@@ -170,6 +175,34 @@ CREATE TABLE IF NOT EXISTS custom_agent_types (
     deleted_at    TEXT
 );
 
+-- Reversed-direction pairing: the browser mints a short typeable code,
+-- the operator retypes it on the agent host. ``code_hash`` is a peppered
+-- HMAC (the code is only ~34.6 bits). ``pairing_nonce_hash`` links to the
+-- ``pairing_tokens`` row minted at redeem time, so the credential push
+-- reuses the QR flow's WebSocket, signature and recovery slot unchanged.
+-- The raw nonce is never stored here; the confirm path addresses the
+-- token row by hash.
+CREATE TABLE IF NOT EXISTS pairing_device_codes (
+    request_id         TEXT PRIMARY KEY,
+    code_hash          TEXT NOT NULL UNIQUE,
+    user_id            TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at         TEXT NOT NULL,
+    expires_at         TEXT NOT NULL,
+    redeemed_at        TEXT,
+    redeemer_id        TEXT,
+    redeem_hostname    TEXT,
+    redeem_os          TEXT,
+    redeem_agent_id    TEXT,
+    -- Set when the operator answered the agent's terminal prompt. The
+    -- browser cannot confirm before it: minting is the browser's, so the
+    -- terminal is the only party that can refuse a code it did not ask
+    -- for, and nothing may be created or rotated until it has.
+    approved_at        TEXT,
+    pairing_nonce_hash TEXT,
+    confirmed_at       TEXT,
+    canceled_at        TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_google_sub
     ON users(google_sub) WHERE google_sub IS NOT NULL;
@@ -206,6 +239,9 @@ CREATE INDEX IF NOT EXISTS idx_user_shortcuts_owner
     ON user_shortcuts(owner_user_id) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_shortcuts_dedupe
     ON user_shortcuts(owner_user_id, kind, chord_token) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_pairing_device_codes_live
+    ON pairing_device_codes(user_id)
+    WHERE redeemed_at IS NULL AND canceled_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_custom_agent_types_owner
     ON custom_agent_types(owner_user_id) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_agent_types_owner_name
@@ -572,6 +608,35 @@ class Database:
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 18")
 
+        if version < 19:
+            # Device-code pairing + account-level trust pin. The new table
+            # is a pure _SCHEMA re-run, but ``users.trust_key_fp`` has to be
+            # ALTERed in first: an upgraded DB reaches the CREATE TABLE
+            # statements only after the column exists, and no index in
+            # _SCHEMA may reference a column that does not (same reason the
+            # apple_sub guard is hoisted above).
+            user_cursor = await self._conn.execute("PRAGMA table_info(users)")
+            user_cols = {r[1] for r in await user_cursor.fetchall()}
+            if "trust_key_fp" not in user_cols:
+                await self._conn.execute(
+                    "ALTER TABLE users ADD COLUMN trust_key_fp TEXT"
+                )
+            # ``approved_at`` landed after the table did, so a database
+            # created by an earlier build of this same version has the table
+            # without the column — CREATE TABLE IF NOT EXISTS would not add
+            # it. Empty table_info means the table does not exist yet and
+            # _SCHEMA below creates it complete.
+            code_cursor = await self._conn.execute(
+                "PRAGMA table_info(pairing_device_codes)"
+            )
+            code_cols = {r[1] for r in await code_cursor.fetchall()}
+            if code_cols and "approved_at" not in code_cols:
+                await self._conn.execute(
+                    "ALTER TABLE pairing_device_codes ADD COLUMN approved_at TEXT"
+                )
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 19")
+
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -587,7 +652,7 @@ class Database:
     _USER_COLUMNS = (
         "id, email, password_hash, google_sub, apple_sub, role, "
         "email_verified, verified_at, created_at, updated_at, "
-        "scheduled_deletion_at, deletion_requested_at"
+        "scheduled_deletion_at, deletion_requested_at, trust_key_fp"
     )
 
     async def create_user(
@@ -769,7 +834,8 @@ class Database:
           4. Drop ``email_verification_tokens``, ``password_reset_tokens``,
              ``account_deletion_cancel_tokens``, ``user_refresh_tokens``,
              ``mobile_devices``, ``prompt_templates``, ``user_shortcuts``,
-             and ``custom_agent_types`` owned by the user.
+             ``custom_agent_types`` and ``pairing_device_codes`` owned by
+             the user.
           5. Drop the ``users`` row.
 
         ``deletion_audit`` rows are intentionally NOT cascaded — they have no
@@ -827,6 +893,9 @@ class Database:
         await self.conn.execute(
             "DELETE FROM custom_agent_types WHERE owner_user_id = ?",
             (user_id,),
+        )
+        await self.conn.execute(
+            "DELETE FROM pairing_device_codes WHERE user_id = ?", (user_id,)
         )
         await self.conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         await self.conn.commit()
@@ -1464,6 +1533,27 @@ class Database:
         recomputing it from a request context that can disagree behind
         a reverse proxy.
         """
+        result = await self._insert_pairing_token(
+            agent_id=agent_id,
+            ttl_seconds=ttl_seconds,
+            agent_metadata=agent_metadata,
+            relay_url=relay_url,
+        )
+        await self.conn.commit()
+        return result
+
+    async def _insert_pairing_token(
+        self,
+        agent_id: str | None = None,
+        ttl_seconds: int = 300,
+        agent_metadata: str | None = None,
+        relay_url: str | None = None,
+    ) -> tuple[str, str]:
+        """``create_pairing_token`` without the commit.
+
+        The device-code redeem mints its nonce inside the same transaction
+        as the code's CAS, so the two either both land or neither does.
+        """
         raw_token = secrets.token_urlsafe(24)  # 192 bits
         token_hash = _hash_token(raw_token)
         now = datetime.now(timezone.utc)
@@ -1483,7 +1573,6 @@ class Database:
                 relay_url,
             ),
         )
-        await self.conn.commit()
         return raw_token, expires_at.isoformat()
 
     async def consume_pairing_token(
@@ -1524,7 +1613,19 @@ class Database:
         handler to validate nonce existence + TTL and read the same
         persisted ``relay_url`` for the recovery push.
         """
-        token_hash = _hash_token(raw_token)
+        return await self.lookup_pairing_token_metadata_by_hash(
+            _hash_token(raw_token)
+        )
+
+    async def lookup_pairing_token_metadata_by_hash(
+        self, token_hash: str
+    ) -> dict | None:
+        """``lookup_pairing_token_metadata`` for a caller that has the hash.
+
+        The device-code confirm path never sees the raw nonce — the code
+        row stores only ``pairing_nonce_hash`` — so it addresses the token
+        row directly.
+        """
         cursor = await self.conn.execute(
             "SELECT token_hash, expires_at, agent_metadata, consumed_at, relay_url "
             "FROM pairing_tokens WHERE token_hash = ?",
@@ -1551,7 +1652,21 @@ class Database:
         Returns True on success, False if the row was already consumed,
         expired, or never existed.
         """
-        token_hash = _hash_token(raw_token)
+        return await self.claim_pairing_nonce_by_hash(
+            token_hash=_hash_token(raw_token),
+            mobile_device_id=mobile_device_id,
+            claimed_agent_id=claimed_agent_id,
+            claimed_token_raw=claimed_token_raw,
+        )
+
+    async def claim_pairing_nonce_by_hash(
+        self,
+        token_hash: str,
+        mobile_device_id: str,
+        claimed_agent_id: str,
+        claimed_token_raw: str,
+    ) -> bool:
+        """``claim_pairing_nonce`` for a caller that has the hash."""
         now = _now_iso()
         cursor = await self.conn.execute(
             "UPDATE pairing_tokens "
@@ -1619,6 +1734,334 @@ class Database:
             "relay_url": relay_url,
         }
 
+    async def create_device_code(
+        self,
+        request_id: str,
+        code_hash: str,
+        user_id: str,
+        ttl_seconds: int,
+    ) -> str:
+        """Mint a device code, retiring the account's earlier live ones.
+
+        One live code per account is a guessing-surface control as much as
+        a UX one: the ~34.6-bit code space is only comfortable while the
+        set of valid codes stays tiny. Superseded rows are marked canceled
+        rather than deleted so a redeem of a stale code reports "canceled"
+        instead of the indistinguishable "unknown".
+
+        Returns the ``expires_at`` ISO string.
+        """
+        now = datetime.now(timezone.utc)
+        expires_at = datetime.fromtimestamp(
+            now.timestamp() + ttl_seconds, tz=timezone.utc
+        )
+        await self.conn.execute(
+            "UPDATE pairing_device_codes SET canceled_at = ? "
+            "WHERE user_id = ? AND redeemed_at IS NULL AND canceled_at IS NULL",
+            (now.isoformat(), user_id),
+        )
+        await self.conn.execute(
+            "INSERT INTO pairing_device_codes "
+            "(request_id, code_hash, user_id, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                request_id,
+                code_hash,
+                user_id,
+                now.isoformat(),
+                expires_at.isoformat(),
+            ),
+        )
+        await self.conn.commit()
+        return expires_at.isoformat()
+
+    async def redeem_device_code(
+        self,
+        code_hash: str,
+        redeemer_id: str,
+        hostname: str | None,
+        os_name: str | None,
+        current_agent_id: str | None,
+        agent_metadata: str | None,
+        nonce_ttl_seconds: int,
+        relay_url: str | None,
+    ) -> dict | None:
+        """Bind a code to the redeeming host and mint its pairing nonce.
+
+        Returns ``{request_id, user_id, nonce, expires_at, replayed}``, or
+        ``None`` when the code is unknown, expired, canceled, or already
+        held by a *different* redeemer.
+
+        Recognises a retry from the same ``redeemer_id`` instead of
+        rejecting it as a second machine racing the code, returning
+        ``replayed=True``. Note what that does *not* buy: the raw nonce is
+        never stored server-side, so a replay comes back with
+        ``nonce=None`` and the caller can only continue if it still holds
+        its own local copy. A redeem whose response was lost in transit is
+        therefore not recoverable — the operator has to mint a new code.
+
+        The claim itself is a single CAS ``UPDATE``, matching
+        ``claim_pairing_nonce``: two hosts racing the same code resolve to
+        exactly one winner.
+        """
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "UPDATE pairing_device_codes "
+            "SET redeemed_at = ?, "
+            "    redeemer_id = ?, "
+            "    redeem_hostname = ?, "
+            "    redeem_os = ?, "
+            "    redeem_agent_id = ? "
+            "WHERE code_hash = ? "
+            "  AND redeemed_at IS NULL "
+            "  AND canceled_at IS NULL "
+            "  AND expires_at > ?",
+            (
+                now,
+                redeemer_id,
+                hostname,
+                os_name,
+                current_agent_id,
+                code_hash,
+                now,
+            ),
+        )
+        if cursor.rowcount != 1:
+            await self.conn.commit()
+            return await self._replay_device_code_redeem(code_hash, redeemer_id)
+
+        raw_nonce, expires_at = await self._insert_pairing_token(
+            ttl_seconds=nonce_ttl_seconds,
+            agent_metadata=agent_metadata,
+            relay_url=relay_url,
+        )
+        # Guarded on ``canceled_at``, not just the code hash. Minting the
+        # token is a separate statement from the CAS above, so a DELETE can
+        # land in between: it would read ``pairing_nonce_hash`` still NULL,
+        # cancel the request, and expire nothing — and an unguarded link
+        # here would then attach a live nonce to a canceled row, leaving the
+        # agent waiting out the full confirm TTL for a confirm that can only
+        # ever 410. Losing the guard rolls the nonce back with it.
+        row_cursor = await self.conn.execute(
+            "UPDATE pairing_device_codes SET pairing_nonce_hash = ? "
+            "WHERE code_hash = ? AND redeemer_id = ? AND canceled_at IS NULL",
+            (_hash_token(raw_nonce), code_hash, redeemer_id),
+        )
+        if row_cursor.rowcount != 1:
+            await self.conn.rollback()
+            return None
+        await self.conn.commit()
+        lookup = await self.conn.execute(
+            "SELECT request_id, user_id FROM pairing_device_codes "
+            "WHERE code_hash = ?",
+            (code_hash,),
+        )
+        row = await lookup.fetchone()
+        if row is None:  # pragma: no cover - row just updated
+            return None
+        return {
+            "request_id": row["request_id"],
+            "user_id": row["user_id"],
+            "nonce": raw_nonce,
+            "expires_at": expires_at,
+            "replayed": False,
+        }
+
+    async def _replay_device_code_redeem(
+        self, code_hash: str, redeemer_id: str
+    ) -> dict | None:
+        """Re-answer a redeem the same host already won, else ``None``.
+
+        The caller gets the *hash* back and resolves the WebSocket URL from
+        the nonce it persisted locally before the first attempt.
+        """
+        cursor = await self.conn.execute(
+            "SELECT request_id, user_id, pairing_nonce_hash, redeemer_id, "
+            "       canceled_at, confirmed_at "
+            "FROM pairing_device_codes WHERE code_hash = ?",
+            (code_hash,),
+        )
+        row = await cursor.fetchone()
+        if row is None or row["redeemer_id"] != redeemer_id:
+            return None
+        if row["canceled_at"] is not None or row["confirmed_at"] is not None:
+            return None
+        if row["pairing_nonce_hash"] is None:
+            return None
+        token = await self.lookup_pairing_token_metadata_by_hash(
+            row["pairing_nonce_hash"]
+        )
+        if token is None or token["consumed_at"] is not None:
+            return None
+        return {
+            "request_id": row["request_id"],
+            "user_id": row["user_id"],
+            "nonce": None,
+            "expires_at": token["expires_at"],
+            "replayed": True,
+        }
+
+    async def get_device_code(
+        self, request_id: str, user_id: str
+    ) -> dict | None:
+        """Read an owned device-code row, or ``None`` for a foreign/absent id."""
+        cursor = await self.conn.execute(
+            "SELECT request_id, user_id, created_at, expires_at, redeemed_at, "
+            "       redeem_hostname, redeem_os, redeem_agent_id, approved_at, "
+            "       pairing_nonce_hash, confirmed_at, canceled_at "
+            "FROM pairing_device_codes WHERE request_id = ? AND user_id = ?",
+            (request_id, user_id),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def approve_device_code(
+        self, code_hash: str, redeemer_id: str
+    ) -> bool:
+        """Record that the redeeming host's operator said yes.
+
+        Anonymous like the redeem, and authorised the same way: only the
+        machine holding both the code and the ``redeemer_id`` it redeemed
+        under can approve. Idempotent, so a resumed ``pair`` run can send it
+        again without having to know whether the first one landed.
+        """
+        cursor = await self.conn.execute(
+            "UPDATE pairing_device_codes SET approved_at = ? "
+            "WHERE code_hash = ? AND redeemer_id = ? "
+            "  AND redeemed_at IS NOT NULL "
+            "  AND approved_at IS NULL "
+            "  AND confirmed_at IS NULL "
+            "  AND canceled_at IS NULL",
+            (_now_iso(), code_hash, redeemer_id),
+        )
+        await self.conn.commit()
+        if cursor.rowcount == 1:
+            return True
+        lookup = await self.conn.execute(
+            "SELECT approved_at, canceled_at FROM pairing_device_codes "
+            "WHERE code_hash = ? AND redeemer_id = ?",
+            (code_hash, redeemer_id),
+        )
+        row = await lookup.fetchone()
+        return bool(row and row["approved_at"] and not row["canceled_at"])
+
+    async def mark_device_code_confirmed(
+        self, request_id: str, user_id: str
+    ) -> bool:
+        """CAS a redeemed code to confirmed. False if it already moved on.
+
+        The confirm endpoint runs this *before* issuing credentials, so
+        this statement and :meth:`cancel_device_code`'s — single statements
+        over the same connection, guarded on the same two columns — are
+        what makes confirm and cancel mutually exclusive. A confirm that is
+        then refused calls :meth:`reopen_device_code`.
+        """
+        cursor = await self.conn.execute(
+            "UPDATE pairing_device_codes SET confirmed_at = ? "
+            "WHERE request_id = ? AND user_id = ? "
+            "  AND redeemed_at IS NOT NULL "
+            "  AND confirmed_at IS NULL "
+            "  AND canceled_at IS NULL",
+            (_now_iso(), request_id, user_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    async def reopen_device_code(self, request_id: str, user_id: str) -> bool:
+        """Undo a confirm reservation whose pairing was then refused.
+
+        Only the reserving request can reach this, and a cancel cannot have
+        landed in between — cancel's CAS requires ``confirmed_at IS NULL``,
+        which the reservation held for the whole attempt.
+        """
+        cursor = await self.conn.execute(
+            "UPDATE pairing_device_codes SET confirmed_at = NULL "
+            "WHERE request_id = ? AND user_id = ? "
+            "  AND confirmed_at IS NOT NULL "
+            "  AND canceled_at IS NULL",
+            (request_id, user_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    async def cancel_device_code(self, request_id: str, user_id: str) -> bool:
+        """Cancel an owned code and expire its nonce in the same transaction.
+
+        A confirm racing this loses on the ``confirmed_at IS NULL AND
+        canceled_at IS NULL`` guard below, which it reserves through
+        :meth:`mark_device_code_confirmed` before issuing any credentials.
+
+        Expiring the ``pairing_tokens`` row rather than leaving it to time
+        out is what stops the agent's WebSocket hanging for the rest of the
+        window: it gives up at its next TTL check.
+        """
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "SELECT pairing_nonce_hash FROM pairing_device_codes "
+            "WHERE request_id = ? AND user_id = ? "
+            "  AND confirmed_at IS NULL AND canceled_at IS NULL",
+            (request_id, user_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return False
+        update = await self.conn.execute(
+            "UPDATE pairing_device_codes SET canceled_at = ? "
+            "WHERE request_id = ? AND user_id = ? "
+            "  AND confirmed_at IS NULL AND canceled_at IS NULL",
+            (now, request_id, user_id),
+        )
+        if update.rowcount != 1:
+            await self.conn.commit()
+            return False
+        if row["pairing_nonce_hash"] is not None:
+            await self.conn.execute(
+                "UPDATE pairing_tokens SET expires_at = ? "
+                "WHERE token_hash = ? AND consumed_at IS NULL",
+                (now, row["pairing_nonce_hash"]),
+            )
+        await self.conn.commit()
+        return True
+
+    async def get_user_trust_key_fp(self, user_id: str) -> str | None:
+        cursor = await self.conn.execute(
+            "SELECT trust_key_fp FROM users WHERE id = ?", (user_id,)
+        )
+        row = await cursor.fetchone()
+        return row["trust_key_fp"] if row else None
+
+    async def pin_user_trust_key_fp(self, user_id: str, fingerprint: str) -> bool:
+        """Take the account's trust pin if it is still unset.
+
+        Two first pairings racing produce one winner and one no-op, and
+        neither can overwrite an established pin.
+        """
+        cursor = await self.conn.execute(
+            "UPDATE users SET trust_key_fp = ?, updated_at = ? "
+            "WHERE id = ? AND trust_key_fp IS NULL",
+            (fingerprint, _now_iso(), user_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    async def clear_user_trust_key_fp(self, user_id: str) -> bool:
+        """Drop the account's trust pin (recovery after a key rotation)."""
+        cursor = await self.conn.execute(
+            "UPDATE users SET trust_key_fp = NULL, updated_at = ? "
+            "WHERE id = ? AND trust_key_fp IS NOT NULL",
+            (_now_iso(), user_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    async def count_agents_for_owner(self, user_id: str) -> int:
+        cursor = await self.conn.execute(
+            "SELECT COUNT(*) AS n FROM agents WHERE owner_user_id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        return int(row["n"]) if row else 0
+
     async def get_pending_pairing_tokens(self, agent_id: str) -> list[dict]:
         now = _now_iso()
         cursor = await self.conn.execute(
@@ -1644,8 +2087,9 @@ class Database:
     _PAIRING_CLAIMED_TOKEN_RETENTION_SECONDS = 60
 
     async def cleanup_expired_tokens(self) -> int:
-        """Delete expired pairing, email-verification, password-reset and
-        user-session refresh tokens; clear stale claimed pairing-token rows.
+        """Delete expired pairing, device-code, email-verification,
+        password-reset and user-session refresh tokens; clear stale claimed
+        pairing-token rows.
 
         Verification tokens are cleaned in two sweeps:
           - expired but never consumed rows are dropped immediately;
@@ -1723,6 +2167,36 @@ class Database:
             "  AND consumed_at <= ?",
             (pairing_token_cutoff,),
         )
+        # Device codes carry a peppered hash of a ~34.6-bit secret, so a
+        # settled row is pure brute-force fodder on a dump. Unredeemed rows
+        # go as soon as they expire; settled ones (confirmed or canceled)
+        # follow the same retention window as consumed OTP rows.
+        device_code_expired_cursor = await self.conn.execute(
+            "DELETE FROM pairing_device_codes "
+            "WHERE expires_at <= ? AND redeemed_at IS NULL",
+            (now,),
+        )
+        device_code_settled_cursor = await self.conn.execute(
+            "DELETE FROM pairing_device_codes "
+            "WHERE (confirmed_at IS NOT NULL AND confirmed_at <= ?) "
+            "   OR (canceled_at IS NOT NULL AND canceled_at <= ?)",
+            (retention_cutoff, retention_cutoff),
+        )
+        # Redeemed but never settled: the operator answered no at the
+        # agent's prompt, the agent's WebSocket died, the confirm was
+        # refused by the ownership guard, or the browser tab was simply
+        # closed. None of those paths notifies the relay, so without this
+        # sweep the row — and its code hash — would live forever. The
+        # linked nonce is dead long before the retention cutoff, so this
+        # can never delete a request that is still completable.
+        device_code_stranded_cursor = await self.conn.execute(
+            "DELETE FROM pairing_device_codes "
+            "WHERE redeemed_at IS NOT NULL "
+            "  AND confirmed_at IS NULL "
+            "  AND canceled_at IS NULL "
+            "  AND redeemed_at <= ?",
+            (retention_cutoff,),
+        )
         await self.conn.commit()
         return (
             pairing_cursor.rowcount
@@ -1733,6 +2207,9 @@ class Database:
             + user_refresh_expired_cursor.rowcount
             + user_refresh_revoked_cursor.rowcount
             + claimed_clear_cursor.rowcount
+            + device_code_expired_cursor.rowcount
+            + device_code_settled_cursor.rowcount
+            + device_code_stranded_cursor.rowcount
         )
 
     async def create_verification_token(

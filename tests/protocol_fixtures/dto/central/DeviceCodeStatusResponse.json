@@ -1,0 +1,66 @@
+{
+  "type": "DeviceCodeStatusResponse",
+  "cases": [
+    {
+      "name": "pending_before_any_host_redeems",
+      "wire": {
+        "status": "pending",
+        "expires_at": "2026-08-09T12:10:00+00:00",
+        "hostname": null,
+        "os": null,
+        "is_repair": false,
+        "blocked_reason": null
+      },
+      "decoded_canonical": {
+        "status": "pending",
+        "expires_at": "2026-08-09T12:10:00+00:00",
+        "is_repair": false
+      }
+    },
+    {
+      "name": "redeemed_names_the_reporting_host",
+      "wire": {
+        "status": "redeemed",
+        "expires_at": "2026-08-09T12:05:00+00:00",
+        "hostname": "pavel-mbp",
+        "os": "Darwin",
+        "is_repair": false,
+        "blocked_reason": null
+      },
+      "decoded_canonical": {
+        "status": "redeemed",
+        "expires_at": "2026-08-09T12:05:00+00:00",
+        "hostname": "pavel-mbp",
+        "os": "Darwin",
+        "is_repair": false
+      }
+    },
+    {
+      "name": "repair_blocked_by_other_owner",
+      "wire": {
+        "status": "redeemed",
+        "expires_at": "2026-08-09T12:05:00+00:00",
+        "hostname": "build-box",
+        "os": "Linux",
+        "is_repair": true,
+        "blocked_reason": "owned_by_other"
+      }
+    },
+    {
+      "name": "expired",
+      "wire": {
+        "status": "expired",
+        "expires_at": "2026-08-09T12:00:00+00:00",
+        "hostname": null,
+        "os": null,
+        "is_repair": false,
+        "blocked_reason": null
+      },
+      "decoded_canonical": {
+        "status": "expired",
+        "expires_at": "2026-08-09T12:00:00+00:00",
+        "is_repair": false
+      }
+    }
+  ]
+}

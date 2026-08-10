@@ -187,6 +187,31 @@ class CentralServerConfig:
     # device, and the nonce is single-use so the wider window adds no
     # replay exposure.
     pairing_qr_token_ttl_seconds: int = 120
+    # Reversed (device-code) pairing. Two windows, because the human step
+    # sits between them: the code has to survive the walk from a browser to
+    # a terminal, while the confirm prompt is answered by someone already
+    # looking at the screen. The second window is also the TTL of the nonce
+    # minted at redeem, so it bounds how long a declined pairing leaves the
+    # agent waiting on its WebSocket.
+    pairing_device_code_ttl_seconds: int = 600
+    pairing_device_code_confirm_ttl_seconds: int = 300
+    # Guessing defence for the ~34.6-bit code. Per-IP degrades to a single
+    # shared bucket behind a proxy that does not forward the client address
+    # (see FORWARDED_ALLOW_IPS in docs/deployment.md), so the global cap is
+    # the one a distributed guesser cannot dodge.
+    pairing_device_code_redeem_ip_hourly_cap: int = 30
+    pairing_device_code_redeem_global_hourly_cap: int = 600
+    pairing_device_code_redeem_ip_cooldown_seconds: int = 1
+    # Minting has a cooldown but deliberately no hourly cap: a new code
+    # supersedes the account's previous one, so a user who reloads the
+    # pairing screen re-mints, and a cap would lock them out of pairing
+    # entirely for an hour.
+    pairing_device_code_mint_cooldown_seconds: int = 2
+    # Refuse a claim whose relay signing key differs from the one the
+    # account first paired against. Set false only to recover a deployment
+    # that has legitimately rotated MANIFEST_SIGNING_* — see the trust-key
+    # rotation runbook in docs/qr-pairing.md.
+    trust_key_pin_enforced: bool = True
     ws_ping_interval: int = 20  # seconds, within 15-30s spec
     ws_allowed_origins: tuple[str, ...] = _DEFAULT_WS_ALLOWED_ORIGINS
     agent_disconnect_timeout: int = 30
@@ -356,6 +381,29 @@ class CentralServerConfig:
             pairing_qr_token_ttl_seconds=int(
                 os.getenv("PAIRING_QR_TOKEN_TTL_SECONDS", "120"),
             ),
+            pairing_device_code_ttl_seconds=int(
+                os.getenv("PAIRING_DEVICE_CODE_TTL_SECONDS", "600"),
+            ),
+            pairing_device_code_confirm_ttl_seconds=int(
+                os.getenv("PAIRING_DEVICE_CODE_CONFIRM_TTL_SECONDS", "300"),
+            ),
+            pairing_device_code_redeem_ip_hourly_cap=int(
+                os.getenv("PAIRING_DEVICE_CODE_REDEEM_IP_HOURLY_CAP", "30"),
+            ),
+            pairing_device_code_redeem_global_hourly_cap=int(
+                os.getenv(
+                    "PAIRING_DEVICE_CODE_REDEEM_GLOBAL_HOURLY_CAP", "600"
+                ),
+            ),
+            pairing_device_code_redeem_ip_cooldown_seconds=int(
+                os.getenv(
+                    "PAIRING_DEVICE_CODE_REDEEM_IP_COOLDOWN_SECONDS", "1"
+                ),
+            ),
+            pairing_device_code_mint_cooldown_seconds=int(
+                os.getenv("PAIRING_DEVICE_CODE_MINT_COOLDOWN_SECONDS", "2"),
+            ),
+            trust_key_pin_enforced=_env_bool("TRUST_KEY_PIN_ENFORCED", True),
             ws_ping_interval=int(os.getenv("WS_PING_INTERVAL", "20")),
             ws_allowed_origins=_env_origin_list(
                 "WS_ALLOWED_ORIGINS", _DEFAULT_WS_ALLOWED_ORIGINS,

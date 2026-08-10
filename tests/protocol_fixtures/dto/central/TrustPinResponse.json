@@ -1,0 +1,25 @@
+{
+  "type": "TrustPinResponse",
+  "cases": [
+    {
+      "name": "account_has_pinned",
+      "wire": {
+        "relay_url": "https://api.mobaide.com",
+        "relay_trust_key_fp": "9f2c4b1e8a0d7c63f5e4a2b90c1d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d",
+        "account_trust_key_fp": "9f2c4b1e8a0d7c63f5e4a2b90c1d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d"
+      }
+    },
+    {
+      "name": "account_never_paired",
+      "wire": {
+        "relay_url": "https://api.mobaide.com",
+        "relay_trust_key_fp": "9f2c4b1e8a0d7c63f5e4a2b90c1d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d",
+        "account_trust_key_fp": null
+      },
+      "decoded_canonical": {
+        "relay_url": "https://api.mobaide.com",
+        "relay_trust_key_fp": "9f2c4b1e8a0d7c63f5e4a2b90c1d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d"
+      }
+    }
+  ]
+}

@@ -70,6 +70,84 @@ export function trustMismatchMessage(relayUrl: string): string {
   );
 }
 
+/** `detail.error` on the relay's account-trust-pin refusal. */
+export const TRUST_PIN_MISMATCH_CODE = 'trust_key_pin_mismatch';
+
+/**
+ * The account-level pin refusal — a different failure from
+ * {@link trustMismatchMessage}, which is this browser's own local pin.
+ *
+ * Recovery is deliberately not self-service. The pin only ever disagrees when
+ * the relay's signing key changed, and nobody signed in to a browser can tell
+ * an intended rotation from a compromise; the operator can.
+ */
+export function trustPinMismatchMessage(): string {
+  return (
+    "This relay's signing key is not the one this account first paired with. " +
+    'Pairing is refused. Compare the fingerprint on a machine you already ' +
+    'paired (`mobaide-agent show-trust-fp`) and contact the relay operator if ' +
+    'they differ.'
+  );
+}
+
+/** Why a confirm is going to be refused, known before the user clicks. */
+export type DeviceCodeBlockedReason = 'unknown_agent' | 'owned_by_other';
+
+/**
+ * The blocked-reason copy, and the canonical wording for both refusals.
+ *
+ * `deviceCodeErrorMessage` reuses these for the matching statuses rather than
+ * restating them: the poll shows the reason before the click and the server
+ * repeats it after, so two wordings for one condition is how they drift.
+ */
+export function deviceCodeBlockedMessage(reason: DeviceCodeBlockedReason): string {
+  switch (reason) {
+    case 'unknown_agent':
+      return (
+        'That machine still has credentials for an agent this relay no longer has. ' +
+        'On the agent host run `mobaide-agent re-pair --fresh`, then enter a new code.'
+      );
+    case 'owned_by_other':
+      return (
+        'That machine is already paired to a different account. Its current owner has ' +
+        'to remove it before it can be paired here.'
+      );
+  }
+}
+
+/**
+ * Failures of the browser-mints-the-code flow.
+ *
+ * Distinct from {@link claimErrorMessage} because the remedies differ: nothing
+ * here is fixed by re-rendering a QR on the agent, and every dead end is fixed
+ * by minting a fresh code right here.
+ */
+export function deviceCodeErrorMessage(error: unknown): string {
+  if (!isApiError(error)) {
+    return error instanceof Error && error.message !== ''
+      ? error.message
+      : 'Pairing failed.';
+  }
+  if (error.code === TRUST_PIN_MISMATCH_CODE) return trustPinMismatchMessage();
+  switch (error.status) {
+    case 404:
+      return 'This pairing request no longer exists. Get a new code.';
+    case 409:
+      return deviceCodeBlockedMessage('owned_by_other');
+    case 410:
+      return 'This pairing request expired or was already used. Get a new code.';
+    case 429:
+      return 'Too many pairing attempts. Wait a moment and try again.';
+    case 503:
+      return (
+        'Pairing is not configured on this relay — it is missing its manifest ' +
+        'signing keys. Contact the relay operator.'
+      );
+    default:
+      return error.message !== '' ? error.message : 'Pairing failed.';
+  }
+}
+
 /**
  * Claim failures, by status.
  *
@@ -85,6 +163,7 @@ export function claimErrorMessage(error: unknown): string {
       ? error.message
       : 'Pairing failed.';
   }
+  if (error.code === TRUST_PIN_MISMATCH_CODE) return trustPinMismatchMessage();
   switch (error.status) {
     case 400:
       return `This pairing code was built with an older relay trust key. ${FRESH_CODE_HINT}`;

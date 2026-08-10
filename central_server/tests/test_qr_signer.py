@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
+from pathlib import Path
 
 import pytest
 from cryptography.exceptions import InvalidSignature
@@ -16,11 +18,27 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
+from central_server.db.database import _hash_token
 from central_server.pairing.qr_signer import (
     canonical_payload_bytes,
     compute_trust_key_fp,
+    encode_pairing_payload,
+    hash_pairing_nonce,
     sign_pairing_payload,
 )
+
+# Resolved from this file, not the CWD: pytest runs from ``central_server/``
+# and the shared golden lives at the repo root.
+_QR_PAYLOAD_FIXTURE = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "tests"
+        / "protocol_fixtures"
+        / "pairing"
+        / "qr_payload.json"
+    ).read_text(encoding="utf-8")
+)
+_ENCODE_CASES = _QR_PAYLOAD_FIXTURE["encode_cases"]
 
 
 def _ed25519_keypair_b64() -> tuple[str, str]:
@@ -118,3 +136,46 @@ class TestSignPairingPayload:
         s2 = sign_pairing_payload(priv_b64, payload)
 
         assert s1 == s2
+
+
+class TestEncodePairingPayload:
+    @pytest.mark.parametrize(
+        "case",
+        _ENCODE_CASES,
+        ids=[c["name"] for c in _ENCODE_CASES],
+    )
+    def test_matches_the_shared_golden(self, case):
+        # The same fixture the agent, web, Android and iOS encoders are
+        # pinned to. The server used to build this string inline, so the
+        # golden is what stops the extracted encoder from drifting.
+        assert (
+            encode_pairing_payload(
+                case["relay_url"],
+                case["nonce"],
+                case["trust_key_fp"],
+                case["exp_unix"],
+            )
+            == case["expect"]
+        )
+
+    def test_golden_is_not_empty(self):
+        # A fixture that lost its cases would make the parametrised test
+        # above vacuously green.
+        assert _ENCODE_CASES
+
+
+class TestHashPairingNonce:
+    def test_equals_the_digest_the_database_stores(self):
+        # This is the whole point of the helper: the router addresses
+        # ``pairing_tokens`` rows and keys the WS waiter registry by it,
+        # so any divergence from ``Database``'s own hashing turns every
+        # device-code confirm into a silent ws_delivered=False.
+        nonce = "Xr3sT-nonce_value-192bit"
+
+        assert hash_pairing_nonce(nonce) == _hash_token(nonce)
+
+    def test_is_a_plain_sha256_hex_digest(self):
+        assert hash_pairing_nonce("abc") == hashlib.sha256(b"abc").hexdigest()
+
+    def test_distinguishes_nonces(self):
+        assert hash_pairing_nonce("a") != hash_pairing_nonce("b")

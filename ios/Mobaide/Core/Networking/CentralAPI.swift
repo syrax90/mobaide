@@ -118,6 +118,44 @@ struct CentralAPI: Sendable {
         try await execute(method: "POST", path: "/api/pairing/claim", body: request, bearer: userToken)
     }
 
+    /// Mint a short pairing code for the operator to retype on the agent host.
+    ///
+    /// Supersedes this account's previous unredeemed code, so the set of live
+    /// codes stays at one — part of what keeps the ~34.6-bit space safe.
+    func mintDeviceCode(userToken: String) async throws -> DeviceCodeMintResponse {
+        try await execute(method: "POST", path: "/api/pairing/device-code", rawBody: Data(), bearer: userToken)
+    }
+
+    func getDeviceCodeStatus(userToken: String, requestId: String) async throws -> DeviceCodeStatusResponse {
+        try await execute(method: "GET", path: "/api/pairing/device-code/\(requestId)", bearer: userToken)
+    }
+
+    /// Approve a redeemed code, releasing credentials to the waiting agent.
+    ///
+    /// Throws `APIError` 409 when the target agent belongs to another account
+    /// or the relay's trust key no longer matches this account's pin, and 410
+    /// once the request has expired or settled.
+    func confirmDeviceCode(
+        userToken: String,
+        requestId: String,
+        request: DeviceCodeConfirmRequest
+    ) async throws -> PairingClaimResponse {
+        try await execute(
+            method: "POST",
+            path: "/api/pairing/device-code/\(requestId)/confirm",
+            body: request,
+            bearer: userToken
+        )
+    }
+
+    func cancelDeviceCode(userToken: String, requestId: String) async throws {
+        try await executeNoContent(method: "DELETE", path: "/api/pairing/device-code/\(requestId)", bearer: userToken)
+    }
+
+    func getTrustPin(userToken: String) async throws -> TrustPinResponse {
+        try await execute(method: "GET", path: "/api/pairing/trust-pin", bearer: userToken)
+    }
+
     func listTemplates(userToken: String) async throws -> [TemplateDto] {
         try await execute(method: "GET", path: "/api/templates", bearer: userToken)
     }

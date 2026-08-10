@@ -262,9 +262,8 @@ describe('Agents list', () => {
     renderAgents();
 
     expect(await screen.findByText(/No agents yet/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Pair an agent' })).toHaveAttribute(
-      'href',
-      '/pair',
-    );
+    expect(
+      screen.getByRole('link', { name: 'Pair from a code' }),
+    ).toHaveAttribute('href', '/pair');
   });
 });
