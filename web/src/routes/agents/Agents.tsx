@@ -13,6 +13,7 @@ import { clearAgentToken } from '../../auth/agentTokens';
 import { queryKeys, wsBackedQueryOptions } from '../../lib/queryKeys';
 import { disconnectAgentEvents } from '../../realtime';
 import { useLastSessionStore } from '../../stores/lastSessionStore';
+import { clearRecentPaths } from '../../stores/recentPaths';
 import { useSelectedAgentStore } from '../../stores/selectedAgentStore';
 import { useToastStore } from '../../stores/toastStore';
 import { AddAgentDialog } from './AddAgentDialog';
@@ -84,6 +85,9 @@ export function Agents() {
       clearAgentToken(agent.agentId);
       disconnectAgentEvents(agent.agentId);
       useLastSessionStore.getState().clearLastUsedSession(agent.agentId);
+      // Otherwise the bucket outlives the machine it names, and re-pairing an
+      // agent that happens to reuse the id resurrects directories from it.
+      clearRecentPaths(agent.agentId);
       const selected = useSelectedAgentStore.getState();
       if (selected.selectedAgentId === agent.agentId) {
         selected.setSelectedAgent(null);

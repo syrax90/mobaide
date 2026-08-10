@@ -90,7 +90,8 @@ web/
 │   │                         #   event→Query bridge, RealtimeProvider (WEB-04)
 │   ├── stores/               # Zustand stores (themeStore, toastStore, terminalPrefsStore,
 │   │                         #   selectedAgentStore, lastSessionStore,
-│   │                         #   notificationPrefsStore, visibleSessionStore)
+│   │                         #   notificationPrefsStore, visibleSessionStore) plus
+│   │                         #   recentPaths.ts, a plain module not a store (CLA-256)
 │   ├── lib/queryClient.ts    # TanStack Query defaults
 │   ├── lib/queryKeys.ts      # central query-key factory + wsBackedQueryOptions
 │   ├── api/
@@ -349,6 +350,35 @@ default is `true`**, so an omitted field launches with
 schemas) and typed as the *generated* request, whose booleans are required —
 so a dropped flag is a compile error rather than a silent escalation.
 
+**Recent custom paths** (CLA-256) mirror the mobile stores exactly: up to 5
+per agent, newest first, deduped by exact string equality — no trailing-slash
+collapse, no `~` expansion — and never filtered against what is being typed.
+A path is recorded in `create`'s `onSuccess` from the **mutation's variables**,
+not from live state: the wizard stays interactive during the POST, so
+re-reading afterwards could file a directory nobody launched. `cwd` is
+`undefined` for a stored project, which is what keeps stored launches out of
+the bucket. Each row can be forgotten individually — iOS ships swipe-to-delete,
+Android has no removal (CLA-255).
+
+The bucket is the only persisted key that does **not** carry the `mobaide-`
+prefix: `src/stores/recentPaths.ts` writes one raw `localStorage` key per
+agent, `recent_custom_paths::<agentId>`, holding a JSON array — Android's and
+iOS's key shape verbatim, so the concept stays recognisable across the three
+clients. It is a plain module rather than a zustand store, which costs a
+`useState` in the wizard to stay reactive; the try/catch around every storage
+call is not a new cost but the same idiom `auth/agentTokens.ts` and
+`auth/deviceIdentity.ts` already carry, minus their in-memory mirror (a lost
+suggestion is cosmetic, a lost token is not). One thing the key shape buys: the
+agent id is a *storage* key and never an object key, so none of the `__proto__`
+guards `lastSessionStore` needs apply. An empty agent id is mobile's null
+`agentScopeKey` — reads and writes are both skipped rather than sharing one
+unscoped bucket — and any blank or non-string member voids the whole blob,
+matching the typed mobile decoders rather than salvaging the readable entries.
+Deleting an agent drops its bucket alongside its token and its last-used
+session. Signing out does **not**: recents outlive the session on all three
+clients, and agent ids are server-issued, so a later account cannot collide
+into another's bucket.
+
 Custom agent types are listed, launched, created and deleted here; editing
 is CLA-231. A launch sends only `cli: "custom_<id>"` — the relay resolves the
 stored command server-side, and the agent-direct REST path rejects custom
@@ -454,11 +484,12 @@ machine from the browser.
 
 Removing an agent calls `clearAgentToken(agentId)`, never
 `sessionStore.agentDisconnect()`, which clears *every* agent's tokens; it also
-drops the agent's events channel and its `mobaide-agent` / `mobaide-sessions`
-entries. The credentials panel is an inline panel rather than a `<dialog>`
-precisely so no Escape handler or backdrop can dismiss the one and only
-showing of a token — the web analogue of Android's `confirmValueChange` and
-iOS's `interactiveDismissDisabled`. Android's `EXTRA_IS_SENSITIVE` clipboard
+drops the agent's events channel, its `mobaide-agent` / `mobaide-sessions`
+entries and its `recent_custom_paths::<agentId>` bucket. The credentials
+panel is an inline panel rather than a `<dialog>` precisely so no Escape
+handler or backdrop can dismiss the one and only showing of a token — the
+web analogue of Android's `confirmValueChange` and iOS's
+`interactiveDismissDisabled`. Android's `EXTRA_IS_SENSITIVE` clipboard
 flag has no browser equivalent, so a copied token lands in ordinary clipboard
 history; that is why the panel points at pairing instead.
 
@@ -670,7 +701,10 @@ oversized frame trips the agent tunnel's 4 MB limit and drops *every*
 session on that agent. The toggle is the one piece of terminal state that
 outlives the tab: `terminalPrefsStore` persists it under `localStorage` key
 `mobaide-terminal`, the second persisted key after `mobaide-theme` (WEB-07
-adds `mobaide-agent` and `mobaide-sessions`).
+adds `mobaide-agent` and `mobaide-sessions`; CLA-256 adds the wizard's
+per-agent `recent_custom_paths::<agentId>`, deliberately unprefixed for
+mobile parity — nothing in `src/` sweeps `localStorage` by prefix, so
+sitting outside the namespace costs nothing).
 
 **OSC 52**: writes allowed, reads refused. The refusal is a handler
 registered *after* `ClipboardAddon` (xterm dispatches OSC handlers

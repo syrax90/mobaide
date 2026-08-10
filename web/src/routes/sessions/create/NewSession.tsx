@@ -15,6 +15,11 @@ import { queryKeys, wsBackedQueryOptions } from '../../../lib/queryKeys';
 import type { SessionResponse } from '../../../protocol/dto/session';
 import { customSessionTypeId } from '../../../protocol/wireSchema';
 import { useLastSessionStore } from '../../../stores/lastSessionStore';
+import {
+  forgetRecentPath,
+  noteRecentPath,
+  readRecentPaths,
+} from '../../../stores/recentPaths';
 import { useToastStore } from '../../../stores/toastStore';
 import { useAgentEvents } from '../../../realtime';
 import { upsertSession } from '../../../realtime/sessionCache';
@@ -80,6 +85,14 @@ export function NewSession() {
   const setLastUsedSession = useLastSessionStore((state) => state.setLastUsedSession);
 
   const resolvedAgentId = agentId ?? '';
+
+  // Read through an effect rather than once at mount: the router keeps this one
+  // component instance across a change of `:agentId`, so a lazy initializer
+  // would leave the previous agent's directories on screen.
+  const [recentPaths, setRecentPaths] = useState<string[]>([]);
+  useEffect(() => {
+    setRecentPaths(readRecentPaths(resolvedAgentId));
+  }, [resolvedAgentId]);
 
   // The wizard keeps the agent channel open for its own visit: without it
   // `projects.changed` is missed for the whole time it is mounted (and a
@@ -200,10 +213,19 @@ export function NewSession() {
 
   const create = useMutation({
     mutationFn: (request: CreateSessionRequest) => createSession(resolvedAgentId, request),
-    onSuccess: (session) => {
+    onSuccess: (session, request) => {
       setShowCodexLogin(false);
       pendingRequest.current = null;
       setLastUsedSession(resolvedAgentId, session.session_id);
+      // Recorded off the request the mutation actually sent, never off live
+      // state: the wizard stays interactive while the POST is in flight, so a
+      // path typed meanwhile would otherwise be filed as a directory nobody
+      // launched (iOS pins both halves before the round trip). `cwd` is
+      // undefined for a stored project, which is what keeps those out of the
+      // bucket; the re-validation covers a `?path=` deep link.
+      if (typeof request.cwd === 'string' && validateCustomPath(request.cwd) === null) {
+        noteRecentPath(resolvedAgentId, request.cwd);
+      }
       // Seed the row synchronously, before navigating. The terminal treats
       // "absent from a synced list" as proof the session is gone and leaves, so
       // the gap between this create and the reconciling snapshot below would
@@ -390,6 +412,13 @@ export function NewSession() {
           selection={location.selection}
           customPathDraft={state.customPathDraft}
           customPathError={state.customPathError}
+          recentPaths={recentPaths}
+          onForgetRecent={(path) => {
+            forgetRecentPath(resolvedAgentId, path);
+            // Re-read rather than filter locally, so what the list shows is
+            // always what storage holds (iOS `refreshRecentCustomPaths`).
+            setRecentPaths(readRecentPaths(resolvedAgentId));
+          }}
           dispatch={(action) => {
             dispatch(action);
             // Picking a project is one discrete act, so it reaches the URL at

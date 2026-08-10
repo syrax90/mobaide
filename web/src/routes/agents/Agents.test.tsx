@@ -66,6 +66,9 @@ stubLocalStorage();
 
 const { useLastSessionStore } = await import('../../stores/lastSessionStore');
 const { useSelectedAgentStore } = await import('../../stores/selectedAgentStore');
+// Left real rather than mocked: the bucket it deletes lives in the stubbed
+// storage above, so the assertion can be the storage state itself.
+const { noteRecentPath, readRecentPaths } = await import('../../stores/recentPaths');
 const { Agents } = await import('./Agents');
 
 const agent = (agentId: string, name: string): Agent => ({
@@ -199,6 +202,21 @@ describe('Agents remove', () => {
     expect(seams.disconnected).toEqual(['agent-1']);
   });
 
+  it('drops the removed agent recent paths and keeps every other agent list', async () => {
+    // The bucket is keyed by agent id, so leaving it behind would resurrect a
+    // dead machine's directories for whoever next pairs into that id.
+    noteRecentPath('agent-1', '/srv/one');
+    noteRecentPath('agent-2', '/srv/two');
+    renderAgents();
+
+    confirmRemove(await openRemoveFor('Workstation'));
+
+    await waitFor(() => {
+      expect(readRecentPaths('agent-1')).toEqual([]);
+    });
+    expect(readRecentPaths('agent-2')).toEqual(['/srv/two']);
+  });
+
   it('unsticks the sessions list only when it pointed at the removed agent', async () => {
     useSelectedAgentStore.setState({ selectedAgentId: 'agent-2' });
     renderAgents();
@@ -232,9 +250,10 @@ describe('Agents remove', () => {
     expect(seams.clearedTokens).toEqual([]);
   });
 
-  it('leaves the local token alone when the delete request fails', async () => {
+  it('leaves the local state alone when the delete request fails', async () => {
     // A failed delete means the agent still exists on the relay; dropping its
-    // token here would strand a browser that can still reach it.
+    // token or its recents here would strand a browser that can still reach it,
+    // which is what pins every cleanup to the success path.
     const { ApiError } = await import('../../api/errors');
     api.deleteError = new ApiError({
       status: 500,
@@ -243,6 +262,7 @@ describe('Agents remove', () => {
       retryAfterSeconds: null,
       detail: 'boom',
     });
+    noteRecentPath('agent-1', '/srv/one');
     renderAgents();
 
     confirmRemove(await openRemoveFor('Workstation'));
@@ -252,6 +272,7 @@ describe('Agents remove', () => {
     });
     expect(seams.clearedTokens).toEqual([]);
     expect(seams.disconnected).toEqual([]);
+    expect(readRecentPaths('agent-1')).toEqual(['/srv/one']);
   });
 });
 

@@ -7,6 +7,9 @@ interface ProjectStepProps {
   selection: ProjectSelection;
   customPathDraft: string;
   customPathError: string | null;
+  /** Previously launched one-off directories for this agent, most-recent-first. */
+  recentPaths: readonly string[];
+  onForgetRecent: (path: string) => void;
   dispatch: (action: WizardAction) => void;
   onContinue: () => void;
 }
@@ -16,6 +19,8 @@ export function ProjectStep({
   selection,
   customPathDraft,
   customPathError,
+  recentPaths,
+  onForgetRecent,
   dispatch,
   onContinue,
 }: ProjectStepProps) {
@@ -76,6 +81,44 @@ export function ProjectStep({
             dispatch({ type: 'setCustomPathDraft', draft });
           }}
         />
+
+        {/*
+          Never filtered against the draft — all five stay up while the user
+          types, which is both mobile clients' behaviour. Picking one dispatches
+          the same action a keystroke does, so the validation, the resulting
+          selection and the Continue gate below are shared with typed text.
+        */}
+        {recentPaths.length > 0 && (
+          <div className="recent-paths">
+            <h4>Recent paths</h4>
+            <ul className="recent-path-list">
+              {recentPaths.map((path) => (
+                <li key={path} className="recent-path-row">
+                  <button
+                    type="button"
+                    className="recent-path-pick"
+                    title={path}
+                    onClick={() => {
+                      dispatch({ type: 'setCustomPathDraft', draft: path });
+                    }}
+                  >
+                    {path}
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-icon"
+                    aria-label={`Remove ${path}`}
+                    onClick={() => {
+                      onForgetRecent(path);
+                    }}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       <div className="wizard-actions">
