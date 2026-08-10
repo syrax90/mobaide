@@ -764,6 +764,7 @@ def _run_pair(args: argparse.Namespace) -> int:
     from mobaide.agent.pairing_monitor import (
         DeviceCodeRejected,
         PairingMonitorError,
+        accept_device_code,
         redeem_device_code,
         write_credentials_to_env,
     )
@@ -911,6 +912,28 @@ def _run_pair(args: argparse.Namespace) -> int:
             )
         record = replace(record, confirmed=True)
         save_pending_device_code(layout, record)
+
+    # Sent on every path that gets past the prompt, resume included, and
+    # before the wait: until the relay has it the request still polls as
+    # pending, so the account holder's confirm button does not exist and
+    # nothing can be registered or rotated behind this operator's back.
+    try:
+        accept_device_code(
+            relay_server_url, code=args.code, redeemer_id=record.redeemer_id
+        )
+    except DeviceCodeRejected as exc:
+        sys.stderr.write(f"mobaide-agent pair: {exc}\n")
+        clear_pending_device_code(layout)
+        return 8
+    except (urllib_error.URLError, OSError) as exc:
+        sys.stderr.write(
+            f"mobaide-agent pair: cannot reach central server: {exc}\n"
+            f"mobaide-agent pair: the approval was not recorded. Re-run "
+            f"'mobaide-agent pair {args.code}' to resume — it will not ask "
+            "again.\n"
+        )
+        return 3
+
     if is_repair:
         sys.stdout.write(
             "[mobaide-agent] Re-pairing the existing agent "

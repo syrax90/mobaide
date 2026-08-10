@@ -35,6 +35,7 @@ from ..auth.models import (
     MobileTokenResponse,
     UserTokenPayload,
 )
+from ..relay.routing import WS_CLOSE_AGENT_TRANSIENT_OFFLINE
 from ..ws_origin import enforce_ws_origin
 from .device_code import (
     format_code,
@@ -44,6 +45,7 @@ from .device_code import (
     normalize_code,
 )
 from .models import (
+    DeviceCodeAcceptRequest,
     DeviceCodeConfirmRequest,
     DeviceCodeMintResponse,
     DeviceCodeRedeemRequest,
@@ -440,6 +442,29 @@ async def _complete_pairing(
     # cannot leave a pin behind. No-op when the account already has one.
     await db.pin_user_trust_key_fp(user.sub, current_fp)
 
+    if current_agent_id:
+        # Drop the tunnel the rotated token used to authenticate. Two
+        # things depended on this: an agent whose credentials were revoked
+        # kept a live authenticated socket until its process happened to
+        # restart, and every client's "waiting for it to come online"
+        # watcher reads exactly this registration — so a re-pair of an
+        # online agent reported success the instant it was asked, whether
+        # or not the redeeming host ever received or wrote the new
+        # credentials. 4012, not 4010: the agent is expected back, and the
+        # mobile sockets closed alongside it must keep reconnecting rather
+        # than treat this as a destructive revocation.
+        routing = getattr(request.app.state, "routing", None)
+        if routing is not None:
+            closed = await routing.disconnect_agent(
+                agent_id, WS_CLOSE_AGENT_TRANSIENT_OFFLINE, "credentials_rotated"
+            )
+            if closed:
+                logger.info(
+                    "pairing.repair_disconnected_agent agent_id=%s sockets=%d",
+                    agent_id,
+                    closed,
+                )
+
     # Echo the relay_url persisted at initiate time, not whatever
     # ``request.base_url`` happens to resolve to now. Two reasons:
     # (1) when the mobile and the agent reach the relay via
@@ -682,6 +707,60 @@ async def redeem_device_code(
     )
 
 
+@router.post(
+    "/api/pairing/device-code/accept",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["pairing"],
+)
+async def accept_device_code(
+    request: Request,
+    body: DeviceCodeAcceptRequest,
+    _ip_quota: None = Depends(_require_device_code_redeem_quota),
+    _global_quota: None = Depends(_require_global_device_code_quota),
+) -> Response:
+    """Record the operator's yes on the terminal of the machine being paired.
+
+    The gate that makes that prompt real. The browser mints the code, so a
+    confirmation it shows is answered by whoever minted it — which is why
+    the agent asks on its own terminal before writing anything. Without
+    this call the browser could still confirm while that prompt was
+    unanswered, and ``_complete_pairing`` would register an agent or rotate
+    an existing agent's token regardless of how the operator replied: a
+    decline then left an orphan agent, or a working host locked out of a
+    relay it never agreed to leave.
+
+    Anonymous, like the redeem it follows, and rate-limited by the same two
+    buckets: it takes the code *and* the ``redeemer_id`` that redeemed it,
+    so only the machine already holding both can approve.
+    """
+    config = request.app.state.config
+    db = request.app.state.db
+
+    normalized = normalize_code(body.code)
+    if normalized is None:
+        await _charge_failed_device_code_redeem(request)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Malformed pairing code",
+        )
+    approved = await db.approve_device_code(
+        code_hash=hash_device_code(config.jwt_secret_key, normalized),
+        redeemer_id=body.redeemer_id,
+    )
+    if not approved:
+        await _charge_failed_device_code_redeem(request)
+        logger.info("pairing.device_code_accept_rejected")
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=(
+                "That pairing request is no longer open. It may have "
+                "expired, been canceled, or been redeemed by another "
+                "machine."
+            ),
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 async def _device_code_repair_verdict(
     db, current_agent_id, user_id
 ) -> tuple[str | None, str | None]:
@@ -745,7 +824,11 @@ async def get_device_code_status(
             state = "expired"
         else:
             expires_at = token["expires_at"]
-            state = "redeemed"
+            # A machine has the code but its operator has not answered the
+            # terminal prompt yet, so there is nothing for the browser to
+            # confirm: reporting "redeemed" here would light up a button
+            # whose whole purpose is to come *after* that answer.
+            state = "redeemed" if row["approved_at"] else "pending"
     elif datetime.fromisoformat(expires_at) <= now:
         state = "expired"
     else:
@@ -798,6 +881,15 @@ async def confirm_device_code(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="No machine has entered this code yet",
+        )
+    # The poll never offers a confirm before this, so reaching it means a
+    # client went around the flow. Refused rather than trusted: the whole
+    # point of the terminal prompt is that nothing is created or rotated
+    # until the machine being paired has agreed to it.
+    if row["approved_at"] is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That machine has not accepted this pairing yet",
         )
 
     pre = await db.lookup_pairing_token_metadata_by_hash(

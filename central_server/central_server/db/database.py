@@ -193,6 +193,11 @@ CREATE TABLE IF NOT EXISTS pairing_device_codes (
     redeem_hostname    TEXT,
     redeem_os          TEXT,
     redeem_agent_id    TEXT,
+    -- Set when the operator answered the agent's terminal prompt. The
+    -- browser cannot confirm before it: minting is the browser's, so the
+    -- terminal is the only party that can refuse a code it did not ask
+    -- for, and nothing may be created or rotated until it has.
+    approved_at        TEXT,
     pairing_nonce_hash TEXT,
     confirmed_at       TEXT,
     canceled_at        TEXT
@@ -615,6 +620,19 @@ class Database:
             if "trust_key_fp" not in user_cols:
                 await self._conn.execute(
                     "ALTER TABLE users ADD COLUMN trust_key_fp TEXT"
+                )
+            # ``approved_at`` landed after the table did, so a database
+            # created by an earlier build of this same version has the table
+            # without the column — CREATE TABLE IF NOT EXISTS would not add
+            # it. Empty table_info means the table does not exist yet and
+            # _SCHEMA below creates it complete.
+            code_cursor = await self._conn.execute(
+                "PRAGMA table_info(pairing_device_codes)"
+            )
+            code_cols = {r[1] for r in await code_cursor.fetchall()}
+            if code_cols and "approved_at" not in code_cols:
+                await self._conn.execute(
+                    "ALTER TABLE pairing_device_codes ADD COLUMN approved_at TEXT"
                 )
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 19")
@@ -1817,12 +1835,19 @@ class Database:
             agent_metadata=agent_metadata,
             relay_url=relay_url,
         )
+        # Guarded on ``canceled_at``, not just the code hash. Minting the
+        # token is a separate statement from the CAS above, so a DELETE can
+        # land in between: it would read ``pairing_nonce_hash`` still NULL,
+        # cancel the request, and expire nothing — and an unguarded link
+        # here would then attach a live nonce to a canceled row, leaving the
+        # agent waiting out the full confirm TTL for a confirm that can only
+        # ever 410. Losing the guard rolls the nonce back with it.
         row_cursor = await self.conn.execute(
             "UPDATE pairing_device_codes SET pairing_nonce_hash = ? "
-            "WHERE code_hash = ?",
-            (_hash_token(raw_nonce), code_hash),
+            "WHERE code_hash = ? AND redeemer_id = ? AND canceled_at IS NULL",
+            (_hash_token(raw_nonce), code_hash, redeemer_id),
         )
-        if row_cursor.rowcount != 1:  # pragma: no cover - row just updated
+        if row_cursor.rowcount != 1:
             await self.conn.rollback()
             return None
         await self.conn.commit()
@@ -1882,13 +1907,43 @@ class Database:
         """Read an owned device-code row, or ``None`` for a foreign/absent id."""
         cursor = await self.conn.execute(
             "SELECT request_id, user_id, created_at, expires_at, redeemed_at, "
-            "       redeem_hostname, redeem_os, redeem_agent_id, "
+            "       redeem_hostname, redeem_os, redeem_agent_id, approved_at, "
             "       pairing_nonce_hash, confirmed_at, canceled_at "
             "FROM pairing_device_codes WHERE request_id = ? AND user_id = ?",
             (request_id, user_id),
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+    async def approve_device_code(
+        self, code_hash: str, redeemer_id: str
+    ) -> bool:
+        """Record that the redeeming host's operator said yes.
+
+        Anonymous like the redeem, and authorised the same way: only the
+        machine holding both the code and the ``redeemer_id`` it redeemed
+        under can approve. Idempotent, so a resumed ``pair`` run can send it
+        again without having to know whether the first one landed.
+        """
+        cursor = await self.conn.execute(
+            "UPDATE pairing_device_codes SET approved_at = ? "
+            "WHERE code_hash = ? AND redeemer_id = ? "
+            "  AND redeemed_at IS NOT NULL "
+            "  AND approved_at IS NULL "
+            "  AND confirmed_at IS NULL "
+            "  AND canceled_at IS NULL",
+            (_now_iso(), code_hash, redeemer_id),
+        )
+        await self.conn.commit()
+        if cursor.rowcount == 1:
+            return True
+        lookup = await self.conn.execute(
+            "SELECT approved_at, canceled_at FROM pairing_device_codes "
+            "WHERE code_hash = ? AND redeemer_id = ?",
+            (code_hash, redeemer_id),
+        )
+        row = await lookup.fetchone()
+        return bool(row and row["approved_at"] and not row["canceled_at"])
 
     async def mark_device_code_confirmed(
         self, request_id: str, user_id: str

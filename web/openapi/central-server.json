@@ -406,6 +406,29 @@
         "title": "DeleteAccountRequest",
         "type": "object"
       },
+      "DeviceCodeAcceptRequest": {
+        "description": "The agent reporting that its operator approved the pairing.\n\nCarries the same two secrets the redeem did, and for the same reason:\nthe endpoint is anonymous, so holding the code *and* the\n``redeemer_id`` it was redeemed under is what identifies the caller as\nthe machine that is being paired.",
+        "properties": {
+          "code": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "redeemer_id": {
+            "maxLength": 64,
+            "minLength": 8,
+            "title": "Redeemer Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "redeemer_id"
+        ],
+        "title": "DeviceCodeAcceptRequest",
+        "type": "object"
+      },
       "DeviceCodeConfirmRequest": {
         "description": "Browser's approval of a redeemed code.\n\nCarries the same device fields as ``PairingClaimRequest`` because the\nconfirm runs the identical completion path.",
         "properties": {
@@ -2609,6 +2632,41 @@
           }
         },
         "summary": "Mint Device Code",
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/api/pairing/device-code/accept": {
+      "post": {
+        "description": "Record the operator's yes on the terminal of the machine being paired.\n\nThe gate that makes that prompt real. The browser mints the code, so a\nconfirmation it shows is answered by whoever minted it \u2014 which is why\nthe agent asks on its own terminal before writing anything. Without\nthis call the browser could still confirm while that prompt was\nunanswered, and ``_complete_pairing`` would register an agent or rotate\nan existing agent's token regardless of how the operator replied: a\ndecline then left an orphan agent, or a working host locked out of a\nrelay it never agreed to leave.\n\nAnonymous, like the redeem it follows, and rate-limited by the same two\nbuckets: it takes the code *and* the ``redeemer_id`` that redeemed it,\nso only the machine already holding both can approve.",
+        "operationId": "accept_device_code_api_pairing_device_code_accept_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceCodeAcceptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept Device Code",
         "tags": [
           "pairing"
         ]

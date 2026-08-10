@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -69,6 +70,28 @@ async def _redeem(client, code: str, redeemer_id: str, **extra):
         "/api/pairing/device-code/redeem",
         json={"code": code, "redeemer_id": redeemer_id, **extra},
     )
+
+
+async def _accept(client, code: str, redeemer_id: str):
+    return await client.post(
+        "/api/pairing/device-code/accept",
+        json={"code": code, "redeemer_id": redeemer_id},
+    )
+
+
+async def _redeem_and_accept(client, code: str, redeemer_id: str, **extra):
+    """Drive a code to the state the browser is allowed to confirm.
+
+    Two calls because the relay will not offer a confirm until the machine
+    that entered the code says its operator approved — the terminal prompt
+    is the reversed direction's primary control, so nothing may be
+    registered or rotated while it is still unanswered.
+    """
+    redeemed = await _redeem(client, code, redeemer_id, **extra)
+    assert redeemed.status_code == 200, redeemed.text
+    accepted = await _accept(client, code, redeemer_id)
+    assert accepted.status_code == 204, accepted.text
+    return redeemed
 
 
 async def _confirm(client, headers, request_id: str):
@@ -177,7 +200,7 @@ class TestConfirm:
         # via read_and_clear_claimed_credentials — so this assertion is the
         # only thing that catches it on the device-code path.
         minted = await _mint(client, api_auth_headers)
-        redeemed = (await _redeem(client, minted["code"], "redeemer-ws")).json()
+        redeemed = (await _redeem_and_accept(client, minted["code"], "redeemer-ws")).json()
         queue = await dc_app.state.pairing_ws_registry.register_waiter(
             hash_pairing_nonce(redeemed["nonce"])
         )
@@ -192,7 +215,7 @@ class TestConfirm:
         self, client, dc_app, api_auth_headers
     ):
         minted = await _mint(client, api_auth_headers)
-        await _redeem(client, minted["code"], "redeemer-pin")
+        await _redeem_and_accept(client, minted["code"], "redeemer-pin")
 
         await _confirm(client, api_auth_headers, minted["request_id"])
 
@@ -205,7 +228,7 @@ class TestConfirm:
         self, client, dc_app, api_auth_headers
     ):
         minted = await _mint(client, api_auth_headers)
-        await _redeem(client, minted["code"], "redeemer-replay")
+        await _redeem_and_accept(client, minted["code"], "redeemer-replay")
         await _confirm(client, api_auth_headers, minted["request_id"])
 
         again = await _confirm(client, api_auth_headers, minted["request_id"])
@@ -225,7 +248,7 @@ class TestConfirm:
         self, client, dc_app, api_auth_headers
     ):
         minted = await _mint(client, api_auth_headers)
-        redeemed = (await _redeem(client, minted["code"], "redeemer-expiry")).json()
+        redeemed = (await _redeem_and_accept(client, minted["code"], "redeemer-expiry")).json()
         await _expire_nonce(dc_app.state.db, redeemed["nonce"])
 
         resp = await _confirm(client, api_auth_headers, minted["request_id"])
@@ -249,7 +272,7 @@ class TestConfirm:
         # the operator can still legitimately confirm.
         await db.pin_user_trust_key_fp(viewer_user["id"], _STALE_FP)
         minted = await _mint(client, api_auth_headers)
-        await _redeem(client, minted["code"], "redeemer-reopen")
+        await _redeem_and_accept(client, minted["code"], "redeemer-reopen")
         refused = await _confirm(client, api_auth_headers, minted["request_id"])
         assert refused.status_code == 409, refused.text
 
@@ -257,6 +280,143 @@ class TestConfirm:
         again = await _confirm(client, api_auth_headers, minted["request_id"])
 
         assert again.status_code == 200, again.text
+
+
+class TestTerminalApproval:
+    """Nothing may be created or rotated until the machine agrees.
+
+    The browser mints the code, so a confirmation it shows is answered by
+    whoever minted it — the prompt on the agent's own terminal is the only
+    party that can refuse a code it did not ask for. That prompt is only a
+    control if the relay waits for its answer.
+    """
+
+    async def test_a_redeemed_code_polls_as_pending_until_the_host_accepts(
+        self, client, dc_app, api_auth_headers
+    ):
+        minted = await _mint(client, api_auth_headers)
+        await _redeem(client, minted["code"], "redeemer-unapproved")
+
+        before = (
+            await client.get(
+                f"/api/pairing/device-code/{minted['request_id']}",
+                headers=api_auth_headers,
+            )
+        ).json()
+        await _accept(client, minted["code"], "redeemer-unapproved")
+        after = (
+            await client.get(
+                f"/api/pairing/device-code/{minted['request_id']}",
+                headers=api_auth_headers,
+            )
+        ).json()
+
+        assert before["status"] == "pending"
+        assert after["status"] == "redeemed"
+        assert after["hostname"] == before["hostname"]
+
+    async def test_confirming_before_the_host_accepts_changes_nothing(
+        self, client, dc_app, api_auth_headers, db, viewer_user
+    ):
+        minted = await _mint(client, api_auth_headers)
+        await _redeem(client, minted["code"], "redeemer-early")
+
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+
+        assert resp.status_code == 409, resp.text
+        # The damage the guard exists to prevent: a declined prompt used to
+        # leave a registered agent behind, and a declined re-pair left the
+        # working host's token already rotated.
+        assert await db.list_agents_for_user(viewer_user["id"]) == []
+
+    async def test_the_request_stays_confirmable_after_the_host_accepts(
+        self, client, dc_app, api_auth_headers
+    ):
+        minted = await _mint(client, api_auth_headers)
+        await _redeem_and_accept(client, minted["code"], "redeemer-late")
+
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+
+        assert resp.status_code == 200, resp.text
+
+    async def test_accepting_twice_is_still_no_content(
+        self, client, dc_app, api_auth_headers
+    ):
+        # Idempotent on purpose: the agent re-sends on a resumed run rather
+        # than persisting whether the first attempt was acknowledged.
+        minted = await _mint(client, api_auth_headers)
+        await _redeem(client, minted["code"], "redeemer-twice")
+
+        first = await _accept(client, minted["code"], "redeemer-twice")
+        second = await _accept(client, minted["code"], "redeemer-twice")
+
+        assert (first.status_code, second.status_code) == (204, 204)
+
+    async def test_another_machine_cannot_accept_the_redemption(
+        self, client, dc_app, api_auth_headers
+    ):
+        minted = await _mint(client, api_auth_headers)
+        await _redeem(client, minted["code"], "redeemer-owner")
+
+        resp = await _accept(client, minted["code"], "redeemer-impostor")
+
+        assert resp.status_code == 410
+
+    async def test_accepting_an_unredeemed_code_is_refused(
+        self, client, dc_app, api_auth_headers
+    ):
+        minted = await _mint(client, api_auth_headers)
+
+        resp = await _accept(client, minted["code"], "redeemer-premature")
+
+        assert resp.status_code == 410
+
+    async def test_accepting_a_canceled_request_is_refused(
+        self, client, dc_app, api_auth_headers
+    ):
+        minted = await _mint(client, api_auth_headers)
+        await _redeem(client, minted["code"], "redeemer-canceled")
+        await client.delete(
+            f"/api/pairing/device-code/{minted['request_id']}",
+            headers=api_auth_headers,
+        )
+
+        resp = await _accept(client, minted["code"], "redeemer-canceled")
+
+        assert resp.status_code == 410
+
+
+class TestRepairDisconnect:
+    async def test_rotating_an_online_agent_drops_its_tunnel(
+        self, client, dc_app, api_auth_headers, registered_agent
+    ):
+        # The rotated token stops authenticating, so leaving the socket up
+        # left an agent connected on revoked credentials — and left every
+        # client's "waiting for it to come online" watcher reading a `true`
+        # that predates the pairing it is waiting for.
+        agent_id, _ = registered_agent
+        agent_ws = MagicMock()
+        agent_ws.send_text = AsyncMock()
+        agent_ws.close = AsyncMock()
+        dc_app.state.routing.register_agent(agent_id, agent_ws)
+        minted = await _mint(client, api_auth_headers)
+        await _redeem_and_accept(
+            client,
+            minted["code"],
+            "redeemer-repair-online",
+            current_agent_id=agent_id,
+        )
+
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+
+        assert resp.status_code == 200, resp.text
+        assert dc_app.state.routing.is_agent_online(agent_id) is False
+        # 4012, not 4010: the agent is expected back, and the paired mobile
+        # sockets closed with it must keep reconnecting rather than treat
+        # this as a destructive revocation.
+        agent_ws.close.assert_awaited_once_with(
+            code=4012, reason="credentials_rotated"
+        )
 
 
 class TestRedeemIdempotency:
@@ -290,7 +450,7 @@ class TestRedeemIdempotency:
         self, client, dc_app, api_auth_headers
     ):
         minted = await _mint(client, api_auth_headers)
-        await _redeem(client, minted["code"], "redeemer-settled")
+        await _redeem_and_accept(client, minted["code"], "redeemer-settled")
         await _confirm(client, api_auth_headers, minted["request_id"])
 
         resp = await _redeem(client, minted["code"], "redeemer-settled")
@@ -309,7 +469,7 @@ class TestStatus:
         )
         assert before.json()["status"] == "pending"
 
-        await _redeem(
+        await _redeem_and_accept(
             client,
             minted["code"],
             "redeemer-status",
@@ -356,7 +516,7 @@ class TestStatus:
         )
         foreign_agent_id, _token = await db.register_agent("theirs", other)
         minted = await _mint(client, api_auth_headers)
-        await _redeem(
+        await _redeem_and_accept(
             client,
             minted["code"],
             "redeemer-foreign",
@@ -379,7 +539,7 @@ class TestStatus:
         self, client, dc_app, api_auth_headers
     ):
         minted = await _mint(client, api_auth_headers)
-        await _redeem(
+        await _redeem_and_accept(
             client,
             minted["code"],
             "redeemer-ghost",
@@ -411,7 +571,7 @@ class TestCancel:
         self, client, dc_app, api_auth_headers
     ):
         minted = await _mint(client, api_auth_headers)
-        await _redeem(client, minted["code"], "redeemer-cancel")
+        await _redeem_and_accept(client, minted["code"], "redeemer-cancel")
 
         deleted = await client.delete(
             f"/api/pairing/device-code/{minted['request_id']}",
@@ -472,7 +632,7 @@ class TestCancel:
         from central_server.pairing import router as router_mod
 
         minted = await _mint(client, api_auth_headers)
-        await _redeem(client, minted["code"], "redeemer-race")
+        await _redeem_and_accept(client, minted["code"], "redeemer-race")
         original = router_mod._complete_pairing
         cancel_codes: list[int] = []
 
@@ -516,7 +676,7 @@ class TestAccountTrustPin:
     ):
         await db.pin_user_trust_key_fp(viewer_user["id"], _STALE_FP)
         minted = await _mint(client, api_auth_headers)
-        await _redeem(client, minted["code"], "redeemer-pinned")
+        await _redeem_and_accept(client, minted["code"], "redeemer-pinned")
 
         resp = await _confirm(client, api_auth_headers, minted["request_id"])
 
@@ -530,7 +690,7 @@ class TestAccountTrustPin:
     ):
         await db.pin_user_trust_key_fp(viewer_user["id"], _STALE_FP)
         minted = await _mint(client, api_auth_headers)
-        await _redeem(client, minted["code"], "redeemer-pin-intact")
+        await _redeem_and_accept(client, minted["code"], "redeemer-pin-intact")
 
         await _confirm(client, api_auth_headers, minted["request_id"])
 
@@ -543,7 +703,7 @@ class TestAccountTrustPin:
         # account owns nothing, so the stale pin is guarding nothing.
         await db.pin_user_trust_key_fp(viewer_user["id"], _STALE_FP)
         minted = await _mint(client, api_auth_headers)
-        await _redeem(client, minted["code"], "redeemer-repin")
+        await _redeem_and_accept(client, minted["code"], "redeemer-repin")
 
         resp = await _confirm(client, api_auth_headers, minted["request_id"])
 
@@ -558,7 +718,7 @@ class TestAccountTrustPin:
         _override_config(dc_app, trust_key_pin_enforced=False)
         await db.pin_user_trust_key_fp(viewer_user["id"], _STALE_FP)
         minted = await _mint(client, api_auth_headers)
-        await _redeem(client, minted["code"], "redeemer-unenforced")
+        await _redeem_and_accept(client, minted["code"], "redeemer-unenforced")
 
         resp = await _confirm(client, api_auth_headers, minted["request_id"])
 

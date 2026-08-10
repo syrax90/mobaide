@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 
 _INITIATE_PATH = "/api/pairing/initiate"
 _DEVICE_CODE_REDEEM_PATH = "/api/pairing/device-code/redeem"
+_DEVICE_CODE_ACCEPT_PATH = "/api/pairing/device-code/accept"
 _BACKOFF_FLOOR_S = 2.0
 _BACKOFF_CEIL_S = 60.0
 from .install_paths import ALLOW_INSECURE_HTTPS_BOOTSTRAP_ENV as _ALLOW_INSECURE_FETCH_ENV
@@ -74,6 +75,15 @@ def _device_code_redeem_url(relay_server_url: str) -> str:
 
     return endpoint_url_from_relay_server_url(
         relay_server_url, _DEVICE_CODE_REDEEM_PATH
+    )
+
+
+def _device_code_accept_url(relay_server_url: str) -> str:
+    """Translate ``RELAY_SERVER_URL`` into the HTTP device-code accept URL."""
+    from .install_paths import endpoint_url_from_relay_server_url
+
+    return endpoint_url_from_relay_server_url(
+        relay_server_url, _DEVICE_CODE_ACCEPT_PATH
     )
 
 
@@ -300,6 +310,40 @@ def redeem_device_code(
         account_hint,
         is_repair,
     )
+
+
+def accept_device_code(
+    relay_server_url: str, *, code: str, redeemer_id: str
+) -> None:
+    """Tell the relay the operator approved this pairing on the terminal.
+
+    Until this lands the relay reports the request as still pending, so the
+    browser cannot confirm and nothing is created or rotated. That is what
+    keeps the terminal prompt — the reversed direction's primary control —
+    from being a message the account holder can simply outrun.
+
+    Sent on every run that gets past the prompt, including a resume: the
+    relay's update is idempotent, so re-sending is cheaper than persisting
+    whether the first attempt was acknowledged.
+    """
+    url = _device_code_accept_url(relay_server_url)
+    data = json.dumps({"code": code, "redeemer_id": redeemer_id}).encode("utf-8")
+    try:
+        with _http.urlopen(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+            timeout=30,
+        ) as resp:
+            if resp.status not in (200, 204):
+                raise DeviceCodeRejected(
+                    f"accept returned HTTP {resp.status}", status=resp.status
+                )
+    except urllib_error.HTTPError as exc:
+        raise DeviceCodeRejected(
+            _redeem_error_message(exc), status=exc.code
+        ) from exc
 
 
 def _redeem_error_message(exc) -> str:

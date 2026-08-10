@@ -43,6 +43,7 @@ def upgrade() -> None:
         sa.Column("redeem_hostname", sa.Text(), nullable=True),
         sa.Column("redeem_os", sa.Text(), nullable=True),
         sa.Column("redeem_agent_id", sa.Text(), nullable=True),
+        sa.Column("approved_at", sa.Text(), nullable=True),
         sa.Column("pairing_nonce_hash", sa.Text(), nullable=True),
         sa.Column("confirmed_at", sa.Text(), nullable=True),
         sa.Column("canceled_at", sa.Text(), nullable=True),

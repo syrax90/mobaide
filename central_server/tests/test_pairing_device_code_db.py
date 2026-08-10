@@ -194,6 +194,29 @@ class TestRedeem:
         assert replay["nonce"] is None
         assert replay["expires_at"] == first["expires_at"]
 
+    async def test_a_cancel_between_the_cas_and_the_link_wins(
+        self, db, owner_id, monkeypatch
+    ):
+        # Minting the token sits between the redeem CAS and the update that
+        # links it, and the cancel that lands there reads a still-NULL
+        # ``pairing_nonce_hash`` — so it expires nothing. An unguarded link
+        # then attached a live nonce to a canceled request: the agent
+        # prompted its operator and waited out the whole confirm TTL for a
+        # confirm that could only ever 410.
+        request_id = await _mint(db, owner_id)
+        original = db._insert_pairing_token
+
+        async def cancel_then_insert(**kwargs):
+            await db.cancel_device_code(request_id, owner_id)
+            return await original(**kwargs)
+
+        monkeypatch.setattr(db, "_insert_pairing_token", cancel_then_insert)
+
+        assert await _redeem(db) is None
+        row = await db.get_device_code(request_id, owner_id)
+        assert row["canceled_at"] is not None
+        assert row["pairing_nonce_hash"] is None
+
     async def test_an_expired_code_cannot_be_redeemed(self, db, owner_id):
         await _mint(db, owner_id, ttl=-1)
 

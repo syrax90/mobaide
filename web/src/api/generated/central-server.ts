@@ -536,6 +536,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/pairing/device-code/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Device Code
+         * @description Record the operator's yes on the terminal of the machine being paired.
+         *
+         *     The gate that makes that prompt real. The browser mints the code, so a
+         *     confirmation it shows is answered by whoever minted it — which is why
+         *     the agent asks on its own terminal before writing anything. Without
+         *     this call the browser could still confirm while that prompt was
+         *     unanswered, and ``_complete_pairing`` would register an agent or rotate
+         *     an existing agent's token regardless of how the operator replied: a
+         *     decline then left an orphan agent, or a working host locked out of a
+         *     relay it never agreed to leave.
+         *
+         *     Anonymous, like the redeem it follows, and rate-limited by the same two
+         *     buckets: it takes the code *and* the ``redeemer_id`` that redeemed it,
+         *     so only the machine already holding both can approve.
+         */
+        post: operations["accept_device_code_api_pairing_device_code_accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/pairing/device-code/redeem": {
         parameters: {
             query?: never;
@@ -1052,6 +1085,21 @@ export interface components {
             nonce?: string | null;
             /** Password */
             password?: string | null;
+        };
+        /**
+         * DeviceCodeAcceptRequest
+         * @description The agent reporting that its operator approved the pairing.
+         *
+         *     Carries the same two secrets the redeem did, and for the same reason:
+         *     the endpoint is anonymous, so holding the code *and* the
+         *     ``redeemer_id`` it was redeemed under is what identifies the caller as
+         *     the machine that is being paired.
+         */
+        DeviceCodeAcceptRequest: {
+            /** Code */
+            code: string;
+            /** Redeemer Id */
+            redeemer_id: string;
         };
         /**
          * DeviceCodeConfirmRequest
@@ -2437,6 +2485,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeviceCodeMintResponse"];
+                };
+            };
+        };
+    };
+    accept_device_code_api_pairing_device_code_accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceCodeAcceptRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

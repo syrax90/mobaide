@@ -122,6 +122,19 @@ class DeviceCodeRedeemRequest(BaseModel):
     current_agent_id: str | None = Field(default=None, max_length=64)
 
 
+class DeviceCodeAcceptRequest(BaseModel):
+    """The agent reporting that its operator approved the pairing.
+
+    Carries the same two secrets the redeem did, and for the same reason:
+    the endpoint is anonymous, so holding the code *and* the
+    ``redeemer_id`` it was redeemed under is what identifies the caller as
+    the machine that is being paired.
+    """
+
+    code: str = Field(min_length=1, max_length=64)
+    redeemer_id: str = Field(min_length=8, max_length=64)
+
+
 class DeviceCodeRedeemResponse(BaseModel):
     """What the agent needs to wait for its credentials.
 

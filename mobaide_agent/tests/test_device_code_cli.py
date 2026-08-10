@@ -218,6 +218,8 @@ class TestRunPairResume:
         _seed_pending_device_code(tmp_path, confirmed=True)
 
         with patch("sys.stdin.isatty", return_value=True), patch(
+            "mobaide.agent.pairing_monitor.accept_device_code"
+        ), patch(
             "mobaide.agent.pairing_ws.PairingWsClient"
         ) as mock_ws_cls, patch("builtins.input") as mock_input:
             mock_ws_cls.return_value.wait_for_claim = AsyncMock(
@@ -246,8 +248,8 @@ class TestRunPairResume:
         _seed_pending_device_code(tmp_path, confirmed=True)
 
         with patch("sys.stdin.isatty", return_value=True), patch(
-            "mobaide.agent.pairing_ws.PairingWsClient"
-        ) as mock_ws_cls:
+            "mobaide.agent.pairing_monitor.accept_device_code"
+        ), patch("mobaide.agent.pairing_ws.PairingWsClient") as mock_ws_cls:
             mock_ws_cls.return_value.wait_for_claim = AsyncMock(
                 side_effect=PairingWsError("connection reset")
             )
@@ -270,6 +272,8 @@ class TestRunPairResume:
         _seed_pending_device_code(tmp_path, code="WDJB-MJHT", confirmed=True)
 
         with patch("sys.stdin.isatty", return_value=True), patch(
+            "mobaide.agent.pairing_monitor.accept_device_code"
+        ), patch(
             "mobaide.agent.pairing_ws.PairingWsClient"
         ) as mock_ws_cls, patch("builtins.input") as mock_input:
             mock_ws_cls.return_value.wait_for_claim = AsyncMock(
@@ -280,6 +284,97 @@ class TestRunPairResume:
         mock_input.assert_not_called()
         assert "Resuming the pairing request" in capsys.readouterr().out
         assert rc == 6
+
+
+class TestRunPairApproval:
+    """The relay learns the operator answered before the browser can act.
+
+    Without this call the account holder's confirm is reachable while the
+    terminal prompt is still unanswered, and the relay would register or
+    rotate an agent whichever way the operator eventually replied.
+    """
+
+    def test_the_approval_reaches_the_relay_before_the_wait(
+        self, tmp_path, capsys
+    ):
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        _seed_pending_device_code(tmp_path, confirmed=False)
+        order: list[str] = []
+
+        with patch("sys.stdin.isatty", return_value=True), patch(
+            "builtins.input", return_value="y"
+        ), patch(
+            "mobaide.agent.pairing_monitor.accept_device_code"
+        ) as mock_accept, patch(
+            "mobaide.agent.pairing_ws.PairingWsClient"
+        ) as mock_ws_cls:
+            mock_accept.side_effect = lambda *a, **kw: order.append("accept")
+            mock_ws_cls.return_value.wait_for_claim = AsyncMock(
+                side_effect=lambda *a, **kw: order.append("wait")
+                or (_ for _ in ()).throw(PairingWsError("boom"))
+            )
+            rc = _run_pair(_ns(prefix=str(tmp_path), yes=False))
+
+        assert rc == 6
+        assert order == ["accept", "wait"]
+        _, kwargs = mock_accept.call_args
+        assert kwargs["code"] == "WDJB-MJHT"
+        assert kwargs["redeemer_id"] == "redeemer-1"
+
+    def test_a_declined_run_never_approves(self, tmp_path, capsys):
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        _seed_pending_device_code(tmp_path, confirmed=False)
+
+        with patch("sys.stdin.isatty", return_value=True), patch(
+            "builtins.input", return_value="n"
+        ), patch(
+            "mobaide.agent.pairing_monitor.accept_device_code"
+        ) as mock_accept:
+            rc = _run_pair(_ns(prefix=str(tmp_path), yes=False))
+
+        assert rc == 9
+        mock_accept.assert_not_called()
+
+    def test_a_resume_re_sends_the_approval(self, tmp_path, capsys):
+        # Re-sent rather than remembered: the relay's update is idempotent,
+        # and a run interrupted between the prompt and this call would
+        # otherwise resume into a request the browser can never confirm.
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        _seed_pending_device_code(tmp_path, confirmed=True)
+
+        with patch("sys.stdin.isatty", return_value=True), patch(
+            "mobaide.agent.pairing_monitor.accept_device_code"
+        ) as mock_accept, patch(
+            "mobaide.agent.pairing_ws.PairingWsClient"
+        ) as mock_ws_cls:
+            mock_ws_cls.return_value.wait_for_claim = AsyncMock(
+                side_effect=PairingWsError("boom")
+            )
+            _run_pair(_ns(prefix=str(tmp_path), yes=False))
+
+        mock_accept.assert_called_once()
+
+    def test_an_unreachable_relay_keeps_the_record_and_returns_3(
+        self, tmp_path, capsys
+    ):
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        _seed_pending_device_code(tmp_path, confirmed=True)
+
+        with patch("sys.stdin.isatty", return_value=True), patch(
+            "mobaide.agent.pairing_monitor.accept_device_code",
+            side_effect=OSError("no route to host"),
+        ):
+            rc = _run_pair(_ns(prefix=str(tmp_path), yes=False))
+
+        assert rc == 3
+        # Resumable: the record still holds the nonce, and ``confirmed``
+        # means the re-run re-sends the approval without re-prompting.
+        assert (tmp_path / "run" / "pending_device_code.json").exists()
+        assert "Re-run" in capsys.readouterr().err
 
 
 class TestConfirmDevicePairing:
