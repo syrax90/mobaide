@@ -339,6 +339,32 @@ class TestRunTlsDiagnosisGuards:
         assert "Origin-cert checks skipped" in out
         assert "--tls-mode CloudflareOrigin" in out
 
+    def test_probes_the_api_host_alongside_the_apex_and_app_hosts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``api.<domain>`` shares the apex's Caddy site block but has its own
+        DNS record and its own per-hostname Cloudflare edge config, so it
+        fails independently -- and it is the hostname every agent tunnel and
+        mobile client actually connects to. Leaving it unprobed here would be
+        an inconsistency with ``proxied_hosts()`` and the SAN guard, which
+        both already treat it as first-class.
+        """
+        recorded: list[tuple[str, ...]] = []
+
+        def record_urls(urls: tuple[str, ...]) -> int:
+            recorded.append(urls)
+            return 0
+
+        monkeypatch.setattr(deploy_central, "diagnose_local_tls", record_urls)
+        assert deploy_central.run_tls_diagnosis("LetsEncrypt") == 0
+        assert recorded == [
+            (
+                deploy_central.HEALTH_URL,
+                deploy_central.API_HEALTH_URL,
+                deploy_central.APP_URL,
+            )
+        ]
+
     def test_missing_ssh_is_reported_instead_of_tracebacking(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -527,6 +553,7 @@ class TestWaitHttpRollbackContract:
         [
             ("tls_local", True),
             ("tls_server", True),
+            ("inconclusive", True),
             ("timeout", False),
             ("connect", False),
         ],

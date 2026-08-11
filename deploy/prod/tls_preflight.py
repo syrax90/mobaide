@@ -13,7 +13,9 @@ opaque "could not reach the host":
   - THIS interpreter trusts nothing      -> kind "tls_local"
   - the host serves a bad certificate    -> kind "tls_server"
 The last two raise an identical CERTIFICATE_VERIFY_FAILED, so they are told
-apart by a control probe against a known-good public host.
+apart by a control probe against a known-good public host. When that probe
+cannot run either, the verdict is kind "inconclusive" — a fifth answer rather
+than a guess at one of the other four.
 """
 
 from __future__ import annotations
@@ -763,8 +765,12 @@ def diagnose(
                 # Nothing answered, so nothing was learned. Report what the
                 # host serves anyway — peer_cert_facts needs no trust store,
                 # and it is the only evidence available here.
+                # NOT tls_local: the kind is printed verbatim ahead of the
+                # detail, so labelling this "local" would contradict the very
+                # sentence it introduces. Callers that suppress auto-rollback
+                # on a certificate fault must treat it like the other two.
                 return ProbeFailure(
-                    "tls_local",
+                    "inconclusive",
                     "could not determine whether the fault is local: neither "
                     f"control host ({' or '.join(CONTROL_URLS)}) was reachable",
                     inconclusive_remedy(host, port, timeout),

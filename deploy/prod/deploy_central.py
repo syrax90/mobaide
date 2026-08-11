@@ -57,6 +57,10 @@ SSH_HOST = "mobaide"
 REMOTE_BASE = "/opt/mobaide"
 DOMAIN = "mobaide.com"
 HEALTH_URL = f"https://{DOMAIN}/api/health"
+# Same Caddy site block as the apex, but a separate DNS record and separate
+# per-hostname Cloudflare edge config — so it fails independently, and it is
+# the hostname every agent tunnel and mobile client actually connects to.
+API_HEALTH_URL = f"https://api.{DOMAIN}/api/health"
 APP_URL = f"https://app.{DOMAIN}/"
 ORIGIN_CERT = f"{REMOTE_BASE}/tls/origin-cert.pem"
 ORIGIN_KEY = f"{REMOTE_BASE}/tls/origin-key.pem"
@@ -287,7 +291,10 @@ def wait_http(
             # deadline can be something else entirely. Only the two certificate
             # verdicts may raise CertVerificationError — callers read that
             # class as "do not auto-rollback".
-            if failure.kind in ("tls_local", "tls_server"):
+            # "inconclusive" belongs with the certificate verdicts, not the
+            # transport ones: nothing was learned, and rolling the source back
+            # cannot fix a certificate fault in any case.
+            if failure.kind in ("tls_local", "tls_server", "inconclusive"):
                 raise CertVerificationError(f"{url}: {failure.detail}")
             raise ClassifiedDeployError(f"{url}: {failure.detail}")
         # Latched a cert error while polling, but the classifier could not
@@ -811,7 +818,7 @@ def diagnose_local_tls(urls: tuple[str, ...]) -> int:
 
 
 def run_tls_diagnosis(tls_mode: str) -> int:
-    failures = diagnose_local_tls((HEALTH_URL, APP_URL))
+    failures = diagnose_local_tls((HEALTH_URL, API_HEALTH_URL, APP_URL))
     step("Server-side TLS material")
     if tls_mode != "CloudflareOrigin":
         # Say so rather than printing an empty section: the origin-cert checks

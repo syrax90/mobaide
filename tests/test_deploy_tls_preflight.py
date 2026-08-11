@@ -1146,7 +1146,7 @@ class TestDiagnoseControlProbe:
         )
         failure = tls_preflight.diagnose(APP_URL)
         assert failure is not None
-        assert failure.kind == "tls_local"
+        assert failure.kind == "inconclusive"
         assert "INCONCLUSIVE" in failure.remedy
         assert "workstation problem, not a server problem" not in failure.remedy
 
@@ -1206,7 +1206,7 @@ class TestDiagnoseControlProbe:
             ),
             (
                 tls_preflight.ControlResult(None, False),
-                "tls_local",
+                "inconclusive",
                 "INCONCLUSIVE",
                 "workstation problem, not a server problem",
             ),
