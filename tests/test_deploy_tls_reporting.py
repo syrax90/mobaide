@@ -14,6 +14,9 @@ function:
   - ``CertVerificationError`` widened past the two certificate verdicts --
     callers read that class as "do not auto-rollback", so a server that is
     simply down would keep a broken release live (``wait_http``);
+  - the mirror of that: a Cloudflare 52x answering every poll reported as
+    "Timed out waiting", which says nothing answered and sends the caller into
+    an auto-rollback it cannot possibly benefit from (``wait_http``);
   - "Transient -- re-run the deploy" printed for the post-swap probe, which
     demands a 200 from this host and therefore cannot conclude that from a
     clean ``diagnose`` (``deploy_web.report_unreachable``);
@@ -76,6 +79,10 @@ def _explodes_with(exc: BaseException) -> Callable[..., Any]:
         raise exc
 
     return fake
+
+
+def _http_error(url: str, code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(url, code, f"status {code}", {}, None)  # type: ignore[arg-type]
 
 
 def _preflight_output(
@@ -597,6 +604,115 @@ class TestWaitHttpRollbackContract:
         with pytest.raises(deploy_central.CertVerificationError) as excinfo:
             deploy_central.wait_http(deploy_central.HEALTH_URL, 4)
         assert "could not verify the TLS certificate" in str(excinfo.value)
+
+    def test_a_cloudflare_status_that_answered_every_poll_reaches_the_classifier(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 525 means something answered every single poll, over an edge
+        certificate the workstation verified. Dropping it left the deadline gate
+        shut, so the run ended in "Timed out waiting" -- reporting that nothing
+        answered -- and ``_run_deploy`` read that plain ``DeployError`` as
+        licence to swap the source back on an origin-certificate fault.
+        """
+        probed: list[str] = []
+
+        def record(url: str, **kwargs: Any) -> tls_preflight.ProbeFailure:
+            probed.append(url)
+            return tls_preflight.ProbeFailure(
+                "tls_server", "Cloudflare returned 525", "re-issue the origin cert"
+            )
+
+        monkeypatch.setattr(
+            deploy_central.urllib.request,
+            "urlopen",
+            _explodes_with(_http_error(deploy_central.HEALTH_URL, 525)),
+        )
+        monkeypatch.setattr(tls_preflight, "diagnose", record)
+
+        with pytest.raises(deploy_central.CertVerificationError) as excinfo:
+            deploy_central.wait_http(deploy_central.HEALTH_URL, 4)
+
+        assert probed == [deploy_central.HEALTH_URL]
+        assert "Cloudflare returned 525" in str(excinfo.value)
+        assert "Timed out" not in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        ("code", "suppresses_rollback"),
+        [(525, True), (526, True), (521, False), (522, False), (523, False)],
+    )
+    def test_an_unreproducible_cloudflare_status_keeps_the_certificate_split(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        code: int,
+        suppresses_rollback: bool,
+    ) -> None:
+        """The classifier's own pass can miss what polling saw -- the edge
+        answers it cleanly, or the fault clears between the two. The latched
+        code is then the only evidence left, and it splits: 525/526 are
+        certificate faults no source rollback can fix, while 521/522/523 mean
+        the origin never answered the edge, which one plausibly does fix.
+        """
+        monkeypatch.setattr(
+            deploy_central.urllib.request,
+            "urlopen",
+            _explodes_with(_http_error(deploy_central.HEALTH_URL, code)),
+        )
+        monkeypatch.setattr(tls_preflight, "diagnose", lambda *args, **kwargs: None)
+
+        with pytest.raises(deploy_central.DeployError) as excinfo:
+            deploy_central.wait_http(deploy_central.HEALTH_URL, 4)
+
+        raised_cert_class = isinstance(
+            excinfo.value, deploy_central.CertVerificationError
+        )
+        assert raised_cert_class is suppresses_rollback
+        assert str(code) in str(excinfo.value)
+        assert "Timed out" not in str(excinfo.value)
+
+    @pytest.mark.parametrize("code", [404, 500])
+    def test_an_ordinary_status_still_ends_as_a_plain_timeout(
+        self, monkeypatch: pytest.MonkeyPatch, code: int
+    ) -> None:
+        """Only Cloudflare's own edge range is evidence about the origin leg.
+        Widening the latch to any status would spend a probe ladder on every
+        ordinary failure and suppress the rollback that is the fix for it.
+        """
+        monkeypatch.setattr(
+            deploy_central.urllib.request,
+            "urlopen",
+            _explodes_with(_http_error(deploy_central.HEALTH_URL, code)),
+        )
+        monkeypatch.setattr(tls_preflight, "diagnose", _explodes("diagnose"))
+
+        with pytest.raises(deploy_central.DeployError) as excinfo:
+            deploy_central.wait_http(deploy_central.HEALTH_URL, 4)
+
+        assert type(excinfo.value) is deploy_central.DeployError
+        assert (
+            f"Timed out after 4s waiting for {deploy_central.HEALTH_URL}"
+            in str(excinfo.value)
+        )
+
+    def test_any_status_still_returns_on_the_first_response(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The latch sits in the same ``HTTPError`` arm as ``deploy_web``'s
+        one-shot preflight, which asks only whether the site block answered at
+        all -- on an orange-clouded host a 52x answers that question. Polling on
+        would turn it into a full timeout against a host that did respond.
+        """
+        polls: list[str] = []
+
+        def answered(url: str, *args: Any, **kwargs: Any) -> None:
+            polls.append(url)
+            raise _http_error(url, 525)
+
+        monkeypatch.setattr(deploy_central.urllib.request, "urlopen", answered)
+        monkeypatch.setattr(tls_preflight, "diagnose", _explodes("diagnose"))
+
+        deploy_central.wait_http(deploy_central.APP_URL, 4, any_status=True)
+
+        assert polls == [deploy_central.APP_URL]
 
 
 class TestReportUnreachable:

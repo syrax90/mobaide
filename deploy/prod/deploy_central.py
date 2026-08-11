@@ -260,6 +260,7 @@ def wait_http(
     opener = urllib.request.build_opener(*handlers) if handlers else None
     deadline = time.monotonic() + timeout_sec
     cert_error: ssl.SSLCertVerificationError | None = None
+    http_status: int | None = None
     while time.monotonic() < deadline:
         try:
             with (
@@ -269,9 +270,14 @@ def wait_http(
             ) as resp:
                 if any_status or resp.status == 200:
                     return
-        except urllib.error.HTTPError:
+        except urllib.error.HTTPError as e:
             if any_status:
                 return
+            # Latch it. A Cloudflare 52x means something answered every poll —
+            # falling through to "timed out waiting" would report that nothing
+            # did, and would send the caller into an auto-rollback that cannot
+            # fix an origin-certificate fault.
+            http_status = e.code
         except urllib.error.URLError as e:
             if isinstance(e.reason, ssl.SSLCertVerificationError):
                 cert_error = e.reason
@@ -280,10 +286,12 @@ def wait_http(
         except (OSError, TimeoutError):
             pass
         time.sleep(2)
-    if cert_error is not None:
+    cloudflare_origin_fault = http_status in tls_preflight.CLOUDFLARE_ORIGIN_STATUSES
+    if cert_error is not None or cloudflare_origin_fault:
         # Which of {local trust store, served certificate} is at fault is not
         # decidable from the exception — both raise CERTIFICATE_VERIFY_FAILED.
-        # diagnose() settles it with a control probe before printing advice.
+        # diagnose() settles it with a control probe before printing advice,
+        # and classifies a latched Cloudflare 52x on the same pass.
         failure = tls_preflight.diagnose(url, context=context)
         if failure is not None:
             report_probe_failure(failure)
@@ -297,12 +305,23 @@ def wait_http(
             if failure.kind in ("tls_local", "tls_server", "inconclusive"):
                 raise CertVerificationError(f"{url}: {failure.detail}")
             raise ClassifiedDeployError(f"{url}: {failure.detail}")
-        # Latched a cert error while polling, but the classifier could not
-        # reproduce it. The message must stay non-empty: callers turn an empty
-        # DeployError into "details already printed", and nothing was.
-        raise CertVerificationError(
-            f"could not verify the TLS certificate for {url} within {timeout_sec}s: {cert_error}"
+        # The classifier could not reproduce what polling saw. The message must
+        # stay non-empty: callers turn an empty DeployError into "details
+        # already printed", and nothing was.
+        if cert_error is not None:
+            raise CertVerificationError(
+                f"could not verify the TLS certificate for {url} within {timeout_sec}s: {cert_error}"
+            )
+        detail = (
+            f"{url} answered HTTP {http_status} (Cloudflare edge->origin failure) "
+            f"within {timeout_sec}s, but the classifier could not reproduce it"
         )
+        # 525/526 are certificate faults, so they keep the no-auto-rollback
+        # contract even unreproduced; 521/522/523 mean the origin was
+        # unreachable, which a source rollback plausibly does fix.
+        if http_status in tls_preflight.CLOUDFLARE_TLS_STATUSES:
+            raise CertVerificationError(detail)
+        raise ClassifiedDeployError(detail)
     raise DeployError(f"Timed out after {timeout_sec}s waiting for {url}")
 
 

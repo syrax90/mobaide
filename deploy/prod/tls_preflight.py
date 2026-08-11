@@ -45,6 +45,14 @@ CONTROL_URLS = ("https://letsencrypt.org/", "https://www.google.com/")
 
 CONTROL_TIMEOUT = 8
 
+# Cloudflare-specific 5xx, emitted BY THE EDGE over a valid edge certificate
+# when the edge->origin leg fails. Split because they route differently: a
+# certificate fault must never trigger an auto-rollback (a source swap cannot
+# fix it), whereas an unreachable origin plausibly is fixed by one.
+CLOUDFLARE_TLS_STATUSES = (525, 526)
+CLOUDFLARE_REACH_STATUSES = (521, 522, 523)
+CLOUDFLARE_ORIGIN_STATUSES = CLOUDFLARE_TLS_STATUSES + CLOUDFLARE_REACH_STATUSES
+
 _RDN_SHORT = {
     "countryName": "C",
     "stateOrProvinceName": "ST",
@@ -717,7 +725,7 @@ def diagnose(
         # module exists for. 525 is precisely how a mismatched origin cert/key
         # presents. These codes are Cloudflare-specific, so no ordinary origin
         # response is misread; the gray-clouded app host can never emit them.
-        if e.code in (525, 526):
+        if e.code in CLOUDFLARE_TLS_STATUSES:
             return ProbeFailure(
                 "tls_server",
                 f"Cloudflare returned {e.code} for {host} — its TLS connection to "
@@ -725,7 +733,7 @@ def diagnose(
                 f"the origin's)",
                 cloudflare_origin_remedy(e.code, host),
             )
-        if e.code in (521, 522, 523):
+        if e.code in CLOUDFLARE_REACH_STATUSES:
             return ProbeFailure(
                 "connect",
                 f"Cloudflare returned {e.code} for {host} — the edge could not "
