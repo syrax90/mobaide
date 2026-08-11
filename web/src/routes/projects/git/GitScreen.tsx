@@ -16,6 +16,8 @@ import { useDeferredCommit } from '../../../lib/useDeferredCommit';
 import type { BusyHolder } from '../../../protocol/dto/gitConflict';
 import { useAgentEvents } from '../../../realtime';
 import { useToastStore } from '../../../stores/toastStore';
+import { ErrorState } from '../../../components/ErrorState';
+import { Modal } from '../../../components/Modal';
 import { UndoBar } from '../../../components/UndoBar';
 import { GitItemRow } from './GitItemRow';
 import { deleteFailureMessage, forceDeleteMessage } from './gitDisplay';
@@ -61,6 +63,7 @@ export function GitScreen() {
   // created. This is the web analogue of holding `pendingBatch` outside the
   // deferred task on iOS.
   const machineRef = useRef(machine);
+  const forceCancelRef = useRef<HTMLButtonElement>(null);
   machineRef.current = machine;
 
   useAgentEvents(agentId);
@@ -203,9 +206,12 @@ export function GitScreen() {
       )}
 
       {items.isPending ? (
-        <p className="page-note">Loading git items…</p>
+        <p className="page-note state-loading">Loading git items…</p>
       ) : items.isError ? (
-        <p className="auth-error">Failed to load git items.</p>
+        <ErrorState
+          message="Failed to load git items."
+          onRetry={() => void items.refetch()}
+        />
       ) : visible.length === 0 ? (
         <p className="empty-state">No branches or worktrees.</p>
       ) : (
@@ -235,7 +241,14 @@ export function GitScreen() {
       )}
 
       {machine.force !== null && (
-        <div className="confirm-panel" role="alertdialog" aria-labelledby="force-title">
+        <Modal
+          role="alertdialog"
+          labelledBy="force-title"
+          initialFocus={forceCancelRef}
+          onClose={() => {
+            setMachine(dismissForce(machineRef.current));
+          }}
+        >
           <h2 id="force-title">Force delete?</h2>
           <p>{forceDeleteMessage(machine.force.refs)}</p>
           <div className="button-row">
@@ -254,6 +267,7 @@ export function GitScreen() {
             </button>
             <button
               type="button"
+              ref={forceCancelRef}
               className="button"
               onClick={() => {
                 setMachine(dismissForce(machineRef.current));
@@ -262,11 +276,17 @@ export function GitScreen() {
               Cancel
             </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {busyDialog !== null && (
-        <div className="confirm-panel" role="alertdialog" aria-labelledby="busy-title">
+        <Modal
+          role="alertdialog"
+          labelledBy="busy-title"
+          onClose={() => {
+            setBusyDialog(null);
+          }}
+        >
           <h2 id="busy-title">Item is in use</h2>
           <p>Stop the holder, then try again.</p>
           <ul className="busy-holders">
@@ -285,7 +305,7 @@ export function GitScreen() {
               OK
             </button>
           </div>
-        </div>
+        </Modal>
       )}
     </section>
   );

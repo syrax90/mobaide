@@ -1,4 +1,5 @@
 import { CopyableCode } from '../../components/CopyableCode';
+import { Modal } from '../../components/Modal';
 import { INSTALL_COMMANDS } from './hostOs';
 
 /**
@@ -14,11 +15,7 @@ interface InstallCommandsPanelProps {
 
 export function InstallCommandsPanel({ onClose }: InstallCommandsPanelProps) {
   return (
-    <section
-      className="confirm-panel"
-      role="dialog"
-      aria-labelledby="install-commands-title"
-    >
+    <Modal labelledBy="install-commands-title" onClose={onClose}>
       <h2 id="install-commands-title">Install mobaide-agent on a host</h2>
       <p>
         Run one of these on the machine you want to use as a host. After the install
@@ -32,6 +29,6 @@ export function InstallCommandsPanel({ onClose }: InstallCommandsPanelProps) {
           Close
         </button>
       </div>
-    </section>
+    </Modal>
   );
 }

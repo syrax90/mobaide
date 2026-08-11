@@ -161,7 +161,9 @@ export function TemplatesPicker({ onPick, onClose }: TemplatesPickerProps) {
         }}
       />
 
-      {templates.isPending && <p>Loading templates…</p>}
+      {templates.isPending && (
+        <p className="page-note state-loading">Loading templates…</p>
+      )}
       {templates.isError && <p className="auth-error">Failed to load templates.</p>}
       {!templates.isPending && empty && (
         <p className="empty-state">No templates match.</p>

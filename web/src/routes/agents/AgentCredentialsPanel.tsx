@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { CopyableCode } from '../../components/CopyableCode';
 import type { AgentCredentials } from '../../api/agentRepository';
@@ -32,8 +32,19 @@ export function AgentCredentialsPanel({
 }: AgentCredentialsPanelProps) {
   const [hostOs, setHostOs] = useState<AgentHostOs>(DEFAULT_AGENT_HOST_OS);
 
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    panelRef.current?.scrollIntoView({
+      block: 'nearest',
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        ? 'auto'
+        : 'smooth',
+    });
+  }, []);
+
   return (
     <section
+      ref={panelRef}
       className="confirm-panel credentials-panel"
       role="dialog"
       aria-labelledby="agent-credentials-title"

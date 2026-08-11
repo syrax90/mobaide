@@ -1,31 +1,93 @@
-:root[data-theme='light'] {
-  color-scheme: light;
-  --color-bg: #f7f8fa;
-  --color-surface: #ffffff;
-  --color-fg: #1a1d24;
-  --color-fg-muted: #5b6472;
-  --color-border: #d9dde3;
-  --color-accent: #1f6feb;
-  --color-accent-fg: #ffffff;
-  --color-danger: #c93c3c;
-  --color-success: #1a7f37;
-  /*
-   * Attention chips and disabled-mode reasons. Darker than iOS's #F9A825, which
-   * is ~2:1 against the light surface and fails WCAG AA as text.
-   */
-  --color-warning: #8a6100;
+/*
+ * Design tokens — the portal "modern pixel" system (docs/website.md).
+ *
+ * Token names follow central_server/static/site/site.css so a diff against the
+ * portal sheet lines up token-for-token. The dark block mirrors site.css
+ * verbatim and site.css stays the source of truth for those values; the light
+ * block exists only here, derived to the same contrast targets (text >= 4.5:1,
+ * UI boundaries >= 3:1 per WCAG 1.4.11).
+ *
+ * Purple + grey are the identity in BOTH themes: --brand/--brand-2 are
+ * theme-invariant fills, the accent is purple on both surfaces, and every
+ * neutral is a purple-tinted grey. The only other chromatics are the semantic
+ * status colors and the terminal's fixed ANSI grid (terminalTheme.ts).
+ */
+
+/* Same URL as index.html's <link rel="preload"> — keep byte-identical. */
+@font-face {
+  font-family: 'Departure Mono';
+  src: url('/fonts/DepartureMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
 }
 
+:root {
+  /*
+   * Fill and border colours only, in BOTH themes. On dark they fail WCAG AA
+   * as text (~2.6:1); on light, text purple is --accent below instead.
+   */
+  --brand: #6008ac;
+  --brand-2: #6650a4;
+
+  --btn-shadow: #2b0450;
+  --danger-fill: #8c1d18;
+  --danger-fill-shadow: #4a0f0c;
+
+  --plate: #f4f4f4;
+  --px: 4px;
+
+  --pix-sm: 11px;
+  --pix-md: 22px;
+  --pix-lg: 33px;
+  --pix-xl: 44px;
+
+  --font-chrome: 'Departure Mono', ui-monospace, SFMono-Regular, Menlo,
+    monospace;
+  --font-body: system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --modal-shadow: #000;
+}
+
+/* Exact portal values (site.css). */
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --color-bg: #12141a;
-  --color-surface: #1a1d24;
-  --color-fg: #e6e8ee;
-  --color-fg-muted: #9aa3b2;
-  --color-border: #2c313c;
-  --color-accent: #4da3ff;
-  --color-accent-fg: #0b1420;
-  --color-danger: #e56868;
-  --color-success: #4ac26b;
-  --color-warning: #e3b341;
+  --bg: #121212;
+  --bg-2: #171717;
+  --surface: #1e1e1e;
+  --surface-2: #232323;
+  --accent: #d0bcff;
+  --text: #e9e5ef;
+  --text-muted: #ccc2dc;
+  /* Form-control boundaries ring in --gray (5.26:1 on --bg-2), never --rule
+     (2.78:1, decorative frames only). */
+  --gray: #8b8b8b;
+  --danger: #f2b8b5;
+  --ok: #23d18b;
+  --rule: #625b71;
+  /* Portal has no warning role; attention chips need one. */
+  --warning: #e3b341;
+  --scrim: rgba(0, 0, 0, 0.72);
+  --head-bg: rgba(18, 18, 18, 0.92);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f4f4;
+  --bg-2: #fdfcff;
+  --surface: #efecf3;
+  --surface-2: #dcd7e2;
+  --text: #1c1b1f;
+  --text-muted: #49454f;
+  /* The brand purple doubles as accent text on light: 8.97:1 on --bg. */
+  --accent: #6008ac;
+  --gray: #666666;
+  /* Dark's --danger/--ok are light-on-dark colours (#f2b8b5 is 1.4:1 on
+     white); these hold >= 4.5:1 as text and >= 3:1 as rings on every plate. */
+  --danger: #8c1d18;
+  --ok: #116a2e;
+  --warning: #8a6100;
+  --rule: #a099ab;
+  --scrim: rgba(0, 0, 0, 0.5);
+  --head-bg: rgba(244, 244, 244, 0.92);
 }

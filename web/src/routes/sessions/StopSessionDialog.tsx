@@ -1,3 +1,5 @@
+import { useRef } from 'react';
+import { Modal } from '../../components/Modal';
 import type { SessionResponse } from '../../protocol/dto/session';
 
 interface StopSessionDialogProps {
@@ -17,8 +19,15 @@ export function StopSessionDialog({
   onStop,
   onCancel,
 }: StopSessionDialogProps) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
   return (
-    <div className="confirm-panel" role="alertdialog" aria-labelledby="stop-session-title">
+    <Modal
+      role="alertdialog"
+      labelledBy="stop-session-title"
+      dismissible={!busy}
+      initialFocus={cancelRef}
+      onClose={onCancel}
+    >
       <h2 id="stop-session-title">Stop session?</h2>
       <p>
         Stop {session.title !== undefined ? `"${session.title}"` : session.session_id}? Force
@@ -45,10 +54,10 @@ export function StopSessionDialog({
         >
           Force Stop
         </button>
-        <button type="button" className="button" onClick={onCancel}>
+        <button type="button" ref={cancelRef} className="button" onClick={onCancel}>
           Cancel
         </button>
       </div>
-    </div>
+    </Modal>
   );
 }

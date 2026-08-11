@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import {
@@ -10,6 +10,8 @@ import {
   type AgentCredentials,
 } from '../../api/agentRepository';
 import { clearAgentToken } from '../../auth/agentTokens';
+import { ErrorState } from '../../components/ErrorState';
+import { Modal } from '../../components/Modal';
 import { queryKeys, wsBackedQueryOptions } from '../../lib/queryKeys';
 import { disconnectAgentEvents } from '../../realtime';
 import { useLastSessionStore } from '../../stores/lastSessionStore';
@@ -39,6 +41,7 @@ type Panel =
 export function Agents() {
   const queryClient = useQueryClient();
   const [panel, setPanel] = useState<Panel>({ kind: 'none' });
+  const removeCancelRef = useRef<HTMLButtonElement>(null);
 
   const agents = useQuery({
     queryKey: queryKeys.agents(),
@@ -114,8 +117,13 @@ export function Agents() {
         one to run sessions on it from this browser.
       </p>
 
-      {agents.isPending && <p className="page-note">Loading agents…</p>}
-      {agents.isError && <p className="auth-error">Failed to load agents.</p>}
+      {agents.isPending && <p className="page-note state-loading">Loading agents…</p>}
+      {agents.isError && (
+        <ErrorState
+          message="Failed to load agents."
+          onRetry={() => void agents.refetch()}
+        />
+      )}
 
       {agents.data?.length === 0 && (
         <p className="empty-state">
@@ -198,7 +206,13 @@ export function Agents() {
       )}
 
       {panel.kind === 'confirmReregister' && (
-        <div className="confirm-panel" role="dialog" aria-labelledby="reregister-title">
+        <Modal
+          labelledBy="reregister-title"
+          dismissible={!reregister.isPending}
+          onClose={() => {
+            setPanel({ kind: 'none' });
+          }}
+        >
           <h2 id="reregister-title">Re-register agent?</h2>
           <p>
             This generates new credentials for &ldquo;{panel.agent.name}&rdquo; and
@@ -226,14 +240,18 @@ export function Agents() {
               Cancel
             </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {panel.kind === 'confirmDelete' && (
-        <div
-          className="confirm-panel"
+        <Modal
           role="alertdialog"
-          aria-labelledby="remove-agent-title"
+          labelledBy="remove-agent-title"
+          dismissible={!remove.isPending}
+          initialFocus={removeCancelRef}
+          onClose={() => {
+            setPanel({ kind: 'none' });
+          }}
         >
           <h2 id="remove-agent-title">Remove agent?</h2>
           <p>
@@ -254,6 +272,7 @@ export function Agents() {
             </button>
             <button
               type="button"
+              ref={removeCancelRef}
               className="button"
               disabled={remove.isPending}
               onClick={() => {
@@ -263,7 +282,7 @@ export function Agents() {
               Cancel
             </button>
           </div>
-        </div>
+        </Modal>
       )}
     </section>
   );

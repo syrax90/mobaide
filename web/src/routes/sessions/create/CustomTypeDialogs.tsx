@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { Modal } from '../../../components/Modal';
 import { TextAreaField } from '../../../components/form/TextAreaField';
 import { TextField } from '../../../components/form/TextField';
 import { validateCustomAgentType } from '../../../api/customAgentTypeRepository';
@@ -30,7 +31,7 @@ export function CreateCustomTypeDialog({
   const validation = validateCustomAgentType(name, command);
 
   return (
-    <div className="confirm-panel" role="dialog" aria-labelledby="custom-type-title">
+    <Modal labelledBy="custom-type-title" dismissible={!busy} onClose={onCancel}>
       <h2 id="custom-type-title">Add custom agent</h2>
       <TextField
         label="Name"
@@ -64,7 +65,7 @@ export function CreateCustomTypeDialog({
           Cancel
         </button>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -83,8 +84,15 @@ export function DeleteCustomTypeDialog({
   onConfirm,
   onCancel,
 }: DeleteCustomTypeDialogProps) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
   return (
-    <div className="confirm-panel" role="alertdialog" aria-labelledby="delete-type-title">
+    <Modal
+      role="alertdialog"
+      labelledBy="delete-type-title"
+      dismissible={!busy}
+      initialFocus={cancelRef}
+      onClose={onCancel}
+    >
       <h2 id="delete-type-title">Delete agent type?</h2>
       <p>
         Delete &quot;{name}&quot;? Saved shortcuts for this agent type will also be deleted.
@@ -100,10 +108,10 @@ export function DeleteCustomTypeDialog({
         >
           {busy ? 'Deleting…' : 'Delete'}
         </button>
-        <button type="button" className="button" disabled={busy} onClick={onCancel}>
+        <button type="button" ref={cancelRef} className="button" disabled={busy} onClick={onCancel}>
           Cancel
         </button>
       </div>
-    </div>
+    </Modal>
   );
 }

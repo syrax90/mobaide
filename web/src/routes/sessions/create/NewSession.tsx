@@ -11,6 +11,7 @@ import {
 } from '../../../api/customAgentTypeRepository';
 import { listProjects } from '../../../api/projectRepository';
 import { createSession, type CreateSessionRequest } from '../../../api/sessionRepository';
+import { ErrorState } from '../../../components/ErrorState';
 import { queryKeys, wsBackedQueryOptions } from '../../../lib/queryKeys';
 import type { SessionResponse } from '../../../protocol/dto/session';
 import { customSessionTypeId } from '../../../protocol/wireSchema';
@@ -403,9 +404,12 @@ export function NewSession() {
       </ol>
 
       {projects.isPending ? (
-        <p className="page-note">Loading projects…</p>
+        <p className="page-note state-loading">Loading projects…</p>
       ) : projects.isError ? (
-        <p className="auth-error">Failed to load projects.</p>
+        <ErrorState
+          message="Failed to load projects."
+          onRetry={() => void projects.refetch()}
+        />
       ) : location.step === 'project' ? (
         <ProjectStep
           projects={projects.data}
