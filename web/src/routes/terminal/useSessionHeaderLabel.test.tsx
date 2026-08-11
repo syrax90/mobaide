@@ -77,6 +77,9 @@ describe('useSessionHeaderLabel', () => {
 
     await act(async () => {
       client.setQueryData(queryKeys.sessions('a1'), [session({ title: '* Fix the header' })]);
+      // React Query notifies its subscribers on a microtask; yielding here
+      // spends it inside `act`, so the render is flushed on the way out.
+      await Promise.resolve();
     });
 
     expect(label()).toBe('* Fix the header');
@@ -96,6 +99,7 @@ describe('useSessionHeaderLabel', () => {
     // case proves an update lands inside one `act`, so this is not vacuous.
     await act(async () => {
       client.setQueryData(queryKeys.sessions('a1'), []);
+      await Promise.resolve();
     });
 
     expect(label()).toBe('* Fix the header');

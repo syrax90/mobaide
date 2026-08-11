@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { renderGoogleButton } from '../../auth/googleSignIn';
+import { initGoogleIdentity, renderGoogleButton } from '../../auth/googleSignIn';
 import { generateNonce } from '../../auth/nonce';
+import { useResolvedTheme } from '../../app/useResolvedTheme';
 
 interface GoogleSignInButtonProps {
   clientId: string | null;
@@ -24,6 +25,11 @@ export function GoogleSignInButton({
 }: GoogleSignInButtonProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
+  const [armed, setArmed] = useState(false);
+  // GIS offers no dark-surface fill, so the dark theme takes `outline` — a
+  // white button — and the Apple button beside it flips to its white variant
+  // to match. See the `[data-theme='dark']` rule in styles/global.css.
+  const theme = useResolvedTheme() === 'dark' ? 'outline' : 'filled_black';
 
   // The callback identity changes on every parent render, so keeping it in a
   // ref lets the effect depend only on the client id — otherwise GIS would be
@@ -31,21 +37,25 @@ export function GoogleSignInButton({
   const callbackRef = useRef(onCredential);
   callbackRef.current = onCredential;
 
+  // Arming is keyed on the client id alone. The nonce minted here is the one
+  // baked into every popup this screen opens, so re-running it for a cosmetic
+  // reason — a theme flip, which the redraw effect below handles — would
+  // strand an in-flight sign-in: the returning token carries the old nonce
+  // while this component would report the new one, and the server compares
+  // the two.
   useEffect(() => {
-    const parent = containerRef.current;
-    if (clientId === null || parent === null) return;
+    if (clientId === null) return;
     let cancelled = false;
     setFailed(false);
+    setArmed(false);
 
     void (async () => {
       try {
         const nonce = await generateNonce();
         if (cancelled) return;
-        await renderGoogleButton({
-          parent,
+        await initGoogleIdentity({
           clientId,
           nonce,
-          text,
           onCredential: (credential) => {
             // GIS holds this callback globally once the button is rendered, so
             // a popup the user leaves open can complete long after this screen
@@ -56,6 +66,8 @@ export function GoogleSignInButton({
             callbackRef.current(credential, nonce);
           },
         });
+        if (cancelled) return;
+        setArmed(true);
       } catch {
         if (!cancelled) setFailed(true);
       }
@@ -64,7 +76,28 @@ export function GoogleSignInButton({
     return () => {
       cancelled = true;
     };
-  }, [clientId, text]);
+  }, [clientId]);
+
+  // Appearance only, so a theme flip redraws the button without disturbing an
+  // attempt already in flight.
+  useEffect(() => {
+    const parent = containerRef.current;
+    if (!armed || parent === null) return;
+    let cancelled = false;
+    setFailed(false);
+
+    void (async () => {
+      try {
+        await renderGoogleButton({ parent, theme, text });
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [armed, text, theme]);
 
   if (clientId === null) return null;
 

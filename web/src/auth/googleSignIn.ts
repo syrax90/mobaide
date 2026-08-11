@@ -118,17 +118,49 @@ export function loadGoogleIdentity(): Promise<GisIdApi> {
   return loader;
 }
 
-export interface RenderGoogleButtonOptions {
-  parent: HTMLElement;
+export interface InitGoogleIdentityOptions {
   clientId: string;
   nonce: string;
-  /** Google owns the visible label per their branding rules. */
-  text?: 'signin_with' | 'signup_with' | 'continue_with';
   onCredential: (credential: string) => void;
 }
 
 /**
- * Mount a GIS button into `parent`.
+ * Arm GIS with the client id, the nonce, and the callback that answers.
+ *
+ * Deliberately separate from `renderGoogleButton`: `initialize` is what binds
+ * the nonce a popup's token will be minted against, so re-running it while an
+ * attempt is in flight would leave the returning credential paired with a
+ * nonce it does not carry. Appearance changes must go through the renderer
+ * alone.
+ */
+export async function initGoogleIdentity(
+  options: InitGoogleIdentityOptions,
+): Promise<void> {
+  const api = await loadGoogleIdentity();
+  api.initialize({
+    client_id: options.clientId,
+    nonce: options.nonce,
+    ux_mode: 'popup',
+    callback: (response) => {
+      options.onCredential(response.credential);
+    },
+  });
+}
+
+export interface RenderGoogleButtonOptions {
+  parent: HTMLElement;
+  /**
+   * Chosen by the caller so this button can match the Apple one beside it,
+   * which is drawn in our own CSS. GIS has no light-on-dark fill, so the pair
+   * is black on a light surface and white on a dark one.
+   */
+  theme: 'filled_black' | 'outline';
+  /** Google owns the visible label per their branding rules. */
+  text?: 'signin_with' | 'signup_with' | 'continue_with';
+}
+
+/**
+ * Draw a GIS button into `parent`, which `initGoogleIdentity` must have armed.
  *
  * `width` makes GIS emit an inline `style=` attribute on the button — covered
  * by the `style-src 'unsafe-inline'` the SPA CSP concedes, which the GIS
@@ -141,17 +173,12 @@ export async function renderGoogleButton(
   // The element can be unmounted while the script was loading; rendering into
   // a detached node is wasted work and leaves GIS holding a stale reference.
   if (!options.parent.isConnected) return;
-  api.initialize({
-    client_id: options.clientId,
-    nonce: options.nonce,
-    ux_mode: 'popup',
-    callback: (response) => {
-      options.onCredential(response.credential);
-    },
-  });
+  // A theme change redraws into the same container; GIS appends rather than
+  // replacing, so without this the old button survives underneath the new one.
+  options.parent.replaceChildren();
   api.renderButton(options.parent, {
     type: 'standard',
-    theme: 'outline',
+    theme: options.theme,
     size: 'large',
     shape: 'rectangular',
     logo_alignment: 'left',

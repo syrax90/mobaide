@@ -350,24 +350,21 @@ button {
   gap: 0.5rem;
 }
 
-.google-signin {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
-}
-
+/* One rule, so the two providers cannot drift: neither wrapper carries a
+   margin of its own, leaving both on .auth-card's uniform gap. */
+.google-signin,
 .apple-signin {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0.5rem;
-  margin-top: 0.5rem;
 }
 
-/* Apple's Human Interface Guidelines fix the appearance — black fill, white
-   mark and label — so this button does not take the themed .button tokens.
-   320px/40px is the box GIS renders at, so the two stack without a width step. */
+/* Drawn here rather than by Apple's SDK, so it is ours to match to the GIS
+   button beside it: the same 320px/40px box, and a 14px/500 label because that
+   is what GIS renders at `size: 'large'` inside its cross-origin frame. Apple's
+   Human Interface Guidelines fix the fill — black, or white on a dark surface —
+   which is why this button takes no themed .button tokens. */
 .apple-signin-button {
   display: flex;
   align-items: center;
@@ -381,8 +378,20 @@ button {
   background: #000;
   color: #fff;
   font: inherit;
+  font-size: 14px;
+  font-weight: 500;
   line-height: 1;
   cursor: pointer;
+}
+
+/* GIS has no dark-surface fill, so on the dark theme the Google button is
+   rendered with its `outline` theme — a white button — and Apple's white
+   variant pairs with it. The hairline is GIS outline's own border colour so
+   the two edges agree; box-sizing keeps the height at 40px. */
+:root[data-theme='dark'] .apple-signin-button {
+  border: 1px solid #747775;
+  background: #fff;
+  color: #000;
 }
 
 /* Disabled until Apple's SDK answers, and while a sign-in is already in
