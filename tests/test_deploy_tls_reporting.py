@@ -159,14 +159,71 @@ class TestRemotePreflightOriginReassurances:
         so neither fact exists, and both checks have to say so. Claiming "no
         wildcard, keys match" here is a false all-clear about exactly the cert
         the guard exists to catch -- worse than no guard, because it reassures.
+
+        Printing it is not enough. A check that could not run is RETURNED, on
+        the same contract absent PEMs already have: that is what stops
+        ``--diagnose-tls`` exiting 0 about a certificate nothing parsed, and
+        what routes it through ``run``'s tail re-print.
         """
         warnings, out = _preflight_output(monkeypatch, capsys, "ORIGIN_PRESENT=1")
-        assert warnings == []
+        assert [w.kind for w in warnings] == ["unchecked", "unchecked"]
+        assert all(w.severity == "advisory" for w in warnings)
         assert SHADOW_OK not in out
         assert PAIR_OK not in out
-        assert "wildcard-shadow check did NOT run" in out
+        assert "wildcard-shadow and host-coverage checks did NOT run" in out
         assert "cert/key pair check did NOT run" in out
         assert out.count("[!!]") == 2
+        assert out.count("[XX]") == 0
+
+    def test_a_san_less_cert_keeps_only_the_pair_all_clear_it_earned(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The two could-not-check halves are independent, and this is the
+        combination that shipped a false pass: a valid CN-only certificate with
+        no SAN extension at all. Its public keys derive fine, so the run printed
+        the pair all-clear and exited 0 -- on a cert Cloudflare Full (strict)
+        rejects with a 526 on the apex, www AND api.
+        """
+        warnings, out = _preflight_output(
+            monkeypatch,
+            capsys,
+            "ORIGIN_PRESENT=1",
+            "ORIGIN_CERT_PUB=8f4e1c",
+            "ORIGIN_KEY_PUB=8f4e1c",
+        )
+        assert [w.kind for w in warnings] == ["unchecked"]
+        assert warnings[0].severity == "advisory"
+        assert "SANs" in warnings[0].headline
+        assert "526" in "\n".join(warnings[0].lines)
+        assert f"[OK] {PAIR_OK}" in out
+        assert SHADOW_OK not in out
+        assert out.count("[!!]") == 1
+        assert out.count("[XX]") == 0
+
+    def test_an_expired_origin_cert_is_reported_and_returned(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The one fault a public probe cannot see in CloudflareOrigin mode: the
+        probes verify the Cloudflare EDGE certificate, while this deploy's
+        forced reload is what puts the staged origin PEM into service.
+
+        The window below expired in 2021, so the verdict cannot depend on when
+        this suite runs.
+        """
+        warnings, out = _preflight_output(
+            monkeypatch,
+            capsys,
+            "ORIGIN_PRESENT=1",
+            REISSUED_SAN_LINE,
+            "ORIGIN_DATES=notBefore=Aug 10 20:35:00 2020 GMT "
+            "notAfter=Aug  6 20:35:00 2021 GMT ",
+            "ORIGIN_CERT_PUB=8f4e1c",
+            "ORIGIN_KEY_PUB=8f4e1c",
+        )
+        assert [w.kind for w in warnings] == ["expiry"]
+        assert "[XX] Origin cert EXPIRED on 2021-08-06" in out
+        assert f"[OK] {SHADOW_OK}" in out
+        assert f"[OK] {PAIR_OK}" in out
 
     def test_absent_pems_are_reported_as_missing_not_as_unreadable(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -348,12 +405,13 @@ class TestDiagnoseLocalTls:
         host (each run walks every address of every control URL).
         """
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        result = tls_preflight.ControlResult("https://www.google.com/", True)
         probed: list[Any] = []
         calls: list[dict[str, Any]] = []
 
         def record_probe(ctx: Any) -> tls_preflight.ControlResult:
             probed.append(ctx)
-            return tls_preflight.ControlResult("https://www.google.com/", True)
+            return result
 
         def record_diagnose(url: str, **kwargs: Any) -> None:
             calls.append({"url": url, **kwargs})
@@ -369,8 +427,34 @@ class TestDiagnoseLocalTls:
 
         assert failures == 0
         assert probed == [context]
-        assert [c["control_verified"] for c in calls] == [True, True]
+        assert [c["control"] is result for c in calls] == [True, True]
         assert [c["context"] for c in calls] == [context, context]
+
+    def test_an_unverified_control_result_is_handed_down_not_dropped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """"Reached, but nothing verified" is a settled answer, so it travels
+        with the same weight as a passing one.
+
+        Dropping it -- passing "unknown" because the probe did not VERIFY --
+        makes ``diagnose`` re-run the whole ladder for every URL, and a re-probe
+        that flips on a flaky network then blames the server three lines under a
+        header blaming the workstation.
+        """
+        result = tls_preflight.ControlResult(None, True)
+        calls: list[dict[str, Any]] = []
+
+        def record_diagnose(url: str, **kwargs: Any) -> None:
+            calls.append({"url": url, **kwargs})
+            return None
+
+        monkeypatch.setattr(deploy_central, "http_ssl_context", lambda: None)
+        monkeypatch.setattr(tls_preflight, "control_probe", lambda ctx: result)
+        monkeypatch.setattr(tls_preflight, "diagnose", record_diagnose)
+
+        deploy_central.diagnose_local_tls((deploy_central.APP_URL,))
+
+        assert [c["control"] is result for c in calls] == [True]
 
     def test_a_dead_local_trust_store_does_not_skip_probing_the_hosts(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

@@ -27,6 +27,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, NamedTuple, Sequence
 
 # Two hosts, pass on the first that verifies. A single blocked host must not
@@ -63,13 +64,19 @@ class ProbeFailure(NamedTuple):
 class TlsWarning(NamedTuple):
     """A finding about the server's TLS material: headline + remedy lines.
 
-    `kind` is `shadow` or `pair`; callers match on it to decide which
-    reassurance they are still entitled to print.
+    `kind` (`shadow`, `pair`, `missing`, `absent`, `unchecked`, `expiry`) lets
+    callers decide which reassurance they are still entitled to print.
+
+    `severity` decides how it is painted. A confirmed defect and "I could not
+    determine this" must not look alike, and neither should a cert that expires
+    next month — a red banner on every deploy for thirty days is the alarm
+    fatigue that let the original incident's log line go unread.
     """
 
     kind: str
     headline: str
     lines: tuple[str, ...]
+    severity: str = "fault"  # fault | advisory
 
 
 class OriginProbe(NamedTuple):
@@ -86,6 +93,8 @@ class OriginProbe(NamedTuple):
     cert_pubkey: str
     key_pubkey: str
     sans_read: bool = False
+    not_before: datetime | None = None
+    not_after: datetime | None = None
 
 
 def _default_context_trusts_anything() -> bool:
@@ -285,6 +294,30 @@ def parse_openssl_san_output(text: str) -> list[str]:
     return _DNS_SAN_RE.findall(text or "")
 
 
+def parse_openssl_dates(text: str) -> tuple[datetime | None, datetime | None]:
+    """`notBefore=... notAfter=...` from `openssl x509 -startdate -enddate`.
+
+    openssl pads single-digit days to two columns (`Aug  6`), so whitespace is
+    normalised before parsing. Either field is None when absent or unparseable
+    — never a guessed date, since the caller treats a missing value as "not
+    checked" rather than "valid".
+    """
+    found: dict[str, datetime | None] = {"notBefore": None, "notAfter": None}
+    for key in found:
+        match = re.search(rf"{key}=([^=]*?)(?:\s+not(?:Before|After)=|$)", text or "")
+        if not match:
+            continue
+        raw = " ".join(match.group(1).split())
+        for fmt in ("%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y"):
+            try:
+                parsed = datetime.strptime(raw, fmt)
+            except ValueError:
+                continue
+            found[key] = parsed.replace(tzinfo=timezone.utc)
+            break
+    return found["notBefore"], found["notAfter"]
+
+
 def parse_origin_probe(lines: Iterable[str]) -> OriginProbe:
     """Read the ORIGIN_* facts out of the remote preflight's stdout.
 
@@ -298,6 +331,8 @@ def parse_origin_probe(lines: Iterable[str]) -> OriginProbe:
     key_pub = ""
     present = False
     sans_read = False
+    not_before: datetime | None = None
+    not_after: datetime | None = None
     for line in lines:
         if line.startswith("ORIGIN_PRESENT="):
             present = True
@@ -309,7 +344,11 @@ def parse_origin_probe(lines: Iterable[str]) -> OriginProbe:
             cert_pub = line[len("ORIGIN_CERT_PUB="):].strip()
         elif line.startswith("ORIGIN_KEY_PUB="):
             key_pub = line[len("ORIGIN_KEY_PUB="):].strip()
-    return OriginProbe(present, sans, cert_pub, key_pub, sans_read)
+        elif line.startswith("ORIGIN_DATES="):
+            not_before, not_after = parse_openssl_dates(line[len("ORIGIN_DATES="):])
+    return OriginProbe(
+        present, sans, cert_pub, key_pub, sans_read, not_before, not_after
+    )
 
 
 def proxied_hosts(domain: str) -> tuple[str, ...]:
@@ -317,7 +356,66 @@ def proxied_hosts(domain: str) -> tuple[str, ...]:
     return (domain, f"www.{domain}", f"api.{domain}")
 
 
-def origin_cert_warnings(probe: OriginProbe, domain: str) -> list[TlsWarning]:
+EXPIRY_WARN_DAYS = 30
+
+
+def _validity_warning(probe: OriginProbe, now: datetime) -> TlsWarning | None:
+    """Expired, not-yet-valid, or expiring soon.
+
+    Worth checking here because the deploy's forced reload is what makes staged
+    on-disk certificate content take effect, so an expired PEM sitting in
+    tls/ goes live at deploy time rather than waiting for a container restart.
+    A public probe cannot catch it in CloudflareOrigin mode — that verifies the
+    edge certificate, not the origin's.
+    """
+    if probe.not_after is None:
+        return None
+    window = (
+        f"valid {probe.not_before:%Y-%m-%d} to {probe.not_after:%Y-%m-%d}"
+        if probe.not_before
+        else f"expires {probe.not_after:%Y-%m-%d}"
+    )
+    if probe.not_after <= now:
+        return TlsWarning(
+            "expiry",
+            f"Origin cert EXPIRED on {probe.not_after:%Y-%m-%d} ({window})",
+            (
+                "Cloudflare rejects an expired origin certificate with a 526 on",
+                "every proxied host — the apex, www and api, i.e. every agent",
+                "tunnel and mobile client, not just the SPA.",
+                "Re-issue it before deploying: this deploy's forced reload is what",
+                "loads whatever is on disk.",
+            ),
+        )
+    if probe.not_before is not None and probe.not_before > now:
+        return TlsWarning(
+            "expiry",
+            f"Origin cert is not valid until {probe.not_before:%Y-%m-%d} ({window})",
+            (
+                "Cloudflare rejects a not-yet-valid certificate the same way it",
+                "rejects an expired one. Check the server clock if this is",
+                "unexpected.",
+            ),
+        )
+    if probe.not_after - now <= timedelta(days=EXPIRY_WARN_DAYS):
+        days = (probe.not_after - now).days
+        return TlsWarning(
+            "expiry",
+            f"Origin cert expires in {days} day{'s' if days != 1 else ''} "
+            f"({probe.not_after:%Y-%m-%d})",
+            (
+                "Nothing renews this certificate automatically — Cloudflare Origin",
+                "certs are operator-managed, unlike the ACME-issued app host.",
+                "Re-issue and rotate per docs/deployment.md before it lapses.",
+            ),
+            "advisory",
+        )
+    return None
+
+
+def origin_cert_warnings(
+    probe: OriginProbe, domain: str, now: datetime | None = None
+) -> list[TlsWarning]:
     """The ways the server's origin cert can be wrong before a deploy.
 
     Both directions of the SAN list matter. Covering `app.<domain>` breaks the
@@ -378,6 +476,9 @@ def origin_cert_warnings(probe: OriginProbe, domain: str) -> list[TlsWarning]:
                     ),
                 )
             )
+    validity = _validity_warning(probe, now or datetime.now(timezone.utc))
+    if validity is not None:
+        warnings.append(validity)
     if probe.cert_pubkey and probe.key_pubkey and probe.cert_pubkey != probe.key_pubkey:
         warnings.append(
             TlsWarning(
@@ -546,9 +647,15 @@ def diagnose(
     timeout: int = 15,
     *,
     context: ssl.SSLContext | None = None,
-    control_verified: bool | None = None,
+    control: ControlResult | None = None,
 ) -> ProbeFailure | None:
     """Why `url` is unreachable, or None when it answers.
+
+    A caller that already ran the control probe passes the whole
+    `ControlResult`. Both its fields are needed: re-probing per URL costs a
+    full ladder, and a flaky network can flip the answer between URLs, so a
+    per-URL verdict would blame the server under a header blaming the
+    workstation.
 
     `timeout` bounds each network step, not the total: getaddrinfo takes no
     timeout at all, and create_connection applies the full value to every
@@ -649,13 +756,10 @@ def diagnose(
                 "firewall problem. Check the caddy and central-server container\n"
                 "logs on the server.",
             )
-        control_reached = True
-        if control_verified is None:
+        if control is None:
             control = control_probe(context)
-            control_verified = control.verified_url is not None
-            control_reached = control.reached
-        if not control_verified:
-            if not control_reached:
+        if control.verified_url is None:
+            if not control.reached:
                 # Nothing answered, so nothing was learned. Report what the
                 # host serves anyway — peer_cert_facts needs no trust store,
                 # and it is the only evidence available here.

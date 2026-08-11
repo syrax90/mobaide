@@ -35,6 +35,7 @@ import ssl
 import sys
 import types
 import urllib.error
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -62,6 +63,15 @@ OPENSSL_SAN_OUTPUT = (
     "X509v3 Subject Alternative Name:      "
     "DNS:api.mobaide.com, DNS:mobaide.com, DNS:www.mobaide.com "
 )
+# `openssl x509 -noout -startdate -enddate` after the same squash. openssl pads
+# a single-digit day to two columns -- `Aug  6`, with TWO spaces.
+OPENSSL_DATE_OUTPUT = (
+    "notBefore=Aug 10 20:35:00 2026 GMT notAfter=Aug  6 20:35:00 2041 GMT "
+)
+CERT_NOT_BEFORE = datetime(2026, 8, 10, 20, 35, tzinfo=timezone.utc)
+CERT_NOT_AFTER = datetime(2041, 8, 6, 20, 35, tzinfo=timezone.utc)
+# Every validity assertion passes `now` explicitly; nothing here reads a clock.
+NOW = datetime(2026, 8, 11, tzinfo=timezone.utc)
 APP_URL = "https://app.mobaide.com/"
 # The apex is Proxied under CloudflareOrigin, so this is the URL whose probe
 # can be answered by the Cloudflare edge rather than by the origin.
@@ -142,6 +152,54 @@ class TestParseOpensslSanOutput:
         assert tls_preflight.parse_openssl_san_output("") == []
 
 
+class TestParseOpensslDates:
+    """The validity window, parsed from openssl's own output shape."""
+
+    def test_parses_the_squashed_remote_form_including_the_padded_day(self) -> None:
+        """Verified real output for the cert on the server: openssl pads a
+        single-digit day to two columns (`Aug  6`), and both fields arrive on
+        one line after the probe's ``tr`` squash. The two have to separate on
+        the ``notAfter=`` key rather than on whitespace, or the padded day ends
+        up inside the wrong field and the check silently never fires.
+        """
+        assert tls_preflight.parse_openssl_dates(OPENSSL_DATE_OUTPUT) == (
+            CERT_NOT_BEFORE,
+            CERT_NOT_AFTER,
+        )
+
+    def test_parses_the_raw_multiline_form(self) -> None:
+        text = (
+            "notBefore=Aug 10 20:35:00 2026 GMT\n"
+            "notAfter=Aug  6 20:35:00 2041 GMT\n"
+        )
+        assert tls_preflight.parse_openssl_dates(text) == (
+            CERT_NOT_BEFORE,
+            CERT_NOT_AFTER,
+        )
+
+    def test_both_dates_are_timezone_aware(self) -> None:
+        """openssl prints GMT; the comparison against `now` is tz-aware, and a
+        naive datetime raises TypeError there rather than answering wrong.
+        """
+        not_before, not_after = tls_preflight.parse_openssl_dates(OPENSSL_DATE_OUTPUT)
+        assert not_before is not None and not_after is not None
+        assert not_before.utcoffset() == timedelta(0)
+        assert not_after.utcoffset() == timedelta(0)
+
+    @pytest.mark.parametrize(
+        "text",
+        ["", "unable to load certificate", "notAfter=whenever"],
+        ids=["nothing", "openssl-error", "unparseable"],
+    )
+    def test_unreadable_output_yields_no_dates_rather_than_a_guess(
+        self, text: str
+    ) -> None:
+        """Same rule as ``sans_read``: a date nothing could read is "not
+        checked", never "valid" -- and never a fabricated one either.
+        """
+        assert tls_preflight.parse_openssl_dates(text) == (None, None)
+
+
 class TestParseOriginProbe:
     """The remote preflight emits facts on stdout; classification is local."""
 
@@ -198,6 +256,24 @@ class TestParseOriginProbe:
         assert probe.present is False
         assert probe.sans_read is False
         assert probe.sans == ()
+
+    def test_the_validity_window_arrives_on_its_own_fact_line(self) -> None:
+        probe = tls_preflight.parse_origin_probe(
+            ["ORIGIN_PRESENT=1", f"ORIGIN_DATES={OPENSSL_DATE_OUTPUT}"]
+        )
+        assert probe.not_before == CERT_NOT_BEFORE
+        assert probe.not_after == CERT_NOT_AFTER
+
+    def test_a_missing_dates_line_leaves_the_window_unknown_not_valid(self) -> None:
+        """openssl failing emits no ORIGIN_DATES at all. That has to read as
+        "the expiry check did not run" -- the same fail-open direction as
+        ``sans_read`` -- rather than as a certificate that is in date.
+        """
+        probe = tls_preflight.parse_origin_probe(
+            ["ORIGIN_PRESENT=1", "ORIGIN_CERT_PUB=8f4e1c"]
+        )
+        assert probe.not_before is None
+        assert probe.not_after is None
 
 
 class TestOriginCertWarnings:
@@ -313,6 +389,114 @@ class TestOriginCertWarnings:
     def test_absent_cert_reports_nothing(self) -> None:
         probe = tls_preflight.OriginProbe(False, (), "", "", False)
         assert tls_preflight.origin_cert_warnings(probe, "mobaide.com") == []
+
+
+def _dated_probe(
+    not_before: datetime | None, not_after: datetime | None
+) -> tls_preflight.OriginProbe:
+    """The re-issued production cert with only its validity window varying."""
+    return tls_preflight.OriginProbe(
+        True, REISSUED_SANS, "8f4e1c", "8f4e1c", True, not_before, not_after
+    )
+
+
+class TestOriginCertValidity:
+    """Nothing else in a deploy can see an expired origin PEM.
+
+    Under CloudflareOrigin the public probes verify the Cloudflare EDGE
+    certificate, so they pass over an origin cert that lapsed months ago; and
+    this deploy's forced ``caddy reload`` is precisely what makes whatever is
+    staged on disk go live, so the fuse burns at deploy time rather than at the
+    next container restart. The module's own 526 remedy already tells the
+    operator the origin cert is "typically expired" -- this is the check that
+    can say so.
+
+    ``now`` is passed explicitly by every test here: the rule is a comparison
+    against the clock, and freezing the clock instead would leave the seam the
+    production caller uses untested.
+    """
+
+    def test_the_real_certs_window_is_clean(self) -> None:
+        assert (
+            tls_preflight.origin_cert_warnings(
+                _dated_probe(CERT_NOT_BEFORE, CERT_NOT_AFTER), "mobaide.com", NOW
+            )
+            == []
+        )
+
+    def test_an_expired_cert_is_a_finding(self) -> None:
+        probe = _dated_probe(
+            NOW - timedelta(days=372), NOW - timedelta(days=7)
+        )
+        warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com", NOW)
+        assert [w.kind for w in warnings] == ["expiry"]
+        assert "EXPIRED" in warnings[0].headline
+        assert "2026-08-04" in warnings[0].headline
+        assert "526" in "\n".join(warnings[0].lines)
+
+    def test_a_cert_inside_the_warning_window_is_a_finding(self) -> None:
+        """Cloudflare Origin certs are operator-managed -- nothing renews them,
+        unlike the ACME-issued app host -- so the only warning an operator gets
+        before the lapse is this one.
+        """
+        probe = _dated_probe(CERT_NOT_BEFORE, NOW + timedelta(days=10))
+        warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com", NOW)
+        assert [w.kind for w in warnings] == ["expiry"]
+        assert "expires in 10 days" in warnings[0].headline
+
+    def test_a_not_yet_valid_cert_is_a_finding(self) -> None:
+        """The edge rejects a future notBefore exactly like an expired one, and
+        a wrong server clock presents this way.
+        """
+        probe = _dated_probe(NOW + timedelta(days=5), NOW + timedelta(days=400))
+        warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com", NOW)
+        assert [w.kind for w in warnings] == ["expiry"]
+        assert "not valid until 2026-08-16" in warnings[0].headline
+
+    @pytest.mark.parametrize(
+        ("remaining", "kinds"),
+        [
+            (timedelta(days=tls_preflight.EXPIRY_WARN_DAYS), ["expiry"]),
+            (timedelta(days=tls_preflight.EXPIRY_WARN_DAYS, seconds=1), []),
+        ],
+        ids=["on-the-threshold", "one-second-past-it"],
+    )
+    def test_the_warning_window_boundary_is_inclusive(
+        self, remaining: timedelta, kinds: list[str]
+    ) -> None:
+        probe = _dated_probe(CERT_NOT_BEFORE, NOW + remaining)
+        warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com", NOW)
+        assert [w.kind for w in warnings] == kinds
+
+    def test_dates_that_could_not_be_read_are_not_a_finding(self) -> None:
+        """Same rule as ``sans_read``: a check that did not run must not be
+        rendered as a check that failed, or every server whose openssl is too
+        old grows a permanent false expiry warning.
+        """
+        assert tls_preflight.origin_cert_warnings(
+            _dated_probe(None, None), "mobaide.com", NOW
+        ) == []
+
+    def test_a_half_read_window_still_reports_the_date_it_does_have(self) -> None:
+        """``parse_openssl_dates`` returns the fields independently, so an
+        unparseable notBefore beside a readable notAfter is reachable -- and
+        formatting the missing one would raise instead of warning.
+        """
+        probe = _dated_probe(None, NOW - timedelta(days=1))
+        warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com", NOW)
+        assert [w.kind for w in warnings] == ["expiry"]
+        assert "2026-08-10" in warnings[0].headline
+
+    def test_expiry_does_not_mute_the_other_findings(self) -> None:
+        """Callers branch on the *set* of kinds, so the validity check joining
+        the list must leave the shadow and pair findings intact and distinct.
+        """
+        probe = tls_preflight.OriginProbe(
+            True, OFFENDING_SANS, "8f4e1c", "b02d99", True, None,
+            NOW - timedelta(days=1),
+        )
+        warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com", NOW)
+        assert [w.kind for w in warnings] == ["shadow", "expiry", "pair"]
 
 
 class TestExplainServerCert:
@@ -1006,19 +1190,52 @@ class TestDiagnoseControlProbe:
         assert "openssl s_client" in failure.remedy
 
     @pytest.mark.parametrize(
-        ("control_verified", "kind"),
-        [(True, "tls_server"), (False, "tls_local")],
+        ("control", "kind", "remedy_marker", "forbidden"),
+        [
+            (
+                tls_preflight.ControlResult(tls_preflight.CONTROL_URLS[0], True),
+                "tls_server",
+                "skipped ACME for app.mobaide.com",
+                "INCONCLUSIVE",
+            ),
+            (
+                tls_preflight.ControlResult(None, True),
+                "tls_local",
+                "workstation problem, not a server problem",
+                "INCONCLUSIVE",
+            ),
+            (
+                tls_preflight.ControlResult(None, False),
+                "tls_local",
+                "INCONCLUSIVE",
+                "workstation problem, not a server problem",
+            ),
+        ],
+        ids=["verified", "reached-but-untrusted", "nothing-reachable"],
     )
-    def test_a_caller_supplied_verdict_skips_the_probe_entirely(
-        self, monkeypatch: pytest.MonkeyPatch, control_verified: bool, kind: str
+    def test_a_caller_supplied_control_result_skips_the_probe_entirely(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        control: tls_preflight.ControlResult,
+        kind: str,
+        remedy_marker: str,
+        forbidden: str,
     ) -> None:
-        """The urlopen fake answers control hosts the OPPOSITE way, so a verdict
-        matching the flag can only have come from the flag.
+        """A whole ``ControlResult`` is passed down, not a bool: "reached but
+        nothing verified" is a SETTLED answer with its own remedy, and a bool
+        collapses it into "unknown", which sends ``diagnose`` back through the
+        ~80s ladder per URL and lets a flaky network return a per-URL verdict
+        that contradicts the header the caller already printed.
+
+        ``control_probe`` explodes and the urlopen fake answers control hosts
+        the OPPOSITE way, so each verdict below can only have come from the
+        supplied result.
         """
         _install_transport(
             monkeypatch,
             urlopen=_urlopen(
-                _cert_verification_failure(), control_verifies=not control_verified
+                _cert_verification_failure(),
+                control_verifies=control.verified_url is None,
             ),
         )
         monkeypatch.setattr(
@@ -1029,9 +1246,11 @@ class TestDiagnoseControlProbe:
             "peer_cert_facts",
             lambda *args, **kwargs: (CLOUDFLARE_ORIGIN_ISSUER, list(OFFENDING_SANS)),
         )
-        failure = tls_preflight.diagnose(APP_URL, control_verified=control_verified)
+        failure = tls_preflight.diagnose(APP_URL, control=control)
         assert failure is not None
         assert failure.kind == kind
+        assert remedy_marker in failure.remedy
+        assert forbidden not in failure.remedy
 
     def test_one_blocked_control_host_does_not_condemn_the_trust_store(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1074,6 +1293,7 @@ class TestDeployCommandInvariants:
         for marker in (
             "ORIGIN_PRESENT=1",
             "ORIGIN_SANS=",
+            "ORIGIN_DATES=",
             "ORIGIN_CERT_PUB=",
             "ORIGIN_KEY_PUB=",
             "ORIGIN_CERT_MISSING=1",
@@ -1130,12 +1350,30 @@ class TestOriginCertProbeScript:
             assert "printf '%s' \"$" in line
 
     @pytest.mark.parametrize(
-        "var", ["origin_sans", "origin_cert_pub", "origin_key_pub"]
+        "var",
+        ["origin_sans", "origin_dates", "origin_cert_pub", "origin_key_pub"],
     )
     def test_each_fact_is_echoed_only_when_it_was_actually_measured(
         self, var: str
     ) -> None:
         assert f'[ -n "${var}" ] && echo' in deploy_central._ORIGIN_CERT_PROBE
+
+    def test_the_validity_window_is_read_from_the_cert_the_caddyfile_loads(
+        self,
+    ) -> None:
+        """Both dates in one openssl call, from the same PEM the site blocks
+        load by path -- and squashed to a single line, because the caller reads
+        this back out of a line-oriented preflight stdout.
+        """
+        line = next(
+            candidate
+            for candidate in deploy_central._ORIGIN_CERT_PROBE.splitlines()
+            if "-startdate" in candidate
+        )
+        assert "-enddate" in line
+        assert deploy_central.ORIGIN_CERT in line
+        assert deploy_central.ORIGIN_KEY not in line
+        assert "tr '\\n' ' '" in line
 
     def test_presence_is_reported_before_any_openssl_can_fail(self) -> None:
         """ORIGIN_PRESENT=1 is the line that tells the caller the PEMs exist

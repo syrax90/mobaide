@@ -226,7 +226,8 @@ def report_probe_failure(failure: tls_preflight.ProbeFailure) -> None:
 
 
 def report_tls_warning(warning: tls_preflight.TlsWarning) -> None:
-    fail(warning.headline)
+    emit = warn if warning.severity == "advisory" else fail
+    emit(warning.headline)
     for line in warning.lines:
         dim(f"  {line}")
 
@@ -358,9 +359,11 @@ _ORIGIN_CERT_PROBE = f"""
 if [ -f {ORIGIN_CERT} ] && [ -f {ORIGIN_KEY} ]; then
     echo "ORIGIN_PRESENT=1"
     origin_sans=$(openssl x509 -in {ORIGIN_CERT} -noout -ext subjectAltName 2>/dev/null | tr '\\n' ' ')
+    origin_dates=$(openssl x509 -in {ORIGIN_CERT} -noout -startdate -enddate 2>/dev/null | tr '\\n' ' ')
     origin_cert_pub=$(openssl x509 -in {ORIGIN_CERT} -noout -pubkey 2>/dev/null)
     origin_key_pub=$(openssl pkey -in {ORIGIN_KEY} -pubout -passin pass: 2>/dev/null)
     [ -n "$origin_sans" ] && echo "ORIGIN_SANS=$origin_sans"
+    [ -n "$origin_dates" ] && echo "ORIGIN_DATES=$origin_dates"
     [ -n "$origin_cert_pub" ] && echo "ORIGIN_CERT_PUB=$(printf '%s' "$origin_cert_pub" | openssl sha256 | awk '{{print $NF}}')"
     [ -n "$origin_key_pub" ] && echo "ORIGIN_KEY_PUB=$(printf '%s' "$origin_key_pub" | openssl sha256 | awk '{{print $NF}}')"
 else
@@ -603,20 +606,51 @@ def remote_preflight(tls_mode: str) -> tuple[str, list[tls_preflight.TlsWarning]
             # unreadable PEM or a missing openssl yields no facts, and saying
             # "does not shadow" there would be a false all-clear on exactly the
             # cert this check exists to catch.
+            # A check that could not run is itself a finding, not a silent
+            # skip: returning it keeps --diagnose-tls from exiting 0 on a cert
+            # nothing was learned about, and routes it through run()'s finally
+            # re-print. A SAN-less cert reaches here with pubkeys derived, so
+            # the two halves are reported independently.
             kinds = {w.kind for w in warnings}
             if not origin.sans_read:
-                warn(
-                    f"Could not read {ORIGIN_CERT} SANs on the server — the "
-                    f"wildcard-shadow check did NOT run. Verify openssl is "
-                    f"installed and the PEMs are readable by '{ssh_user}'."
+                warnings.append(
+                    tls_preflight.TlsWarning(
+                        "unchecked",
+                        f"Could not read {ORIGIN_CERT} SANs on the server — the "
+                        f"wildcard-shadow and host-coverage checks did NOT run",
+                        (
+                            "This is not an all-clear. Either openssl is missing or",
+                            f"too old for -ext, the PEMs are unreadable by '{ssh_user}',",
+                            "or the certificate carries no SAN extension at all — which",
+                            "Cloudflare Full (strict) rejects with a 526 on every",
+                            "proxied host.",
+                            "Check: ssh {0} 'openssl x509 -in {1} -noout -ext subjectAltName'".format(
+                                SSH_HOST, ORIGIN_CERT
+                            ),
+                        ),
+                        "advisory",
+                    )
                 )
+                report_tls_warning(warnings[-1])
             elif "shadow" not in kinds:
                 ok(f"Origin cert SANs do not shadow app.{DOMAIN}")
             if not (origin.cert_pubkey and origin.key_pubkey):
-                warn(
-                    "Could not derive both public keys on the server — the "
-                    "cert/key pair check did NOT run."
+                warnings.append(
+                    tls_preflight.TlsWarning(
+                        "unchecked",
+                        "Could not derive both public keys on the server — the "
+                        "cert/key pair check did NOT run",
+                        (
+                            "A mismatched pair survives `caddy reload` and bricks the",
+                            "next container restart, so this check not running is not",
+                            "the same as it passing.",
+                            f"Check: ssh {SSH_HOST} 'openssl x509 -in {ORIGIN_CERT} "
+                            "-noout -pubkey | openssl sha256'",
+                        ),
+                        "advisory",
+                    )
                 )
+                report_tls_warning(warnings[-1])
             elif "pair" not in kinds:
                 ok("Origin cert and key are a matching pair")
     return ssh_user, warnings
@@ -761,15 +795,13 @@ def diagnose_local_tls(urls: tuple[str, ...]) -> int:
 
     for url in urls:
         step(f"Probing {url}")
-        # Probe every host even when the control probe failed. control_verified
-        # is passed only when it was actually settled, so re-running it per URL
-        # (which walks every address of every control host) is avoided without
-        # asserting an answer that was not obtained.
-        failure = tls_preflight.diagnose(
-            url,
-            context=context,
-            control_verified=True if control.verified_url is not None else None,
-        )
+        # Probe every host even when the control probe failed: what the server
+        # serves is evidence the operator needs, and reading it needs no trust
+        # store. The one control result is passed down verbatim so every URL is
+        # judged against the verdict the header already printed — a re-probe
+        # that flipped would blame the server under a header blaming the
+        # workstation, and would re-walk every address of every control host.
+        failure = tls_preflight.diagnose(url, context=context, control=control)
         if failure is None:
             ok(f"{url} verified")
         else:
