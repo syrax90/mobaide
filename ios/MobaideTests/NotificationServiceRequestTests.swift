@@ -40,6 +40,25 @@ final class NotificationServiceRequestTests: XCTestCase {
         XCTAssertEqual(sessionId, "sess-remote")
     }
 
+    func testAgentIdReadFromRemotePayloadAndNilForLocalAlerts() {
+        // The relay stamps `agent_id` from the authenticated tunnel
+        // (`central_server/push/sender.py`); a locally posted alert carries no
+        // userInfo and is the connected agent's by construction, and a nil id
+        // is what keeps that path replaying without an agent switch.
+        XCTAssertEqual(
+            NotificationService.agentId(from: ["session_id": "sess-remote", "agent_id": "a1"]),
+            "a1"
+        )
+        XCTAssertNil(NotificationService.agentId(from: [:]))
+    }
+
+    func testBlankAgentIdIsNotAnAgentClaim() {
+        // The dispatcher stamps `str(payload.get("agent_id", ""))`, so a push
+        // raised without an agent id arrives as `""` rather than absent — an
+        // empty claim must not send the deep link switching to a nameless agent.
+        XCTAssertNil(NotificationService.agentId(from: ["session_id": "sess-remote", "agent_id": ""]))
+    }
+
     func testSessionIdFallsBackToIdentifierForLocalAlerts() {
         XCTAssertEqual(
             NotificationService.sessionId(from: [:], identifier: "sess-local"),

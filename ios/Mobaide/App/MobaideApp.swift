@@ -13,6 +13,7 @@ struct MobaideApp: App {
             RootView()
                 .environment(container.router)
                 .environment(container.authStateModel)
+                .environment(container.deepLinkCoordinator)
                 .environment(\.appContainer, container)
                 .mobaideTheme()
                 .task {

@@ -19,6 +19,7 @@ private struct AgentListContent: View {
     @State private var toast: ToastMessage?
 
     @Environment(Router.self) private var router
+    @Environment(AuthStateModel.self) private var authStateModel
 
     let container: AppContainer
 
@@ -83,6 +84,11 @@ private struct AgentListContent: View {
             .refreshable { await model.refresh() }
             .task { await model.observeAgents() }
             .task { await model.refresh() }
+            // Both legs of the agent switch a notification deep link can drive
+            // pass through here, so the connected badge follows it.
+            .onChange(of: authStateModel.state, initial: true) { _, _ in
+                model.syncConnectedAgent()
+            }
             .sheet(isPresented: $model.pairingSheetPresented, onDismiss: { model.resetPairing() }) {
                 PairingSheet(model: model)
             }

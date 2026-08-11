@@ -129,8 +129,30 @@ rotation, best-effort DELETEing it on explicit sign-out — and
 provisioning profile. A remote alert carries `session_id` in its custom data
 and its `apns-collapse-id` equals the session id, so tap deep-links, foreground
 suppression, replace-in-place, and the reconcile loop all reuse the iOS-09
-pipeline unchanged. The entitlements file gains `aps-environment`
+pipeline unchanged. It also carries the `agent_id` the relay stamped from the
+authenticated tunnel, and `DeepLinkCoordinator` gates the replay on it: tapping
+an alert raised by an agent other than the connected one connects to that agent
+first (the same `connectAgentViaRelay` a manual agent-card tap makes) and lets
+the resulting `fullyConnected` transition drive the navigation, rather than
+opening a session the connected agent cannot resolve — one attempt per tap,
+since the switch cycles the auth state through `userOnly` itself, with a
+root-level toast when it fails. A locally-posted alert names no agent and is by
+construction the connected one's. The entitlements file gains `aps-environment`
 (`development`; signing rewrites it for distribution builds).
+Both `UNUserNotificationCenterDelegate` witnesses must stay `@MainActor`,
+carried by an isolated conformance (`NSObject, @MainActor
+UNUserNotificationCenterDelegate`) since the SDK requirements are nonisolated
+over non-`Sendable` parameters — the same shape `QrScannerView` and
+`TerminalHostView` already use for their delegates. Swift bridges an `async`
+delegate method to its ObjC completion-handler selector through an
+`@isolated(any)` task that adopts the *callee's* isolation, so a nonisolated
+witness calls UIKit's completion handler from the cooperative pool; UIKit
+answers that handler by running
+`_updateSnapshotAndStateRestorationWithAction:` — the app-switcher snapshot and
+state-restoration write it performs when a response *launched or resumed* the
+app — which asserts main-thread affinity and aborts the process. Because that
+path is skipped while the app is already active, an off-main handler looks
+harmless in the foreground and crashes on every tap from a closed app.
 CLA-124 (revised scope) ports Android's explicit-only keyboard model to the
 terminal: the soft keyboard raises solely from explicit user action — the
 composer field, or a show-keyboard toggle in the `InputBar` that makes the

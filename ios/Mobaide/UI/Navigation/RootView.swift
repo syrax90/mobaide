@@ -8,21 +8,48 @@ import SwiftUI
 struct RootView: View {
     @Environment(AuthStateModel.self) private var authStateModel
     @Environment(Router.self) private var router
+    @Environment(DeepLinkCoordinator.self) private var deepLink
+
+    @State private var toast: ToastMessage?
 
     var body: some View {
-        if case .incompatibleServer(let info) = authStateModel.state {
-            IncompatibleServerScreen(info: info)
-        } else {
-            @Bindable var router = router
-            NavigationStack(path: $router.path) {
-                rootScreen
-                    .navigationDestination(for: Route.self) { route in
-                        destination(for: route)
-                    }
+        // Both notification-deep-link signals are observed above the root
+        // switch: attached inside a branch, an error published while the
+        // upgrade takeover is up would never be read, never be cleared, and
+        // never fire again for the same message.
+        Group {
+            if case .incompatibleServer(let info) = authStateModel.state {
+                IncompatibleServerScreen(info: info)
+            } else {
+                stack
             }
-            .onChange(of: authStateModel.state) { previous, next in
-                router.handleTransition(from: previous, to: next)
+        }
+        .toast($toast)
+        .onChange(of: deepLink.switchError, initial: true) { _, newValue in
+            if let newValue {
+                toast = ToastMessage(text: newValue)
+                deepLink.clearSwitchError()
             }
+        }
+        .onChange(of: deepLink.isSwitchingAgent, initial: true) { _, switching in
+            // The switch clears the stack and takes a network round trip; say
+            // so, or the wait on the agent list reads as another dead tap.
+            if switching {
+                toast = ToastMessage(text: "Connecting to this notification’s agent…")
+            }
+        }
+    }
+
+    private var stack: some View {
+        @Bindable var router = router
+        return NavigationStack(path: $router.path) {
+            rootScreen
+                .navigationDestination(for: Route.self) { route in
+                    destination(for: route)
+                }
+        }
+        .onChange(of: authStateModel.state) { previous, next in
+            router.handleTransition(from: previous, to: next)
         }
     }
 

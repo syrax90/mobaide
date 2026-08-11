@@ -214,6 +214,52 @@ final class AgentListModelTests: XCTestCase {
         XCTAssertTrue(StubURLProtocol.requests.isEmpty, "already-connected shortcut makes no network call")
     }
 
+    func testConnectStaleSnapshotDoesNotShortCircuitAfterASwitchBehindTheModel() async {
+        let harness = AgentHarness()
+        harness.session.tokenStore.saveRelayCredentials(
+            serverUrl: "https://central.example.com", agentId: "a1", pairingId: "a1",
+            deviceId: "d", accessToken: "at", refreshToken: "rt"
+        )
+        let model = harness.makeAgentListModel()
+        XCTAssertEqual(model.connectedAgentId, "a1")
+
+        // A tapped notification switched agents behind this model.
+        harness.session.tokenStore.saveRelayCredentials(
+            serverUrl: "https://central.example.com", agentId: "a2", pairingId: "a2",
+            deviceId: "d", accessToken: "at2", refreshToken: "rt2"
+        )
+        StubURLProtocol.enqueue(status: 200, body: mobileTokensJSON())
+
+        model.connect(agent(id: "a1", name: "Prod Box"))
+        await waitUntil { harness.session.tokenStore.getAgentId() == "a1" }
+
+        XCTAssertEqual(
+            StubURLProtocol.requests.count, 1,
+            "a stale snapshot must not skip the connect and land on another agent's session list"
+        )
+        XCTAssertEqual(harness.session.tokenStore.getAgentId(), "a1")
+        XCTAssertEqual(model.connectedAgentId, "a1")
+        XCTAssertEqual(harness.router.path, [.sessionList])
+    }
+
+    func testConnectShortCircuitsForAnAgentConnectedBehindTheModel() async {
+        let harness = AgentHarness()
+        let model = harness.makeAgentListModel()
+        XCTAssertNil(model.connectedAgentId)
+
+        harness.session.tokenStore.saveRelayCredentials(
+            serverUrl: "https://central.example.com", agentId: "a2", pairingId: "a2",
+            deviceId: "d", accessToken: "at", refreshToken: "rt"
+        )
+        model.connect(agent(id: "a2"))
+
+        XCTAssertFalse(model.isConnecting, "the agent already connected must not be torn down and reconnected")
+        XCTAssertEqual(model.connectedAgentId, "a2")
+        XCTAssertEqual(harness.router.path, [.sessionList])
+        await waitUntil(timeout: .milliseconds(200)) { false }
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
+    }
+
     func testConnectFailureSurfacesMessageAndDoesNotNavigate() async {
         let harness = AgentHarness()
         let model = harness.makeAgentListModel()

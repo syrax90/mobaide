@@ -63,6 +63,7 @@ final class AgentListModel {
     private let authRepository: AuthRepository
     private let trustKeyPinning: TrustKeyPinning
     private let deviceIdentityStore: DeviceIdentityStore
+    private let tokenStore: TokenStore
     private let router: Router
     private let sleeper: any Sleeper
     private let now: @Sendable () -> Date
@@ -81,6 +82,7 @@ final class AgentListModel {
         self.authRepository = authRepository
         self.trustKeyPinning = trustKeyPinning
         self.deviceIdentityStore = deviceIdentityStore
+        self.tokenStore = tokenStore
         self.router = router
         self.sleeper = sleeper
         self.now = now
@@ -114,8 +116,18 @@ final class AgentListModel {
 
     // MARK: - Connect (tap an agent card)
 
+    /// Re-read the connected agent from its source of truth. This model is
+    /// `@State`-held on the stack root and outlives every screen, while a
+    /// notification deep link can switch agents behind it with no user action —
+    /// so every reader of `connectedAgentId` (the connect short circuit, the
+    /// delete teardown, the row badge) must re-sync before acting on it.
+    func syncConnectedAgent() {
+        connectedAgentId = tokenStore.getAgentId()
+    }
+
     func connect(_ agent: AgentSummaryResponse) {
         guard !isConnecting else { return }
+        syncConnectedAgent()
         if agent.agent_id == connectedAgentId {
             router.navigate(to: .sessionList)
             return
@@ -205,6 +217,7 @@ final class AgentListModel {
         Task { [weak self] in
             guard let self else { return }
             do {
+                self.syncConnectedAgent()
                 if agent.agent_id == self.connectedAgentId {
                     await self.authRepository.disconnectAgent()
                     self.connectedAgentId = nil

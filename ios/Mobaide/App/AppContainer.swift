@@ -228,13 +228,28 @@ final class AppContainer {
         let deepLinkCoordinator = DeepLinkCoordinator(
             router: self.router,
             authStates: { sessionManager.authStates() },
-            initialAuthState: initialState
+            initialAuthState: initialState,
+            connectedAgentId: { [tokenStore] in tokenStore.getAgentId() },
+            switchAgent: { [agentRepository, authRepository, deviceIdentityStore] agentId in
+                // `connectAgentViaRelay` clears the current agent's credentials
+                // before it validates anything, so an id we cannot vouch for must
+                // fail here rather than cost a live connection to learn nothing.
+                guard let agent = try await agentRepository.resolveAgent(id: agentId) else {
+                    throw APIError(code: -1, errorBody: "that agent is no longer available")
+                }
+                try await authRepository.connectAgentViaRelay(
+                    agentId: agent.agent_id,
+                    friendlyName: agent.name,
+                    deviceId: deviceIdentityStore.getOrCreateDeviceId(),
+                    deviceName: deviceIdentityStore.getDeviceName()
+                )
+            }
         )
         self.deepLinkCoordinator = deepLinkCoordinator
         let notificationService = NotificationService(
             tracker: foregroundSessionTracker,
-            onTap: { [deepLinkCoordinator] sessionId in
-                Task { @MainActor in deepLinkCoordinator.handleTap(sessionId: sessionId) }
+            onTap: { [deepLinkCoordinator] sessionId, agentId in
+                deepLinkCoordinator.handleTap(sessionId: sessionId, agentId: agentId)
             }
         )
         self.notificationService = notificationService
