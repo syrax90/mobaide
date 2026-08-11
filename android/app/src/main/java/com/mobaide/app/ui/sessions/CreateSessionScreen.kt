@@ -992,11 +992,13 @@ private fun StandardConfigSection(
         effort = state.claudeEffort,
         fastMode = state.claudeFastMode,
         ultracode = state.claudeUltracode,
+        debug = state.claudeDebug,
         appendSystemPrompt = state.claudeAppendSystemPrompt,
         onModelSelect = viewModel::setClaudeModel,
         onEffortSelect = viewModel::setClaudeEffort,
         onFastModeToggle = viewModel::toggleClaudeFastMode,
         onUltracodeToggle = viewModel::toggleClaudeUltracode,
+        onDebugToggle = viewModel::toggleClaudeDebug,
         onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
     )
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
@@ -1306,8 +1308,8 @@ private fun AntigravityConfigSection(
 /**
  * Claude reasoning controls shared by the Standard and Auto Scan config steps:
  * a model dropdown, a model-conditional effort dropdown, and an "Advanced"
- * expander (fast mode, ultracode, append-system-prompt). Replaces the old
- * boolean "Max effort" toggle.
+ * expander (fast mode, ultracode, debug logging, append-system-prompt).
+ * Replaces the old boolean "Max effort" toggle.
  */
 @Composable
 private fun ClaudeOptionControls(
@@ -1315,11 +1317,13 @@ private fun ClaudeOptionControls(
     effort: String,
     fastMode: Boolean,
     ultracode: Boolean,
+    debug: Boolean,
     appendSystemPrompt: String,
     onModelSelect: (String?) -> Unit,
     onEffortSelect: (String) -> Unit,
     onFastModeToggle: (Boolean) -> Unit,
     onUltracodeToggle: (Boolean) -> Unit,
+    onDebugToggle: (Boolean) -> Unit,
     onAppendSystemPromptChange: (String) -> Unit,
 ) {
     Text("Model", style = MaterialTheme.typography.labelLarge)
@@ -1365,6 +1369,12 @@ private fun ClaudeOptionControls(
     if (advancedExpanded) {
         ToggleRow("Fast mode (Opus only)", fastMode, onFastModeToggle)
         ToggleRow("ultracode", ultracode, onUltracodeToggle)
+        ToggleRow("Debug logging", debug, onDebugToggle)
+        Text(
+            text = "Claude Code prints verbose diagnostics into the terminal.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         OutlinedTextField(
             value = appendSystemPrompt,
             onValueChange = onAppendSystemPromptChange,
@@ -1505,11 +1515,13 @@ private fun AutoScanConfigSection(
         effort = state.autoScanClaudeEffort,
         fastMode = state.autoScanClaudeFastMode,
         ultracode = state.autoScanClaudeUltracode,
+        debug = state.autoScanClaudeDebug,
         appendSystemPrompt = state.autoScanClaudeAppendSystemPrompt,
         onModelSelect = viewModel::setAutoScanClaudeModel,
         onEffortSelect = viewModel::setAutoScanClaudeEffort,
         onFastModeToggle = viewModel::toggleAutoScanClaudeFastMode,
         onUltracodeToggle = viewModel::toggleAutoScanClaudeUltracode,
+        onDebugToggle = viewModel::toggleAutoScanClaudeDebug,
         onAppendSystemPromptChange = viewModel::setAutoScanClaudeAppendSystemPrompt,
     )
     ToggleRow("Plan mode", state.autoScanPlanMode, viewModel::toggleAutoScanPlanMode)

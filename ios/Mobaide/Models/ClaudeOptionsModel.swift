@@ -14,6 +14,7 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
     let fast_mode: Bool
     let ultracode: Bool
     let append_system_prompt: String?
+    let debug: Bool
 
     init(
         plan_mode: Bool = false,
@@ -31,7 +32,8 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
         effort: String? = nil,
         fast_mode: Bool = false,
         ultracode: Bool = false,
-        append_system_prompt: String? = nil
+        append_system_prompt: String? = nil,
+        debug: Bool = false
     ) {
         self.plan_mode = plan_mode
         self.no_memory = no_memory
@@ -46,6 +48,7 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
         self.fast_mode = fast_mode
         self.ultracode = ultracode
         self.append_system_prompt = append_system_prompt
+        self.debug = debug
     }
 }
 
@@ -65,5 +68,6 @@ extension ClaudeOptionsModel {
         fast_mode = try container.decodeIfPresent(Bool.self, forKey: .fast_mode) ?? false
         ultracode = try container.decodeIfPresent(Bool.self, forKey: .ultracode) ?? false
         append_system_prompt = try container.decodeIfPresent(String.self, forKey: .append_system_prompt)
+        debug = try container.decodeIfPresent(Bool.self, forKey: .debug) ?? false
     }
 }

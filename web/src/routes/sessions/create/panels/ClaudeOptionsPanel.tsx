@@ -108,6 +108,14 @@ export function ClaudeOptionsPanel({
         }}
       />
       <CheckboxField
+        label="Debug logging"
+        checked={bucket.debug}
+        hint="Claude Code prints verbose diagnostics into the terminal."
+        onChange={(value) => {
+          dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'debug', value });
+        }}
+      />
+      <CheckboxField
         label="No memory"
         checked={bucket.noMemory}
         onChange={(value) => {

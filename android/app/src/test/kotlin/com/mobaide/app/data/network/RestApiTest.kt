@@ -17,6 +17,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -227,6 +228,47 @@ class RestApiTest {
         // Response decode.
         assertEquals("s-1", resp.session_id)
         assertEquals("running", resp.state)
+    }
+
+    @Test
+    fun createSession_claudeDebug_reachesTheWireOnlyWhenTheToggleIsOn() = runTest {
+        // RestApi's Json omits fields left at their declared default, so OFF
+        // is legitimately absent. The ON case is the one that would silently
+        // vanish if the DTO default were ever flipped to true the way
+        // skip_permissions has to be.
+        val (api, client) = newApi()
+        val captured = stubCall(client) { req ->
+            responseFor(
+                req,
+                200,
+                bodyJson = """{"session_id":"s-1","state":"running","created_at":"2026-08-11T00:00:00Z"}""",
+            )
+        }
+
+        api.createSession(
+            CreateSessionRequest(
+                project_name = "alpha",
+                claude_options = ClaudeOptionsModel(debug = false),
+            ),
+        )
+        assertFalse(
+            "an off toggle is indistinguishable from absent, which the server reads as off",
+            bodyOf(captured.captured).contains("\"debug\""),
+        )
+
+        api.createSession(
+            CreateSessionRequest(
+                project_name = "alpha",
+                claude_options = ClaudeOptionsModel(debug = true),
+            ),
+        )
+        assertTrue(bodyOf(captured.captured).contains("\"debug\":true"))
+    }
+
+    private fun bodyOf(request: Request): String {
+        val buffer = okio.Buffer()
+        request.body!!.writeTo(buffer)
+        return buffer.readUtf8()
     }
 
     // ---- listSessions -------------------------------------------------------

@@ -9,8 +9,8 @@
  *
  * **Every boolean explicit.** The return type is the *generated*
  * `CreateSessionRequest`, whose option models declare `plan_mode`, `no_memory`,
- * `skip_permissions`, `fast_mode`, `ultracode` and `worktree` as required — so
- * omitting one is a compile error. That matters most for `skip_permissions`,
+ * `skip_permissions`, `fast_mode`, `ultracode`, `debug` and `worktree` as
+ * required — so omitting one is a compile error. That matters most for `skip_permissions`,
  * whose wire-absence default is `true`: a dropped field would silently launch
  * with `--dangerously-skip-permissions`.
  */
@@ -80,6 +80,7 @@ function claudeOptions(
     effort: effectiveClaudeEffort(bucket),
     fast_mode: bucket.fastMode,
     ultracode: bucket.ultracode,
+    debug: bucket.debug,
     append_system_prompt: blankToUndefined(bucket.appendSystemPrompt),
   };
 }

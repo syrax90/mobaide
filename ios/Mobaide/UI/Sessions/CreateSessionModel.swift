@@ -120,6 +120,7 @@ final class CreateSessionModel {
     var claudeEffort = "high"
     var claudeFastMode = false
     var claudeUltracode = false
+    var claudeDebug = false
     var claudeAppendSystemPrompt = ""
     var skipPermissions = false
     var noMemory = false
@@ -137,6 +138,7 @@ final class CreateSessionModel {
     var autoScanClaudeEffort = "high"
     var autoScanClaudeFastMode = false
     var autoScanClaudeUltracode = false
+    var autoScanClaudeDebug = false
     var autoScanClaudeAppendSystemPrompt = ""
     var autoScanPlanMode = false
     /// Defaults ON: a scan runs unattended, so pausing at a permission prompt
@@ -816,7 +818,8 @@ final class CreateSessionModel {
             effort: effectiveAutoScanEffort,
             fast_mode: autoScanClaudeFastMode,
             ultracode: autoScanClaudeUltracode,
-            append_system_prompt: Self.blankToNil(autoScanClaudeAppendSystemPrompt)
+            append_system_prompt: Self.blankToNil(autoScanClaudeAppendSystemPrompt),
+            debug: autoScanClaudeDebug
         )
     }
 
@@ -829,7 +832,8 @@ final class CreateSessionModel {
             appendSystemPrompt: autoScanClaudeAppendSystemPrompt,
             skipPermissions: autoScanSkipPermissions,
             noMemory: autoScanNoMemory,
-            planMode: autoScanPlanMode
+            planMode: autoScanPlanMode,
+            debug: autoScanClaudeDebug
         )
     }
 
@@ -874,7 +878,8 @@ final class CreateSessionModel {
                 effort: effectiveClaudeEffort,
                 fast_mode: claudeFastMode,
                 ultracode: claudeUltracode,
-                append_system_prompt: Self.blankToNil(claudeAppendSystemPrompt)
+                append_system_prompt: Self.blankToNil(claudeAppendSystemPrompt),
+                debug: claudeDebug
             )
             return CreateSessionRequest(cwd: cwd, project_name: projectName, claude_options: options)
         case .codex:
@@ -950,7 +955,8 @@ final class CreateSessionModel {
                 ultracode: claudeUltracode,
                 appendSystemPrompt: claudeAppendSystemPrompt,
                 skipPermissions: skipPermissions,
-                noMemory: noMemory
+                noMemory: noMemory,
+                debug: claudeDebug
             ))
         case .codex:
             preferencesStore.setLastUsedCodexOptions(CodexLaunchPrefs(
@@ -984,6 +990,7 @@ final class CreateSessionModel {
             claudeAppendSystemPrompt = claude.appendSystemPrompt
             skipPermissions = claude.skipPermissions
             noMemory = claude.noMemory
+            claudeDebug = claude.debug
         }
         if let autoScan = preferencesStore.getLastUsedAutoScanOptions() {
             autoScanClaudeModel = autoScan.model
@@ -994,6 +1001,7 @@ final class CreateSessionModel {
             autoScanSkipPermissions = autoScan.skipPermissions
             autoScanNoMemory = autoScan.noMemory
             autoScanPlanMode = autoScan.planMode
+            autoScanClaudeDebug = autoScan.debug
         }
         if let codex = preferencesStore.getLastUsedCodexOptions() {
             codexModel = codex.model

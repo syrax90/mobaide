@@ -35,6 +35,7 @@ const POPULATED: WizardState = {
     effort: 'medium',
     fastMode: false,
     ultracode: true,
+    debug: true,
     appendSystemPrompt: 'claude system',
     skipPermissions: true,
     noMemory: true,
@@ -46,6 +47,7 @@ const POPULATED: WizardState = {
     effort: 'low',
     fastMode: false,
     ultracode: false,
+    debug: false,
     appendSystemPrompt: 'scan system',
     skipPermissions: true,
     noMemory: false,
@@ -134,12 +136,14 @@ describe('buildCreateRequest — no cross-branch leakage', () => {
       model: 'sonnet',
       effort: 'medium',
       plan_mode: true,
+      debug: true,
       append_system_prompt: 'claude system',
     });
     expect(scan).toMatchObject({
       model: 'haiku',
       effort: 'low',
       plan_mode: false,
+      debug: false,
       append_system_prompt: 'scan system',
       initial_prompt: 'scan the backlog',
     });
@@ -164,6 +168,7 @@ const CLAUDE_BOOLEANS: Record<
   skip_permissions: true,
   fast_mode: true,
   ultracode: true,
+  debug: true,
   worktree: true,
 };
 

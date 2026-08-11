@@ -116,6 +116,7 @@ data class CreateSessionUiState(
     val claudeEffort: String = "high",
     val claudeFastMode: Boolean = false,
     val claudeUltracode: Boolean = false,
+    val claudeDebug: Boolean = false,
     val claudeAppendSystemPrompt: String = "",
     // Auto Scan's own copies of the Claude controls: each kind remembers its
     // own persisted defaults, and in-flight edits must not bleed between the
@@ -130,6 +131,7 @@ data class CreateSessionUiState(
     val autoScanClaudeEffort: String = "high",
     val autoScanClaudeFastMode: Boolean = false,
     val autoScanClaudeUltracode: Boolean = false,
+    val autoScanClaudeDebug: Boolean = false,
     val autoScanClaudeAppendSystemPrompt: String = "",
     // Codex launch options (CodexConfig step). Defaults reflect the "Auto" preset.
     val codexModel: String? = null,
@@ -205,6 +207,7 @@ private fun CreateSessionUiState.toClaudeLaunchPrefs() = ClaudeLaunchPrefs(
     appendSystemPrompt = claudeAppendSystemPrompt,
     skipPermissions = skipPermissions,
     noMemory = noMemory,
+    debug = claudeDebug,
 )
 
 /** Snapshot of the Auto Scan launch controls for its own per-kind bucket. */
@@ -217,6 +220,7 @@ private fun CreateSessionUiState.toAutoScanLaunchPrefs() = ClaudeLaunchPrefs(
     skipPermissions = autoScanSkipPermissions,
     noMemory = autoScanNoMemory,
     planMode = autoScanPlanMode,
+    debug = autoScanClaudeDebug,
 )
 
 /** Snapshot of the Codex launch controls for persistence / re-defaulting. */
@@ -303,6 +307,7 @@ class CreateSessionViewModel @Inject constructor(
                         claudeAppendSystemPrompt = saved.appendSystemPrompt,
                         skipPermissions = saved.skipPermissions,
                         noMemory = saved.noMemory,
+                        claudeDebug = saved.debug,
                     )
                 }
             }
@@ -320,6 +325,7 @@ class CreateSessionViewModel @Inject constructor(
                         autoScanSkipPermissions = saved.skipPermissions,
                         autoScanNoMemory = saved.noMemory,
                         autoScanPlanMode = saved.planMode,
+                        autoScanClaudeDebug = saved.debug,
                     )
                 }
             }
@@ -681,6 +687,7 @@ class CreateSessionViewModel @Inject constructor(
                     effort = state.autoScanClaudeEffort,
                     fast_mode = state.autoScanClaudeFastMode,
                     ultracode = state.autoScanClaudeUltracode,
+                    debug = state.autoScanClaudeDebug,
                     append_system_prompt = state.autoScanClaudeAppendSystemPrompt.takeIf { it.isNotBlank() },
                     worktree = true,
                     initial_prompt = state.initialPrompt.takeIf { it.isNotBlank() },
@@ -735,6 +742,8 @@ class CreateSessionViewModel @Inject constructor(
 
     fun toggleClaudeUltracode(v: Boolean) = _uiState.update { it.copy(claudeUltracode = v) }
 
+    fun toggleClaudeDebug(v: Boolean) = _uiState.update { it.copy(claudeDebug = v) }
+
     fun setClaudeAppendSystemPrompt(v: String) = _uiState.update { it.copy(claudeAppendSystemPrompt = v) }
 
     // Auto Scan copies of the Claude control setters, including the same
@@ -761,6 +770,9 @@ class CreateSessionViewModel @Inject constructor(
 
     fun toggleAutoScanClaudeUltracode(v: Boolean) =
         _uiState.update { it.copy(autoScanClaudeUltracode = v) }
+
+    fun toggleAutoScanClaudeDebug(v: Boolean) =
+        _uiState.update { it.copy(autoScanClaudeDebug = v) }
 
     fun setAutoScanClaudeAppendSystemPrompt(v: String) =
         _uiState.update { it.copy(autoScanClaudeAppendSystemPrompt = v) }
@@ -820,6 +832,7 @@ class CreateSessionViewModel @Inject constructor(
             effort = state.claudeEffort,
             fast_mode = state.claudeFastMode,
             ultracode = state.claudeUltracode,
+            debug = state.claudeDebug,
             append_system_prompt = state.claudeAppendSystemPrompt.takeIf { it.isNotBlank() },
             worktree = state.worktree,
             branch_name = state.branchName.takeIf { it.isNotBlank() },

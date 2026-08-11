@@ -131,6 +131,20 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.claude_options?.effort, "xhigh")
     }
 
+    func testClaudeDebugReachesTheRequestOnlyWhenToggledOn() throws {
+        let model = makeModel()
+        model.selection = .stored("a")
+        let untouched = try XCTUnwrap(model.buildRequest(mode: .standard))
+        XCTAssertEqual(
+            untouched.claude_options?.debug, false,
+            "Claude Code's --debug is opt-in now — an untouched wizard must not ask for it"
+        )
+
+        model.claudeDebug = true
+        let request = try XCTUnwrap(model.buildRequest(mode: .standard))
+        XCTAssertEqual(request.claude_options?.debug, true)
+    }
+
     func testClaudeEffortClampedWhenModelNarrows() throws {
         let model = makeModel()
         model.selection = .stored("a")
@@ -364,6 +378,31 @@ final class CreateSessionModelTests: XCTestCase {
         let saved = prefs.getLastUsedClaudeOptions()
         XCTAssertEqual(saved?.skipPermissions, true, "the toggles now survive into the next launch")
         XCTAssertEqual(saved?.noMemory, true)
+    }
+
+    func testCreateRoundTripsClaudeDebugThroughItsOwnPrefsBucket() async {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = stubbedModel(prefs: prefs)
+        model.selection = .stored("a")
+        model.mode = .standard
+        model.claudeDebug = true
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+
+        await model.create()
+
+        XCTAssertNil(model.error)
+        XCTAssertEqual(prefs.getLastUsedClaudeOptions()?.debug, true)
+        XCTAssertNil(
+            prefs.getLastUsedAutoScanOptions(),
+            "a Claude Code launch never writes the Auto Scan bucket"
+        )
+        let reopened = makeModel(prefs: prefs)
+        XCTAssertTrue(reopened.claudeDebug, "the next wizard opens on the remembered choice")
+        XCTAssertFalse(reopened.autoScanClaudeDebug)
     }
 
     // MARK: - Recent custom paths

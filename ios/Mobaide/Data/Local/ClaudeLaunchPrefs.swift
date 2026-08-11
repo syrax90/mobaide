@@ -13,6 +13,7 @@ struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
     let skipPermissions: Bool
     let noMemory: Bool
     let planMode: Bool
+    let debug: Bool
 
     init(
         model: String? = nil,
@@ -22,7 +23,8 @@ struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
         appendSystemPrompt: String = "",
         skipPermissions: Bool = false,
         noMemory: Bool = false,
-        planMode: Bool = false
+        planMode: Bool = false,
+        debug: Bool = false
     ) {
         self.model = model
         self.effort = effort
@@ -32,6 +34,7 @@ struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
         self.skipPermissions = skipPermissions
         self.noMemory = noMemory
         self.planMode = planMode
+        self.debug = debug
     }
 }
 
@@ -46,5 +49,6 @@ extension ClaudeLaunchPrefs {
         skipPermissions = try container.decodeIfPresent(Bool.self, forKey: .skipPermissions) ?? false
         noMemory = try container.decodeIfPresent(Bool.self, forKey: .noMemory) ?? false
         planMode = try container.decodeIfPresent(Bool.self, forKey: .planMode) ?? false
+        debug = try container.decodeIfPresent(Bool.self, forKey: .debug) ?? false
     }
 }

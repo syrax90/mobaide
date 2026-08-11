@@ -121,6 +121,9 @@ class ClaudeOptions:
     fast_mode: bool = False
     ultracode: bool = False
     append_system_prompt: str | None = None
+    # Emits --debug. Wire-absence default matches the clients' UI default (both
+    # off), so an omitted field is unambiguous — unlike skip_permissions above.
+    debug: bool = False
 
 
 _LINEAR_MCP_TEMPLATE = {
@@ -277,7 +280,9 @@ class ClaudeLauncher:
         hooks_path: Path | None = None,
         cli_settings: dict | None = None,
     ) -> list[str]:
-        argv: list[str] = [self._resolve_binary(), "--debug"]
+        argv: list[str] = [self._resolve_binary()]
+        if options.debug:
+            argv.append("--debug")
         # Exactly one --settings source: the hooks file (fast/ultracode already
         # merged in) when hooks were written, else those keys inline.
         if hooks_path is not None:

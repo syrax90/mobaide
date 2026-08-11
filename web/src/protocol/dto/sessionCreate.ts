@@ -50,6 +50,11 @@ export const claudeOptionsSchema = z.strictObject({
   fast_mode: z.boolean().default(false),
   ultracode: z.boolean().default(false),
   append_system_prompt: optionalWireString(),
+  /**
+   * Emits `--debug`. Unlike `skip_permissions` above, the wire-absence default
+   * matches the UI default (both false), so an omitted field is unambiguous.
+   */
+  debug: z.boolean().default(false),
 });
 
 export const codexOptionsSchema = z.strictObject({

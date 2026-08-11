@@ -426,7 +426,7 @@ Terminal, enabled only when the selected stored project carries a Linear API key
 and the Claude CLI is installed, greyed out with the reason otherwise (Android's
 `autoScanEnabled` gate; a custom path has no stored project, so it can never
 satisfy it). Its config step drives the Claude model / effort / fast-mode /
-ultracode / append-system-prompt controls — extracted into two `@ViewBuilder`
+ultracode / debug / append-system-prompt controls — extracted into two `@ViewBuilder`
 helpers now shared with the Claude Code step, mirroring Android's
 `ClaudeOptionControls` — plus Plan mode, Skip permissions (default ON for
 unattended scans, with an always-visible caption explaining the off-state), No

@@ -16,7 +16,8 @@
         "effort": "high",
         "fast_mode": true,
         "ultracode": true,
-        "append_system_prompt": "be careful"
+        "append_system_prompt": "be careful",
+        "debug": true
       }
     },
     {
@@ -28,7 +29,8 @@
         "skip_permissions": true,
         "worktree": false,
         "fast_mode": false,
-        "ultracode": false
+        "ultracode": false,
+        "debug": false
       }
     }
   ]

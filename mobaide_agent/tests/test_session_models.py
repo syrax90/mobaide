@@ -42,6 +42,14 @@ def test_effort_invalid_value_rejected():
         ClaudeOptionsModel.model_validate({"effort": "turbo"})
 
 
+def test_debug_wire_absence_is_off_and_survives_the_hop_to_claude_options():
+    """``to_options()`` is ``ClaudeOptions(**model_dump())``, so a field carried
+    by only one of the two would raise ``TypeError`` rather than merely drop
+    the flag; this pins the pair together."""
+    assert ClaudeOptionsModel.model_validate({}).to_options().debug is False
+    assert ClaudeOptionsModel.model_validate({"debug": True}).to_options().debug is True
+
+
 def test_effort_accepts_full_ladder():
     for level in ("low", "medium", "high", "xhigh", "max"):
         assert ClaudeOptionsModel.model_validate({"effort": level}).effort == level

@@ -307,6 +307,36 @@ class CreateSessionViewModelTest {
     }
 
     @Test
+    fun submit_claudeDebug_defaultsOff_andReachesRequestAndPrefsWhenToggledOn() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-dbg", "starting", "2026-08-11T00:00:00Z")
+        val prefsSlot = slot<ClaudeLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedClaudeOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.submit()
+        advanceUntilIdle()
+
+        assertFalse(
+            "Claude Code's --debug is opt-in now — an untouched wizard must not ask for it",
+            requestSlot.captured.claude_options!!.debug,
+        )
+        assertFalse(prefsSlot.captured.debug)
+
+        vm.toggleClaudeDebug(true)
+        vm.submit()
+        advanceUntilIdle()
+
+        assertTrue(requestSlot.captured.claude_options!!.debug)
+        assertTrue("the choice is remembered for the next Claude launch", prefsSlot.captured.debug)
+    }
+
+    @Test
     fun toggleClaudeFastMode_locksModelToOpus() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -398,6 +428,31 @@ class CreateSessionViewModelTest {
         assertTrue(s.autoScanSkipPermissions)
         // The Standard toggle stays off-by-default — asymmetric on purpose.
         assertFalse(s.skipPermissions)
+    }
+
+    @Test
+    fun init_seedsClaudeDebugFromItsOwnBucket_withoutBleedingIntoAutoScan() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedClaudeOptions() } returns ClaudeLaunchPrefs(debug = true)
+        coEvery { fx.prefs.getLastUsedAutoScanOptions() } returns ClaudeLaunchPrefs(debug = false)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue(s.claudeDebug)
+        assertFalse("the Auto Scan bucket keeps its own saved OFF choice", s.autoScanClaudeDebug)
+    }
+
+    @Test
+    fun init_seedsAutoScanDebugFromItsOwnBucket_withoutBleedingIntoClaude() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedAutoScanOptions() } returns ClaudeLaunchPrefs(debug = true)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue(s.autoScanClaudeDebug)
+        assertFalse("nothing was ever persisted for the Claude Code bucket", s.claudeDebug)
     }
 
     @Test
@@ -694,6 +749,39 @@ class CreateSessionViewModelTest {
                 "default) — Standard-mode edits must not bleed across kinds",
             optsSlot.captured.skip_permissions,
         )
+    }
+
+    @Test
+    fun submitAutoScan_claudeDebug_readsItsOwnBucket_notTheStandardToggle() = runTest {
+        val fx = newFixture(autoScanPrompt = "seed")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val optsSlot = slot<ClaudeOptionsModel>()
+        coEvery { fx.autoScanRepo.startScan("alpha", capture(optsSlot)) } just Runs
+        val prefsSlot = slot<ClaudeLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedAutoScanOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAutoScanMode()
+        vm.toggleClaudeDebug(true) // the STANDARD toggle, a different kind
+        vm.submitAutoScan()
+        advanceUntilIdle()
+
+        assertFalse(
+            "Auto Scan reads autoScanClaudeDebug — a Standard-mode edit must not bleed across kinds",
+            optsSlot.captured.debug,
+        )
+        assertFalse(prefsSlot.captured.debug)
+
+        vm.toggleAutoScanClaudeDebug(true)
+        vm.submitAutoScan()
+        advanceUntilIdle()
+
+        assertTrue(optsSlot.captured.debug)
+        assertTrue(prefsSlot.captured.debug)
+        coVerify(exactly = 0) { fx.prefs.setLastUsedClaudeOptions(any()) }
     }
 
     @Test
