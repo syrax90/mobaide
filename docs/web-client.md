@@ -1074,10 +1074,17 @@ button inside a cross-origin frame, so its only appearance levers are the
 chosen by resolved theme rather than fixed: `filled_black` beside Apple's black
 button on the light surface, `outline` beside Apple's white variant on the dark
 one. `GoogleSignInButton` reads `useResolvedTheme()` — the same value
-`ThemeProvider` stamps onto `data-theme` — and re-renders when it flips, which
+`ThemeProvider` stamps onto `data-theme` — and redraws when it flips, which
 clears the container first because GIS appends rather than replaces. The rest is
 matched by hand: the same 320×40 box, and a 14px/500 label, which is what GIS
 renders at `size: 'large'`.
+
+That redraw is why `initGoogleIdentity` and `renderGoogleButton` are two calls
+rather than one. `initialize` binds the nonce that every popup's token will be
+minted against, so it is keyed on the client id alone; the theme can flip while
+a popup is open, and re-arming there would leave the returning credential
+paired with a nonce it does not carry — which the server compares and rejects.
+Appearance changes go through the renderer alone.
 
 The delete-account panel gains a third re-auth branch for the same reason the
 sign-in exists: an Apple-only account has no password and no Google identity,
