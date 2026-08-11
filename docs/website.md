@@ -13,6 +13,18 @@ deploys with the relay and needs no extra infrastructure.
 (`/dashboard/**`, `templates/base.html`) is a separate light Bootstrap-flavoured
 sheet (`static/style.css`) and is deliberately not part of this system.
 
+**A third consumer mirrors the tokens: the web SPA** (`web/src/styles/theme.css`,
+see the Theming bullet in [`docs/web-client.md`](web-client.md)). Its dark theme
+copies this sheet's `:root` values verbatim — **a token change in `site.css`
+must be mirrored there** — and its light theme is a derived variant that exists
+only in the SPA. Two invariants restate per-theme on that side: the brand
+purples stay fill/border-only **on dark surfaces**, while on the SPA's light
+theme `#6008ac` doubles as the accent *text* colour (8.97:1 on `#f4f4f4`); and
+the light `--danger`/`--ok` are `#8c1d18`/`#116a2e`, because this sheet's
+`#f2b8b5`/`#23d18b` are light-on-dark colours that fail on white. The SPA also
+ships its own copy of the Departure Mono woff2 + OFL under `web/public/fonts/`
+(different origin, same-origin CSP — it cannot load this host's copy).
+
 ## Where things live
 
 | Path | What |

@@ -1128,13 +1128,27 @@ restart, `--rollback` repoints at the previously-live release. Runbook: the
   `prefers-color-scheme` while in `system`. An inline pre-paint script in
   `index.html` stamps `data-theme` before first paint (no theme flash). All
   colors are CSS custom properties under `:root[data-theme=…]` in
-  `src/styles/theme.css`. The shell ships neutral tokens; adopting the
-  marketing "modern pixel" design system (docs/website.md) is a decision
-  for the feature milestones. **CSP coupling:** the production Caddy site
+  `src/styles/theme.css`. The SPA ships the marketing "modern pixel"
+  design system (docs/website.md): the dark block mirrors `site.css`'s
+  tokens **verbatim** (`site.css` stays the source of truth — a token
+  change there must be mirrored here), the light block is a derived
+  variant that exists only in `theme.css`, and token names follow
+  `site.css` (`--bg`, `--surface`, `--accent`, …). Purple + grey stay the
+  identity in both themes: `--brand`/`--brand-2` are theme-invariant
+  fills, and the accent is `#d0bcff` on dark / `#6008ac` on light (the
+  "brand is never text" rule is a dark-surface contrast rationale;
+  on light the same hue measures 8.97:1). Departure Mono is self-hosted
+  at `web/public/fonts/` with its OFL license file, preloaded from
+  `index.html` with a URL that must stay byte-identical to the
+  `@font-face` `url()`. The terminal grid and the autoscan log pane stay
+  always-dark regardless of theme (an ANSI palette is a matched set with
+  its background). **CSP coupling:** the production Caddy site
   block pins that inline script by `sha256` hash in `script-src` — in
   BOTH `deploy/prod/Caddyfile.*` files. Editing the script means updating
   both hashes; `deploy_web.py` hard-fails on drift (the escape hatch is
-  `--force`, at the cost of a theme flash).
+  `--force`, at the cost of a theme flash). The font needs no Caddyfile
+  change: the SPA CSP has no `font-src`, so same-origin fonts ride
+  `default-src 'self'`.
 - **Errors, two tiers** — the router's `errorElement` (`RouteError`)
   renders loader/render errors and doubles as the 404 page;
   `AppErrorBoundary` (class component) wraps the providers as a last

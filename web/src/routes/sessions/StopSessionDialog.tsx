@@ -1,3 +1,4 @@
+import { Modal } from '../../components/Modal';
 import type { SessionResponse } from '../../protocol/dto/session';
 
 interface StopSessionDialogProps {
@@ -18,7 +19,12 @@ export function StopSessionDialog({
   onCancel,
 }: StopSessionDialogProps) {
   return (
-    <div className="confirm-panel" role="alertdialog" aria-labelledby="stop-session-title">
+    <Modal
+      role="alertdialog"
+      labelledBy="stop-session-title"
+      dismissible={!busy}
+      onClose={onCancel}
+    >
       <h2 id="stop-session-title">Stop session?</h2>
       <p>
         Stop {session.title !== undefined ? `"${session.title}"` : session.session_id}? Force
@@ -49,6 +55,6 @@ export function StopSessionDialog({
           Cancel
         </button>
       </div>
-    </div>
+    </Modal>
   );
 }

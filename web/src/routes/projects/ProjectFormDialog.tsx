@@ -12,6 +12,7 @@ import { conflictDetailString, isConflict } from '../../api/conflicts';
 import { isApiError } from '../../api/errors';
 import { queryKeys } from '../../lib/queryKeys';
 import { autoScanFilterSchema, type AutoScanFilter } from '../../protocol/dto/projects';
+import { Modal } from '../../components/Modal';
 import { PasswordField } from '../../components/form/PasswordField';
 import { TextField } from '../../components/form/TextField';
 import { AutoScanFilterSection } from './AutoScanFilterSection';
@@ -170,10 +171,11 @@ export function ProjectFormDialog({ agentId, editing, onClose }: ProjectFormDial
   const titleId = 'project-form-title';
 
   return (
-    <div className="confirm-panel project-form" role="dialog" aria-labelledby={titleId}>
+    <Modal labelledBy={titleId} dismissible={!save.isPending} onClose={onClose}>
       <h2 id={titleId}>{editing === null ? 'New project' : 'Edit project'}</h2>
 
       <form
+        className="project-form"
         onSubmit={(event) => {
           event.preventDefault();
           if (!submittable) return;
@@ -299,6 +301,6 @@ export function ProjectFormDialog({ agentId, editing, onClose }: ProjectFormDial
           </button>
         </div>
       </form>
-    </div>
+    </Modal>
   );
 }

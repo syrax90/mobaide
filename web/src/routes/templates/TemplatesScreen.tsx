@@ -11,6 +11,8 @@ import {
   type PromptTemplate,
 } from '../../api/templateRepository';
 import { isApiError } from '../../api/errors';
+import { ErrorState } from '../../components/ErrorState';
+import { Modal } from '../../components/Modal';
 import { queryKeys, wsBackedQueryOptions } from '../../lib/queryKeys';
 import { useToastStore } from '../../stores/toastStore';
 import { TemplateEditorDialog } from './TemplateEditorDialog';
@@ -176,9 +178,12 @@ export function TemplatesScreen() {
       </div>
 
       {templates.isPending ? (
-        <p className="page-note">Loading templates…</p>
+        <p className="page-note state-loading">Loading templates…</p>
       ) : templates.isError ? (
-        <p className="auth-error">Failed to load templates.</p>
+        <ErrorState
+          message="Failed to load templates."
+          onRetry={() => void templates.refetch()}
+        />
       ) : templates.data.length === 0 ? (
         <p className="empty-state">No templates yet. Create one to get started.</p>
       ) : (
@@ -209,10 +214,13 @@ export function TemplatesScreen() {
       )}
 
       {panel.kind === 'confirmDelete' && (
-        <div
-          className="confirm-panel"
+        <Modal
           role="alertdialog"
-          aria-labelledby="delete-template-title"
+          labelledBy="delete-template-title"
+          dismissible={!remove.isPending}
+          onClose={() => {
+            setPanel({ kind: 'none' });
+          }}
         >
           <h2 id="delete-template-title">Delete template?</h2>
           <p>Delete &ldquo;{panel.template.name}&rdquo;? This cannot be undone.</p>
@@ -238,7 +246,7 @@ export function TemplatesScreen() {
               Cancel
             </button>
           </div>
-        </div>
+        </Modal>
       )}
     </section>
   );

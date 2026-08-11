@@ -8,6 +8,8 @@ import {
   type Device,
 } from '../../api/deviceRepository';
 import { getDeviceId } from '../../auth/deviceIdentity';
+import { ErrorState } from '../../components/ErrorState';
+import { Modal } from '../../components/Modal';
 import { queryKeys } from '../../lib/queryKeys';
 import { useToastStore } from '../../stores/toastStore';
 
@@ -49,8 +51,13 @@ export function Devices() {
         signed in.
       </p>
 
-      {devices.isPending && <p>Loading devices…</p>}
-      {devices.isError && <p className="auth-error">Failed to load devices.</p>}
+      {devices.isPending && <p className="page-note state-loading">Loading devices…</p>}
+      {devices.isError && (
+        <ErrorState
+          message="Failed to load devices."
+          onRetry={() => void devices.refetch()}
+        />
+      )}
 
       {devices.data?.length === 0 && (
         <p className="empty-state">
@@ -99,7 +106,14 @@ export function Devices() {
       </ul>
 
       {target !== null && (
-        <div className="confirm-panel" role="alertdialog" aria-labelledby="revoke-title">
+        <Modal
+          role="alertdialog"
+          labelledBy="revoke-title"
+          dismissible={!revoke.isPending}
+          onClose={() => {
+            setTarget(null);
+          }}
+        >
           <h2 id="revoke-title">Revoke device?</h2>
           <p>
             {target.deviceId === currentDeviceId
@@ -128,7 +142,7 @@ export function Devices() {
               Cancel
             </button>
           </div>
-        </div>
+        </Modal>
       )}
     </section>
   );

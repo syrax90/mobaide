@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { listAgents } from '../../api/agentRepository';
+import { ErrorState } from '../../components/ErrorState';
 import { queryKeys, wsBackedQueryOptions } from '../../lib/queryKeys';
 import { useSelectedAgentStore } from '../../stores/selectedAgentStore';
 import { AgentPicker } from '../sessions/AgentPicker';
@@ -45,9 +46,12 @@ export function ProjectsScreen() {
       </header>
 
       {agents.isPending ? (
-        <p className="page-note">Loading agents…</p>
+        <p className="page-note state-loading">Loading agents…</p>
       ) : agents.isError ? (
-        <p className="auth-error">Failed to load agents.</p>
+        <ErrorState
+          message="Failed to load agents."
+          onRetry={() => void agents.refetch()}
+        />
       ) : resolved === null ? (
         <p className="empty-state">
           No agents yet. <Link to="/pair">Pair an agent</Link> to manage its projects

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Modal } from '../../components/Modal';
 import { TextField } from '../../components/form/TextField';
 import { TextAreaField } from '../../components/form/TextAreaField';
 import type { PromptTemplate } from '../../api/templateRepository';
@@ -36,7 +37,7 @@ export function TemplateEditorDialog({
   const titleId = 'template-editor-title';
 
   return (
-    <div className="confirm-panel" role="dialog" aria-labelledby={titleId}>
+    <Modal labelledBy={titleId} dismissible={!busy} onClose={onCancel}>
       <h2 id={titleId}>{editing === null ? 'New template' : 'Edit template'}</h2>
 
       <TextField label="Name" value={name} onChange={setName} autoFocus />
@@ -67,6 +68,6 @@ export function TemplateEditorDialog({
           Cancel
         </button>
       </div>
-    </div>
+    </Modal>
   );
 }

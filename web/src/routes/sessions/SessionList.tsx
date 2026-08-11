@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 import { listCustomAgentTypes } from '../../api/customAgentTypeRepository';
 import { listSessions, stopSession } from '../../api/sessionRepository';
 import { isApiError } from '../../api/errors';
+import { ErrorState } from '../../components/ErrorState';
 import { queryKeys, wsBackedQueryOptions } from '../../lib/queryKeys';
 import type { SessionResponse } from '../../protocol/dto/session';
 import {
@@ -127,9 +128,12 @@ export function SessionList({ agentId, online }: SessionListProps) {
       {!online ? (
         <p className="empty-state">This agent is offline.</p>
       ) : sessions.isPending ? (
-        <p className="page-note">Loading sessions…</p>
+        <p className="page-note state-loading">Loading sessions…</p>
       ) : sessions.isError ? (
-        <p className="auth-error">Failed to load sessions.</p>
+        <ErrorState
+          message="Failed to load sessions."
+          onRetry={() => void sessions.refetch()}
+        />
       ) : sessions.data.length === 0 ? (
         <p className="empty-state">No active sessions</p>
       ) : (

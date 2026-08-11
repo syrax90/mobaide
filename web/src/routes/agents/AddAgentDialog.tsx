@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Modal } from '../../components/Modal';
 import { TextField } from '../../components/form/TextField';
 
 interface AddAgentDialogProps {
@@ -20,7 +21,7 @@ export function AddAgentDialog({ busy, onCreate, onCancel }: AddAgentDialogProps
   const trimmed = name.trim();
 
   return (
-    <section className="confirm-panel" role="dialog" aria-labelledby="add-agent-title">
+    <Modal labelledBy="add-agent-title" dismissible={!busy} onClose={onCancel}>
       <h2 id="add-agent-title">Add agent</h2>
       <p>
         Creates an agent and shows its credentials once. Prefer pairing when the host
@@ -54,6 +55,6 @@ export function AddAgentDialog({ busy, onCreate, onCancel }: AddAgentDialogProps
           </button>
         </div>
       </form>
-    </section>
+    </Modal>
   );
 }

@@ -1,3 +1,11 @@
+/*
+ * The portal "modern pixel" design system (docs/website.md), applied app-wide.
+ * Grammar: no border-radius anywhere (only 0-value resets), every border is a
+ * `inset 0 0 0 2px` ring (--surface-2 plates, --gray interactive boundaries,
+ * --rule decorative), every elevation a hard `var(--px) var(--px) 0 0` offset,
+ * chrome text in var(--font-chrome) at 11px uppercase. Tokens: theme.css.
+ */
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -10,15 +18,33 @@ body,
 }
 
 body {
-  background: var(--color-bg);
-  color: var(--color-fg);
-  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
-  line-height: 1.5;
+  background-color: var(--bg);
+  /* The portal's page texture: a faint dot grid, not decoration. */
+  background-image: radial-gradient(var(--surface-2) 1px, transparent 1px);
+  background-size: 24px 24px;
+  color: var(--text);
+  font-family: var(--font-body);
+  line-height: 1.65;
   -webkit-font-smoothing: antialiased;
 }
 
 button {
   font: inherit;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* One source of truth for focus, as in site.css. */
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* xterm's hidden helper textarea must not paint the global ring in the grid. */
+.terminal-host :focus-visible {
+  outline: none;
 }
 
 .app-shell {
@@ -28,33 +54,83 @@ button {
 }
 
 .app-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 1rem;
-  padding: 0.75rem 1.25rem;
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-border);
+  padding: 0.65rem 1.25rem;
+  background: var(--head-bg);
+  border-bottom: 2px solid var(--surface-2);
+}
+
+.app-nav {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 2.5vw, 26px);
+  min-width: 0;
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.app-nav a {
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color 120ms linear;
+}
+
+.app-nav a:hover {
+  color: var(--accent);
+}
+
+/* The brand doubles as the Sessions link and is active on `/`; excluding it
+   keeps the underline meaning "current page" rather than decorating the mark. */
+.app-nav a[aria-current='page']:not(.app-brand) {
+  color: var(--text);
+  box-shadow: 0 2px 0 0 var(--brand);
 }
 
 .app-brand {
-  color: var(--color-fg);
-  font-weight: 700;
-  font-size: 1.1rem;
-  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--text);
+  font-size: 1rem;
 }
 
+.app-brand::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  background: var(--brand);
+  box-shadow: 3px 3px 0 0 var(--brand-2);
+  flex: none;
+}
+
+/* No text-transform here: e2e asserts the literal innerText "Theme: system",
+   and toHaveText sees through CSS uppercasing. */
 .theme-toggle {
-  padding: 0.4rem 0.8rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-bg);
-  color: var(--color-fg);
+  padding: 5px 11px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  box-shadow: inset 0 0 0 2px var(--gray);
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  letter-spacing: 0.08em;
   cursor: pointer;
+  transition: color 120ms linear, box-shadow 120ms linear;
 }
 
 .theme-toggle:hover {
-  border-color: var(--color-accent);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .app-main {
@@ -77,7 +153,7 @@ button {
 }
 
 .error-screen a {
-  color: var(--color-accent);
+  color: var(--accent);
 }
 
 .toast-viewport {
@@ -97,23 +173,33 @@ button {
   min-width: 16rem;
   max-width: 24rem;
   padding: 0.6rem 0.9rem;
-  border: 1px solid var(--color-border);
-  border-left-width: 4px;
-  border-radius: 6px;
-  background: var(--color-surface);
-  box-shadow: 0 4px 12px rgb(0 0 0 / 15%);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--rule),
+    var(--px) var(--px) 0 0 var(--modal-shadow);
+  animation: toast-in 160ms steps(2, end);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--px));
+  }
 }
 
 .toast-info {
-  border-left-color: var(--color-accent);
+  color: var(--text-muted);
 }
 
 .toast-success {
-  border-left-color: var(--color-success);
+  color: var(--ok);
+  box-shadow: inset 0 0 0 2px var(--ok),
+    var(--px) var(--px) 0 0 var(--modal-shadow);
 }
 
 .toast-error {
-  border-left-color: var(--color-danger);
+  color: var(--danger);
+  box-shadow: inset 0 0 0 2px var(--danger),
+    var(--px) var(--px) 0 0 var(--modal-shadow);
 }
 
 .toast-message {
@@ -123,7 +209,7 @@ button {
 .toast-dismiss {
   border: none;
   background: none;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   font-size: 1.1rem;
   cursor: pointer;
   padding: 0 0.2rem;
@@ -144,7 +230,7 @@ button {
 }
 
 .takeover-note {
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   max-width: 40ch;
   font-size: 0.9rem;
 }
@@ -158,7 +244,7 @@ button {
 
 .auth-main {
   width: 100%;
-  max-width: 24rem;
+  max-width: 26.25rem; /* 420px, the portal .login-card column (GIS floor) */
 }
 
 .auth-shell-header {
@@ -171,29 +257,31 @@ button {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  padding: 1.75rem;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-surface);
+  padding: 24px 22px;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
 }
 
 .auth-title {
   margin: 0;
-  font-size: 1.5rem;
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: var(--pix-md);
+  line-height: 1.35;
+  color: var(--accent);
 }
 
 .auth-subtitle {
   margin: 0 0 0.5rem;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
 }
 
 .auth-error {
   margin: 0;
-  padding: 0.6rem 0.75rem;
-  border-left: 3px solid var(--color-danger);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
-  color: var(--color-fg);
+  padding: 14px 16px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--danger);
+  color: var(--danger);
 }
 
 .auth-link,
@@ -203,7 +291,7 @@ button {
 
 .auth-footer {
   margin: 0;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   text-align: center;
 }
 
@@ -211,16 +299,20 @@ button {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  color: var(--color-fg-muted);
-  font-size: 0.85rem;
+  color: var(--gray);
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
+/* 2px, never a 1px hairline — the system has no hairlines. */
 .auth-divider::before,
 .auth-divider::after {
   content: '';
   flex: 1;
-  height: 1px;
-  background: var(--color-border);
+  height: 2px;
+  background: var(--surface-2);
 }
 
 .field {
@@ -231,22 +323,56 @@ button {
 }
 
 .field-label {
-  font-size: 0.9rem;
-  color: var(--color-fg-muted);
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
 }
 
+/* 1rem, not smaller: below 16px iOS Safari zooms the page on focus.
+   Boundary ring is --gray, never --rule — WCAG 1.4.11 needs 3:1 for a control
+   the user has to find. */
 .field-input {
   width: 100%;
   padding: 0.55rem 0.7rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-bg);
-  color: var(--color-fg);
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: inset 0 0 0 2px var(--gray);
   font: inherit;
+  font-size: 1rem;
+}
+
+.field-input:focus {
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .field-input[aria-invalid='true'] {
-  border-color: var(--color-danger);
+  box-shadow: inset 0 0 0 2px var(--danger);
+}
+
+.field-input::placeholder {
+  color: var(--gray);
+  opacity: 1;
+}
+
+/* `appearance: none` only on text-like controls — a <select> also carries
+   .field-input and must keep its native indicator arrow. */
+input.field-input,
+textarea.field-input {
+  appearance: none;
+}
+
+/* Dark-surface autofill: without the 1000px inset plate Chrome paints its own
+   pale yellow fill over --surface. */
+input.field-input:-webkit-autofill {
+  -webkit-text-fill-color: var(--text);
+  caret-color: var(--text);
+  -webkit-box-shadow: inset 0 0 0 2px var(--gray),
+    inset 0 0 0 1000px var(--surface);
+  transition: background-color 0s 600000s;
 }
 
 .field-with-affix {
@@ -260,17 +386,22 @@ button {
 
 .field-affix {
   padding: 0 0.7rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-bg);
-  color: var(--color-fg-muted);
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text-muted);
+  box-shadow: inset 0 0 0 2px var(--gray);
   font: inherit;
   cursor: pointer;
 }
 
+.field-affix:hover {
+  color: var(--accent);
+}
+
 .field-error {
   margin: 0;
-  color: var(--color-danger);
+  color: var(--danger);
   font-size: 0.85rem;
 }
 
@@ -289,7 +420,7 @@ button {
   border: none;
   background: transparent;
   color: transparent;
-  caret-color: var(--color-fg);
+  caret-color: var(--text);
   font: inherit;
   letter-spacing: 2.6rem;
   text-indent: 1.1rem;
@@ -303,41 +434,85 @@ button {
 .code-input-box {
   flex: 1;
   padding: 0.55rem 0;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-bg);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--gray);
   text-align: center;
+  font-family: var(--font-chrome);
   font-size: 1.15rem;
 }
 
 .code-input-box-filled {
-  border-color: var(--color-accent);
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
+/*
+ * The portal button vocabulary (docs/website.md), mapped without renaming the
+ * 130+ call sites: .button is the ghost/secondary, .button-primary the filled
+ * brand action, .button-danger the filled destructive one.
+ */
 .button {
-  padding: 0.55rem 0.9rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-surface);
-  color: var(--color-fg);
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--brand-2),
+    var(--px) var(--px) 0 0 var(--btn-shadow);
   font: inherit;
+  line-height: 1.65;
+  text-align: center;
+  appearance: none;
   cursor: pointer;
+  transition: transform 90ms steps(2), box-shadow 90ms steps(2);
 }
 
-.button:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
+.button:hover {
+  color: var(--text);
+}
+
+.button:active {
+  transform: translate(var(--px), var(--px));
+  box-shadow: inset 0 0 0 2px var(--brand-2);
 }
 
 .button-primary {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-  color: var(--color-accent-fg);
+  background: var(--brand);
+  color: #fff;
+  box-shadow: var(--px) var(--px) 0 0 var(--btn-shadow);
+}
+
+.button-primary:hover {
+  color: #fff;
+}
+
+.button-primary:active {
+  box-shadow: 0 0 0 0 var(--btn-shadow);
 }
 
 .button-danger {
-  border-color: var(--color-danger);
-  color: var(--color-danger);
+  background: var(--danger-fill);
+  color: #fff;
+  box-shadow: var(--px) var(--px) 0 0 var(--danger-fill-shadow);
+}
+
+.button-danger:hover {
+  color: #fff;
+}
+
+.button-danger:active {
+  box-shadow: 0 0 0 0 var(--danger-fill-shadow);
+}
+
+/* Not polish: several submits start disabled, and without this a brand-filled
+   button looks fully enabled. */
+.button:disabled,
+.button-primary:disabled,
+.button-danger:disabled {
+  background: var(--surface-2);
+  color: var(--gray);
+  box-shadow: inset 0 0 0 2px var(--rule);
+  transform: none;
+  cursor: not-allowed;
 }
 
 .button-block {
@@ -414,7 +589,6 @@ button {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  max-width: 44rem;
 }
 
 .page-header {
@@ -426,13 +600,26 @@ button {
 
 .page-header h1 {
   margin: 0;
-  font-size: 1.4rem;
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: var(--pix-md);
+  line-height: 1.35;
+  color: var(--accent);
 }
 
-.page-note,
+.page-note {
+  margin: 0;
+  color: var(--text-muted);
+  max-width: 62ch;
+}
+
 .empty-state {
   margin: 0;
-  color: var(--color-fg-muted);
+  padding: 32px;
+  text-align: center;
+  color: var(--gray);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
 }
 
 .device-list,
@@ -448,9 +635,9 @@ button {
 .device-card,
 .session-card {
   padding: 0.9rem;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+  transition: box-shadow 120ms linear;
 }
 
 .device-card-head {
@@ -465,11 +652,14 @@ button {
 }
 
 .device-current {
-  padding: 0.1rem 0.45rem;
-  border-radius: 999px;
-  background: var(--color-accent);
-  color: var(--color-accent-fg);
-  font-size: 0.75rem;
+  padding: 2px 8px;
+  background: var(--brand);
+  color: #fff;
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .device-card-head .button {
@@ -486,8 +676,11 @@ button {
 
 .device-meta dt,
 .account-summary dt {
-  color: var(--color-fg-muted);
-  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .device-meta dd,
@@ -496,7 +689,7 @@ button {
 }
 
 .device-id {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-chrome);
   font-size: 0.8rem;
   overflow-wrap: anywhere;
 }
@@ -506,14 +699,16 @@ button {
   flex-direction: column;
   gap: 0.75rem;
   padding: 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
 }
 
 .confirm-panel h2 {
   margin: 0;
+  font-family: var(--font-chrome);
+  font-weight: 400;
   font-size: 1.1rem;
+  color: var(--accent);
 }
 
 .grace-banner {
@@ -522,14 +717,14 @@ button {
   gap: 0.6rem;
   align-items: flex-start;
   padding: 1rem;
-  border: 1px solid var(--color-danger);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--danger);
 }
 
 .grace-banner-title {
   margin: 0;
   font-size: 1rem;
+  color: var(--danger);
 }
 
 .grace-banner-body,
@@ -554,18 +749,18 @@ button {
   gap: 0.6rem;
   align-items: flex-start;
   padding: 1rem;
-  border: 1px solid var(--color-danger);
-  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--danger);
 }
 
 .danger-zone p {
   margin: 0;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
 }
 
 .danger-title {
   margin: 0;
-  color: var(--color-danger);
+  color: var(--danger);
 }
 
 .delete-email {
@@ -576,13 +771,13 @@ button {
 .delete-modes {
   margin: 0;
   padding: 0.75rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--rule);
 }
 
 .delete-reauth-label {
   margin: 0;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   font-size: 0.9rem;
 }
 
@@ -599,7 +794,55 @@ button {
 }
 
 .radio-row small {
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
+}
+
+/* endregion */
+
+/* region pixel controls */
+
+/* The portal radio recipe: an appearance-none square whose checked state is a
+   brand fill ringed in --brand-2 with a surface core. The checkbox is the same
+   square filled solid — cored vs filled keeps the two distinguishable. */
+input[type='checkbox'] {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: none;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--gray);
+  cursor: pointer;
+}
+
+input[type='checkbox']:checked {
+  background: var(--brand);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+}
+
+input[type='checkbox']:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+input[type='radio'] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 4px 0 0;
+  flex: none;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--gray);
+  cursor: pointer;
+}
+
+input[type='radio']:checked {
+  background: var(--brand);
+  box-shadow: inset 0 0 0 2px var(--brand-2), inset 0 0 0 5px var(--surface);
 }
 
 /* endregion */
@@ -623,23 +866,47 @@ button {
   flex: 1;
   flex-direction: column;
   min-height: 0;
-  background: var(--color-bg);
+  background: var(--bg);
 }
 
 .terminal-page-empty {
   align-items: center;
   justify-content: center;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
 }
 
+/*
+ * nowrap + internal scroll keeps the bar a constant height: a label change or
+ * an appearing button must never rewrap the bar, because the stage below would
+ * change height and a terminal row-count change clears xterm's selection.
+ */
 .terminal-bar {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 0.75rem;
+  min-height: 48px;
   padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
+  overflow-x: auto;
+  border-bottom: 2px solid var(--surface-2);
+  background: var(--bg-2);
   font-size: 0.9rem;
+}
+
+.terminal-bar .button {
+  flex: none;
+  padding: 5px 11px;
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.terminal-bar .button[aria-pressed='true'] {
+  color: var(--text);
+  box-shadow: inset 0 0 0 2px var(--accent),
+    var(--px) var(--px) 0 0 var(--btn-shadow);
 }
 
 .terminal-bar-spacer {
@@ -647,52 +914,61 @@ button {
 }
 
 .terminal-back {
-  color: var(--color-accent);
+  color: var(--accent);
   text-decoration: none;
+  white-space: nowrap;
 }
 
 .terminal-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 22rem;
+  flex: 0 1 auto;
+  min-width: 4rem;
+  font-family: var(--font-chrome);
+  font-size: 0.85rem;
 }
 
 .terminal-state {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  color: var(--color-fg-muted);
-  text-transform: capitalize;
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .terminal-state::before {
   content: '';
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-  background: var(--color-fg-muted);
+  width: 8px;
+  height: 8px;
+  background: var(--text-muted);
 }
 
 .terminal-state-running::before {
-  background: var(--color-success);
+  background: var(--ok);
 }
 
 .terminal-state-starting::before,
 .terminal-state-stopping::before {
-  background: var(--color-accent);
+  background: var(--accent);
 }
 
 .terminal-state-crashed::before {
-  background: var(--color-danger);
+  background: var(--danger);
 }
 
 .terminal-toggle {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  color: var(--color-fg-muted);
+  flex: none;
+  color: var(--text-muted);
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .terminal-stage {
@@ -718,28 +994,46 @@ button {
   left: 50%;
   transform: translateX(-50%);
   padding: 0.35rem 0.9rem;
-  border-radius: 999px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  color: var(--color-fg);
-  font-size: 0.85rem;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--rule);
+  color: var(--text);
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  letter-spacing: 0.08em;
   display: inline-flex;
   align-items: center;
   gap: 0.6rem;
-  /* The pill floats over the grid; only its button may take a click, so a
+  /* The chip floats over the grid; only its button may take a click, so a
      selection drag through the top rows is not blocked by a status label. */
   pointer-events: none;
 }
 
 .terminal-overlay-retry {
   pointer-events: auto;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
+  border: 0;
+  border-radius: 0;
   padding: 0.1rem 0.6rem;
-  background: var(--color-bg);
-  color: var(--color-accent);
+  background: transparent;
+  color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
   font: inherit;
   cursor: pointer;
+}
+
+/* Floats over the stage exactly like .terminal-overlay: an in-flow error would
+   change the stage height and clear the selection. */
+.terminal-error {
+  position: absolute;
+  left: 50%;
+  bottom: 1rem;
+  transform: translateX(-50%);
+  max-width: calc(100% - 2rem);
+  margin: 0;
+  padding: 0.5rem 0.9rem;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--danger);
+  color: var(--danger);
+  font-size: 0.85rem;
 }
 
 .terminal-jump {
@@ -748,10 +1042,12 @@ button {
   bottom: 1rem;
   width: 2.5rem;
   height: 2.5rem;
-  border-radius: 50%;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  color: var(--color-fg);
+  border: 0;
+  border-radius: 0;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2),
+    var(--px) var(--px) 0 0 var(--btn-shadow);
+  color: var(--text);
   font-size: 1.1rem;
   cursor: pointer;
 }
@@ -762,9 +1058,9 @@ button {
   right: -0.4rem;
   min-width: 1.25rem;
   padding: 0 0.25rem;
-  border-radius: 999px;
-  background: var(--color-accent);
-  color: var(--color-accent-fg);
+  background: var(--brand);
+  color: #fff;
+  font-family: var(--font-chrome);
   font-size: 0.7rem;
   line-height: 1.25rem;
 }
@@ -787,10 +1083,9 @@ button {
   left: 1rem;
   bottom: 1rem;
   padding: 0.4rem 0.6rem;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
-  box-shadow: 0 4px 14px rgb(0 0 0 / 25%);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2),
+    var(--px) var(--px) 0 0 var(--modal-shadow);
 }
 
 .terminal-composer {
@@ -798,8 +1093,8 @@ button {
   flex-direction: column;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  border-top: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border-top: 2px solid var(--surface-2);
+  background: var(--bg-2);
 }
 
 /* Layered on `.field-input`, which already carries the box and the colours. */
@@ -820,10 +1115,9 @@ button {
   max-height: 70vh;
   overflow-y: auto;
   padding: 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-surface);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 30%);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2),
+    var(--px) var(--px) 0 0 var(--modal-shadow);
 }
 
 .template-picker-head {
@@ -835,15 +1129,20 @@ button {
 
 .template-picker-head h2 {
   margin: 0;
+  font-family: var(--font-chrome);
+  font-weight: 400;
   font-size: 1.05rem;
+  color: var(--accent);
 }
 
 .template-section h3 {
   margin: 1rem 0 0.4rem;
-  font-size: 0.8rem;
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: var(--pix-sm);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--color-fg-muted);
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
 }
 
 .template-list {
@@ -865,15 +1164,16 @@ button {
   gap: 0.15rem;
   padding: 0.5rem;
   border: none;
-  border-radius: 6px;
+  border-radius: 0;
   background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
+  transition: background 120ms linear;
 }
 
 .template-pick:hover {
-  background: var(--color-bg);
+  background: var(--surface);
 }
 
 .template-name {
@@ -881,7 +1181,7 @@ button {
 }
 
 .template-body {
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   font-size: 0.85rem;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -891,9 +1191,14 @@ button {
 .template-favorite {
   border: none;
   background: transparent;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   font-size: 1.1rem;
   cursor: pointer;
+  transition: color 120ms linear;
+}
+
+.template-favorite:hover {
+  color: var(--accent);
 }
 
 /* endregion */
@@ -923,15 +1228,14 @@ button {
 }
 
 .agent-status {
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-  background: var(--color-fg-muted);
+  width: 8px;
+  height: 8px;
+  background: var(--text-muted);
   flex: none;
 }
 
 .agent-status-online {
-  background: var(--color-success);
+  background: var(--ok);
 }
 
 .session-card {
@@ -951,23 +1255,22 @@ button {
 }
 
 .session-dot {
-  width: 0.6rem;
-  height: 0.6rem;
-  border-radius: 50%;
+  width: 8px;
+  height: 8px;
   flex: none;
-  background: var(--color-fg-muted);
+  background: var(--text-muted);
 }
 
 .session-dot-running {
-  background: var(--color-success);
+  background: var(--ok);
 }
 
 .session-dot-pending {
-  background: var(--color-accent);
+  background: var(--accent);
 }
 
 .session-dot-crashed {
-  background: var(--color-danger);
+  background: var(--danger);
 }
 
 /* `min-width: 0` is what lets the ellipsis rules below actually clip. */
@@ -993,34 +1296,37 @@ button {
 
 .session-kind {
   font-size: 0.8rem;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
 }
 
 .session-cwd {
   font-size: 0.75rem;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
 }
 
 .session-attention {
   flex: none;
-  padding: 0.1rem 0.45rem;
-  border-radius: 999px;
-  font-size: 0.75rem;
+  padding: 2px 8px;
+  background: var(--surface);
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .session-attention-permission {
-  color: var(--color-warning);
-  background: color-mix(in srgb, var(--color-warning) 20%, transparent);
+  color: var(--warning);
+  box-shadow: inset 0 0 0 2px var(--warning);
 }
 
 .session-attention-ready {
-  color: var(--color-success);
-  background: color-mix(in srgb, var(--color-success) 20%, transparent);
+  color: var(--ok);
+  box-shadow: inset 0 0 0 2px var(--ok);
 }
 
 .session-attention-ended {
-  color: var(--color-fg-muted);
-  background: color-mix(in srgb, var(--color-fg-muted) 20%, transparent);
+  color: var(--gray);
+  box-shadow: inset 0 0 0 2px var(--rule);
 }
 
 .session-stop {
@@ -1035,12 +1341,38 @@ button {
   list-style: none;
   padding: 0;
   margin: 0 0 1.5rem;
-  color: var(--color-fg-muted);
+  counter-reset: wizard-step;
+  color: var(--text-muted);
   font-size: 0.85rem;
 }
 
+.wizard-steps li {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+/* The portal .step-n square, drawn by counter so the markup stays plain. */
+.wizard-steps li::before {
+  counter-increment: wizard-step;
+  content: counter(wizard-step);
+  padding: 1px 7px;
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+  color: var(--text-muted);
+}
+
+.wizard-steps li[aria-current='step']::before,
+.wizard-steps .wizard-step-current::before {
+  background: var(--brand);
+  box-shadow: none;
+  color: #fff;
+}
+
 .wizard-step-current {
-  color: var(--color-fg);
+  color: var(--text);
   font-weight: 600;
 }
 
@@ -1072,17 +1404,26 @@ button {
   gap: 0.2rem;
   width: 100%;
   padding: 0.75rem 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
+  border: 0;
+  border-radius: 0;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
+  transition: box-shadow 120ms linear, background 120ms linear;
 }
 
-.project-row-selected {
-  border-color: var(--color-accent);
+.project-row:hover,
+.mode-card:hover {
+  box-shadow: inset 0 0 0 2px var(--rule);
+}
+
+.project-row-selected,
+.project-row-selected:hover {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
 }
 
 .project-name,
@@ -1093,7 +1434,7 @@ button {
 .project-path,
 .mode-subtitle {
   font-size: 0.8rem;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
 }
 
 .project-badges {
@@ -1103,16 +1444,19 @@ button {
 }
 
 .project-badge {
+  padding: 1px 6px;
+  background: var(--surface);
+  color: var(--text-muted);
+  box-shadow: inset 0 0 0 2px var(--rule);
+  font-family: var(--font-chrome);
   font-size: 0.7rem;
-  padding: 0.05rem 0.4rem;
-  border-radius: 999px;
-  color: var(--color-fg-muted);
-  background: color-mix(in srgb, var(--color-fg-muted) 15%, transparent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .project-badge-warning {
-  color: var(--color-warning);
-  background: color-mix(in srgb, var(--color-warning) 20%, transparent);
+  color: var(--warning);
+  box-shadow: inset 0 0 0 2px var(--warning);
 }
 
 .mode-item {
@@ -1131,9 +1475,9 @@ button {
 }
 
 .mode-command {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-chrome);
   font-size: 0.8rem;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1141,7 +1485,7 @@ button {
 
 .mode-subtitle-warning {
   font-size: 0.8rem;
-  color: var(--color-warning);
+  color: var(--warning);
 }
 
 .mode-delete {
@@ -1156,9 +1500,12 @@ button {
 
 .recent-paths h4 {
   margin: 0;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--color-fg-muted);
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
 }
 
 .recent-path-list {
@@ -1188,11 +1535,12 @@ button {
   flex: 1;
   min-width: 0;
   padding: 0.4rem 0.6rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-surface);
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--gray);
   color: inherit;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-chrome);
   font-size: 0.8rem;
   cursor: pointer;
   overflow: hidden;
@@ -1206,14 +1554,18 @@ button {
   flex-direction: column;
   gap: 0.75rem;
   padding: 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
 }
 
 .option-group h3 {
   margin: 0;
-  font-size: 0.95rem;
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
 }
 
 .check-row {
@@ -1232,7 +1584,7 @@ button {
 .field-hint {
   margin: 0;
   font-size: 0.8rem;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
 }
 
 .field-select {
@@ -1257,17 +1609,25 @@ button {
   gap: 0.2rem;
   flex: 1 1 12rem;
   padding: 0.6rem 0.8rem;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-bg);
+  border: 0;
+  border-radius: 0;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
+  transition: box-shadow 120ms linear, background 120ms linear;
 }
 
-.preset-card-active {
-  border-color: var(--color-accent);
+.preset-card:hover {
+  box-shadow: inset 0 0 0 2px var(--rule);
+}
+
+.preset-card-active,
+.preset-card-active:hover {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
 }
 
 .preset-title {
@@ -1276,32 +1636,35 @@ button {
 
 .preset-description {
   font-size: 0.78rem;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
 }
 
 .advanced summary {
   cursor: pointer;
+  font-family: var(--font-chrome);
   font-size: 0.9rem;
+  color: var(--accent);
+  list-style: none;
 }
 
-.dialog {
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-surface);
-  color: var(--color-fg);
-  max-width: 30rem;
-  padding: 1.25rem;
+.advanced summary::-webkit-details-marker {
+  display: none;
 }
 
-.dialog::backdrop {
-  background: rgb(0 0 0 / 45%);
+.advanced summary::before {
+  content: '+ ';
+  color: var(--gray);
+}
+
+.advanced[open] > summary::before {
+  content: '\2212 ';
 }
 /* endregion */
 
 /* region agents & pairing (WEB-08) */
 .agent-state-label {
   font-size: 0.85rem;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   margin-left: auto;
 }
 
@@ -1316,7 +1679,7 @@ button {
 }
 
 .pair-input {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-chrome);
   font-size: 0.85rem;
   /* The payload is one logical line by contract; wrapping it in the box is a
      display choice and never reaches the parser, which strips whitespace. */
@@ -1324,8 +1687,11 @@ button {
   word-break: break-all;
 }
 
+/* Deliberately an inline panel, never a modal: nothing may Escape-dismiss the
+   one and only showing of the token. The brand ring is what marks it out. */
 .credentials-panel {
   max-width: 40rem;
+  box-shadow: inset 0 0 0 2px var(--brand-2);
 }
 
 .credential-steps {
@@ -1351,22 +1717,27 @@ button {
 }
 
 .code-block-label {
-  font-size: 0.8rem;
-  color: var(--color-fg-muted);
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
 }
 
 .code-block-copy {
-  padding: 0.2rem 0.6rem;
-  font-size: 0.8rem;
+  padding: 2px 8px;
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .code-block-value {
   display: block;
   padding: 0.5rem 0.6rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-bg);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+  font-family: var(--font-chrome);
   font-size: 0.8rem;
   /* A token and an .env path both overflow a narrow column, and neither may be
      truncated: the whole point of the panel is that the value can be copied. */
@@ -1421,14 +1792,13 @@ button {
   align-items: center;
   gap: 0.75rem;
   padding: 0.75rem 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
 }
 
 .project-drag-handle {
   cursor: grab;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   user-select: none;
 }
 
@@ -1448,7 +1818,7 @@ button {
 }
 
 .project-path-warning {
-  color: var(--color-danger);
+  color: var(--danger);
   margin-right: 0.3rem;
 }
 
@@ -1459,9 +1829,13 @@ button {
   flex-wrap: wrap;
 }
 
+/* Compact, but never below the 32px hit floor the reorder buttons need. */
 .button-icon {
+  min-width: 32px;
+  min-height: 32px;
   padding: 0.25rem 0.55rem;
   line-height: 1;
+  font-family: var(--font-chrome);
 }
 
 .undo-bar {
@@ -1475,10 +1849,9 @@ button {
   gap: 0.75rem;
   max-width: min(30rem, calc(100vw - 2rem));
   padding: 0.6rem 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
-  box-shadow: 0 6px 20px rgb(0 0 0 / 25%);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2),
+    var(--px) var(--px) 0 0 var(--modal-shadow);
 }
 
 .undo-bar-message {
@@ -1489,7 +1862,7 @@ button {
 .undo-bar-action {
   border: 0;
   background: none;
-  color: var(--color-accent);
+  color: var(--accent);
   font: inherit;
   font-weight: 600;
   cursor: pointer;
@@ -1498,16 +1871,11 @@ button {
 .undo-bar-dismiss {
   border: 0;
   background: none;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   font: inherit;
   font-size: 1.1rem;
   line-height: 1;
   cursor: pointer;
-}
-
-.project-form {
-  max-height: 80vh;
-  overflow-y: auto;
 }
 
 .option-group-head {
@@ -1551,20 +1919,22 @@ button {
   margin: 0.35rem 0;
 }
 
+/* Carries flag literals — no uppercase, no mono: the label must read verbatim. */
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
   padding: 0.2rem 0.6rem;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--rule);
   font-size: 0.85rem;
   cursor: pointer;
+  transition: box-shadow 120ms linear, background 120ms linear;
 }
 
 .chip:has(input:checked) {
-  border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
 }
 
 .git-row-text {
@@ -1576,15 +1946,15 @@ button {
 }
 
 .git-row-primary {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-weight: 600;
+  font-family: var(--font-chrome);
+  font-weight: 400;
   overflow-wrap: anywhere;
 }
 
 .git-row-secondary {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-chrome);
   font-size: 0.8rem;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   overflow-wrap: anywhere;
 }
 
@@ -1595,38 +1965,40 @@ button {
 }
 
 .git-chip {
+  padding: 1px 6px;
+  background: var(--surface);
+  color: var(--text-muted);
+  box-shadow: inset 0 0 0 2px var(--rule);
+  font-family: var(--font-chrome);
   font-size: 0.7rem;
-  padding: 0.05rem 0.4rem;
-  border-radius: 999px;
-  color: var(--color-fg-muted);
-  background: color-mix(in srgb, var(--color-fg-muted) 15%, transparent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .git-chip-highlight {
-  color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
 }
 
 .git-chip-danger {
-  color: var(--color-danger);
-  background: color-mix(in srgb, var(--color-danger) 18%, transparent);
+  color: var(--danger);
+  box-shadow: inset 0 0 0 2px var(--danger);
 }
 
 .git-chip-neutral {
-  color: var(--color-fg);
-  background: color-mix(in srgb, var(--color-fg) 12%, transparent);
+  color: var(--text);
+  box-shadow: inset 0 0 0 2px var(--gray);
 }
 
 .git-chip-muted {
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   background: none;
-  border: 1px solid var(--color-border);
 }
 
 .busy-holders {
   margin: 0.5rem 0;
   padding-left: 1.2rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-chrome);
   font-size: 0.85rem;
 }
 
@@ -1639,7 +2011,7 @@ button {
 }
 
 .template-body-input {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-chrome);
 }
 /* endregion */
 
@@ -1650,8 +2022,12 @@ button {
 
 .autoscan-section-title {
   margin: 0 0 0.5rem;
-  font-size: 0.95rem;
-  color: var(--color-fg-muted);
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
 }
 
 .autoscan-card {
@@ -1681,7 +2057,7 @@ button {
   gap: 0.75rem;
   margin: 0;
   font-size: 0.85rem;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
 }
 
 /* Tabular figures for the same reason iOS uses `monospacedDigit()`: this label
@@ -1689,31 +2065,34 @@ button {
 .autoscan-countdown {
   margin: 0;
   font-size: 0.85rem;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
 .autoscan-chip {
+  padding: 1px 6px;
+  background: var(--surface);
+  color: var(--text-muted);
+  box-shadow: inset 0 0 0 2px var(--rule);
+  font-family: var(--font-chrome);
   font-size: 0.7rem;
-  padding: 0.05rem 0.4rem;
-  border-radius: 999px;
-  color: var(--color-fg-muted);
-  background: color-mix(in srgb, var(--color-fg-muted) 15%, transparent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .autoscan-chip-running {
-  color: var(--color-success);
-  background: color-mix(in srgb, var(--color-success) 18%, transparent);
+  color: var(--ok);
+  box-shadow: inset 0 0 0 2px var(--ok);
 }
 
 .autoscan-chip-pending {
-  color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
 }
 
 .autoscan-chip-crashed {
-  color: var(--color-danger);
-  background: color-mix(in srgb, var(--color-danger) 18%, transparent);
+  color: var(--danger);
+  box-shadow: inset 0 0 0 2px var(--danger);
 }
 
 .autoscan-status-row {
@@ -1726,8 +2105,12 @@ button {
 
 .autoscan-heading {
   margin: 1.25rem 0 0.5rem;
-  font-size: 0.95rem;
-  color: var(--color-fg-muted);
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
 }
 
 .autoscan-phases {
@@ -1745,13 +2128,13 @@ button {
   gap: 0.15rem;
   min-width: 6rem;
   padding: 0.4rem 0.6rem;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
 }
 
 .autoscan-phase[aria-current='step'] {
-  border-color: var(--color-accent);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
 }
 
 .autoscan-phase-name {
@@ -1761,19 +2144,19 @@ button {
 
 .autoscan-phase-status {
   font-size: 0.75rem;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
 }
 
 .autoscan-phase-running .autoscan-phase-status {
-  color: var(--color-success);
+  color: var(--ok);
 }
 
 .autoscan-phase-pending .autoscan-phase-status {
-  color: var(--color-accent);
+  color: var(--accent);
 }
 
 .autoscan-phase-crashed .autoscan-phase-status {
-  color: var(--color-danger);
+  color: var(--danger);
 }
 
 .autoscan-issues {
@@ -1794,7 +2177,7 @@ button {
 }
 
 .autoscan-issue-id {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-chrome);
 }
 
 .autoscan-issue-title {
@@ -1807,25 +2190,31 @@ button {
 
 .autoscan-issue-step,
 .autoscan-issue-error {
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
 }
 
 .autoscan-issue-error {
-  color: var(--color-danger);
+  color: var(--danger);
 }
 
 .autoscan-log {
   position: relative;
 }
 
+/*
+ * Always dark, whatever the app theme — the same rationale as the terminal
+ * grid (terminalTheme.ts): the SGR palette the log runs carry is a matched set
+ * with a dark background, and repainting only the plate would put bright ANSI
+ * colours on near-white. Values are the portal's .code plate.
+ */
 .autoscan-log-viewport {
   height: min(60vh, 32rem);
   overflow: auto;
   padding: 0.5rem 0.75rem;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  box-shadow: inset 0 0 0 2px #232323;
+  font-family: var(--font-chrome);
   font-size: 0.8rem;
   line-height: 1.45;
 }
@@ -1846,31 +2235,69 @@ button {
   position: absolute;
   right: 0.75rem;
   bottom: 0.75rem;
-  font-size: 0.8rem;
-  padding: 0.25rem 0.6rem;
+  padding: 2px 8px;
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 /* endregion */
 
 /* region: settings (WEB-10) */
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 24px 22px;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+}
+
 .settings-heading {
-  margin: 1.5rem 0 0.5rem;
-  font-size: 0.95rem;
-  color: var(--color-fg-muted);
+  margin: 0;
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
 }
 
 .settings-links {
   display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.settings-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.settings-links a::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  background: var(--brand);
+  box-shadow: 3px 3px 0 0 var(--brand-2);
+  flex: none;
+}
+
+.settings-links a:hover {
+  text-decoration: underline;
 }
 
 .settings-version {
-  margin-top: 2rem;
+  margin-top: 1rem;
+  font-family: var(--font-chrome);
   font-size: 0.8rem;
-  color: var(--color-fg-muted);
+  color: var(--gray);
 }
 /* endregion */
-
 
 /* region: keyboard & shortcuts (WEB-06) */
 .shortcut-bar {
@@ -1878,18 +2305,22 @@ button {
   align-items: flex-start;
   gap: 0.5rem;
   padding: 0.4rem 0.75rem;
-  border-top: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border-top: 2px solid var(--surface-2);
+  background: var(--bg-2);
 }
 
 .shortcut-bar-toggle {
   flex: none;
-  padding: 0.25rem 0.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 0;
   background: transparent;
-  color: var(--color-fg-muted);
-  font-size: 0.75rem;
+  color: var(--text-muted);
+  box-shadow: inset 0 0 0 2px var(--gray);
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
   cursor: pointer;
 }
 
@@ -1904,17 +2335,19 @@ button {
   flex: none;
   min-width: 2.2rem;
   padding: 0.3rem 0.55rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-surface);
-  color: var(--color-fg);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--gray);
+  color: var(--text);
+  font-family: var(--font-chrome);
   font-size: 0.8rem;
   cursor: pointer;
 }
 
 .shortcut-key:disabled {
-  opacity: 0.55;
+  color: var(--gray);
+  box-shadow: inset 0 0 0 2px var(--rule);
   cursor: not-allowed;
 }
 
@@ -1922,12 +2355,15 @@ button {
   font-weight: 700;
 }
 
+/* The one deliberate border in the sheet: an inset shadow cannot dash. */
 .shortcut-key-saved {
-  border-style: dashed;
+  box-shadow: none;
+  border: 2px dashed var(--gray);
+  padding: calc(0.3rem - 2px) calc(0.55rem - 2px);
 }
 
 .shortcut-key-risky {
-  color: var(--color-warning);
+  color: var(--warning);
 }
 
 .shortcut-picker,
@@ -1939,10 +2375,9 @@ button {
   display: flex;
   flex-direction: column;
   padding: 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-surface);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 30%);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2),
+    var(--px) var(--px) 0 0 var(--modal-shadow);
 }
 
 .shortcut-picker-head {
@@ -1955,7 +2390,10 @@ button {
 
 .shortcut-picker-head h2 {
   margin: 0;
+  font-family: var(--font-chrome);
+  font-weight: 400;
   font-size: 1.05rem;
+  color: var(--accent);
 }
 
 .shortcut-mode-switch {
@@ -1964,7 +2402,9 @@ button {
 }
 
 .shortcut-mode-switch [aria-selected='true'] {
-  border-color: var(--color-accent);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+  color: var(--text);
 }
 
 .shortcut-picker-body {
@@ -1974,8 +2414,7 @@ button {
 
 .shortcut-record {
   padding: 1rem;
-  border: 1px dashed var(--color-border);
-  border-radius: 8px;
+  border: 2px dashed var(--rule);
   text-align: center;
 }
 
@@ -1983,32 +2422,29 @@ button {
   width: 100%;
   padding: 0.75rem;
   border: none;
-  border-radius: 6px;
+  border-radius: 0;
   background: transparent;
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   font: inherit;
   font-size: 0.85rem;
   text-align: center;
   cursor: default;
 }
 
-.shortcut-record-surface:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
 .shortcut-record-error {
   margin: 0.5rem 0 0;
-  color: var(--color-danger);
+  color: var(--danger);
   font-size: 0.8rem;
 }
 
 .shortcut-section h3 {
   margin: 1rem 0 0.4rem;
-  font-size: 0.8rem;
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: var(--pix-sm);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--color-fg-muted);
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
 }
 
 .shortcut-chips {
@@ -2020,27 +2456,29 @@ button {
 .shortcut-chip {
   min-width: 2.2rem;
   padding: 0.25rem 0.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border: 0;
+  border-radius: 0;
   background: transparent;
-  color: var(--color-fg);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  box-shadow: inset 0 0 0 2px var(--gray);
+  color: var(--text);
+  font-family: var(--font-chrome);
   font-size: 0.8rem;
   cursor: pointer;
 }
 
 .shortcut-chip[aria-pressed='true'] {
-  border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
 }
 
 .shortcut-chip:disabled {
-  opacity: 0.55;
+  color: var(--gray);
+  box-shadow: inset 0 0 0 2px var(--rule);
   cursor: not-allowed;
 }
 
 .shortcut-chip-risky {
-  color: var(--color-warning);
+  color: var(--warning);
 }
 
 .shortcut-saved-chip {
@@ -2051,10 +2489,12 @@ button {
 
 .shortcut-chip-action {
   padding: 0.25rem 0.4rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border: 0;
+  border-radius: 0;
   background: transparent;
-  color: var(--color-fg-muted);
+  box-shadow: inset 0 0 0 2px var(--gray);
+  color: var(--text-muted);
+  font-family: var(--font-chrome);
   font-size: 0.75rem;
   cursor: pointer;
 }
@@ -2062,7 +2502,7 @@ button {
 .shortcut-picker-foot {
   flex: none;
   padding-top: 0.6rem;
-  border-top: 1px solid var(--color-border);
+  border-top: 2px solid var(--surface-2);
 }
 
 .shortcut-readout {
@@ -2073,12 +2513,12 @@ button {
 }
 
 .shortcut-readout-chord {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-chrome);
   font-size: 0.95rem;
 }
 
 .shortcut-readout-bytes {
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   font-size: 0.75rem;
 }
 
@@ -2091,11 +2531,11 @@ button {
 
 .shortcut-hint-risky,
 .shortcut-conflict-warn {
-  color: var(--color-warning);
+  color: var(--warning);
 }
 
 .shortcut-conflict-info {
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
 }
 
 .command-palette-list {
@@ -2112,27 +2552,27 @@ button {
   gap: 0.5rem;
   width: 100%;
   padding: 0.35rem 0.5rem;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  border: 0;
+  border-radius: 0;
   background: transparent;
-  color: var(--color-fg);
+  color: var(--text);
   text-align: left;
   cursor: pointer;
 }
 
 .command-palette-row[aria-current='true'] {
-  border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
 }
 
 .command-palette-row:disabled {
-  opacity: 0.55;
+  color: var(--gray);
   cursor: not-allowed;
 }
 
 .command-palette-group,
 .command-palette-hint {
-  color: var(--color-fg-muted);
+  color: var(--text-muted);
   font-size: 0.75rem;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2157,9 +2597,139 @@ button {
   max-height: 20rem;
   overflow: auto;
   padding: 0.75rem;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
   font-size: 0.75rem;
 }
+/* endregion */
+
+/* region modal */
+
+/* The portal .modal-card, on a native <dialog>'s top layer (Modal.tsx). */
+.dialog {
+  border: 0;
+  border-radius: 0;
+  background: var(--bg-2);
+  color: var(--text);
+  box-shadow: inset 0 0 0 2px var(--surface-2),
+    var(--px) var(--px) 0 0 var(--modal-shadow);
+  width: min(35rem, calc(100vw - 32px));
+  max-height: 90vh;
+  overflow: auto;
+  padding: 22px;
+}
+
+/* The converted confirm panels keep their flat h2/p/.button-row children; this
+   stands in for the flex-column gap the old .confirm-panel gave them. */
+.dialog > * + * {
+  margin-top: 0.75rem;
+}
+
+.dialog h2 {
+  margin: 0 0 0.5rem;
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: 1.1rem;
+  color: var(--accent);
+}
+
+/* Literal first: ::backdrop only inherits custom properties in recent
+   engines, and the scrim must never silently disappear. */
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.72);
+  background: var(--scrim);
+}
+
+body:has(dialog[open]) {
+  overflow: hidden;
+}
+
+/* endregion */
+
+/* region async states */
+
+.page-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--danger);
+  color: var(--danger);
+}
+
+.page-error p {
+  margin: 0;
+}
+
+/* The landing page's typewriter cursor, standing in for a spinner. The static
+   block that remains under reduced motion is still a "working" cue. */
+.state-loading::after {
+  content: '';
+  display: inline-block;
+  width: 0.6em;
+  height: 1em;
+  margin-left: 0.35em;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: px-blink 900ms steps(1, end) infinite;
+}
+
+@keyframes px-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* endregion */
+
+/* region responsive — the system's only two breakpoints; do not add a third */
+
+@media (max-width: 900px) {
+  .app-main {
+    padding: 1.25rem 1rem;
+  }
+}
+
+@media (max-width: 560px) {
+  .app-header {
+    padding: 0.5rem 1rem;
+  }
+
+  /* Every link stays reachable: the functional nav scrolls, never collapses. */
+  .app-nav {
+    flex: 1 1 auto;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .dialog {
+    padding: 16px;
+  }
+
+  .terminal-toggle-label {
+    display: none;
+  }
+}
+
+/* endregion */
+
+/* region motion — everything above is gated here, the portal's approach */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 /* endregion */

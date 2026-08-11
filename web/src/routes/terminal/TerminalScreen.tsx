@@ -182,7 +182,7 @@ function TerminalView({ model, kind, headerLabel }: TerminalViewProps) {
         </span>
         {headerLabel !== '' && <span className="terminal-title">{headerLabel}</span>}
         <span className="terminal-bar-spacer" />
-        <label className="terminal-toggle">
+        <label className="terminal-toggle" title="Pass Ctrl+V to terminal">
           <input
             type="checkbox"
             checked={passCtrlV}
@@ -190,7 +190,7 @@ function TerminalView({ model, kind, headerLabel }: TerminalViewProps) {
               setPassCtrlV(event.target.checked);
             }}
           />
-          Pass Ctrl+V to terminal
+          <span className="terminal-toggle-label">Pass Ctrl+V to terminal</span>
         </label>
         <button
           type="button"
@@ -227,10 +227,11 @@ function TerminalView({ model, kind, headerLabel }: TerminalViewProps) {
         </button>
       </header>
 
-      {immersive.error !== null && <p className="auth-error">{immersive.error}</p>}
-
       <div className="terminal-stage">
         <TerminalSurface model={model} />
+        {/* Overlaid, never a flex sibling: an in-flow error would change the
+            stage height, and a terminal row-count change clears the selection. */}
+        {immersive.error !== null && <p className="terminal-error">{immersive.error}</p>}
         <ConnectionOverlay
           message={overlay}
           onRetry={

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { clampShortcutName, type ShortcutButton } from '../../api/shortcutRepository';
+import { Modal } from '../../components/Modal';
 import { TextField } from '../../components/form/TextField';
 import { chordDisplay } from '../../protocol/keyChord';
 
@@ -29,7 +30,7 @@ export function RenameShortcutDialog({
   const [name, setName] = useState(shortcut.name ?? '');
 
   return (
-    <div className="confirm-panel" role="dialog" aria-labelledby="rename-shortcut-title">
+    <Modal labelledBy="rename-shortcut-title" dismissible={!busy} onClose={onClose}>
       <h3 id="rename-shortcut-title">Name {chordDisplay(shortcut.chord)}</h3>
       <form
         onSubmit={(event) => {
@@ -56,6 +57,6 @@ export function RenameShortcutDialog({
           </button>
         </div>
       </form>
-    </div>
+    </Modal>
   );
 }
