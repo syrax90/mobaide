@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import {
@@ -37,6 +37,7 @@ function errorMessage(error: unknown, fallback: string): string {
 export function TemplatesScreen() {
   const queryClient = useQueryClient();
   const [panel, setPanel] = useState<Panel>({ kind: 'none' });
+  const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const templates = useQuery({
@@ -218,6 +219,7 @@ export function TemplatesScreen() {
           role="alertdialog"
           labelledBy="delete-template-title"
           dismissible={!remove.isPending}
+          initialFocus={deleteCancelRef}
           onClose={() => {
             setPanel({ kind: 'none' });
           }}
@@ -237,6 +239,7 @@ export function TemplatesScreen() {
             </button>
             <button
               type="button"
+              ref={deleteCancelRef}
               className="button"
               disabled={remove.isPending}
               onClick={() => {

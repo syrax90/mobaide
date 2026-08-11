@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { Modal } from '../../components/Modal';
 import type { SessionResponse } from '../../protocol/dto/session';
 
@@ -18,11 +19,13 @@ export function StopSessionDialog({
   onStop,
   onCancel,
 }: StopSessionDialogProps) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
   return (
     <Modal
       role="alertdialog"
       labelledBy="stop-session-title"
       dismissible={!busy}
+      initialFocus={cancelRef}
       onClose={onCancel}
     >
       <h2 id="stop-session-title">Stop session?</h2>
@@ -51,7 +54,7 @@ export function StopSessionDialog({
         >
           Force Stop
         </button>
-        <button type="button" className="button" onClick={onCancel}>
+        <button type="button" ref={cancelRef} className="button" onClick={onCancel}>
           Cancel
         </button>
       </div>

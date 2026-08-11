@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import {
@@ -41,6 +41,7 @@ type Panel =
 export function Agents() {
   const queryClient = useQueryClient();
   const [panel, setPanel] = useState<Panel>({ kind: 'none' });
+  const removeCancelRef = useRef<HTMLButtonElement>(null);
 
   const agents = useQuery({
     queryKey: queryKeys.agents(),
@@ -247,6 +248,7 @@ export function Agents() {
           role="alertdialog"
           labelledBy="remove-agent-title"
           dismissible={!remove.isPending}
+          initialFocus={removeCancelRef}
           onClose={() => {
             setPanel({ kind: 'none' });
           }}
@@ -270,6 +272,7 @@ export function Agents() {
             </button>
             <button
               type="button"
+              ref={removeCancelRef}
               className="button"
               disabled={remove.isPending}
               onClick={() => {

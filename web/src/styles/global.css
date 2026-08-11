@@ -846,12 +846,27 @@ input[type='radio']:checked {
 }
 
 /* Windows High Contrast strips author backgrounds and box-shadows, which is
-   everything the pixel squares use to show state — hand the controls back to
-   the UA there so the checked mark stays visible in system colors. */
+   everything the pixel system uses for boundaries and state — hand the
+   squares back to the UA, and give every ring-only interactive box a real
+   border so it stays findable in system colors. */
 @media (forced-colors: active) {
   input[type='checkbox'],
   input[type='radio'] {
     appearance: auto;
+  }
+
+  .field-input,
+  .field-affix,
+  .code-input-box,
+  .button,
+  .theme-toggle,
+  .shortcut-key,
+  .shortcut-chip,
+  .shortcut-chip-action,
+  .shortcut-bar-toggle,
+  .recent-path-pick,
+  .terminal-overlay-retry {
+    border: 1px solid ButtonBorder;
   }
 }
 
@@ -2624,6 +2639,9 @@ input[type='radio']:checked {
 
 /* The portal .modal-card, on a native <dialog>'s top layer (Modal.tsx). */
 .dialog {
+  /* The `* { margin: 0 }` reset overrides the UA's `dialog { margin: auto }`,
+     which is the whole centering mechanism — restore it. */
+  margin: auto;
   border: 0;
   border-radius: 0;
   background: var(--bg-2);
@@ -2650,11 +2668,11 @@ input[type='radio']:checked {
   color: var(--accent);
 }
 
-/* Literal first: ::backdrop only inherits custom properties in recent
-   engines, and the scrim must never silently disappear. */
+/* The fallback must live inside var(): where ::backdrop does not inherit
+   custom properties the reference is invalid at computed-value time, and CSS
+   does not fall back to an earlier declaration — the scrim would vanish. */
 .dialog::backdrop {
-  background: rgba(0, 0, 0, 0.72);
-  background: var(--scrim);
+  background: var(--scrim, rgba(0, 0, 0, 0.72));
 }
 
 body:has(dialog[open]) {

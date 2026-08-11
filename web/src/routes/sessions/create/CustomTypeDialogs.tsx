@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Modal } from '../../../components/Modal';
 import { TextAreaField } from '../../../components/form/TextAreaField';
 import { TextField } from '../../../components/form/TextField';
@@ -84,11 +84,13 @@ export function DeleteCustomTypeDialog({
   onConfirm,
   onCancel,
 }: DeleteCustomTypeDialogProps) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
   return (
     <Modal
       role="alertdialog"
       labelledBy="delete-type-title"
       dismissible={!busy}
+      initialFocus={cancelRef}
       onClose={onCancel}
     >
       <h2 id="delete-type-title">Delete agent type?</h2>
@@ -106,7 +108,7 @@ export function DeleteCustomTypeDialog({
         >
           {busy ? 'Deleting…' : 'Delete'}
         </button>
-        <button type="button" className="button" disabled={busy} onClick={onCancel}>
+        <button type="button" ref={cancelRef} className="button" disabled={busy} onClick={onCancel}>
           Cancel
         </button>
       </div>

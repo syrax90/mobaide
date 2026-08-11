@@ -63,6 +63,7 @@ export function GitScreen() {
   // created. This is the web analogue of holding `pendingBatch` outside the
   // deferred task on iOS.
   const machineRef = useRef(machine);
+  const forceCancelRef = useRef<HTMLButtonElement>(null);
   machineRef.current = machine;
 
   useAgentEvents(agentId);
@@ -243,6 +244,7 @@ export function GitScreen() {
         <Modal
           role="alertdialog"
           labelledBy="force-title"
+          initialFocus={forceCancelRef}
           onClose={() => {
             setMachine(dismissForce(machineRef.current));
           }}
@@ -265,6 +267,7 @@ export function GitScreen() {
             </button>
             <button
               type="button"
+              ref={forceCancelRef}
               className="button"
               onClick={() => {
                 setMachine(dismissForce(machineRef.current));

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
 
 interface ModalProps {
   /** id of the element that names the dialog. */
@@ -6,6 +6,12 @@ interface ModalProps {
   role?: 'dialog' | 'alertdialog';
   /** Pass false while a mutation is in flight to block Esc-dismissal. */
   dismissible?: boolean;
+  /**
+   * Focused after showModal() instead of the first focusable descendant.
+   * Destructive confirms point this at Cancel — showModal's default would
+   * land on the destructive button, one Enter away from firing.
+   */
+  initialFocus?: RefObject<HTMLElement | null>;
   onClose: () => void;
   className?: string;
   children: ReactNode;
@@ -23,6 +29,7 @@ export function Modal({
   labelledBy,
   role = 'dialog',
   dismissible = true,
+  initialFocus,
   onClose,
   className,
   children,
@@ -38,11 +45,14 @@ export function Modal({
   // late — it runs after the node has left the DOM.
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
-    if (dialog !== null && !dialog.open) dialog.showModal();
+    if (dialog !== null && !dialog.open) {
+      dialog.showModal();
+      initialFocus?.current?.focus();
+    }
     return () => {
       if (dialog !== null && dialog.open) dialog.close();
     };
-  }, []);
+  }, [initialFocus]);
 
   return (
     <dialog

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import {
@@ -17,6 +17,7 @@ export function Devices() {
   const queryClient = useQueryClient();
   const currentDeviceId = getDeviceId();
   const [target, setTarget] = useState<Device | null>(null);
+  const revokeCancelRef = useRef<HTMLButtonElement>(null);
 
   const devices = useQuery({
     queryKey: queryKeys.devices(),
@@ -110,6 +111,7 @@ export function Devices() {
           role="alertdialog"
           labelledBy="revoke-title"
           dismissible={!revoke.isPending}
+          initialFocus={revokeCancelRef}
           onClose={() => {
             setTarget(null);
           }}
@@ -134,6 +136,7 @@ export function Devices() {
             </button>
             <button
               type="button"
+              ref={revokeCancelRef}
               className="button"
               onClick={() => {
                 setTarget(null);
