@@ -363,8 +363,11 @@ bare 200 with a zero-byte body and no `Via: 1.1 Caddy` header, which is how you
 can tell the request reached Caddy but never a `reverse_proxy`.
 
 `www` needs a DNS record either way. Under `LetsEncrypt` it must be "DNS only"
-(gray cloud) so ACME HTTP-01 can complete; under `CloudflareOrigin` the existing
-wildcard origin certificate already covers it.
+(gray cloud) so ACME HTTP-01 can complete; under `CloudflareOrigin` it is
+proxied and served by the origin certificate, which must therefore carry
+`www.mobaide.com` as an explicit SAN. Do **not** cover it with a `*.mobaide.com`
+wildcard: that SAN also matches `app.mobaide.com`, which silently disables ACME
+for the SPA host — see [TLS certificates](deployment.md#tls-certificates).
 
 If CLA-167 (per-host Caddy site blocks) lands later, fold this block into its
 structure rather than keeping a fourth top-level block.

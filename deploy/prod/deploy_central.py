@@ -4,12 +4,15 @@
 Usage:
     python deploy/prod/deploy_central.py                              # LetsEncrypt TLS, full deploy
     python deploy/prod/deploy_central.py --tls-mode CloudflareOrigin
+    python deploy/prod/deploy_central.py --diagnose-tls --tls-mode CloudflareOrigin   # classify a TLS failure, deploy nothing
     python deploy/prod/deploy_central.py --skip-build                 # restart current image, no source re-sync
     python deploy/prod/deploy_central.py --rollback                   # swap central_server <-> central_server.prev on server
     python deploy/prod/deploy_central.py --force                      # allow dirty working tree
 
 What it does:
-  1) Preflight: local tools, clean tree, ssh mobaide reachable, /opt/mobaide/.env exists
+  1) Preflight: local tools, clean tree, ssh mobaide reachable, /opt/mobaide/.env exists,
+     and (CloudflareOrigin mode) the origin cert neither shadows app.mobaide.com nor
+     mismatches its key
   2) Tar central_server/ (with excludes) -> scp -> remote atomic swap
   3) scp docker-compose.prod.yml + Caddyfile.<TlsMode> to /opt/mobaide/
   4) ssh: docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
@@ -46,12 +49,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
+import tls_preflight
+
 MIN_PYTHON = (3, 12)
 
 SSH_HOST = "mobaide"
 REMOTE_BASE = "/opt/mobaide"
 DOMAIN = "mobaide.com"
 HEALTH_URL = f"https://{DOMAIN}/api/health"
+# Same Caddy site block as the apex, but a separate DNS record and separate
+# per-hostname Cloudflare edge config — so it fails independently, and it is
+# the hostname every agent tunnel and mobile client actually connects to.
+API_HEALTH_URL = f"https://api.{DOMAIN}/api/health"
+APP_URL = f"https://app.{DOMAIN}/"
+ORIGIN_CERT = f"{REMOTE_BASE}/tls/origin-cert.pem"
+ORIGIN_KEY = f"{REMOTE_BASE}/tls/origin-key.pem"
 
 DEPLOY_DIR = Path(__file__).resolve().parent  # .../deploy/prod/
 PROJECT_ROOT = DEPLOY_DIR.parents[1]
@@ -77,6 +89,15 @@ TAR_EXCLUDES = (
 
 class DeployError(Exception):
     """Deploy failure. An empty message means the details were already printed."""
+
+
+class ClassifiedDeployError(DeployError):
+    """A failure `wait_http` already classified and printed.
+
+    Callers must not re-run the classifier on it: the second pass costs
+    another probe ladder and can disagree with the first (a flapping host
+    yields a hard verdict followed by "transient — re-run the deploy").
+    """
 
 
 class CertVerificationError(DeployError):
@@ -122,6 +143,28 @@ def _enable_ansi() -> bool:
     return True
 
 
+def enable_ansi() -> None:
+    """Arm colored output. Both entry points call this: the emitters and the
+    _ANSI flag live here, so deploy_web's color comes from this same global.
+    """
+    global _ANSI
+    _ANSI = _enable_ansi()
+
+
+def require_min_python(prog: str) -> bool:
+    """False (after printing why) when the interpreter is too old. Both entry
+    points gate on it — deploy_web runs the same syntax off the same stdlib.
+    """
+    if sys.version_info >= MIN_PYTHON:
+        return True
+    print(
+        f"{prog} requires Python {'.'.join(map(str, MIN_PYTHON))}+ "
+        f"(found {sys.version.split()[0]})",
+        file=sys.stderr,
+    )
+    return False
+
+
 def _emit(text: str, color: str) -> None:
     if _ANSI:
         print(f"{color}{text}{RESET}", flush=True)
@@ -160,6 +203,39 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
+_ssl_context: ssl.SSLContext | None = None
+_ssl_context_ready = False
+
+
+def http_ssl_context() -> ssl.SSLContext | None:
+    """The context every probe uses; None means urllib's default is fine.
+
+    Resolved once so the certifi-fallback warning is printed at most once per
+    run, and shared with the control probe — comparing a failing host against
+    a known-good one only means something if both use the same trust store.
+    """
+    global _ssl_context, _ssl_context_ready
+    if not _ssl_context_ready:
+        _ssl_context, warning = tls_preflight.build_ssl_context()
+        if warning:
+            warn(warning)
+        _ssl_context_ready = True
+    return _ssl_context
+
+
+def report_probe_failure(failure: tls_preflight.ProbeFailure) -> None:
+    fail(f"{failure.kind}: {failure.detail}")
+    for line in failure.remedy.splitlines():
+        dim(f"  {line}")
+
+
+def report_tls_warning(warning: tls_preflight.TlsWarning) -> None:
+    emit = warn if warning.severity == "advisory" else fail
+    emit(warning.headline)
+    for line in warning.lines:
+        dim(f"  {line}")
+
+
 def wait_http(
     url: str,
     timeout_sec: int = 90,
@@ -175,25 +251,33 @@ def wait_http(
     # keeps polling unless any_status) — used by deploy_web.py's post-swap
     # probes, where a redirect to another (healthy) host must not count as
     # proof the app host served the release.
-    opener = (
-        None
-        if follow_redirects
-        else urllib.request.build_opener(_NoRedirectHandler())
-    )
+    context = http_ssl_context()
+    handlers: list[urllib.request.BaseHandler] = []
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    if not follow_redirects:
+        handlers.append(_NoRedirectHandler())
+    opener = urllib.request.build_opener(*handlers) if handlers else None
     deadline = time.monotonic() + timeout_sec
     cert_error: ssl.SSLCertVerificationError | None = None
+    http_status: int | None = None
     while time.monotonic() < deadline:
         try:
             with (
-                urllib.request.urlopen(url, timeout=5)
+                urllib.request.urlopen(url, timeout=5, context=context)
                 if opener is None
                 else opener.open(url, timeout=5)
             ) as resp:
                 if any_status or resp.status == 200:
                     return
-        except urllib.error.HTTPError:
+        except urllib.error.HTTPError as e:
             if any_status:
                 return
+            # Latch it. A Cloudflare 52x means something answered every poll —
+            # falling through to "timed out waiting" would report that nothing
+            # did, and would send the caller into an auto-rollback that cannot
+            # fix an origin-certificate fault.
+            http_status = e.code
         except urllib.error.URLError as e:
             if isinstance(e.reason, ssl.SSLCertVerificationError):
                 cert_error = e.reason
@@ -202,14 +286,42 @@ def wait_http(
         except (OSError, TimeoutError):
             pass
         time.sleep(2)
-    if cert_error is not None:
-        warn(
-            "TLS certificate verification failed. On macOS python.org builds, "
-            "run 'Install Certificates.command' or set SSL_CERT_FILE."
+    cloudflare_origin_fault = http_status in tls_preflight.CLOUDFLARE_ORIGIN_STATUSES
+    if cert_error is not None or cloudflare_origin_fault:
+        # Which of {local trust store, served certificate} is at fault is not
+        # decidable from the exception — both raise CERTIFICATE_VERIFY_FAILED.
+        # diagnose() settles it with a control probe before printing advice,
+        # and classifies a latched Cloudflare 52x on the same pass.
+        failure = tls_preflight.diagnose(url, context=context)
+        if failure is not None:
+            report_probe_failure(failure)
+            # cert_error was latched by ANY poll iteration, so the state at the
+            # deadline can be something else entirely. Only the two certificate
+            # verdicts may raise CertVerificationError — callers read that
+            # class as "do not auto-rollback".
+            # "inconclusive" belongs with the certificate verdicts, not the
+            # transport ones: nothing was learned, and rolling the source back
+            # cannot fix a certificate fault in any case.
+            if failure.kind in ("tls_local", "tls_server", "inconclusive"):
+                raise CertVerificationError(f"{url}: {failure.detail}")
+            raise ClassifiedDeployError(f"{url}: {failure.detail}")
+        # The classifier could not reproduce what polling saw. The message must
+        # stay non-empty: callers turn an empty DeployError into "details
+        # already printed", and nothing was.
+        if cert_error is not None:
+            raise CertVerificationError(
+                f"could not verify the TLS certificate for {url} within {timeout_sec}s: {cert_error}"
+            )
+        detail = (
+            f"{url} answered HTTP {http_status} (Cloudflare edge->origin failure) "
+            f"within {timeout_sec}s, but the classifier could not reproduce it"
         )
-        raise CertVerificationError(
-            f"could not verify the TLS certificate for {url} within {timeout_sec}s: {cert_error}"
-        )
+        # 525/526 are certificate faults, so they keep the no-auto-rollback
+        # contract even unreproduced; 521/522/523 mean the origin was
+        # unreachable, which a source rollback plausibly does fix.
+        if http_status in tls_preflight.CLOUDFLARE_TLS_STATUSES:
+            raise CertVerificationError(detail)
+        raise ClassifiedDeployError(detail)
     raise DeployError(f"Timed out after {timeout_sec}s waiting for {url}")
 
 
@@ -265,12 +377,37 @@ def invoke_ssh_or_fail(script: str, fail_msg: str) -> str:
 # the server has `ufw limit 22/tcp`, which silently drops SYNs past 6
 # connections in 30s, so every saved round-trip matters.
 
-# Batched preflight: one SSH round-trip exercises the transport, reports the
-# remote user, and flags every failing prereq at once — so the operator fixes
-# them in a single pass instead of discovering them one connection at a time.
-# If ssh fails to even reach the remote bash, we surface that as a separate
-# reachability error (see the empty-errs branch in remote_preflight).
-PREFLIGHT_SCRIPT = f"""set +e
+# Each fact is captured first and echoed only if non-empty, because piping a
+# FAILED openssl straight into sha256 yields e3b0c442… — the hash of empty
+# input — for BOTH cert and key, so two unreadable PEMs would compare equal and
+# silently pass the pair check.
+_ORIGIN_CERT_PROBE = f"""
+if [ -f {ORIGIN_CERT} ] && [ -f {ORIGIN_KEY} ]; then
+    echo "ORIGIN_PRESENT=1"
+    origin_sans=$(openssl x509 -in {ORIGIN_CERT} -noout -ext subjectAltName 2>/dev/null | tr '\\n' ' ')
+    origin_dates=$(openssl x509 -in {ORIGIN_CERT} -noout -startdate -enddate 2>/dev/null | tr '\\n' ' ')
+    origin_cert_pub=$(openssl x509 -in {ORIGIN_CERT} -noout -pubkey 2>/dev/null)
+    origin_key_pub=$(openssl pkey -in {ORIGIN_KEY} -pubout -passin pass: 2>/dev/null)
+    [ -n "$origin_sans" ] && echo "ORIGIN_SANS=$origin_sans"
+    [ -n "$origin_dates" ] && echo "ORIGIN_DATES=$origin_dates"
+    [ -n "$origin_cert_pub" ] && echo "ORIGIN_CERT_PUB=$(printf '%s' "$origin_cert_pub" | openssl sha256 | awk '{{print $NF}}')"
+    [ -n "$origin_key_pub" ] && echo "ORIGIN_KEY_PUB=$(printf '%s' "$origin_key_pub" | openssl sha256 | awk '{{print $NF}}')"
+else
+    echo "ORIGIN_CERT_MISSING=1"
+fi
+"""
+
+
+def build_preflight_script(tls_mode: str) -> str:
+    # Batched preflight: one SSH round-trip exercises the transport, reports
+    # the remote user, and flags every failing prereq at once — so the operator
+    # fixes them in a single pass instead of discovering them one connection at
+    # a time. If ssh fails to even reach the remote bash, that surfaces as a
+    # separate reachability error (the empty-errs branch in remote_preflight).
+    # The origin-cert probe rides the same round-trip for the same reason: the
+    # server rate-limits at 6 connections / 30s.
+    origin = _ORIGIN_CERT_PROBE if tls_mode == "CloudflareOrigin" else ""
+    return f"""set +e
 user=$(whoami)
 echo "USER=$user"
 errs=""
@@ -278,6 +415,7 @@ errs=""
 [ -w {REMOTE_BASE} ]          || errs="$errs BASE_NOT_WRITABLE"
 [ -f {REMOTE_BASE}/.env ]     || errs="$errs ENV_MISSING"
 docker info >/dev/null 2>&1 || errs="$errs DOCKER"
+{origin}
 if [ -n "$errs" ]; then echo "ERRORS:$errs"; exit 1; fi
 echo "OK"
 """
@@ -320,6 +458,7 @@ echo {tag} > .last_tag
 
 def build_deploy_cmd(tls_mode: str, skip_build: bool) -> str:
     up_args = "up -d --remove-orphans" if skip_build else "up -d --build --remove-orphans"
+    reload_args = "reload --force" if tls_mode == "CloudflareOrigin" else "reload"
     # One SSH round-trip does: (a) validate the incoming Caddyfile in a
     # throwaway container, (b) copy Caddyfile.<TlsMode> -> Caddyfile so
     # docker-compose can mount it, (c) compose up (streaming), (d) caddy
@@ -341,10 +480,24 @@ def build_deploy_cmd(tls_mode: str, skip_build: bool) -> str:
     # container for a bind-mounted file's CONTENT change — without it a
     # Caddyfile-only deploy silently keeps serving the old config. Reload is
     # atomic (a parse failure keeps the old config live and fails this
-    # command loudly) and, with stream_close_delay on both proxied site
-    # blocks (apex/api and app), non-disruptive to established WebSockets.
-    # When compose just recreated the container the reload is a harmless
-    # re-read.
+    # command loudly). When compose just recreated the container the reload is
+    # a harmless re-read.
+    # stream_close_delay on both proxied site blocks (apex/api and app) does
+    # NOT spare established WebSockets from a reload — Caddy's docs are
+    # explicit that it "delays streaming requests such as WebSockets from being
+    # forcibly closed when the config is unloaded". It buys a 5-minute grace,
+    # then every stream registered against the unloaded config is closed, all
+    # on the same timer. So a reload that actually swaps config is a DEFERRED
+    # mass disconnect, not a free one.
+    # That is why --force is scoped to CloudflareOrigin rather than always on.
+    # There it is unavoidable: Caddy diffs the ADAPTED JSON and certificates
+    # are referenced by path, so swapping tls/origin-*.pem in place leaves the
+    # config byte-identical and a plain reload logs "config is unchanged",
+    # does nothing, and keeps serving the old certificate from memory — while
+    # reading like success. LetsEncrypt mode loads no certificate from a path
+    # at all (that Caddyfile has zero `tls` directives), so forcing there would
+    # buy nothing and would convert every no-op deploy into a disconnect of
+    # every agent tunnel and client socket.
     # The tls/ mount mirrors the compose caddy service: CloudflareOrigin's
     # `tls <cert> <key>` directives load the PEMs at provision time, so
     # validate fails without them. tls/ always exists (bootstrap and the
@@ -360,7 +513,7 @@ def build_deploy_cmd(tls_mode: str, skip_build: bool) -> str:
         f" && cp -f Caddyfile.{tls_mode} Caddyfile"
         f" && docker compose -f docker-compose.prod.yml {up_args}"
         f" && docker compose -f docker-compose.prod.yml exec -T caddy"
-        f" caddy reload --config /etc/caddy/Caddyfile"
+        f" caddy {reload_args} --config /etc/caddy/Caddyfile"
         f" && docker compose -f docker-compose.prod.yml ps"
     )
 
@@ -402,8 +555,8 @@ def check_clean_tree() -> None:
     ok("Working tree clean")
 
 
-def remote_preflight() -> str:
-    probe = invoke_ssh(PREFLIGHT_SCRIPT)
+def remote_preflight(tls_mode: str) -> tuple[str, list[tls_preflight.TlsWarning]]:
+    probe = invoke_ssh(build_preflight_script(tls_mode))
     ssh_user = "<unknown>"
     for line in probe.output.splitlines():
         if line.startswith("USER="):
@@ -448,7 +601,85 @@ def remote_preflight() -> str:
 
     ok(f"ssh {SSH_HOST} reachable as '{ssh_user}'")
     ok(f"Server prereqs OK ({REMOTE_BASE}, .env, docker, writable by '{ssh_user}')")
-    return ssh_user
+
+    warnings: list[tls_preflight.TlsWarning] = []
+    if tls_mode == "CloudflareOrigin":
+        origin = tls_preflight.parse_origin_probe(probe.output.splitlines())
+        if not origin.present:
+            # A checked negative finding, not an unrunnable check: return it as
+            # a warning so --diagnose-tls exits non-zero and run()'s finally
+            # re-prints it, instead of the deploy failing later inside an
+            # opaque remote `caddy validate`.
+            warnings = [
+                tls_preflight.TlsWarning(
+                    "absent",
+                    f"{ORIGIN_CERT} / {ORIGIN_KEY} missing — CloudflareOrigin mode needs them",
+                    (
+                        "The apex/www/api site blocks load these PEMs by path, so",
+                        "`caddy validate` will reject the config and the deploy will",
+                        "fail with a message that does not name the cause.",
+                        "Install them per deploy/prod/bootstrap-mobaide.md (Option B),",
+                        "scoped to the proxied hosts only, with no wildcard.",
+                    ),
+                )
+            ]
+            report_tls_warning(warnings[0])
+        else:
+            warnings = tls_preflight.origin_cert_warnings(origin, DOMAIN)
+            for warning in warnings:
+                report_tls_warning(warning)
+            # Each half is asserted only where the evidence for it exists. An
+            # unreadable PEM or a missing openssl yields no facts, and saying
+            # "does not shadow" there would be a false all-clear on exactly the
+            # cert this check exists to catch.
+            # A check that could not run is itself a finding, not a silent
+            # skip: returning it keeps --diagnose-tls from exiting 0 on a cert
+            # nothing was learned about, and routes it through run()'s finally
+            # re-print. A SAN-less cert reaches here with pubkeys derived, so
+            # the two halves are reported independently.
+            kinds = {w.kind for w in warnings}
+            if not origin.sans_read:
+                warnings.append(
+                    tls_preflight.TlsWarning(
+                        "unchecked",
+                        f"Could not read {ORIGIN_CERT} SANs on the server — the "
+                        f"wildcard-shadow and host-coverage checks did NOT run",
+                        (
+                            "This is not an all-clear. Either openssl is missing or",
+                            f"too old for -ext, the PEMs are unreadable by '{ssh_user}',",
+                            "or the certificate carries no SAN extension at all — which",
+                            "Cloudflare Full (strict) rejects with a 526 on every",
+                            "proxied host.",
+                            "Check: ssh {0} 'openssl x509 -in {1} -noout -ext subjectAltName'".format(
+                                SSH_HOST, ORIGIN_CERT
+                            ),
+                        ),
+                        "advisory",
+                    )
+                )
+                report_tls_warning(warnings[-1])
+            elif "shadow" not in kinds:
+                ok(f"Origin cert SANs do not shadow app.{DOMAIN}")
+            if not (origin.cert_pubkey and origin.key_pubkey):
+                warnings.append(
+                    tls_preflight.TlsWarning(
+                        "unchecked",
+                        "Could not derive both public keys on the server — the "
+                        "cert/key pair check did NOT run",
+                        (
+                            "A mismatched pair survives `caddy reload` and bricks the",
+                            "next container restart, so this check not running is not",
+                            "the same as it passing.",
+                            f"Check: ssh {SSH_HOST} 'openssl x509 -in {ORIGIN_CERT} "
+                            "-noout -pubkey | openssl sha256'",
+                        ),
+                        "advisory",
+                    )
+                )
+                report_tls_warning(warnings[-1])
+            elif "pair" not in kinds:
+                ok("Origin cert and key are a matching pair")
+    return ssh_user, warnings
 
 
 # ------------------------------------------------------------ rollback
@@ -569,7 +800,87 @@ def print_summary(tag: str, tls_mode: str) -> None:
     info("Rollback     : python deploy/prod/deploy_central.py --rollback")
 
 
+def diagnose_local_tls(urls: tuple[str, ...]) -> int:
+    """Classify every host this workstation talks to. Returns a failure count."""
+    step("Local TLS trust")
+    context = http_ssl_context()
+    control = tls_preflight.control_probe(context)
+    failures = 0
+    if control.verified_url is not None:
+        ok(f"Control probe passed — this Python verifies public HTTPS ({control.verified_url})")
+    elif control.reached:
+        fail("Control probe FAILED — this Python cannot verify any HTTPS")
+        for line in tls_preflight.certifi_remedy().splitlines():
+            dim(f"  {line}")
+        failures += 1
+    else:
+        warn("Control probe INCONCLUSIVE — no control host was reachable")
+        dim("  Local-vs-server attribution cannot be settled; the served")
+        dim("  certificate is reported below regardless.")
+        failures += 1
+
+    for url in urls:
+        step(f"Probing {url}")
+        # Probe every host even when the control probe failed: what the server
+        # serves is evidence the operator needs, and reading it needs no trust
+        # store. The one control result is passed down verbatim so every URL is
+        # judged against the verdict the header already printed — a re-probe
+        # that flipped would blame the server under a header blaming the
+        # workstation, and would re-walk every address of every control host.
+        failure = tls_preflight.diagnose(url, context=context, control=control)
+        if failure is None:
+            ok(f"{url} verified")
+        else:
+            report_probe_failure(failure)
+            failures += 1
+    return failures
+
+
+def run_tls_diagnosis(tls_mode: str) -> int:
+    failures = diagnose_local_tls((HEALTH_URL, API_HEALTH_URL, APP_URL))
+    step("Server-side TLS material")
+    if tls_mode != "CloudflareOrigin":
+        # Say so rather than printing an empty section: the origin-cert checks
+        # are the reason most operators reach for this command.
+        warn(
+            f"Origin-cert checks skipped — they only apply to CloudflareOrigin "
+            f"mode (this run is --tls-mode {tls_mode}). Re-run with "
+            f"--tls-mode CloudflareOrigin to check the origin cert."
+        )
+        return 1 if failures else 0
+    if shutil.which("ssh") is None:
+        # run() short-circuits to here before check_local_tools(), so guard the
+        # one tool the server-side section needs rather than tracebacking.
+        warn("Skipped: ssh not found in PATH, so the origin cert cannot be read")
+        return 1 if failures else 0
+    try:
+        _, warnings = remote_preflight(tls_mode)
+    except DeployError:
+        warn("Skipped: the ssh preflight failed (see above)")
+        return 1
+    return 1 if failures or warnings else 0
+
+
 def run(args: argparse.Namespace) -> int:
+    if args.diagnose_tls:
+        return run_tls_diagnosis(args.tls_mode)
+
+    # The re-print below is the entire compensating control for TLS findings
+    # not failing the deploy, so it has to survive every exit path. _run_deploy
+    # fills this list in place.
+    tls_warnings: list[tls_preflight.TlsWarning] = []
+    try:
+        return _run_deploy(args, tls_warnings)
+    finally:
+        if tls_warnings:
+            step("Outstanding TLS warnings")
+            for warning in tls_warnings:
+                report_tls_warning(warning)
+
+
+def _run_deploy(
+    args: argparse.Namespace, tls_warnings: list[tls_preflight.TlsWarning]
+) -> int:
     caddy_file = DEPLOY_DIR / f"Caddyfile.{args.tls_mode}"
 
     step("Preflight")
@@ -577,7 +888,8 @@ def run(args: argparse.Namespace) -> int:
     check_repo_artifacts(caddy_file)
     if not args.force and not args.rollback:
         check_clean_tree()
-    remote_preflight()
+    _, warnings = remote_preflight(args.tls_mode)
+    tls_warnings.extend(warnings)
 
     if args.rollback:
         return do_rollback()
@@ -626,6 +938,7 @@ def build_parser() -> argparse.ArgumentParser:
             "examples:\n"
             "  python deploy/prod/deploy_central.py                              # LetsEncrypt TLS, full deploy\n"
             "  python deploy/prod/deploy_central.py --tls-mode CloudflareOrigin\n"
+            "  python deploy/prod/deploy_central.py --diagnose-tls --tls-mode CloudflareOrigin   # classify a TLS failure, deploy nothing\n"
             "  python deploy/prod/deploy_central.py --skip-build                 # restart current image, no source re-sync\n"
             "  python deploy/prod/deploy_central.py --rollback                   # swap central_server <-> central_server.prev\n"
             "  python deploy/prod/deploy_central.py --force                      # allow dirty working tree\n"
@@ -641,21 +954,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-build", action="store_true", help="restart current image without re-syncing sources")
     parser.add_argument("--rollback", action="store_true", help="swap central_server.prev back in on the server")
     parser.add_argument("--force", action="store_true", help="allow deploying from a dirty working tree")
+    parser.add_argument(
+        "--diagnose-tls",
+        action="store_true",
+        help="classify TLS failures for the relay and SPA hosts, then exit without deploying",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    if sys.version_info < MIN_PYTHON:
-        print(
-            f"deploy_central.py requires Python {'.'.join(map(str, MIN_PYTHON))}+ "
-            f"(found {sys.version.split()[0]})",
-            file=sys.stderr,
-        )
+    if not require_min_python("deploy_central.py"):
         return 1
     args = build_parser().parse_args(argv)
 
-    global _ANSI
-    _ANSI = _enable_ansi()
+    enable_ansi()
 
     try:
         return run(args)

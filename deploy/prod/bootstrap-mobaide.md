@@ -185,10 +185,11 @@ sudo ufw enable
 
 ### Option B — `CloudflareOrigin`
 
-- In Cloudflare DNS, keep the `A` record **Proxied** (orange cloud). Proxy the `www` record too; the default origin-cert hostnames below (`*.mobaide.com` plus the apex) already cover `www`, so it needs no extra cert step.
-- **Exception: the `app` record stays DNS only (gray cloud) even in this mode.** Orange cloud would put Cloudflare's ~100 s proxy idle timeout in the path of every relay WebSocket, and a gray-cloud host cannot serve the Origin cert (browsers do not trust the Origin CA) — so the `app.mobaide.com` site block deliberately has no `tls` directive and Caddy ACME-issues a Let's Encrypt cert for that one host over HTTP-01 (port 80 is already open).
+- In Cloudflare DNS, keep the `A` record **Proxied** (orange cloud). Proxy the `www` record too, and list `www` explicitly among the origin cert's hostnames below.
+- **Exception: the `app` record stays DNS only (gray cloud) even in this mode.** Orange cloud would put Cloudflare's ~100 s proxy idle timeout in the path of every relay WebSocket, and a gray-cloud host cannot serve the Origin cert (browsers do not trust the Origin CA) — so the `app.mobaide.com` site block deliberately has no `tls` directive and Caddy ACME-issues a Let's Encrypt cert for that one host over HTTP-01 (port 80 is already open). **That issuance happens only if the origin cert does not cover `app.mobaide.com` — see the no-wildcard step below.**
 - In the Cloudflare dashboard → **SSL/TLS** → **Overview**, set mode to **Full (strict)**.
 - Create an Origin Certificate: **SSL/TLS** → **Origin Server** → **Create Certificate** (default RSA 2048, 15-year validity).
+- **Scope it to exactly `mobaide.com`, `www.mobaide.com`, `api.mobaide.com` — delete the wildcard.** The dialog pre-fills `mobaide.com, *.mobaide.com`; leaving that wildcard in place breaks the SPA. Caddy's certificate cache is global, so a `*.mobaide.com` SAN matches SNI `app.mobaide.com`, and Caddy then skips ACME for it (logging `skipping automatic certificate management because one or more matching certificates are already loaded`) and serves the Origin CA cert, which no browser trusts. `deploy_central.py --tls-mode CloudflareOrigin` warns when the installed cert has this problem; `deploy_central.py --diagnose-tls --tls-mode CloudflareOrigin` reports it on demand (the `--tls-mode` flag is required — it defaults to `LetsEncrypt`, which skips the origin-cert checks entirely).
 - Save the two PEMs on the server:
   ```bash
   mkdir -p /opt/mobaide/tls
@@ -197,6 +198,18 @@ sudo ufw enable
   nano /opt/mobaide/tls/origin-key.pem    # paste private key
   chmod 600 /opt/mobaide/tls/origin-*.pem
   ```
+- Verify the pair before restarting anything — the two hashes must be identical. A mismatched pair survives a `caddy reload` (which is atomic, so the old config stays live) but bricks the **next container restart**, taking down the relay for every agent and mobile client, not just the SPA:
+  ```bash
+  openssl x509 -in /opt/mobaide/tls/origin-cert.pem -noout -pubkey | openssl sha256
+  openssl pkey  -in /opt/mobaide/tls/origin-key.pem  -pubout | openssl sha256
+  openssl x509 -in /opt/mobaide/tls/origin-cert.pem -noout -ext subjectAltName   # no wildcard here
+  ```
+- **Rotating the cert later:** replacing the PEMs in place and running a plain `caddy reload` does nothing. Caddy diffs the adapted JSON, and certificates are referenced by path, so identical config means the reload logs `config is unchanged` and keeps the old certificate in memory. Use `--force` (`deploy_central.py` does this automatically in `CloudflareOrigin` mode; `LetsEncrypt` deploys reload unforced, since that mode loads no certificate from a path):
+  ```bash
+  cd /opt/mobaide && docker compose -f docker-compose.prod.yml exec -T caddy \
+    caddy reload --force --config /etc/caddy/Caddyfile
+  ```
+  Creating a new Origin Certificate does not revoke the old one, so keep a backup of the previous PEMs and rollback stays available.
 - You can keep Cloudflare's Universal SSL active for the edge; CF Origin Cert covers the CF→VPS leg.
 
 ## 5. (Optional) Weekly SQLite backup

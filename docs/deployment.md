@@ -17,7 +17,8 @@ Follow [`deploy/prod/bootstrap-mobaide.md`](../deploy/prod/bootstrap-mobaide.md)
 
 1. On the VPS: `mkdir /opt/mobaide`, populate `/opt/mobaide/.env` from `central_server/.env.example`, open ports 80/443.
 2. DNS: `A` record for your domain → VPS public IP, plus a `www` record (both Caddyfiles 308-redirect `www` → apex). Cloudflare proxy can be on (use `CloudflareOrigin` TLS mode) or off (use `LetsEncrypt`). Add an `app` record for the browser SPA — **DNS only (gray cloud) in BOTH TLS modes**: orange cloud would put Cloudflare's ~100 s proxy idle timeout in the path of every relay WebSocket, and a gray-cloud host cannot serve the Cloudflare Origin cert (browsers do not trust the Origin CA), so Caddy ACME-issues a Let's Encrypt cert for `app.mobaide.com` in both modes.
-3. On your workstation: add an `~/.ssh/config` entry so `ssh mobaide` works with key-based auth.
+3. `CloudflareOrigin` only: **issue the Origin Certificate for exactly `mobaide.com, www.mobaide.com, api.mobaide.com` — no wildcard.** The Cloudflare dialog pre-fills `mobaide.com, *.mobaide.com`; the wildcard must be deleted. Step 2's ACME issuance for `app.mobaide.com` happens *only if no loaded certificate matches that host*, and Caddy's certificate cache is global rather than per-site — so a `*.mobaide.com` SAN matches SNI `app.mobaide.com`, Caddy skips ACME for it entirely, and the SPA serves an Origin CA certificate that every browser rejects. See [TLS certificates](#tls-certificates).
+4. On your workstation: add an `~/.ssh/config` entry so `ssh mobaide` works with key-based auth.
 
 ### Deploy
 
@@ -25,6 +26,7 @@ Follow [`deploy/prod/bootstrap-mobaide.md`](../deploy/prod/bootstrap-mobaide.md)
 cd <repo-root>
 python deploy/prod/deploy_central.py                              # LetsEncrypt (Cloudflare gray cloud)
 python deploy/prod/deploy_central.py --tls-mode CloudflareOrigin  # CF Origin Cert (orange cloud)
+python deploy/prod/deploy_central.py --diagnose-tls --tls-mode CloudflareOrigin   # classify a TLS failure, deploy nothing
 python deploy/prod/deploy_central.py --skip-build                 # restart without source re-sync
 python deploy/prod/deploy_central.py --rollback                   # swap back to previous version
 python deploy/prod/deploy_central.py --force                      # allow dirty working tree
@@ -56,7 +58,56 @@ The deploy script tars `central_server/` with excludes (`.env`, `__pycache__`, `
 
 `docker-compose.prod.yml` is re-synced from `deploy/prod/` each run, so the per-service `mem_limit` / `cpus` / `ulimits.nofile` caps (central-server `4g`/`3.0`, caddy `1g`/`1.0`, both `nofile` 65536 soft/hard) and the json-file log rotation (`max-size: 20m`, `max-file: 5` per service) apply automatically on the next deploy — no extra step. The 65536 file-descriptor ceiling is what lets the relay and Caddy hold WebSocket fan-out well past the dockerd default 1024 soft limit; the sizing rationale lives inline in the compose file and in [Capacity & revisit triggers](#capacity--revisit-triggers) below.
 
-The deploy command validates the incoming `Caddyfile.<TlsMode>` in a throwaway `caddy:2-alpine` container **before** copying it over the live `Caddyfile` (a rejected config must never end up mounted — the running caddy would keep serving from memory, but the next container restart would take down all ingress), then runs `caddy reload` inside the caddy container after `compose up`: compose never restarts a running container for a bind-mounted file's content change, so without the reload a Caddyfile-only deploy would silently keep serving the old config. The reload is atomic (a parse failure keeps the old config live and fails the deploy loudly) and, thanks to `stream_close_delay` on both proxied site blocks (apex/api and app.mobaide.com), established WebSockets — native clients and agent tunnels included — survive it. The flip side: a reload no longer severs live connections, so an emergency cut-off means a relay-side kill or a caddy container restart, not `caddy reload`.
+The deploy command validates the incoming `Caddyfile.<TlsMode>` in a throwaway `caddy:2-alpine` container **before** copying it over the live `Caddyfile` (a rejected config must never end up mounted — the running caddy would keep serving from memory, but the next container restart would take down all ingress), then runs `caddy reload` inside the caddy container after `compose up`: compose never restarts a running container for a bind-mounted file's content change, so without the reload a Caddyfile-only deploy would silently keep serving the old config. The reload is atomic (a parse failure keeps the old config live and fails the deploy loudly).
+
+`stream_close_delay` on both proxied site blocks (apex/api and app.mobaide.com) does **not** spare established WebSockets from a reload. Caddy's documentation is explicit that it "delays streaming requests such as WebSockets from being forcibly closed when the config is unloaded" — it buys a 5-minute grace and then closes every stream registered against the unloaded config, all on one timer. So a reload that actually swaps config is a *deferred* mass disconnect, not a free one; a reload that changes nothing (`config is unchanged`) costs nothing.
+
+That is why `--force` is used **only in `CloudflareOrigin` mode**. There it is unavoidable: Caddy diffs the *adapted JSON* and certificates are referenced by path, so swapping `tls/origin-*.pem` in place leaves the config byte-identical and a plain reload would keep serving the old certificate from memory while logging `config is unchanged` — see [TLS certificates](#tls-certificates). `LetsEncrypt` mode loads no certificate from a path at all (that Caddyfile has zero `tls` directives), so forcing there would buy nothing and would turn every no-op deploy into a disconnect of every agent tunnel and client socket.
+
+### TLS certificates
+
+Which host gets its certificate from where:
+
+| Host | `LetsEncrypt` mode | `CloudflareOrigin` mode |
+|---|---|---|
+| `mobaide.com`, `api.mobaide.com` | Caddy, ACME HTTP-01 | Cloudflare Origin CA, loaded from `/opt/mobaide/tls/` |
+| `www.mobaide.com` | Caddy, ACME HTTP-01 | Cloudflare Origin CA (must be an explicit SAN) |
+| `app.mobaide.com` | Caddy, ACME HTTP-01 | Caddy, ACME HTTP-01 — **conditionally**, see below |
+
+**The origin certificate must not be a wildcard.** `app.mobaide.com` is gray-cloud in both modes and has no `tls` directive in either Caddyfile, so Caddy is expected to ACME-issue for it. That only happens if no already-loaded certificate matches the host — and Caddy's certificate cache is global, not per-site. A Cloudflare Origin cert with SANs `*.mobaide.com, mobaide.com` therefore matches SNI `app.mobaide.com`, and Caddy disables automatic HTTPS for it, logging only:
+
+```
+"skipping automatic certificate management because one or more matching
+ certificates are already loaded","domain":"app.mobaide.com"
+```
+
+The SPA then serves the Origin CA certificate, which no browser trusts, and `/data/caddy/certificates` stays empty. The documented override (`auto_https ignore_loaded_certs`) is **server-scoped**, so it would also force ACME for the orange-clouded apex and api — not a usable fix. Issue the origin cert for exactly `mobaide.com, www.mobaide.com, api.mobaide.com` instead.
+
+`deploy_central.py --tls-mode CloudflareOrigin` inspects the installed cert during its preflight and warns (loudly, and again at the end of the run whatever its outcome) if its SANs shadow `app.mobaide.com` or if cert and key are not a pair. It does not block the deploy: a wildcard breaks the SPA, not the relay. When `openssl` cannot read the PEMs on the server it says the check **did not run** rather than reporting a clean result — an unreadable certificate must never be mistaken for a good one.
+
+**Rotating the origin certificate.** Replacing `/opt/mobaide/tls/origin-*.pem` in place and running a plain `caddy reload` **does nothing** — Caddy diffs the *adapted JSON*, and certificates are referenced by path, so identical config means the reload logs `config is unchanged` and keeps the old certificate in memory. `deploy_central.py` therefore passes `--force` in this TLS mode. By hand:
+
+```bash
+# 1. verify the new pair BEFORE installing it — the two hashes must match.
+#    A mismatch survives `caddy reload` (atomic; the old config stays live)
+#    but bricks the next container restart, taking down the whole relay.
+openssl x509 -in origin-cert.pem -noout -pubkey | openssl sha256
+openssl pkey  -in origin-key.pem  -pubout | openssl sha256
+openssl x509 -in origin-cert.pem -noout -ext subjectAltName   # no wildcard
+
+# 2. install, then force the reload
+cd /opt/mobaide && docker compose -f docker-compose.prod.yml exec -T caddy \
+  caddy reload --force --config /etc/caddy/Caddyfile
+```
+
+Creating a new Origin Certificate in Cloudflare does not revoke the old one, so keeping the previous PEMs preserves rollback. `caddy validate` is a useful dry run: it prints the same `skipping automatic certificate management` list, so a host's ACME status can be confirmed before touching the live config.
+
+**Diagnosing a TLS failure.** Both deploy scripts take `--diagnose-tls`, which probes without deploying and names which of {DNS, connect, local CA store, served certificate} is at fault — printing the served issuer and SANs when it is the server. It separates a broken *workstation* trust store from a broken *server* certificate with a control probe against a known-good public host, because both raise an identical `CERTIFICATE_VERIFY_FAILED`. If the workstation has no CA bundle at all (python.org macOS builds ship without one until `Install Certificates.command` runs), the scripts fall back to `certifi` automatically and say so.
+
+```bash
+python deploy/prod/deploy_central.py --diagnose-tls --tls-mode CloudflareOrigin
+python deploy/prod/deploy_web.py --diagnose-tls
+```
 
 ### Deploying the web SPA (app.mobaide.com)
 
@@ -66,7 +117,10 @@ The browser client (`web/`) is served by **Caddy from disk** at `app.mobaide.com
 python deploy/prod/deploy_web.py                # npm run build + ship
 python deploy/prod/deploy_web.py --skip-build   # reuse existing web/dist
 python deploy/prod/deploy_web.py --rollback     # repoint at previous release
+python deploy/prod/deploy_web.py --diagnose-tls # classify a TLS failure, deploy nothing
 ```
+
+`web/node_modules` is not in the repo and the deploy never installs it, so run `npm ci` in `web/` on a fresh clone first — the preflight checks for it and says so rather than letting the build die inside vite as `tsc: command not found`.
 
 Each deploy tars `web/dist`, extracts it to `/opt/mobaide/www/releases/<UTC-timestamp>-<sha>/`, and swaps the `current` symlink atomically (`ln -s` to a temp name, then `mv -T` — the symlink target stays **relative** so it resolves inside the caddy container's `/srv/www` bind mount). **No container restarts**; in-flight requests and live WebSockets are untouched. The newest 5 releases are kept, except that the release recorded in `www/.previous` is never pruned — repeated deploy/rollback cycles could otherwise push the rollback target out of the newest-5 window and silently degrade `--rollback` to the sorted-predecessor fallback (a newer, just-rejected build). `--rollback` repoints at the release that was live before the last swap (each deploy records it in `www/.previous`; a second `--rollback` toggles back, and hosts without the marker fall back to the sorted predecessor of `current`). There is no auto-rollback on a failed health probe — the swap is atomic, so a failure almost always means DNS/Caddy, not release content.
 
@@ -74,7 +128,7 @@ First-time prerequisites, in order:
 
 1. Create the `app.mobaide.com` DNS record — **gray cloud in both TLS modes** (see [One-time setup](#one-time-setup)).
 2. On a host bootstrapped **before** this feature landed, add `PAIRING_QR_TOKEN_TTL_SECONDS=600` to `/opt/mobaide/.env` by hand — bootstrap writes that line only into a freshly generated `.env`, and deploys never touch the file (operator-owned, never synced). It takes effect on the next `deploy_central.py` run (the container is recreated). Web pairing links assume the 600 s window; the 120 s code default is tuned for the scan-with-phone flow.
-3. Run `deploy_central.py` **without `--skip-build`** so the extract step creates `www/releases` before compose mounts `./www` (a compose-created mount would be root-owned) and Caddy picks up the new site block. This run recreates both containers — the one-time quiet window; every live WebSocket drops once and clients auto-reconnect (session replay covers the gap). Afterwards, Caddyfile-only changes ship via the deploy command's `caddy reload` step, which `stream_close_delay` makes non-disruptive.
+3. Run `deploy_central.py` **without `--skip-build`** so the extract step creates `www/releases` before compose mounts `./www` (a compose-created mount would be root-owned) and Caddy picks up the new site block. This run recreates both containers — the one-time quiet window; every live WebSocket drops once and clients auto-reconnect (session replay covers the gap). Afterwards, Caddyfile-only changes ship via the deploy command's `caddy reload` step; a reload that actually changes config gives established WebSockets the 5-minute `stream_close_delay` grace and then closes them (see [How upgrades work](#how-upgrades-work)), while a reload that changes nothing costs nothing.
 4. Wait ~30 s (the server's ufw limits SSH to 6 connections per 30 s), then run `deploy_web.py`.
 
 Hosts bootstrapped by the current `bootstrap-mobaide.sh` serve a placeholder page until the first web deploy; older hosts serve 404 on `/` of the app host between steps 2 and 3.

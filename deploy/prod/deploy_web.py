@@ -6,9 +6,10 @@ Usage:
     python deploy/prod/deploy_web.py --skip-build   # reuse existing web/dist
     python deploy/prod/deploy_web.py --rollback     # repoint at previous release
     python deploy/prod/deploy_web.py --force        # dirty tree / hash mismatch OK
+    python deploy/prod/deploy_web.py --diagnose-tls # classify a TLS failure, deploy nothing
 
 What it does:
-  1) Preflight: local tools, clean tree, npm build, CSP-hash guard
+  1) Preflight: local tools, web/node_modules, clean tree, npm build, CSP-hash guard
   2) Remote preflight: /opt/mobaide/www exists, https://app.mobaide.com reachable
   3) Tar web/dist -> scp -> extract to www/releases/<tag>/
   4) Atomic symlink swap: ln -s <tag> current.new && mv -T current.new current
@@ -46,29 +47,37 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Running `python deploy/prod/deploy_web.py` puts deploy/prod on sys.path[0],
-# so the central-deploy helpers import directly. deploy_central guards its
-# entry point with __main__, and its module level holds only constants.
+# so both sibling modules import directly. deploy_central guards its entry
+# point with __main__, and its module level holds only constants; tls_preflight
+# is pure and imports neither of these back, so there is no cycle.
+import tls_preflight
 from deploy_central import (
+    APP_URL,
     DEPLOY_DIR,
-    DOMAIN,
     PROJECT_ROOT,
     REMOTE_BASE,
     SSH_HOST,
+    CertVerificationError,
+    ClassifiedDeployError,
     DeployError,
     check_clean_tree,
+    diagnose_local_tls,
     dim,
+    enable_ansi,
     fail,
+    http_ssl_context,
     info,
     invoke_ssh,
     invoke_ssh_or_fail,
     ok,
+    report_probe_failure,
+    require_min_python,
     resolve_tag,
     step,
     wait_http,
     warn,
 )
 
-APP_URL = f"https://app.{DOMAIN}/"
 WEB_DIR = PROJECT_ROOT / "web"
 DIST_DIR = WEB_DIR / "dist"
 CADDYFILES = (
@@ -104,6 +113,15 @@ def build_web(skip_build: bool) -> None:
     npm = shutil.which("npm")  # resolves npm.cmd on Windows
     if npm is None:
         raise DeployError("npm not found in PATH")
+    if not (WEB_DIR / "node_modules").exists():
+        # node_modules is not in the repo, so `npm run build` on a fresh clone
+        # dies inside vite as `sh: tsc: command not found` / exit 127, which
+        # names neither the missing directory nor the fix.
+        raise DeployError(
+            f"{WEB_DIR / 'node_modules'} is missing — `npm run build` would fail "
+            f"with `tsc: command not found`. Install dependencies first:\n"
+            f"    cd {WEB_DIR} && npm ci"
+        )
     r = subprocess.run([npm, "run", "build"], cwd=WEB_DIR)
     if r.returncode != 0:
         raise DeployError(f"npm run build failed (exit {r.returncode})")
@@ -146,6 +164,28 @@ def check_csp_hash(force: bool) -> None:
         warn("--force: continuing despite CSP-hash mismatch (theme boot will be blocked)")
         return
     raise DeployError("CSP hash mismatch (see above; --force to override)")
+
+
+def report_unreachable(url: str, *, expect_200: bool) -> None:
+    """Say which of {DNS, connect, local CA store, server cert} is at fault.
+
+    `expect_200` mirrors the caller's `wait_http` contract. `diagnose` treats
+    any HTTP status as reachable and follows redirects, so for the probes that
+    demand a 200 from this host, "no transport failure" is not "nothing is
+    wrong" — it is the signal that the fault is release content.
+    """
+    failure = tls_preflight.diagnose(url, context=http_ssl_context())
+    if failure is not None:
+        report_probe_failure(failure)
+        return
+    if expect_200:
+        fail(f"{url} answered, but not with a 200 from this host.")
+        dim("  Transport, DNS and the certificate are all fine — this is release")
+        dim("  content: a missing index.html, or a redirect away from the app host.")
+        dim(f"  Check: ssh {SSH_HOST} 'readlink {REMOTE_BASE}/www/current'")
+        return
+    fail(f"{url} unreachable while polling, but a direct probe just succeeded.")
+    dim("  Transient — re-run the deploy.")
 
 
 def remote_preflight() -> None:
@@ -192,11 +232,16 @@ echo OK
         # 404 is fine (empty webroot pre-first-deploy); only transport-level
         # failure means the site block / DNS record does not exist yet.
         wait_http(APP_URL, 15, any_status=True)
+    except ClassifiedDeployError:
+        # wait_http already printed the classification; re-running it would
+        # print a second, possibly contradictory verdict.
+        raise DeployError("")
+    except CertVerificationError as e:
+        # An empty message means "details already printed" — but the
+        # unclassified fallback prints nothing, so carry the reason.
+        raise DeployError(str(e) or f"{APP_URL}: TLS verification failed")
     except DeployError:
-        fail(f"{APP_URL} unreachable.")
-        dim("  First-time setup: create the app DNS record (gray cloud / DNS")
-        dim("  only in BOTH TLS modes) and run deploy_central.py so Caddy")
-        dim("  picks up the app.mobaide.com site block. Then re-run this.")
+        report_unreachable(APP_URL, expect_200=False)
         raise DeployError("")
     ok(f"{APP_URL} reachable")
 
@@ -306,6 +351,8 @@ echo "current -> $prev"
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.diagnose_tls:
+        return 1 if diagnose_local_tls((APP_URL,)) else 0
     if args.rollback:
         return do_rollback()
 
@@ -328,10 +375,23 @@ def run(args: argparse.Namespace) -> int:
         # follow_redirects=False for the same reason as the rollback probe:
         # only a 200 from the app host itself proves the release is live.
         wait_http(APP_URL, 60, follow_redirects=False)
+    except CertVerificationError as e:
+        # wait_http already classified and printed this one.
+        fail(f"Post-deploy probe inconclusive: {e}")
+        warn("The swap is already live. A certificate fault is never fixed by a rollback.")
+        info("Rollback (only if the release itself is bad): python deploy/prod/deploy_web.py --rollback")
+        return 1
+    except ClassifiedDeployError as e:
+        # Already printed by wait_http — report the outcome, not the diagnosis.
+        fail(f"Post-deploy probe failed: {e}")
+        warn("The swap is already live; a probe failure here is usually DNS/Caddy, not release content.")
+        info("Rollback: python deploy/prod/deploy_web.py --rollback")
+        return 1
     except DeployError as e:
         # The swap already happened (atomically), so the operator needs the
         # rollback hint HERE, not only on the success path.
         fail(f"Post-deploy probe failed: {e}")
+        report_unreachable(APP_URL, expect_200=True)
         warn("The swap is already live; a probe failure here is usually DNS/Caddy, not release content.")
         info("Rollback: python deploy/prod/deploy_web.py --rollback")
         return 1
@@ -357,11 +417,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true",
         help="allow dirty working tree and CSP-hash mismatch",
     )
+    p.add_argument(
+        "--diagnose-tls", action="store_true",
+        help=f"classify why {APP_URL} does not verify, then exit without deploying",
+    )
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
+    if not require_min_python("deploy_web.py"):
+        return 1
     args = build_parser().parse_args(argv)
+    enable_ansi()
     try:
         return run(args)
     except DeployError as e:

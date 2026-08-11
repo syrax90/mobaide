@@ -3,12 +3,16 @@
 #           SSL/TLS mode set to "Full (strict)" in the Cloudflare dashboard,
 #           a free 15-year Origin Certificate generated under
 #             SSL/TLS > Origin Server > Create Certificate
-#           and saved on the VPS as:
+#           scoped to EXACTLY the proxied hosts — mobaide.com,
+#           www.mobaide.com, api.mobaide.com — with NO wildcard, and saved
+#           on the VPS as:
 #             /opt/mobaide/tls/origin-cert.pem
 #             /opt/mobaide/tls/origin-key.pem
 #           (both chmod 600, owner matches the user running docker compose).
 #           EXCEPTION: app.mobaide.com stays "DNS only" (gray cloud) with an
 #           ACME HTTP-01 cert — see the comment on its site block below.
+#           The no-wildcard requirement is what makes that exception work: a
+#           SAN covering app.mobaide.com silently disables ACME for it.
 
 # Send www to the apex. Without this block Caddy matches no site for the www
 # host and answers its default empty 200, which is what www.mobaide.com did
@@ -17,9 +21,10 @@
 #
 # 308 rather than 301 so the method and body survive the redirect.
 #
-# The same Cloudflare Origin Certificate serves this host — the free 15-year
-# origin cert covers *.mobaide.com alongside the apex — so no extra cert step is
-# needed here, only a proxied DNS record for www.
+# The same Cloudflare Origin Certificate serves this host, so www must be one
+# of its SANs. List it explicitly when issuing the cert; do NOT reach for the
+# wildcard the dashboard offers, which would also cover app.mobaide.com and
+# break it (see the app site block below). Also needs a proxied DNS record.
 
 # HSTS — the `header Strict-Transport-Security` line in both site blocks below.
 #
@@ -161,6 +166,19 @@ mobaide.com, api.mobaide.com {
 # open. If Cloudflare fronting is ever required here, orange cloud + the
 # origin cert does work: the app-level ws_ping_interval (20 s) beats the
 # 100 s idle timeout.
+#
+# CONSTRAINT: that ACME issuance happens only if NO loaded certificate matches
+# this host — i.e. only if the origin cert above is not a wildcard. Caddy's
+# certificate cache is global, not per-site, so a `*.mobaide.com` SAN loaded
+# by the blocks above matches SNI app.mobaide.com and disables automatic HTTPS
+# here. The only symptom is a log line:
+#   "skipping automatic certificate management because one or more matching
+#    certificates are already loaded","domain":"app.mobaide.com"
+# after which this host serves the Origin CA cert and every browser rejects
+# it. The override (`auto_https ignore_loaded_certs`) is server-scoped, so it
+# would force ACME for the orange-clouded hosts too and is not usable here —
+# issue the origin cert without a wildcard instead. deploy_central.py's
+# preflight checks this and warns.
 app.mobaide.com {
     import app_mobaide
 }
