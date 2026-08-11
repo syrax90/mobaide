@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { renderGoogleButton } from '../../auth/googleSignIn';
 import { generateNonce } from '../../auth/nonce';
+import { useResolvedTheme } from '../../app/useResolvedTheme';
 
 interface GoogleSignInButtonProps {
   clientId: string | null;
@@ -24,6 +25,10 @@ export function GoogleSignInButton({
 }: GoogleSignInButtonProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
+  // GIS offers no dark-surface fill, so the dark theme takes `outline` — a
+  // white button — and the Apple button beside it flips to its white variant
+  // to match. See the `[data-theme='dark']` rule in styles/global.css.
+  const theme = useResolvedTheme() === 'dark' ? 'outline' : 'filled_black';
 
   // The callback identity changes on every parent render, so keeping it in a
   // ref lets the effect depend only on the client id — otherwise GIS would be
@@ -45,6 +50,7 @@ export function GoogleSignInButton({
           parent,
           clientId,
           nonce,
+          theme,
           text,
           onCredential: (credential) => {
             // GIS holds this callback globally once the button is rendered, so
@@ -64,7 +70,7 @@ export function GoogleSignInButton({
     return () => {
       cancelled = true;
     };
-  }, [clientId, text]);
+  }, [clientId, text, theme]);
 
   if (clientId === null) return null;
 

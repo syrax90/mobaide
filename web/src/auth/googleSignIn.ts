@@ -122,6 +122,12 @@ export interface RenderGoogleButtonOptions {
   parent: HTMLElement;
   clientId: string;
   nonce: string;
+  /**
+   * Chosen by the caller so this button can match the Apple one beside it,
+   * which is drawn in our own CSS. GIS has no light-on-dark fill, so the pair
+   * is black on a light surface and white on a dark one.
+   */
+  theme: 'filled_black' | 'outline';
   /** Google owns the visible label per their branding rules. */
   text?: 'signin_with' | 'signup_with' | 'continue_with';
   onCredential: (credential: string) => void;
@@ -149,9 +155,13 @@ export async function renderGoogleButton(
       options.onCredential(response.credential);
     },
   });
+  // A theme change re-renders through here into the same container; GIS
+  // appends rather than replacing, so without this the old button survives
+  // underneath the new one.
+  options.parent.replaceChildren();
   api.renderButton(options.parent, {
     type: 'standard',
-    theme: 'outline',
+    theme: options.theme,
     size: 'large',
     shape: 'rectangular',
     logo_alignment: 'left',

@@ -1068,6 +1068,17 @@ resolves as `AppleSignInCancelledError` and is swallowed — only a
 browser-blocked popup produces a message, because it is the one the user can
 act on.
 
+Drawing it by hand is also what lets the two providers match. GIS renders its
+button inside a cross-origin frame, so its only appearance levers are the
+`renderButton` options, and it has no light-on-dark fill. The pair is therefore
+chosen by resolved theme rather than fixed: `filled_black` beside Apple's black
+button on the light surface, `outline` beside Apple's white variant on the dark
+one. `GoogleSignInButton` reads `useResolvedTheme()` — the same value
+`ThemeProvider` stamps onto `data-theme` — and re-renders when it flips, which
+clears the container first because GIS appends rather than replaces. The rest is
+matched by hand: the same 320×40 box, and a 14px/500 label, which is what GIS
+renders at `size: 'large'`.
+
 The delete-account panel gains a third re-auth branch for the same reason the
 sign-in exists: an Apple-only account has no password and no Google identity,
 so without it this milestone would create users who can sign in and never
