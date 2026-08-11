@@ -185,12 +185,19 @@ function TerminalView({ model, kind, headerLabel }: TerminalViewProps) {
         <label className="terminal-toggle" title="Pass Ctrl+V to terminal">
           <input
             type="checkbox"
+            aria-label="Pass Ctrl+V to terminal"
             checked={passCtrlV}
             onChange={(event) => {
               setPassCtrlV(event.target.checked);
             }}
           />
-          <span className="terminal-toggle-label">Pass Ctrl+V to terminal</span>
+          {/* aria-label pins the accessible name, so the visible text can
+              shrink to "Ctrl+V" on narrow screens without renaming the
+              control for a screen reader. */}
+          <span className="terminal-toggle-label" aria-hidden="true">
+            <span className="terminal-toggle-label-full">Pass Ctrl+V to terminal</span>
+            <span className="terminal-toggle-label-short">Ctrl+V</span>
+          </span>
         </label>
         <button
           type="button"

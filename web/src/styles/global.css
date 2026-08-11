@@ -845,6 +845,16 @@ input[type='radio']:checked {
   box-shadow: inset 0 0 0 2px var(--brand-2), inset 0 0 0 5px var(--surface);
 }
 
+/* Windows High Contrast strips author backgrounds and box-shadows, which is
+   everything the pixel squares use to show state — hand the controls back to
+   the UA there so the checked mark stays visible in system colors. */
+@media (forced-colors: active) {
+  input[type='checkbox'],
+  input[type='radio'] {
+    appearance: auto;
+  }
+}
+
 /* endregion */
 
 /* region terminal (WEB-05) */
@@ -969,6 +979,13 @@ input[type='radio']:checked {
   color: var(--text-muted);
   cursor: pointer;
   white-space: nowrap;
+}
+
+/* The short form only exists on narrow screens; the checkbox's accessible
+   name is pinned by aria-label, so swapping the visible text changes nothing
+   for a screen reader. */
+.terminal-toggle-label-short {
+  display: none;
 }
 
 .terminal-stage {
@@ -2714,8 +2731,14 @@ body:has(dialog[open]) {
     padding: 16px;
   }
 
-  .terminal-toggle-label {
+  /* Swap the toggle's long label for a compact one — never an unlabelled
+     square: a hover title is unreachable on a touchscreen. */
+  .terminal-toggle-label-full {
     display: none;
+  }
+
+  .terminal-toggle-label-short {
+    display: inline;
   }
 }
 

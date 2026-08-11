@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
 
 interface ModalProps {
   /** id of the element that names the dialog. */
@@ -29,9 +29,19 @@ export function Modal({
 }: ModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
-  useEffect(() => {
+  // Layout effect, and the element captured in the closure: every caller
+  // unmounts the Modal to dismiss it, and removing an open dialog skips the
+  // native close algorithm — focus would land on document.body instead of the
+  // button that opened it. Closing in the cleanup runs while the dialog is
+  // still connected, so the trigger gets focus back on every dismissal path
+  // (Esc and Cancel buttons alike). A passive effect's cleanup would be too
+  // late — it runs after the node has left the DOM.
+  useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (dialog !== null && !dialog.open) dialog.showModal();
+    return () => {
+      if (dialog !== null && dialog.open) dialog.close();
+    };
   }, []);
 
   return (
