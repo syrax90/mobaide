@@ -326,6 +326,45 @@ class TestImmediateDeletionHappyPath:
 
         assert await deletion_db.validate_and_consume_refresh("r-imm-1") is None
 
+    async def test_purge_drops_push_registrations_with_the_device_rows(
+        self,
+        deletion_service: AuthService,
+        deletion_db: Database,
+    ) -> None:
+        """The immediate path deliberately does NOT call
+        ``clear_push_tokens_for_user`` — the cascade deletes the
+        ``mobile_devices`` rows outright, so a clear would have no observable
+        effect."""
+        from central_server.auth.models import DeleteAccountRequest
+
+        user = await _make_password_user(
+            deletion_db, deletion_service, "push@example.com", "pw",
+        )
+        await deletion_db.upsert_mobile_device(
+            device_id="dev-imm", user_id=user["id"], name="iPhone", platform="ios",
+        )
+        await deletion_db.set_push_token(
+            "dev-imm", user["id"], "ios", "tok-imm", "sandbox",
+        )
+        assert len(await deletion_db.list_push_targets(user["id"])) == 1
+
+        await deletion_service.request_account_deletion(
+            _build_payload(user),
+            source="android",
+            proof=DeleteAccountRequest(
+                method="password", password="pw", mode="immediate",
+            ),
+        )
+
+        assert await deletion_db.list_push_targets(user["id"]) == []
+        cur = await deletion_db.conn.execute(
+            "SELECT COUNT(*) AS n FROM mobile_devices WHERE user_id = ?",
+            (user["id"],),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        assert row["n"] == 0
+
 
 class TestImmediateDeletionGuards:
     async def test_seed_admin_rejected_even_with_immediate_mode(

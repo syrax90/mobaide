@@ -249,6 +249,81 @@ class TestRequestAccountDeletion:
         last = routing_tracker.calls[-1]
         assert last[0] == "disconnect_user"
 
+    async def test_schedule_clears_push_tokens_on_every_device(
+        self,
+        deletion_service: AuthService,
+        deletion_db: Database,
+    ) -> None:
+        """The clear cannot be left to the devices: one that is offline or
+        uninstalled never runs that path. An owned agent may still reconnect
+        during the 14-day grace window, so the tokens must be dropped
+        server-side or the account keeps receiving attention pushes."""
+        from central_server.auth.models import DeleteAccountRequest
+
+        user = await _make_password_user(
+            deletion_db, deletion_service, "push@example.com", "pw",
+        )
+        for device_id in ("dev-phone", "dev-tablet"):
+            await deletion_db.upsert_mobile_device(
+                device_id=device_id,
+                user_id=user["id"],
+                name=device_id,
+                platform="ios",
+            )
+            await deletion_db.set_push_token(
+                device_id, user["id"], "ios", f"tok-{device_id}", "sandbox",
+            )
+        assert len(await deletion_db.list_push_targets(user["id"])) == 2
+
+        scheduled_iso = await deletion_service.request_account_deletion(
+            _build_payload(user),
+            source="android",
+            proof=DeleteAccountRequest(method="password", password="pw"),
+        )
+
+        assert scheduled_iso is not None
+        assert await deletion_db.list_push_targets(user["id"]) == []
+
+    async def test_cancel_does_not_restore_tokens_but_allows_reregistration(
+        self,
+        deletion_service: AuthService,
+        deletion_db: Database,
+    ) -> None:
+        """Cancelling deliberately leaves the tokens cleared — the client
+        re-POSTs its token on the next launch, and that path must still work
+        because the device row itself was never revoked."""
+        from central_server.auth.models import DeleteAccountRequest
+
+        user = await _make_password_user(
+            deletion_db, deletion_service, "recover@example.com", "pw",
+        )
+        await deletion_db.upsert_mobile_device(
+            device_id="dev-1", user_id=user["id"], name="iPhone", platform="ios",
+        )
+        await deletion_db.set_push_token(
+            "dev-1", user["id"], "ios", "tok-old", "sandbox",
+        )
+        await deletion_service.request_account_deletion(
+            _build_payload(user),
+            source="android",
+            proof=DeleteAccountRequest(method="password", password="pw"),
+        )
+
+        assert await deletion_service.cancel_account_deletion(user["id"]) is not None
+        assert await deletion_db.list_push_targets(user["id"]) == []
+
+        assert await deletion_db.set_push_token(
+            "dev-1", user["id"], "ios", "tok-new", "production",
+        ) is True
+        assert await deletion_db.list_push_targets(user["id"]) == [
+            {
+                "device_id": "dev-1",
+                "platform": "ios",
+                "push_token": "tok-new",
+                "push_environment": "production",
+            }
+        ]
+
 
 class TestRequestAccountDeletionFailures:
     async def test_seed_admin_refused(

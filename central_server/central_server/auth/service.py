@@ -1121,7 +1121,10 @@ class AuthService:
           2. Verify fresh credential proof.
           3. Set ``users.scheduled_deletion_at`` + ``deletion_requested_at``.
           4. Write a ``deletion_audit`` row in ``pending`` state.
-          5. Revoke every active mobile refresh token for the user.
+          5. Revoke every active mobile refresh token for the user and clear
+             every device push token: an owned agent can still reconnect during
+             the grace window, and the device it would push to may be offline
+             or signed out. Re-registration is deliberately not gated.
           6. Close the user's WS connections + each owned-agent's WS with
              ``4010``. The routing table snapshot is taken before any DB
              row that invalidates the lookup keys.
@@ -1136,7 +1139,9 @@ class AuthService:
              before any destructive step).
           4. Revoke refresh tokens + close WS-4010 (mirrors scheduled order
              so live sessions cannot race the purge).
-          5. Cascade ``delete_user``.
+          5. Cascade ``delete_user`` — it DELETEs the ``mobile_devices``
+             rows, so the scheduled path's push-token clear has no
+             counterpart here.
           6. Stamp audit ``completed``; email the final-purge confirmation.
         """
         user_id = user_payload.sub
@@ -1178,6 +1183,7 @@ class AuthService:
         )
         revoked = await self._db.revoke_all_refresh_tokens_for_user(user_id)
         revoked += await self._db.revoke_all_user_refresh_tokens(user_id)
+        cleared_push = await self._db.clear_push_tokens_for_user(user_id)
 
         if self._routing is not None:
             agent_ids = await self._db.list_agents_for_user(user_id)
@@ -1215,8 +1221,8 @@ class AuthService:
 
         logger.info(
             "account_deletion.requested user_id=%s source=%s "
-            "scheduled_for=%s revoked_sessions=%d",
-            user_id, source, scheduled_iso, revoked,
+            "scheduled_for=%s revoked_sessions=%d cleared_push_tokens=%d",
+            user_id, source, scheduled_iso, revoked, cleared_push,
         )
         return scheduled_iso
 

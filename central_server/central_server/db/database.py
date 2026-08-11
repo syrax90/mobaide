@@ -2758,6 +2758,23 @@ class Database:
         )
         await self.conn.commit()
 
+    async def clear_push_tokens_for_user(self, user_id: str) -> int:
+        """Drop every push registration the user owns (account-deletion path).
+
+        Unlike the owner-scoped helpers this is not scoped to
+        ``revoked_at IS NULL``, and still cannot over-report: the only
+        statement that *sets* ``revoked_at`` nulls both push columns in the
+        same UPDATE, and ``set_push_token`` refuses revoked rows.
+        """
+        cursor = await self.conn.execute(
+            "UPDATE mobile_devices SET "
+            "    push_token = NULL, push_environment = NULL "
+            "WHERE user_id = ? AND push_token IS NOT NULL",
+            (user_id,),
+        )
+        await self.conn.commit()
+        return cursor.rowcount
+
     async def list_push_targets(self, user_id: str) -> list[dict]:
         """Active devices of a user that registered a push token."""
         cursor = await self.conn.execute(
