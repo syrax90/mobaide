@@ -313,6 +313,11 @@
             ],
             "title": "Branch Name"
           },
+          "debug": {
+            "default": false,
+            "title": "Debug",
+            "type": "boolean"
+          },
           "effort": {
             "anyOf": [
               {

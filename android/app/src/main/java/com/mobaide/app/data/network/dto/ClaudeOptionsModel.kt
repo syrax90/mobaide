@@ -24,4 +24,8 @@ data class ClaudeOptionsModel(
     val fast_mode: Boolean = false,
     val ultracode: Boolean = false,
     val append_system_prompt: String? = null,
+    // Unlike skip_permissions above, this default is safe to leave at the wire
+    // default: the server also treats an absent debug as false, so the field
+    // being omitted when the toggle is off carries exactly the right meaning.
+    val debug: Boolean = false,
 )

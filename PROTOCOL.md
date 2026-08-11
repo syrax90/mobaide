@@ -115,6 +115,33 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-08-11, Claude debug toggle): **additive
+  optional field, no version bump.** ``claude_options`` gains ``debug`` — bool,
+  default ``false`` — emitted by the agent as ``--debug``. Previously
+  ``ClaudeLauncher._build_argv`` passed ``--debug`` unconditionally on every
+  Claude session (interactive, Auto Scan and worktree alike), so every user saw
+  Claude Code's verbose diagnostics; it is now a per-session choice surfaced as
+  a **Debug logging** toggle in all three clients' create-session wizards,
+  default off. No other managed CLI ever carried the flag, and the relay
+  forwards ``claude_options`` opaquely, so ``central_server`` is untouched.
+  * The wire-absence default (``false``) **matches** the clients' UI default,
+    which is what makes this additive rather than a ``skip_permissions``-style
+    hazard: an omitted field means exactly what a client leaving the toggle off
+    means. Old client + new agent therefore lands on debug **off** — the
+    intended outcome. New client + old agent is a harmless no-op: the old
+    agent ignores the unknown key and keeps hardcoding ``--debug`` until it
+    updates.
+  * Shared-fixture consumers (iOS ``ClaudeOptionsModel``, the web
+    ``claudeOptionsSchema``) both carry the field, so all three fixtures that
+    embed a ``claude_options`` object were updated:
+    ``tests/protocol_fixtures/dto/agent/{ClaudeOptionsModel,CreateSessionRequest,StartScanRequest}.json``.
+    Only ``ClaudeOptionsModel.json`` exercises both values — ``debug: true`` in
+    its ``full`` case and ``debug: false`` materialized in
+    ``empty_defaults_materialize_skip_permissions_true``; the
+    ``CreateSessionRequest`` / ``StartScanRequest`` cases carry it explicitly as
+    ``false`` (their own defaults cases have no ``claude_options`` block at
+    all). Both consumers emit every boolean on re-encode, so an omitted key
+    there fails the round-trip.
 * Additive delta within proto-v7 (2026-08-05, stale-attach fix): **agent-side
   only — no wire change, no version bump.** ``RelayClient._handle_session_input``
   no longer auto-creates a session for a ``CH_SESSION_IO`` frame naming an

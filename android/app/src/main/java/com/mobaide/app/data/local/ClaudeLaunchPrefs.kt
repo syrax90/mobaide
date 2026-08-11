@@ -20,4 +20,5 @@ data class ClaudeLaunchPrefs(
     val skipPermissions: Boolean = false,
     val noMemory: Boolean = false,
     val planMode: Boolean = false,
+    val debug: Boolean = false,
 )

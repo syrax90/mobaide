@@ -325,6 +325,7 @@ private struct CreateSessionContent: View {
             claudeAdvancedControls(
                 fastMode: $model.autoScanClaudeFastMode,
                 ultracode: $model.autoScanClaudeUltracode,
+                debug: $model.autoScanClaudeDebug,
                 appendSystemPrompt: $model.autoScanClaudeAppendSystemPrompt
             )
         }
@@ -386,6 +387,7 @@ private struct CreateSessionContent: View {
             claudeAdvancedControls(
                 fastMode: $model.claudeFastMode,
                 ultracode: $model.claudeUltracode,
+                debug: $model.claudeDebug,
                 appendSystemPrompt: $model.claudeAppendSystemPrompt
             )
         }
@@ -421,10 +423,15 @@ private struct CreateSessionContent: View {
     private func claudeAdvancedControls(
         fastMode: Binding<Bool>,
         ultracode: Binding<Bool>,
+        debug: Binding<Bool>,
         appendSystemPrompt: Binding<String>
     ) -> some View {
         Toggle("Fast mode (Opus only)", isOn: fastMode)
         Toggle("Ultracode", isOn: ultracode)
+        Toggle("Debug logging", isOn: debug)
+        Text("Claude Code prints verbose diagnostics into the terminal.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
         TextField("Append system prompt", text: appendSystemPrompt, axis: .vertical)
             .lineLimit(1...4)
             .autocorrectionDisabled()

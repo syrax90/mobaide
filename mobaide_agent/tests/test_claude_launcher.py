@@ -22,13 +22,13 @@ async def test_argv_minimal_adds_bypass(tmp_path: Path):
     permissions at the wire/launch layer (the mobile UI's own toggle starts
     off, but always sends its choice explicitly — see the ClaudeOptionsModel
     comments on both platforms). The default effort is ``high`` (the CLI
-    default), so no ``--effort`` flag."""
+    default), so no ``--effort`` flag; ``debug`` defaults off, so no ``--debug``."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)), ClaudeOptions()
     )
     assert spec.argv == [
-        "claude", "--debug",
+        "claude",
         "--dangerously-skip-permissions",
     ]
 
@@ -43,7 +43,7 @@ async def test_argv_plan_mode_with_default_skip_permissions(tmp_path: Path):
         ClaudeOptions(plan_mode=True),
     )
     assert spec.argv == [
-        "claude", "--debug",
+        "claude",
         "--permission-mode", "plan",
         "--allow-dangerously-skip-permissions",
     ]
@@ -58,21 +58,21 @@ async def test_argv_plan_mode_without_skip_permissions(tmp_path: Path):
         ClaudeOptions(plan_mode=True, skip_permissions=False),
     )
     assert spec.argv == [
-        "claude", "--debug",
+        "claude",
         "--permission-mode", "plan",
     ]
 
 
 @pytest.mark.asyncio
 async def test_argv_no_plan_no_skip(tmp_path: Path):
-    """Neither plan_mode nor skip_permissions: bare claude --debug (the default
-    effort high omits the flag)."""
+    """Neither plan_mode nor skip_permissions: bare claude (the default effort
+    high omits the flag)."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)),
         ClaudeOptions(plan_mode=False, skip_permissions=False),
     )
-    assert spec.argv == ["claude", "--debug"]
+    assert spec.argv == ["claude"]
 
 
 @pytest.mark.asyncio
@@ -85,7 +85,7 @@ async def test_argv_no_skip_with_initial_prompt(tmp_path: Path):
         ClaudeOptions(skip_permissions=False, initial_prompt="run it"),
     )
     assert spec.argv == [
-        "claude", "--debug",
+        "claude",
         "--", "run it",
     ]
 
@@ -102,6 +102,7 @@ async def test_argv_all_flags(tmp_path: Path):
             effort="xhigh",
             append_system_prompt="be terse",
             initial_prompt="hello world",
+            debug=True,
         ),
     )
     assert spec.argv == [
@@ -120,6 +121,20 @@ async def test_argv_all_flags(tmp_path: Path):
         "hello world",
     ]
     assert spec.env["CLAUDE_NO_MEMORY"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_argv_debug_off_by_default_on_when_requested(tmp_path: Path):
+    """``--debug`` is opt-in per session. It used to be unconditional, which put
+    Claude Code's verbose diagnostics into every user's terminal."""
+    launcher = ClaudeLauncher()
+    off = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
+    assert "--debug" not in off.argv
+
+    on = await launcher.build(
+        _make_project(str(tmp_path)), ClaudeOptions(debug=True),
+    )
+    assert on.argv[1] == "--debug"
 
 
 @pytest.mark.asyncio

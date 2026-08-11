@@ -210,7 +210,6 @@ async def test_build_uses_resolved_absolute_path(monkeypatch, tmp_path):
     spec = await ClaudeLauncher().build(project, ClaudeOptions())
 
     assert spec.argv[0] == "/abs/path/to/claude"
-    assert spec.argv[1] == "--debug"
 
 
 @pytest.mark.asyncio

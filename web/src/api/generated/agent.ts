@@ -656,6 +656,11 @@ export interface components {
             append_system_prompt?: string | null;
             /** Branch Name */
             branch_name?: string | null;
+            /**
+             * Debug
+             * @default false
+             */
+            debug: boolean;
             /** Effort */
             effort?: ("low" | "medium" | "high" | "xhigh" | "max") | null;
             /**

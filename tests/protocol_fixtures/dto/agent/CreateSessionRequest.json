@@ -11,7 +11,7 @@
         "cols": 120,
         "project_name": "proj",
         "cli": "claude",
-        "claude_options": { "plan_mode": true, "no_memory": false, "skip_permissions": true, "worktree": false, "fast_mode": false, "ultracode": false },
+        "claude_options": { "plan_mode": true, "no_memory": false, "skip_permissions": true, "worktree": false, "fast_mode": false, "ultracode": false, "debug": false },
         "worktree": true,
         "branch_name": "feature/x"
       }

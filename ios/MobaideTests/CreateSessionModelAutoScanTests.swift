@@ -345,6 +345,46 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         XCTAssertTrue(options.ultracode)
     }
 
+    func testAutoScanDebugIsReadFromItsOwnBucketNotTheClaudeStep() {
+        let prefs = isolatedPrefs()
+        prefs.setLastUsedClaudeOptions(ClaudeLaunchPrefs(debug: false))
+        prefs.setLastUsedAutoScanOptions(ClaudeLaunchPrefs(debug: true))
+
+        let model = makeModel(autoScanRepo: makeAutoScanRepo(), prefs: prefs)
+
+        XCTAssertTrue(model.autoScanClaudeDebug)
+        XCTAssertFalse(model.claudeDebug, "the Claude Code step keeps its own saved OFF choice")
+        XCTAssertTrue(model.autoScanClaudeOptions().debug)
+
+        model.autoScanClaudeDebug = false
+        model.claudeDebug = true
+        XCTAssertFalse(
+            model.autoScanClaudeOptions().debug,
+            "a Claude Code edit must not bleed into the scan's options"
+        )
+    }
+
+    func testStartAutoScanSendsDebugAndPersistsItIntoItsOwnBucket() async throws {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = await loadedModel(autoScanRepo: makeAutoScanRepo(), prefs: prefs)
+        model.selectStoredProject("linear")
+        model.autoScanClaudeDebug = true
+        StubURLProtocol.enqueue(status: 200, body: "{}")
+
+        await model.startAutoScan()
+
+        XCTAssertNil(model.error)
+        let data = try XCTUnwrap(StubURLProtocol.bodies.last)
+        let body = try WireJSON.decoder().decode(JSONValue.self, from: data)
+        XCTAssertEqual(body["claude_options"]?["debug"]?.boolValue, true)
+        XCTAssertEqual(prefs.getLastUsedAutoScanOptions()?.debug, true)
+        XCTAssertNil(
+            prefs.getLastUsedClaudeOptions(),
+            "an Auto Scan launch leaves the Claude Code bucket alone"
+        )
+    }
+
     func testAutoScanNeverBuildsASessionRequest() async {
         StubURLProtocol.reset()
         let model = await loadedModel(autoScanRepo: makeAutoScanRepo())
