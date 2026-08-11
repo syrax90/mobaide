@@ -577,7 +577,24 @@ def remote_preflight(tls_mode: str) -> tuple[str, list[tls_preflight.TlsWarning]
     if tls_mode == "CloudflareOrigin":
         origin = tls_preflight.parse_origin_probe(probe.output.splitlines())
         if not origin.present:
-            warn(f"{ORIGIN_CERT} / {ORIGIN_KEY} missing — CloudflareOrigin mode needs them")
+            # A checked negative finding, not an unrunnable check: return it as
+            # a warning so --diagnose-tls exits non-zero and run()'s finally
+            # re-prints it, instead of the deploy failing later inside an
+            # opaque remote `caddy validate`.
+            warnings = [
+                tls_preflight.TlsWarning(
+                    "absent",
+                    f"{ORIGIN_CERT} / {ORIGIN_KEY} missing — CloudflareOrigin mode needs them",
+                    (
+                        "The apex/www/api site blocks load these PEMs by path, so",
+                        "`caddy validate` will reject the config and the deploy will",
+                        "fail with a message that does not name the cause.",
+                        "Install them per deploy/prod/bootstrap-mobaide.md (Option B),",
+                        "scoped to the proxied hosts only, with no wildcard.",
+                    ),
+                )
+            ]
+            report_tls_warning(warnings[0])
         else:
             warnings = tls_preflight.origin_cert_warnings(origin, DOMAIN)
             for warning in warnings:

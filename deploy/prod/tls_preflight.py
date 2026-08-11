@@ -175,6 +175,35 @@ def certifi_remedy() -> str:
     return "\n".join(lines)
 
 
+def cloudflare_origin_remedy(code: int, host: str) -> str:
+    lines = [
+        "This is a CloudflareOrigin-mode fault on the edge->origin leg, so it",
+        f"is invisible to a browser-style check of {host}.",
+    ]
+    if code == 525:
+        lines += [
+            "525 is an SSL handshake failure between Cloudflare and the origin —",
+            "most often a cert/key pair that do not match, or Caddy not serving",
+            "the origin cert at all (the container failed to start after a cert",
+            "swap). Note a mismatched pair survives `caddy reload` and only",
+            "bricks the NEXT container restart.",
+        ]
+    else:
+        lines += [
+            f"{code} means Cloudflare rejected the origin certificate under",
+            "Full (strict) — typically expired, or missing this hostname from",
+            "its SANs.",
+        ]
+    lines += [
+        "Check the origin directly, bypassing the edge:",
+        f"  ssh mobaide 'openssl s_client -connect localhost:443 -servername {host} "
+        "</dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates -ext subjectAltName'",
+        "  ssh mobaide 'docker compose -f /opt/mobaide/docker-compose.prod.yml logs caddy | tail -50'",
+        "Then: python deploy/prod/deploy_central.py --diagnose-tls --tls-mode CloudflareOrigin",
+    ]
+    return "\n".join(lines)
+
+
 def inconclusive_remedy(host: str, port: int, timeout: int) -> str:
     """Say the attribution is unresolved, and show the served cert regardless.
 
@@ -283,8 +312,20 @@ def parse_origin_probe(lines: Iterable[str]) -> OriginProbe:
     return OriginProbe(present, sans, cert_pub, key_pub, sans_read)
 
 
+def proxied_hosts(domain: str) -> tuple[str, ...]:
+    """The hosts whose Caddy site blocks load the origin cert by path."""
+    return (domain, f"www.{domain}", f"api.{domain}")
+
+
 def origin_cert_warnings(probe: OriginProbe, domain: str) -> list[TlsWarning]:
-    """The two ways the server's origin cert can be wrong before a deploy."""
+    """The ways the server's origin cert can be wrong before a deploy.
+
+    Both directions of the SAN list matter. Covering `app.<domain>` breaks the
+    SPA; failing to cover a proxied host breaks that host outright under
+    Cloudflare's Full (strict), and `api.<domain>` carries every agent and
+    mobile client. The runbook now asks the operator to hand-edit that list in
+    the dashboard, so checking only one direction would bless half the edit.
+    """
     if not probe.present:
         return []
     warnings: list[TlsWarning] = []
@@ -311,6 +352,32 @@ def origin_cert_warnings(probe: OriginProbe, domain: str) -> list[TlsWarning]:
                 ),
             )
         )
+    # Gated on sans_read for the same reason the caller gates its reassurances:
+    # an unreadable SAN list is not evidence that a host is uncovered.
+    if probe.sans_read:
+        uncovered = [
+            host
+            for host in proxied_hosts(domain)
+            if not any(san_covers_host(san, host) for san in probe.sans)
+        ]
+        if uncovered:
+            warnings.append(
+                TlsWarning(
+                    "missing",
+                    f"Origin cert does not cover {', '.join(uncovered)} — "
+                    f"{'those hosts' if len(uncovered) > 1 else 'that host'} "
+                    f"will fail TLS at the Cloudflare edge",
+                    (
+                        "Caddy serves these hosts from this certificate, so a name",
+                        "missing from its SANs is a 526 under Cloudflare's",
+                        "Full (strict) mode. api.<domain> carries every agent tunnel",
+                        "and mobile client, not just the SPA.",
+                        "Re-issue the origin certificate for exactly:",
+                        f"  {', '.join(proxied_hosts(domain))}",
+                        f"Currently present: {', '.join(probe.sans) or '(none)'}",
+                    ),
+                )
+            )
     if probe.cert_pubkey and probe.key_pubkey and probe.cert_pubkey != probe.key_pubkey:
         warnings.append(
             TlsWarning(
@@ -532,7 +599,32 @@ def diagnose(
     try:
         with urllib.request.urlopen(url, timeout=timeout, context=context):
             return None
-    except urllib.error.HTTPError:
+    except urllib.error.HTTPError as e:
+        # A Cloudflare 52x is emitted BY THE EDGE, over a perfectly valid edge
+        # certificate, when the edge->origin leg fails. The handshake this
+        # probe just completed therefore says nothing about the origin, and
+        # treating any HTTP status as success would answer a broken origin with
+        # "verified" — on an orange-clouded host, the exact incident this
+        # module exists for. 525 is precisely how a mismatched origin cert/key
+        # presents. These codes are Cloudflare-specific, so no ordinary origin
+        # response is misread; the gray-clouded app host can never emit them.
+        if e.code in (525, 526):
+            return ProbeFailure(
+                "tls_server",
+                f"Cloudflare returned {e.code} for {host} — its TLS connection to "
+                f"the origin failed (the edge certificate you just verified is not "
+                f"the origin's)",
+                cloudflare_origin_remedy(e.code, host),
+            )
+        if e.code in (521, 522, 523):
+            return ProbeFailure(
+                "connect",
+                f"Cloudflare returned {e.code} for {host} — the edge could not "
+                f"reach the origin",
+                "DNS and the edge are fine; the origin is down or unreachable\n"
+                "from Cloudflare. Check `docker compose ps` and `ufw status` on\n"
+                "the server, and that the DNS record points at the right address.",
+            )
         return None
     except (urllib.error.URLError, ssl.SSLError, OSError) as e:
         cert_error = _cert_error(e)

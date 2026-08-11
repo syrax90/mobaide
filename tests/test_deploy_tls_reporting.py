@@ -54,6 +54,12 @@ WILDCARD_SAN_LINE = (
     "ORIGIN_SANS=X509v3 Subject Alternative Name:      "
     "DNS:*.mobaide.com, DNS:mobaide.com "
 )
+# The hand-edit the runbook now asks for, one name short: api.<domain> is the
+# host every agent tunnel and mobile client connects through.
+NO_API_SAN_LINE = (
+    "ORIGIN_SANS=X509v3 Subject Alternative Name:      "
+    "DNS:mobaide.com, DNS:www.mobaide.com "
+)
 SHADOW_OK = "Origin cert SANs do not shadow app.mobaide.com"
 PAIR_OK = "Origin cert and key are a matching pair"
 
@@ -165,12 +171,42 @@ class TestRemotePreflightOriginReassurances:
     def test_absent_pems_are_reported_as_missing_not_as_unreadable(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        """Absent PEMs are a checked negative, not a check that could not run.
+
+        The distinction is the exit code: an unreadable cert leaves nothing
+        asserted either way, while PEMs the Caddyfile loads by path being
+        absent is a finding -- and returning it is what stops ``--diagnose-tls``
+        exiting 0 on a server whose next deploy dies inside a remote
+        ``caddy validate``.
+        """
         warnings, out = _preflight_output(monkeypatch, capsys, "ORIGIN_CERT_MISSING=1")
-        assert warnings == []
+        assert [w.kind for w in warnings] == ["absent"]
+        assert "CloudflareOrigin mode needs them" in warnings[0].headline
+        assert "caddy validate" in "\n".join(warnings[0].lines)
+        assert "[XX] " in out
         assert "CloudflareOrigin mode needs them" in out
-        assert out.count("[!!]") == 1
+        assert "did NOT run" not in out
         assert SHADOW_OK not in out
         assert PAIR_OK not in out
+
+    def test_a_cert_missing_a_proxied_host_keeps_the_all_clears_it_earned(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The third finding kind flows through the same reporting path as the
+        other two: printed, returned, and muting neither unrelated affirmative.
+        """
+        warnings, out = _preflight_output(
+            monkeypatch,
+            capsys,
+            "ORIGIN_PRESENT=1",
+            NO_API_SAN_LINE,
+            "ORIGIN_CERT_PUB=8f4e1c",
+            "ORIGIN_KEY_PUB=8f4e1c",
+        )
+        assert [w.kind for w in warnings] == ["missing"]
+        assert "[XX] Origin cert does not cover api.mobaide.com" in out
+        assert f"[OK] {SHADOW_OK}" in out
+        assert f"[OK] {PAIR_OK}" in out
 
 
 class TestRunReprintsOutstandingWarnings:

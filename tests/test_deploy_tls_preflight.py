@@ -63,6 +63,9 @@ OPENSSL_SAN_OUTPUT = (
     "DNS:api.mobaide.com, DNS:mobaide.com, DNS:www.mobaide.com "
 )
 APP_URL = "https://app.mobaide.com/"
+# The apex is Proxied under CloudflareOrigin, so this is the URL whose probe
+# can be answered by the Cloudflare edge rather than by the origin.
+HEALTH_URL = "https://mobaide.com/api/health"
 
 
 class TestSanCoversHost:
@@ -223,6 +226,66 @@ class TestOriginCertWarnings:
         body = "\n".join(warnings[0].lines)
         assert "mobaide.com, www.mobaide.com, api.mobaide.com" in body
         assert "--force" in body
+
+    def test_an_uncovered_proxied_host_is_a_third_kind_of_finding(self) -> None:
+        """The SAN list is checked in both directions, because the runbook now
+        asks the operator to hand-edit it in the dashboard. Over-coverage
+        breaks the SPA; a name dropped from it is a 526 for that host under
+        Full (strict), and api.<domain> carries every agent tunnel and mobile
+        client rather than a browser someone would notice.
+        """
+        probe = tls_preflight.OriginProbe(
+            True, ("mobaide.com", "www.mobaide.com"), "8f4e1c", "8f4e1c", True
+        )
+        warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com")
+        assert [w.kind for w in warnings] == ["missing"]
+        assert "api.mobaide.com" in warnings[0].headline
+        assert "www.mobaide.com" not in warnings[0].headline
+        body = "\n".join(warnings[0].lines)
+        assert "mobaide.com, www.mobaide.com, api.mobaide.com" in body
+
+    def test_every_uncovered_host_lands_in_one_finding(self) -> None:
+        """Callers branch on the *set* of kinds and print one block per
+        warning, so an apex-only cert has to name both survivors in one place.
+        """
+        probe = tls_preflight.OriginProbe(
+            True, ("mobaide.com",), "8f4e1c", "8f4e1c", True
+        )
+        warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com")
+        assert [w.kind for w in warnings] == ["missing"]
+        assert "www.mobaide.com" in warnings[0].headline
+        assert "api.mobaide.com" in warnings[0].headline
+
+    def test_a_wildcard_only_cert_is_over_and_under_covered_at_once(self) -> None:
+        """A wildcard spans exactly one label: `*.mobaide.com` does cover the
+        www and api hosts, so neither is "missing" -- but it leaves the apex,
+        served from this same file, uncovered while still shadowing the SPA
+        host. Deleting the apex SAN is one keystroke in that dashboard edit.
+        """
+        probe = tls_preflight.OriginProbe(
+            True, ("*.mobaide.com",), "8f4e1c", "8f4e1c", True
+        )
+        warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com")
+        assert [w.kind for w in warnings] == ["shadow", "missing"]
+        assert "www." not in warnings[1].headline
+        assert "api." not in warnings[1].headline
+
+    @pytest.mark.parametrize(
+        ("sans_read", "kinds"),
+        [(True, ["missing"]), (False, [])],
+        ids=["read-and-empty", "never-read"],
+    )
+    def test_only_a_san_list_that_was_read_can_prove_a_host_uncovered(
+        self, sans_read: bool, kinds: list[str]
+    ) -> None:
+        """Both cases arrive as an empty ``sans``. "Not in the list" is not
+        evidence when there is no list: warning there sends the operator to
+        re-issue a certificate that may be perfectly correct, on the strength
+        of a missing openssl.
+        """
+        probe = tls_preflight.OriginProbe(True, (), "8f4e1c", "8f4e1c", sans_read)
+        warnings = tls_preflight.origin_cert_warnings(probe, "mobaide.com")
+        assert [w.kind for w in warnings] == kinds
 
     def test_mismatched_public_keys_warn_as_a_separate_finding(self) -> None:
         probe = tls_preflight.OriginProbe(
@@ -541,6 +604,28 @@ class TestCertifiRemedy:
         assert "does NOT contain the Cloudflare Origin CA" in remedy
 
 
+class TestCloudflareOriginRemedy:
+    """Two codes, two unrelated mechanisms -- and the operator acts on the
+    mechanism, not on the number.
+    """
+
+    def test_525_names_the_mismatched_pair_and_its_delayed_fuse(self) -> None:
+        remedy = tls_preflight.cloudflare_origin_remedy(525, "mobaide.com")
+        assert "do not match" in remedy
+        assert "NEXT container restart" in remedy
+        assert "-servername mobaide.com" in remedy
+        assert "Full (strict)" not in remedy
+
+    def test_526_names_the_strict_mode_rejection_not_a_key_mismatch(self) -> None:
+        """Cloudflare accepted the handshake here, so re-uploading a matching
+        pair fixes nothing: the cert is expired or does not carry this name.
+        """
+        remedy = tls_preflight.cloudflare_origin_remedy(526, "mobaide.com")
+        assert "Full (strict)" in remedy
+        assert "SANs" in remedy
+        assert "do not match" not in remedy
+
+
 class TestCreateDnsRemedy:
     """The gray-cloud instruction is right for exactly one host.
 
@@ -589,6 +674,10 @@ def _cert_verification_failure() -> urllib.error.URLError:
             "unable to get local issuer certificate (_ssl.c:1028)"
         )
     )
+
+
+def _http_error(url: str, code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(url, code, f"status {code}", {}, None)  # type: ignore[arg-type]
 
 
 def _urlopen(target: BaseException | None, *, control_verifies: bool) -> Callable[..., Any]:
@@ -759,6 +848,64 @@ class TestDiagnoseTransport:
         assert "accepted the connection" in failure.detail
         assert "docker compose logs central-server" in failure.remedy
         assert "certificate" not in failure.remedy.lower()
+
+
+class TestCloudflareEdgeStatuses:
+    """A 52x is emitted BY THE EDGE, over a valid edge certificate.
+
+    The handshake this probe just completed therefore says nothing about the
+    origin behind it, so the "any status means reachable" rule -- correct for
+    an origin response -- reported a broken origin as verified on every
+    orange-clouded host. 525 is exactly how the mismatched cert/key this
+    module warns about presents.
+    """
+
+    @pytest.mark.parametrize("code", [525, 526])
+    def test_a_failed_origin_handshake_is_a_server_certificate_verdict(
+        self, monkeypatch: pytest.MonkeyPatch, code: int
+    ) -> None:
+        _install_transport(
+            monkeypatch,
+            urlopen=_urlopen(_http_error(HEALTH_URL, code), control_verifies=True),
+        )
+        failure = tls_preflight.diagnose(HEALTH_URL)
+        assert failure is not None
+        assert failure.kind == "tls_server"
+        assert str(code) in failure.detail
+        assert "mobaide.com" in failure.detail
+        assert "-servername mobaide.com" in failure.remedy
+
+    @pytest.mark.parametrize("code", [521, 522, 523])
+    def test_an_origin_the_edge_cannot_reach_is_not_a_certificate_verdict(
+        self, monkeypatch: pytest.MonkeyPatch, code: int
+    ) -> None:
+        """Nothing answered the edge at all, so no certificate was involved --
+        and ``tls_server`` is the class that suppresses the auto-rollback.
+        """
+        _install_transport(
+            monkeypatch,
+            urlopen=_urlopen(_http_error(HEALTH_URL, code), control_verifies=True),
+        )
+        failure = tls_preflight.diagnose(HEALTH_URL)
+        assert failure is not None
+        assert failure.kind == "connect"
+        assert str(code) in failure.detail
+        assert "docker compose ps" in failure.remedy
+        assert "certificate" not in failure.remedy.lower()
+
+    @pytest.mark.parametrize("code", [404, 500])
+    def test_an_ordinary_origin_response_still_counts_as_reachable(
+        self, monkeypatch: pytest.MonkeyPatch, code: int
+    ) -> None:
+        """Only Cloudflare's own range is edge-emitted. A 404 (the webroot
+        before the first web deploy) or a 500 from the app itself proves the
+        whole chain terminated at the origin, which is what this probe asks.
+        """
+        _install_transport(
+            monkeypatch,
+            urlopen=_urlopen(_http_error(HEALTH_URL, code), control_verifies=True),
+        )
+        assert tls_preflight.diagnose(HEALTH_URL) is None
 
 
 class TestProbeControl:
@@ -1055,6 +1202,20 @@ class TestCaddyfileAcmePrecondition:
             header for header, body in blocks.items() if "tls" in _directives(body)
         )
         assert loaders == ["mobaide.com, api.mobaide.com", "www.mobaide.com"]
+
+    def test_the_san_check_covers_exactly_the_hosts_that_load_the_cert(self) -> None:
+        """``proxied_hosts`` is the list the ``missing`` finding is computed
+        from, so a site block gained or dropped here silently changes what that
+        check can see -- and an unchecked host is a 526 for every client of it.
+        """
+        blocks = _caddyfile("CloudflareOrigin")
+        loaded_by = {
+            host.strip()
+            for header, body in blocks.items()
+            if "tls" in _directives(body)
+            for host in header.split(",")
+        }
+        assert loaded_by == set(tls_preflight.proxied_hosts(deploy_central.DOMAIN))
 
     def test_letsencrypt_mode_loads_no_certificate_at_all(self) -> None:
         blocks = _caddyfile("LetsEncrypt")
