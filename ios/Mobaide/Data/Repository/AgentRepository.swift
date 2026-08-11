@@ -39,6 +39,24 @@ final class AgentRepository: AgentStatusApplying {
         setAgents([])
     }
 
+    /// Cached agent for `id`, or nil when the account does not own one by that
+    /// id. Callers that act on an id from outside the app must resolve it here
+    /// first — the list is `GET /api/agents` under the user's own token.
+    func agent(id: String) -> AgentSummaryResponse? {
+        currentAgents.first { $0.agent_id == id }
+    }
+
+    /// Resolve `id`, refreshing once when it is not cached. Returning nil means
+    /// the account genuinely does not own it; a refresh failure *throws* rather
+    /// than reporting nil, so a caller cannot mistake "we could not find out"
+    /// for "no such agent" — the cache is empty on every cold start, so that
+    /// distinction carries the whole first lookup after launch.
+    func resolveAgent(id: String) async throws -> AgentSummaryResponse? {
+        if let cached = agent(id: id) { return cached }
+        try await refreshAgents()
+        return agent(id: id)
+    }
+
     /// Patch one agent's `online` flag in place. No-op when the agent is not
     /// cached or the flag is unchanged (Android parity — avoids spurious emits).
     func updateAgentOnline(agentId: String, online: Bool) async {

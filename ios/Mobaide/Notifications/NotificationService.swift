@@ -13,7 +13,7 @@ import os
 /// thread-safe singleton, `onTap` is `@Sendable`) or lock-guarded
 /// (`authorizationRequest`, `teardownEpoch`), so there is no unsynchronised
 /// mutable state.
-final class NotificationService: NSObject, UNUserNotificationCenterDelegate, AttentionPresenting, @unchecked Sendable {
+final class NotificationService: NSObject, @MainActor UNUserNotificationCenterDelegate, AttentionPresenting, @unchecked Sendable {
     /// Loud delivery: heads-up banner + sound, on the Lock Screen and while
     /// foregrounded. Deliberately excludes `.provisional`, which grants
     /// quiet-only delivery (Notification Center, no banner, no sound) and
@@ -22,7 +22,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
 
     private let tracker: ForegroundSessionTracker
     private let center: UNUserNotificationCenter
-    private let onTap: @Sendable (String) -> Void
+    private let onTap: @MainActor @Sendable (String, String?) -> Void
 
     /// Single-flight slot for an in-flight `requestAuthorization`, so the
     /// coordinator's fire-and-forget request and a racing inline request from
@@ -43,7 +43,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
     init(
         tracker: ForegroundSessionTracker,
         center: UNUserNotificationCenter = .current(),
-        onTap: @escaping @Sendable (String) -> Void
+        onTap: @escaping @MainActor @Sendable (String, String?) -> Void
     ) {
         self.tracker = tracker
         self.center = center
@@ -59,6 +59,16 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
         from userInfo: [AnyHashable: Any], identifier: String
     ) -> String {
         (userInfo["session_id"] as? String) ?? identifier
+    }
+
+    /// Agent that raised the alert, or nil when the notification carries no
+    /// such claim. Only remote alerts do: the relay stamps `agent_id` from the
+    /// authenticated tunnel, while a locally-posted alert has an empty
+    /// `userInfo` and is by construction the connected agent's. Blank counts as
+    /// no claim — the dispatcher sends `str(payload.get("agent_id", ""))`, so a
+    /// payload without one arrives as `""` rather than absent.
+    static func agentId(from userInfo: [AnyHashable: Any]) -> String? {
+        (userInfo["agent_id"] as? String).flatMap { $0.isBlank ? nil : $0 }
     }
 
     /// Notification request for a session's attention, or nil when the reason
@@ -188,9 +198,27 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
 
     // MARK: - UNUserNotificationCenterDelegate
 
+    // Both witnesses below MUST stay `@MainActor`. Swift bridges an `async`
+    // delegate method to its ObjC completion-handler selector through an
+    // `@isolated(any)` task that adopts the *callee's* isolation, so a
+    // nonisolated witness calls UIKit's completion handler from the
+    // cooperative pool. UIKit answers that handler by running
+    // `_updateSnapshotAndStateRestorationWithAction:` — the app-switcher
+    // snapshot and state-restoration write it performs when a response
+    // launched or resumed the app — which asserts main-thread affinity and
+    // aborts the process. It only fires when the app was not already active,
+    // which is why an off-main handler looked harmless in the foreground.
+    //
+    // The isolated conformance carries that isolation: the SDK requirements are
+    // nonisolated over non-Sendable parameters, which no plain `@MainActor`
+    // witness could satisfy. Same shape as `QrScannerView`'s
+    // `@MainActor AVCaptureMetadataOutputObjectsDelegate` and `TerminalHostView`'s
+    // `@MainActor TerminalViewDelegate`.
+
     /// Called only while the app is in the foreground. Suppress iff the user
     /// is already viewing this session; otherwise present a banner (a
     /// different session's alert still fires while the app is open).
+    @MainActor
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
@@ -206,18 +234,22 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
         return suppress ? [] : [.banner, .sound, .list]
     }
 
-    /// A tapped notification deep-links to its session. The id is handed to
-    /// the router, which stashes it until `.fullyConnected` on a cold start
-    /// or navigates immediately when warm.
+    /// The ids are handed to the router, which stashes them until
+    /// `.fullyConnected` on a cold start or navigates immediately when warm.
+    /// Dispatched inline rather than from a detached task so the route is
+    /// already pushed by the time UIKit takes its post-response snapshot.
+    @MainActor
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
+        let userInfo = response.notification.request.content.userInfo
         onTap(
             Self.sessionId(
-                from: response.notification.request.content.userInfo,
+                from: userInfo,
                 identifier: response.notification.request.identifier
-            )
+            ),
+            Self.agentId(from: userInfo)
         )
     }
 }
