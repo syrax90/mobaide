@@ -814,3 +814,147 @@ describe('TerminalSessionModel selection focus', () => {
     expect(focus).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('TerminalSessionModel scrollbar geometry', () => {
+  const ALT_SCREEN_ON = '[?1049h';
+  const ALT_SCREEN_OFF = '[?1049l';
+
+  /** Comfortably past the 24-row default grid, so a real scrollback exists. */
+  const lines = (count: number): string =>
+    Array.from({ length: count }, (_, index) => `line ${String(index)}`).join('\r\n');
+
+  async function withScrollback(): Promise<Harness> {
+    const context = await liveRunning();
+    context.deliverFrame(outputFrame(lines(80)));
+    await settle();
+    return context;
+  }
+
+  it('offers nothing to scroll until the buffer outgrows the grid', async () => {
+    const { model } = await liveRunning();
+
+    expect(model.scrollbar.getState()).toEqual({
+      scrollable: false,
+      size: 1,
+      offset: 1,
+    });
+  });
+
+  it('shrinks the thumb and parks it at the tail while pinned', async () => {
+    const { model } = await withScrollback();
+    const view = model.scrollbar.getState();
+
+    expect(view.scrollable).toBe(true);
+    expect(view.size).toBeLessThan(1);
+    expect(view.offset).toBe(1);
+    // The reason the geometry is a second store: it moves here while `pinned`
+    // and `unread` do not, so a field on `state` would re-render the whole
+    // screen chrome once per inbound frame.
+    expect(model.state.getState().pinned).toBe(true);
+  });
+
+  it('moves the thumb when the slider seeks', async () => {
+    const { model } = await withScrollback();
+
+    model.scrollToOffset(0);
+
+    expect(model.scrollbar.getState().offset).toBe(0);
+    expect(model.state.getState().pinned).toBe(false);
+  });
+
+  it('counts no unread rows for the seek itself', async () => {
+    // A seek moves `viewportY` down exactly as a ring-full trim does, so
+    // without the re-baseline the slider would light its own badge.
+    const { model } = await withScrollback();
+
+    model.scrollToOffset(0);
+
+    expect(model.state.getState().unread).toBe(0);
+  });
+
+  it('keeps counting rows that arrive while the slider is held off the tail', async () => {
+    const { model, deliverFrame } = await withScrollback();
+    model.scrollToOffset(0);
+
+    deliverFrame(outputFrame(lines(5)));
+    await settle();
+
+    expect(model.state.getState().unread).toBeGreaterThan(0);
+    expect(model.state.getState().pinned).toBe(false);
+  });
+
+  it('returns to the tail when the slider is dragged back down', async () => {
+    const { model } = await withScrollback();
+    model.scrollToOffset(0);
+
+    model.scrollToOffset(1);
+
+    expect(model.scrollbar.getState().offset).toBe(1);
+    expect(model.state.getState().pinned).toBe(true);
+    expect(model.state.getState().unread).toBe(0);
+  });
+
+  it('retracts the control on the alternate screen, which has no scrollback', async () => {
+    const { model, deliverFrame } = await withScrollback();
+    expect(model.scrollbar.getState().scrollable).toBe(true);
+
+    deliverFrame(outputFrame(ALT_SCREEN_ON));
+    await settle();
+
+    expect(model.scrollbar.getState().scrollable).toBe(false);
+  });
+
+  /** jsdom lays nothing out, so the grid height the conversion divides by is stated. */
+  function statedHostHeight(model: Model, height: number): void {
+    Object.defineProperty(model.host, 'clientHeight', {
+      value: height,
+      configurable: true,
+    });
+  }
+
+  it('spends a pixel wheel at one row per cell height', async () => {
+    const { model } = await withScrollback();
+    // 24 rows over 360 px, so a row is 15 px and 150 px is ten of them.
+    statedHostHeight(model, 24 * 15);
+    model.scrollToOffset(0);
+
+    model.scrollByPixels(150);
+
+    expect(model.term.buffer.active.viewportY).toBe(10);
+  });
+
+  it('carries a sub-row remainder between wheel events', async () => {
+    // 70 px is 4 rows and two thirds. Rounding each event down would spend 8
+    // rows over two of them; carrying spends 9, which is what the same travel
+    // buys over the grid.
+    const { model } = await withScrollback();
+    statedHostHeight(model, 24 * 15);
+    model.scrollToOffset(0);
+
+    model.scrollByPixels(70);
+    model.scrollByPixels(70);
+
+    expect(model.term.buffer.active.viewportY).toBe(9);
+  });
+
+  it('refuses a pixel wheel while the host has no layout to measure', async () => {
+    // Before attach, where jsdom leaves every terminal in these suites.
+    const { model } = await withScrollback();
+    model.scrollToOffset(0);
+
+    model.scrollByPixels(150);
+
+    expect(model.term.buffer.active.viewportY).toBe(0);
+  });
+
+  it('restores it when the program leaves the alternate screen', async () => {
+    const { model, deliverFrame } = await withScrollback();
+    deliverFrame(outputFrame(ALT_SCREEN_ON));
+    await settle();
+
+    deliverFrame(outputFrame(ALT_SCREEN_OFF));
+    await settle();
+
+    expect(model.scrollbar.getState().scrollable).toBe(true);
+  });
+});

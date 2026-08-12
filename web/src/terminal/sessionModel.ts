@@ -61,6 +61,14 @@ import {
   type RendererHandle,
   type RendererKind,
 } from './terminalRenderer';
+import {
+  initialScrollbarView,
+  lineForOffset,
+  sameScrollbarView,
+  scrollbarView,
+  wheelRows,
+  type ScrollbarView,
+} from './terminalScrollbar';
 import { executePayload } from './terminalSubmit';
 import { terminalTheme } from './terminalTheme';
 
@@ -146,6 +154,16 @@ export class TerminalSessionModel {
   readonly term: Terminal;
   readonly host: HTMLDivElement;
   readonly state: UseBoundStore<StoreApi<TerminalViewState>>;
+  /**
+   * Slider geometry, deliberately kept out of {@link state}.
+   *
+   * `TerminalView` subscribes to the whole view store, so a field there would
+   * re-render the entire screen chrome — the header bar and every overlay —
+   * every time the thumb moved, which is every row a busy PTY prints. Only
+   * `TerminalScrollbar` reads this one, and `publishScrollbar` quantizes before
+   * writing it.
+   */
+  readonly scrollbar: UseBoundStore<StoreApi<ScrollbarView>>;
 
   private readonly io: SessionIoChannel;
   private readonly fit = new FitAddon();
@@ -166,6 +184,8 @@ export class TerminalSessionModel {
   /** Consumed by the next sample: re-baseline instead of accruing unread. */
   private rebaseline = false;
   private pointerDragging = false;
+  /** Sub-row wheel remainder, so a touchpad's small deltas are not rounded off. */
+  private wheelCarry = 0;
 
   private lastRows = 0;
   private lastCols = 0;
@@ -182,6 +202,7 @@ export class TerminalSessionModel {
     this.scheduler = options.scheduler ?? realScheduler;
     this.onDispose = options.onDispose;
     this.state = create<TerminalViewState>()(() => initialViewState());
+    this.scrollbar = create<ScrollbarView>()(() => initialScrollbarView());
 
     this.host = document.createElement('div');
     this.host.className = 'terminal-host';
@@ -562,16 +583,82 @@ export class TerminalSessionModel {
     const userDriven = this.rebaseline || this.pointerDragging;
     this.rebaseline = false;
     const previous = this.follow;
-    const next = foldSample(previous, this.currentSample(), userDriven);
+    const sample = this.currentSample();
+    const next = foldSample(previous, sample, userDriven);
     this.follow = next;
+    // Ahead of the early return below: the thumb tracks the buffer even while
+    // pinned, where neither `pinned` nor `unread` ever changes.
+    this.publishScrollbar(sample);
     if (next.pinned === previous.pinned && next.unread === previous.unread) return;
     this.state.setState({ pinned: next.pinned, unread: next.unread });
   }
 
+  private publishScrollbar(sample: ScrollSample): void {
+    const next = scrollbarView(sample, this.term.rows);
+    if (sameScrollbarView(this.scrollbar.getState(), next)) return;
+    this.scrollbar.setState(next);
+  }
+
+  /**
+   * Move the viewport on the user's behalf.
+   *
+   * Every one of these arms `rebaseline` before it scrolls, so the tally reads
+   * the move as the user's rather than as rows they missed, and calls
+   * `sampleFollow()` afterwards — xterm emits no `onScroll` for a scroll that
+   * lands where it already was, and the flag has to be consumed either way or
+   * it would suppress the next genuine accrual.
+   */
   jumpToBottom(): void {
     this.rebaseline = true;
     this.term.scrollToBottom();
     this.sampleFollow();
+  }
+
+  scrollToTop(): void {
+    this.rebaseline = true;
+    this.term.scrollToTop();
+    this.sampleFollow();
+  }
+
+  /** Seek the slider, as a fraction of the scrollback. */
+  scrollToOffset(offset: number): void {
+    this.rebaseline = true;
+    this.term.scrollToLine(lineForOffset(offset, this.term.buffer.active.baseY));
+    this.sampleFollow();
+  }
+
+  scrollByLines(lines: number): void {
+    if (lines === 0) return;
+    this.rebaseline = true;
+    this.term.scrollLines(lines);
+    this.sampleFollow();
+  }
+
+  scrollByPages(pages: number): void {
+    if (pages === 0) return;
+    this.rebaseline = true;
+    this.term.scrollPages(pages);
+    this.sampleFollow();
+  }
+
+  /**
+   * Scroll by a pixel-mode wheel delta, in rows.
+   *
+   * The conversion belongs here rather than in the view because the cell height
+   * does: the client is the sole size authority, so the grid it fitted is what
+   * says how tall a row is.
+   */
+  scrollByPixels(deltaY: number): void {
+    const { rows, carry } = wheelRows(deltaY, this.cellHeight(), this.wheelCarry);
+    this.wheelCarry = carry;
+    this.scrollByLines(rows);
+  }
+
+  /** Row height in CSS pixels, or 0 before the host has been laid out. */
+  private cellHeight(): number {
+    const rows = this.term.rows;
+    if (rows <= 0 || this.host.clientHeight <= 0) return 0;
+    return this.host.clientHeight / rows;
   }
 
   /**

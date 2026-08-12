@@ -1003,6 +1003,16 @@ input[type='radio']:checked {
   position: relative;
   flex: 1;
   min-height: 0;
+
+  /*
+   * FitAddon reserves the scrollbar gutter as a constant —
+   * `options.overviewRuler?.width || 14` whenever `scrollback` is non-zero — and
+   * measures no real bar; xterm 6 dropped `scrollBarWidth` entirely. The grid is
+   * therefore already inset by exactly this much, so the slider below costs no
+   * columns and forces no reflow. Keep the two numbers equal across an addon
+   * bump, and see the header of `terminal/terminalScrollbar.ts`.
+   */
+  --terminal-scrollbar-width: 14px;
 }
 
 /*
@@ -1014,6 +1024,148 @@ input[type='radio']:checked {
 .terminal-host {
   position: absolute;
   inset: 0;
+}
+
+/*
+ * Two scrollbars have to be cleared out of this gutter, and neither is the one
+ * you would expect.
+ *
+ * `.xterm-viewport` is a leftover layer: xterm 6 scrolls through the VS Code
+ * `ScrollableElement` beside it, so this element's scroll height equals its
+ * client height and the `overflow-y: scroll` it still ships paints a
+ * permanently empty native bar wherever scrollbars are classic rather than
+ * overlay.
+ */
+.terminal-host .xterm-viewport {
+  scrollbar-width: none;
+}
+
+.terminal-host .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+ * The real one: `ScrollableElement` renders its own 14 px slider into exactly
+ * this gutter at `z-index: 11`, held at `opacity: 0` until it fades in on
+ * interaction — but with `pointer-events: auto` the whole time. Left in place
+ * it sits invisibly on top of ours and swallows every press, so the slider
+ * would paint here and be dragged there: no `role="scrollbar"`, no keyboard, no
+ * unread re-baseline, and none of the coarse-pointer target below. Only the
+ * widget is removed; the wheel and every scroll API live on the scrollable
+ * element itself and are untouched.
+ */
+.terminal-host .xterm-scrollable-element > .scrollbar {
+  display: none;
+}
+
+.terminal-scrollbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--terminal-scrollbar-width);
+  background: var(--bg-2);
+  box-shadow: inset 2px 0 0 0 var(--surface-2);
+  /* A touch that starts on the track drags the thumb; it must not pan the page
+     instead, and the browser decides that before the first pointermove. */
+  touch-action: none;
+}
+
+/*
+ * With no scrollback the track is decoration, and decoration must not sit in
+ * the hit path: it covers a strip of the terminal, so a wheel or a click here
+ * would be swallowed instead of reaching xterm. Dropping out also releases the
+ * `touch-action` above, which is only wanted while there is a thumb to drag.
+ * Same split as `.terminal-overlay` and its retry button.
+ */
+.terminal-scrollbar-idle {
+  pointer-events: none;
+}
+
+/*
+ * Height and offset resolve together because the minimum appears in both: a
+ * thumb clamped up to 1.5rem travels less than the full track, and computing
+ * `top` against the unclamped height would run it past the bottom edge.
+ */
+.terminal-scrollbar-thumb {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: max(var(--thumb-size), 1.5rem);
+  top: calc((100% - max(var(--thumb-size), 1.5rem)) * var(--thumb-offset));
+  /* --gray, not --surface-2: this is a control the user has to find and hit,
+     and --surface-2 on --bg-2 is ~1.2:1. --rule is decorative-frames-only for
+     the same reason. */
+  background: var(--gray);
+  box-shadow: inset 0 0 0 2px var(--bg-2);
+  cursor: grab;
+}
+
+.terminal-scrollbar-thumb:hover,
+.terminal-scrollbar:focus-visible .terminal-scrollbar-thumb {
+  background: var(--text-muted);
+}
+
+.terminal-scrollbar-thumb:active {
+  /* --accent rather than --brand: it is the light purple on dark and the dark
+     purple on light, so the drag state reads on both plates. */
+  background: var(--accent);
+  cursor: grabbing;
+}
+
+.terminal-scrollbar:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/*
+ * The visual gutter is pinned at 14 px by FitAddon's reservation, which is well
+ * under a fingertip and sits on the screen edge the browser's own back gesture
+ * claims. Where the pointer is coarse the thumb takes a transparent hit area
+ * reaching into the grid, so the drag can start clear of that edge; the thumb's
+ * own box is unchanged, and a pseudo-element is outside `getBoundingClientRect`,
+ * so the drag math still measures the 14 px it paints.
+ *
+ * Gated on the *primary* pointer being coarse, not `any-pointer`: on a
+ * touchscreen laptop this strip would otherwise swallow mouse selections of the
+ * right-hand columns.
+ */
+@media (pointer: coarse) {
+  .terminal-scrollbar-thumb::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 2.75rem;
+  }
+}
+
+/*
+ * Its own block rather than the shared one further up, and deliberately *after*
+ * the rules above: both selectors are one class, so the shared block — which
+ * sits earlier in the file — loses the cascade to the `--gray` fill and the
+ * thumb comes out the same Canvas white as its track.
+ *
+ * The thumb also needs the opposite treatment to everything in that block. A
+ * ring is enough for a button; here the whole signal is a filled block that
+ * differs from the track, and on a touch device this is the only route into the
+ * scrollback. System colour keywords survive the forced palette, so name them.
+ */
+@media (forced-colors: active) {
+  .terminal-scrollbar {
+    border-left: 1px solid ButtonBorder;
+  }
+
+  .terminal-scrollbar-thumb {
+    background: ButtonText;
+  }
+
+  .terminal-scrollbar-thumb:hover,
+  .terminal-scrollbar-thumb:active,
+  .terminal-scrollbar:focus-visible .terminal-scrollbar-thumb {
+    background: Highlight;
+  }
 }
 
 .terminal-overlay {
@@ -1066,7 +1218,7 @@ input[type='radio']:checked {
 
 .terminal-jump {
   position: absolute;
-  right: 1rem;
+  right: calc(1rem + var(--terminal-scrollbar-width));
   bottom: 1rem;
   width: 2.5rem;
   height: 2.5rem;

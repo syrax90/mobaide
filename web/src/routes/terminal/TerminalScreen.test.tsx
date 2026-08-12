@@ -103,6 +103,26 @@ describe('TerminalScreen selection toolbar', () => {
   });
 });
 
+describe('TerminalScreen scrollbar', () => {
+  it('mounts the slider inside the stage and points it at the surface', () => {
+    // Same containment rule as the toolbar, for the same reason — and the
+    // `aria-controls` pairing is the half of it a test can hold, since the two
+    // ids are minted in different components.
+    const model = acquireTerminal('a1', 's1');
+    model.scrollbar.setState({ scrollable: true, size: 0.2, offset: 0.5 });
+
+    const { container } = renderTerminal();
+
+    const stage = container.querySelector('.terminal-stage');
+    const bar = screen.getByRole('scrollbar', { name: 'Terminal scrollback' });
+    expect(stage).toContainElement(bar);
+    expect(container.querySelector('.terminal-surface')).toHaveAttribute(
+      'id',
+      bar.getAttribute('aria-controls'),
+    );
+  });
+});
+
 describe('TerminalScreen eviction exemption', () => {
   const key = (): string => sessionChannelName('a1', 's1');
   const model = () => useTerminalStore.getState().models[key()];

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { sessionChannelName } from '../../realtime/channels';
 import { useKeyboardLock } from '../../keyboard/useKeyboardLock';
@@ -19,6 +19,7 @@ import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
 import { JumpToBottom } from './JumpToBottom';
 import { SelectionActions } from './SelectionActions';
 import { TemplatesPicker } from './TemplatesPicker';
+import { TerminalScrollbar } from './TerminalScrollbar';
 import { TerminalSurface } from './TerminalSurface';
 import { useSessionGone } from './useSessionGone';
 import { useSessionHeaderLabel } from './useSessionHeaderLabel';
@@ -103,6 +104,9 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
   const setPassCtrlV = useTerminalPrefsStore((state) => state.setPassCtrlVToTerminal);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const immersive = useKeyboardLock();
+  // Shared with the scrollbar, whose `role="scrollbar"` has to name what it
+  // controls.
+  const surfaceId = useId();
 
   const running = isSessionRunning(view.status);
   // `replayPainting` mirrors the model's own `pendingReplayWrites` term: after
@@ -178,7 +182,10 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
       </header>
 
       <div className="terminal-stage">
-        <TerminalSurface model={model} />
+        <TerminalSurface model={model} id={surfaceId} />
+        {/* Sits in the gutter FitAddon already reserves for a scrollbar, so it
+            costs no columns — see `terminalScrollbar.ts`. */}
+        <TerminalScrollbar model={model} surfaceId={surfaceId} />
         {/* Overlaid, never a flex sibling: an in-flow error would change the
             stage height, and a terminal row-count change clears the selection. */}
         {immersive.error !== null && <p className="terminal-error">{immersive.error}</p>}

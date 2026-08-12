@@ -3,6 +3,8 @@ import type { TerminalSessionModel } from '../../terminal/sessionModel';
 
 interface TerminalSurfaceProps {
   model: TerminalSessionModel;
+  /** Referenced by the scrollbar's `aria-controls`. */
+  id: string;
 }
 
 /**
@@ -17,7 +19,7 @@ interface TerminalSurfaceProps {
  * `useLayoutEffect` rather than `useEffect`: the model measures the container
  * on attach, and a paint in between would size the grid off a stale layout.
  */
-export function TerminalSurface({ model }: TerminalSurfaceProps) {
+export function TerminalSurface({ model, id }: TerminalSurfaceProps) {
   const container = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
@@ -30,5 +32,5 @@ export function TerminalSurface({ model }: TerminalSurfaceProps) {
     };
   }, [model]);
 
-  return <div className="terminal-surface" ref={container} />;
+  return <div className="terminal-surface" id={id} ref={container} />;
 }
