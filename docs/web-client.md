@@ -350,6 +350,55 @@ defaults the opposite way. Only `step`, `mode` and the project selection
 live in the URL; the ~30 option fields do not, so no prompt text reaches
 browser history.
 
+**The wizard opens where the last launch left off** (CLA-232), which is both
+mobile clients' behaviour and the one part of WEB-07 that shipped as defaults
+only. `localStorage` key `mobaide-launch-prefs` holds the four option buckets
+plus the last project name, and `launchPrefs.ts` is the seam in both
+directions. Three things are load-bearing. The buckets are **global, not per
+agent** — mobile's scoping, kept because a model or an autonomy preset is a
+preference about how the user works rather than a fact about a machine, and
+because a global bucket has nothing to re-seed when the router keeps one
+wizard instance across a change of `:agentId` (the hazard that forces
+`recentPaths` into an effect). A bucket that was never launched stays `null`
+rather than being written out at its defaults, which is what keeps Auto Scan's
+`skipPermissions: true` alive for a fresh profile while letting a stored
+`false` win. And the values are **pinned by `submit` before the round trip**:
+the config step's controls are not disabled while a create is in flight (only
+Back, Create and Cancel are), so reading live state in `onSuccess` would file
+options the launch never carried — the mobile instance of that race is
+CLA-259. Rebuilding the blob from the request instead is not the way out,
+because `buildCreateRequest` drops a blank `append_system_prompt` and would
+turn `''` into `undefined` on the prefill path; only the *project* comes off
+the request, where its absence is exactly what keeps an ad-hoc directory a
+recent rather than the last-used project.
+
+Two rules follow the storage precedents rather than the mobile source.
+Sanitising on read is `recentPaths`'s all-or-nothing rule applied per bucket: a
+missing key takes the mobile data-class default (Kotlin's `encodeDefaults`,
+Swift's `decodeIfPresent ?? default`), but a present-but-wrong value or an
+out-of-vocabulary enum voids that whole bucket back to `INITIAL_WIZARD_STATE`,
+because a typed `@Serializable`/`Codable` decode fails outright rather than
+salvaging the readable fields. And `codex.reasoningEffort` persists nullable
+where Kotlin and Swift store a plain `String` — the web control has a real
+third state (`null` renders "Agent default"), and nothing in this blob crosses
+a device boundary, so the wider type costs no interop. Restore re-applies the
+Antigravity `sandbox && !skipPermissions` interlock, as both mobile clients do
+(the server 422s the pair), and additionally clamps a restored effort through
+`effectiveClaudeEffort` — display-only, since `buildCreateRequest` already
+clamps through the same helper, but it avoids the blank picker Android and iOS
+render when the stored effort outruns the model's ladder. Worktree/branch,
+`add_dirs` and the Auto Scan initial prompt are per-session and are not
+persisted on any client.
+
+Not purged at sign-out, matching mobile and unlike the recents below — a
+decision worth stating with its cost rather than as a parity note. What
+survives is a project name and `append_system_prompt`, free text the user
+typed, which the agent puts on argv. Android and iOS store the same values in
+per-OS-user app storage, while `localStorage` is per *browser profile*, so on a
+shared profile the next account to sign in inherits both, pre-filled. The
+parity argument is therefore weaker here than it looks; the decision stands
+deliberately, not by default.
+
 `skip_permissions` is the trap the wizard is built around: its **wire-absence
 default is `true`**, so an omitted field launches with
 `--dangerously-skip-permissions`. Requests are re-parsed through
@@ -811,7 +860,8 @@ oversized frame trips the agent tunnel's 4 MB limit and drops *every*
 session on that agent. The toggle is the one piece of terminal state that
 outlives the tab: `terminalPrefsStore` persists it under `localStorage` key
 `mobaide-terminal`, the second persisted key after `mobaide-theme` (WEB-07
-adds `mobaide-agent` and `mobaide-sessions`; CLA-256 adds the wizard's
+adds `mobaide-agent` and `mobaide-sessions`, and CLA-232 the wizard's global
+`mobaide-launch-prefs`; CLA-256 adds the wizard's
 per-agent `recent_custom_paths::<agentId>`, deliberately unprefixed for
 mobile parity — the one prefix sweep in `src/` is CLA-258's
 `clearAllRecentPaths()`, which keys off `recent_custom_paths::` itself, so

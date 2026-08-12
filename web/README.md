@@ -122,8 +122,15 @@ wizard.
   cannot leak a field into the request. `skip_permissions` defaults to
   **true** on wire absence, so every boolean is sent explicitly and the
   request is re-parsed through a strict schema before it goes out.
-- Two new persisted keys: `mobaide-agent` (selected agent) and
-  `mobaide-sessions` (last-used session per agent).
+- The wizard opens on the options each kind was last **successfully** launched
+  with, and pre-selects the last project. Written only after a launch
+  succeeds, from values pinned before the request goes out — the option
+  controls stay live while it is in flight. Worktree/branch, Antigravity
+  `add_dirs` and the Auto Scan prompt are per-session and deliberately not
+  remembered, matching Android and iOS.
+- Three new persisted keys: `mobaide-agent` (selected agent),
+  `mobaide-sessions` (last-used session per agent) and `mobaide-launch-prefs`
+  (last-used launch options per mode — global, not per agent, as on mobile).
 
 ## Agents and pairing (WEB-08)
 
@@ -164,7 +171,8 @@ list at `/`. The layering mirrors the WEB-04 split:
 - `src/routes/terminal/` is presentation only.
 - `src/stores/terminalPrefsStore.ts` persists the terminal preferences under
   `localStorage` key `mobaide-terminal` (the second persisted key, after
-  `mobaide-theme`; WEB-07 adds `mobaide-agent` and `mobaide-sessions`).
+  `mobaide-theme`; WEB-07 adds `mobaide-agent`, `mobaide-sessions` and
+  `mobaide-launch-prefs`).
 
 Dependencies: `@xterm/xterm` plus the `fit`, `webgl`, `clipboard` and
 `unicode11` addons. `@xterm/headless` is a devDependency only — it backs the

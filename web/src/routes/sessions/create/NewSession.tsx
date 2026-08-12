@@ -17,6 +17,11 @@ import type { SessionResponse } from '../../../protocol/dto/session';
 import { customSessionTypeId } from '../../../protocol/wireSchema';
 import { useLastSessionStore } from '../../../stores/lastSessionStore';
 import {
+  readLaunchPrefs,
+  useLaunchPrefsStore,
+  type LaunchPrefsSnapshot,
+} from '../../../stores/launchPrefsStore';
+import {
   forgetRecentPath,
   noteRecentPath,
   readRecentPaths,
@@ -41,6 +46,7 @@ import {
   codexLoginErrorMessage,
   customTypeErrorMessage,
 } from './createErrors';
+import { applyLaunchPrefs, launchPrefsFromState } from './launchPrefs';
 import { buildModeCards } from './modeCatalog';
 import {
   INITIAL_WIZARD_STATE,
@@ -56,20 +62,69 @@ import {
   serializeWizardLocation,
 } from './wizardUrl';
 
+/**
+ * File a completed launch as the starting point for the next one.
+ *
+ * `snapshot` is `null` for the modes that carry no options — Terminal and
+ * custom agent types — which is the same set that sends no options block on the
+ * wire. `projectName` is absent for an ad-hoc directory; the generated request
+ * type allows an explicit `null` there too, so both stand for "no project".
+ *
+ * Never allowed to throw. `persist` calls `localStorage.setItem` on every `set`
+ * with no guard of its own, and this runs inside a mutation's `onSuccess`,
+ * which TanStack awaits inside a try that routes any throw to `onError` — so a
+ * refused write would report a session the agent has already started as a
+ * failed launch, and skip the cache seed and navigation queued behind it. Same
+ * rule, and the same set of causes, as `recentPaths.writePaths`.
+ */
+function persistLaunchPrefs(
+  snapshot: LaunchPrefsSnapshot | null,
+  projectName: string | null | undefined,
+): void {
+  // One guard per write, not one around both. `set` lands the in-memory half
+  // before `persist` throws, so a shared block would leave the options updated
+  // and the project name never written at all — and the next wizard in this
+  // same tab would then pre-select the wrong project off the stale value. Each
+  // write costs only its own durability.
+  try {
+    if (snapshot !== null) useLaunchPrefsStore.getState().setLaunchPrefs(snapshot);
+  } catch {
+    // Storage refused — a partitioned context, a full quota, private mode. A
+    // forgotten preference is a cosmetic loss; failing the launch is not.
+  }
+  try {
+    if (typeof projectName === 'string' && projectName !== '') {
+      useLaunchPrefsStore.getState().setLastProjectName(projectName);
+    }
+  } catch {
+    // As above.
+  }
+}
+
 export function NewSession() {
   const { agentId } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  // Seeded from the URL once, because the reducer does not survive a remount
-  // while the search params do: without this a reload at `?path=/foo` would
-  // render an empty path field with Continue disabled, and the user would have
-  // to retype a path the URL is still carrying.
+  // Seeded from two places the reducer itself cannot see. The **URL**, because
+  // the reducer does not survive a remount while the search params do: without
+  // this a reload at `?path=/foo` would render an empty path field with
+  // Continue disabled, and the user would have to retype a path the URL is
+  // still carrying. And the **last successful launch of each kind**, which is
+  // the whole of the prefill feature — `applyLaunchPrefs` leaves a bucket that
+  // was never launched exactly as `INITIAL_WIZARD_STATE` had it, so Auto Scan
+  // keeps its `skipPermissions: true` on a fresh profile. Read here rather than
+  // in an effect because `persist` over `localStorage` hydrates synchronously
+  // during store creation, so the first render already has the stored values;
+  // and unlike `recentPaths` below there is nothing to re-read when `:agentId`
+  // changes under the one component instance the router keeps, because the
+  // buckets are global.
   const [state, dispatch] = useReducer(wizardReducer, searchParams, (params) => {
+    const base = applyLaunchPrefs(INITIAL_WIZARD_STATE, readLaunchPrefs());
     const { selection } = parseWizardLocation(params);
-    if (selection.kind !== 'customPath') return INITIAL_WIZARD_STATE;
+    if (selection.kind !== 'customPath') return base;
     return {
-      ...INITIAL_WIZARD_STATE,
+      ...base,
       customPathDraft: selection.path,
       customPathError: validateCustomPath(selection.path),
     };
@@ -83,6 +138,13 @@ export function NewSession() {
   // The request that hit `codex_auth_required`, re-sent verbatim once the key
   // lands. Captured rather than rebuilt so the retry cannot pick up edits.
   const pendingRequest = useRef<CreateSessionRequest | null>(null);
+  // The options the in-flight launch was built from, pinned by `submit` before
+  // the round trip. The config step's controls are *not* disabled while
+  // submitting (only Back, Create and Cancel are), so reading live state in
+  // `onSuccess` would remember a toggle the launch never carried. Deliberately
+  // not cleared on error: the Codex-login retry re-sends `pendingRequest`
+  // verbatim, and the prefs it should file are the original submit's.
+  const pendingPrefs = useRef<LaunchPrefsSnapshot | null>(null);
   const setLastUsedSession = useLastSessionStore((state) => state.setLastUsedSession);
 
   const resolvedAgentId = agentId ?? '';
@@ -212,12 +274,49 @@ export function NewSession() {
     }
   }, [location.mode, project]);
 
+  // Pre-select the project the last session was launched against — iOS's
+  // `applyProjectPrefill`, translated to the model where the URL owns the
+  // selection. One shot per mount, and the latch arms only once an empty
+  // project step has actually been reached: the clamp effect above runs first
+  // and may still be redirecting a stale deep link, so arming on the list's
+  // arrival alone would spend the one attempt on a step the user never saw. A
+  // name the agent no longer has is silently skipped, exactly as on mobile, and
+  // `replace` keeps the pre-fill out of history so Back still leaves the wizard.
+  // Keyed by agent rather than a bare flag, for the reason `recentPaths` reads
+  // through an effect: the router keeps this one component instance across a
+  // change of `:agentId`, so a boolean latch would leave the second agent
+  // without a pre-fill for the rest of the visit.
+  const projectPrefilledFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (projectPrefilledFor.current === resolvedAgentId || projects.data === undefined) return;
+    if (location.step !== 'project' || location.selection.kind !== 'none') return;
+    projectPrefilledFor.current = resolvedAgentId;
+    const name = readLaunchPrefs().lastProjectName;
+    if (name === null) return;
+    if (!projects.data.some((entry) => entry.name === name)) return;
+    setSearchParams(
+      serializeWizardLocation({
+        step: 'project',
+        mode: null,
+        selection: { kind: 'stored', name },
+      }),
+      { replace: true },
+    );
+  }, [projects.data, location.step, location.selection.kind, resolvedAgentId, setSearchParams]);
+
   const create = useMutation({
     mutationFn: (request: CreateSessionRequest) => createSession(resolvedAgentId, request),
     onSuccess: (session, request) => {
       setShowCodexLogin(false);
       pendingRequest.current = null;
-      setLastUsedSession(resolvedAgentId, session.session_id);
+      // Guarded for the reason spelled out on `persistLaunchPrefs`: this is a
+      // `persist`-backed store too, so a refused write here would abort the
+      // rest of this handler and report the launch as failed.
+      try {
+        setLastUsedSession(resolvedAgentId, session.session_id);
+      } catch {
+        // Storage refused; auto-resume simply will not return here.
+      }
       // Recorded off the request the mutation actually sent, never off live
       // state: the wizard stays interactive while the POST is in flight, so a
       // path typed meanwhile would otherwise be filed as a directory nobody
@@ -227,6 +326,12 @@ export function NewSession() {
       if (typeof request.cwd === 'string' && validateCustomPath(request.cwd) === null) {
         noteRecentPath(resolvedAgentId, request.cwd);
       }
+      // Remember how this kind was launched, for the next wizard. The values
+      // are the pinned ones; the *project* comes off the request, which is
+      // present only for a stored selection — an ad-hoc directory stays a
+      // recent and never becomes the last-used project, as on both mobile
+      // clients. Terminal and custom types pin `null` and so file nothing.
+      persistLaunchPrefs(pendingPrefs.current, request.project_name);
       // Seed the row synchronously, before navigating. The terminal treats
       // "absent from a synced list" as proof the session is gone and leaves, so
       // the gap between this create and the reconciling snapshot below would
@@ -270,6 +375,7 @@ export function NewSession() {
   const scan = useMutation({
     mutationFn: (request: StartScanRequest) => startAutoScan(resolvedAgentId, request),
     onSuccess: (_result, request) => {
+      persistLaunchPrefs(pendingPrefs.current, request.project_name);
       useToastStore.getState().show(`Auto scan started for "${request.project_name}"`, 'success');
       // The monitor screen is WEB-10; the scan's sessions arrive on the list via
       // `sessions.changed`, so that is the honest destination for now.
@@ -346,6 +452,9 @@ export function NewSession() {
       location.mode === 'auto_scan'
         ? buildStartScanRequest(context)
         : buildCreateRequest(context);
+    // Pinned in the same synchronous pass that builds the request, so the two
+    // are provably the same snapshot of the options.
+    pendingPrefs.current = launchPrefsFromState(state, location.mode);
     if (request === null) {
       // Never fail silently: a null here means the selection did not survive,
       // and a dead button with no message is the worst possible symptom.
