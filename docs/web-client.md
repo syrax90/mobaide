@@ -18,7 +18,9 @@ protocol core — WebSocket channel manager, binary terminal codec, the
 TypeScript arm of the cross-platform golden fixtures, and the WS-event →
 TanStack Query bridge. WEB-05 (CLA-192) added the terminal screen on
 xterm.js 6: replay, follow mode and the unread badge, desktop copy/paste,
-the composer and the prompt-template picker. WEB-07 (CLA-193) added the
+and the prompt-template picker (later re-homed behind the terminal
+header's Templates button once the composer that hosted it was removed —
+see WEB-06 below). WEB-07 (CLA-193) added the
 sessions area — the live list with auto-resume, and the six-branch create
 wizard. WEB-08 (CLA-194) added agents and pairing Phase 1 — the `/pair`
 route with its deep link and paste box, the `/agents` screen, and the
@@ -253,11 +255,12 @@ integers. No `lossless-json` dependency, and runtimes without source access
 degrade only above 2^53.
 
 **Event → Query bridge.** Refresh-on-connect invalidates agents / templates
-/ shortcuts / custom types on the user channel (Android `UserEventBus`
-order) and projects on an agent channel. Per event the default policy is
-`invalidateQueries`, never a hand-applied delta; `custom_type.deleted` also
-invalidates shortcuts because the server cascades them in one transaction
-with no companion events. Payloads are schema-validated before anything is
+/ custom types on the user channel (Android `UserEventBus` order, minus
+the shortcuts leg — web dropped saved shortcuts entirely, so it neither
+subscribes to `shortcut.*` nor needs the `custom_type.deleted` cascade
+Android/iOS use to keep their shortcut lists in sync) and projects on an
+agent channel. Per event the default policy is `invalidateQueries`, never
+a hand-applied delta. Payloads are schema-validated before anything is
 written, and dropped rather than thrown on failure — this runs inside the
 socket's listener loop.
 
@@ -749,12 +752,16 @@ the instant of the action, never cached in view state: xterm disarms it on a
 flag has a transition it can never observe and would strand the toolbar
 disabled over a screen that is actually current.
 
-**Frames sent.** `i` from keystrokes, mouse reports (`onBinary`) and paste;
-`m` from the composer, prefixed with `CLEAR_INPUT_LINE` (`0x01 0x0B`) and
-bracket-wrapped only when multi-line; `x` from the selection's "Run" action,
-the desktop stand-in for mobile's tap-a-row-to-execute. Neither `m` nor `x`
-carries a trailing CR — the agent owns that timing (proto-v4). Keystrokes,
-paste and submit are gated on `live && running` **plus a web-only third
+**Frames sent.** `i` from keystrokes, mouse reports (`onBinary`) and paste
+— including the selection toolbar's "Send to input", which now pastes
+onto the running program's line instead of filling a composer; `x` from
+the selection's "Run" action, the desktop stand-in for mobile's
+tap-a-row-to-execute. Neither carries a trailing CR — the agent owns that
+timing (proto-v4). Web no longer produces the `m` submit frame: the
+composer that built it was removed as redundant on a physical keyboard,
+though the frame stays in the protocol for Android and iOS. Keystrokes and
+paste — including "Send to input", which needs a running program to have
+a line to land on — are gated on `live && running` **plus a web-only third
 term: the replay write queue must have drained.** `'e'` flips the connection
 synchronously while `term.write` is asynchronous, so a DECRQM / XTVERSION /
 DECRQSS / OSC 4 query still sitting in the replayed history would otherwise
@@ -777,94 +784,72 @@ WEB-09.
 
 ## Desktop keyboard & shortcuts (WEB-06)
 
-The input model on top of the terminal. Native keystrokes are the default —
-every built-in bar key is typeable in every desktop browser — so the work here
-is deciding what the app takes back, and making the chords the browser steals
-reachable anyway.
+The input model on top of the terminal. Native keystrokes are the default and,
+since the removal below, the **only** input path: every chord types straight
+into the PTY, and the work here is limited to a few guards around that and to
+making the chords the browser steals reachable anyway.
 
-**The shared chord contract is now a fixture, not three tables.** The token
-grammar (`ctrl+shift+i`: modifiers in ctrl, alt, shift order, at most two, over
-a–z / 0–9 / F1–F12 / tab / enter / space / backspace, Esc excluded) and the
-legacy-first encoder (C0 for Ctrl+letter, ESC-prefix for Alt over a single-byte
-core, xterm SS3 / CSI forms for F-keys, kitty CSI-u for everything legacy bytes
-cannot express) were pinned by hand-mirrored assertion tables in
-`KeyChordEncoderTest.kt` and `KeyChordEncoderTests.swift`. They are now
+**The control-key bar, its saved-shortcut chips and picker, the command
+palette and the composer were removed.** A desktop has a physical keyboard, so
+the bar's built-in keys, the "…" chord recorder/chooser (`ShortcutBar.tsx`,
+`ShortcutPicker.tsx`, `RenameShortcutDialog.tsx`), `CommandPalette.tsx` and its
+Ctrl+Shift+P wiring, and the composer text box (`Composer.tsx`) are all
+redundant with typing the chord directly — the same reason mobile needs them
+and web no longer does. `terminal/controlKeys.ts`, `keyboard/appShortcuts.ts`,
+`keyboard/useAppShortcuts.ts`, `keyboard/chordConflicts.ts`,
+`routes/terminal/useSessionKind.ts` and `api/shortcutRepository.ts` went with
+them: web now has **no app-owned chords at all**. The prompt-template picker
+survived the cut — it is reachable from a **Templates** button in the
+terminal header instead of the composer, and picking a template pastes its
+body onto the running program's input line via the sanitized bracketed-paste
+path (insert for review, never auto-execute, mirroring mobile's
+insert-into-composer semantics) rather than filling a composer. Android and
+iOS keep their control-key bar, saved shortcuts and composer unchanged; the
+central server keeps `/api/shortcuts` and `shortcut.*` for them.
+
+**The shared chord contract is still a fixture, not three tables**, and
+outlives the bar: the token grammar (`ctrl+shift+i`: modifiers in ctrl, alt,
+shift order, at most two, over a–z / 0–9 / F1–F12 / tab / enter / space /
+backspace, Esc excluded) and the legacy-first encoder (C0 for Ctrl+letter,
+ESC-prefix for Alt over a single-byte core, xterm SS3 / CSI forms for F-keys,
+kitty CSI-u for everything legacy bytes cannot express) were pinned by
+hand-mirrored assertion tables in `KeyChordEncoderTest.kt` and
+`KeyChordEncoderTests.swift`. They are now
 `tests/protocol_fixtures/keys/key_chords.json`, read by all three clients:
 `web/src/protocol/keyChord.ts` (gated by `protocol-integrity.yml`, which is why
-the encoder lives under `protocol/` and not `terminal/`), a new
-`KeyChordFixtureTests.swift`, and a new `KeyChordFixtureTest.kt` — Android's
-**first** fixture consumer, with the loader it never had
-(`testing/ProtocolFixtures.kt`; extending it to `dto/` is CLA-235). Kotlin stays
-the reference implementation: a disagreement means the fixture is wrong. The two
-suites keep only what a table cannot state — that Ctrl+Shift+I never collapses
-onto Ctrl+I's byte, that every chord in the domain encodes, and that no two
-chords share a CSI-u sequence.
+the encoder lives under `protocol/` and not `terminal/` — the **only**
+CI-enforced arm of this golden, since iOS CI is push-to-main-only and
+Android's tests are not CI-gated), a new `KeyChordFixtureTests.swift`, and a
+new `KeyChordFixtureTest.kt` — Android's **first** fixture consumer, with the
+loader it never had (`testing/ProtocolFixtures.kt`; extending it to `dto/` is
+CLA-235). Kotlin stays the reference implementation: a disagreement means the
+fixture is wrong. The two suites keep only what a table cannot state — that
+Ctrl+Shift+I never collapses onto Ctrl+I's byte, that every chord in the
+domain encodes, and that no two chords share a CSI-u sequence.
+`keyboard/recordChord.ts` (physical-key capture off `event.code`) and
+`keyboard/reservedKeys.ts` also survive, now serving only the dev-only
+key-sweep screen below.
 
 **Passthrough.** `attachCustomKeyEventHandler` remains the funnel for the WEB-05
 clipboard policy, and the send gate is still mirrored into `disableStdin` and
-never into the key handler. App-owned chords do **not** go through it:
-`keyboard/useAppShortcuts` claims them on a capture-phase `document` listener,
-because xterm registers its `keydown` on the terminal's *textarea* — a
-model-level handler is dead whenever focus sits in the composer, on a bar button,
-or on `document.body`, which is exactly where it lands after a dialog closes. The
-skip list is one entry long (`keyboard/appShortcuts.ts`); every chord the app
-takes is a chord the PTY loses. The hook releases its own chord while the
-recorder is open, since both are document-capture listeners and
-`stopPropagation` does not silence a sibling on the same node.
+never into the key handler. With no app-owned chord layer left, that clipboard
+routing is the only thing standing in front of xterm's own `keydown` handling.
 
 **Reload and unload guards.** `useReloadGuard` is a **capture-phase**
 `preventDefault` on Ctrl/Cmd+R, its Shift form and F5, and nothing else: capture
 runs before xterm and `preventDefault` does not stop propagation, so a focused
 terminal still receives `0x12` exactly as before — what the guard adds is the
-case xterm cannot cover, focus parked on the composer or a bar button.
+case xterm cannot cover, focus parked anywhere outside the grid.
 `useUnloadGuard` registers `beforeunload` only while the session is live *and*
 running; it needs sticky activation to produce a prompt at all, and in Firefox on
 Windows and Linux it is the only thing between an unsuppressable Ctrl+W and a
 closed tab.
-
-**The bar** (`terminal/controlKeys.ts` + `routes/terminal/ShortcutBar.tsx`)
-carries the mobile per-kind sets byte-for-byte, then the "…" composer trigger,
-then the kind's synced saved shortcuts. It mounts as a flex sibling *below* the
-stage, never inside it — xterm's `SelectionService` clears the selection on any
-row-count change. Expanded by default and persisted, because it is how anyone
-discovers Mode, Rewind and saved shortcuts, and because on Windows and Linux the
-browser takes Ctrl+L and Ctrl+O outright. Saved chips send only; renaming and
-removing live in the composer, as they do on both phones.
-
-**CLA-158 is fixed here, on all three clients at once**: a Shell session now
-renders the neutral 9-key set rather than Claude's 14. Mode (`CSI Z`) and Rewind
-(`ESC ESC`) are Claude-TUI input, and Ctrl+O / Ctrl+R / Ctrl+L are readline
-bindings a shell user may have remapped.
-
-**The composer** (`ShortcutPicker.tsx`) records on `e.code`, never `e.key`, so a
-Dvorak or AZERTY user records the physical key and Shift does not turn `2` into
-`@`. It ignores `isComposing || keyCode === 229` (IME) and any press while
-`getModifierState('AltGraph')` is set — Windows AltGr reports Ctrl+Alt and is
-indistinguishable from a real Ctrl+Alt chord. Mobile's modifier-toggles-plus-key-grid
-survives as the **Choose** tab, which is the only way to compose a chord the
-browser eats. Readout is VS Code-shaped: the chord, the resolved bytes
-(`ChordEncoding.summary`), the same-byte-as disclosure, the CSI-u hint, and four
-conflict classes — already saved, shadows a built-in (compared on **bytes**, so
-Shift+Tab ↔ Mode is caught), shadows the command palette, and browser-reserved.
-None of them block saving: a contract-valid token has to round-trip to phones that
-have none of these problems. Saving is deliberately not session-gated; sending is.
-Saving is refused only while the kind is unresolved, because a shortcut filed
-under a guessed kind stays in the wrong bucket forever (`useSessionKind` is a
-one-way latch, matching `resolvedKind.compareAndSet`).
 
 **The reserved-key table** (`keyboard/reservedKeys.ts`) splits "what the browser
 does" from "whether the page can stop it", because only the first is documented.
 Every row ships `documented`; `/dev/key-sweep` — a DEV-only route, dropped from
 the production bundle — measures the second. Sources, runbook and the empty
 results matrix are in docs/web-keyboard-reserved-keys.md; running it is CLA-251.
-
-**Command palette** (Ctrl+Shift+P, ⌘⇧P on macOS, plus a toolbar button) lists the
-kind's keys, its saved shortcuts and the prompt templates. The chord is a
-deliberate departure from the issue's Ctrl+K / F1 proposal: `ctrl+k` encodes to
-`0x0B`, which is Antigravity's built-in fast-approve key and readline's
-kill-line, and plain `f1` is a TUI help key users can save in its own right.
-Ctrl+Shift+P is itself in the reserved table (Firefox private window on Windows
-and Linux), which is why the button exists.
 
 **Immersive mode** is fullscreen plus `navigator.keyboard.lock()` — the only way
 Ctrl+W, Ctrl+T, Ctrl+N and F11 ever reach a web page. Chromium-only and
@@ -1194,13 +1179,20 @@ mode both exist because a browser window has a physical keyboard and a wide
 viewport, neither of which a phone has. Each is listed in the WEB-05 section
 above with its reason.
 
-WEB-06 adds to that exempt set for the same reason: the press-to-record
-composer, the reserved-key table, the reload and unload guards, the command
-palette and immersive mode all answer "a physical keyboard exists and a browser
-competes for it", which is not a question either phone can be asked. Two things
-in that milestone are the opposite of a divergence — the shared encoder fixture
-pulls all three clients onto one contract, and the CLA-158 Shell fix lands on
-Android, iOS and web in the same change.
+WEB-06 adds to that exempt set for the same reason: the reserved-key table,
+the reload and unload guards and immersive mode all answer "a physical
+keyboard exists and a browser competes for it", which is not a question
+either phone can be asked. The shared encoder fixture is the opposite of a
+divergence — it pulls all three clients onto one contract.
+
+**The control-key bar, saved shortcuts, command palette and composer removal
+is a deliberate, platform-convention-exempt divergence, not a gap to mirror.**
+A physical keyboard makes app-owned chord UI redundant on web — the mirror
+image of why mobile needs it. Android and iOS keep the bar, the shortcut
+picker and the composer, and the central server keeps `/api/shortcuts` and
+`shortcut.*` serving them. No Linear issue is needed for either direction:
+web is not "missing" what mobile has, and mobile is not "behind" what web
+dropped.
 
 WEB-07's two divergences are **not** exempt and are tracked accordingly:
 recording the last-used session on open as well as on create is a behaviour

@@ -95,8 +95,9 @@ cadence; they do **not** gate compatibility.
   ``{"id"}``. Deleting a type also soft-deletes the owner's saved
   shortcuts whose ``kind`` equals ``custom_<id>`` **in the same
   transaction, with only the one ``custom_type.deleted`` event** — no
-  companion ``shortcut.deleted`` events; clients purge their local
-  shortcut caches for that kind on receipt. Connect-time reconcile is the
+  companion ``shortcut.deleted`` events; Android and iOS purge their
+  local shortcut caches for that kind on receipt (the web client removed
+  its shortcuts UI and ignores the cascade). Connect-time reconcile is the
   usual REST refresh (``GET /api/custom-agent-types``). Per-type shortcut
   scoping needs no server change: ``custom_<12hex>`` already satisfies
   the shortcuts ``KIND_PATTERN`` and the server stores kinds opaquely.

@@ -16,7 +16,6 @@ export const queryKeys = {
   devices: () => ['devices'] as const,
   agents: () => ['agents'] as const,
   templates: () => ['templates'] as const,
-  shortcuts: () => ['shortcuts'] as const,
   customAgentTypes: () => ['custom-agent-types'] as const,
   /**
    * One in-flight device-code pairing request.

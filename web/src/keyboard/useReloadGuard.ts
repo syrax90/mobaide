@@ -1,16 +1,15 @@
 /**
  * Stop the browser reloading out from under an attached terminal.
  *
- * A reload costs the session's whole replay and anything typed into the
- * composer, and Ctrl+R is a chord people press in a terminal on purpose
- * (readline's reverse history search).
+ * A reload costs the session's whole replay, and Ctrl+R is a chord people
+ * press in a terminal on purpose (readline's reverse history search).
  *
  * **Capture phase, and `preventDefault` only.** Capture runs before xterm's own
  * handler, and `preventDefault()` does not stop propagation — so when the
  * terminal has focus xterm still encodes Ctrl+R to `0x12` and sends it, exactly
  * as if this guard were not here. What the guard adds is the case xterm cannot
- * cover: focus parked on the composer, a bar button, or anywhere else on the
- * page, where the keystroke would otherwise reach the browser.
+ * cover: focus parked anywhere outside the grid, where the keystroke would
+ * otherwise reach the browser.
  */
 import { useEffect } from 'react';
 

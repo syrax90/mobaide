@@ -17,13 +17,6 @@
  *   more reliable than `navigator.clipboard.readText()`, which Firefox and
  *   Safari gate behind a per-read user prompt.
  * - `terminal` — ordinary xterm processing.
- *
- * Chords the **app** owns rather than the PTY (`keyboard/appShortcuts.ts`) never
- * reach this policy: `keyboard/useAppShortcuts.ts` claims them on a
- * document-level capture listener, because xterm registers its `keydown` on the
- * terminal's textarea and anything hung off that only fires while the grid has
- * focus. That is a routing decision about who handles the key at all, not a
- * clipboard one.
  */
 
 export type TerminalKeyAction = 'copy' | 'browserPaste' | 'terminal';

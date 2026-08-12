@@ -16,9 +16,9 @@ const mount = (active = true) =>
 afterEach(cleanup);
 
 describe('useReloadGuard', () => {
-  // `reservedKeys.ts` marks these three `appSuppressed`, which is the reason
-  // the composer tells a user saving Ctrl+R that it will reach the program
-  // rather than reloading. That claim is only true because of this hook.
+  // `reservedKeys.ts` marks these three `appSuppressed`: they reach the
+  // program rather than reloading the page. That claim is only true because
+  // of this hook.
   it('cancels the reload chords the reserved-key table says it cancels', () => {
     mount();
 
@@ -37,7 +37,7 @@ describe('useReloadGuard', () => {
 
   it('lets the chord keep travelling, so the program still receives it', () => {
     // `preventDefault` without `stopPropagation` is the whole trick, and it is
-    // what makes the composer's "it reaches the program" wording true: the
+    // what makes the reserved-key table's `appSuppressed` claim true: the
     // browser does not reload, and xterm still encodes Ctrl+R to `0x12` for
     // readline's reverse history search.
     const grid = document.body.appendChild(document.createElement('textarea'));

@@ -19,7 +19,7 @@
 // eslint-disable-next-line no-control-regex
 const ESCAPE_AND_C1 = /[\u001b\u0080-\u009f]/g;
 
-/** DECSET 2004 markers. Shared with the composer's submit encoder. */
+/** DECSET 2004 markers. */
 export const BRACKETED_PASTE_START = '\u001b[200~';
 export const BRACKETED_PASTE_END = '\u001b[201~';
 
@@ -39,8 +39,8 @@ const utf8 = new TextEncoder();
 /**
  * Drop ESC and C1 without touching anything else.
  *
- * Split out from {@link sanitizePaste} because the composer's `m`-submit encoder
- * needs the escape-injection strip without the newline rewrite.
+ * Split out from {@link sanitizePaste} because the execute builder needs the
+ * escape-injection strip without the newline rewrite.
  */
 export function stripControls(text: string): string {
   return text.replace(ESCAPE_AND_C1, '');
@@ -66,7 +66,7 @@ export function measureUtf8Bytes(text: string): number {
 
 /**
  * What to do with an encoded payload. Shared by the paste encoder and the
- * composer/execute builders, which are bound by the same relay frame ceiling.
+ * execute builder, which are bound by the same relay frame ceiling.
  */
 export type PayloadOutcome =
   | { kind: 'send'; text: string }

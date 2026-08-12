@@ -38,9 +38,9 @@ export interface ReservedKey {
   /**
    * The app suppresses this chord itself while a terminal is attached
    * (`useReloadGuard`), so it *does* reach the PTY. Kept in the table rather
-   * than deleted so the composer can say so instead of staying silent — a user
-   * saving Ctrl+R (reverse-i-search) deserves the reassurance, not a warning
-   * about a reload that will not happen.
+   * than deleted so the key-sweep report can say so instead of staying
+   * silent — Ctrl+R (reverse-i-search) reaching the program deserves the
+   * reassurance, not a warning about a reload that will not happen.
    */
   appSuppressed?: boolean;
   source: string;
