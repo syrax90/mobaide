@@ -748,10 +748,30 @@ and swallow every following keystroke. `Tab` still reaches it. Drag start, drag
 move and drag end are all keyed on the pointer that began the drag, because
 capture is per-pointer and a second finger on the widened thumb is hit-tested
 normally — its `pointerup` would otherwise strand the finger still holding on.
-With no scrollback the track keeps painting but takes `pointer-events: none`:
-it lies over the terminal, and the usual reason there is no scrollback is a
-full-screen program with mouse reporting on, which has to receive the wheel and
-pointer events landing in that strip. Where the primary
+**The control has two forms, which is the web spelling of the mobile scroll
+ladder.** With scrollback it is the scrollbar above. Without — the alternate
+screen, or any program holding mouse tracking — there is no position to show,
+because the program owns its own viewport; it becomes a **grip** parked
+mid-track that reports travel and springs back. That case is not an edge: every
+full-screen TUI is there, so Claude Code and Codex are *only* ever there, and
+shipping the scrollback-only control meant the client had no visible scroll
+affordance in its entire workload. Scrollback wins over the program when both
+apply, because `scrollToLine` still works on the primary buffer and a visible
+thumb promises a position. Only when neither applies does the track go inert
+with `pointer-events: none` — it lies over the terminal, and events landing in
+that strip have to reach xterm.
+
+**The grip encodes nothing.** xterm already performs the whole ladder for a
+wheel event — a mouse report with buttons 64/65 in the *active* encoding while
+tracking is on, a DECCKM-correct `ESC O A`/`ESC [ A` on the alternate screen —
+so `relativeScroll` synthesizes a `WheelEvent` at a pinned anchor inside
+`.xterm-screen` and lets xterm encode it. That is not merely convenient:
+`IModes.mouseTrackingMode` does not expose the mouse *encoding* protocol, so
+hand-writing a report is not possible from public API. `deltaMode` is LINE with
+a unit delta, because on that path xterm's own accumulator is only a non-zero
+gate, making one event exactly one step; the per-call ceiling is one screen,
+matching iOS, because every step is a frame crossing a WebSocket where mobile's
+PTY is local. Where the primary
 pointer is coarse the thumb takes a 2.75rem transparent hit area reaching into
 the grid — 14 px is under half a fingertip and sits on the edge the browser's
 back gesture claims — and that widening is deliberately **not** on
@@ -843,11 +863,13 @@ draggable scrollback thumb**, which neither mobile client has and neither HIG
 asks for — Android exposes only the platform's fading indicator
 (`TerminalView.setVerticalScrollBarEnabled` plus `awakenScrollBars()`, not
 grabbable), iOS the transient `UIScrollView` one; both scroll by dragging the
-grid, which is exactly what xterm 6 does not offer. The web gesture ladder is
-mobile's inverse for the same reason: no wheel-64/65, alt-buffer-arrow or
-local-scrollback arms here, because xterm routes the wheel to a mouse-reporting
-program itself, and the slider is a scrollback control that simply retracts when
-there is no scrollback. The prompt-template picker is read-only here (list,
+grid, which is exactly what xterm 6 does not offer. The *ladder* is not a
+divergence — web runs the same three arms mobile does, it just does not
+hand-encode them, and the control that drives them is a grip rather than a pan
+on the grid. Grid drag-to-scroll remains unported: under mouse reporting the
+program already claims the drag, and arbitrating that against xterm's text
+selection is the one risky piece; the grip reaches the same arms without it.
+The prompt-template picker is read-only here (list,
 recents/favourites grouping, filter, insert, favourite toggle); creating and
 deleting templates is WEB-09.
 

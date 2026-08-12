@@ -1013,6 +1013,16 @@ input[type='radio']:checked {
    * bump, and see the header of `terminal/terminalScrollbar.ts`.
    */
   --terminal-scrollbar-width: 14px;
+
+  /*
+   * Fixed, not tokens. xterm paints the grid background across this gutter, and
+   * the grid is always dark whatever the app theme (terminalTheme.ts), so app
+   * tokens are being read against the wrong backdrop: `--bg-2` is #171717 on a
+   * #12141a grid — 1.03:1, which is why the control was invisible in dark mode.
+   */
+  --terminal-scrollbar-track: #20242e;
+  --terminal-scrollbar-grip: #8f96a6;
+  --terminal-scrollbar-grip-hover: #c3c9d6;
 }
 
 /*
@@ -1064,8 +1074,7 @@ input[type='radio']:checked {
   right: 0;
   bottom: 0;
   width: var(--terminal-scrollbar-width);
-  background: var(--bg-2);
-  box-shadow: inset 2px 0 0 0 var(--surface-2);
+  background: var(--terminal-scrollbar-track);
   /* A touch that starts on the track drags the thumb; it must not pan the page
      instead, and the browser decides that before the first pointermove. */
   touch-action: none;
@@ -1093,17 +1102,51 @@ input[type='radio']:checked {
   right: 0;
   height: max(var(--thumb-size), 1.5rem);
   top: calc((100% - max(var(--thumb-size), 1.5rem)) * var(--thumb-offset));
-  /* --gray, not --surface-2: this is a control the user has to find and hit,
-     and --surface-2 on --bg-2 is ~1.2:1. --rule is decorative-frames-only for
-     the same reason. */
-  background: var(--gray);
-  box-shadow: inset 0 0 0 2px var(--bg-2);
+  background: var(--terminal-scrollbar-grip);
+  box-shadow: inset 0 0 0 2px var(--terminal-scrollbar-track);
   cursor: grab;
 }
 
+/*
+ * The relative-mode grip: no scrollback to position it in, so it parks at the
+ * middle and springs back there on release. Ridges rather than a plain block,
+ * so it reads as something to drag and not as a position readout.
+ */
+.terminal-scrollbar-grip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2.75rem;
+  transform: translateY(-50%);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--terminal-scrollbar-grip);
+  box-shadow: inset 0 0 0 2px var(--terminal-scrollbar-track);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--terminal-scrollbar-track) 0,
+    var(--terminal-scrollbar-track) 2px,
+    transparent 2px,
+    transparent 6px
+  );
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 6px 18px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.terminal-scrollbar-grip:active {
+  cursor: grabbing;
+}
+
+.terminal-scrollbar-grip:hover,
+.terminal-scrollbar-grip:focus-visible,
 .terminal-scrollbar-thumb:hover,
 .terminal-scrollbar:focus-visible .terminal-scrollbar-thumb {
-  background: var(--text-muted);
+  background-color: var(--terminal-scrollbar-grip-hover);
 }
 
 .terminal-scrollbar-thumb:active {
@@ -1131,7 +1174,8 @@ input[type='radio']:checked {
  * right-hand columns.
  */
 @media (pointer: coarse) {
-  .terminal-scrollbar-thumb::before {
+  .terminal-scrollbar-thumb::before,
+  .terminal-scrollbar-grip::before {
     content: '';
     position: absolute;
     top: 0;
@@ -1157,12 +1201,19 @@ input[type='radio']:checked {
     border-left: 1px solid ButtonBorder;
   }
 
-  .terminal-scrollbar-thumb {
+  .terminal-scrollbar-thumb,
+  .terminal-scrollbar-grip {
     background: ButtonText;
+    /* The ridges are painted with a gradient, and forced colors drops those. */
+    background-image: none;
+    border: 1px solid ButtonBorder;
   }
 
   .terminal-scrollbar-thumb:hover,
   .terminal-scrollbar-thumb:active,
+  .terminal-scrollbar-grip:hover,
+  .terminal-scrollbar-grip:active,
+  .terminal-scrollbar-grip:focus-visible,
   .terminal-scrollbar:focus-visible .terminal-scrollbar-thumb {
     background: Highlight;
   }

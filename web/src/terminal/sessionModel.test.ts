@@ -817,6 +817,7 @@ describe('TerminalSessionModel selection focus', () => {
 
 describe('TerminalSessionModel scrollbar geometry', () => {
   const ALT_SCREEN_ON = '[?1049h';
+  const MOUSE_TRACKING_ON = '[?1000h';
   const ALT_SCREEN_OFF = '[?1049l';
 
   /** Comfortably past the 24-row default grid, so a real scrollback exists. */
@@ -834,7 +835,7 @@ describe('TerminalSessionModel scrollbar geometry', () => {
     const { model } = await liveRunning();
 
     expect(model.scrollbar.getState()).toEqual({
-      scrollable: false,
+      mode: 'idle',
       size: 1,
       offset: 1,
     });
@@ -844,7 +845,7 @@ describe('TerminalSessionModel scrollbar geometry', () => {
     const { model } = await withScrollback();
     const view = model.scrollbar.getState();
 
-    expect(view.scrollable).toBe(true);
+    expect(view.mode).toBe('seek');
     expect(view.size).toBeLessThan(1);
     expect(view.offset).toBe(1);
     // The reason the geometry is a second store: it moves here while `pinned`
@@ -894,14 +895,46 @@ describe('TerminalSessionModel scrollbar geometry', () => {
     expect(model.state.getState().unread).toBe(0);
   });
 
-  it('retracts the control on the alternate screen, which has no scrollback', async () => {
+  it('hands the control to the program on the alternate screen', async () => {
+    // The bug this replaces: the control used to retract here, so it was absent
+    // in Claude Code, Codex, vim and less — every full-screen program, which is
+    // this client's whole workload. There is no scrollback to seek, but there
+    // is still scrolling to do; it is just the program's.
     const { model, deliverFrame } = await withScrollback();
-    expect(model.scrollbar.getState().scrollable).toBe(true);
+    expect(model.scrollbar.getState().mode).toBe('seek');
 
     deliverFrame(outputFrame(ALT_SCREEN_ON));
     await settle();
 
-    expect(model.scrollbar.getState().scrollable).toBe(false);
+    expect(model.scrollbar.getState().mode).toBe('relative');
+  });
+
+  it('hands it over for mouse tracking on a buffer with no scrollback', async () => {
+    const { model, deliverFrame } = await liveRunning();
+
+    deliverFrame(outputFrame(MOUSE_TRACKING_ON));
+    await settle();
+
+    expect(model.term.modes.mouseTrackingMode).not.toBe('none');
+    expect(model.scrollbar.getState().mode).toBe('relative');
+  });
+
+  it('stays idle on a fresh primary buffer nobody is scrolling', async () => {
+    const { model } = await liveRunning();
+
+    expect(model.scrollbar.getState().mode).toBe('idle');
+  });
+
+  it('refuses a relative scroll before the terminal is in the DOM', async () => {
+    // jsdom never opens the emulator in these suites, so there is no element to
+    // dispatch at; the guard is what keeps that from throwing.
+    const { model, deliverFrame } = await withScrollback();
+    deliverFrame(outputFrame(ALT_SCREEN_ON));
+    await settle();
+
+    expect(() => {
+      model.relativeScroll(3);
+    }).not.toThrow();
   });
 
   /** jsdom lays nothing out, so the grid height the conversion divides by is stated. */
@@ -947,7 +980,7 @@ describe('TerminalSessionModel scrollbar geometry', () => {
     expect(model.term.buffer.active.viewportY).toBe(0);
   });
 
-  it('restores it when the program leaves the alternate screen', async () => {
+  it('goes back to seeking when the program leaves the alternate screen', async () => {
     const { model, deliverFrame } = await withScrollback();
     deliverFrame(outputFrame(ALT_SCREEN_ON));
     await settle();
@@ -955,6 +988,6 @@ describe('TerminalSessionModel scrollbar geometry', () => {
     deliverFrame(outputFrame(ALT_SCREEN_OFF));
     await settle();
 
-    expect(model.scrollbar.getState().scrollable).toBe(true);
+    expect(model.scrollbar.getState().mode).toBe('seek');
   });
 });

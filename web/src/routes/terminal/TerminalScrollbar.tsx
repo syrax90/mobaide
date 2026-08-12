@@ -10,16 +10,23 @@ import { offsetFromDrag } from '../../terminal/terminalScrollbar';
  * middle-click would page, and a second finger landing during a drag would
  * fight the first for the thumb.
  */
-function isPrimaryPress(event: PointerEvent<HTMLDivElement>): boolean {
+function isPrimaryPress(event: PointerEvent<HTMLElement>): boolean {
   return event.isPrimary && event.button === 0;
 }
 
-interface Drag {
+/** Seek drag: absolute, so it measures the track once and maps into it. */
+interface SeekDrag {
   pointerId: number;
   trackTop: number;
   trackHeight: number;
   thumbHeight: number;
   grabOffset: number;
+}
+
+/** Grip drag: relative, so only the previous position matters. */
+interface GripDrag {
+  pointerId: number;
+  lastY: number;
 }
 
 interface TerminalScrollbarProps {
@@ -39,11 +46,19 @@ function thumbStyle(size: number, offset: number): CSSProperties {
 }
 
 /**
- * The scrollback slider.
+ * The scroll control, in whichever of its two forms the session can use.
  *
- * It renders from two fractions and takes no measurement, so it needs no
+ * With scrollback it is a scrollbar: the thumb shows where the viewport sits
+ * and dragging it seeks. Without — the alternate screen, or any program holding
+ * mouse tracking — there is no position to show, because the program owns its
+ * own viewport. It becomes a grip parked mid-track that reports travel instead,
+ * which is the same trade both mobile clients make (iOS `TerminalWheelScroll`,
+ * Android `doScroll`); it just springs back rather than following a finger on
+ * the grid.
+ *
+ * It renders from fractions and takes no measurement, so it needs no
  * `ResizeObserver` and survives jsdom, which computes no layout. Only a drag
- * reads real pixels, and it reads them once at `pointerdown`.
+ * reads real pixels.
  *
  * The track sits in the gutter `FitAddon` already reserves (see
  * `terminalScrollbar.ts`), so it costs no columns. It is absolutely positioned
@@ -52,19 +67,20 @@ function thumbStyle(size: number, offset: number): CSSProperties {
  * any row-count change.
  */
 export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) {
-  const { scrollable, size, offset } = model.scrollbar();
+  const { mode, size, offset } = model.scrollbar();
   const trackRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<Drag | null>(null);
+  const seekRef = useRef<SeekDrag | null>(null);
+  const gripRef = useRef<GripDrag | null>(null);
 
-  const startDrag = useCallback((event: PointerEvent<HTMLDivElement>) => {
+  const startSeek = useCallback((event: PointerEvent<HTMLElement>) => {
     const track = trackRef.current;
     // Deliberately before `stopPropagation`, so a non-primary press falls
     // through to the track handler — which refuses it on the same test.
     if (track === null || !isPrimaryPress(event)) return;
     const thumbRect = event.currentTarget.getBoundingClientRect();
     const trackRect = track.getBoundingClientRect();
-    dragRef.current = {
+    seekRef.current = {
       pointerId: event.pointerId,
       trackTop: trackRect.top,
       trackHeight: trackRect.height,
@@ -78,9 +94,9 @@ export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) 
     event.preventDefault();
   }, []);
 
-  const onDrag = useCallback(
-    (event: PointerEvent<HTMLDivElement>) => {
-      const drag = dragRef.current;
+  const onSeek = useCallback(
+    (event: PointerEvent<HTMLElement>) => {
+      const drag = seekRef.current;
       if (drag === null || drag.pointerId !== event.pointerId) return;
       model.scrollToOffset(
         offsetFromDrag({
@@ -95,17 +111,39 @@ export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) 
     [model],
   );
 
-  // Keyed on the pointer that started the drag, exactly like `onDrag` above.
+  const startGrip = useCallback((event: PointerEvent<HTMLElement>) => {
+    if (!isPrimaryPress(event)) return;
+    gripRef.current = { pointerId: event.pointerId, lastY: event.clientY };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.stopPropagation();
+    event.preventDefault();
+  }, []);
+
+  // Travel since the last move, not since the press: the grip is a rate of
+  // travel rather than a position, so an absolute origin would keep re-sending
+  // the whole drag on every move.
+  const onGrip = useCallback(
+    (event: PointerEvent<HTMLElement>) => {
+      const drag = gripRef.current;
+      if (drag === null || drag.pointerId !== event.pointerId) return;
+      const travel = event.clientY - drag.lastY;
+      drag.lastY = event.clientY;
+      model.relativeScrollByPixels(travel);
+    },
+    [model],
+  );
+
+  // Keyed on the pointer that started the drag, exactly like the move handlers.
   // Capture is per-pointer, so a second finger landing on the thumb is hit-
   // tested here normally and its `pointerup` would otherwise end a drag the
   // first finger is still holding.
-  const endDrag = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    if (dragRef.current?.pointerId !== event.pointerId) return;
-    dragRef.current = null;
+  const endDrag = useCallback((event: PointerEvent<HTMLElement>) => {
+    if (seekRef.current?.pointerId === event.pointerId) seekRef.current = null;
+    if (gripRef.current?.pointerId === event.pointerId) gripRef.current = null;
   }, []);
 
   const pageToPointer = useCallback(
-    (event: PointerEvent<HTMLDivElement>) => {
+    (event: PointerEvent<HTMLElement>) => {
       const thumb = thumbRef.current;
       if (thumb === null || !isPrimaryPress(event)) return;
       // Paging must not pull focus off the grid, or the next keystroke is
@@ -121,24 +159,31 @@ export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) 
   );
 
   const onKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
+    (event: KeyboardEvent<HTMLElement>) => {
+      const relative = mode === 'relative';
       switch (event.key) {
         case 'ArrowUp':
-          model.scrollByLines(-1);
+          if (relative) model.relativeScroll(-1);
+          else model.scrollByLines(-1);
           break;
         case 'ArrowDown':
-          model.scrollByLines(1);
+          if (relative) model.relativeScroll(1);
+          else model.scrollByLines(1);
           break;
         case 'PageUp':
-          model.scrollByPages(-1);
+          if (relative) model.relativeScrollPage(-1);
+          else model.scrollByPages(-1);
           break;
         case 'PageDown':
-          model.scrollByPages(1);
+          if (relative) model.relativeScrollPage(1);
+          else model.scrollByPages(1);
           break;
         case 'Home':
+          if (relative) return;
           model.scrollToTop();
           break;
         case 'End':
+          if (relative) return;
           model.jumpToBottom();
           break;
         default:
@@ -146,7 +191,7 @@ export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) 
       }
       event.preventDefault();
     },
-    [model],
+    [model, mode],
   );
 
   // The track covers the strip the viewport's own scrollbar used to occupy, so
@@ -158,31 +203,61 @@ export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) 
   // count: a precision touchpad reports pixels, in a stream, and one notch per
   // event would run the scrollback many times faster here than over the grid.
   const onWheel = useCallback(
-    (event: WheelEvent<HTMLDivElement>) => {
+    (event: WheelEvent<HTMLElement>) => {
       if (event.deltaY === 0) return;
+      const relative = mode === 'relative';
       if (event.deltaMode === 2) {
-        model.scrollByPages(Math.sign(event.deltaY));
+        if (relative) model.relativeScrollPage(Math.sign(event.deltaY));
+        else model.scrollByPages(Math.sign(event.deltaY));
         return;
       }
       if (event.deltaMode === 1) {
-        model.scrollByLines(Math.round(event.deltaY));
+        const lines = Math.round(event.deltaY);
+        if (relative) model.relativeScroll(lines);
+        else model.scrollByLines(lines);
         return;
       }
-      model.scrollByPixels(event.deltaY);
+      if (relative) model.relativeScrollByPixels(event.deltaY);
+      else model.scrollByPixels(event.deltaY);
     },
-    [model],
+    [model, mode],
   );
 
-  // Nothing above the viewport — the alternate screen, or a session that has
-  // not filled one page yet. The track stays so the gutter never looks empty,
-  // but with no control to expose it drops out of the hit path entirely: the
-  // strip lies over the terminal, so a wheel landing here would bubble up the
-  // stage instead of reaching xterm, and a full-screen program with mouse
-  // reporting on — the common reason there is no scrollback — would never see
-  // its report.
-  if (!scrollable) {
+  // Nothing to scroll and nobody to ask: a primary buffer that has not filled
+  // one screen. The track stays so the gutter never looks empty, but with no
+  // control to expose it drops out of the hit path entirely — the strip lies
+  // over the terminal, and events landing here have to reach xterm.
+  if (mode === 'idle') {
     return (
       <div className="terminal-scrollbar terminal-scrollbar-idle" aria-hidden="true" />
+    );
+  }
+
+  if (mode === 'relative') {
+    return (
+      <div
+        ref={trackRef}
+        className="terminal-scrollbar"
+        role="group"
+        aria-label="Scroll terminal"
+        onWheel={onWheel}
+      >
+        {/* A button, not a `scrollbar`: there is no position to report, so
+            `aria-valuenow` would be a fiction. Focusable, so the arrow and page
+            keys above are reachable without a pointer. */}
+        <button
+          type="button"
+          className="terminal-scrollbar-grip"
+          aria-label="Drag to scroll the terminal"
+          aria-controls={surfaceId}
+          onKeyDown={onKeyDown}
+          onPointerDown={startGrip}
+          onPointerMove={onGrip}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onLostPointerCapture={endDrag}
+        />
+      </div>
     );
   }
 
@@ -206,8 +281,8 @@ export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) 
         ref={thumbRef}
         className="terminal-scrollbar-thumb"
         style={thumbStyle(size, offset)}
-        onPointerDown={startDrag}
-        onPointerMove={onDrag}
+        onPointerDown={startSeek}
+        onPointerMove={onSeek}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
         onLostPointerCapture={endDrag}

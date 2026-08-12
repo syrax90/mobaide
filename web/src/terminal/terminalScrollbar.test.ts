@@ -4,6 +4,7 @@ import {
   initialScrollbarView,
   lineForOffset,
   offsetFromDrag,
+  relativeSteps,
   sameScrollbarView,
   scrollbarView,
   wheelRows,
@@ -23,51 +24,74 @@ const drag = (overrides: Partial<DragInput> = {}): DragInput => ({
   ...overrides,
 });
 
-describe('scrollbarView', () => {
-  it('reports nothing to scroll on a buffer with no scrollback', () => {
-    // Also the alternate screen, which never accumulates one.
-    expect(scrollbarView(at(0, 0), 24)).toEqual({
-      scrollable: false,
-      size: 1,
-      offset: 1,
-    });
+/** The emulator states the ladder branches on. */
+const PLAIN = { altBuffer: false, mouseReporting: false };
+const ALT = { altBuffer: true, mouseReporting: false };
+const TRACKING = { altBuffer: false, mouseReporting: true };
+
+describe('scrollbarView modes', () => {
+  it('seeks whenever there is scrollback to seek through', () => {
+    expect(scrollbarView(at(100, 50), 24, PLAIN).mode).toBe('seek');
   });
 
+  it('keeps seeking even while a program holds mouse tracking', () => {
+    // `scrollToLine` still works on the primary buffer, and a visible thumb
+    // promises a position — so it has to keep meaning one.
+    expect(scrollbarView(at(100, 50), 24, TRACKING).mode).toBe('seek');
+  });
+
+  it('hands the gesture to the program on the alternate screen', () => {
+    // The whole reason this mode exists: Claude Code, Codex, vim and less all
+    // run here, where the buffer has no scrollback and never will.
+    expect(scrollbarView(at(0, 0), 24, ALT).mode).toBe('relative');
+  });
+
+  it('hands it over for mouse tracking without a scrollback too', () => {
+    expect(scrollbarView(at(0, 0), 24, TRACKING).mode).toBe('relative');
+  });
+
+  it('goes idle only when nothing can scroll and nobody wants the wheel', () => {
+    expect(scrollbarView(at(0, 0), 24, PLAIN)).toEqual(initialScrollbarView());
+    expect(initialScrollbarView().mode).toBe('idle');
+  });
+});
+
+describe('scrollbarView geometry', () => {
   it('shrinks the thumb as history accumulates', () => {
-    expect(scrollbarView(at(24, 24), 24).size).toBe(0.5);
-    expect(scrollbarView(at(72, 72), 24).size).toBe(0.25);
+    expect(scrollbarView(at(24, 24), 24, PLAIN).size).toBe(0.5);
+    expect(scrollbarView(at(72, 72), 24, PLAIN).size).toBe(0.25);
   });
 
   it('places the thumb by how far the viewport is up the scrollback', () => {
-    expect(scrollbarView(at(100, 100), 24).offset).toBe(1);
-    expect(scrollbarView(at(100, 50), 24).offset).toBe(0.5);
-    expect(scrollbarView(at(100, 0), 24).offset).toBe(0);
+    expect(scrollbarView(at(100, 100), 24, PLAIN).offset).toBe(1);
+    expect(scrollbarView(at(100, 50), 24, PLAIN).offset).toBe(0.5);
+    expect(scrollbarView(at(100, 0), 24, PLAIN).offset).toBe(0);
   });
 
   it('reads a mid-reflow overshoot as parked, matching isPinned', () => {
     // `isPinned` accepts `viewportY > baseY` rather than calling it a scroll-up,
     // so the thumb has to agree or it would leave the tail while the badge says
     // the viewport is still on it.
-    expect(scrollbarView(at(10, 12), 24).offset).toBe(1);
+    expect(scrollbarView(at(10, 12), 24, PLAIN).offset).toBe(1);
   });
 
   it('keeps a usable thumb once the scrollback ring saturates', () => {
     // baseY stops growing at the 10,000-row cap; the fraction has to stay
     // finite and positive rather than collapsing to zero.
-    const view = scrollbarView(at(10_000, 5_000), 24);
+    const view = scrollbarView(at(10_000, 5_000), 24, PLAIN);
 
-    expect(view.scrollable).toBe(true);
+    expect(view.mode).toBe('seek');
     expect(view.size).toBeGreaterThan(0);
     expect(view.offset).toBeCloseTo(0.5, 5);
   });
 
   it('survives a zero-row grid, which is what a pre-open terminal reports', () => {
-    expect(scrollbarView(at(0, 0), 0)).toEqual(initialScrollbarView());
+    expect(scrollbarView(at(0, 0), 0, PLAIN)).toEqual(initialScrollbarView());
   });
 });
 
 describe('sameScrollbarView', () => {
-  const base: ScrollbarView = { scrollable: true, size: 0.5, offset: 0.5 };
+  const base: ScrollbarView = { mode: 'seek', size: 0.5, offset: 0.5 };
 
   it('folds a move too small to paint', () => {
     // The throttle that keeps a busy PTY from pushing a store write per row.
@@ -79,8 +103,14 @@ describe('sameScrollbarView', () => {
     expect(sameScrollbarView(base, { ...base, size: 0.502 })).toBe(false);
   });
 
-  it('never folds the appearance or loss of a scrollback', () => {
-    expect(sameScrollbarView(base, { ...base, scrollable: false })).toBe(false);
+  it('never folds a change of mode', () => {
+    expect(sameScrollbarView(base, { ...base, mode: 'relative' })).toBe(false);
+    expect(sameScrollbarView(base, { ...base, mode: 'idle' })).toBe(false);
+  });
+
+  it('ignores geometry outside seek mode, where nothing paints from it', () => {
+    const grip: ScrollbarView = { mode: 'relative', size: 1, offset: 1 };
+    expect(sameScrollbarView(grip, { ...grip, offset: 0.2, size: 0.3 })).toBe(true);
   });
 });
 
@@ -184,5 +214,28 @@ describe('wheelRows', () => {
     // either, so there is nothing to scroll to.
     expect(wheelRows(120, 0, 0)).toEqual({ rows: 0, carry: 0 });
     expect(wheelRows(0, CELL, 0.4)).toEqual({ rows: 0, carry: 0.4 });
+  });
+});
+
+describe('relativeSteps', () => {
+  it('emits one step per row', () => {
+    expect(relativeSteps(5, 24)).toBe(5);
+    expect(relativeSteps(-5, 24)).toBe(5);
+  });
+
+  it('caps a fast drag at one screen', () => {
+    // Every step is a wheel event crossing a WebSocket and a relay, where
+    // mobile's PTY is local — iOS caps the same way, Android does not cap.
+    expect(relativeSteps(500, 24)).toBe(24);
+  });
+
+  it('still moves on a grid that reports no rows', () => {
+    expect(relativeSteps(3, 0)).toBe(1);
+  });
+
+  it('does nothing for a zero or non-finite request', () => {
+    expect(relativeSteps(0, 24)).toBe(0);
+    expect(relativeSteps(Number.NaN, 24)).toBe(0);
+    expect(relativeSteps(0.4, 24)).toBe(0);
   });
 });
