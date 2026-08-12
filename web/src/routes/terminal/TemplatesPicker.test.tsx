@@ -17,6 +17,8 @@ import type { PromptTemplate } from '../../api/templateRepository';
 const repo = vi.hoisted(() => ({
   templates: [] as PromptTemplate[],
   patches: [] as { templateId: string; isFavorite: boolean }[],
+  /** Recency stamps, in click order — what moves a row into Recents. */
+  touches: [] as string[],
   // Keyed by template id, not a single slot: two rows can hold PATCHes open at
   // once, and that is the case the guard exists for — a second in-flight
   // request must not overwrite the first one's resolver.
@@ -33,7 +35,10 @@ vi.mock('../../api/templateRepository', async (importOriginal) => {
       if (repo.listGate !== undefined) await repo.listGate;
       return repo.templates;
     },
-    touchTemplate: () => Promise.resolve(),
+    touchTemplate: (templateId: string) => {
+      repo.touches.push(templateId);
+      return Promise.resolve();
+    },
     setTemplateFavorite: (templateId: string, isFavorite: boolean) => {
       repo.patches.push({ templateId, isFavorite });
       return new Promise<void>((resolve, reject) => {
@@ -116,19 +121,34 @@ async function settlePatch(name: string, outcome: 'ok' | 'failed'): Promise<void
   await flush();
 }
 
-async function renderPicker(...templates: PromptTemplate[]): Promise<void> {
+async function renderPickerWith(
+  onPick: (picked: PromptTemplate) => boolean,
+  ...templates: PromptTemplate[]
+): Promise<void> {
   repo.templates = templates;
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <TemplatesPicker onPick={() => undefined} onClose={() => undefined} />
+      <TemplatesPicker onPick={onPick} onClose={() => undefined} />
     </QueryClientProvider>,
   );
   await screen.findByRole('heading', { name: 'All' });
 }
 
+async function renderPicker(...templates: PromptTemplate[]): Promise<void> {
+  await renderPickerWith(() => true, ...templates);
+}
+
+/**
+ * One row's pick button. The name and body spans sit flush in the markup, so
+ * the computed accessible name concatenates them without a separator.
+ */
+const pickRow = (name: string): HTMLElement =>
+  screen.getByRole('button', { name: `${name}body of ${name}` });
+
 beforeEach(() => {
   repo.templates = [];
   repo.patches.length = 0;
+  repo.touches.length = 0;
   repo.settlers.clear();
   repo.listGate = undefined;
 });
@@ -228,5 +248,31 @@ describe('TemplatesPicker favourite guard', () => {
 
     await clickStar('alpha');
     expect(repo.patches).toHaveLength(2);
+  });
+});
+
+describe('TemplatesPicker recency stamp', () => {
+  it('skips the recency stamp when the pick was refused', async () => {
+    // `onPick` returns whether the body actually landed in the terminal — a
+    // closed send gate or an over-cap paste refuses it. Stamping the template
+    // anyway would promote it into Recents on the strength of an insert that
+    // never happened, and the misplaced row would persist server-side.
+    await renderPickerWith(() => false, template('alpha'));
+
+    fireEvent.click(pickRow('alpha'));
+    await flush();
+
+    expect(repo.touches).toEqual([]);
+  });
+
+  it('stamps the template once its body has landed', async () => {
+    // The companion direction: a pick that did land must reach `touchTemplate`
+    // with this row's id, or Recents never learns what the user actually uses.
+    await renderPickerWith(() => true, template('alpha'));
+
+    fireEvent.click(pickRow('alpha'));
+    await flush();
+
+    expect(repo.touches).toEqual(['id-alpha']);
   });
 });

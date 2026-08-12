@@ -445,6 +445,27 @@ describe('TerminalSessionModel outbound payload cap', () => {
     expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toEqual([]);
     expect(toastKinds()).toEqual(['error']);
   });
+
+  it('keeps the selection when sending it to input is refused over the cap', async () => {
+    // `pasteSelection` spends irreversible things only on a frame that went
+    // out: the selection, the scroll position, focus. An over-cap refusal has
+    // already toasted its explanation, and the selection is the user's only
+    // retry material — copy it, trim it, split it — so clearing it here would
+    // charge for a paste that never happened and destroy the retry with it.
+    const { model, framesOfType } = await liveRunning();
+    vi.spyOn(model.term, 'getSelection').mockReturnValue(
+      'a'.repeat(MAX_PASTE_BYTES + 1),
+    );
+    const clearSelection = vi.spyOn(model.term, 'clearSelection');
+    const focus = vi.spyOn(model.term, 'focus');
+
+    model.pasteSelection();
+
+    expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toEqual([]);
+    expect(toastKinds()).toEqual(['error']);
+    expect(clearSelection).not.toHaveBeenCalled();
+    expect(focus).not.toHaveBeenCalled();
+  });
 });
 
 describe('TerminalSessionModel clipboard copy', () => {

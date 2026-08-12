@@ -12,6 +12,7 @@ import {
 } from '../../terminal/terminalStore';
 import { isSessionRunning } from '../../protocol/dto/terminalState';
 import { useTerminalPrefsStore } from '../../stores/terminalPrefsStore';
+import { useToastStore } from '../../stores/toastStore';
 import { useVisibleSessionStore } from '../../stores/visibleSessionStore';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
@@ -218,12 +219,26 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
             model.focus();
           }}
           onPick={(template) => {
+            // A refused insert keeps the picker open: the body stays on
+            // screen for a retry instead of silently vanishing while the
+            // recency stamp advertises success.
+            if (!canSend) {
+              useToastStore
+                .getState()
+                .show("The session isn't accepting input — the template was not inserted.", 'info');
+              return false;
+            }
             // Paste, never execute: the body lands on the running program's
             // input line for review, mirroring the mobile clients' insert-
             // into-composer semantics.
-            model.pasteText(template.body);
+            if (!model.pasteText(template.body)) return false;
             setTemplatesOpen(false);
+            // The paste bypasses xterm's user-input scroll and `focus()`
+            // preserves scroll position, so an insert made while scrolled up
+            // would otherwise land off-screen.
+            model.jumpToBottom();
             model.focus();
+            return true;
           }}
         />
       )}

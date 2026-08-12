@@ -665,12 +665,17 @@ export class TerminalSessionModel {
     return this.io.send(terminalTextFrame(kind, outcome.text));
   }
 
-  pasteText(text: string): void {
-    if (!this.canSendBytes()) return;
+  /**
+   * Returns whether a frame actually went out, so a caller can refuse to
+   * spend anything irreversible — a selection, an open picker — on a paste
+   * that was silently gated or refused over the cap.
+   */
+  pasteText(text: string): boolean {
+    if (!this.canSendBytes()) return false;
     // One frame, not Android's three: these cross a WebSocket and a relay, and
     // losing only the closing marker would strand the program's line editor in
     // paste-collect mode and read as a dead keyboard.
-    this.sendPayload('input', encodePaste(text, this.term.modes.bracketedPasteMode));
+    return this.sendPayload('input', encodePaste(text, this.term.modes.bracketedPasteMode));
   }
 
   /**
@@ -752,13 +757,19 @@ export class TerminalSessionModel {
     // Settledness first so a mid-paint click gets the same explanation the
     // other two actions give. The send gate then refuses silently: the view
     // mirrors it into the button's `canPaste` prop, so this backstop only
-    // catches a socket that drops between pointerdown and mouseup — and it
-    // keeps the selection intact when it does.
+    // catches a state change between pointerdown and mouseup — and it keeps
+    // the selection intact when it does.
     if (!this.screenIsSettled() || !this.canSendBytes()) return;
     const text = this.term.getSelection();
     if (text === '') return;
-    this.pasteText(text);
+    // Only a frame that actually went out may cost the user their selection —
+    // an over-cap refusal has already toasted and leaves the retry target.
+    if (!this.pasteText(text)) return;
     this.term.clearSelection();
+    // The paste bypasses xterm's user-input path and `focus()` preserves
+    // scroll, so without the jump an insert made while scrolled up — the
+    // normal state when selecting older output — lands off-screen.
+    this.jumpToBottom();
     // Same reason as `runSelection`: the toolbar button that was clicked is
     // about to leave the DOM.
     this.focus();
