@@ -21,12 +21,14 @@ from .envelope import (
     CH_CONTROL,
     CH_EVENTS,
     CH_SESSION_IO,
+    CH_SESSION_IO_TARGETED,
     CH_SESSIONS_LIST,
     MIN_CLIENT_PROTOCOL_VERSION,
     PROTOCOL_INCOMPATIBLE_CLOSE_CODE,
     SUPPORTED_PROTOCOL_VERSIONS,
     decode,
     encode,
+    split_targeted,
 )
 from .routing import (
     WS_CLOSE_AGENT_TRANSIENT_OFFLINE,
@@ -189,9 +191,17 @@ async def agent_tunnel(websocket: WebSocket) -> None:
     # Replay ``mobile_session_attach`` for each currently-attached mobile
     # session so the new agent re-sends the PTY handshake (state/replay/ring)
     # and those mobiles don't get stuck on a grayed-out keyboard waiting
-    # for a state frame that will never arrive.
-    for sid in routing.list_attached_sessions(agent_id):
-        _enqueue_attach(conn, sid)
+    # for a state frame that will never arrive. A v8 agent gets one attach
+    # per attached CLIENT (conn_id included) so its per-session client
+    # registry rebuilds with the true count; a v7 agent would answer N
+    # per-client attaches with N broadcast re-handshakes, so it keeps the
+    # legacy one-per-session replay.
+    if (conn.protocol_version or 0) >= 8:
+        for sid, client in routing.iter_attached_session_clients(agent_id):
+            _enqueue_attach(conn, sid, conn_id=client.conn_id)
+    else:
+        for sid in routing.list_attached_sessions(agent_id):
+            _enqueue_attach(conn, sid)
 
     reader_task = asyncio.create_task(
         _reader(websocket, agent_id, routing),
@@ -273,6 +283,21 @@ async def _reader(
                     clients = routing.get_mobile_clients(agent_id, channel_key)
                     for client in clients:
                         _try_enqueue(client, payload, binary=True)
+
+                elif channel == CH_SESSION_IO_TARGETED:
+                    # Proto-v8: deliver the inner frame to the one attached
+                    # client whose conn_id matches. An unknown conn_id means
+                    # the client already detached — drop silently.
+                    try:
+                        conn_id, inner = split_targeted(payload)
+                    except ValueError:
+                        continue
+                    channel_key = f"session_io:{session_id}"
+                    clients = routing.get_mobile_clients(agent_id, channel_key)
+                    for client in clients:
+                        if client.conn_id == conn_id:
+                            _try_enqueue(client, inner, binary=True)
+                            break
 
                 elif channel == CH_SESSIONS_LIST:
                     clients = routing.get_mobile_clients(agent_id, "sessions_list")
@@ -499,17 +524,21 @@ def _try_enqueue(client: MobileClient, payload: bytes, *, binary: bool) -> None:
         record_send_queue_drop("agent_to_mobile")
 
 
-def _enqueue_attach(conn, session_id: str) -> None:
+def _enqueue_attach(conn, session_id: str, conn_id: str | None = None) -> None:
     """Queue a ``mobile_session_attach`` CH_CONTROL frame for the agent.
 
     Used on agent reconnect to replay attach for every mobile that was
-    already registered before the tunnel died. Best-effort: logs on a
-    full queue and otherwise drops silently (the caller already resolved
-    ``conn`` from routing, so ``None`` cannot occur here).
+    already registered before the tunnel died. ``conn_id`` (proto-v8)
+    names the specific mobile connection being replayed. Best-effort:
+    logs on a full queue and otherwise drops silently (the caller already
+    resolved ``conn`` from routing, so ``None`` cannot occur here).
     """
-    if not try_enqueue_control(
-        conn, {"type": "mobile_session_attach", "session_id": session_id}
-    ):
+    ctrl: dict[str, str] = {
+        "type": "mobile_session_attach", "session_id": session_id,
+    }
+    if conn_id:
+        ctrl["conn_id"] = conn_id
+    if not try_enqueue_control(conn, ctrl):
         logger.warning(
             "agent_tunnel.attach_replay_drop agent=%s session=%s — agent queue full",
             conn.agent_id,

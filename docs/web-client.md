@@ -235,12 +235,15 @@ WEB-03 seams; the REST 401 path remains the authoritative session teardown.
 Browsers also expose no ping API, unlike both mobile clients (CLA-219).
 
 **Resume hooks.** The session I/O channel re-asserts the cached PTY size on
-every open — the client is the sole size authority and the agent spawns at
-24×80. WEB-05's replay state machine owns two further re-assert points
-(first inbound binary while reconnecting, and `replayEnd`) and drives them
-through `setSize`, because its model caches the measured grid *before* the
-resize debounce and can therefore be ahead of the channel's own cache. The
-auto-scan channel sends
+every open, gated by `setResendSuppressed` while the model is a size
+*follower* (proto-v8 latest-active arbitration, WEB-05) — a solo/owner
+client still re-asserts because the agent spawns at 24×80 and never reports
+back on its own, but a follower's stale natural grid must not race the
+handshake's authoritative `w` frame. WEB-05's replay state machine owns two
+further re-assert points (first inbound binary while reconnecting, and
+`replayEnd`), gated the same way, and drives them through `setSize`, because
+its model caches the measured grid *before* the resize debounce and can
+therefore be ahead of the channel's own cache. The auto-scan channel sends
 `{subscribe, resume_from_seq}` as the first thing on every open (the agent's
 grace window is 200 ms direct, 1 s through the relay), rebuilt from a live
 per-project cursor so a reconnect resumes at the true high-water mark; it
@@ -680,10 +683,23 @@ decode. The overlay is driven by socket state, not by the first frame
 (ttyd's stuck-overlay bug), and stays up past `'e'` until the replay writes
 report parsed through their `write` callbacks.
 
-**Size authority.** The grid is cached before the 100 ms resize debounce and
-re-asserted at all three live entries — socket open, first inbound binary
-of a cycle, and `replayEnd` — because the agent spawns every PTY at 24×80
-and never reports back.
+**Size authority (proto-v8 latest-active arbitration).** Each model holds a
+role — `solo` / `owner` / `follower` — driven by the agent's `w` frame
+(rows, cols, attached-client count) carried on every attach handshake, every
+effective resize and every attach/detach. A solo/owner client still caches
+its grid before the 100 ms resize debounce and re-asserts it at the same
+three live entries as before — socket open, first inbound binary of a
+cycle, and `replayEnd` — because the agent spawns every PTY at 24×80 and
+never reports back on its own. A `follower` — the grid belongs to another
+client — sends no `r` frames at all: `solveFollowerLayout` binary-searches
+`fontSize` against `proposeDimensions()`'s measured cell metrics until the
+foreign grid fits the container (floor 6 px, then clamped and clipped), and
+resizes the emulator to that grid exactly. Fresh models start `follower`, so
+attaching to a session another client already drives adopts its grid
+instead of stealing it. Typing (`onKey`, ahead of the keystroke's own bytes)
+or a paste takes authority back immediately; window focus takes it back
+after a 400 ms debounce armed only on focus *edges* — never steady state,
+or an idle focused tab would reclaim authority after every foreign resize.
 
 **Follow mode is derived, not commanded**: pinned ⇔ `viewportY === baseY`.
 That gets the CLA-184/CLA-178 fix for free — xterm scrolls to the tail on
@@ -1260,8 +1276,10 @@ the root `CLAUDE.md`: client-facing changes must be mirrored across
 Android, iOS, and web (or a Linear issue filed) — with the transition rule
 that feature areas not yet built on web are covered by their planned WEB-*
 issue rather than per-change issues. Terminal behavior parity references:
-the client is the sole PTY size authority and must re-assert size on every
-reconnect (see `docs/ios-client.md` and PROTOCOL.md).
+size follows the shared proto-v8 latest-active-client-owns-the-grid
+arbitration: a solo/owner client still re-asserts on every reconnect, while
+a follower renders the foreign grid instead of fighting it (see
+`docs/ios-client.md` and PROTOCOL.md).
 
 Web-only behaviour that needs **no** mirror issue is the platform-convention
 exemption the rule already carries: the desktop keyboard surface (Ctrl+C /

@@ -25,6 +25,7 @@ from mobaide.relay.client import (
     FRAME_RESIZE,
     FRAME_STATE,
     FRAME_SUBMIT,
+    FRAME_WINSIZE,
     INPUT_QUEUE_MAXSIZE,
     UNKNOWN_SESSION_NOTIFY_CAP,
     RelayClient,
@@ -351,6 +352,8 @@ class TestHandleMobileAttach:
         mock_session.iter_ring_chunks = MagicMock(
             side_effect=_mock_iter_ring_chunks(b"hello world"),
         )
+        winsize_payload = struct.pack(">HHH", 24, 80, 1)
+        mock_session.winsize_payload = MagicMock(return_value=winsize_payload)
         mock_session_manager.get_session = AsyncMock(return_value=mock_session)
 
         ws = AsyncMock()
@@ -359,11 +362,11 @@ class TestHandleMobileAttach:
         ).encode()
         await client._handle_control(payload, ws)
 
-        # Chunked replay handshake (protocol v3+):
-        # state → replay → output(chunk_0)…output(chunk_N) → replay_end
-        # The 11-byte ring fits in a single 64 KB chunk, so N=1.
-        assert ws.send.await_count == 4
-        sent = [ws.send.call_args_list[i][0][0] for i in range(4)]
+        # Chunked replay handshake (protocol v8): state → winsize → replay →
+        # output(chunk_0)…output(chunk_N) → replay_end. The 11-byte ring fits
+        # in a single 64 KB chunk, so N=1.
+        assert ws.send.await_count == 5
+        sent = [ws.send.call_args_list[i][0][0] for i in range(5)]
         decoded = [decode(b) for b in sent]
 
         for ch, sid, _ in decoded:
@@ -375,12 +378,14 @@ class TestHandleMobileAttach:
         assert state_payload["status"] == "running"
         assert state_payload["pid"] == 42
 
-        assert decoded[1][2] == FRAME_REPLAY
+        assert decoded[1][2] == FRAME_WINSIZE + winsize_payload
 
-        assert decoded[2][2][:1] == FRAME_OUTPUT
-        assert decoded[2][2][1:] == b"hello world"
+        assert decoded[2][2] == FRAME_REPLAY
 
-        assert decoded[3][2] == FRAME_REPLAY_END
+        assert decoded[3][2][:1] == FRAME_OUTPUT
+        assert decoded[3][2][1:] == b"hello world"
+
+        assert decoded[4][2] == FRAME_REPLAY_END
 
     async def test_attach_sends_multi_chunk_handshake_when_ring_exceeds_chunk_size(
         self, client, mock_session_manager,
@@ -409,6 +414,8 @@ class TestHandleMobileAttach:
         mock_session.iter_ring_chunks = MagicMock(
             side_effect=_mock_iter_ring_chunks(ring),
         )
+        winsize_payload = struct.pack(">HHH", 24, 80, 1)
+        mock_session.winsize_payload = MagicMock(return_value=winsize_payload)
         mock_session_manager.get_session = AsyncMock(return_value=mock_session)
 
         ws = AsyncMock()
@@ -423,13 +430,14 @@ class TestHandleMobileAttach:
             assert ch == CH_SESSION_IO
             assert sid == "s-multi"
 
-        # Wire sequence: STATE → REPLAY → N × OUTPUT → REPLAY_END, N ≥ 2.
+        # Wire sequence: STATE → WINSIZE → REPLAY → N × OUTPUT → REPLAY_END, N ≥ 2.
         assert decoded[0][2][:1] == FRAME_STATE
-        assert decoded[1][2] == FRAME_REPLAY
+        assert decoded[1][2] == FRAME_WINSIZE + winsize_payload
+        assert decoded[2][2] == FRAME_REPLAY
         assert decoded[-1][2] == FRAME_REPLAY_END
 
-        output_payloads = [d[2][1:] for d in decoded[2:-1]]
-        assert all(d[2][:1] == FRAME_OUTPUT for d in decoded[2:-1])
+        output_payloads = [d[2][1:] for d in decoded[3:-1]]
+        assert all(d[2][:1] == FRAME_OUTPUT for d in decoded[3:-1])
         assert len(output_payloads) >= 2, (
             f"ring of size REPLAY_CHUNK_BYTES + 1 must emit ≥ 2 output "
             f"chunks; got {len(output_payloads)}"
@@ -512,6 +520,9 @@ class TestHandleMobileAttach:
         mock_session.iter_ring_chunks = MagicMock(
             side_effect=_mock_iter_ring_chunks(b""),
         )
+        mock_session.winsize_payload = MagicMock(
+            return_value=struct.pack(">HHH", 24, 80, 1),
+        )
         mock_session_manager.get_session = AsyncMock(return_value=mock_session)
 
         ws = AsyncMock()
@@ -523,10 +534,10 @@ class TestHandleMobileAttach:
         await client._handle_control(payload, ws)
         await client._handle_control(payload, ws)
 
-        # 3 attaches × 4 handshake sends each (state + replay + output(chunk)
-        # + replay_end). Empty ring still emits one output frame between the
-        # markers, so the per-attach count is fixed.
-        assert ws.send.await_count == 12
+        # 3 attaches × 5 handshake sends each (state + winsize + replay +
+        # output(chunk) + replay_end). Empty ring still emits one output frame
+        # between the markers, so the per-attach count is fixed.
+        assert ws.send.await_count == 15
 
     async def test_unknown_attach_answers_every_time(
         self, client, mock_session_manager

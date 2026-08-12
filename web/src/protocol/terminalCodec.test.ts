@@ -26,6 +26,9 @@ interface DecodeCase {
     payload_hex?: string;
     status?: string;
     pid?: number;
+    rows?: number;
+    cols?: number;
+    attached_clients?: number;
   } | null;
 }
 
@@ -95,6 +98,15 @@ describe('terminal codec golden fixtures', () => {
       case 'replay_end':
         expect(decoded?.kind).toBe('replayEnd');
         break;
+      case 'winsize': {
+        expect(decoded?.kind).toBe('winsize');
+        if (decoded?.kind === 'winsize') {
+          expect(decoded.rows).toBe(expected.rows);
+          expect(decoded.cols).toBe(expected.cols);
+          expect(decoded.attachedClients).toBe(expected.attached_clients);
+        }
+        break;
+      }
       default:
         throw new Error(`${decodeCase.name}: unhandled expectation ${expected.kind}`);
     }

@@ -29,6 +29,9 @@ private struct FrameFixtureFile: Decodable {
         let payload_hex: String?
         let status: String?
         let pid: Int?
+        let rows: Int?
+        let cols: Int?
+        let attached_clients: Int?
     }
 }
 
@@ -68,6 +71,10 @@ final class FrameFixtureTests: XCTestCase {
                 XCTAssertEqual(tree, .object(expected), decodeCase.name)
             case ("replay_start", .replayStart), ("replay_end", .replayEnd):
                 break
+            case ("winsize", .winsize(let rows, let cols, let attachedClients)):
+                XCTAssertEqual(rows, expect.rows, decodeCase.name)
+                XCTAssertEqual(cols, expect.cols, decodeCase.name)
+                XCTAssertEqual(attachedClients, expect.attached_clients, decodeCase.name)
             default:
                 XCTFail("\(decodeCase.name): expected \(expect.kind), got \(String(describing: decoded))")
             }

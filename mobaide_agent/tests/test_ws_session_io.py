@@ -87,14 +87,17 @@ class TestWsBinaryFrames:
     def test_initial_handshake_sequence(
         self, test_client, auth_token, session_id_sync,
     ):
-        """Protocol v3 handshake: state → 'b' → 'o' (empty for a fresh
-        session) → 'e'."""
+        """Protocol v8 handshake: state → 'w' (winsize) → 'b' → 'o' (empty
+        for a fresh session) → 'e'."""
         with test_client.websocket_connect(
             f"/ws/session/{session_id_sync}?token={auth_token}",
         ) as ws:
             drain_text_preamble(ws)
             first = ws.receive_bytes()
             assert first[:1] == b"s"
+            winsize = ws.receive_bytes()
+            assert winsize[:1] == b"w"
+            assert len(winsize) == 7  # type byte + u16 rows, cols, count
             second = ws.receive_bytes()
             assert second == b"b"  # marker has empty payload
             third = ws.receive_bytes()

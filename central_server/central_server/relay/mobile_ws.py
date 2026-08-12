@@ -38,8 +38,14 @@ def _send_session_lifecycle(
     agent_id: str,
     session_id: str,
     event: str,
+    conn_id: str | None = None,
 ) -> None:
     """Push a session-lifecycle control frame onto the agent's send queue.
+
+    ``conn_id`` (proto-v8) identifies the one mobile connection attaching or
+    detaching; a v8 agent keys its per-session client registry on it and may
+    answer with CH_SESSION_IO_TARGETED envelopes. Omitted only for callers
+    that predate per-connection identity.
 
     Best-effort: silently drops when the agent is offline; warns when the
     queue is saturated. A saturated queue requires ~10k pending frames,
@@ -50,9 +56,10 @@ def _send_session_lifecycle(
     conn = routing.get_agent(agent_id)
     if conn is None:
         return
-    if not try_enqueue_control(
-        conn, {"type": event, "session_id": session_id}
-    ):
+    ctrl: dict[str, str] = {"type": event, "session_id": session_id}
+    if conn_id:
+        ctrl["conn_id"] = conn_id
+    if not try_enqueue_control(conn, ctrl):
         logger.warning(
             "relay.session_lifecycle.drop agent=%s session=%s event=%s — agent queue full",
             agent_id,
@@ -129,7 +136,8 @@ async def relay_session_io(
     routing.register_mobile(agent_id, channel_key, client)
 
     _send_session_lifecycle(
-        routing, agent_id, session_id, "mobile_session_attach"
+        routing, agent_id, session_id, "mobile_session_attach",
+        conn_id=client.conn_id,
     )
 
     reader_task = asyncio.create_task(
@@ -151,7 +159,8 @@ async def relay_session_io(
     finally:
         routing.unregister_mobile(agent_id, channel_key, client)
         _send_session_lifecycle(
-            routing, agent_id, session_id, "mobile_session_detach"
+            routing, agent_id, session_id, "mobile_session_detach",
+            conn_id=client.conn_id,
         )
 
 

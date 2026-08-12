@@ -59,6 +59,20 @@ import javax.inject.Inject
 /** Live, reconnecting, replaying — what the UI overlay should show on top of the terminal. */
 enum class ConnectionState { Live, Reconnecting, ReplayingBuffer }
 
+/**
+ * This client's role in proto-v8 size arbitration (latest-active wins).
+ * [Solo] and [Owner] behave exactly like the pre-v8 sole-authority client;
+ * [Follower] renders another client's grid and never sends `'r'` frames.
+ * Fresh ViewModels start as [Follower] so attaching to a session another
+ * client is driving *adopts* the broadcast size instead of stealing it — the
+ * handshake's `'w'` frame (or replay-end on a v7 agent that sends none)
+ * resolves the real role. Mirrors web `SizeAuthority` / iOS `SizeAuthority`.
+ */
+enum class SizeAuthority { Solo, Owner, Follower }
+
+/** The foreign grid a follower renders; null whenever this client owns the size. */
+data class FollowerGrid(val rows: Int, val cols: Int)
+
 /** Ctrl+A (0x01) + Ctrl+K (0x0B) — clears the PTY's current input line via
  *  readline line-edit keys (no SIGINT, unlike Ctrl+C), so a composer send never
  *  concatenates onto stale prompt text and a running task is never interrupted.
@@ -93,7 +107,27 @@ class TerminalViewModel @Inject constructor(
 
     private var lastResizeRows = -1
     private var lastResizeCols = -1
+
+    /** The grid actually put on the wire last — can trail the cache by a
+     *  debounce mid-drag. [onWinsize]'s own-echo check accepts either, so an
+     *  echo of an in-flight send cannot demote the actively resizing client. */
+    private var lastSentRows = -1
+    private var lastSentCols = -1
     private var resizeJob: Job? = null
+
+    private val _sizeAuthority = MutableStateFlow(SizeAuthority.Follower)
+    val sizeAuthority: StateFlow<SizeAuthority> = _sizeAuthority.asStateFlow()
+
+    private val _followerGrid = MutableStateFlow<FollowerGrid?>(null)
+    val followerGrid: StateFlow<FollowerGrid?> = _followerGrid.asStateFlow()
+
+    private val _attachedClients = MutableStateFlow(0)
+    val attachedClients: StateFlow<Int> = _attachedClients.asStateFlow()
+
+    /** Whether a `'w'` frame arrived on the current socket; reset on disconnect.
+     *  Replay-end with none seen means a v7 agent → pre-v8 solo behavior. */
+    private var winsizeSeen = false
+    private var foregroundTakeoverJob: Job? = null
 
     /** Buffered channel for outgoing PTY frames — consumed by a single IO coroutine to
      *  keep sends off the main thread while preserving FIFO ordering. */
@@ -325,10 +359,14 @@ class TerminalViewModel @Inject constructor(
                     }
                     is WsEvent.Disconnected -> {
                         _isConnected.value = false
+                        // Authority survives the drop; only the per-socket 'w'
+                        // marker resets so the next handshake re-decides.
+                        winsizeSeen = false
                         _connectionState.value = ConnectionState.Reconnecting
                     }
                     is WsEvent.Error -> {
                         _isConnected.value = false
+                        winsizeSeen = false
                         _connectionState.value = ConnectionState.Reconnecting
                     }
                     is WsEvent.Binary -> handleBinary(event.bytes)
@@ -392,9 +430,17 @@ class TerminalViewModel @Inject constructor(
                 // before this case existed).
                 if (inReplay) {
                     inReplay = false
+                    // No 'w' by replay-end means a v7 agent, which cannot have
+                    // another size authority: revert to Solo so the
+                    // enterLiveState() re-assert below delivers the grid.
+                    if (!winsizeSeen && _sizeAuthority.value == SizeAuthority.Follower) {
+                        setAuthority(SizeAuthority.Solo)
+                    }
                     enterLiveState()
                 }
             }
+            is TerminalFrame.Winsize ->
+                onWinsize(decoded.rows, decoded.cols, decoded.attachedClients)
             null -> { /* unknown frame type, ignore */ }
         }
     }
@@ -407,6 +453,7 @@ class TerminalViewModel @Inject constructor(
         }
 
     fun sendInput(text: String) {
+        takeoverNow()
         setFollowMode(true)
         // Wrap multi-line input in xterm bracketed-paste markers so Ink/React TUIs
         // (Claude CLI) treat the whole buffer as a single paste instead of submitting
@@ -438,6 +485,10 @@ class TerminalViewModel @Inject constructor(
 
     /** Send raw bytes (Ctrl-C, Esc, arrow keys, ...) to the PTY. */
     fun sendBytes(bytes: ByteArray) {
+        // User input claims size authority; the emulator's auto-replies bypass
+        // this method via [sendTerminalBytes]'s isApplyingEmulatorOutput branch
+        // and must not (a program's ESC[6n answer is not the user typing).
+        takeoverNow()
         setFollowMode(true)
         enqueueInput(bytes)
     }
@@ -535,6 +586,7 @@ class TerminalViewModel @Inject constructor(
      */
     fun sendTappedRow(text: String, isCurrentInput: Boolean) {
         if (_connectionState.value != ConnectionState.Live) return
+        takeoverNow()
         setFollowMode(true)
         val frame = if (isCurrentInput) {
             TerminalProtocol.encodeInput("\r".toByteArray(Charsets.UTF_8))
@@ -550,6 +602,96 @@ class TerminalViewModel @Inject constructor(
 
     fun consumeFocusRequest() {
         _requestInputFocus.value = false
+    }
+
+    /**
+     * The latest-active arbitration state machine (proto-v8; identical on web
+     * and iOS). The agent broadcasts `'w'` on every effective resize and every
+     * attach/detach; whoever's grid it names is the owner, everyone else
+     * follows, and a count of one restores the pre-v8 sole-authority behavior.
+     */
+    private fun onWinsize(rows: Int, cols: Int, attachedClients: Int) {
+        winsizeSeen = true
+        _attachedClients.value = attachedClients
+        if (attachedClients <= 1) {
+            setAuthority(SizeAuthority.Solo)
+            // A fresh PTY (24x80) or a departed owner's leftover grid: deliver
+            // the natural size. Equal grids stay silent — a solo reconnect now
+            // costs zero resize frames.
+            if (lastResizeRows > 0 && (rows != lastResizeRows || cols != lastResizeCols)) {
+                resendCachedSize()
+            }
+            return
+        }
+        if ((rows == lastResizeRows && cols == lastResizeCols) ||
+            (rows == lastSentRows && cols == lastSentCols)
+        ) {
+            // Our own size echoed back: this client holds authority. The
+            // last-sent pair matters mid-drag — the cache may have moved past
+            // the frame the agent is echoing, and matching only the cache
+            // would demote the very client that is actively resizing.
+            setAuthority(SizeAuthority.Owner)
+            // Same corrective as the solo branch: a stale echo can trail a
+            // cache that already moved on, and a transient demotion may have
+            // canceled the debounced frame that would have delivered it —
+            // re-assert the divergence now and drop any pending debounce,
+            // which could only re-send the same cache.
+            if (lastResizeRows > 0 && (rows != lastResizeRows || cols != lastResizeCols)) {
+                resendCachedSize()
+                resizeJob?.cancel()
+                resizeJob = null
+            }
+            return
+        }
+        _followerGrid.value = FollowerGrid(rows, cols)
+        setAuthority(SizeAuthority.Follower)
+    }
+
+    private fun setAuthority(next: SizeAuthority) {
+        val previous = _sizeAuthority.value
+        if (previous == next) return
+        _sizeAuthority.value = next
+        if (next == SizeAuthority.Follower) {
+            // A queued debounced resize must not fire after the demotion.
+            resizeJob?.cancel()
+            resizeJob = null
+        } else if (previous == SizeAuthority.Follower) {
+            _followerGrid.value = null
+            foregroundTakeoverJob?.cancel()
+            foregroundTakeoverJob = null
+        }
+    }
+
+    /**
+     * Follower → owner: assert the frozen natural grid immediately (no
+     * debounce — a takeover triggered by typing must put the resize on the
+     * wire before the keystroke's bytes). Clearing [followerGrid] reverts the
+     * surface to its native layout; the layout pass that follows corrects the
+     * cache through [resize] if the viewport changed while following.
+     */
+    private fun takeoverNow() {
+        if (_sizeAuthority.value != SizeAuthority.Follower) return
+        if (_connectionState.value != ConnectionState.Live ||
+            _sessionState.value != "running"
+        ) {
+            return
+        }
+        setAuthority(SizeAuthority.Owner)
+        resendCachedSize()
+    }
+
+    /** Arm the delayed foreground takeover — the screen-visible counterpart of
+     *  typing. Edges only (screen open / return to foreground), never steady
+     *  state: re-arming on demotion would steal authority back 400 ms after
+     *  every foreign resize while this screen sits open. */
+    private fun armForegroundTakeover() {
+        if (_sizeAuthority.value != SizeAuthority.Follower) return
+        foregroundTakeoverJob?.cancel()
+        foregroundTakeoverJob = viewModelScope.launch {
+            delay(FOREGROUND_TAKEOVER_MS)
+            foregroundTakeoverJob = null
+            takeoverNow()
+        }
     }
 
     /** Single entry point into [ConnectionState.Live]. */
@@ -571,7 +713,10 @@ class TerminalViewModel @Inject constructor(
      * or agent-spawned (Auto Scan) PTY. Mirrors iOS TerminalSessionModel.resendCachedSize().
      */
     private fun resendCachedSize() {
+        if (_sizeAuthority.value == SizeAuthority.Follower) return
         if (lastResizeRows <= 0 || lastResizeCols <= 0) return
+        lastSentRows = lastResizeRows
+        lastSentCols = lastResizeCols
         sendChannel.trySend(TerminalProtocol.encodeResize(lastResizeRows, lastResizeCols))
     }
 
@@ -838,6 +983,9 @@ class TerminalViewModel @Inject constructor(
 
     fun markScreenHidden() {
         foregroundSessionTracker.clearVisible(sessionId)
+        // Leaving the screen cancels a not-yet-fired foreground takeover.
+        foregroundTakeoverJob?.cancel()
+        foregroundTakeoverJob = null
     }
 
     /**
@@ -853,11 +1001,31 @@ class TerminalViewModel @Inject constructor(
      * and flash the overlay unnecessarily.
      */
     fun onScreenVisible() {
+        // The screen coming (back) on-screen is a focus edge: a follower the
+        // user is now looking at takes size authority after the debounce.
+        armForegroundTakeover()
         if (_connectionState.value == ConnectionState.Live) return
         connection?.forceReconnect()
     }
 
     fun resize(rows: Int, cols: Int) {
+        // While following, nothing is ever sent from here — but the cache
+        // rules differ by phase. With a foreign grid adopted, the cache stays
+        // frozen at the last natural grid: that freeze is the echo
+        // suppression (the layout pass triggered by applying the foreign grid
+        // lands here and dies) and the reference [onWinsize] compares against
+        // for the own-echo owner check. Before any grid is adopted (the
+        // fresh-model state), the layout report IS this client's natural grid
+        // and must be recorded, or the solo/v7 promotion would find an empty
+        // cache, skip its assert, and leave the PTY at the spawn 24x80 with
+        // nothing left to re-fire a grid report (web/iOS seed identically).
+        if (_sizeAuthority.value == SizeAuthority.Follower) {
+            if (_followerGrid.value == null) {
+                lastResizeRows = rows
+                lastResizeCols = cols
+            }
+            return
+        }
         if (rows == lastResizeRows && cols == lastResizeCols) return
         lastResizeRows = rows
         lastResizeCols = cols
@@ -867,6 +1035,8 @@ class TerminalViewModel @Inject constructor(
         resizeJob?.cancel()
         resizeJob = viewModelScope.launch {
             delay(100)
+            lastSentRows = rows
+            lastSentCols = cols
             sendChannel.trySend(TerminalProtocol.encodeResize(rows, cols))
         }
     }
@@ -879,6 +1049,11 @@ class TerminalViewModel @Inject constructor(
 
     private companion object {
         const val MAX_UNREAD_DISPLAY = 9999
+
+        /** How long the terminal screen must stay foregrounded before a
+         *  follower takes size authority. Matches web's FOCUS_TAKEOVER_MS;
+         *  typing takes over immediately instead. */
+        const val FOREGROUND_TAKEOVER_MS = 400L
 
         /**
          * Local emulator transcript size in rows. Sized to comfortably hold

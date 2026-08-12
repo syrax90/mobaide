@@ -29,9 +29,29 @@ final class TerminalPanScrollView: UIScrollView {
             // checks, and an equality guard here would turn a dropped layout
             // pass (zero-bounds early-out, stale wrapper) into a permanently
             // missed mode change.
-            alwaysBounceHorizontal = displayConfig.mode == .static
+            alwaysBounceHorizontal = pansHorizontally
             setNeedsLayout()
         }
+    }
+
+    /// Foreign grid rendered while another client owns the PTY size (proto-v8
+    /// follower mode), or nil. While set it overrides `displayConfig` entirely:
+    /// the terminal is laid out at exactly `grid × cellSize` — the width
+    /// overflow pans through the existing Static machinery, a taller grid is
+    /// bottom-anchored so its *top* rows clip (the prompt/cursor edge stays
+    /// visible), and a shorter one letterboxes above.
+    var followerGrid: FollowerGrid? {
+        didSet {
+            guard followerGrid != oldValue else { return }
+            alwaysBounceHorizontal = pansHorizontally
+            setNeedsLayout()
+        }
+    }
+
+    /// Whether this outer view owns horizontally-dominant drags — Static mode
+    /// and follower mode both lay the terminal out wider than the viewport.
+    private var pansHorizontally: Bool {
+        displayConfig.mode == .static || followerGrid != nil
     }
 
     init(terminalView: MobaideTerminalView, displayConfig: TerminalDisplayConfig) {
@@ -75,20 +95,36 @@ final class TerminalPanScrollView: UIScrollView {
         guard viewport.width > 0, viewport.height > 0 else { return }
 
         let targetWidth: CGFloat
-        switch displayConfig.mode {
-        case .full:
-            targetWidth = viewport.width
-        case .static:
-            let cellWidth = terminalView.cellSize.width
-            targetWidth = cellWidth > 0
-                ? ceil(CGFloat(displayConfig.staticColumns) * cellWidth)
+        let targetHeight: CGFloat
+        var originY: CGFloat = 0
+        if let grid = followerGrid {
+            let cell = terminalView.cellSize
+            targetWidth = cell.width > 0
+                ? ceil(CGFloat(grid.cols) * cell.width)
                 : viewport.width
+            targetHeight = cell.height > 0
+                ? ceil(CGFloat(grid.rows) * cell.height)
+                : viewport.height
+            // Bottom-anchor: clip the top of a taller grid, letterbox above a
+            // shorter one — either way the prompt/cursor edge stays on screen.
+            originY = viewport.height - targetHeight
+        } else {
+            switch displayConfig.mode {
+            case .full:
+                targetWidth = viewport.width
+            case .static:
+                let cellWidth = terminalView.cellSize.width
+                targetWidth = cellWidth > 0
+                    ? ceil(CGFloat(displayConfig.staticColumns) * cellWidth)
+                    : viewport.width
+            }
+            targetHeight = viewport.height
         }
 
         // Keyboard counter-pan moves only the frame ORIGIN — SwiftTerm resizes
         // solely from a bounds-size change, so this can never emit an `r` frame.
         let dy = currentCounterPan(boxHeight: viewport.height)
-        let targetFrame = CGRect(x: 0, y: dy, width: targetWidth, height: viewport.height)
+        let targetFrame = CGRect(x: 0, y: originY + dy, width: targetWidth, height: targetHeight)
         if terminalView.frame != targetFrame {
             let originMoved = terminalView.frame.origin != targetFrame.origin
             terminalView.frame = targetFrame
@@ -107,6 +143,21 @@ final class TerminalPanScrollView: UIScrollView {
         let targetContent = CGSize(width: targetWidth, height: viewport.height)
         if contentSize != targetContent {
             contentSize = targetContent
+        }
+        if let grid = followerGrid {
+            // Backstop for SwiftTerm's internal insets skewing the
+            // bounds-derived grid: the emulator must hold the foreign grid
+            // *exactly* or cursor addressing renders wrong. Deferred out of
+            // the layout pass; the model's follower gate swallows the
+            // `sizeChanged` echo either way.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.followerGrid == grid,
+                      self.terminalView.superview === self else { return }
+                let term = self.terminalView.getTerminal()
+                if term.cols != grid.cols || term.rows != grid.rows {
+                    term.resize(cols: grid.cols, rows: grid.rows)
+                }
+            }
         }
     }
 
@@ -188,7 +239,7 @@ final class TerminalPanScrollView: UIScrollView {
     /// Full mode has no horizontal overflow and never arbitrates, so the outer
     /// claims nothing there.
     func wouldClaimHorizontalPan(velocity: CGPoint, translation: CGPoint) -> Bool {
-        guard displayConfig.mode == .static else { return false }
+        guard pansHorizontally else { return false }
         return Self.shouldClaimHorizontalPan(
             velocity: velocity,
             translation: translation,
@@ -199,7 +250,7 @@ final class TerminalPanScrollView: UIScrollView {
     /// The same split answered for this view's own pan, where a stationary touch
     /// must still catch an in-flight fling.
     func claimsHorizontalPan() -> Bool {
-        guard displayConfig.mode == .static else { return false }
+        guard pansHorizontally else { return false }
         return Self.shouldClaimHorizontalPan(
             velocity: panGestureRecognizer.velocity(in: self),
             translation: panGestureRecognizer.translation(in: self),
@@ -227,7 +278,7 @@ final class TerminalPanScrollView: UIScrollView {
         if gestureRecognizer === panGestureRecognizer, terminalView.isSelectionActive {
             return false
         }
-        if displayConfig.mode == .static,
+        if pansHorizontally,
            gestureRecognizer === panGestureRecognizer,
            !claimsHorizontalPan() {
             return false

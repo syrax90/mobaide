@@ -6,7 +6,92 @@ and ``central_server``. The three human-facing semvers (``android-vX.Y.Z``,
 ``agent-vX.Y.Z``, ``server-vX.Y.Z``) are independent and ship on their own
 cadence; they do **not** gate compatibility.
 
-## proto-v7 (current)
+## proto-v8 (current)
+
+* Introduced: 2026-08-12 (CLA-276).
+* Python support: ``PROTOCOL_VERSION = 8``, ``SUPPORTED_PROTOCOL_VERSIONS =
+  (6, 7, 8)``, ``MIN_CLIENT_PROTOCOL_VERSION = 6`` (both ``mobaide_agent`` and
+  ``central_server``). ``APP_PROTOCOL_VERSION = 8`` on Android, iOS and web.
+* **Deployment order matters** (same rule as proto-v7): the central server must
+  deploy before any agent rollout — a v8 agent handshaking against a
+  v7-only relay is closed with ``4002``. Old (v6/v7) agents keep connecting.
+* Change vs proto-v7: **multi-client PTY size arbitration** — *latest active
+  client owns the grid* (tmux ``window-size latest``). Before v8 every client
+  was sole size authority and re-asserted its grid on every connect and
+  replay-end; with two clients attached (web tab + phone) the relay's
+  broadcast fan-out made each attach handshake trigger the *other* client's
+  re-assert, ping-ponging the PTY size indefinitely.
+* **Agent-side size state.** The agent stores the current PTY ``(rows, cols)``
+  per session, applies only *effective* resizes (an equal-size ``r`` frame is
+  a no-op — this alone kills most of the storm), refuses resizes on a
+  non-running session, and no longer crashes on a resize against a dead PTY.
+  It also tracks the attached-client count per session across both transports
+  (direct-WS sockets natively; relay clients via ``conn_id``, below).
+* **New S→C binary frame ``w`` (0x77, winsize)** on ``/ws/session/<id>`` and
+  ``CH_SESSION_IO``: payload ``u16 rows + u16 cols + u16 attached_clients``
+  (big-endian). Sent (1) in every attach handshake between the state frame and
+  the ``'b'`` replay marker — so a client can arbitrate *before* its replay-end
+  re-assert decision; (2) broadcast to all attached clients after every
+  effective resize; (3) broadcast whenever the attached-client count changes,
+  which is what lets a passive client reclaim its natural grid the moment it
+  becomes solo. A truncated payload decodes to null. All three v7 clients drop
+  unknown frame type bytes, so a v8 agent is safe against v7 clients.
+* **Client arbitration (identical on Android / iOS / web).** Each terminal
+  model holds a role — ``solo`` / ``owner`` / ``follower`` — **initialized
+  ``follower``** so a fresh attach adopts an already-driven session's grid
+  instead of stealing it. On ``w(rows, cols, count)``: ``count <= 1`` → solo
+  (pre-v8 behavior; assert the natural grid iff it differs from the reported
+  size); ``count > 1`` and the size equals the client's own last-sent grid →
+  owner (own echo); otherwise → follower: adopt the foreign grid into the
+  local emulator, render passively (web solves a smaller ``fontSize`` so the
+  foreign grid fits the tab; mobile reuses the Static-mode forced-size pan at
+  native font, bottom-anchored), and suppress **all** outbound ``r`` frames —
+  including the connect/replay-end re-asserts and the local dedupe cache,
+  whose freeze doubles as the echo suppression for locally-applied foreign
+  grids. Takeover: typing (or a row tap / paste) promotes a follower to owner
+  immediately, re-asserting its natural grid *before* the input bytes; window
+  focus (web) / terminal-screen foreground (mobile) promotes after a 400 ms
+  debounce, armed on focus *edges* only (never steady state, or an idle
+  focused tab would steal authority back after every foreign resize). Applied
+  on receipt — no ACK roundtrip. **v7-agent fallback:** no ``w`` by replay-end
+  means no arbitration exists on the other side; the client reverts to solo
+  and re-asserts, i.e. exactly the pre-v8 contract, with no version sniffing.
+* **``conn_id`` on the mobile attach/detach control frames.** The relay
+  generates a per-connection id (uuid hex — per socket, not per device: two
+  tabs of one browser must count as two clients) and adds it to
+  ``mobile_session_attach`` / ``mobile_session_detach``. The agent keys its
+  per-session client registry on it, and ``_handle_mobile_detach`` — an empty
+  hook before v8 — now unregisters the client so the count-change broadcast
+  fires. On agent reconnect the relay replays **one attach per attached
+  client** (v8 agents only; a v7 agent still gets the one-per-session replay,
+  since it would answer per-client attaches with redundant broadcast
+  re-handshakes). The ``conn_id``'s *presence* is the capability gate: a v7
+  relay never sends one, and the agent then falls back to broadcast
+  handshakes and a single legacy registry token per session — which
+  undercounts multiple v7-relayed clients, degrading those setups to
+  pre-v8 behavior for the duration of the mixed-version window.
+* **New envelope channel ``0x05 CH_SESSION_IO_TARGETED`` (agent → server
+  only)**: payload ``[1-byte client_id_len][client_id][inner PTY frame]``. The
+  relay unwraps it and delivers the inner frame to the one attached client
+  whose ``conn_id`` matches (unknown id → dropped; the client already
+  detached). The agent uses it for the attach handshake and stale-``stopped``
+  frames whenever the triggering attach carried a ``conn_id`` — a broadcast
+  handshake wipes and re-replays every already-attached client's terminal,
+  which was both the visible foreign-attach wipe and the root of the resize
+  storm. Mobile clients never see this channel; their leg still carries plain
+  binary PTY frames.
+* Single-client behavior is unchanged in effect: the handshake now reports the
+  PTY size, so a solo client whose grid already matches sends zero resize
+  frames where it used to re-assert on every connect; a mismatch (fresh 24×80
+  PTY) is asserted on the handshake ``w`` instead of blindly at socket-open.
+* Protocol fixtures: ``tests/protocol_fixtures/frames/terminal_frames.json``
+  gains ``winsize_40x120_2clients`` / ``winsize_solo_24x80`` /
+  ``winsize_max_u16`` / ``winsize_truncated_is_nil`` decode cases (consumed by
+  the web and iOS fixture arms; Android's ``TerminalProtocolTest`` is
+  hand-written). ``inbound_resize_byte_is_nil`` (``'r'`` = 0x72) is unchanged —
+  inbound ``r`` remains client-undecodable.
+
+## proto-v7 (superseded by proto-v8)
 
 * Introduced: 2026-07-27 (CLA-153).
 * Python support: ``PROTOCOL_VERSION = 7``, ``SUPPORTED_PROTOCOL_VERSIONS =

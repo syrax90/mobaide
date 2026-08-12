@@ -17,7 +17,7 @@ import type { IncompatibleServerInfo } from '../auth/authState';
  * what makes the gate below meaningful, and keeps the three clients on one
  * number.
  */
-export const APP_PROTOCOL_VERSION = 7;
+export const APP_PROTOCOL_VERSION = 8;
 
 const versionSchema = z.object({
   server_version: z.string().optional(),

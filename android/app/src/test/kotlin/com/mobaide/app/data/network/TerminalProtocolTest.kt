@@ -237,4 +237,40 @@ class TerminalProtocolTest {
         assertEquals(0, (decoded as TerminalFrame.Output).bytes.size)
     }
 
+    @Test
+    fun decode_winsize_unpacksBigEndianU16Fields() {
+        // 'w' + rows=40, cols=120, attached=2 — matches the shared fixture
+        // case winsize_40x120_2clients in tests/protocol_fixtures.
+        val wire = byteArrayOf('w'.code.toByte(), 0x00, 0x28, 0x00, 0x78, 0x00, 0x02)
+            .toByteString()
+
+        assertEquals(
+            TerminalFrame.Winsize(rows = 40, cols = 120, attachedClients = 2),
+            TerminalProtocol.decode(wire),
+        )
+    }
+
+    @Test
+    fun decode_winsize_maxU16_doesNotSignExtend() {
+        // 0xFF bytes are negative as JVM Byte; a signed shift would produce
+        // garbage instead of 65535.
+        val ff = 0xFF.toByte()
+        val wire = byteArrayOf('w'.code.toByte(), ff, ff, ff, ff, ff, ff).toByteString()
+
+        assertEquals(
+            TerminalFrame.Winsize(rows = 65535, cols = 65535, attachedClients = 65535),
+            TerminalProtocol.decode(wire),
+        )
+    }
+
+    @Test
+    fun decode_winsize_truncatedPayload_returnsNull() {
+        // 6 bytes total (one short of the fixed 7): decoding must refuse to
+        // invent a grid rather than read past the frame.
+        val wire = byteArrayOf('w'.code.toByte(), 0x00, 0x28, 0x00, 0x78, 0x00)
+            .toByteString()
+
+        assertNull(TerminalProtocol.decode(wire))
+    }
+
 }

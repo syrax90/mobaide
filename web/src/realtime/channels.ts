@@ -149,6 +149,12 @@ export class SessionIoChannel {
   readonly channel: WebSocketChannel;
   private rows = 0;
   private cols = 0;
+  /**
+   * Raised while the session model is a size *follower* (proto-v8 latest-
+   * active arbitration): a reconnect must then not re-assert the stale
+   * natural grid ahead of the handshake's authoritative `w` frame.
+   */
+  private resendSuppressed = false;
 
   constructor(agentId: string, sessionId: string, overrides: ChannelOverrides = {}) {
     this.channel = new WebSocketChannel({
@@ -186,11 +192,17 @@ export class SessionIoChannel {
   setSize(rows: number, cols: number): void {
     this.rows = Math.max(1, rows);
     this.cols = Math.max(1, cols);
-    this.resendCachedSize();
+    this.send({ kind: 'resize', rows: this.rows, cols: this.cols });
+  }
+
+  /** Gate the socket-open re-assert; an explicit `setSize` is unaffected. */
+  setResendSuppressed(suppressed: boolean): void {
+    this.resendSuppressed = suppressed;
   }
 
   /** Re-push the last measured grid. No-op before the first measurement. */
   private resendCachedSize(): void {
+    if (this.resendSuppressed) return;
     if (this.rows <= 0 || this.cols <= 0) return;
     this.send({ kind: 'resize', rows: this.rows, cols: this.cols });
   }

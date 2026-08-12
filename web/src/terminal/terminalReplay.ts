@@ -57,7 +57,13 @@ export type ReplayEffect =
   /** Entered live: re-assert the cached grid size. */
   | { kind: 'enterLive' }
   /** The replay span closed; the caller reveals live once the writes drain. */
-  | { kind: 'replayFinished' };
+  | { kind: 'replayFinished' }
+  /**
+   * Authoritative PTY size + attached-client count (proto-v8). Pass-through:
+   * the caller runs the size-arbitration state machine. Arrives between the
+   * state frame and `'b'` in the handshake, and live on any change.
+   */
+  | { kind: 'winsize'; rows: number; cols: number; attachedClients: number };
 
 export interface ReplayTransition {
   state: ReplayState;
@@ -101,6 +107,14 @@ export function reduceInboundFrame(
       break;
     case 'state':
       effects.push({ kind: 'state', json: frame.json });
+      break;
+    case 'winsize':
+      effects.push({
+        kind: 'winsize',
+        rows: frame.rows,
+        cols: frame.cols,
+        attachedClients: frame.attachedClients,
+      });
       break;
     case 'replayEnd':
       if (next.inReplay) {

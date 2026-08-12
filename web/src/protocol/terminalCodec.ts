@@ -15,11 +15,14 @@
  * | 0x73 | 's'  | S→C       | state: UTF-8 JSON {status, pid?, exit_code?}      |
  * | 0x62 | 'b'  | S→C       | replay-buffer start marker (empty payload)        |
  * | 0x65 | 'e'  | S→C       | replay-buffer end marker (empty payload)          |
+ * | 0x77 | 'w'  | S→C       | winsize: u16 rows + u16 cols + u16 attached       |
+ * |      |      |           | clients, big-endian (proto-v8)                    |
  *
  * Decoding is server→client only: an empty frame, an unknown type byte, and any
  * of the outbound type bytes all decode to `null`. An `'o'` frame with an empty
  * payload is *not* null — the server emits one even for an empty ring, so the
- * replay span always contains at least one output frame.
+ * replay span always contains at least one output frame. A truncated `'w'`
+ * payload decodes to `null` rather than inventing a grid.
  *
  * Clients never append a trailing CR to `execute`/`submit` payloads; the agent
  * owns that timing (proto-v4).
@@ -33,6 +36,7 @@ export const TERMINAL_FRAME_TYPE = {
   state: 0x73,
   replayStart: 0x62,
   replayEnd: 0x65,
+  winsize: 0x77,
 } as const;
 
 export type TerminalOutboundFrame =
@@ -45,7 +49,8 @@ export type TerminalInboundFrame =
   | { kind: 'output'; payload: Uint8Array }
   | { kind: 'state'; json: string }
   | { kind: 'replayStart' }
-  | { kind: 'replayEnd' };
+  | { kind: 'replayEnd' }
+  | { kind: 'winsize'; rows: number; cols: number; attachedClients: number };
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -93,6 +98,16 @@ export function decodeTerminalFrame(frame: Uint8Array): TerminalInboundFrame | n
       return { kind: 'replayStart' };
     case TERMINAL_FRAME_TYPE.replayEnd:
       return { kind: 'replayEnd' };
+    case TERMINAL_FRAME_TYPE.winsize: {
+      if (frame.length < 7) return null;
+      const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
+      return {
+        kind: 'winsize',
+        rows: view.getUint16(1),
+        cols: view.getUint16(3),
+        attachedClients: view.getUint16(5),
+      };
+    }
     default:
       return null;
   }

@@ -3,8 +3,8 @@ import Foundation
 /// Binary terminal frame grammar shared with the agent (PROTOCOL.md; Android
 /// `TerminalProtocol.kt`): every WebSocket binary message is one frame — a
 /// single type byte at `[0]` followed by the raw payload at `[1...]`.
-/// The client encodes `i`/`x`/`m`/`r` and decodes `o`/`s`/`b`/`e`; an empty
-/// frame or any other type byte decodes to nil.
+/// The client encodes `i`/`x`/`m`/`r` and decodes `o`/`s`/`b`/`e`/`w`; an
+/// empty frame, a truncated `w` payload, or any other type byte decodes to nil.
 enum TerminalFrameType {
     static let output: UInt8 = 0x6F     // 'o' server → client: raw PTY bytes
     static let input: UInt8 = 0x69      // 'i' client → server: raw input bytes
@@ -14,6 +14,7 @@ enum TerminalFrameType {
     static let state: UInt8 = 0x73      // 's' server → client: UTF-8 JSON {status, pid?, exit_code?}
     static let replayStart: UInt8 = 0x62 // 'b' server → client: replay-buffer start, empty payload
     static let replayEnd: UInt8 = 0x65  // 'e' server → client: replay-buffer end, empty payload
+    static let winsize: UInt8 = 0x77    // 'w' server → client: u16 BE rows, cols, attached clients (proto-v8)
 }
 
 enum TerminalOutboundFrame: Equatable, Sendable {
@@ -59,6 +60,8 @@ enum TerminalInboundFrame: Equatable, Sendable {
     case state(json: String)
     case replayStart
     case replayEnd
+    /// Authoritative PTY size + attached-client count (proto-v8 size arbitration).
+    case winsize(rows: Int, cols: Int, attachedClients: Int)
 
     static func decode(_ frame: Data) -> TerminalInboundFrame? {
         guard let type = frame.first else { return nil }
@@ -72,6 +75,14 @@ enum TerminalInboundFrame: Equatable, Sendable {
             return .replayStart
         case TerminalFrameType.replayEnd:
             return .replayEnd
+        case TerminalFrameType.winsize:
+            let bytes = [UInt8](payload)
+            guard bytes.count >= 6 else { return nil }
+            return .winsize(
+                rows: Int(bytes[0]) << 8 | Int(bytes[1]),
+                cols: Int(bytes[2]) << 8 | Int(bytes[3]),
+                attachedClients: Int(bytes[4]) << 8 | Int(bytes[5])
+            )
         default:
             return nil
         }

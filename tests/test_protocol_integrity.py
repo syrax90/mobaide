@@ -44,7 +44,14 @@ def test_protocol_version_constants_match() -> None:
 def test_channel_constants_match() -> None:
     agent = _import_agent()
     central = _import_central()
-    for name in ("CH_SESSION_IO", "CH_SESSIONS_LIST", "CH_EVENTS", "CH_AUTOSCAN", "CH_CONTROL"):
+    for name in (
+        "CH_SESSION_IO",
+        "CH_SESSIONS_LIST",
+        "CH_EVENTS",
+        "CH_AUTOSCAN",
+        "CH_SESSION_IO_TARGETED",
+        "CH_CONTROL",
+    ):
         assert getattr(agent, name) == getattr(central, name), (
             f"channel constant {name} drifted between agent and central"
         )

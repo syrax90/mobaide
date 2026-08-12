@@ -2,6 +2,21 @@ import Foundation
 import Observation
 import SwiftTerm
 
+/// This client's role in proto-v8 size arbitration (latest-active wins).
+/// `.solo` and `.owner` behave exactly like the pre-v8 sole-authority client;
+/// `.follower` renders another client's grid and never sends `r` frames.
+/// Fresh models start as `.follower` so attaching to a session another client
+/// is driving *adopts* the broadcast size instead of stealing it — the
+/// handshake's `w` frame (or replay-end on a v7 agent that sends none)
+/// resolves the real role. Mirrors Android `SizeAuthority` / web `SizeAuthority`.
+enum SizeAuthority: Equatable, Sendable { case solo, owner, follower }
+
+/// The foreign grid a follower renders; nil whenever this client owns the size.
+struct FollowerGrid: Equatable, Sendable {
+    let rows: Int
+    let cols: Int
+}
+
 /// Owns the wire connection and the SwiftTerm emulator for one session and
 /// survives SwiftUI view recreation (it is cached by `TerminalSessionStore`,
 /// not stored as `@State`). Mirrors Android `TerminalViewModel`.
@@ -37,6 +52,11 @@ final class TerminalSessionModel {
 
     /// Android `MAX_UNREAD_DISPLAY`.
     static let maxUnreadRows = 9999
+
+    /// How long the terminal screen must stay foregrounded before a follower
+    /// takes size authority (Android `FOREGROUND_TAKEOVER_MS`, web
+    /// `FOCUS_TAKEOVER_MS`). Typing takes over immediately instead.
+    static let foregroundTakeoverMs = 400
 
     /// `ESC[H ESC[2J ESC[3J` — cursor home, erase display, erase scrollback.
     /// Fed before applying each replay buffer (Android `CLEAR_BEFORE_REPLAY`).
@@ -131,6 +151,23 @@ final class TerminalSessionModel {
     private var lastResizeRows = 0
     private var lastResizeCols = 0
 
+    /// The grid actually put on the wire last — can trail the cache by a
+    /// debounce mid-drag. `onWinsize`'s own-echo check accepts either, so an
+    /// echo of an in-flight send cannot demote the actively resizing client.
+    private var lastSentRows = 0
+    private var lastSentCols = 0
+
+    /// Size-arbitration role; see `SizeAuthority`.
+    private(set) var sizeAuthority: SizeAuthority = .follower
+    /// Foreign grid to render while `.follower`; drives `TerminalPanScrollView`.
+    private(set) var followerGrid: FollowerGrid?
+    /// Attached-client count from the last `w` frame; 0 before any arrived.
+    private(set) var attachedClients = 0
+    /// Whether a `w` frame arrived on the current socket; reset on disconnect.
+    /// Replay-end with none seen means a v7 agent → pre-v8 solo behavior.
+    private var winsizeSeen = false
+    private var foregroundTakeoverTask: Task<Void, Never>?
+
     private let outboundStream: AsyncStream<Data>
     private let outboundContinuation: AsyncStream<Data>.Continuation
     private let focusBroadcaster = Broadcaster<Bool>(replay: .none)
@@ -222,12 +259,16 @@ final class TerminalSessionModel {
         case .binary(let data):
             handleBinary(data)
         case .disconnected:
+            // Authority survives the drop; only the per-socket `w` marker
+            // resets so the next handshake re-decides.
+            winsizeSeen = false
             connectionState = .reconnecting
         case .error:
             break
         case .message:
             break
         case .tokenRejected, .accountRemoved, .incompatibleServer:
+            winsizeSeen = false
             connectionState = .reconnecting
         }
     }
@@ -265,8 +306,99 @@ final class TerminalSessionModel {
         case .replayEnd:
             if inReplay {
                 inReplay = false
+                // No `w` by replay-end means a v7 agent, which cannot have
+                // another size authority: revert to solo so enterLiveState()'s
+                // re-assert delivers the grid.
+                if !winsizeSeen, sizeAuthority == .follower {
+                    setAuthority(.solo)
+                }
                 enterLiveState()
             }
+        case .winsize(let rows, let cols, let attachedClients):
+            onWinsize(rows: rows, cols: cols, attachedClients: attachedClients)
+        }
+    }
+
+    // MARK: - Size arbitration (proto-v8)
+
+    /// The latest-active arbitration state machine (identical on Android and
+    /// web). The agent broadcasts `w` on every effective resize and every
+    /// attach/detach; whoever's grid it names is the owner, everyone else
+    /// follows, and a count of one restores the pre-v8 sole-authority behavior.
+    private func onWinsize(rows: Int, cols: Int, attachedClients: Int) {
+        winsizeSeen = true
+        self.attachedClients = attachedClients
+        if attachedClients <= 1 {
+            setAuthority(.solo)
+            // A fresh PTY (24×80) or a departed owner's leftover grid: deliver
+            // the natural size. Equal grids stay silent.
+            if lastResizeRows > 0, rows != lastResizeRows || cols != lastResizeCols {
+                resendCachedSize()
+            }
+            return
+        }
+        if (rows == lastResizeRows && cols == lastResizeCols)
+            || (rows == lastSentRows && cols == lastSentCols) {
+            // Our own size echoed back: this client holds authority. The
+            // last-sent pair matters mid-drag — the cache may have moved past
+            // the frame the agent is echoing, and matching only the cache
+            // would demote the very client that is actively resizing.
+            setAuthority(.owner)
+            // Same corrective as the solo branch: a stale echo can trail a
+            // cache that already moved on, and a transient demotion may have
+            // canceled the debounced frame that would have delivered it —
+            // re-assert the divergence now and drop any pending debounce,
+            // which could only re-send the same cache.
+            if lastResizeRows > 0, rows != lastResizeRows || cols != lastResizeCols {
+                resendCachedSize()
+                resizeTask?.cancel()
+                resizeTask = nil
+            }
+            return
+        }
+        followerGrid = FollowerGrid(rows: rows, cols: cols)
+        setAuthority(.follower)
+    }
+
+    private func setAuthority(_ next: SizeAuthority) {
+        guard sizeAuthority != next else { return }
+        let wasFollower = sizeAuthority == .follower
+        sizeAuthority = next
+        if next == .follower {
+            // A queued debounced resize must not fire after the demotion.
+            resizeTask?.cancel()
+            resizeTask = nil
+        } else if wasFollower {
+            followerGrid = nil
+            foregroundTakeoverTask?.cancel()
+            foregroundTakeoverTask = nil
+        }
+    }
+
+    /// Follower → owner: assert the frozen natural grid immediately (no
+    /// debounce — a takeover triggered by typing must put the resize on the
+    /// wire before the keystroke's bytes). Clearing `followerGrid` reverts the
+    /// pan view to its native layout; the `sizeChanged` that follows corrects
+    /// the cache through `resize` if the viewport changed while following.
+    private func takeoverNow() {
+        guard sizeAuthority == .follower else { return }
+        guard canSendTerminalBytes else { return }
+        setAuthority(.owner)
+        resendCachedSize()
+    }
+
+    /// Arm the delayed foreground takeover — the screen-visible counterpart of
+    /// typing. Edges only (screen open / return to foreground), never steady
+    /// state: re-arming on demotion would steal authority back 400 ms after
+    /// every foreign resize while this screen sits open.
+    private func armForegroundTakeover() {
+        guard sizeAuthority == .follower else { return }
+        foregroundTakeoverTask?.cancel()
+        foregroundTakeoverTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.foregroundTakeoverMs))
+            guard !Task.isCancelled else { return }
+            self?.foregroundTakeoverTask = nil
+            self?.takeoverNow()
         }
     }
 
@@ -277,6 +409,7 @@ final class TerminalSessionModel {
     /// lines. The server appends the CR as a separate PTY write, so no trailing
     /// CR is added here.
     func sendInput(_ text: String) {
+        takeoverNow()
         let body = text.contains("\n") ? "\u{1B}[200~\(text)\u{1B}[201~" : text
         enqueue(.submit("\u{01}\u{0B}" + body))
         setFollowMode(true)
@@ -284,6 +417,10 @@ final class TerminalSessionModel {
     }
 
     func sendBytes(_ data: Data) {
+        // User input claims size authority; the emulator's auto-replies bypass
+        // this method via `sendTerminalBytes`' `isApplyingEmulatorOutput`
+        // branch and must not (a program's `ESC[6n` answer is not the user).
+        takeoverNow()
         // Any user-originated write dismisses a live selection (Android drops
         // it from `onKeyDown` and on every IME commit). Deliberately here and
         // not in `sendTerminalBytes`: emulator auto-replies produced while
@@ -381,6 +518,7 @@ final class TerminalSessionModel {
     /// Ctrl+C-clears, types the payload, then sends CR).
     func sendTappedRow(text: String, isCurrentInput: Bool) {
         guard connectionState == .live else { return }
+        takeoverNow()
         setFollowMode(true)
         if isCurrentInput {
             enqueue(.input("\r"))
@@ -394,6 +532,25 @@ final class TerminalSessionModel {
     /// layout pass; this only drives the `r` frame. (Keyboard show/hide never
     /// reaches here — the screen pans instead of resizing.)
     func resize(rows: Int, cols: Int) {
+        // While following, nothing is ever sent from here — but the cache
+        // rules differ by phase. With a foreign grid adopted, the cache stays
+        // frozen at the last natural grid: that freeze is the echo
+        // suppression (the `sizeChanged` fired by applying the foreign grid
+        // lands here and dies) and the reference `onWinsize` compares against
+        // for the own-echo owner check. Before any grid is adopted (the
+        // fresh-model state), the `sizeChanged` report IS this client's
+        // natural grid and must be recorded, or the solo/v7 promotion would
+        // find an empty cache, skip its assert, and leave the PTY at the
+        // spawn 24×80 — and SwiftTerm fires no further `sizeChanged` to heal
+        // it (the keyboard pans instead of resizing). Web/Android seed
+        // identically.
+        guard sizeAuthority != .follower else {
+            if followerGrid == nil {
+                lastResizeRows = max(1, rows)
+                lastResizeCols = max(1, cols)
+            }
+            return
+        }
         let r = max(1, rows)
         let c = max(1, cols)
         guard r != lastResizeRows || c != lastResizeCols else { return }
@@ -404,8 +561,10 @@ final class TerminalSessionModel {
         resizeTask?.cancel()
         resizeTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(100))
-            guard !Task.isCancelled else { return }
-            self?.enqueue(.resize(rows: rows16, cols: cols16))
+            guard !Task.isCancelled, let self else { return }
+            self.lastSentRows = r
+            self.lastSentCols = c
+            self.enqueue(.resize(rows: rows16, cols: cols16))
         }
     }
 
@@ -434,7 +593,10 @@ final class TerminalSessionModel {
     /// left at 24 rows with the bottom of a taller device grid blank. Re-sending
     /// the same size is idempotent.
     private func resendCachedSize() {
+        guard sizeAuthority != .follower else { return }
         guard lastResizeRows > 0, lastResizeCols > 0 else { return }
+        lastSentRows = lastResizeRows
+        lastSentCols = lastResizeCols
         enqueue(.resize(rows: UInt16(clamping: lastResizeRows), cols: UInt16(clamping: lastResizeCols)))
     }
 
@@ -745,6 +907,9 @@ final class TerminalSessionModel {
 
     func markVisible() {
         foregroundSessionTracker.setVisible(sessionId)
+        // The screen coming (back) on-screen is a focus edge: a follower the
+        // user is now looking at takes size authority after the debounce.
+        armForegroundTakeover()
         if connectionState != .live, let core {
             Task { await core.forceReconnect() }
         }
@@ -752,6 +917,9 @@ final class TerminalSessionModel {
 
     func markHidden() {
         foregroundSessionTracker.clearVisible(sessionId)
+        // Leaving the screen cancels a not-yet-fired foreground takeover.
+        foregroundTakeoverTask?.cancel()
+        foregroundTakeoverTask = nil
         // Selection is per-visit UI. The view is retained and keeps consuming
         // PTY output while hidden, and a live selection pins the viewport
         // through `holdsAutoScroll` — with follow mode untouched, no unread
@@ -775,6 +943,7 @@ final class TerminalSessionModel {
         sendTask?.cancel()
         resizeTask?.cancel()
         shortcutsTask?.cancel()
+        foregroundTakeoverTask?.cancel()
         outboundContinuation.finish()
         if let core {
             Task { await core.disconnect() }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import struct
+import uuid
 
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
@@ -37,6 +38,7 @@ FRAME_SUBMIT = b"m"      # 0x6d  C->S  submit: payload + pause + CR (discrete En
 FRAME_STATE = b"s"       # 0x73  S->C  payload: UTF-8 JSON {status,pid?,exit_code?}
 FRAME_REPLAY = b"b"      # 0x62  S->C  marker: ring-buffer replay starts next frame
 FRAME_REPLAY_END = b"e"  # 0x65  S->C  marker: ring-buffer replay finished; live frames follow
+FRAME_WINSIZE = b"w"     # 0x77  S->C  payload: u16 rows, u16 cols, u16 attached clients (big-endian)
 
 _STATE_MAP = {
     SessionState.STARTING: "starting",
@@ -128,7 +130,54 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
         await websocket.close(code=4004, reason="Session not found")
         return
 
+    # Register before the handshake so the ``w`` frame below already counts
+    # this client; the count-change broadcast reaches only the sockets that
+    # subscribed earlier (this one subscribes after the handshake). The
+    # unregister lives in the ``finally`` below — a client that drops
+    # mid-handshake (the replay can span megabytes) raises out of any of the
+    # sends, and a token that outlived its socket would inflate the
+    # attached-client count for the session's whole life.
+    client_token = f"direct:{uuid.uuid4().hex}"
+    session.register_client(client_token)
+    fanout: SessionEventFanout | None = None
+    consumer_queue: asyncio.Queue[SessionEvent] | None = None
+
+    # Aggregated counters — emitted on disconnect, never per message.
+    counters = {"bytes_in": 0, "bytes_out": 0, "msg_count": 0}
+
+    try:
+        await _send_attach_handshake(websocket, session)
+
+        fanout = ensure_fanout(websocket.app.state, session)
+        consumer_queue = fanout.subscribe()
+        await _run_session_pumps(
+            websocket, session, session_id, channel, consumer_queue, counters,
+        )
+    finally:
+        if fanout is not None and consumer_queue is not None:
+            fanout.unsubscribe(consumer_queue)
+        session.unregister_client(client_token)
+        log_ws_disconnect(
+            channel,
+            session_id=session_id,
+            username=username,
+            bytes_in=counters["bytes_in"],
+            bytes_out=counters["bytes_out"],
+            msg_count=counters["msg_count"],
+        )
+
+
+async def _send_attach_handshake(websocket: WebSocket, session) -> None:
+    """Send state + winsize + replay marker + chunked ring + replay-end.
+
+    Relay twin: ``mobaide.relay.client.RelayClient._send_session_handshake``.
+    """
     await websocket.send_bytes(_state_frame(_STATE_MAP[session.state], session.pid))
+
+    # Authoritative PTY size + attached-client count (protocol v8). Sent before
+    # the replay span so the client can arbitrate before its replay-end
+    # re-assert decision; v7 clients drop the unknown frame type.
+    await websocket.send_bytes(FRAME_WINSIZE + session.winsize_payload())
 
     # Chunked replay handshake (protocol v3+):
     #   FRAME_REPLAY → N × FRAME_OUTPUT(chunk) → FRAME_REPLAY_END
@@ -147,12 +196,15 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
         await websocket.send_bytes(FRAME_OUTPUT)
     await websocket.send_bytes(FRAME_REPLAY_END)
 
-    fanout = ensure_fanout(websocket.app.state, session)
-    consumer_queue = fanout.subscribe()
 
-    # Aggregated counters — emitted on disconnect, never per message.
-    counters = {"bytes_in": 0, "bytes_out": 0, "msg_count": 0}
-
+async def _run_session_pumps(
+    websocket: WebSocket,
+    session,
+    session_id: str,
+    channel: str,
+    consumer_queue: asyncio.Queue[SessionEvent],
+    counters: dict[str, int],
+) -> None:
     async def _reader() -> None:
         """Read binary frames from WebSocket and forward to PTY."""
         try:
@@ -211,29 +263,21 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
                     await websocket.send_bytes(
                         _state_frame(_EVENT_TO_STATUS[event.event_type], session.pid),
                     )
+                elif event.event_type == "winsize" and event.data:
+                    await websocket.send_bytes(FRAME_WINSIZE + event.data)
         except WebSocketDisconnect:
             pass
         except Exception as exc:
             log_ws_error(channel, exc, session_id=session_id, stage="writer")
 
-    # Run both concurrently; cancel the other when one finishes
+    # Run both concurrently; cancel the other when one finishes. The caller's
+    # ``finally`` unsubscribes and unregisters — but does NOT kill the
+    # session, which stays alive for reconnect.
     reader_task = asyncio.create_task(_reader(), name=f"ws-reader-{session_id}")
     writer_task = asyncio.create_task(_writer(), name=f"ws-writer-{session_id}")
-    try:
-        done, pending = await asyncio.wait(
-            {reader_task, writer_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for task in pending:
-            task.cancel()
-    finally:
-        # Unsubscribe but do NOT kill the session — it stays alive for reconnect
-        fanout.unsubscribe(consumer_queue)
-        log_ws_disconnect(
-            channel,
-            session_id=session_id,
-            username=username,
-            bytes_in=counters["bytes_in"],
-            bytes_out=counters["bytes_out"],
-            msg_count=counters["msg_count"],
-        )
+    done, pending = await asyncio.wait(
+        {reader_task, writer_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for task in pending:
+        task.cancel()

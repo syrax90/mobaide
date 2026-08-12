@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -78,12 +79,33 @@ class TerminalViewModelResizeTest {
             preferencesStore = preferencesStore,
         )
 
+    /**
+     * Fresh view models start as [SizeAuthority.Follower] (proto-v8
+     * latest-active arbitration), so [TerminalViewModel.resize] discards
+     * every layout pass until a solo `'w'` (or the replay-end fallback)
+     * resolves the role. Deliver one, then revert to the pre-connect
+     * [ConnectionState.Reconnecting] state these tests otherwise assume, so
+     * the promotion itself leaves no trace on the debounce/dedupe/connect-
+     * reassert behavior under test below.
+     */
+    private suspend fun TestScope.promoteToSolo() {
+        eventsFlow.emit(
+            WsEvent.Binary(
+                byteArrayOf(TerminalProtocol.TYPE_WINSIZE, 0, 24, 0, 80, 0, 1).toByteString(),
+            ),
+        )
+        runCurrent()
+        eventsFlow.emit(WsEvent.Disconnected)
+        runCurrent()
+    }
+
     // ── Deduplication ─────────────────────────────────────────────────────────
 
     @Test
     fun resize_sameDimensionsTwice_sendsOnlyOneFrame() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent() // let init coroutines start
+        promoteToSolo()
 
         vm.resize(24, 80)
         vm.resize(24, 80) // identical — should be a no-op
@@ -102,6 +124,7 @@ class TerminalViewModelResizeTest {
     fun resize_rapidCalls_onlyLastDimensionsSent() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
+        promoteToSolo()
 
         // Simulate keyboard animation: size changes rapidly.
         vm.resize(30, 80)
@@ -133,6 +156,7 @@ class TerminalViewModelResizeTest {
     fun resize_sendsCorrectResizeFrame() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
+        promoteToSolo()
 
         vm.resize(50, 120)
         advanceTimeBy(200)
@@ -148,6 +172,7 @@ class TerminalViewModelResizeTest {
     fun resize_newDimensionsAfterDebounce_sendsSecondFrame() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
+        promoteToSolo()
 
         // First resize settles.
         vm.resize(24, 80)
@@ -171,6 +196,7 @@ class TerminalViewModelResizeTest {
     fun resize_changingOnlyRows_sendsNewFrame() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
+        promoteToSolo()
 
         vm.resize(24, 80)
         advanceTimeBy(200)
@@ -188,6 +214,7 @@ class TerminalViewModelResizeTest {
     fun resize_changingOnlyCols_sendsNewFrame() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
+        promoteToSolo()
 
         vm.resize(24, 80)
         advanceTimeBy(200)
@@ -205,6 +232,7 @@ class TerminalViewModelResizeTest {
     fun enterLive_reAssertsCachedSize_evenWithoutPostConnectResize() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
+        promoteToSolo()
 
         // A layout pass measured the grid before the socket connected. The
         // debounced frame is still pending — virtual time is never advanced past
@@ -227,6 +255,7 @@ class TerminalViewModelResizeTest {
     fun enterLive_forceResendBypassesDedupe_reEmitsSameSize() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
+        promoteToSolo()
 
         // The size settles and is delivered once, so the cache now equals the
         // frame already on the wire — resize()'s dedupe would suppress re-sending it.
@@ -262,6 +291,7 @@ class TerminalViewModelResizeTest {
     fun reconnect_reAssertsCachedSize_onEveryLiveEntry() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
+        promoteToSolo()
 
         vm.resize(24, 80)
         advanceTimeBy(200)
@@ -288,6 +318,7 @@ class TerminalViewModelResizeTest {
     fun binaryUpgrade_missedConnected_reAssertsCachedSize() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
+        promoteToSolo()
 
         vm.resize(50, 120)
         advanceTimeBy(200)

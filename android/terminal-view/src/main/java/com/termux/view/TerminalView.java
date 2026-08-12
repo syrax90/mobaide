@@ -64,6 +64,9 @@ public final class TerminalView extends View {
      */
     private int mForcedColumns = 0;
 
+    /** CLA-276: forced row count for follower mode; 0 = derive rows from the view height. */
+    private int mForcedRows = 0;
+
     private TextSelectionCursorController mTextSelectionCursorController;
 
     private Handler mTerminalCursorBlinkerHandler;
@@ -770,8 +773,19 @@ public final class TerminalView extends View {
      * behavior.
      */
     public void setForcedColumns(int columns) {
-        if (mForcedColumns != columns) {
+        setForcedSize(columns, 0);
+    }
+
+    /**
+     * CLA-276: override both halves of the auto-fit calculation in {@link #updateSize()},
+     * for follower mode where another client's grid (rows AND columns) must be rendered
+     * verbatim. Pass {@code rows == 0} to keep rows viewport-derived (Static-column mode),
+     * or {@code 0, 0} to restore full auto-fit.
+     */
+    public void setForcedSize(int columns, int rows) {
+        if (mForcedColumns != columns || mForcedRows != rows) {
             mForcedColumns = columns;
+            mForcedRows = rows;
             applyForcedColumnsLayoutWidth();
             updateSize();
         }
@@ -779,6 +793,9 @@ public final class TerminalView extends View {
 
     /** CLA-49 */
     public int getForcedColumns() { return mForcedColumns; }
+
+    /** CLA-276 */
+    public int getForcedRows() { return mForcedRows; }
 
     /** CLA-49: glyph width in pixels from the active renderer. {@code 0} until the renderer is created. */
     public float getRendererFontWidth() {
@@ -794,6 +811,17 @@ public final class TerminalView extends View {
         if (mForcedColumns <= 0 || mRenderer == null || mRenderer.mFontWidth <= 0f) return;
         ViewGroup.LayoutParams lp = getLayoutParams();
         if (lp == null) return;
+        // CLA-276: follower mode also pins the layout height to the forced row count
+        // (inverse of updateSize()'s row derivation), so the grid keeps its exact
+        // height and the host container letterboxes or clips it.
+        if (mForcedRows > 0 && mRenderer.mFontLineSpacing > 0) {
+            int desiredHeight =
+                mForcedRows * mRenderer.mFontLineSpacing + mRenderer.mFontLineSpacingAndAscent;
+            if (lp.height != desiredHeight) {
+                lp.height = desiredHeight;
+                setLayoutParams(lp);
+            }
+        }
         int desired = (int) Math.ceil(mForcedColumns * mRenderer.mFontWidth);
         if (lp.width != desired) {
             lp.width = desired;
@@ -1296,7 +1324,10 @@ public final class TerminalView extends View {
         int newColumns = (mForcedColumns > 0)
             ? Math.max(4, mForcedColumns)
             : Math.max(4, (int) (viewWidth / mRenderer.mFontWidth));
-        int newRows = Math.max(4, (viewHeight - mRenderer.mFontLineSpacingAndAscent) / mRenderer.mFontLineSpacing);
+        // CLA-276: in follower mode mForcedRows overrides the viewport-derived count too.
+        int newRows = (mForcedRows > 0)
+            ? Math.max(4, mForcedRows)
+            : Math.max(4, (viewHeight - mRenderer.mFontLineSpacingAndAscent) / mRenderer.mFontLineSpacing);
 
         if (mEmulator == null || (newColumns != mEmulator.mColumns || newRows != mEmulator.mRows)) {
             mTermSession.updateSize(newColumns, newRows, (int) mRenderer.getFontWidth(), mRenderer.getFontLineSpacing());

@@ -1,9 +1,11 @@
 package com.mobaide.app.ui.terminal
 
 import android.graphics.Typeface
+import android.view.Gravity
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.view.inputmethod.InputMethodManager
+import android.widget.FrameLayout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -45,6 +47,7 @@ fun TerminalSurfaceView(
     session: TerminalSession,
     sessionCallback: TerminalSessionCallback,
     displayConfig: TerminalDisplayConfig,
+    followerGrid: FollowerGrid? = null,
     onResize: (rows: Int, cols: Int) -> Unit,
     onRowTapped: (text: String, isCurrentInput: Boolean) -> Unit = { _, _ -> },
     onRowCopyToInput: (text: String, isCurrentInput: Boolean) -> Unit = { _, _ -> },
@@ -172,7 +175,7 @@ fun TerminalSurfaceView(
                     val text = appCtx.readClipboardText()
                     if (!text.isNullOrEmpty()) pasteSession.emulator?.paste(text)
                 }
-                applyDisplayConfig(isStatic, staticCols)
+                applyDisplayConfig(isStatic, staticCols, followerGrid)
                 viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
                 terminalViewRef.value = this
             }
@@ -195,7 +198,7 @@ fun TerminalSurfaceView(
                 // Replayed sessions carry content before the first live frame.
                 reportCursorAnchor(view)
             }
-            view.applyDisplayConfig(isStatic, staticCols)
+            view.applyDisplayConfig(isStatic, staticCols, followerGrid)
             if (followMode && view.topRow != 0) {
                 // Bypasses onScreenUpdated, so re-anchor for the new topRow here.
                 view.topRow = 0
@@ -214,11 +217,46 @@ fun TerminalSurfaceView(
 /** Rows of slack under the cursor row included in the reported anchor — see the reporter above. */
 private const val CURSOR_ANCHOR_SLACK_ROWS = 2
 
-/** Push the requested display mode into the [TerminalView] without churning when nothing changed. */
-private fun TerminalView.applyDisplayConfig(isStatic: Boolean, staticCols: Int) {
+/**
+ * Push the requested display mode into the [TerminalView] without churning when nothing changed.
+ *
+ * A non-null [followerGrid] (proto-v8 size arbitration: another client owns the PTY size)
+ * overrides the display mode entirely: the emulator is forced to the foreign grid at native
+ * font size, the view is laid out at exactly that grid's pixel size, and the host
+ * [TerminalHorizontalScrollView] pans the overflow width — the same machinery Static mode
+ * uses. The grid is bottom-anchored so a foreign grid taller than the viewport clips its
+ * *top* rows (the prompt/cursor edge stays visible) and a shorter one letterboxes above.
+ */
+private fun TerminalView.applyDisplayConfig(
+    isStatic: Boolean,
+    staticCols: Int,
+    followerGrid: FollowerGrid?,
+) {
+    val lpGravity = layoutParams as? FrameLayout.LayoutParams
+    if (followerGrid != null) {
+        if (lpGravity != null && lpGravity.gravity != Gravity.BOTTOM) {
+            lpGravity.gravity = Gravity.BOTTOM
+            layoutParams = lpGravity
+        }
+        if (forcedColumns != followerGrid.cols || forcedRows != followerGrid.rows) {
+            // Also pins the layout width and height once the renderer exists.
+            setForcedSize(followerGrid.cols, followerGrid.rows)
+        }
+        return
+    }
+    if (lpGravity != null && lpGravity.gravity != Gravity.NO_GRAVITY) {
+        lpGravity.gravity = Gravity.NO_GRAVITY
+        layoutParams = lpGravity
+    }
     val targetForcedCols = if (isStatic) staticCols else 0
-    if (forcedColumns != targetForcedCols) {
+    if (forcedColumns != targetForcedCols || forcedRows != 0) {
         setForcedColumns(targetForcedCols)
+    }
+    val restoredLp = layoutParams
+    if (restoredLp != null && restoredLp.height != ViewGroup.LayoutParams.MATCH_PARENT) {
+        // Leaving follower mode: undo the pinned height before width handling.
+        restoredLp.height = ViewGroup.LayoutParams.MATCH_PARENT
+        layoutParams = restoredLp
     }
     val targetWidth: Int = when {
         !isStatic -> ViewGroup.LayoutParams.MATCH_PARENT

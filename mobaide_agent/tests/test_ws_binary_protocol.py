@@ -143,6 +143,8 @@ class TestRingBufferReplay:
             drain_text_preamble(ws)
             state = ws.receive_bytes()
             assert state[:1] == b"s"
+            winsize_frame = ws.receive_bytes()
+            assert winsize_frame[:1] == b"w"
             replay_marker = ws.receive_bytes()
             assert replay_marker == b"b"
             # Concatenate all 'o' chunks until 'e' terminates the replay.
@@ -160,16 +162,18 @@ class TestRingBufferReplay:
             assert marker in chunks
 
     def test_empty_ring_still_emits_output_frame(self, test_client, auth_token):
-        """Even with an empty ring buffer the handshake yields the full v3
-        sequence: state ('s') → replay-start ('b') → empty output ('o') →
-        replay-end ('e'). The empty 'o' preserves the protocol-v2 invariant
-        that at least one output frame appears inside the replay span."""
+        """Even with an empty ring buffer the handshake yields the full v8
+        sequence: state ('s') → winsize ('w') → replay-start ('b') → empty
+        output ('o') → replay-end ('e'). The empty 'o' preserves the
+        protocol-v2 invariant that at least one output frame appears inside
+        the replay span."""
         sid = _create_session(test_client, auth_token)
         with test_client.websocket_connect(
             f"/ws/session/{sid}?token={auth_token}",
         ) as ws:
             drain_text_preamble(ws)
             assert ws.receive_bytes()[:1] == b"s"
+            assert ws.receive_bytes()[:1] == b"w"
             assert ws.receive_bytes() == b"b"
             third = ws.receive_bytes()
             assert third[:1] == b"o"
@@ -219,6 +223,7 @@ class TestRingBufferReplay:
             else:
                 state = first["bytes"]
             assert state[:1] == b"s"
+            assert ws.receive_bytes()[:1] == b"w"
             assert ws.receive_bytes() == b"b"
 
             output_chunks: list[bytes] = []

@@ -143,9 +143,10 @@ class SessionInfo:
 
 @dataclass
 class SessionEvent:
-    event_type: str  # "output", "started", "stopped", "error", "title", "attention"
+    event_type: str  # "output", "started", "stopped", "error", "title", "attention", "winsize"
     session_id: str
-    # Output events carry raw PTY bytes; other event types leave this None.
+    # Output events carry raw PTY bytes and winsize events the packed ``w``
+    # frame payload; other event types leave this None.
     data: bytes | None = None
     timestamp: float = field(default_factory=time.time)
     # For ``attention`` events: the trigger reason (``awaiting_permission`` |

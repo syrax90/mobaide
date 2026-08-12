@@ -76,6 +76,32 @@ import { terminalTheme } from './terminalTheme';
 /** Matches Android's and iOS's 100 ms resize debounce. */
 const RESIZE_DEBOUNCE_MS = 100;
 
+/** The one font size the terminal renders at while this client owns the grid. */
+const NATIVE_FONT_SIZE = 13;
+
+/**
+ * Floor for the follower-mode font solve. Below this the text is unreadable
+ * anyway; a foreign grid that still does not fit is clamped and clipped.
+ */
+const MIN_FOLLOWER_FONT_SIZE = 6;
+
+/**
+ * How long window focus must hold before a passive client takes size
+ * authority (proto-v8 latest-active arbitration). Matches Android/iOS's
+ * foreground-takeover debounce. Typing takes over immediately instead.
+ */
+const FOCUS_TAKEOVER_MS = 400;
+
+/**
+ * This client's role in proto-v8 size arbitration. `solo` and `owner` behave
+ * exactly like the pre-v8 sole-authority client; `follower` renders another
+ * client's grid and never sends `r` frames. Fresh models start as `follower`
+ * so an attach to a session another client is driving *adopts* the broadcast
+ * size instead of stealing it — the handshake's `w` frame (or replay-end on a
+ * v7 agent that sends none) resolves the real role.
+ */
+export type SizeAuthority = 'solo' | 'owner' | 'follower';
+
 /**
  * Rows kept above the viewport. The requirement bar is Termux's 10,000; the
  * spike confirmed xterm holds exactly that plus the visible rows.
@@ -96,6 +122,10 @@ export interface TerminalViewState {
   unread: number;
   hasSelection: boolean;
   renderer: RendererKind;
+  /** Size-arbitration role; `follower` means the grid belongs to another client. */
+  sizeAuthority: SizeAuthority;
+  /** Attached-client count from the last `w` frame; 0 before any arrived. */
+  attachedClients: number;
 }
 
 function initialViewState(): TerminalViewState {
@@ -108,6 +138,8 @@ function initialViewState(): TerminalViewState {
     unread: 0,
     hasSelection: false,
     renderer: 'dom',
+    sizeAuthority: 'follower',
+    attachedClients: 0,
   };
 }
 
@@ -190,7 +222,32 @@ export class TerminalSessionModel {
 
   private lastRows = 0;
   private lastCols = 0;
+  /**
+   * The grid actually put on the wire last, which can trail {@link lastRows}/
+   * {@link lastCols} by a debounce while the user is still resizing. The
+   * own-echo check accepts either: a `w` echoing an in-flight send must not
+   * demote the client that is actively driving the grid.
+   */
+  private lastSentRows = 0;
+  private lastSentCols = 0;
   private cancelResize: (() => void) | null = null;
+
+  /**
+   * Size-arbitration role (see {@link SizeAuthority}). Source of truth; the
+   * view-state copy exists only for the "following" badge.
+   */
+  private authority: SizeAuthority = 'follower';
+  private followerGrid: { rows: number; cols: number } | null = null;
+  /**
+   * Whether a `w` frame arrived on the current socket. Reset on disconnect;
+   * a replay-end with no `w` seen means a v7 agent, and the pre-v8 solo
+   * behavior applies.
+   */
+  private winsizeSeen = false;
+  /** Dedupe key of the last follower solve: grid + container size. */
+  private lastFollowerSolve: string | null = null;
+  private cancelFocusTakeover: (() => void) | null = null;
+  private removeFocusListeners: (() => void) | null = null;
 
   constructor(
     agentId: string,
@@ -220,7 +277,7 @@ export class TerminalSessionModel {
       cursorBlink: true,
       fontFamily:
         'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 13,
+      fontSize: NATIVE_FONT_SIZE,
       // Left at xterm's default `true`: it scrolls to the tail on *genuine*
       // user input only, which is what keeps a program's own `ESC[6n` reply
       // from un-pausing a scrolled-up viewport. Both mobile clients had to
@@ -238,6 +295,9 @@ export class TerminalSessionModel {
     this.track(refuseOsc52Reads(this.term));
 
     this.io = options.channel ?? new SessionIoChannel(agentId, sessionId);
+    // Fresh models start as followers, so the socket-open re-assert stays
+    // muted until the handshake resolves the real role.
+    this.io.setResendSuppressed(true);
     this.wireTerminal();
     this.wireChannel();
 
@@ -264,20 +324,69 @@ export class TerminalSessionModel {
     this.resizeObserver = observer;
     this.ensureOpen();
     this.fitNow();
-    // Re-assert unconditionally, bypassing `pushSize`'s dedupe. A retained
-    // model keeps its socket open across detach/reattach, so none of the other
-    // three re-assert points (socket open, first binary while reconnecting,
-    // `replayEnd`) fires on a revisit — and if the grid is unchanged locally
-    // the dedupe swallows the only remaining one. A session another client
-    // resized would then keep that client's grid while this one renders its
-    // own. One extra `r` frame per attach is the whole cost.
+    // Re-assert unconditionally, bypassing `pushSize`'s dedupe (but not the
+    // follower gate inside `assertSize`). A retained model keeps its socket
+    // open across detach/reattach, so none of the other three re-assert
+    // points (socket open, first binary while reconnecting, `replayEnd`)
+    // fires on a revisit — and if the grid is unchanged locally the dedupe
+    // swallows the only remaining one. A session another client resized
+    // would then keep that client's grid while this one renders its own.
+    // One extra `r` frame per attach is the whole cost.
     this.assertSize();
+    this.installFocusListeners();
+    // Opening the screen in a focused tab is itself a focus edge: the user
+    // is looking at this terminal, so a follower arms the takeover the same
+    // way mobile's screen-visible signal does. A background-tab reconnect
+    // never passes this check and stays passive.
+    if (document.hasFocus() && !document.hidden) this.armFocusTakeover();
   }
 
   detach(): void {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.removeFocusListeners?.();
+    this.removeFocusListeners = null;
+    this.cancelFocusTakeover?.();
+    this.cancelFocusTakeover = null;
     this.host.remove();
+  }
+
+  /**
+   * Focus edges arm the follower takeover; loss of focus cancels it.
+   *
+   * Edges only, never steady state: re-arming on demotion would have a
+   * focused-but-idle tab steal authority back 400 ms after every foreign
+   * resize, ping-ponging against the client the user is actually typing on.
+   */
+  private installFocusListeners(): void {
+    const onFocus = (): void => {
+      this.armFocusTakeover();
+    };
+    const onBlur = (): void => {
+      this.cancelFocusTakeover?.();
+      this.cancelFocusTakeover = null;
+    };
+    const onVisibility = (): void => {
+      if (document.hidden) onBlur();
+      else if (document.hasFocus()) this.armFocusTakeover();
+    };
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onVisibility);
+    this.removeFocusListeners = () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }
+
+  private armFocusTakeover(): void {
+    if (this.authority !== 'follower') return;
+    this.cancelFocusTakeover?.();
+    this.cancelFocusTakeover = this.scheduler.schedule(() => {
+      this.cancelFocusTakeover = null;
+      this.takeoverNow();
+    }, FOCUS_TAKEOVER_MS);
   }
 
   focus(): void {
@@ -300,6 +409,13 @@ export class TerminalSessionModel {
 
   private fitNow(): void {
     if (!this.opened) return;
+    if (this.authority === 'follower' && this.followerGrid !== null) {
+      // The grid belongs to another client: solve the font for it instead of
+      // fitting the container. The observer path lands here too, so a window
+      // resize while passive re-solves the font rather than sending `r`.
+      this.solveFollowerLayout();
+      return;
+    }
     try {
       this.fit.fit();
     } catch {
@@ -318,7 +434,95 @@ export class TerminalSessionModel {
     this.pushSize(this.term.rows, this.term.cols);
   }
 
+  /**
+   * Passive rendering: pick the largest font at which the foreign grid fits
+   * the container, then resize the emulator to that grid *exactly*.
+   *
+   * `proposeDimensions()` is the oracle — it subtracts the scrollbar gutter
+   * and reads the renderer's real cell metrics after each font change, so no
+   * linear-scaling assumption is made. Never `transform: scale`: it breaks
+   * xterm's character measurement and selection mapping (xterm #2488/#3242).
+   * If even the floor font cannot fit the grid, it is clamped and the host
+   * clips — typing takes authority and restores the native layout anyway.
+   */
+  private solveFollowerLayout(): void {
+    if (!this.opened || this.followerGrid === null) return;
+    const { rows, cols } = this.followerGrid;
+    const key = `${String(rows)}x${String(cols)}@${String(this.host.clientWidth)}x${String(this.host.clientHeight)}`;
+    if (
+      key === this.lastFollowerSolve &&
+      this.term.rows === rows &&
+      this.term.cols === cols
+    ) {
+      return;
+    }
+    let low = MIN_FOLLOWER_FONT_SIZE;
+    let high = NATIVE_FONT_SIZE;
+    let chosen: number | null = null;
+    while (low <= high) {
+      const probe = Math.floor((low + high) / 2);
+      const dims = this.proposeAt(probe);
+      if (dims === null) {
+        // Renderer metrics not ready (same window as `fitNow`'s catch): put
+        // the font back and let the next observer tick retry the solve.
+        this.term.options.fontSize = NATIVE_FONT_SIZE;
+        return;
+      }
+      if (dims.cols >= cols && dims.rows >= rows) {
+        chosen = probe;
+        low = probe + 1;
+      } else {
+        high = probe - 1;
+      }
+    }
+    const fontSize = chosen ?? MIN_FOLLOWER_FONT_SIZE;
+    if (this.term.options.fontSize !== fontSize) {
+      this.term.options.fontSize = fontSize;
+    }
+    if (this.term.rows !== rows || this.term.cols !== cols) {
+      // Echoes back through `onResize` → `pushSize`, which the follower gate
+      // drops before it can touch the cache or send a frame.
+      this.term.resize(cols, rows);
+    }
+    this.lastFollowerSolve = key;
+  }
+
+  /** Grid the container would hold at `fontSize`, or null while unmeasurable. */
+  private proposeAt(fontSize: number): { rows: number; cols: number } | null {
+    if (this.term.options.fontSize !== fontSize) {
+      this.term.options.fontSize = fontSize;
+    }
+    try {
+      const dims = this.fit.proposeDimensions();
+      if (
+        dims === undefined ||
+        !Number.isFinite(dims.rows) ||
+        !Number.isFinite(dims.cols)
+      ) {
+        return null;
+      }
+      return { rows: dims.rows, cols: dims.cols };
+    } catch {
+      return null;
+    }
+  }
+
+  private restoreNativeLayout(): void {
+    this.lastFollowerSolve = null;
+    if (this.term.options.fontSize !== NATIVE_FONT_SIZE) {
+      this.term.options.fontSize = NATIVE_FONT_SIZE;
+    }
+    this.fitNow();
+  }
+
   private wireTerminal(): void {
+    // `onKey` fires for genuine keyboard input only — never for the emulator's
+    // auto-replies (DA/DSR/DECRQM answers), which also flow through `onData`
+    // and must not claim size authority. It fires before the data event, so a
+    // takeover's resize frame precedes the keystroke's bytes on the wire.
+    this.track(this.term.onKey(() => {
+      this.takeoverNow();
+    }));
     this.track(this.term.onData((data) => {
       this.sendInputText(data);
     }));
@@ -442,6 +646,10 @@ export class TerminalSessionModel {
             break;
           case 'disconnected':
             this.replay = reduceDisconnected();
+            // Authority survives the drop; only the per-socket `w` marker
+            // resets, so the next handshake re-decides (or the v7 fallback
+            // fires at its replay-end).
+            this.winsizeSeen = false;
             patchState(this.state, { connection: this.replay.connection });
             this.syncStdinGate();
             break;
@@ -488,14 +696,105 @@ export class TerminalSessionModel {
         case 'replayFinished':
           this.replayEndSeen = true;
           this.settleReplayPaint();
+          // No `w` frame by replay-end means a v7 agent, which cannot have
+          // another size authority. Revert to solo; the `enterLive` effect
+          // that always follows in this batch does the actual re-assert.
+          if (!this.winsizeSeen && this.authority === 'follower') {
+            this.setAuthority('solo');
+          }
           break;
         case 'enterLive':
           this.assertSize();
+          break;
+        case 'winsize':
+          this.onWinsize(effect.rows, effect.cols, effect.attachedClients);
           break;
       }
     }
     patchState(this.state, { connection: this.replay.connection });
     this.syncStdinGate();
+  }
+
+  /**
+   * The latest-active arbitration state machine (proto-v8; identical on
+   * Android and iOS). The agent broadcasts `w` on every effective resize and
+   * every attach/detach; whoever's grid it names is the owner, everyone else
+   * follows, and a count of one restores the pre-v8 sole-authority behavior.
+   */
+  private onWinsize(rows: number, cols: number, attachedClients: number): void {
+    this.winsizeSeen = true;
+    patchState(this.state, { attachedClients });
+    if (attachedClients <= 1) {
+      this.setAuthority('solo');
+      // A fresh PTY (24×80) or a departed owner's leftover grid: deliver the
+      // natural size. Equal grids stay silent — a solo reconnect costs zero
+      // resize frames now that the handshake reports the PTY size.
+      if (this.lastRows > 0 && (rows !== this.lastRows || cols !== this.lastCols)) {
+        this.assertSize();
+      }
+      return;
+    }
+    if (
+      (rows === this.lastRows && cols === this.lastCols) ||
+      (rows === this.lastSentRows && cols === this.lastSentCols)
+    ) {
+      // Our own size echoed back: this client holds authority. The last-sent
+      // pair matters when the user is mid-drag — the cache has already moved
+      // past the frame the agent is echoing, and matching only the cache
+      // would demote the very client that is actively resizing (and cancel
+      // its pending corrective frame with it).
+      this.setAuthority('owner');
+      // Same corrective as the solo branch: a stale echo can trail a cache
+      // that already moved on, and a transient demotion may have canceled the
+      // debounced frame that would have delivered it — re-assert the
+      // divergence now and drop any pending debounce, which could only
+      // re-send the same cache.
+      if (this.lastRows > 0 && (rows !== this.lastRows || cols !== this.lastCols)) {
+        this.assertSize();
+        this.cancelResize?.();
+        this.cancelResize = null;
+      }
+      return;
+    }
+    this.followerGrid = { rows, cols };
+    if (this.authority === 'follower') {
+      this.solveFollowerLayout();
+    } else {
+      this.setAuthority('follower');
+    }
+  }
+
+  private setAuthority(next: SizeAuthority): void {
+    if (this.authority === next) return;
+    const wasFollower = this.authority === 'follower';
+    this.authority = next;
+    patchState(this.state, { sizeAuthority: next });
+    this.io.setResendSuppressed(next === 'follower');
+    if (next === 'follower') {
+      // A queued debounced assert must not fire after the demotion.
+      this.cancelResize?.();
+      this.cancelResize = null;
+      this.solveFollowerLayout();
+    } else if (wasFollower) {
+      this.followerGrid = null;
+      this.cancelFocusTakeover?.();
+      this.cancelFocusTakeover = null;
+      this.restoreNativeLayout();
+    }
+  }
+
+  /**
+   * Follower → owner: recompute the natural grid at the native font and
+   * assert it immediately (no debounce — a takeover triggered by typing must
+   * put the resize on the wire before the keystroke's effect renders).
+   */
+  private takeoverNow(): void {
+    if (this.authority !== 'follower') return;
+    if (!this.canSendBytes()) return;
+    this.setAuthority('owner');
+    this.assertSize();
+    this.cancelResize?.();
+    this.cancelResize = null;
   }
 
   /**
@@ -559,6 +858,24 @@ export class TerminalSessionModel {
    * paints into the top 24 rows.
    */
   private pushSize(rows: number, cols: number): void {
+    // While following, nothing is ever *sent* from here — but the cache rules
+    // differ by phase. With a foreign grid adopted, the cache stays frozen at
+    // the last natural grid: that freeze is the echo suppression (our own
+    // `term.resize` to the foreign grid lands here and dies) and it means a
+    // takeover's `assertSize()` delivers the grid this client would have
+    // fitted, with no cache reset needed. Before any grid is adopted (the
+    // fresh-model state), the report IS this client's natural grid and must
+    // be recorded, or the solo/v7 promotion would find an empty cache and
+    // never deliver the initial size — mobile has no post-promotion
+    // re-measure to heal that (the PTY would sit at 24×80), so all three
+    // clients seed identically here.
+    if (this.authority === 'follower') {
+      if (this.followerGrid === null) {
+        this.lastRows = rows;
+        this.lastCols = cols;
+      }
+      return;
+    }
     if (rows === this.lastRows && cols === this.lastCols) return;
     this.lastRows = rows;
     this.lastCols = cols;
@@ -569,9 +886,12 @@ export class TerminalSessionModel {
     }, RESIZE_DEBOUNCE_MS);
   }
 
-  /** Re-deliver the cached grid. The client is the sole size authority. */
+  /** Re-deliver the cached grid — unless another client owns the size. */
   private assertSize(): void {
+    if (this.authority === 'follower') return;
     if (this.lastRows <= 0 || this.lastCols <= 0) return;
+    this.lastSentRows = this.lastRows;
+    this.lastSentCols = this.lastCols;
     this.io.setSize(this.lastRows, this.lastCols);
   }
 
@@ -716,8 +1036,17 @@ export class TerminalSessionModel {
   /** Row height in CSS pixels, or 0 before the host has been laid out. */
   private cellHeight(): number {
     const rows = this.term.rows;
-    if (rows <= 0 || this.host.clientHeight <= 0) return 0;
-    return this.host.clientHeight / rows;
+    if (rows <= 0) return 0;
+    // Measure the grid itself, not the host: in follower mode the emulator is
+    // letterboxed inside the container, and dividing the host height by a
+    // foreign row count would over-estimate every drag's row conversion.
+    const screen = this.term.element?.querySelector('.xterm-screen');
+    const height =
+      screen instanceof HTMLElement && screen.clientHeight > 0
+        ? screen.clientHeight
+        : this.host.clientHeight;
+    if (height <= 0) return 0;
+    return height / rows;
   }
 
   /**
@@ -818,6 +1147,8 @@ export class TerminalSessionModel {
    */
   pasteText(text: string): boolean {
     if (!this.canSendBytes()) return false;
+    // A paste is user input, so it claims size authority like typing does.
+    this.takeoverNow();
     // One frame, not Android's three: these cross a WebSocket and a relay, and
     // losing only the closing marker would strand the program's line editor in
     // paste-collect mode and read as a dead keyboard.
@@ -861,6 +1192,8 @@ export class TerminalSessionModel {
    */
   runSelection(): void {
     if (this.replay.connection !== 'live' || !this.screenIsSettled()) return;
+    // The mobile row-tap this stands in for is a takeover trigger there too.
+    this.takeoverNow();
     if (!this.sendPayload('execute', executePayload(this.term.getSelection()))) {
       return;
     }

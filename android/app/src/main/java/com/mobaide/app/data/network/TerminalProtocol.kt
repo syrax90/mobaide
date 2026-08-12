@@ -19,6 +19,8 @@ import okio.ByteString.Companion.toByteString
  * | 0x73 | 's'  | S->C      | state: UTF-8 JSON {status, pid?, exit_code?}           |
  * | 0x62 | 'b'  | S->C      | replay-buffer start marker (empty payload)             |
  * | 0x65 | 'e'  | S->C      | replay-buffer end marker — live frames follow (empty)  |
+ * | 0x77 | 'w'  | S->C      | winsize: u16 rows + u16 cols + u16 attached clients    |
+ * |      |      |           | (big-endian, proto-v8); truncated payload decodes null |
  *
  * Reconnect handshake (protocol v3): the server emits a fixed sequence of
  * ``state → 'b' → 'o'(chunk)…'o'(chunk) → 'e'`` after every WS open. The
@@ -35,6 +37,7 @@ object TerminalProtocol {
     const val TYPE_STATE: Byte = 's'.code.toByte()
     const val TYPE_REPLAY: Byte = 'b'.code.toByte()
     const val TYPE_REPLAY_END: Byte = 'e'.code.toByte()
+    const val TYPE_WINSIZE: Byte = 'w'.code.toByte()
 
     /** Wrap raw input bytes in an `'i'` frame. */
     fun encodeInput(bytes: ByteArray): ByteString {
@@ -81,9 +84,20 @@ object TerminalProtocol {
             TYPE_STATE -> TerminalFrame.State(frame.substring(1).utf8())
             TYPE_REPLAY -> TerminalFrame.ReplayMarker
             TYPE_REPLAY_END -> TerminalFrame.ReplayEndMarker
+            TYPE_WINSIZE -> {
+                if (frame.size < 7) return null
+                TerminalFrame.Winsize(
+                    rows = readU16(frame, 1),
+                    cols = readU16(frame, 3),
+                    attachedClients = readU16(frame, 5),
+                )
+            }
             else -> null
         }
     }
+
+    private fun readU16(frame: ByteString, offset: Int): Int =
+        ((frame[offset].toInt() and 0xff) shl 8) or (frame[offset + 1].toInt() and 0xff)
 }
 
 sealed class TerminalFrame {
@@ -95,4 +109,5 @@ sealed class TerminalFrame {
     data class State(val json: String) : TerminalFrame()
     data object ReplayMarker : TerminalFrame()
     data object ReplayEndMarker : TerminalFrame()
+    data class Winsize(val rows: Int, val cols: Int, val attachedClients: Int) : TerminalFrame()
 }

@@ -112,8 +112,12 @@ class WindowsPtyBackend:
         self._process.write(text)  # type: ignore[union-attr]
 
     def resize(self, rows: int, cols: int) -> None:
-        assert self._process is not None, "PTY not spawned"
-        self._process.setwinsize(rows, cols)  # type: ignore[union-attr]
+        if self._process is None:
+            return
+        try:
+            self._process.setwinsize(rows, cols)  # type: ignore[union-attr]
+        except Exception:
+            logger.debug("resize raised (process may already be dead)", exc_info=True)
 
     def is_alive(self) -> bool:
         if self._process is None:
@@ -239,9 +243,13 @@ class LinuxPtyBackend:
         import struct
         import termios
 
-        assert self._master_fd is not None, "PTY not spawned"
+        if self._master_fd is None:
+            return
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
-        fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, winsize)
+        try:
+            fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, winsize)
+        except OSError:
+            logger.debug("resize ioctl raised (PTY may already be dead)", exc_info=True)
 
     def is_alive(self) -> bool:
         if self._process is None:
@@ -312,6 +320,7 @@ class FakePtyBackend:
         self._leftover = b""
         self._alive = False
         self._closed = False
+        self.resize_calls: list[tuple[int, int]] = []
 
     def spawn(
         self,
@@ -348,7 +357,7 @@ class FakePtyBackend:
         self._queue.put(bytes(data))
 
     def resize(self, rows: int, cols: int) -> None:
-        return None
+        self.resize_calls.append((rows, cols))
 
     def is_alive(self) -> bool:
         return self._alive

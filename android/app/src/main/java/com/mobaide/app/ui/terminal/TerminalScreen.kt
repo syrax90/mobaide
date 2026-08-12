@@ -90,6 +90,7 @@ fun TerminalScreen(
     val templates by viewModel.templates.collectAsStateWithLifecycle()
     val templatesLoading by viewModel.templatesLoading.collectAsStateWithLifecycle()
     val displayConfig by viewModel.displayConfig.collectAsStateWithLifecycle()
+    val followerGrid by viewModel.followerGrid.collectAsStateWithLifecycle()
     val sessionKind by viewModel.sessionKind.collectAsStateWithLifecycle()
     val headerLabel by viewModel.headerLabel.collectAsStateWithLifecycle()
     val composerVisible by viewModel.composerVisible.collectAsStateWithLifecycle()
@@ -250,6 +251,7 @@ fun TerminalScreen(
                             session = viewModel.session,
                             sessionCallback = viewModel.sessionCallback,
                             displayConfig = displayConfig,
+                            followerGrid = followerGrid,
                             // Ungated by design: a pre-connect layout pass must still cache the
                             // measured grid so enterLiveState()'s resendCachedSize() can deliver it
                             // on connect (matches iOS). resize() only enqueues the frame; it never

@@ -4,6 +4,7 @@ import asyncio
 import collections
 import logging
 import re
+import struct
 import sys
 import time
 from collections.abc import Iterator, Mapping
@@ -192,6 +193,14 @@ class TerminalSession:
         self._startup_output_bytes = 0
         self._user_input_seen = False
         self._stall_task: asyncio.Task[None] | None = None
+        # Authoritative PTY size (latest-active-client arbitration, proto-v8).
+        # Seeded from the spawn config; updated only by an *effective* resize.
+        self._rows = config.rows
+        self._cols = config.cols
+        # Opaque tokens for every attached client across both transports
+        # (direct WS sockets and relay conn_ids). The count rides the ``w``
+        # winsize frame so clients can tell "solo" from "shared".
+        self._clients: set[str] = set()
 
     @property
     def state(self) -> SessionState:
@@ -212,6 +221,43 @@ class TerminalSession:
     @property
     def event_queue(self) -> asyncio.Queue[SessionEvent]:
         return self._event_queue
+
+    @property
+    def rows(self) -> int:
+        return self._rows
+
+    @property
+    def cols(self) -> int:
+        return self._cols
+
+    @property
+    def attached_client_count(self) -> int:
+        return len(self._clients)
+
+    def winsize_payload(self) -> bytes:
+        """Payload of the S->C ``w`` frame: rows, cols, attached-client count."""
+        count = min(len(self._clients), 0xFFFF)
+        return struct.pack(">HHH", self._rows, self._cols, count)
+
+    def _emit_winsize(self) -> None:
+        """Enqueue a ``winsize`` SessionEvent (drop-oldest, never blocks)."""
+        self._enqueue_drop_oldest(
+            SessionEvent("winsize", self._config.session_id, self.winsize_payload()),
+        )
+
+    def register_client(self, token: str) -> None:
+        """Record an attached client; broadcast the new count when it changed."""
+        if token in self._clients:
+            return
+        self._clients.add(token)
+        self._emit_winsize()
+
+    def unregister_client(self, token: str) -> None:
+        """Forget an attached client; broadcast the new count when it changed."""
+        if token not in self._clients:
+            return
+        self._clients.discard(token)
+        self._emit_winsize()
 
     async def start(self) -> None:
         """Spawn the PTY process and start the async reader loop."""
@@ -568,9 +614,25 @@ class TerminalSession:
         await asyncio.sleep(EXECUTE_CLEAR_DELAY_SECONDS)
         await self.write_submit(data)
 
-    async def resize(self, rows: int, cols: int) -> None:
-        """Resize the PTY terminal."""
+    async def resize(self, rows: int, cols: int) -> bool:
+        """Apply an *effective* PTY resize.
+
+        Returns ``False`` without touching the backend for invalid values,
+        an unchanged size (the dedupe that stops multi-client resize storms),
+        or a session that is no longer running. An applied resize updates the
+        stored authoritative size and broadcasts a ``winsize`` event.
+        """
+        if not (0 < rows <= 0xFFFF and 0 < cols <= 0xFFFF):
+            return False
+        if (rows, cols) == (self._rows, self._cols):
+            return False
+        if self._state is not SessionState.RUNNING:
+            return False
         self._backend.resize(rows, cols)
+        self._rows = rows
+        self._cols = cols
+        self._emit_winsize()
+        return True
 
     def get_scrollback(self) -> list[str]:
         """Return the current scrollback buffer as decoded strings.

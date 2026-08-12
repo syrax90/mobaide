@@ -107,6 +107,7 @@ from .envelope import (
     SUPPORTED_PROTOCOL_VERSIONS,
     decode,
     encode,
+    encode_targeted,
 )
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,7 @@ FRAME_SUBMIT = b"m"
 FRAME_STATE = b"s"
 FRAME_REPLAY = b"b"
 FRAME_REPLAY_END = b"e"
+FRAME_WINSIZE = b"w"
 
 # Bound on each session's inbound PTY-frame queue. Input is human-rate;
 # the bound only guards memory if a PTY write wedges. Overflow drops the
@@ -389,6 +391,16 @@ class RelayClient:
         self._unknown_control_type_total = 0
         self._unknown_session_input_total = 0
         self._unknown_session_notified: set[str] = set()
+        # Relay-attached clients per session: sid -> (session, client tokens).
+        # Tokens are ``relay:<conn_id>`` from the v8 relay's per-connection id,
+        # or the single ``relay:legacy:<sid>`` for a v7 relay that sends none.
+        # The session ref is kept so tunnel-loss cleanup can unregister without
+        # awaiting the session manager.
+        self._relay_attachments: dict[str, tuple[Any, set[str]]] = {}
+
+        # Advertised by the relay in ``auth_ok``; informational only — the
+        # operative v8 capability signal is conn_id presence on attach frames.
+        self._server_protocol_versions: list[int] = []
 
     async def start(self) -> None:
         """Start the relay client background task."""
@@ -582,6 +594,12 @@ class RelayClient:
             )
         if msg_type != "auth_ok":
             raise ConnectionError(f"Relay auth failed: {resp}")
+        versions = resp.get("server_protocol_versions")
+        self._server_protocol_versions = (
+            [v for v in versions if isinstance(v, int)]
+            if isinstance(versions, list)
+            else []
+        )
         self._latest_manifest = {
             "version": resp.get("latest_agent_version"),
             "manifest_body": resp.get("manifest_body"),
@@ -739,15 +757,28 @@ class RelayClient:
         session_id = ctrl.get("session_id", "")
         if not session_id:
             return
+        conn_id = self._normalize_conn_id(ctrl)
         session = await self._session_manager.get_session(session_id)
         if session is None:
             logger.debug(
                 "relay.mobile_attach.unknown_session session_id=%s",
                 session_id,
             )
-            await self._send_stopped_frame(session_id, ws, "mobile_attach")
+            await self._send_stopped_frame(
+                session_id, ws, "mobile_attach", conn_id=conn_id,
+            )
             return
-        await self._send_session_handshake(session_id, session, ws)
+        # Register before the handshake so its ``w`` frame already counts this
+        # client. A v7 relay sends no conn_id; the single legacy token then
+        # stands in for however many clients that relay multiplexes.
+        token = f"relay:{conn_id}" if conn_id else f"relay:legacy:{session_id}"
+        entry = self._relay_attachments.get(session_id)
+        if entry is None:
+            entry = (session, set())
+            self._relay_attachments[session_id] = entry
+        entry[1].add(token)
+        session.register_client(token)
+        await self._send_session_handshake(session_id, session, ws, conn_id=conn_id)
 
     async def _handle_request_events_snapshot(
         self, ws: ClientConnection
@@ -799,19 +830,48 @@ class RelayClient:
                 exc_info=True,
             )
 
-    def _handle_mobile_detach(self, ctrl: dict) -> None:
-        """Record that a mobile detached from a session.
+    @staticmethod
+    def _normalize_conn_id(ctrl: dict) -> str | None:
+        """Validated per-connection id from a v8 relay's attach/detach frame.
 
-        Present for protocol symmetry with ``mobile_session_attach`` so the
-        central server can notify the agent when a mobile goes away; the
-        agent currently has no per-mobile state to unwind, so this is a
-        debug log. Left as a named method so a future per-device routing
-        change has an obvious hook.
+        Shared by attach and detach so both derive identical registry tokens
+        from identical input — a validation drift between them would leak a
+        token (registered under one name, unregistered under another). The
+        length cap is measured in UTF-8 bytes because that is what
+        ``encode_targeted`` enforces when the id is later used for targeting.
+        """
+        conn_id = ctrl.get("conn_id")
+        if not isinstance(conn_id, str) or not conn_id:
+            return None
+        if len(conn_id.encode("utf-8")) > 255:
+            return None
+        return conn_id
+
+    def _handle_mobile_detach(self, ctrl: dict) -> None:
+        """Unregister a detached mobile from its session's client registry.
+
+        Drops the matching attach token so the session's attached-client
+        count falls and the resulting ``winsize`` broadcast lets a surviving
+        solo client reclaim its natural grid. A fast client reconnect may
+        deliver the new conn_id's attach before the old conn_id's detach —
+        per-connection tokens make that reordering harmless (count dips to
+        the true value, never to zero).
         """
         session_id = ctrl.get("session_id", "")
+        conn_id = self._normalize_conn_id(ctrl)
+        token = f"relay:{conn_id}" if conn_id else f"relay:legacy:{session_id}"
         logger.debug(
-            "relay.mobile_detach session_id=%s", session_id,
+            "relay.mobile_detach session_id=%s conn_id=%s", session_id, conn_id,
         )
+        entry = self._relay_attachments.get(session_id)
+        if entry is None:
+            return
+        session, tokens = entry
+        if token in tokens:
+            tokens.discard(token)
+            session.unregister_client(token)
+        if not tokens:
+            self._relay_attachments.pop(session_id, None)
 
     async def _handle_open_autoscan(
         self, ctrl: dict, ws: ClientConnection
@@ -2027,7 +2087,11 @@ class RelayClient:
         await self._send_stopped_frame(session_id, ws, "session_input")
 
     async def _send_stopped_frame(
-        self, session_id: str, ws: ClientConnection, source: str
+        self,
+        session_id: str,
+        ws: ClientConnection,
+        source: str,
+        conn_id: str | None = None,
     ) -> None:
         """Tell the mobile this agent has no such session.
 
@@ -2036,10 +2100,17 @@ class RelayClient:
         the once-per-id dedupe above: ``_handle_mobile_attach`` has to re-send
         unconditionally on every attach, or a re-opened terminal keeps a grayed
         out keyboard waiting on a state frame that never comes.
+
+        With a v8 relay the attach carries a conn_id and the frame is targeted
+        at the one client that asked; input frames carry none, so that path
+        stays a broadcast.
         """
         try:
             stopped = _state_frame("stopped", None)
-            await ws.send(encode(CH_SESSION_IO, session_id, stopped))
+            if conn_id:
+                await ws.send(encode_targeted(session_id, conn_id, stopped))
+            else:
+                await ws.send(encode(CH_SESSION_IO, session_id, stopped))
         except Exception:
             logger.debug(
                 "relay.%s.stopped_frame_failed session_id=%s",
@@ -2053,37 +2124,49 @@ class RelayClient:
         session_id: str,
         session: Any,
         ws: ClientConnection,
+        conn_id: str | None = None,
     ) -> None:
-        """Send state + replay marker + chunked ring + replay-end marker.
+        """Send state + winsize + replay marker + chunked ring + replay-end.
 
-        Mirrors ``mobaide.agent.ws.session_io.session_io`` — the chunked
-        sequence keeps individual envelope payloads small enough for the
-        relay tunnel and for the mobile emulator to process each chunk
+        Mirrors ``mobaide.agent.ws.session_io._send_attach_handshake`` — the
+        chunked sequence keeps individual envelope payloads small enough for
+        the relay tunnel and for the mobile emulator to process each chunk
         within a UI frame on append.
+
+        When the relay supplied a conn_id (proto-v8), every handshake frame is
+        wrapped in a CH_SESSION_IO_TARGETED envelope so only the attaching
+        client replays — a broadcast handshake wipes and re-renders every
+        already-attached client's terminal. A v7 relay sends no conn_id and
+        gets the legacy broadcast.
         """
+
+        async def _send(frame: bytes) -> None:
+            if conn_id:
+                await ws.send(encode_targeted(session_id, conn_id, frame))
+            else:
+                await ws.send(encode(CH_SESSION_IO, session_id, frame))
+
         try:
             status = _STATE_MAP.get(session.state, "running")
-            state = _state_frame(status, session.pid)
-            await ws.send(encode(CH_SESSION_IO, session_id, state))
+            await _send(_state_frame(status, session.pid))
 
-            await ws.send(encode(CH_SESSION_IO, session_id, FRAME_REPLAY))
+            # Authoritative PTY size + attached-client count (proto-v8), before
+            # the replay span so the client can arbitrate before its replay-end
+            # re-assert decision; v7 clients drop the unknown frame type.
+            await _send(FRAME_WINSIZE + session.winsize_payload())
+
+            await _send(FRAME_REPLAY)
 
             # The ring is DA-stripped at write time inside ``_append_ring``;
             # ``iter_ring_chunks`` takes a single snapshot of the (already
             # clean) ring and yields chunks of ``REPLAY_CHUNK_BYTES`` each.
             emitted_any = False
             for chunk in session.iter_ring_chunks():
-                await ws.send(
-                    encode(CH_SESSION_IO, session_id, FRAME_OUTPUT + chunk),
-                )
+                await _send(FRAME_OUTPUT + chunk)
                 emitted_any = True
             if not emitted_any:
-                await ws.send(
-                    encode(CH_SESSION_IO, session_id, FRAME_OUTPUT),
-                )
-            await ws.send(
-                encode(CH_SESSION_IO, session_id, FRAME_REPLAY_END),
-            )
+                await _send(FRAME_OUTPUT)
+            await _send(FRAME_REPLAY_END)
         except Exception as exc:
             logger.debug(
                 "relay.handshake_send_failed session_id=%s: %s",
@@ -2146,6 +2229,13 @@ class RelayClient:
                         )
                         envelope = encode(CH_SESSION_IO, session_id, state)
                         await ws.send(envelope)
+                    elif event.event_type == "winsize" and event.data:
+                        envelope = encode(
+                            CH_SESSION_IO,
+                            session_id,
+                            FRAME_WINSIZE + event.data,
+                        )
+                        await ws.send(envelope)
                 except Exception as exc:
                     logger.debug(
                         "relay.bridge_send_error session_id=%s: %s",
@@ -2192,6 +2282,10 @@ class RelayClient:
                         # too so a not-yet-scheduled pump cannot linger.
                         self._input_pumps.pop(sid, None)
                         self._input_queues.pop(sid, None)
+
+                for sid in list(self._relay_attachments):
+                    if sid not in current_ids:
+                        self._relay_attachments.pop(sid, None)
         except asyncio.CancelledError:
             pass
         finally:
@@ -2280,3 +2374,11 @@ class RelayClient:
                 task.cancel()
         self._autoscan_streams.clear()
         self._autoscan_inboxes.clear()
+        # Tunnel gone means every relay-attached client is gone: unregister
+        # their tokens so surviving direct-WS clients see the count drop (and
+        # a solo one reclaims its grid). The relay replays attaches on
+        # reconnect, rebuilding the registry.
+        for session, tokens in list(self._relay_attachments.values()):
+            for token in list(tokens):
+                session.unregister_client(token)
+        self._relay_attachments.clear()

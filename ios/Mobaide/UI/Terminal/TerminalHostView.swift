@@ -847,6 +847,9 @@ private final class SimultaneousTapDelegate: NSObject, UIGestureRecognizerDelega
 struct TerminalHostView: UIViewRepresentable {
     let model: TerminalSessionModel
     let displayConfig: TerminalDisplayConfig
+    /// Foreign grid while another client owns the PTY size (proto-v8 follower
+    /// mode); overrides `displayConfig` in the pan view while non-nil.
+    let followerGrid: FollowerGrid?
     let keyboardTransition: TerminalKeyboardObserver.Transition
 
     func makeCoordinator() -> Coordinator {
@@ -862,12 +865,14 @@ struct TerminalHostView: UIViewRepresentable {
         terminal.notifyUpdateChanges = true
         context.coordinator.attachGestures(to: terminal)
         let scroll = TerminalPanScrollView(terminalView: terminal, displayConfig: displayConfig)
+        scroll.followerGrid = followerGrid
         context.coordinator.panHost = scroll
         return scroll
     }
 
     func updateUIView(_ uiView: TerminalPanScrollView, context: Context) {
         uiView.displayConfig = displayConfig
+        uiView.followerGrid = followerGrid
         uiView.setKeyboardLift(keyboardTransition.lift, duration: keyboardTransition.duration)
     }
 

@@ -31,14 +31,16 @@ interface Harness {
   sockets: FakeSocket[];
   /** Fire the armed resize debounce and report the delay it was armed with. */
   flushResize: () => number;
+  /** Fire the armed channel reconnect backoff. */
+  flushChannel: () => number;
   /** How many resize timers are armed; a burst must never arm more than one. */
   pendingResizes: () => number;
-  resizeFrames: () => number[][];
+  resizeFrames: (of?: FakeSocket) => number[][];
   deliver: (typeByte: number) => void;
   /** Play a whole server frame, payload included. */
   deliverFrame: (frame: Uint8Array) => void;
   /** Outbound frames of one type, in the order they reached the socket. */
-  framesOfType: (typeByte: number) => Uint8Array[];
+  framesOfType: (typeByte: number, of?: FakeSocket) => Uint8Array[];
 }
 
 const live: Model[] = [];
@@ -71,8 +73,8 @@ async function harness(): Promise<Harness> {
   if (socket === undefined) throw new Error('no socket was opened');
   socket.accept();
 
-  const framesOfType = (typeByte: number): Uint8Array[] =>
-    socket.sent.filter(
+  const framesOfType = (typeByte: number, of: FakeSocket = socket): Uint8Array[] =>
+    of.sent.filter(
       (frame): frame is Uint8Array =>
         frame instanceof Uint8Array && frame[0] === typeByte,
     );
@@ -82,9 +84,10 @@ async function harness(): Promise<Harness> {
     socket,
     sockets,
     flushResize: () => modelTimers.runNext(),
+    flushChannel: () => channelTimers.runNext(),
     pendingResizes: () => modelTimers.pending.length,
-    resizeFrames: () =>
-      framesOfType(TERMINAL_FRAME_TYPE.resize).map((frame) => [...frame]),
+    resizeFrames: (of?: FakeSocket) =>
+      framesOfType(TERMINAL_FRAME_TYPE.resize, of).map((frame) => [...frame]),
     deliver: (typeByte: number) => {
       socket.deliver(Uint8Array.from([typeByte]).buffer);
     },
@@ -110,6 +113,15 @@ const outputFrame = (bytes: string): Uint8Array =>
 const stateFrame = (status: string): Uint8Array =>
   frameOf(TERMINAL_FRAME_TYPE.state, JSON.stringify({ status }));
 
+/** A `w` winsize frame naming a solo client (attached count of one). */
+const winsizeFrame = (rows: number, cols: number, clients: number): Uint8Array =>
+  Uint8Array.from([
+    TERMINAL_FRAME_TYPE.winsize,
+    rows >> 8, rows & 0xff,
+    cols >> 8, cols & 0xff,
+    clients >> 8, clients & 0xff,
+  ]);
+
 const payloadText = (frame: Uint8Array): string =>
   new TextDecoder().decode(frame.subarray(1));
 
@@ -125,8 +137,13 @@ async function liveRunning(): Promise<Harness> {
 }
 
 describe('TerminalSessionModel grid size', () => {
+  // Fresh models start as `follower` (proto-v8 latest-active arbitration —
+  // see `sessionModel.arbitration.test.ts`) so every case here first
+  // delivers a solo `w` (attached count of one) to resolve the role before
+  // exercising the pre-arbitration resize behavior these tests cover.
   it('sends nothing until the resize debounce fires', async () => {
-    const { model, flushResize, resizeFrames } = await harness();
+    const { model, flushResize, resizeFrames, deliverFrame } = await harness();
+    deliverFrame(winsizeFrame(24, 80, 1));
 
     model.term.resize(120, 40);
     expect(resizeFrames()).toEqual([]);
@@ -139,7 +156,9 @@ describe('TerminalSessionModel grid size', () => {
     // A window drag produces a resize per animation frame; one `r` each would
     // flood the relay and re-wrap the PTY at every intermediate width. Each
     // pass has to *replace* the armed timer, not queue another one.
-    const { model, flushResize, pendingResizes, resizeFrames } = await harness();
+    const { model, flushResize, pendingResizes, resizeFrames, deliverFrame } =
+      await harness();
+    deliverFrame(winsizeFrame(24, 80, 1));
 
     model.term.resize(100, 30);
     model.term.resize(110, 35);
@@ -156,26 +175,52 @@ describe('TerminalSessionModel grid size', () => {
   it('re-asserts the cached grid when a socket goes live', async () => {
     // The agent spawns every session at 24x80 and never reports a size back,
     // so the client is the sole size authority and has to re-assert on every
-    // connect — including the one that arrives with the replay marker.
-    const { model, flushResize, resizeFrames, deliver } = await harness();
+    // connect. Once solo, this re-assert rides the channel's own `onOpen`
+    // hook (PR #409), independent of the model's `connecting`→`live` frame
+    // machinery below — so, unlike the pre-arbitration version, it needs a
+    // real reconnect (the promotion frame already spent this socket's one
+    // `connecting` transition) to observe.
+    const { model, flushResize, resizeFrames, deliverFrame, socket, sockets, flushChannel } =
+      await harness();
+    deliverFrame(winsizeFrame(24, 80, 1));
     model.term.resize(120, 40);
     flushResize();
     expect(resizeFrames()).toHaveLength(1);
 
-    deliver(TERMINAL_FRAME_TYPE.replayStart);
+    socket.serverClose(1006);
+    flushChannel();
+    await settle();
+    const reopened = sockets[1];
+    if (reopened === undefined) throw new Error('no reconnect socket');
+    reopened.accept();
 
-    expect(resizeFrames()).toEqual([resizeFrame(40, 120), resizeFrame(40, 120)]);
+    expect(resizeFrames(reopened)).toEqual([resizeFrame(40, 120)]);
   });
 
   it('re-asserts on a frame it could not decode', async () => {
     // The upgrade to live precedes the decode, exactly as it does on Android.
-    const { model, flushResize, resizeFrames, deliver } = await harness();
+    // As above, exercising the model's own `connecting`→`live` upgrade (as
+    // opposed to the channel's `onOpen` hook a bare reconnect already covers)
+    // needs a fresh `connecting` streak, so this reconnects first.
+    const {
+      model, flushResize, resizeFrames, deliverFrame, socket, sockets, flushChannel,
+    } = await harness();
+    deliverFrame(winsizeFrame(24, 80, 1));
     model.term.resize(120, 40);
     flushResize();
 
-    deliver(0x00);
+    socket.serverClose(1006);
+    flushChannel();
+    await settle();
+    const reopened = sockets[1];
+    if (reopened === undefined) throw new Error('no reconnect socket');
+    reopened.accept(); // channel-level onOpen re-assert (1st frame)
 
-    expect(resizeFrames()).toHaveLength(2);
+    reopened.deliver(Uint8Array.from([0x00]).buffer);
+
+    // 1st frame: the channel's onOpen resend. 2nd: the model's own
+    // connecting→live upgrade, triggered by this undecodable frame.
+    expect(resizeFrames(reopened)).toHaveLength(2);
   });
 });
 

@@ -111,6 +111,7 @@ private struct TerminalScreenContent: View {
                     TerminalHostView(
                         model: model,
                         displayConfig: displayStore.config,
+                        followerGrid: model.followerGrid,
                         keyboardTransition: keyboard.transition
                     )
                     jumpToBottomButton

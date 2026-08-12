@@ -148,6 +148,11 @@ class MobileClient:
 
     device_id: str
     websocket: WebSocket
+    # Per-connection id carried on mobile_session_attach/detach (proto-v8) so
+    # the agent can address one client (CH_SESSION_IO_TARGETED) and keep an
+    # accurate attached-client count. Per connection, not per device: two
+    # sockets from one device (e.g. two browser tabs) must count as two.
+    conn_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     send_queue: asyncio.Queue[bytes | str] = field(
         default_factory=lambda: asyncio.Queue(maxsize=_MOBILE_QUEUE_SIZE)
     )
@@ -319,6 +324,25 @@ class RoutingTable:
             key[len(prefix) :]
             for key, clients in channels.items()
             if key.startswith(prefix) and clients
+        ]
+
+    def iter_attached_session_clients(
+        self, agent_id: str
+    ) -> list[tuple[str, MobileClient]]:
+        """(session_id, client) pairs for every ``session_io:*`` attachment.
+
+        The per-client counterpart of :meth:`list_attached_sessions`: a v8
+        agent reconnect replays one ``mobile_session_attach`` per attached
+        client so the agent's per-session client registry rebuilds with the
+        true count instead of one entry per session.
+        """
+        channels = self._mobile_clients.get(agent_id, {})
+        prefix = "session_io:"
+        return [
+            (key[len(prefix) :], client)
+            for key, clients in channels.items()
+            if key.startswith(prefix)
+            for client in clients
         ]
 
     def register_user_client(self, user_id: str, client: UserClient) -> None:

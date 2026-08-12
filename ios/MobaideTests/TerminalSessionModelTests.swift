@@ -33,6 +33,22 @@ final class TerminalSessionModelTests: XCTestCase {
         return connection.sentBinaries
     }
 
+    /// Fresh models start as `.follower` (proto-v8 latest-active arbitration),
+    /// so `resize` discards every layout pass until a solo `w` (or the
+    /// replay-end fallback) resolves the role. Deliver one so the
+    /// pre-arbitration tests below see solo behavior again.
+    ///
+    /// This frame is itself the model's first inbound binary, so it also
+    /// performs `handleBinary`'s "first binary out of `.reconnecting`"
+    /// upgrade — harmless for every case below except
+    /// `testFirstBinaryUpgradeReassertsSizeDroppedWhileSocketWasDown`, which
+    /// resets `connectionState` back afterward to keep exercising that exact
+    /// path.
+    private func promoteToSolo(_ model: TerminalSessionModel, _ connection: FakeWebSocketConnection) async {
+        connection.emit(.binary(Data([0x77, 0x00, 0x18, 0x00, 0x50, 0x00, 0x01])))
+        _ = await poll { model.sizeAuthority == .solo }
+    }
+
     // MARK: - Frame building
 
     func testSubmitSingleLineHasClearPrefixNoBracketedPaste() async throws {
@@ -89,6 +105,7 @@ final class TerminalSessionModelTests: XCTestCase {
 
     func testResizeDebounceCollapsesToFinalValue() async throws {
         let (model, connection) = try await connectedModel()
+        await promoteToSolo(model, connection)
         model.resize(rows: 30, cols: 100)
         model.resize(rows: 40, cols: 120)
         try await Task.sleep(for: .milliseconds(200))
@@ -106,6 +123,7 @@ final class TerminalSessionModelTests: XCTestCase {
 
     func testResizeResentOnReconnect() async throws {
         let (model, connection) = try await connectedModel()
+        await promoteToSolo(model, connection)
         model.resize(rows: 40, cols: 120)
         try await Task.sleep(for: .milliseconds(200))
         let beforeReconnect = connection.sentBinaries.filter { $0.first == 0x72 }.count
@@ -128,6 +146,7 @@ final class TerminalSessionModelTests: XCTestCase {
     /// resize — and the measurement that follows must still reach the PTY.
     func testConnectBeforeAnyResizeSendsNothingAndLaterResizeStillDelivers() async throws {
         let (model, connection) = try await connectedModel()
+        await promoteToSolo(model, connection)
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertTrue(
             connection.sentBinaries.filter { $0.first == 0x72 }.isEmpty,
@@ -150,6 +169,7 @@ final class TerminalSessionModelTests: XCTestCase {
     /// spawn size for the session's whole life.
     func testReplayEndReassertsSizeDroppedWhileSocketWasDown() async throws {
         let (model, connection) = try await connectedModel()
+        await promoteToSolo(model, connection)
         connection.emit(.binary(Data([0x62]))) // replayStart
         let replaying = await poll { model.connectionState == .replayingBuffer }
         XCTAssertTrue(replaying)
@@ -185,6 +205,16 @@ final class TerminalSessionModelTests: XCTestCase {
         model.start()
         let connection = try await factory.connection(1)
         XCTAssertEqual(model.connectionState, .reconnecting)
+        await promoteToSolo(model, connection)
+        // The promotion frame above was itself the first inbound binary, so it
+        // already consumed the "out of .reconnecting" upgrade this test means to
+        // exercise. Restore `.reconnecting` with a *terminal* close code so
+        // `WebSocketCore` resets the model's state without scheduling an actual
+        // reconnect — a non-terminal code would race a fresh `FakeWebSocketConnection`
+        // into existence and silently steal every later send in this test away from
+        // the `connection` reference above.
+        connection.emit(.closed(code: WebSocketCore.adminRevokedCloseCode, reason: "test reset"))
+        _ = await poll { model.connectionState == .reconnecting }
 
         connection.dropsBinaries = true
         model.resize(rows: 40, cols: 120)

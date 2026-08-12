@@ -76,7 +76,9 @@ describe('fetchServerInfo', () => {
 describe('checkVersionGate', () => {
   it('passes when the client version is offered and at or above the minimum', () => {
     expect(
-      checkVersionGate(serverInfo({ protocolVersions: [6, 7], minClientVersion: 6 })),
+      checkVersionGate(
+        serverInfo({ protocolVersions: [6, 7, APP_PROTOCOL_VERSION], minClientVersion: 6 }),
+      ),
     ).toBeNull();
   });
 
@@ -92,20 +94,27 @@ describe('checkVersionGate', () => {
   });
 
   it('fails when the server has moved past this client', () => {
+    const nextVersion = APP_PROTOCOL_VERSION + 1;
     const gate = checkVersionGate(
-      serverInfo({ protocolVersions: [8, 9], minClientVersion: 8 }),
+      serverInfo({
+        protocolVersions: [nextVersion, nextVersion + 1],
+        minClientVersion: nextVersion,
+      }),
     );
 
     expect(gate).not.toBeNull();
-    expect(gate?.minClientVersion).toBe(8);
+    expect(gate?.minClientVersion).toBe(nextVersion);
     expect(gate?.reason).toContain(`v${String(APP_PROTOCOL_VERSION)}`);
   });
 
   it('fails when the version is dropped from the set despite a lower minimum', () => {
     // Set membership, not a range: min 6 admits this client, but the server
-    // no longer speaks v7, so the handshake would still fail.
+    // no longer speaks this client's version, so the handshake would still
+    // fail.
     expect(
-      checkVersionGate(serverInfo({ protocolVersions: [6, 8], minClientVersion: 6 })),
+      checkVersionGate(
+        serverInfo({ protocolVersions: [6, APP_PROTOCOL_VERSION + 1], minClientVersion: 6 }),
+      ),
     ).not.toBeNull();
   });
 
