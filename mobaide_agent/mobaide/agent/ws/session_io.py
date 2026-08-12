@@ -194,6 +194,12 @@ async def _send_attach_handshake(websocket: WebSocket, session) -> None:
         emitted_any = True
     if not emitted_any:
         await websocket.send_bytes(FRAME_OUTPUT)
+    # The ring replay above can span megabytes while this socket is not yet
+    # subscribed to the fanout, so a resize or attach/detach landing in that
+    # window would otherwise be lost until the next change. Re-emit the
+    # now-current size + count just before the end marker; a duplicate ``w``
+    # is idempotent for clients.
+    await websocket.send_bytes(FRAME_WINSIZE + session.winsize_payload())
     await websocket.send_bytes(FRAME_REPLAY_END)
 
 

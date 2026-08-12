@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubLocalStorage } from '../../test/localStorageStub';
+import { APP_PROTOCOL_VERSION } from '../../api/bootstrap';
 
 // Before importing anything that pulls in a persisted store.
 stubLocalStorage();
@@ -143,7 +144,9 @@ describe('SettingsScreen', () => {
 
   it('reports both version numbers', () => {
     renderScreen();
-    expect(screen.getByText(/protocol v7/)).toHaveTextContent('server 1.2.3');
+    expect(
+      screen.getByText(new RegExp(`protocol v${String(APP_PROTOCOL_VERSION)}`)),
+    ).toHaveTextContent('server 1.2.3');
   });
 
   it('signs out with the silent reason', () => {

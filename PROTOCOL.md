@@ -34,8 +34,15 @@ cadence; they do **not** gate compatibility.
   re-assert decision; (2) broadcast to all attached clients after every
   effective resize; (3) broadcast whenever the attached-client count changes,
   which is what lets a passive client reclaim its natural grid the moment it
-  becomes solo. A truncated payload decodes to null. All three v7 clients drop
-  unknown frame type bytes, so a v8 agent is safe against v7 clients.
+  becomes solo. On the **direct-WS transport** the handshake additionally
+  re-emits ``w`` immediately before the replay-end marker: the ring replay can
+  span megabytes while the connecting socket is not yet subscribed to live
+  broadcasts, so a resize or attach/detach landing in that window would
+  otherwise be lost (the relay transport does not need this — an attaching
+  client is in the relay's broadcast set before the agent's handshake starts).
+  Clients treat a duplicate ``w`` as idempotent. A truncated payload decodes to
+  null. All three v7 clients drop unknown frame type bytes, so a v8 agent is
+  safe against v7 clients.
 * **Client arbitration (identical on Android / iOS / web).** Each terminal
   model holds a role — ``solo`` / ``owner`` / ``follower`` — **initialized
   ``follower``** so a fresh attach adopts an already-driven session's grid

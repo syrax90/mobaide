@@ -248,6 +248,8 @@ export class TerminalSessionModel {
   private lastFollowerSolve: string | null = null;
   private cancelFocusTakeover: (() => void) | null = null;
   private removeFocusListeners: (() => void) | null = null;
+  /** An elapsed focus claim waiting for the send gate; see tryFocusTakeover. */
+  private pendingFocusTakeover = false;
 
   constructor(
     agentId: string,
@@ -348,6 +350,7 @@ export class TerminalSessionModel {
     this.removeFocusListeners = null;
     this.cancelFocusTakeover?.();
     this.cancelFocusTakeover = null;
+    this.pendingFocusTakeover = false;
     this.host.remove();
   }
 
@@ -365,6 +368,7 @@ export class TerminalSessionModel {
     const onBlur = (): void => {
       this.cancelFocusTakeover?.();
       this.cancelFocusTakeover = null;
+      this.pendingFocusTakeover = false;
     };
     const onVisibility = (): void => {
       if (document.hidden) onBlur();
@@ -385,8 +389,35 @@ export class TerminalSessionModel {
     this.cancelFocusTakeover?.();
     this.cancelFocusTakeover = this.scheduler.schedule(() => {
       this.cancelFocusTakeover = null;
-      this.takeoverNow();
+      this.tryFocusTakeover();
     }, FOCUS_TAKEOVER_MS);
+  }
+
+  /**
+   * An elapsed focus claim that cannot send yet (reconnecting, or the replay
+   * is still draining) is kept pending instead of dropped — steady focus
+   * produces no new edge to re-arm it, so a claim discarded here would leave
+   * the returning tab stuck as a follower until the user types. The pending
+   * claim is retried as the send gate opens and dies on blur/hide/detach.
+   */
+  private tryFocusTakeover(): void {
+    if (this.authority !== 'follower') return;
+    if (!this.canSendBytes()) {
+      this.pendingFocusTakeover = true;
+      return;
+    }
+    this.takeoverNow();
+  }
+
+  private maybeRetryFocusTakeover(): void {
+    if (!this.pendingFocusTakeover) return;
+    if (this.authority !== 'follower' || document.hidden || !document.hasFocus()) {
+      this.pendingFocusTakeover = false;
+      return;
+    }
+    if (!this.canSendBytes()) return;
+    this.pendingFocusTakeover = false;
+    this.takeoverNow();
   }
 
   focus(): void {
@@ -735,8 +766,15 @@ export class TerminalSessionModel {
       return;
     }
     if (
-      (rows === this.lastRows && cols === this.lastCols) ||
-      (rows === this.lastSentRows && cols === this.lastSentCols)
+      // Only a grid this client actually SENT can echo back as ownership: the
+      // fresh-follower cache seeding records a merely-measured grid, and
+      // without this guard a fresh client whose natural grid happens to equal
+      // the PTY's would be promoted to owner and later steal the size on an
+      // unattended window relayout. A never-sent match stays follower — it
+      // renders identically and still takes over on typing or focus.
+      this.lastSentRows > 0 &&
+      ((rows === this.lastRows && cols === this.lastCols) ||
+        (rows === this.lastSentRows && cols === this.lastSentCols))
     ) {
       // Our own size echoed back: this client holds authority. The last-sent
       // pair matters when the user is mid-drag — the cache has already moved
@@ -779,6 +817,7 @@ export class TerminalSessionModel {
       this.followerGrid = null;
       this.cancelFocusTakeover?.();
       this.cancelFocusTakeover = null;
+      this.pendingFocusTakeover = false;
       this.restoreNativeLayout();
     }
   }
@@ -1108,6 +1147,8 @@ export class TerminalSessionModel {
     if (this.term.options.disableStdin !== disabled) {
       this.term.options.disableStdin = disabled;
     }
+    // The gate opening is exactly the moment a parked focus claim can act.
+    if (!disabled) this.maybeRetryFocusTakeover();
   }
 
   private sendInputText(text: string): void {

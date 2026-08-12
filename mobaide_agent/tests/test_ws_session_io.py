@@ -88,7 +88,7 @@ class TestWsBinaryFrames:
         self, test_client, auth_token, session_id_sync,
     ):
         """Protocol v8 handshake: state → 'w' (winsize) → 'b' → 'o' (empty
-        for a fresh session) → 'e'."""
+        for a fresh session) → 'w' (re-stated post-replay) → 'e'."""
         with test_client.websocket_connect(
             f"/ws/session/{session_id_sync}?token={auth_token}",
         ) as ws:
@@ -103,7 +103,9 @@ class TestWsBinaryFrames:
             third = ws.receive_bytes()
             assert third[:1] == b"o"
             fourth = ws.receive_bytes()
-            assert fourth == b"e"  # end marker has empty payload
+            assert fourth[:1] == b"w"  # size + count re-stated post-replay
+            fifth = ws.receive_bytes()
+            assert fifth == b"e"  # end marker has empty payload
 
     def test_send_resize_binary(self, test_client, auth_token, session_id_sync):
         with test_client.websocket_connect(

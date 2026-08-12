@@ -86,6 +86,8 @@ def _drain_through_replay_end(ws) -> None:
         frame = ws.receive_bytes()
         if frame[:1] == b"e":
             return
+        if frame[:1] == b"w":
+            continue  # size + count re-stated just before 'e' (proto-v8)
         if frame[:1] != b"o":
             pytest.fail(
                 f"Unexpected frame inside replay: {frame[:1]!r}",
@@ -153,6 +155,8 @@ class TestRingBufferReplay:
                 frame = ws.receive_bytes()
                 if frame[:1] == b"e":
                     break
+                if frame[:1] == b"w":
+                    continue  # size + count re-stated just before 'e'
                 assert frame[:1] == b"o"
                 chunks += frame[1:]
             else:
@@ -164,7 +168,7 @@ class TestRingBufferReplay:
     def test_empty_ring_still_emits_output_frame(self, test_client, auth_token):
         """Even with an empty ring buffer the handshake yields the full v8
         sequence: state ('s') → winsize ('w') → replay-start ('b') → empty
-        output ('o') → replay-end ('e'). The empty 'o' preserves the
+        output ('o') → winsize ('w') → replay-end ('e'). The empty 'o' preserves the
         protocol-v2 invariant that at least one output frame appears inside
         the replay span."""
         sid = _create_session(test_client, auth_token)
@@ -178,6 +182,7 @@ class TestRingBufferReplay:
             third = ws.receive_bytes()
             assert third[:1] == b"o"
             assert third[1:] == b""
+            assert ws.receive_bytes()[:1] == b"w"  # re-stated post-replay
             assert ws.receive_bytes() == b"e"
 
     @pytest.mark.timeout(20)
@@ -231,6 +236,8 @@ class TestRingBufferReplay:
                 frame = ws.receive_bytes()
                 if frame == b"e":
                     break
+                if frame[:1] == b"w":
+                    continue  # size + count re-stated just before 'e'
                 assert frame[:1] == b"o", (
                     f"unexpected frame type inside replay: {frame[:1]!r}"
                 )

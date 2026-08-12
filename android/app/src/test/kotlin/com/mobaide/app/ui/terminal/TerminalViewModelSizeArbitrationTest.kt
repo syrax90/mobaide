@@ -119,6 +119,17 @@ class TerminalViewModelSizeArbitrationTest {
         advanceUntilIdle()
     }
 
+    private suspend fun TestScope.deliverState(status: String) {
+        eventsFlow.emit(
+            WsEvent.Binary(
+                byteArrayOf(TerminalProtocol.TYPE_STATE)
+                    .plus("""{"status":"$status"}""".toByteArray(Charsets.UTF_8))
+                    .toByteString(),
+            ),
+        )
+        advanceUntilIdle()
+    }
+
     /** Block (real time, bounded) until the async send pump delivered [count] frames. */
     private fun awaitFrames(count: Int, timeoutMs: Long = 2000) {
         val deadline = System.currentTimeMillis() + timeoutMs
@@ -140,6 +151,19 @@ class TerminalViewModelSizeArbitrationTest {
         advanceUntilIdle()
         awaitFrames(1)
         assertEquals(listOf(TerminalProtocol.encodeResize(40, 120)), frames())
+    }
+
+    /** Follower whose 400 ms foreground claim already elapsed against a send
+     *  gate closed by a `stopped` state: the claim is parked, not dropped. */
+    private suspend fun TestScope.parkForegroundClaim(vm: TerminalViewModel) {
+        soloWithCachedGrid(vm)
+        deliverWinsize(60, 150, 2)
+        assertEquals(SizeAuthority.Follower, vm.sizeAuthority.value)
+        deliverState("stopped")
+        vm.onScreenVisible()
+        advanceTimeBy(401)
+        advanceUntilIdle()
+        assertEquals(SizeAuthority.Follower, vm.sizeAuthority.value)
     }
 
     @Test
@@ -425,5 +449,98 @@ class TerminalViewModelSizeArbitrationTest {
         advanceUntilIdle()
 
         assertEquals(SizeAuthority.Follower, vm.sizeAuthority.value)
+    }
+
+    @Test
+    fun neverSentMatchingGrid_staysFollower_withNothingOnTheWire() = runTest {
+        // The own-echo owner branch is gated on an actual send (lastSent > 0):
+        // the fresh-follower seeding records a merely-measured grid, and
+        // reading that as "our size echoed back" would promote a fresh client
+        // whose natural grid happens to equal the PTY's — it would then steal
+        // the size on the next unattended layout pass.
+        val vm = createViewModel()
+        goLiveRunning()
+        vm.resize(rows = 40, cols = 120) // follower with a null grid: cached only
+        advanceTimeBy(200)
+        advanceUntilIdle()
+
+        deliverWinsize(40, 120, 2)
+
+        assertEquals(SizeAuthority.Follower, vm.sizeAuthority.value)
+        assertEquals(FollowerGrid(rows = 40, cols = 120), vm.followerGrid.value)
+        assertEquals(2, vm.attachedClients.value)
+
+        // FIFO sentinel: the typing takeover's pair must be the first frames
+        // ever sent — any 'r' leaked by the winsize would precede them.
+        vm.sendBytes(byteArrayOf(0x0d))
+        advanceUntilIdle()
+        awaitFrames(2)
+        assertEquals(
+            listOf(
+                TerminalProtocol.encodeResize(40, 120),
+                TerminalProtocol.encodeInput(byteArrayOf(0x0d)),
+            ),
+            frames(),
+        )
+    }
+
+    @Test
+    fun parkedForegroundClaim_firesExactlyOnce_whenTheGateReopens() = runTest {
+        // An elapsed claim that found the gate closed must survive (steady
+        // foreground produces no new edge to re-arm it) and fire on the
+        // status flip — but only once.
+        val vm = createViewModel()
+        parkForegroundClaim(vm)
+
+        deliverState("running") // the gate reopens → the parked claim fires
+        assertEquals(SizeAuthority.Owner, vm.sizeAuthority.value)
+
+        deliverState("running") // consumed: a later gate sync must not re-fire
+        vm.sendBytes(byteArrayOf(0x0d)) // FIFO sentinel; takeoverNow no-ops as Owner
+        advanceUntilIdle()
+        awaitFrames(3)
+        assertEquals(
+            listOf(
+                TerminalProtocol.encodeResize(40, 120), // the solo seed
+                TerminalProtocol.encodeResize(40, 120), // the one takeover assert
+                TerminalProtocol.encodeInput(byteArrayOf(0x0d)),
+            ),
+            frames(),
+        )
+    }
+
+    @Test
+    fun hidingTheScreen_dropsTheParkedClaim_soTheGateReopeningStaysPassive() = runTest {
+        val vm = createViewModel()
+        parkForegroundClaim(vm)
+
+        vm.markScreenHidden()
+        deliverState("running") // reopens with no claim left to fire
+
+        assertEquals(SizeAuthority.Follower, vm.sizeAuthority.value)
+    }
+
+    @Test
+    fun soloPromotionWhileParked_consumesTheClaim_beforeTheGateReopens() = runTest {
+        // The promotion's authority change clears the parked claim; the
+        // foreign grid that follows demotes again, and the reopening gate
+        // must find no stale claim — only typing or a fresh foreground edge
+        // may take over from here.
+        val vm = createViewModel()
+        parkForegroundClaim(vm)
+
+        deliverWinsize(24, 80, 1) // solo: clears the claim, re-asserts the grid
+        deliverWinsize(60, 150, 2) // foreign again before the reopen
+        deliverState("running")
+
+        assertEquals(SizeAuthority.Follower, vm.sizeAuthority.value)
+        awaitFrames(2)
+        assertEquals(
+            listOf(
+                TerminalProtocol.encodeResize(40, 120), // the solo seed
+                TerminalProtocol.encodeResize(40, 120), // the solo-mismatch re-assert
+            ),
+            frames(),
+        )
     }
 }

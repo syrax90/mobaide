@@ -129,6 +129,9 @@ class TerminalViewModel @Inject constructor(
     private var winsizeSeen = false
     private var foregroundTakeoverJob: Job? = null
 
+    /** An elapsed foreground claim waiting for the send gate; see [tryForegroundTakeover]. */
+    private var pendingForegroundTakeover = false
+
     /** Buffered channel for outgoing PTY frames — consumed by a single IO coroutine to
      *  keep sends off the main thread while preserving FIFO ordering. */
     private val sendChannel = Channel<ByteString>(capacity = Channel.BUFFERED)
@@ -405,6 +408,9 @@ class TerminalViewModel @Inject constructor(
                     everSeenAlive = true
                 }
                 _sessionState.value = status
+                // The running status can be the last gate a parked
+                // foreground-takeover claim was waiting on.
+                maybeRetryForegroundTakeover()
             }
             TerminalFrame.ReplayMarker -> {
                 // The server replays `state + REPLAY marker + chunked ring + REPLAY_END`
@@ -623,9 +629,17 @@ class TerminalViewModel @Inject constructor(
             }
             return
         }
-        if ((rows == lastResizeRows && cols == lastResizeCols) ||
-            (rows == lastSentRows && cols == lastSentCols)
+        if (lastSentRows > 0 &&
+            ((rows == lastResizeRows && cols == lastResizeCols) ||
+                (rows == lastSentRows && cols == lastSentCols))
         ) {
+            // Only a grid this client actually SENT can echo back as
+            // ownership: the fresh-follower cache seeding records a
+            // merely-measured grid, and without the lastSent guard a fresh
+            // client whose natural grid equals the PTY's would be promoted to
+            // owner and later steal the size on an unattended layout pass.
+            // A never-sent match stays follower — it renders identically and
+            // still takes over on typing or foregrounding.
             // Our own size echoed back: this client holds authority. The
             // last-sent pair matters mid-drag — the cache may have moved past
             // the frame the agent is echoing, and matching only the cache
@@ -659,6 +673,7 @@ class TerminalViewModel @Inject constructor(
             _followerGrid.value = null
             foregroundTakeoverJob?.cancel()
             foregroundTakeoverJob = null
+            pendingForegroundTakeover = false
         }
     }
 
@@ -690,14 +705,48 @@ class TerminalViewModel @Inject constructor(
         foregroundTakeoverJob = viewModelScope.launch {
             delay(FOREGROUND_TAKEOVER_MS)
             foregroundTakeoverJob = null
-            takeoverNow()
+            tryForegroundTakeover()
         }
+    }
+
+    /**
+     * An elapsed foreground claim that cannot send yet (reconnecting, or the
+     * session not yet reported running) is kept pending instead of dropped —
+     * a foregrounded screen produces no new edge to re-arm it, so a claim
+     * discarded here would leave the screen stuck as a follower until the
+     * user types. Retried as the gates open; dies when the screen hides.
+     */
+    private fun tryForegroundTakeover() {
+        if (_sizeAuthority.value != SizeAuthority.Follower) return
+        if (_connectionState.value != ConnectionState.Live ||
+            _sessionState.value != "running"
+        ) {
+            pendingForegroundTakeover = true
+            return
+        }
+        takeoverNow()
+    }
+
+    private fun maybeRetryForegroundTakeover() {
+        if (!pendingForegroundTakeover) return
+        if (_sizeAuthority.value != SizeAuthority.Follower) {
+            pendingForegroundTakeover = false
+            return
+        }
+        if (_connectionState.value != ConnectionState.Live ||
+            _sessionState.value != "running"
+        ) {
+            return
+        }
+        pendingForegroundTakeover = false
+        takeoverNow()
     }
 
     /** Single entry point into [ConnectionState.Live]. */
     private fun enterLiveState() {
         _connectionState.value = ConnectionState.Live
         resendCachedSize()
+        maybeRetryForegroundTakeover()
     }
 
     /**
@@ -986,6 +1035,7 @@ class TerminalViewModel @Inject constructor(
         // Leaving the screen cancels a not-yet-fired foreground takeover.
         foregroundTakeoverJob?.cancel()
         foregroundTakeoverJob = null
+        pendingForegroundTakeover = false
     }
 
     /**

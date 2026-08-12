@@ -57,17 +57,25 @@ def _drain_handshake(ws) -> tuple[int, int, int]:
     """Consume the fixed attach sequence and return the ``w`` frame's fields.
 
     Wire order (proto-v8): state -> winsize -> replay-start -> output… ->
-    replay-end. The ``w`` sits before the replay span so a client can
-    arbitrate before its replay-end re-assert decision.
+    winsize -> replay-end. The first ``w`` sits before the replay span so a
+    client can arbitrate before its replay-end re-assert decision; the second
+    re-states size + count just before the end marker, covering changes that
+    landed during a long replay while this socket was not yet subscribed to
+    live broadcasts.
     """
     drain_text_preamble(ws)
     assert ws.receive_bytes()[:1] == b"s"
     dims = _unpack_winsize(ws.receive_bytes())
     assert ws.receive_bytes()[:1] == b"b"
+    trailing = None
     while True:
         frame = ws.receive_bytes()
         if frame[:1] == b"e":
+            assert trailing is not None, "expected a re-emitted 'w' before 'e'"
             return dims
+        if frame[:1] == b"w":
+            trailing = _unpack_winsize(frame)
+            continue
         assert frame[:1] == b"o"
 
 

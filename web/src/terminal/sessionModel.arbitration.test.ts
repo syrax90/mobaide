@@ -15,6 +15,18 @@ vi.mock('../auth/agentTokens', () => ({
   clearAgentToken: () => undefined,
 }));
 
+// The parked-claim tests call `attach()`, and jsdom ships no `ResizeObserver`
+// for it to install. Same inert stand-in as `TerminalScreen.test.tsx`; the
+// host stays zero-sized so `open()` never runs and no layout is touched.
+vi.stubGlobal(
+  'ResizeObserver',
+  class {
+    observe = (): void => undefined;
+    unobserve = (): void => undefined;
+    disconnect = (): void => undefined;
+  },
+);
+
 const { SessionIoChannel } = await import('../realtime/channels');
 const { TerminalSessionModel } = await import('./sessionModel');
 
@@ -100,6 +112,9 @@ const winsizeFrame = (rows: number, cols: number, clients: number): Uint8Array =
     clients >> 8, clients & 0xff,
   ]);
 
+const outputFrame = (text: string): Uint8Array =>
+  Uint8Array.from([TERMINAL_FRAME_TYPE.output, ...utf8.encode(text)]);
+
 /** Solo model with a cached natural grid of 40x120 (one `r` frame sent). */
 async function soloWithCachedGrid(): Promise<Harness> {
   const context = await harness();
@@ -108,6 +123,24 @@ async function soloWithCachedGrid(): Promise<Harness> {
   context.model.term.resize(120, 40);
   context.flushResize();
   expect(context.resizeFrames()).toEqual([resizeFrame(40, 120)]);
+  return context;
+}
+
+/**
+ * Follower whose 400 ms focus claim has already elapsed against a closed send
+ * gate (`stopped` status): the claim is parked, waiting on the gate. The one
+ * armed model timer was the focus takeover, so `flushResize` fires it.
+ */
+async function parkedFocusClaim(): Promise<Harness> {
+  const context = await soloWithCachedGrid();
+  context.deliverFrame(winsizeFrame(50, 132, 2));
+  expect(context.model.state.getState().sizeAuthority).toBe('follower');
+  context.deliverFrame(stateFrame('stopped'));
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  // Attaching in a focused tab is the focus edge that arms the takeover.
+  context.model.attach(document.createElement('div'));
+  context.flushResize();
+  expect(context.model.state.getState().sizeAuthority).toBe('follower');
   return context;
 }
 
@@ -324,5 +357,93 @@ describe('TerminalSessionModel size arbitration (proto-v8)', () => {
     // The corrective went out at echo time; no debounce is left to flush.
     expect(resizeFrames()).toEqual([resizeFrame(40, 118), resizeFrame(40, 120)]);
     expect(() => flushResize()).toThrow('no reconnect was scheduled');
+  });
+
+  it('a matching grid this client never sent stays follower', async () => {
+    // The own-echo owner branch is gated on an actual send (lastSent > 0):
+    // the fresh-follower seeding records a merely-measured grid, and reading
+    // that as "our size echoed back" would promote a fresh client whose
+    // natural grid happens to equal the PTY's — it would then steal the size
+    // on the next unattended window relayout.
+    const { model, deliverFrame, resizeFrames } = await harness();
+    model.term.resize(120, 40); // recorded as the natural grid; never sent
+
+    deliverFrame(winsizeFrame(40, 120, 2));
+
+    expect(model.state.getState().sizeAuthority).toBe('follower');
+    expect(model.state.getState().attachedClients).toBe(2);
+    expect(resizeFrames()).toEqual([]);
+  });
+
+  it('parks an elapsed focus claim on a closed gate and fires it once on reopen', async () => {
+    const { model, deliverFrame, flushResize, resizeFrames } = await parkedFocusClaim();
+    expect(resizeFrames()).toEqual([resizeFrame(40, 120)]); // parked: nothing fired
+
+    deliverFrame(stateFrame('running')); // the send gate reopens
+
+    expect(model.state.getState().sizeAuthority).toBe('owner');
+    expect(resizeFrames()).toEqual([resizeFrame(40, 120), resizeFrame(40, 120)]);
+
+    // The claim is consumed: a later gate sync must not take over again, and
+    // no repeat takeover is left armed.
+    deliverFrame(stateFrame('running'));
+    expect(resizeFrames()).toEqual([resizeFrame(40, 120), resizeFrame(40, 120)]);
+    expect(flushResize).toThrowError('no reconnect was scheduled');
+  });
+
+  it('a blur while the claim is parked drops it, so the reopening gate stays passive', async () => {
+    const { model, deliverFrame, flushResize, resizeFrames } = await parkedFocusClaim();
+
+    window.dispatchEvent(new Event('blur'));
+    deliverFrame(stateFrame('running'));
+
+    expect(model.state.getState().sizeAuthority).toBe('follower');
+    expect(resizeFrames()).toEqual([resizeFrame(40, 120)]);
+    expect(flushResize).toThrowError('no reconnect was scheduled');
+  });
+
+  it('a solo promotion while parked consumes the claim before the gate reopens', async () => {
+    // The promotion's authority change clears the parked claim; the foreign
+    // grid that follows demotes again, and the reopening gate must find no
+    // stale claim to fire — only typing or a fresh focus edge may take over.
+    const { model, deliverFrame, resizeFrames } = await parkedFocusClaim();
+
+    deliverFrame(winsizeFrame(24, 80, 1)); // solo: clears the claim, re-asserts
+    deliverFrame(winsizeFrame(50, 132, 2)); // foreign again before the reopen
+    deliverFrame(stateFrame('running'));
+
+    expect(model.state.getState().sizeAuthority).toBe('follower');
+    expect(resizeFrames()).toEqual([resizeFrame(40, 120), resizeFrame(40, 120)]);
+  });
+
+  it('a foreign winsize inside the replay span decides the role like a pre-replay one', async () => {
+    // The reducer must pass `w` through mid-replay in frame order: deferred
+    // (or dropped) past `'e'`, the v7 fallback would see no `w` on this
+    // socket and wrongly promote the follower to solo.
+    const { model, deliverFrame, resizeFrames } = await harness();
+
+    deliverFrame(Uint8Array.from([TERMINAL_FRAME_TYPE.replayStart]));
+    deliverFrame(outputFrame('replayed history'));
+    deliverFrame(winsizeFrame(50, 132, 2));
+    deliverFrame(Uint8Array.from([TERMINAL_FRAME_TYPE.replayEnd]));
+
+    expect(model.state.getState().sizeAuthority).toBe('follower');
+    expect(resizeFrames()).toEqual([]);
+  });
+
+  it('a solo winsize inside the replay span promotes and delivers the natural grid', async () => {
+    // Same decision as the pre-`b` position: promotion plus the immediate
+    // mismatch assert, then the unconditional enterLive re-assert at
+    // replay-end — two identical frames, none of them lost to replay state.
+    const { model, deliverFrame, resizeFrames } = await harness();
+    model.term.resize(120, 40); // recorded pre-w, nothing sent
+
+    deliverFrame(Uint8Array.from([TERMINAL_FRAME_TYPE.replayStart]));
+    deliverFrame(outputFrame('replayed history'));
+    deliverFrame(winsizeFrame(24, 80, 1));
+    deliverFrame(Uint8Array.from([TERMINAL_FRAME_TYPE.replayEnd]));
+
+    expect(model.state.getState().sizeAuthority).toBe('solo');
+    expect(resizeFrames()).toEqual([resizeFrame(40, 120), resizeFrame(40, 120)]);
   });
 });

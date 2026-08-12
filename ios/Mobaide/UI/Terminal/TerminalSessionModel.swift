@@ -167,6 +167,8 @@ final class TerminalSessionModel {
     /// Replay-end with none seen means a v7 agent → pre-v8 solo behavior.
     private var winsizeSeen = false
     private var foregroundTakeoverTask: Task<Void, Never>?
+    /// An elapsed foreground claim waiting for the send gate; see `tryForegroundTakeover`.
+    private var pendingForegroundTakeover = false
 
     private let outboundStream: AsyncStream<Data>
     private let outboundContinuation: AsyncStream<Data>.Continuation
@@ -291,6 +293,9 @@ final class TerminalSessionModel {
             if sessionStatus == "running" || sessionStatus == "starting" {
                 everSeenAlive = true
             }
+            // The running status can be the last gate a parked
+            // foreground-takeover claim was waiting on.
+            maybeRetryForegroundTakeover()
         case .replayStart:
             // The transcript the selection's rows name is about to be erased and
             // refilled, so those coordinates would silently come to mean other
@@ -337,7 +342,15 @@ final class TerminalSessionModel {
             }
             return
         }
-        if (rows == lastResizeRows && cols == lastResizeCols)
+        // Only a grid this client actually SENT can echo back as ownership:
+        // the fresh-follower cache seeding records a merely-measured grid,
+        // and without the lastSent guard a fresh client whose natural grid
+        // equals the PTY's would be promoted to owner and later steal the
+        // size on an unattended layout pass. A never-sent match stays
+        // follower — it renders identically and still takes over on typing
+        // or foregrounding.
+        if lastSentRows > 0,
+           (rows == lastResizeRows && cols == lastResizeCols)
             || (rows == lastSentRows && cols == lastSentCols) {
             // Our own size echoed back: this client holds authority. The
             // last-sent pair matters mid-drag — the cache may have moved past
@@ -372,6 +385,7 @@ final class TerminalSessionModel {
             followerGrid = nil
             foregroundTakeoverTask?.cancel()
             foregroundTakeoverTask = nil
+            pendingForegroundTakeover = false
         }
     }
 
@@ -398,8 +412,33 @@ final class TerminalSessionModel {
             try? await Task.sleep(for: .milliseconds(Self.foregroundTakeoverMs))
             guard !Task.isCancelled else { return }
             self?.foregroundTakeoverTask = nil
-            self?.takeoverNow()
+            self?.tryForegroundTakeover()
         }
+    }
+
+    /// An elapsed foreground claim that cannot send yet (reconnecting, or the
+    /// session not yet reported running) is kept pending instead of dropped —
+    /// a foregrounded screen produces no new edge to re-arm it, so a claim
+    /// discarded here would leave the screen stuck as a follower until the
+    /// user types. Retried as the gates open; dies when the screen hides.
+    private func tryForegroundTakeover() {
+        guard sizeAuthority == .follower else { return }
+        guard canSendTerminalBytes else {
+            pendingForegroundTakeover = true
+            return
+        }
+        takeoverNow()
+    }
+
+    private func maybeRetryForegroundTakeover() {
+        guard pendingForegroundTakeover else { return }
+        guard sizeAuthority == .follower else {
+            pendingForegroundTakeover = false
+            return
+        }
+        guard canSendTerminalBytes else { return }
+        pendingForegroundTakeover = false
+        takeoverNow()
     }
 
     // MARK: - Sending
@@ -576,6 +615,7 @@ final class TerminalSessionModel {
     private func enterLiveState() {
         connectionState = .live
         resendCachedSize()
+        maybeRetryForegroundTakeover()
     }
 
     /// Re-assert the last measured grid: on `.connected`, and on every entry
@@ -920,6 +960,7 @@ final class TerminalSessionModel {
         // Leaving the screen cancels a not-yet-fired foreground takeover.
         foregroundTakeoverTask?.cancel()
         foregroundTakeoverTask = nil
+        pendingForegroundTakeover = false
         // Selection is per-visit UI. The view is retained and keeps consuming
         // PTY output while hidden, and a live selection pins the viewport
         // through `holdsAutoScroll` — with follow mode untouched, no unread
@@ -944,6 +985,7 @@ final class TerminalSessionModel {
         resizeTask?.cancel()
         shortcutsTask?.cancel()
         foregroundTakeoverTask?.cancel()
+        pendingForegroundTakeover = false
         outboundContinuation.finish()
         if let core {
             Task { await core.disconnect() }
