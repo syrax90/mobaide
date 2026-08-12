@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { sessionChannelName } from '../../realtime/channels';
 import { appShortcutFor } from '../../keyboard/appShortcuts';
@@ -25,6 +25,7 @@ import { SelectionActions } from './SelectionActions';
 import { ShortcutBar } from './ShortcutBar';
 import { ShortcutPicker } from './ShortcutPicker';
 import { TemplatesPicker } from './TemplatesPicker';
+import { TerminalScrollbar } from './TerminalScrollbar';
 import { TerminalSurface } from './TerminalSurface';
 import { useSessionGone } from './useSessionGone';
 import { useSessionHeaderLabel } from './useSessionHeaderLabel';
@@ -117,6 +118,9 @@ function TerminalView({ model, kind, headerLabel }: TerminalViewProps) {
   // the inserted body; it is already mounted, so `autoFocus` cannot help.
   const [insertToken, setInsertToken] = useState(0);
   const immersive = useKeyboardLock();
+  // Shared with the scrollbar, whose `role="scrollbar"` has to name what it
+  // controls.
+  const surfaceId = useId();
 
   const running = isSessionRunning(view.status);
   // `replayPainting` mirrors the model's own `pendingReplayWrites` term: after
@@ -235,7 +239,10 @@ function TerminalView({ model, kind, headerLabel }: TerminalViewProps) {
       </header>
 
       <div className="terminal-stage">
-        <TerminalSurface model={model} />
+        <TerminalSurface model={model} id={surfaceId} />
+        {/* Sits in the gutter FitAddon already reserves for a scrollbar, so it
+            costs no columns — see `terminalScrollbar.ts`. */}
+        <TerminalScrollbar model={model} surfaceId={surfaceId} />
         {/* Overlaid, never a flex sibling: an in-flow error would change the
             stage height, and a terminal row-count change clears the selection. */}
         {immersive.error !== null && <p className="terminal-error">{immersive.error}</p>}

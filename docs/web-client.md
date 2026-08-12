@@ -696,6 +696,30 @@ cleared by re-pinning — same rule as mobile, and like iOS it does not count
 DECSTBM region scrolls, because xterm shifts those in place; Android counts
 them because its Termux fork genuinely appends them.
 
+**The scrollback slider** is the visible half of that state, and on a touch
+device the only way to reach it: xterm 6 scrolls the buffer itself rather than
+through a native scroller — `.xterm-viewport`'s scroll height equals its client
+height and no gesture target is ever registered — so a finger swipe on the grid
+moves nothing, and the `overflow-y: scroll` xterm ships paints a permanently
+empty bar. The slider takes over that gutter, which `FitAddon` reserves as the
+**constant** `options.overviewRuler?.width || 14` whenever `scrollback` is
+non-zero (xterm 6 has no `scrollBarWidth` at all): the grid is inset by exactly
+that much regardless, so the track costs no columns and forces no reflow — and
+therefore no `r` frame and no cleared selection. `--terminal-scrollbar-width` is
+the other half of that pair; keep the two equal across an addon bump.
+
+Geometry is `size = rows / (baseY + rows)`, `offset = viewportY / baseY`, and it
+lives in a **second Zustand store** on the model. `TerminalView` subscribes to
+the whole view store, so a field on `TerminalViewState` would re-render the
+header, composer and shortcut bar once per row a busy PTY prints; only
+`TerminalScrollbar` reads this one, and the model quantizes to a thousandth of
+the track before writing it. The component renders from those two fractions as
+CSS custom properties and measures nothing, which is also what makes it testable
+where jsdom computes no layout. Every scroll command re-baselines the tally
+first, so the slider cannot light its own unread badge. Drag, track-click
+paging, the wheel over the track, and ↑/↓/PageUp/PageDown/Home/End on a focused
+`role="scrollbar"` all route through the same four model methods.
+
 **Renderer.** WebGL, with `onContextLoss` → dispose (which reverts to the DOM
 renderer with the buffer intact) → one bounded re-arm → stay on DOM after a
 second loss.
@@ -770,10 +794,18 @@ frame closes it with 1009 and drops *every* session on that agent.
 platform-convention exemption: **Full display mode only** — no Static /
 forced-column mode and no horizontal pan, because a desktop window is wide
 and fit-to-window is the browser convention, where a phone at ~40 columns
-needs the forced grid; and the whole desktop keyboard surface above. The
-prompt-template picker is read-only here (list, recents/favourites grouping,
-filter, insert, favourite toggle); creating and deleting templates is
-WEB-09.
+needs the forced grid; and the whole desktop keyboard surface above. **A
+draggable scrollback thumb**, which neither mobile client has and neither HIG
+asks for — Android exposes only the platform's fading indicator
+(`TerminalView.setVerticalScrollBarEnabled` plus `awakenScrollBars()`, not
+grabbable), iOS the transient `UIScrollView` one; both scroll by dragging the
+grid, which is exactly what xterm 6 does not offer. The web gesture ladder is
+mobile's inverse for the same reason: no wheel-64/65, alt-buffer-arrow or
+local-scrollback arms here, because xterm routes the wheel to a mouse-reporting
+program itself, and the slider is a scrollback control that simply retracts when
+there is no scrollback. The prompt-template picker is read-only here (list,
+recents/favourites grouping, filter, insert, favourite toggle); creating and
+deleting templates is WEB-09.
 
 ## Desktop keyboard & shortcuts (WEB-06)
 

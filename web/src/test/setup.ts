@@ -42,4 +42,12 @@ if (typeof HTMLDialogElement !== 'undefined') {
   if (typeof Element.prototype.scrollIntoView !== 'function') {
     Element.prototype.scrollIntoView = () => undefined;
   }
+
+  // jsdom has no pointer capture either, and the scrollbar thumb takes it on
+  // pointerdown so a drag that leaves the 14 px track keeps being delivered.
+  if (typeof Element.prototype.setPointerCapture !== 'function') {
+    Element.prototype.setPointerCapture = () => undefined;
+    Element.prototype.releasePointerCapture = () => undefined;
+    Element.prototype.hasPointerCapture = () => false;
+  }
 }
