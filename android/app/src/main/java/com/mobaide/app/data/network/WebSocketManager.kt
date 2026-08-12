@@ -90,6 +90,14 @@ class WebSocketConnection(
         SupervisorJob() + Dispatchers.Default + exceptionHandler,
     )
     private val mutex = Mutex()
+
+    /**
+     * `@Volatile` because [pause] reads and clears it synchronously on the
+     * caller's thread while [doConnect] publishes it from [scope]'s dispatcher.
+     * Without it a pause is not even guaranteed to observe the socket it needs
+     * to close.
+     */
+    @Volatile
     private var webSocket: WebSocket? = null
     private var reconnectJob: Job? = null
 
@@ -248,7 +256,7 @@ class WebSocketConnection(
 
         val myGeneration = generation
         val request = Request.Builder().url(url).build()
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+        val opened = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (myGeneration != generation) return
                 backoffMs = INITIAL_BACKOFF_MS
@@ -302,6 +310,24 @@ class WebSocketConnection(
                 scheduleReconnect()
             }
         })
+
+        // Publish first, then re-read. OkHttp starts the socket inside
+        // `newWebSocket`, so a [pause] landing across that call bumps
+        // [generation] and nulls [webSocket] *before* this assignment — leaving
+        // a live socket whose listener is deaf on its stale generation and which
+        // nothing would ever close, streaming a full ring replay onto a
+        // connection the caller believes is suspended. Assigning before the
+        // recheck also covers the mirror case, a pause arriving just after it:
+        // the field then holds this socket for that pause to close.
+        webSocket = opened
+        if (!shouldReconnect || myGeneration != generation) {
+            webSocket = null
+            try {
+                opened.close(1000, "Client pause")
+            } catch (_: Throwable) {
+                // Already CLOSED — either way it is gone.
+            }
+        }
     }
 
     private fun scheduleReconnect() {

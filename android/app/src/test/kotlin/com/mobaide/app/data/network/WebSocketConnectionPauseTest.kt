@@ -4,6 +4,7 @@ import com.mobaide.app.data.auth.SessionManager
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import io.mockk.verify
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -71,6 +72,32 @@ class WebSocketConnectionPauseTest {
 
         awaitCallCount(calls, 2)
         assertEquals(2, calls.get())
+    }
+
+    @Test
+    fun pauseDuringSocketCreation_closesTheSocketItRacedWith() {
+        // The mirror of the case below: the recheck before creation cannot cover
+        // a pause that lands *across* `newWebSocket`, because OkHttp has already
+        // started the socket by then and the field assignment has not happened.
+        // Without the post-publication recheck that socket survives with a
+        // listener deaf on its stale generation, and nothing ever closes it.
+        val client = mockk<OkHttpClient>()
+        val raced = mockk<WebSocket>(relaxed = true)
+        lateinit var conn: WebSocketConnection
+        every { client.newWebSocket(any(), any()) } answers {
+            conn.pause()
+            raced
+        }
+        conn = WebSocketConnection(
+            client = client,
+            sessionManager = sessionManager(),
+            urlProvider = { "wss://example.com/ws/session/abc?token=ok" },
+            isAuthenticated = { true },
+        )
+
+        conn.connect()
+
+        verify(timeout = 2_000) { raced.close(1000, any()) }
     }
 
     @Test
