@@ -1,9 +1,6 @@
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { sessionChannelName } from '../../realtime/channels';
-import { appShortcutFor } from '../../keyboard/appShortcuts';
-import { currentKeyboardEnv } from '../../keyboard/browserEnv';
-import { useAppShortcuts } from '../../keyboard/useAppShortcuts';
 import { useKeyboardLock } from '../../keyboard/useKeyboardLock';
 import { useReloadGuard } from '../../keyboard/useReloadGuard';
 import { useUnloadGuard } from '../../keyboard/useUnloadGuard';
@@ -15,21 +12,17 @@ import {
 } from '../../terminal/terminalStore';
 import { isSessionRunning } from '../../protocol/dto/terminalState';
 import { useTerminalPrefsStore } from '../../stores/terminalPrefsStore';
+import { useToastStore } from '../../stores/toastStore';
 import { useVisibleSessionStore } from '../../stores/visibleSessionStore';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
-import { CommandPalette } from './CommandPalette';
-import { Composer } from './Composer';
 import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
 import { JumpToBottom } from './JumpToBottom';
 import { SelectionActions } from './SelectionActions';
-import { ShortcutBar } from './ShortcutBar';
-import { ShortcutPicker } from './ShortcutPicker';
 import { TemplatesPicker } from './TemplatesPicker';
 import { TerminalScrollbar } from './TerminalScrollbar';
 import { TerminalSurface } from './TerminalSurface';
 import { useSessionGone } from './useSessionGone';
 import { useSessionHeaderLabel } from './useSessionHeaderLabel';
-import { useSessionKind } from './useSessionKind';
 
 export function TerminalScreen() {
   const { agentId, sessionId } = useParams();
@@ -56,7 +49,6 @@ interface TerminalRouteProps {
 
 function TerminalRoute({ agentId, sessionId }: TerminalRouteProps) {
   useSessionGone(agentId, sessionId);
-  const kind = useSessionKind(agentId, sessionId);
   const headerLabel = useSessionHeaderLabel(agentId, sessionId);
   const key = sessionChannelName(agentId, sessionId);
   const model = useTerminalStore((state) => state.models[key]);
@@ -98,25 +90,19 @@ function TerminalRoute({ agentId, sessionId }: TerminalRouteProps) {
     return <section className="terminal-page terminal-page-empty">Attaching…</section>;
   }
 
-  return <TerminalView model={model} kind={kind} headerLabel={headerLabel} />;
+  return <TerminalView model={model} headerLabel={headerLabel} />;
 }
 
 interface TerminalViewProps {
   model: TerminalSessionModel;
-  kind: string | null;
   headerLabel: string;
 }
 
-function TerminalView({ model, kind, headerLabel }: TerminalViewProps) {
+function TerminalView({ model, headerLabel }: TerminalViewProps) {
   const view = model.state();
   const passCtrlV = useTerminalPrefsStore((state) => state.passCtrlVToTerminal);
   const setPassCtrlV = useTerminalPrefsStore((state) => state.setPassCtrlVToTerminal);
   const [templatesOpen, setTemplatesOpen] = useState(false);
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  // Bumped on every template pick so the composer can take focus and select
-  // the inserted body; it is already mounted, so `autoFocus` cannot help.
-  const [insertToken, setInsertToken] = useState(0);
   const immersive = useKeyboardLock();
   // Shared with the scrollbar, whose `role="scrollbar"` has to name what it
   // controls.
@@ -125,9 +111,9 @@ function TerminalView({ model, kind, headerLabel }: TerminalViewProps) {
   const running = isSessionRunning(view.status);
   // `replayPainting` mirrors the model's own `pendingReplayWrites` term: after
   // `'e'` the connection flips live synchronously while the parser is still
-  // consuming replayed history, so without it the screen would offer an enabled
-  // Send that `submitComposer()` silently swallows. It is a time-superset of
-  // the model's gate, so nothing that would have been allowed gets disabled.
+  // consuming replayed history, so without it the screen would offer enabled
+  // selection actions that the model silently swallows. It is a time-superset
+  // of the model's gate, so nothing that would have been allowed gets disabled.
   const live = view.connection === 'live' && !view.replayPainting;
   const overlay = overlayMessage(view);
   const canSend = live && running;
@@ -137,41 +123,6 @@ function TerminalView({ model, kind, headerLabel }: TerminalViewProps) {
   // still lets a focused terminal receive `0x12`.
   useReloadGuard(true);
   useUnloadGuard(canSend);
-
-  const openPalette = useCallback(() => {
-    setPaletteOpen(true);
-  }, []);
-  // Released while the chord recorder is open: both are document-capture
-  // listeners, so the app would otherwise open the palette *and* record
-  // `ctrl+shift+p` on the same keypress.
-  useAppShortcuts(openPalette, !shortcutsOpen);
-
-  // Plain setters: restoring focus after a dialog closes belongs to the dialog,
-  // which knows whether it just handed focus to the composer.
-  const closePalette = useCallback(() => {
-    setPaletteOpen(false);
-  }, []);
-  const closeShortcuts = useCallback(() => {
-    setShortcutsOpen(false);
-  }, []);
-  const insertTemplate = useCallback(
-    (body: string) => {
-      model.setComposer(body);
-      model.setComposerVisible(true);
-      setInsertToken((token) => token + 1);
-    },
-    [model],
-  );
-
-  // Memoised like the two sibling call sites: `TerminalView` re-renders once per
-  // inbound PTY frame while the viewport is scrolled up, and `currentKeyboardEnv`
-  // costs two `matchMedia` evaluations. The OS cannot change for the life of the
-  // page.
-  const keyboardEnv = useMemo(currentKeyboardEnv, []);
-  const paletteHint = useMemo(
-    () => appShortcutFor('commandPalette')?.hint(keyboardEnv.os),
-    [keyboardEnv],
-  );
 
   return (
     <section className="terminal-page">
@@ -206,10 +157,12 @@ function TerminalView({ model, kind, headerLabel }: TerminalViewProps) {
         <button
           type="button"
           className="button"
-          title={paletteHint === undefined ? undefined : `Command palette (${paletteHint})`}
-          onClick={openPalette}
+          title="Insert a prompt template at the cursor"
+          onClick={() => {
+            setTemplatesOpen(true);
+          }}
         >
-          Commands
+          Templates
         </button>
         {immersive.supported && (
           <button
@@ -226,16 +179,6 @@ function TerminalView({ model, kind, headerLabel }: TerminalViewProps) {
             {immersive.active ? 'Leave immersive' : 'Immersive'}
           </button>
         )}
-        <button
-          type="button"
-          className="button"
-          aria-pressed={view.composerVisible}
-          onClick={() => {
-            model.setComposerVisible(!view.composerVisible);
-          }}
-        >
-          {view.composerVisible ? 'Hide composer' : 'Composer'}
-        </button>
       </header>
 
       <div className="terminal-stage">
@@ -271,59 +214,38 @@ function TerminalView({ model, kind, headerLabel }: TerminalViewProps) {
           the bar that appears because there is a selection destroyed it, then
           unmounted itself and gave the rows back.
         */}
-        {view.hasSelection && <SelectionActions model={model} canRun={live} />}
+        {view.hasSelection && (
+          <SelectionActions model={model} canRun={live} canPaste={canSend} />
+        )}
       </div>
-
-      <ShortcutBar
-        model={model}
-        kind={kind}
-        canSend={canSend}
-        onOpenComposer={() => {
-          setShortcutsOpen(true);
-        }}
-      />
-
-      {view.composerVisible && (
-        <Composer
-          model={model}
-          value={view.composer}
-          canSend={canSend}
-          insertToken={insertToken}
-          onOpenTemplates={() => {
-            setTemplatesOpen(true);
-          }}
-        />
-      )}
-
-      {shortcutsOpen && (
-        <ShortcutPicker
-          model={model}
-          kind={kind}
-          canSend={canSend}
-          onClose={closeShortcuts}
-        />
-      )}
-
-      {paletteOpen && (
-        <CommandPalette
-          model={model}
-          kind={kind}
-          canSend={canSend}
-          onInsertTemplate={insertTemplate}
-          onClose={closePalette}
-        />
-      )}
 
       {templatesOpen && (
         <TemplatesPicker
           onClose={() => {
             setTemplatesOpen(false);
+            model.focus();
           }}
           onPick={(template) => {
-            model.setComposer(template.body);
-            model.setComposerVisible(true);
+            // A refused insert keeps the picker open: the body stays on
+            // screen for a retry instead of silently vanishing while the
+            // recency stamp advertises success.
+            if (!canSend) {
+              useToastStore
+                .getState()
+                .show("The session isn't accepting input — the template was not inserted.", 'info');
+              return false;
+            }
+            // Paste, never execute: the body lands on the running program's
+            // input line for review, mirroring the mobile clients' insert-
+            // into-composer semantics.
+            if (!model.pasteText(template.body)) return false;
             setTemplatesOpen(false);
-            setInsertToken((token) => token + 1);
+            // The paste bypasses xterm's user-input scroll and `focus()`
+            // preserves scroll position, so an insert made while scrolled up
+            // would otherwise land off-screen.
+            model.jumpToBottom();
+            model.focus();
+            return true;
           }}
         />
       )}

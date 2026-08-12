@@ -11,7 +11,8 @@ import { queryKeys, wsBackedQueryOptions } from '../../lib/queryKeys';
 import { useToastStore } from '../../stores/toastStore';
 
 interface TemplatesPickerProps {
-  onPick: (template: PromptTemplate) => void;
+  /** Returns whether the body actually landed — a refused insert is not picked. */
+  onPick: (template: PromptTemplate) => boolean;
   onClose: () => void;
 }
 
@@ -133,7 +134,9 @@ export function TemplatesPicker({ onPick, onClose }: TemplatesPickerProps) {
     grouped.others.length === 0;
 
   const pick = (template: PromptTemplate): void => {
-    onPick(template);
+    // A refused insert must not promote the template into Recents — the stamp
+    // would advertise an insert that never happened.
+    if (!onPick(template)) return;
     // Fire-and-forget: the insert already happened, and a failed stamp only
     // costs this template its place in the recents group.
     void touchTemplate(template.templateId)

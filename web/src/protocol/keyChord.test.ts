@@ -79,8 +79,9 @@ describe('key chord golden fixtures', () => {
   });
 
   // The token is what the server stores, so parsing a persisted string and
-  // encoding it — which is exactly what `shortcutsForKind` does — has to reach
-  // the same bytes as encoding a composed chord. Both mobile arms assert this.
+  // encoding it — which is what the mobile clients' saved-shortcut buttons
+  // do — has to reach the same bytes as encoding a composed chord. Both
+  // mobile arms assert this.
   it.each(fixture.encode)('encodes the $name token to the same bytes', (encodeCase) => {
     const parsed = parseChordToken(encodeCase.token);
     expect(parsed).not.toBeNull();

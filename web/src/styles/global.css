@@ -860,10 +860,6 @@ input[type='radio']:checked {
   .code-input-box,
   .button,
   .theme-toggle,
-  .shortcut-key,
-  .shortcut-chip,
-  .shortcut-chip-action,
-  .shortcut-bar-toggle,
   .recent-path-pick,
   .terminal-overlay-retry {
     border: 1px solid ButtonBorder;
@@ -1249,13 +1245,6 @@ input[type='radio']:checked {
   line-height: 1.25rem;
 }
 
-.terminal-selection-bar,
-.terminal-composer-actions {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
 /*
  * Floats over the grid rather than sitting below it. A flex sibling would take
  * rows away from the terminal the instant a selection appeared, and xterm's
@@ -1263,6 +1252,9 @@ input[type='radio']:checked {
  * would delete the selection that summoned it and then unmount.
  */
 .terminal-selection-bar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
   position: absolute;
   left: 1rem;
   bottom: 1rem;
@@ -1270,26 +1262,6 @@ input[type='radio']:checked {
   background: var(--bg-2);
   box-shadow: inset 0 0 0 2px var(--surface-2),
     var(--px) var(--px) 0 0 var(--modal-shadow);
-}
-
-.terminal-composer {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  border-top: 2px solid var(--surface-2);
-  background: var(--bg-2);
-}
-
-/* Layered on `.field-input`, which already carries the box and the colours. */
-.terminal-composer-input {
-  resize: vertical;
-  padding: 0.5rem 0.65rem;
-  font-size: 0.95rem;
-}
-
-.terminal-composer-actions {
-  justify-content: flex-end;
 }
 
 .template-picker {
@@ -2483,286 +2455,7 @@ input[type='radio']:checked {
 }
 /* endregion */
 
-/* region: keyboard & shortcuts (WEB-06) */
-.shortcut-bar {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  padding: 0.4rem 0.75rem;
-  border-top: 2px solid var(--surface-2);
-  background: var(--bg-2);
-}
-
-.shortcut-bar-toggle {
-  flex: none;
-  padding: 2px 8px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--text-muted);
-  box-shadow: inset 0 0 0 2px var(--gray);
-  font-family: var(--font-chrome);
-  font-size: var(--pix-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  cursor: pointer;
-}
-
-.shortcut-bar-keys {
-  display: flex;
-  gap: 0.3rem;
-  overflow-x: auto;
-  padding-bottom: 0.2rem;
-}
-
-.shortcut-key {
-  flex: none;
-  min-width: 2.2rem;
-  padding: 0.3rem 0.55rem;
-  border: 0;
-  border-radius: 0;
-  background: var(--surface);
-  box-shadow: inset 0 0 0 2px var(--gray);
-  color: var(--text);
-  font-family: var(--font-chrome);
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-
-.shortcut-key:disabled {
-  color: var(--gray);
-  box-shadow: inset 0 0 0 2px var(--rule);
-  cursor: not-allowed;
-}
-
-.shortcut-key-more {
-  font-weight: 700;
-}
-
-/* The one deliberate border in the sheet: an inset shadow cannot dash. */
-.shortcut-key-saved {
-  box-shadow: none;
-  border: 2px dashed var(--gray);
-  padding: calc(0.3rem - 2px) calc(0.55rem - 2px);
-}
-
-.shortcut-key-risky {
-  color: var(--warning);
-}
-
-.shortcut-picker,
-.command-palette {
-  position: fixed;
-  inset: auto 1rem 1rem auto;
-  width: min(34rem, calc(100vw - 2rem));
-  max-height: 78vh;
-  display: flex;
-  flex-direction: column;
-  padding: 1rem;
-  background: var(--bg-2);
-  box-shadow: inset 0 0 0 2px var(--surface-2),
-    var(--px) var(--px) 0 0 var(--modal-shadow);
-}
-
-.shortcut-picker-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-}
-
-.shortcut-picker-head h2 {
-  margin: 0;
-  font-family: var(--font-chrome);
-  font-weight: 400;
-  font-size: 1.05rem;
-  color: var(--accent);
-}
-
-.shortcut-mode-switch {
-  display: flex;
-  gap: 0.25rem;
-}
-
-.shortcut-mode-switch [aria-selected='true'] {
-  background: var(--surface);
-  box-shadow: inset 0 0 0 2px var(--brand-2);
-  color: var(--text);
-}
-
-.shortcut-picker-body {
-  flex: 1 1 auto;
-  overflow-y: auto;
-}
-
-.shortcut-record {
-  padding: 1rem;
-  border: 2px dashed var(--rule);
-  text-align: center;
-}
-
-.shortcut-record-surface {
-  width: 100%;
-  padding: 0.75rem;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: 0.85rem;
-  text-align: center;
-  cursor: default;
-}
-
-.shortcut-record-error {
-  margin: 0.5rem 0 0;
-  color: var(--danger);
-  font-size: 0.8rem;
-}
-
-.shortcut-section h3 {
-  margin: 1rem 0 0.4rem;
-  font-family: var(--font-chrome);
-  font-weight: 400;
-  font-size: var(--pix-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-}
-
-.shortcut-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-
-.shortcut-chip {
-  min-width: 2.2rem;
-  padding: 0.25rem 0.5rem;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: inset 0 0 0 2px var(--gray);
-  color: var(--text);
-  font-family: var(--font-chrome);
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-
-.shortcut-chip[aria-pressed='true'] {
-  background: var(--surface);
-  box-shadow: inset 0 0 0 2px var(--brand-2);
-}
-
-.shortcut-chip:disabled {
-  color: var(--gray);
-  box-shadow: inset 0 0 0 2px var(--rule);
-  cursor: not-allowed;
-}
-
-.shortcut-chip-risky {
-  color: var(--warning);
-}
-
-.shortcut-saved-chip {
-  display: inline-flex;
-  align-items: stretch;
-  gap: 0.15rem;
-}
-
-.shortcut-chip-action {
-  padding: 0.25rem 0.4rem;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: inset 0 0 0 2px var(--gray);
-  color: var(--text-muted);
-  font-family: var(--font-chrome);
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-
-.shortcut-picker-foot {
-  flex: none;
-  padding-top: 0.6rem;
-  border-top: 2px solid var(--surface-2);
-}
-
-.shortcut-readout {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  margin-bottom: 0.4rem;
-}
-
-.shortcut-readout-chord {
-  font-family: var(--font-chrome);
-  font-size: 0.95rem;
-}
-
-.shortcut-readout-bytes {
-  color: var(--text-muted);
-  font-size: 0.75rem;
-}
-
-.shortcut-hint-risky,
-.shortcut-conflict-info,
-.shortcut-conflict-warn {
-  margin: 0.25rem 0;
-  font-size: 0.75rem;
-}
-
-.shortcut-hint-risky,
-.shortcut-conflict-warn {
-  color: var(--warning);
-}
-
-.shortcut-conflict-info {
-  color: var(--text-muted);
-}
-
-.command-palette-list {
-  flex: 1 1 auto;
-  overflow-y: auto;
-  list-style: none;
-  margin: 0.5rem 0 0;
-  padding: 0;
-}
-
-.command-palette-row {
-  display: grid;
-  grid-template-columns: 7rem 1fr auto;
-  gap: 0.5rem;
-  width: 100%;
-  padding: 0.35rem 0.5rem;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-}
-
-.command-palette-row[aria-current='true'] {
-  background: var(--surface);
-  box-shadow: inset 0 0 0 2px var(--brand-2);
-}
-
-.command-palette-row:disabled {
-  color: var(--gray);
-  cursor: not-allowed;
-}
-
-.command-palette-group,
-.command-palette-hint {
-  color: var(--text-muted);
-  font-size: 0.75rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+/* region: key sweep (dev, CLA-251) */
 .sweep-list {
   list-style: none;
   margin: 1rem 0;

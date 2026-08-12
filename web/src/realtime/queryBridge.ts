@@ -55,8 +55,6 @@ import {
   customAgentTypeSchema,
   customTypeDeletedSchema,
   sessionAttentionSchema,
-  shortcutDeletedSchema,
-  shortcutSchema,
   templateDeletedSchema,
   templateSchema,
 } from '../protocol/dto/userEvents';
@@ -96,12 +94,6 @@ const USER_EVENT_RULES: Readonly<Record<string, UserEventRule>> = {
     schema: templateDeletedSchema,
     keys: constantKeys(queryKeys.templates()),
   },
-  'shortcut.created': { schema: shortcutSchema, keys: constantKeys(queryKeys.shortcuts()) },
-  'shortcut.updated': { schema: shortcutSchema, keys: constantKeys(queryKeys.shortcuts()) },
-  'shortcut.deleted': {
-    schema: shortcutDeletedSchema,
-    keys: constantKeys(queryKeys.shortcuts()),
-  },
   'custom_type.created': {
     schema: customAgentTypeSchema,
     keys: constantKeys(queryKeys.customAgentTypes()),
@@ -112,10 +104,7 @@ const USER_EVENT_RULES: Readonly<Record<string, UserEventRule>> = {
   },
   'custom_type.deleted': {
     schema: customTypeDeletedSchema,
-    // Deleting a type soft-deletes its saved shortcuts in the same server
-    // transaction, with no companion `shortcut.deleted` events — so the
-    // shortcut list has to be refetched too or it keeps showing dead rows.
-    keys: constantKeys(queryKeys.customAgentTypes(), queryKeys.shortcuts()),
+    keys: constantKeys(queryKeys.customAgentTypes()),
   },
   'session.attention': {
     schema: sessionAttentionSchema,
@@ -280,8 +269,8 @@ export function applyAgentEventEnvelope(
 }
 
 /**
- * The four account-scoped lists the user channel keeps fresh, reconciled on
- * every (re)connect. Order matches Android's `UserEventBus.handle`.
+ * The account-scoped lists the user channel keeps fresh, reconciled on every
+ * (re)connect. Order matches Android's `UserEventBus.handle`.
  */
 export function refreshOnUserEventsConnect(client: QueryClient): void {
   invalidate(client, [
@@ -294,7 +283,6 @@ export function refreshOnUserEventsConnect(client: QueryClient): void {
     queryKeys.serverInfo(),
     queryKeys.agents(),
     queryKeys.templates(),
-    queryKeys.shortcuts(),
     queryKeys.customAgentTypes(),
   ]);
 }

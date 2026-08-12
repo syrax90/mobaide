@@ -69,7 +69,7 @@ import {
   wheelRows,
   type ScrollbarView,
 } from './terminalScrollbar';
-import { executePayload, submitPayload } from './terminalSubmit';
+import { executePayload } from './terminalSubmit';
 import { terminalTheme } from './terminalTheme';
 
 /** Matches Android's and iOS's 100 ms resize debounce. */
@@ -94,8 +94,6 @@ export interface TerminalViewState {
   pinned: boolean;
   unread: number;
   hasSelection: boolean;
-  composer: string;
-  composerVisible: boolean;
   renderer: RendererKind;
 }
 
@@ -108,8 +106,6 @@ function initialViewState(): TerminalViewState {
     pinned: true,
     unread: 0,
     hasSelection: false,
-    composer: '',
-    composerVisible: false,
     renderer: 'dom',
   };
 }
@@ -162,8 +158,8 @@ export class TerminalSessionModel {
    * Slider geometry, deliberately kept out of {@link state}.
    *
    * `TerminalView` subscribes to the whole view store, so a field there would
-   * re-render the entire screen chrome — header, composer, shortcut bar — every
-   * time the thumb moved, which is every row a busy PTY prints. Only
+   * re-render the entire screen chrome — the header bar and every overlay —
+   * every time the thumb moved, which is every row a busy PTY prints. Only
    * `TerminalScrollbar` reads this one, and `publishScrollbar` quantizes before
    * writing it.
    */
@@ -411,10 +407,6 @@ export class TerminalSessionModel {
     ) {
       this.rebaseline = true;
     }
-    // App-owned chords never reach here: `useAppShortcuts` claims them on a
-    // document-level capture listener, because xterm registers its `keydown` on
-    // the terminal's textarea and this handler would otherwise fire only while
-    // the grid has focus.
     const action = resolveKeyAction(event, {
       hasSelection: this.term.hasSelection(),
       passCtrlVToTerminal: useTerminalPrefsStore.getState().passCtrlVToTerminal,
@@ -749,7 +741,7 @@ export class TerminalSessionModel {
    * `max_size=4 MB`, so one oversized frame closes it with 1009 and drops every
    * session on that agent — not just this one.
    */
-  private sendPayload(kind: 'input' | 'submit' | 'execute', outcome: PayloadOutcome): boolean {
+  private sendPayload(kind: 'input' | 'execute', outcome: PayloadOutcome): boolean {
     if (outcome.kind === 'empty') return false;
     if (outcome.kind === 'tooLarge') {
       useToastStore
@@ -760,42 +752,17 @@ export class TerminalSessionModel {
     return this.io.send(terminalTextFrame(kind, outcome.text));
   }
 
-  pasteText(text: string): void {
-    if (!this.canSendBytes()) return;
+  /**
+   * Returns whether a frame actually went out, so a caller can refuse to
+   * spend anything irreversible — a selection, an open picker — on a paste
+   * that was silently gated or refused over the cap.
+   */
+  pasteText(text: string): boolean {
+    if (!this.canSendBytes()) return false;
     // One frame, not Android's three: these cross a WebSocket and a relay, and
     // losing only the closing marker would strand the program's line editor in
     // paste-collect mode and read as a dead keyboard.
-    this.sendPayload('input', encodePaste(text, this.term.modes.bracketedPasteMode));
-  }
-
-  /**
-   * Send a control-bar button or a saved chord as raw bytes.
-   *
-   * Jumps to the tail for the same reason typing does: xterm scrolls to the
-   * bottom on genuine user input, and a button press is user input. Android
-   * `TerminalViewModel.sendBytes` and iOS `sendControlKey` both do it too.
-   */
-  sendChordBytes(payload: Uint8Array): void {
-    if (payload.length === 0 || !this.canSendBytes()) return;
-    this.sendInputBytes(payload);
-    this.jumpToBottom();
-  }
-
-  setComposer(text: string): void {
-    this.state.setState({ composer: text });
-  }
-
-  setComposerVisible(visible: boolean): void {
-    this.state.setState({ composerVisible: visible });
-  }
-
-  submitComposer(): void {
-    if (!this.canSendBytes()) return;
-    if (!this.sendPayload('submit', submitPayload(this.state.getState().composer))) {
-      return;
-    }
-    this.state.setState({ composer: '' });
-    this.jumpToBottom();
+    return this.sendPayload('input', encodePaste(text, this.term.modes.bracketedPasteMode));
   }
 
   /**
@@ -866,12 +833,33 @@ export class TerminalSessionModel {
     this.focus();
   }
 
-  sendSelectionToComposer(): void {
-    if (!this.screenIsSettled()) return;
+  /**
+   * Paste the current selection onto the program's input line.
+   *
+   * The desktop stand-in for mobile's send-to-composer: the text lands in the
+   * running program's line editor for review, so nothing executes until the
+   * user submits it themselves.
+   */
+  pasteSelection(): void {
+    // Settledness first so a mid-paint click gets the same explanation the
+    // other two actions give. The send gate then refuses silently: the view
+    // mirrors it into the button's `canPaste` prop, so this backstop only
+    // catches a state change between pointerdown and mouseup — and it keeps
+    // the selection intact when it does.
+    if (!this.screenIsSettled() || !this.canSendBytes()) return;
     const text = this.term.getSelection();
     if (text === '') return;
-    this.state.setState({ composer: text, composerVisible: true });
+    // Only a frame that actually went out may cost the user their selection —
+    // an over-cap refusal has already toasted and leaves the retry target.
+    if (!this.pasteText(text)) return;
     this.term.clearSelection();
+    // The paste bypasses xterm's user-input path and `focus()` preserves
+    // scroll, so without the jump an insert made while scrolled up — the
+    // normal state when selecting older output — lands off-screen.
+    this.jumpToBottom();
+    // Same reason as `runSelection`: the toolbar button that was clicked is
+    // about to leave the DOM.
+    this.focus();
   }
 
   dispose(): void {

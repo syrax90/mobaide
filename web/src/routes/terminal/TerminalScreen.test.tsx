@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
-  waitFor,
   type RenderResult,
 } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -57,6 +57,7 @@ const { sessionChannelName } = await import('../../realtime/channels');
 const { acquireTerminal, evictTerminalSessions, useTerminalStore } = await import(
   '../../terminal/terminalStore'
 );
+const { useToastStore } = await import('../../stores/toastStore');
 const { TerminalScreen } = await import('./TerminalScreen');
 
 function renderTerminal(): RenderResult {
@@ -80,6 +81,7 @@ afterEach(() => {
     model.dispose();
   }
   useTerminalStore.setState({ models: {}, order: [] });
+  useToastStore.setState({ toasts: [] });
 });
 
 describe('TerminalScreen selection toolbar', () => {
@@ -152,25 +154,58 @@ describe('TerminalScreen eviction exemption', () => {
 });
 
 describe('TerminalScreen template picks', () => {
-  it('hands focus to the composer with the inserted body selected', async () => {
-    // The screen owns the insert token, and this is its only producer. The
-    // picker's own entry point is the composer's Templates button, so the
-    // composer is already mounted and `autoFocus` cannot fire again — without
-    // the bump, unmounting the picker drops focus to `document.body` with the
-    // body sitting unedited in a field the user is no longer typing into.
+  it('pastes the picked body into the terminal and hands focus back to the grid', async () => {
+    // Picking must not execute anything: the body is pasted onto the program's
+    // input line for review. The model calls are spied rather than observed
+    // through xterm because the harness never attaches the terminal to a live
+    // socket — the real `pasteText` would refuse and `focus()` would reach
+    // into an element jsdom never laid out. The seeded state opens the view's
+    // `canSend` gate so the pick is allowed through.
     const model = acquireTerminal('a1', 's1');
-    model.state.setState({ composerVisible: true });
+    const paste = vi.spyOn(model, 'pasteText').mockImplementation(() => true);
+    const jump = vi.spyOn(model, 'jumpToBottom').mockImplementation(() => undefined);
+    const focus = vi.spyOn(model, 'focus').mockImplementation(() => undefined);
+    renderTerminal();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Templates' }));
+    const pickButton = await screen.findByRole('button', { name: /body of alpha/ });
+    // Seeded only now, not before mount: the mocked token resolves to null,
+    // so the model's own channel asynchronously reports `disconnected` while
+    // the picker's `listTemplates()` query is still in flight, clobbering a
+    // seed applied any earlier. `act` flushes the resulting re-render
+    // synchronously so the click below reads the opened gate, not a stale one.
+    act(() => {
+      model.state.setState({
+        connection: 'live',
+        status: { status: 'running', pid: undefined, exit_code: undefined },
+      });
+    });
+    fireEvent.click(pickButton);
+
+    expect(paste).toHaveBeenCalledWith(alpha.body);
+    // The paste bypasses xterm's user-input scroll, so the screen jumps to the
+    // tail where the body landed.
+    expect(jump).toHaveBeenCalled();
+    expect(focus).toHaveBeenCalled();
+    // The picker closes with the pick; focus must not be stranded on a button
+    // that just left the DOM.
+    expect(screen.queryByRole('dialog', { name: 'Templates' })).toBeNull();
+  });
+
+  it('keeps the picker open and explains when the session is not accepting input', async () => {
+    // A closed send gate must not silently discard the body: the old composer
+    // flow held it in local state, so the paste flow owes the user the same
+    // no-loss guarantee — the picker stays open for a retry and no recency
+    // stamp advertises an insert that never happened.
+    const model = acquireTerminal('a1', 's1');
+    const paste = vi.spyOn(model, 'pasteText');
     renderTerminal();
 
     fireEvent.click(screen.getByRole('button', { name: 'Templates' }));
     fireEvent.click(await screen.findByRole('button', { name: /body of alpha/ }));
 
-    const field = screen.getByLabelText<HTMLTextAreaElement>('Message');
-    await waitFor(() => {
-      expect(field).toHaveFocus();
-    });
-    expect(field.value).toBe(alpha.body);
-    expect(field.selectionStart).toBe(0);
-    expect(field.selectionEnd).toBe(alpha.body.length);
+    expect(paste).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Templates' })).toBeInTheDocument();
+    expect(useToastStore.getState().toasts.map((toast) => toast.kind)).toEqual(['info']);
   });
 });
