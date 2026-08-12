@@ -237,6 +237,15 @@ class WebSocketConnection(
             return
         }
 
+        // Re-checked after the URL resolves, because resolving it can block on a
+        // token refresh. [pause] is synchronous and is the one `generation++`
+        // that does not hold [mutex], so an attempt parked here would otherwise
+        // wake, capture the *new* generation, and build a socket that passes its
+        // own staleness guard — live and streaming while the caller believes the
+        // session is suspended, then orphaned when the next resume overwrites
+        // [webSocket].
+        if (!shouldReconnect) return
+
         val myGeneration = generation
         val request = Request.Builder().url(url).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
