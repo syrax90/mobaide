@@ -1076,6 +1076,17 @@ input[type='radio']:checked {
 }
 
 /*
+ * With no scrollback the track is decoration, and decoration must not sit in
+ * the hit path: it covers a strip of the terminal, so a wheel or a click here
+ * would be swallowed instead of reaching xterm. Dropping out also releases the
+ * `touch-action` above, which is only wanted while there is a thumb to drag.
+ * Same split as `.terminal-overlay` and its retry button.
+ */
+.terminal-scrollbar-idle {
+  pointer-events: none;
+}
+
+/*
  * Height and offset resolve together because the minimum appears in both: a
  * thumb clamped up to 1.5rem travels less than the full track, and computing
  * `top` against the unclamped height would run it past the bottom edge.

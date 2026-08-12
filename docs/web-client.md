@@ -741,7 +741,14 @@ it governs wheel-to-mouse *reporting* and not this. Presses are gated on the
 primary pointer's primary button, so a right-click opens the context menu
 without also grabbing the thumb, and both pointer paths cancel the press: the
 track is `tabIndex={0}`, so an un-cancelled click would move focus off the grid
-and swallow every following keystroke. `Tab` still reaches it. Where the primary
+and swallow every following keystroke. `Tab` still reaches it. Drag start, drag
+move and drag end are all keyed on the pointer that began the drag, because
+capture is per-pointer and a second finger on the widened thumb is hit-tested
+normally — its `pointerup` would otherwise strand the finger still holding on.
+With no scrollback the track keeps painting but takes `pointer-events: none`:
+it lies over the terminal, and the usual reason there is no scrollback is a
+full-screen program with mouse reporting on, which has to receive the wheel and
+pointer events landing in that strip. Where the primary
 pointer is coarse the thumb takes a 2.75rem transparent hit area reaching into
 the grid — 14 px is under half a fingertip and sits on the edge the browser's
 back gesture claims — and that widening is deliberately **not** on

@@ -95,7 +95,12 @@ export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) 
     [model],
   );
 
-  const endDrag = useCallback(() => {
+  // Keyed on the pointer that started the drag, exactly like `onDrag` above.
+  // Capture is per-pointer, so a second finger landing on the thumb is hit-
+  // tested here normally and its `pointerup` would otherwise end a drag the
+  // first finger is still holding.
+  const endDrag = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
     dragRef.current = null;
   }, []);
 
@@ -170,9 +175,15 @@ export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) 
 
   // Nothing above the viewport — the alternate screen, or a session that has
   // not filled one page yet. The track stays so the gutter never looks empty,
-  // but there is no control to expose.
+  // but with no control to expose it drops out of the hit path entirely: the
+  // strip lies over the terminal, so a wheel landing here would bubble up the
+  // stage instead of reaching xterm, and a full-screen program with mouse
+  // reporting on — the common reason there is no scrollback — would never see
+  // its report.
   if (!scrollable) {
-    return <div className="terminal-scrollbar" aria-hidden="true" />;
+    return (
+      <div className="terminal-scrollbar terminal-scrollbar-idle" aria-hidden="true" />
+    );
   }
 
   return (

@@ -26,6 +26,7 @@ afterEach(() => {
 interface PointerInit {
   button?: number;
   isPrimary?: boolean;
+  pointerId?: number;
 }
 
 /**
@@ -42,7 +43,7 @@ function pointer(type: string, clientY: number, init: PointerInit = {}): Event {
     clientY,
     button: init.button ?? 0,
   });
-  Object.defineProperty(event, 'pointerId', { value: 1 });
+  Object.defineProperty(event, 'pointerId', { value: init.pointerId ?? 1 });
   Object.defineProperty(event, 'isPrimary', { value: init.isPrimary ?? true });
   return event;
 }
@@ -81,7 +82,13 @@ describe('TerminalScrollbar', () => {
     const { container } = mount({ scrollable: false, size: 1, offset: 1 });
 
     expect(screen.queryByRole('scrollbar')).toBeNull();
-    expect(container.querySelector('.terminal-scrollbar')).not.toBeNull();
+    // Still painted, but out of the hit path — it lies over the terminal, and
+    // an alternate-screen program with mouse reporting on has to receive the
+    // wheel and pointer events landing in this strip. jsdom resolves no
+    // `pointer-events`, so the class is the half a unit test can hold.
+    expect(container.querySelector('.terminal-scrollbar')).toHaveClass(
+      'terminal-scrollbar-idle',
+    );
   });
 
   it('publishes its position to assistive technology', () => {
@@ -205,6 +212,25 @@ describe('TerminalScrollbar', () => {
 
     expect(seek).not.toHaveBeenCalled();
     expect(page).not.toHaveBeenCalled();
+  });
+
+  it('keeps dragging when an unrelated finger lifts off the thumb', () => {
+    // Pointer capture is per-pointer, so a second finger on the widened thumb
+    // is hit-tested here normally. Ending the drag on its `pointerup` would
+    // strand the finger that is still holding the thumb.
+    const { model, container } = mount(scrolled);
+    const seek = vi.spyOn(model, 'scrollToOffset').mockImplementation(() => undefined);
+    const bar = screen.getByRole('scrollbar');
+    const thumb = container.querySelector('.terminal-scrollbar-thumb');
+    if (thumb === null) throw new Error('no thumb');
+    stubBox(bar, 0, 400);
+    stubBox(thumb, 100, 40);
+
+    fireEvent(thumb, pointer('pointerdown', 120));
+    fireEvent(thumb, pointer('pointerup', 150, { pointerId: 2, isPrimary: false }));
+    fireEvent(thumb, pointer('pointermove', 200));
+
+    expect(seek).toHaveBeenCalledWith(0.5);
   });
 
   it('ignores a second finger landing during a drag', () => {
