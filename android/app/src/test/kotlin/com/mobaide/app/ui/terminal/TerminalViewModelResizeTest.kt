@@ -96,6 +96,15 @@ class TerminalViewModelResizeTest {
      * Tests that specifically need to exercise a real drop do so explicitly.
      */
     private suspend fun TestScope.promoteToSolo() {
+        // A `w` before any state frame on the socket is ignored (it may be a
+        // pre-registration relay broadcast), so lead with the handshake's
+        // state frame exactly as the agent does.
+        eventsFlow.emit(
+            WsEvent.Binary(
+                (byteArrayOf(TerminalProtocol.TYPE_STATE) +
+                    """{"status":"running"}""".toByteArray()).toByteString(),
+            ),
+        )
         eventsFlow.emit(
             WsEvent.Binary(
                 byteArrayOf(TerminalProtocol.TYPE_WINSIZE, 0, 24, 0, 80, 0, 1).toByteString(),
@@ -321,7 +330,15 @@ class TerminalViewModelResizeTest {
         verify(exactly = 2) { connection.sendBinary(expected) }
 
         // The handshake's solo `w` (naming a grid other than the cache) is
-        // what re-promotes and delivers the corrective.
+        // what re-promotes and delivers the corrective. It must follow the
+        // handshake's state frame — a `w` before one is ignored as a
+        // pre-registration broadcast.
+        eventsFlow.emit(
+            WsEvent.Binary(
+                (byteArrayOf(TerminalProtocol.TYPE_STATE) +
+                    """{"status":"running"}""".toByteArray()).toByteString(),
+            ),
+        )
         eventsFlow.emit(
             WsEvent.Binary(
                 byteArrayOf(TerminalProtocol.TYPE_WINSIZE, 0, 10, 0, 40, 0, 1).toByteString(),
@@ -343,12 +360,17 @@ class TerminalViewModelResizeTest {
 
         // A drop demotes to Follower and resets to Reconnecting (round 2). No
         // WsEvent.Connected arrives on the new socket either: the handshake's
-        // own solo `w` is the first inbound binary, so it both re-promotes
-        // authority and — via handleBinary()'s safety upgrade, the sole path
-        // into Live here — reaches the same enterLiveState() choke point that
-        // re-asserts the cached size.
+        // state frame is the first inbound binary (triggering handleBinary()'s
+        // safety upgrade into Live), and the solo `w` that follows it
+        // re-promotes authority and delivers the corrective.
         eventsFlow.emit(WsEvent.Disconnected)
         runCurrent()
+        eventsFlow.emit(
+            WsEvent.Binary(
+                (byteArrayOf(TerminalProtocol.TYPE_STATE) +
+                    """{"status":"running"}""".toByteArray()).toByteString(),
+            ),
+        )
         eventsFlow.emit(
             WsEvent.Binary(
                 byteArrayOf(TerminalProtocol.TYPE_WINSIZE, 0, 24, 0, 80, 0, 1).toByteString(),

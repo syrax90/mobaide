@@ -127,6 +127,12 @@ class TerminalViewModel @Inject constructor(
     /** Whether a `'w'` frame arrived on the current socket; reset on disconnect.
      *  Replay-end with none seen means a v7 agent → pre-v8 solo behavior. */
     private var winsizeSeen = false
+
+    /** Whether a state frame arrived on the current socket — the earliest this
+     *  socket's own handshake can have started. `'w'` frames before it are
+     *  relay broadcasts predating this client's registration and must not be
+     *  arbitrated on. Reset on disconnect. */
+    private var stateSeen = false
     private var foregroundTakeoverJob: Job? = null
 
     /** An elapsed foreground claim waiting for the send gate; see [tryForegroundTakeover]. */
@@ -363,6 +369,7 @@ class TerminalViewModel @Inject constructor(
                     is WsEvent.Disconnected -> {
                         _isConnected.value = false
                         winsizeSeen = false
+                        stateSeen = false
                         // A drop forfeits authority: the reconnect handshake
                         // must arbitrate before any size leaves, or an
                         // ex-owner resuming from a network switch would
@@ -376,6 +383,7 @@ class TerminalViewModel @Inject constructor(
                     is WsEvent.Error -> {
                         _isConnected.value = false
                         winsizeSeen = false
+                        stateSeen = false
                         setAuthority(SizeAuthority.Follower)
                         _connectionState.value = ConnectionState.Reconnecting
                     }
@@ -408,6 +416,7 @@ class TerminalViewModel @Inject constructor(
                 }
             }
             is TerminalFrame.State -> {
+                stateSeen = true
                 val status = parseStatus(decoded.json)
                 // The agent answering with a live PTY is proof the session
                 // exists, independent of when its list snapshot lands.
@@ -624,6 +633,12 @@ class TerminalViewModel @Inject constructor(
      * follows, and a count of one restores the pre-v8 sole-authority behavior.
      */
     private fun onWinsize(rows: Int, cols: Int, attachedClients: Int) {
+        // The relay adds an attaching socket to the session's broadcast set
+        // before the agent has registered it, so a broadcast 'w' can arrive
+        // ahead of this socket's own handshake carrying attachedClients = 1 —
+        // acting on it would grant pre-handshake solo and steal the grid.
+        // The handshake always leads with a state frame.
+        if (!stateSeen) return
         winsizeSeen = true
         _attachedClients.value = attachedClients
         if (attachedClients <= 1) {
@@ -665,6 +680,13 @@ class TerminalViewModel @Inject constructor(
             return
         }
         _followerGrid.value = FollowerGrid(rows, cols)
+        // A foreign grid voids any historical send claim: lastSent surviving
+        // this demotion would let a later 'w' naming the old grid re-promote
+        // a passive follower through the own-echo door. The socket-drop
+        // demotion deliberately KEEPS lastSent (reconnect owner-restoration
+        // depends on it).
+        lastSentRows = -1
+        lastSentCols = -1
         setAuthority(SizeAuthority.Follower)
     }
 

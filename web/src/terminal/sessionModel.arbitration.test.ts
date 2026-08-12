@@ -71,6 +71,10 @@ async function harness(): Promise<Harness> {
   const socket = sockets[0];
   if (socket === undefined) throw new Error('no socket was opened');
   socket.accept();
+  // Every real handshake leads with a state frame, and `w` frames arriving
+  // before one are ignored (pre-registration relay broadcasts). Deliver it
+  // here so tests model a socket whose handshake has started.
+  socket.deliver(stateFrame('running').buffer);
 
   return {
     model,
@@ -290,10 +294,58 @@ describe('TerminalSessionModel size arbitration (proto-v8)', () => {
 
     expect(context.resizeFrames(reopened)).toEqual([]);
 
+    reopened.deliver(stateFrame('running').buffer);
     reopened.deliver(winsizeFrame(24, 80, 1).buffer);
 
     expect(context.model.state.getState().sizeAuthority).toBe('solo');
     expect(context.resizeFrames(reopened)).toEqual([resizeFrame(40, 120)]);
+  });
+
+  it('ignores a w that arrives before any state frame on the socket', async () => {
+    // The relay adds an attaching socket to the broadcast set before the
+    // agent registers it, so a broadcast `w` still reporting one client can
+    // reach the newcomer ahead of its own handshake — acting on it would
+    // grant pre-handshake solo and steal the grid.
+    const { sockets, socketFactory } = recordingSocketFactory();
+    const channelTimers = fakeScheduler();
+    const modelTimers = fakeScheduler();
+    const channel = new SessionIoChannel('a1', 's1', {
+      scheduler: channelTimers.scheduler,
+      socketFactory,
+    });
+    const model = new TerminalSessionModel('a1', 's1', {
+      scheduler: modelTimers.scheduler,
+      channel,
+    });
+    live.push(model);
+    await settle();
+    const socket = sockets[0];
+    if (socket === undefined) throw new Error('no socket was opened');
+    socket.accept();
+    model.term.resize(120, 40); // natural grid recorded, nothing sent
+
+    socket.deliver(winsizeFrame(24, 80, 1).buffer); // pre-handshake broadcast
+
+    expect(model.state.getState().sizeAuthority).toBe('follower');
+    // The v7 fallback must also still see "no w on this socket": the ignored
+    // frame set nothing.
+    socket.deliver(Uint8Array.from([TERMINAL_FRAME_TYPE.replayStart]).buffer);
+    socket.deliver(Uint8Array.from([TERMINAL_FRAME_TYPE.replayEnd]).buffer);
+    expect(model.state.getState().sizeAuthority).toBe('solo');
+  });
+
+  it('a foreign demotion voids the sent claim: a later w naming it stays follower', async () => {
+    // `lastSent*` surviving the demotion would let a `w` that happens to name
+    // the historical grid re-promote a passive follower through the own-echo
+    // door — the no-live-claim defect, leaking through a second entrance.
+    const { model, deliverFrame, resizeFrames } = await soloWithCachedGrid();
+    deliverFrame(winsizeFrame(50, 132, 2)); // foreign grid demotes
+    expect(model.state.getState().sizeAuthority).toBe('follower');
+
+    deliverFrame(winsizeFrame(40, 120, 2)); // the OLD sent grid, still shared
+
+    expect(model.state.getState().sizeAuthority).toBe('follower');
+    expect(resizeFrames()).toEqual([resizeFrame(40, 120)]); // nothing new sent
   });
 
   it('records a pre-w layout report and delivers it on the solo promotion', async () => {

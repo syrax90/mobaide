@@ -45,6 +45,10 @@ final class TerminalSessionModelTests: XCTestCase {
     /// resets `connectionState` back afterward to keep exercising that exact
     /// path.
     private func promoteToSolo(_ model: TerminalSessionModel, _ connection: FakeWebSocketConnection) async {
+        // A `w` before any state frame on the socket is ignored (it may be a
+        // pre-registration relay broadcast), so lead with the handshake's
+        // state frame exactly as the agent does.
+        connection.emit(.binary(Data([0x73]) + Data(#"{"status":"running"}"#.utf8)))
         connection.emit(.binary(Data([0x77, 0x00, 0x18, 0x00, 0x50, 0x00, 0x01])))
         _ = await poll { model.sizeAuthority == .solo }
     }

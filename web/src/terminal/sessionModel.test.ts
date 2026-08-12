@@ -143,6 +143,7 @@ describe('TerminalSessionModel grid size', () => {
   // exercising the pre-arbitration resize behavior these tests cover.
   it('sends nothing until the resize debounce fires', async () => {
     const { model, flushResize, resizeFrames, deliverFrame } = await harness();
+    deliverFrame(stateFrame('running')); // `w` before a state frame is ignored
     deliverFrame(winsizeFrame(24, 80, 1));
 
     model.term.resize(120, 40);
@@ -158,6 +159,7 @@ describe('TerminalSessionModel grid size', () => {
     // pass has to *replace* the armed timer, not queue another one.
     const { model, flushResize, pendingResizes, resizeFrames, deliverFrame } =
       await harness();
+    deliverFrame(stateFrame('running')); // `w` before a state frame is ignored
     deliverFrame(winsizeFrame(24, 80, 1));
 
     model.term.resize(100, 30);
@@ -180,6 +182,7 @@ describe('TerminalSessionModel grid size', () => {
     // re-promotes and fires the corrective re-assert itself.
     const { model, flushResize, resizeFrames, deliverFrame, socket, sockets, flushChannel } =
       await harness();
+    deliverFrame(stateFrame('running'));
     deliverFrame(winsizeFrame(24, 80, 1));
     model.term.resize(120, 40);
     flushResize();
@@ -196,6 +199,7 @@ describe('TerminalSessionModel grid size', () => {
     // until the handshake says otherwise.
     expect(resizeFrames(reopened)).toEqual([]);
 
+    reopened.deliver(stateFrame('running').buffer);
     reopened.deliver(winsizeFrame(24, 80, 1).buffer);
 
     expect(model.state.getState().sizeAuthority).toBe('solo');
@@ -210,6 +214,7 @@ describe('TerminalSessionModel grid size', () => {
     const {
       model, flushResize, resizeFrames, deliverFrame, socket, sockets, flushChannel,
     } = await harness();
+    deliverFrame(stateFrame('running'));
     deliverFrame(winsizeFrame(24, 80, 1));
     model.term.resize(120, 40);
     flushResize();

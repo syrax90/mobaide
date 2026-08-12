@@ -65,7 +65,14 @@ cadence; they do **not** gate compatibility.
   cache and last-sent pair) so the reconnect handshake arbitrates before any
   size leaves — an ex-owner resuming from the background must not re-assert a
   stale grid with zero user activity; the handshake ``w`` restores owner (own
-  echo) or solo (count) without a wasted frame. **v7-agent fallback:** no
+  echo) or solo (count) without a wasted frame. **A foreign-grid demotion
+  voids the last-sent pair** (a later ``w`` naming a historical grid must not
+  re-promote a passive follower through the own-echo branch); only the
+  socket-drop demotion keeps it. **Pre-handshake ``w`` frames are ignored**:
+  the relay adds an attaching socket to the session's broadcast set before
+  the agent registers it, so a broadcast ``w`` still reporting one client can
+  reach the newcomer ahead of its own handshake — clients arbitrate only on
+  ``w`` frames that follow a state frame on the same socket. **v7-agent fallback:** no
   ``w`` by replay-end means no arbitration exists on the other side; the
   client reverts to solo and re-asserts, i.e. exactly the pre-v8 contract,
   with no version sniffing.

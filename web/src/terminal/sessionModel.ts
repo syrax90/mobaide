@@ -244,6 +244,13 @@ export class TerminalSessionModel {
    * behavior applies.
    */
   private winsizeSeen = false;
+  /**
+   * Whether a state frame arrived on the current socket — the earliest this
+   * socket's own handshake can have started. `w` frames before it are relay
+   * broadcasts that predate this client's registration and must not be
+   * arbitrated on. Reset on disconnect.
+   */
+  private stateSeen = false;
   /** Dedupe key of the last follower solve: grid + container size. */
   private lastFollowerSolve: string | null = null;
   private cancelFocusTakeover: (() => void) | null = null;
@@ -678,6 +685,7 @@ export class TerminalSessionModel {
           case 'disconnected':
             this.replay = reduceDisconnected();
             this.winsizeSeen = false;
+            this.stateSeen = false;
             // A drop forfeits authority: whatever happened while this client
             // was away, the reconnect handshake must arbitrate before any
             // size leaves — an ex-owner resuming from the background would
@@ -728,6 +736,7 @@ export class TerminalSessionModel {
           else this.writeLive(effect.payload);
           break;
         case 'state':
+          this.stateSeen = true;
           this.state.setState({ status: decodeTerminalState(effect.json) });
           break;
         case 'replayFinished':
@@ -759,6 +768,13 @@ export class TerminalSessionModel {
    * follows, and a count of one restores the pre-v8 sole-authority behavior.
    */
   private onWinsize(rows: number, cols: number, attachedClients: number): void {
+    // The relay adds an attaching socket to the session's broadcast set
+    // before the agent has registered it, so a broadcast `w` (say, the still
+    // solo active client rotating) can arrive here ahead of this socket's own
+    // handshake carrying `attachedClients: 1` — acting on it would grant
+    // pre-handshake solo and steal the grid. The handshake always leads with
+    // a state frame, so anything before one is ignored.
+    if (!this.stateSeen) return;
     this.winsizeSeen = true;
     patchState(this.state, { attachedClients });
     if (attachedClients <= 1) {
@@ -801,6 +817,14 @@ export class TerminalSessionModel {
       return;
     }
     this.followerGrid = { rows, cols };
+    // A foreign grid voids any historical send claim: `lastSent*` surviving
+    // this demotion would let a later `w` that happens to name the old grid
+    // re-promote a passive follower through the own-echo door — the same
+    // no-live-claim defect the `lastSent > 0` guard closed for never-sent
+    // grids. The socket-drop demotion deliberately KEEPS `lastSent*`;
+    // reconnect owner-restoration depends on it.
+    this.lastSentRows = 0;
+    this.lastSentCols = 0;
     if (this.authority === 'follower') {
       this.solveFollowerLayout();
     } else {
