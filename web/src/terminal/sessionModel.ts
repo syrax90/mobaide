@@ -252,8 +252,8 @@ export class TerminalSessionModel {
   /**
    * The grid actually put on the wire last, which can trail {@link lastRows}/
    * {@link lastCols} by a debounce while the user is still resizing. The
-   * own-echo check accepts either: a `w` echoing an in-flight send must not
-   * demote the client that is actively driving the grid.
+   * own-echo check accepts only this pair — the cache also holds
+   * merely-measured grids, which must never read as a claim.
    */
   private lastSentRows = 0;
   private lastSentCols = 0;
@@ -961,21 +961,23 @@ export class TerminalSessionModel {
       return;
     }
     if (
-      // Only a grid this client actually SENT can echo back as ownership: the
-      // fresh-follower cache seeding records a merely-measured grid, and
-      // without this guard a fresh client whose natural grid happens to equal
-      // the PTY's would be promoted to owner and later steal the size on an
-      // unattended window relayout. A never-sent match stays follower — it
-      // renders identically and still takes over on typing or focus.
+      // Only a grid this client actually PUT ON THE WIRE can echo back as
+      // ownership — never the measurement cache. The cache seeds while
+      // follower (a merely-measured grid must not read as a claim) and runs
+      // a debounce ahead of the wire mid-drag, where a foreign claim that
+      // happens to name the transient measurement would slip through as an
+      // "echo"; on reconnect the same coincidence would re-promote an
+      // ex-owner whose natural grid a foreign client resized the PTY to. A
+      // genuine echo always names a sent grid: `lastSent*` tracks every send
+      // site, and the trailing-echo corrective below collapses the debounce
+      // before a second send can leapfrog it.
       this.lastSentRows > 0 &&
-      ((rows === this.lastRows && cols === this.lastCols) ||
-        (rows === this.lastSentRows && cols === this.lastSentCols))
+      rows === this.lastSentRows &&
+      cols === this.lastSentCols
     ) {
-      // Our own size echoed back: this client holds authority. The last-sent
-      // pair matters when the user is mid-drag — the cache has already moved
-      // past the frame the agent is echoing, and matching only the cache
-      // would demote the very client that is actively resizing (and cancel
-      // its pending corrective frame with it).
+      // Our own size echoed back: this client holds authority. Matching
+      // `lastSent*` rather than the cache keeps the actively resizing owner
+      // promoted while the cache is a debounce ahead of the echo.
       this.setAuthority('owner');
       // Same corrective as the solo branch: a stale echo can trail a cache
       // that already moved on, and a transient demotion may have canceled the

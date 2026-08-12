@@ -258,9 +258,11 @@ describe('TerminalSessionModel unwatched-session suspension', () => {
     expect(h.view().suspended).toBe(false);
   });
 
-  it('re-asserts the measured grid on the reopened socket', async () => {
+  it('re-asserts the measured grid once the reopened handshake arbitrates', async () => {
     // A resumed PTY that kept the 24x80 it was spawned with would paint a
-    // full-screen TUI into the top 24 rows.
+    // full-screen TUI into the top 24 rows. The suspend forfeited size
+    // authority, so nothing leaves at bare socket-open — the handshake's solo
+    // `w` promotes this client and delivers the measured grid.
     const h = await harness();
     h.model.term.resize(120, 40);
     h.hide();
@@ -271,6 +273,15 @@ describe('TerminalSessionModel unwatched-session suspension', () => {
     const reopened = h.sockets[1];
     if (reopened === undefined) throw new Error('no socket was reopened');
     reopened.accept();
+    reopened.deliver(
+      Uint8Array.from([
+        TERMINAL_FRAME_TYPE.state,
+        ...utf8.encode('{"status":"running"}'),
+      ]).buffer,
+    );
+    reopened.deliver(
+      Uint8Array.from([TERMINAL_FRAME_TYPE.winsize, 0, 24, 0, 80, 0, 1]).buffer,
+    );
 
     const resizes = reopened.sent.filter(
       (frame): frame is Uint8Array =>

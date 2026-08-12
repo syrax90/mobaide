@@ -418,6 +418,28 @@ describe('TerminalSessionModel size arbitration (proto-v8)', () => {
     expect(() => flushResize()).toThrow('no reconnect was scheduled');
   });
 
+  it('a foreign claim naming the measured-but-unsent grid demotes the owner', async () => {
+    // Mid-drag the cache holds a measurement the wire has not seen. A foreign
+    // client claiming exactly that grid must read as a foreign claim, not an
+    // own echo: only `lastSent*` — grids actually put on the wire — can prove
+    // ownership. Matching the cache would leave both clients promoted and let
+    // this one steal the size back on the next unattended relayout.
+    const { model, deliverFrame, flushResize, resizeFrames } = await harness();
+    deliverFrame(stateFrame('running'));
+    deliverFrame(winsizeFrame(24, 80, 1));
+    model.term.resize(120, 40);
+    flushResize();
+    expect(resizeFrames()).toEqual([resizeFrame(40, 120)]);
+    model.term.resize(130, 50); // debounce still pending — never sent
+
+    deliverFrame(winsizeFrame(50, 130, 2));
+
+    expect(model.state.getState().sizeAuthority).toBe('follower');
+    // The demotion also canceled the pending debounce: nothing else leaves.
+    expect(resizeFrames()).toEqual([resizeFrame(40, 120)]);
+    expect(() => flushResize()).toThrow('no reconnect was scheduled');
+  });
+
   it('a matching grid this client never sent stays follower', async () => {
     // The own-echo owner branch is gated on an actual send (lastSent > 0):
     // the fresh-follower seeding records a merely-measured grid, and reading

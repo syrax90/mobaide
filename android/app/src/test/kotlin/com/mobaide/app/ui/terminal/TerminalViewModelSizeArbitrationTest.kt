@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.TemplatesRepository
+import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.every
@@ -84,6 +85,7 @@ class TerminalViewModelSizeArbitrationTest {
             templatesRepository = templatesRepository,
             shortcutsRepository = mockk(),
             foregroundSessionTracker = ForegroundSessionTracker(),
+            appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
         )
 
@@ -449,6 +451,28 @@ class TerminalViewModelSizeArbitrationTest {
         advanceUntilIdle()
 
         assertEquals(SizeAuthority.Follower, vm.sizeAuthority.value)
+    }
+
+    @Test
+    fun foreignClaimNamingTheMeasuredButUnsentGrid_demotesInsteadOfEchoing() = runTest {
+        // Mid-resize the cache holds a measurement the wire has not seen. A
+        // foreign client claiming exactly that grid must read as a foreign
+        // claim, not an own echo: only lastSent — grids actually put on the
+        // wire — proves ownership. Matching the cache would leave both
+        // clients promoted and let this one steal the size back on the next
+        // unattended layout pass.
+        val vm = createViewModel()
+        soloWithCachedGrid(vm)
+        vm.resize(rows = 50, cols = 130) // debounce still pending — never sent
+
+        deliverWinsize(50, 130, 2)
+
+        assertEquals(SizeAuthority.Follower, vm.sizeAuthority.value)
+        assertEquals(FollowerGrid(rows = 50, cols = 130), vm.followerGrid.value)
+        // The demotion also canceled the pending debounce: nothing else leaves.
+        advanceTimeBy(500)
+        advanceUntilIdle()
+        assertEquals(listOf(TerminalProtocol.encodeResize(40, 120)), frames())
     }
 
     @Test

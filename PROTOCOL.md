@@ -67,7 +67,14 @@ cadence; they do **not** gate compatibility.
   focus (web) / terminal-screen foreground (mobile) promotes after a 400 ms
   debounce, armed on focus *edges* only (never steady state, or an idle
   focused tab would steal authority back after every foreign resize). Applied
-  on receipt — no ACK roundtrip. **A socket drop forfeits authority**: the
+  on receipt — no ACK roundtrip. **A takeover at the PTY's exact current grid
+  keeps both claimants promoted**: ``w`` carries no claimant identity and the
+  agent's equal-size resize is a no-op that broadcasts nothing, so the
+  previous owner never learns it was outrun. Accepted for v8 — the grids are
+  identical by construction, the first *differing* assert by either client
+  demotes the other through the normal foreign-grid branch, and typing
+  re-takes immediately; distinguishing claimants would need a client-visible
+  connection identity on the wire, which no client currently has. **A socket drop forfeits authority**: the
   client demotes itself to follower on disconnect (keeping its natural-grid
   cache and last-sent pair) so the reconnect handshake arbitrates before any
   size leaves — an ex-owner resuming from the background must not re-assert a

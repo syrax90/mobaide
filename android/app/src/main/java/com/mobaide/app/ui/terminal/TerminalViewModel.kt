@@ -141,8 +141,9 @@ class TerminalViewModel @Inject constructor(
     private var lastResizeCols = -1
 
     /** The grid actually put on the wire last — can trail the cache by a
-     *  debounce mid-drag. [onWinsize]'s own-echo check accepts either, so an
-     *  echo of an in-flight send cannot demote the actively resizing client. */
+     *  debounce mid-drag. [onWinsize]'s own-echo check accepts only this
+     *  pair; the cache also holds merely-measured grids, which must never
+     *  read as a claim. */
     private var lastSentRows = -1
     private var lastSentCols = -1
     private var resizeJob: Job? = null
@@ -717,21 +718,17 @@ class TerminalViewModel @Inject constructor(
             }
             return
         }
-        if (lastSentRows > 0 &&
-            ((rows == lastResizeRows && cols == lastResizeCols) ||
-                (rows == lastSentRows && cols == lastSentCols))
-        ) {
-            // Only a grid this client actually SENT can echo back as
-            // ownership: the fresh-follower cache seeding records a
-            // merely-measured grid, and without the lastSent guard a fresh
-            // client whose natural grid equals the PTY's would be promoted to
-            // owner and later steal the size on an unattended layout pass.
-            // A never-sent match stays follower — it renders identically and
-            // still takes over on typing or foregrounding.
-            // Our own size echoed back: this client holds authority. The
-            // last-sent pair matters mid-drag — the cache may have moved past
-            // the frame the agent is echoing, and matching only the cache
-            // would demote the very client that is actively resizing.
+        if (lastSentRows > 0 && rows == lastSentRows && cols == lastSentCols) {
+            // Only a grid this client actually PUT ON THE WIRE can echo back
+            // as ownership — never the measurement cache. The cache seeds
+            // while follower (a merely-measured grid must not read as a
+            // claim) and can run a resize ahead of the wire, where a foreign
+            // claim naming the transient measurement would slip through as an
+            // "echo"; on reconnect the same coincidence would re-promote an
+            // ex-owner whose natural grid a foreign client resized the PTY
+            // to. A genuine echo always names a sent grid: lastSent tracks
+            // every send site, and the trailing-echo corrective below
+            // collapses the debounce before a second send can leapfrog it.
             setAuthority(SizeAuthority.Owner)
             // Same corrective as the solo branch: a stale echo can trail a
             // cache that already moved on, and a transient demotion may have
