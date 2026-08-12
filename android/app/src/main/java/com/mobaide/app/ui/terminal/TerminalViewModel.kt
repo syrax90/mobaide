@@ -105,6 +105,9 @@ class TerminalViewModel @Inject constructor(
     private var unwatchedBytes = 0L
     private var streamSuspended = false
 
+    /** Consumed by the ON_START nudge so a resume is not reconnected twice. */
+    private var resumedFromSuspend = false
+
     val displayConfig: StateFlow<TerminalDisplayConfig> = combine(
         preferencesStore.terminalDisplayMode,
         preferencesStore.terminalStaticColumns,
@@ -618,6 +621,9 @@ class TerminalViewModel @Inject constructor(
     /** Single entry point into [ConnectionState.Live]. */
     private fun enterLiveState() {
         _connectionState.value = ConnectionState.Live
+        // Reaching live retires the latch: an ON_START that never arrived
+        // must not suppress a later, genuine screen-on nudge.
+        resumedFromSuspend = false
         resendCachedSize()
     }
 
@@ -965,6 +971,7 @@ class TerminalViewModel @Inject constructor(
     private fun resumeStream() {
         if (!streamSuspended) return
         streamSuspended = false
+        resumedFromSuspend = true
         unwatchedBytes = 0
         // Explicitly false, not just left alone: the send gates read this flag
         // on its own, and it has to stay shut across the whole reconnect and
@@ -991,6 +998,17 @@ class TerminalViewModel @Inject constructor(
         // `forceReconnect` would no-op anyway: `pause()` cleared
         // `shouldReconnect`.
         if (streamSuspended) return
+        // Foregrounding fires both paths: the tracker's collector resumes the
+        // stream, and the activity's ON_START lands here. By then the resume
+        // has cleared `streamSuspended`, so without this latch the nudge would
+        // force-reconnect the socket that resume just opened — a second
+        // handshake and a second full ring replay, fanned out to every other
+        // client attached to the session, on the one path this exists to make
+        // cheap.
+        if (resumedFromSuspend) {
+            resumedFromSuspend = false
+            return
+        }
         if (_connectionState.value == ConnectionState.Live) return
         connection?.forceReconnect()
     }

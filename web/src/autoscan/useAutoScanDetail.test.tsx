@@ -367,6 +367,29 @@ describe('useAutoScanDetail tab visibility', () => {
     }
   });
 
+  it('arms the disconnect when it mounts into an already-hidden tab', () => {
+    // `onTabVisibility` reports transitions, not the current value, so a hook
+    // that mounts while hidden gets no edge to react to and would stream until
+    // the tab was both shown and hidden again.
+    vi.useFakeTimers();
+    try {
+      const doc = fakeEventTarget();
+      doc.hidden = true;
+      const uninstall = observeTabVisibility(doc);
+      mount();
+      const before = opened()?.disconnectCount ?? 0;
+
+      act(() => {
+        vi.advanceTimersByTime(HIDDEN_DISCONNECT_MS);
+      });
+
+      expect(opened()?.disconnectCount).toBe(before + 1);
+      uninstall();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('leaves a declined channel declined across a hide and show', () => {
     // The agent turned this subscription down; only the banner's retry may
     // re-arm it, and a tab switch is not that.

@@ -202,6 +202,12 @@ final class TerminalSessionModel {
     func start() {
         guard !started else { return }
         started = true
+        // Seeds the unwatched clock before the socket opens. `start()` runs
+        // from the screen's `init`, ahead of any `markVisible`/`markHidden`, so
+        // a model whose view never appears would otherwise sit at
+        // `unwatchedSince == nil` and stream past the policy forever — the
+        // invariant "nil while it is being read" is false at birth without it.
+        syncWatched()
         // Subscribed for the model's whole life (not lazily on picker open):
         // the control-key row renders saved-shortcut buttons without the
         // picker ever opening, and `shortcut.*` pushes must land there live.

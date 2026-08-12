@@ -301,6 +301,54 @@ class TerminalViewModelSuspendTest {
     }
 
     @Test
+    fun onScreenVisible_afterAResume_doesNotReconnectWhatTheResumeJustOpened() =
+        runTest(testDispatcher) {
+            // Foregrounding fires both paths: the tracker's collector resumes,
+            // and the activity's ON_START lands in `onScreenVisible`. By then
+            // `streamSuspended` is already cleared, so without the latch this
+            // would pay a second handshake and a second full ring replay on the
+            // exact path the feature exists to make cheap.
+            val vm = newViewModel()
+            runCurrent()
+            background()
+            runCurrent()
+            eventsFlow.tryEmit(WsEvent.Binary(outputFrame("spending".toByteArray())))
+            runCurrent()
+
+            foreground()
+            runCurrent()
+            vm.onScreenVisible()
+            runCurrent()
+
+            verify(exactly = 0) { connection.forceReconnect() }
+        }
+
+    @Test
+    fun onScreenVisible_stillNudgesAStaleSocketOnceTheResumeWentLive() =
+        runTest(testDispatcher) {
+            // The latch is one-shot and retires at Live, so an ON_START that
+            // never arrived cannot suppress a later genuine screen-on nudge.
+            val vm = newViewModel()
+            runCurrent()
+            background()
+            runCurrent()
+            eventsFlow.tryEmit(WsEvent.Binary(outputFrame("spending".toByteArray())))
+            runCurrent()
+
+            foreground()
+            runCurrent()
+            eventsFlow.tryEmit(WsEvent.Binary(stateRunningFrame))
+            runCurrent()
+            eventsFlow.tryEmit(WsEvent.Disconnected)
+            runCurrent()
+
+            vm.onScreenVisible()
+            runCurrent()
+
+            verify(exactly = 1) { connection.forceReconnect() }
+        }
+
+    @Test
     fun theShippedPolicy_leavesAModestSpendAlone() = runTest(testDispatcher) {
         // The real thresholds, not the stub: a few hundred bytes is nowhere near
         // a ring.

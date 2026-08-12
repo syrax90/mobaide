@@ -210,18 +210,21 @@ export function useAutoScanDetail(agentId: string, projectName: string): AutoSca
       if (pending !== null) clearTimeout(pending);
       pending = null;
     };
+    // Delayed, not immediate. `resumeOnFocus` states the rule this would
+    // otherwise break — "alt-tabbing is constant, and reconnecting on each one
+    // would be its own handshake storm" — and the stakes are higher here than
+    // bytes: the agent caps concurrent auto-scan streams, so open/close churn
+    // can trip the cap and leave the pane declined.
+    const armDisconnect = (): void => {
+      pending = setTimeout(() => {
+        pending = null;
+        channelRef.current?.channel.disconnect();
+      }, HIDDEN_DISCONNECT_MS);
+    };
     const unsubscribe = onTabVisibility((hidden) => {
       cancelPending();
       if (hidden) {
-        // Delayed, not immediate. `resumeOnFocus` states the rule this would
-        // otherwise break — "alt-tabbing is constant, and reconnecting on each
-        // one would be its own handshake storm" — and the stakes are higher
-        // here than bytes: the agent caps concurrent auto-scan streams, so
-        // open/close churn can trip the cap and leave the pane declined.
-        pending = setTimeout(() => {
-          pending = null;
-          channelRef.current?.channel.disconnect();
-        }, HIDDEN_DISCONNECT_MS);
+        armDisconnect();
         return;
       }
       // A declined channel stays declined: the agent turned this subscription
@@ -229,6 +232,12 @@ export function useAutoScanDetail(agentId: string, projectName: string): AutoSca
       // the timer never got to close is a no-op, so this needs no guard for it.
       if (!declined) channelRef.current?.connect();
     });
+    // `onTabVisibility` reports transitions, not the current value, and the
+    // effect that opens the channel does so unconditionally. Mounting into an
+    // already-hidden tab — `authenticated` flipping while hidden, or the lazy
+    // route chunk resolving after the user switched away — would otherwise arm
+    // nothing and stream until the tab is both shown and hidden again.
+    if (tabHidden()) armDisconnect();
     return () => {
       cancelPending();
       unsubscribe();
