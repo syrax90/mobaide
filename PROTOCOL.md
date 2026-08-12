@@ -723,7 +723,12 @@ and apply to every current proto-v revision.
    asserts all three ``APP_PROTOCOL_VERSION`` values are equal (and iOS's
    ``MIN_SERVER_PROTOCOL_VERSION`` equals Android's — the web gate is set
    membership against the server's advertised list and carries no floor of
-   its own), so a bump that misses a client fails CI.
+   its own), so a bump that misses a client fails CI. Version-pinned test
+   artifacts move with the constants: iOS
+   ``MobaideTests/ProtocolVersionTests.swift`` pins ``ProtocolVersion.app``,
+   and the web Playwright stub ``web/e2e/fixtures.ts`` must list the new
+   version in ``protocol_versions`` (with ``auth.spec.ts``'s
+   incompatible-server fixture staying strictly above it).
 3. Update ``tests/protocol_golden.json`` to match the new shape; any change
    must update the golden file or CI fails.
 4. Add a new section to this file documenting the change.

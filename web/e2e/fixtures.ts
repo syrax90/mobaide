@@ -4,7 +4,7 @@ import type { BrowserContext, Page } from '@playwright/test';
 export const SERVER_INFO = {
   name: 'central_server',
   server_version: '0.9.9',
-  protocol_versions: [6, 7],
+  protocol_versions: [6, 7, 8],
   min_client_version: 6,
   capabilities: {},
   google_client_id: null,

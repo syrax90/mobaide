@@ -35,6 +35,7 @@ private struct TerminalScreenContent: View {
     private let sessionId: String
 
     @Environment(Router.self) private var router
+    @Environment(\.scenePhase) private var scenePhase
 
     init(container: AppContainer, sessionId: String) {
         let session = container.sessionRepository.currentSessions.first { $0.session_id == sessionId }
@@ -201,6 +202,20 @@ private struct TerminalScreenContent: View {
         .onDisappear {
             model.markHidden()
             keyboard.stop()
+        }
+        // `onAppear`/`onDisappear` never fire for scene-level transitions on
+        // an already-mounted screen; the takeover claim must still die on
+        // backgrounding and re-arm on return (`.inactive` also cancels — the
+        // app switcher and system overlays are not foreground attention).
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active:
+                model.sceneWillActivate()
+            case .inactive, .background:
+                model.sceneDidBackground()
+            @unknown default:
+                break
+            }
         }
     }
 

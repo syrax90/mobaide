@@ -141,6 +141,13 @@ fun TerminalScreen(
         viewModel.onScreenVisible()
     }
 
+    // STARTED→STOPPED edge: composition is retained across backgrounding, so
+    // without this a foreground-takeover job armed within the last 400 ms
+    // fires while the user is looking at another client and steals the grid.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        viewModel.onScreenStopped()
+    }
+
     // Tell the notification service which session is on screen so it suppresses
     // a redundant alert for the session the user is already viewing (alerts for
     // other sessions still fire). Cleared when this screen leaves composition.

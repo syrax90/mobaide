@@ -93,6 +93,17 @@ const MIN_FOLLOWER_FONT_SIZE = 6;
 const FOCUS_TAKEOVER_MS = 400;
 
 /**
+ * The agent's per-dimension grid envelope (`MAX_GRID_DIM` in
+ * `mobaide/core/session.py`). A grid outside it is rejected server-side with
+ * no corrective `w`, so the emulator must never adopt one: a wide viewport at
+ * low browser zoom can propose more than 1000 columns, and sizing the
+ * emulator to it would leave local wrapping permanently disagreeing with the
+ * PTY. The browser is the only client that can reach this — both mobile
+ * viewports are physically orders of magnitude below the envelope.
+ */
+const MAX_GRID_DIM = 1000;
+
+/**
  * This client's role in proto-v8 size arbitration. `solo` and `owner` behave
  * exactly like the pre-v8 sole-authority client; `follower` renders another
  * client's grid and never sends `r` frames. Fresh models start as `follower`
@@ -455,7 +466,21 @@ export class TerminalSessionModel {
       return;
     }
     try {
-      this.fit.fit();
+      // `fit()` would adopt the proposal unclamped, so an out-of-envelope
+      // proposal takes the manual-resize path instead.
+      const dims = this.fit.proposeDimensions();
+      if (
+        dims !== undefined &&
+        (dims.rows > MAX_GRID_DIM || dims.cols > MAX_GRID_DIM)
+      ) {
+        const rows = Math.min(dims.rows, MAX_GRID_DIM);
+        const cols = Math.min(dims.cols, MAX_GRID_DIM);
+        if (this.term.rows !== rows || this.term.cols !== cols) {
+          this.term.resize(cols, rows);
+        }
+      } else {
+        this.fit.fit();
+      }
     } catch {
       // `proposeDimensions` reads the renderer's cell metrics, which are absent
       // for a frame after `open()` in some browsers. The next observer tick

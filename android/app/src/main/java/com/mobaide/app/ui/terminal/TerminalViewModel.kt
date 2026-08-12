@@ -700,10 +700,16 @@ class TerminalViewModel @Inject constructor(
             resizeJob = null
         } else if (previous == SizeAuthority.Follower) {
             _followerGrid.value = null
-            foregroundTakeoverJob?.cancel()
-            foregroundTakeoverJob = null
-            pendingForegroundTakeover = false
+            cancelForegroundClaim()
         }
+    }
+
+    /** Drops both stages of a foreground takeover: the armed 400 ms job and
+     *  an elapsed claim parked on the send gate. */
+    private fun cancelForegroundClaim() {
+        foregroundTakeoverJob?.cancel()
+        foregroundTakeoverJob = null
+        pendingForegroundTakeover = false
     }
 
     /**
@@ -1062,9 +1068,16 @@ class TerminalViewModel @Inject constructor(
     fun markScreenHidden() {
         foregroundSessionTracker.clearVisible(sessionId)
         // Leaving the screen cancels a not-yet-fired foreground takeover.
-        foregroundTakeoverJob?.cancel()
-        foregroundTakeoverJob = null
-        pendingForegroundTakeover = false
+        cancelForegroundClaim()
+    }
+
+    /** ON_STOP counterpart of [onScreenVisible]: the app leaving the
+     *  foreground (composition retained) must drop the claim in either stage —
+     *  an armed job that fired mid-background would silently steal the grid
+     *  from whichever client the user switched to. The next ON_START edge
+     *  re-arms it. */
+    fun onScreenStopped() {
+        cancelForegroundClaim()
     }
 
     /**

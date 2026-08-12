@@ -80,8 +80,8 @@ test('a second tab inherits the session and follows the sign-out', async ({
 test('an incompatible server takes the whole app over', async ({ page }) => {
   await stubRelay(page, {
     ...SERVER_INFO,
-    protocol_versions: [8, 9],
-    min_client_version: 8,
+    protocol_versions: [9, 10],
+    min_client_version: 9,
   });
 
   await page.goto('/login');

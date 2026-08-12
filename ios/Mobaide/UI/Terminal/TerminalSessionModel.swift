@@ -174,6 +174,10 @@ final class TerminalSessionModel {
     private var foregroundTakeoverTask: Task<Void, Never>?
     /// An elapsed foreground claim waiting for the send gate; see `tryForegroundTakeover`.
     private var pendingForegroundTakeover = false
+    /// Whether the terminal screen is on screen (`markVisible`/`markHidden`).
+    /// Scene reactivation arms a foreground takeover only for the visible
+    /// screen — a retained model behind another screen must not claim.
+    private var isScreenVisible = false
 
     private let outboundStream: AsyncStream<Data>
     private let outboundContinuation: AsyncStream<Data>.Continuation
@@ -410,10 +414,16 @@ final class TerminalSessionModel {
             resizeTask = nil
         } else if wasFollower {
             followerGrid = nil
-            foregroundTakeoverTask?.cancel()
-            foregroundTakeoverTask = nil
-            pendingForegroundTakeover = false
+            cancelForegroundClaim()
         }
+    }
+
+    /// Drops both stages of a foreground takeover: the armed 400 ms task and
+    /// an elapsed claim parked on the send gate.
+    private func cancelForegroundClaim() {
+        foregroundTakeoverTask?.cancel()
+        foregroundTakeoverTask = nil
+        pendingForegroundTakeover = false
     }
 
     /// Follower → owner: assert the frozen natural grid immediately (no
@@ -973,6 +983,7 @@ final class TerminalSessionModel {
     // MARK: - Lifecycle
 
     func markVisible() {
+        isScreenVisible = true
         foregroundSessionTracker.setVisible(sessionId)
         // The screen coming (back) on-screen is a focus edge: a follower the
         // user is now looking at takes size authority after the debounce.
@@ -983,11 +994,10 @@ final class TerminalSessionModel {
     }
 
     func markHidden() {
+        isScreenVisible = false
         foregroundSessionTracker.clearVisible(sessionId)
         // Leaving the screen cancels a not-yet-fired foreground takeover.
-        foregroundTakeoverTask?.cancel()
-        foregroundTakeoverTask = nil
-        pendingForegroundTakeover = false
+        cancelForegroundClaim()
         // Selection is per-visit UI. The view is retained and keeps consuming
         // PTY output while hidden, and a live selection pins the viewport
         // through `holdsAutoScroll` — with follow mode untouched, no unread
@@ -998,6 +1008,23 @@ final class TerminalSessionModel {
         // dismiss-on-dispose parity) — the retained view would otherwise keep
         // first responder and swallow keys behind whatever screen comes next.
         dismissTerminalKeyboard()
+    }
+
+    /// Scene reactivation while this screen is visible is a foreground edge —
+    /// `onAppear` does not re-run for an already-mounted screen, so without
+    /// this a terminal returning from the background never re-arms its claim.
+    /// Gated on visibility: a retained model behind another screen observes
+    /// the same scene transitions but must stay passive.
+    func sceneWillActivate() {
+        guard isScreenVisible else { return }
+        markVisible()
+    }
+
+    /// Leaving the foreground drops the claim in either stage — an armed task
+    /// that fired mid-background would silently steal the grid from whichever
+    /// client the user switched to. The next `.active` edge re-arms it.
+    func sceneDidBackground() {
+        cancelForegroundClaim()
     }
 
     func disconnect() {
@@ -1011,8 +1038,7 @@ final class TerminalSessionModel {
         sendTask?.cancel()
         resizeTask?.cancel()
         shortcutsTask?.cancel()
-        foregroundTakeoverTask?.cancel()
-        pendingForegroundTakeover = false
+        cancelForegroundClaim()
         outboundContinuation.finish()
         if let core {
             Task { await core.disconnect() }

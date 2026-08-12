@@ -521,6 +521,35 @@ class TerminalViewModelSizeArbitrationTest {
     }
 
     @Test
+    fun backgroundingTheApp_cancelsTheArmedForegroundTakeover() = runTest {
+        // ON_STOP arrives with the composition retained (markScreenHidden
+        // never runs), so the armed job would otherwise fire mid-background
+        // and steal the grid from the client the user switched to.
+        val vm = createViewModel()
+        soloWithCachedGrid(vm)
+        deliverWinsize(60, 150, 2)
+
+        vm.onScreenVisible()
+        advanceTimeBy(200)
+        vm.onScreenStopped()
+        advanceTimeBy(500)
+        advanceUntilIdle()
+
+        assertEquals(SizeAuthority.Follower, vm.sizeAuthority.value)
+    }
+
+    @Test
+    fun backgroundingTheApp_dropsTheParkedClaim_soTheGateReopeningStaysPassive() = runTest {
+        val vm = createViewModel()
+        parkForegroundClaim(vm)
+
+        vm.onScreenStopped()
+        deliverState("running") // reopens with no claim left to fire
+
+        assertEquals(SizeAuthority.Follower, vm.sizeAuthority.value)
+    }
+
+    @Test
     fun soloPromotionWhileParked_consumesTheClaim_beforeTheGateReopens() = runTest {
         // The promotion's authority change clears the parked claim; the
         // foreign grid that follows demotes again, and the reopening gate
