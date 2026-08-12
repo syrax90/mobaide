@@ -366,6 +366,13 @@ final class TerminalSessionModel {
             // content — a reconnect mid-selection must not let Copy lift text
             // the user never selected.
             endSelection()
+            // Each replay span is its own winsize generation: a same-socket
+            // handshake replacement (relay swapping a v8 agent for a v7 one)
+            // must not inherit the previous handshake's `w`, or replay-end
+            // would skip the v7 fallback and strand a follower. A v8 agent
+            // re-emits `w` inside the span on both transports, so this reset
+            // never misfires against one.
+            winsizeSeen = false
             terminalView.applyingEmulatorOutput {
                 terminalView.feedTrackingSynchronizedOutput(Self.clearBeforeReplay[...])
             }

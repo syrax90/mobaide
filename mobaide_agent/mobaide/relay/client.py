@@ -2184,6 +2184,15 @@ class RelayClient:
                 emitted_any = True
             if not emitted_any:
                 await _send(FRAME_OUTPUT)
+            # Second ``w`` inside the replay span, mirroring the direct-WS
+            # handshake. Clients start a fresh winsize generation at
+            # replay-start, so only an in-span ``w`` proves the agent behind
+            # THIS handshake speaks v8 — without it, a same-socket agent swap
+            # (v8 tunnel replaced by v7) would leak the previous handshake's
+            # ``w`` into the new span's v7-fallback decision and strand
+            # followers. It also covers size/count changes that landed during
+            # the multi-MB chunk replay above.
+            await _send(FRAME_WINSIZE + session.winsize_payload())
             await _send(FRAME_REPLAY_END)
         except Exception as exc:
             logger.debug(

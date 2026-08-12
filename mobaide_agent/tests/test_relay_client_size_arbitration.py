@@ -85,10 +85,13 @@ class TestTargetedAttachHandshake:
 
         await client._handle_control(_attach("s1", conn_id="c1"), ws)
 
-        # state -> winsize -> replay -> output(empty ring) -> replay_end,
-        # each addressed at the one attaching client — a broadcast handshake
-        # would wipe and re-replay every already-attached client's terminal.
-        assert ws.send.await_count == 5
+        # state -> winsize -> replay -> output(empty ring) -> winsize ->
+        # replay_end, each addressed at the one attaching client — a broadcast
+        # handshake would wipe and re-replay every already-attached client's
+        # terminal. The second winsize sits INSIDE the replay span: clients
+        # reset their winsize marker at replay-start, and the in-span copy is
+        # what defeats the v7 fallback after a same-socket agent swap.
+        assert ws.send.await_count == 6
         inners = []
         for call in ws.send.call_args_list:
             channel, sid, payload = decode(call[0][0])
@@ -102,7 +105,8 @@ class TestTargetedAttachHandshake:
         assert inners[1] == FRAME_WINSIZE + WINSIZE_PAYLOAD
         assert inners[2] == FRAME_REPLAY
         assert inners[3] == FRAME_OUTPUT
-        assert inners[4] == FRAME_REPLAY_END
+        assert inners[4] == FRAME_WINSIZE + WINSIZE_PAYLOAD
+        assert inners[5] == FRAME_REPLAY_END
 
     async def test_attach_registers_conn_token_before_the_handshake(
         self, client, mock_session_manager
@@ -123,7 +127,7 @@ class TestTargetedAttachHandshake:
         await client._handle_control(_attach("s1", conn_id="c1"), ws)
 
         assert order[0] == "register:relay:c1"
-        assert order.count("send") == 5
+        assert order.count("send") == 6
 
     async def test_attach_without_conn_id_broadcasts_legacy_handshake(
         self, client, mock_session_manager
@@ -138,10 +142,11 @@ class TestTargetedAttachHandshake:
         await client._handle_control(_attach("s1"), ws)
 
         session.register_clients.assert_called_once_with({"relay:legacy:s1"})
-        assert ws.send.await_count == 5
+        assert ws.send.await_count == 6
         decoded = [decode(c[0][0]) for c in ws.send.call_args_list]
         assert all(ch == CH_SESSION_IO for ch, _, _ in decoded)
         assert decoded[1][2] == FRAME_WINSIZE + WINSIZE_PAYLOAD
+        assert decoded[4][2] == FRAME_WINSIZE + WINSIZE_PAYLOAD
 
     async def test_oversized_conn_id_falls_back_to_legacy(
         self, client, mock_session_manager

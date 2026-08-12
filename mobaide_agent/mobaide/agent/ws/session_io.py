@@ -198,7 +198,10 @@ async def _send_attach_handshake(websocket: WebSocket, session) -> None:
     # subscribed to the fanout, so a resize or attach/detach landing in that
     # window would otherwise be lost until the next change. Re-emit the
     # now-current size + count just before the end marker; a duplicate ``w``
-    # is idempotent for clients.
+    # is idempotent for clients. This in-span copy is also the one the
+    # v7-fallback trusts: clients reset their winsize marker at replay-start,
+    # so a same-socket agent swap cannot leak a previous handshake's ``w``
+    # into this span's replay-end decision.
     await websocket.send_bytes(FRAME_WINSIZE + session.winsize_payload())
     await websocket.send_bytes(FRAME_REPLAY_END)
 

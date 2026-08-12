@@ -41,15 +41,19 @@ cadence; they do **not** gate compatibility.
   re-assert decision; (2) broadcast to all attached clients after every
   effective resize; (3) broadcast whenever the attached-client count changes,
   which is what lets a passive client reclaim its natural grid the moment it
-  becomes solo. On the **direct-WS transport** the handshake additionally
-  re-emits ``w`` immediately before the replay-end marker: the ring replay can
-  span megabytes while the connecting socket is not yet subscribed to live
-  broadcasts, so a resize or attach/detach landing in that window would
-  otherwise be lost (the relay transport does not need this — an attaching
-  client is in the relay's broadcast set before the agent's handshake starts).
-  Clients treat a duplicate ``w`` as idempotent. A truncated payload decodes to
-  null. All three v7 clients drop unknown frame type bytes, so a v8 agent is
-  safe against v7 clients.
+  becomes solo. **Both transports additionally re-emit ``w`` inside the replay
+  span, immediately before the replay-end marker.** On direct-WS this covers
+  the subscription gap (the ring replay can span megabytes while the
+  connecting socket is not yet subscribed to live broadcasts, so a resize or
+  attach/detach landing in that window would otherwise be lost); on both
+  transports the in-span copy is what the client-side v7 fallback trusts —
+  clients reset their per-socket winsize marker at replay-start, so a
+  handshake replayed over a *surviving* mobile socket after the relay swaps
+  the agent tunnel (a v8 agent replaced by a v7 one) cannot inherit the
+  previous handshake's ``w`` and skip the fallback, which would strand
+  followers with their resizes suppressed. Clients treat a duplicate ``w`` as
+  idempotent. A truncated payload decodes to null. All three v7 clients drop
+  unknown frame type bytes, so a v8 agent is safe against v7 clients.
 * **Client arbitration (identical on Android / iOS / web).** Each terminal
   model holds a role — ``solo`` / ``owner`` / ``follower`` — **initialized
   ``follower``** so a fresh attach adopts an already-driven session's grid
@@ -100,9 +104,12 @@ cadence; they do **not** gate compatibility.
   the agent registers it, so a broadcast ``w`` still reporting one client can
   reach the newcomer ahead of its own handshake — clients arbitrate only on
   ``w`` frames that follow a state frame on the same socket. **v7-agent fallback:** no
-  ``w`` by replay-end means no arbitration exists on the other side; the
+  ``w`` since replay-start means no arbitration exists on the other side; the
   client reverts to solo and re-asserts, i.e. exactly the pre-v8 contract,
-  with no version sniffing.
+  with no version sniffing. The marker resets at every replay-start (not just
+  on disconnect), because a replacement handshake can arrive over a surviving
+  socket after an agent-tunnel swap; the in-span ``w`` both transports
+  guarantee is what proves the current handshake's agent speaks v8.
 * **``conn_id`` on the mobile attach/detach control frames.** The relay
   generates a per-connection id (uuid hex — per socket, not per device: two
   tabs of one browser must count as two clients) and adds it to

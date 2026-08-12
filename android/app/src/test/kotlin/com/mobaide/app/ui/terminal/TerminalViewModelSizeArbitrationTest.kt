@@ -382,14 +382,47 @@ class TerminalViewModelSizeArbitrationTest {
     }
 
     @Test
-    fun replayEndAfterWinsize_staysFollower() = runTest {
+    fun replayEndAfterInSpanWinsize_staysFollower() = runTest {
         val vm = createViewModel()
         goLiveRunning()
         deliverWinsize(60, 150, 2)
 
-        deliverReplaySpan()
+        eventsFlow.emit(WsEvent.Binary(byteArrayOf(TerminalProtocol.TYPE_REPLAY).toByteString()))
+        // The in-span copy every v8 handshake carries on both transports —
+        // the pre-span 'w' no longer counts, since replay-start begins a
+        // fresh winsize generation.
+        deliverWinsize(60, 150, 2)
+        eventsFlow.emit(WsEvent.Binary(byteArrayOf(TerminalProtocol.TYPE_REPLAY_END).toByteString()))
+        advanceUntilIdle()
 
         assertEquals(SizeAuthority.Follower, vm.sizeAuthority.value)
+    }
+
+    @Test
+    fun replacementHandshakeWithoutWinsize_revertsTheFollowerToSolo() = runTest {
+        // A surviving socket can receive a whole new handshake when the relay
+        // swaps the agent tunnel underneath it. If the new agent is v7, its
+        // handshake carries no 'w' anywhere — and a marker left raised by the
+        // previous v8 handshake would skip the fallback, stranding this
+        // follower with resizes suppressed against an agent that has no
+        // arbitration at all.
+        val vm = createViewModel()
+        soloWithCachedGrid(vm)
+        deliverWinsize(60, 150, 2) // v8 agent: follower
+        assertEquals(SizeAuthority.Follower, vm.sizeAuthority.value)
+
+        deliverState("running") // replacement handshake begins
+        deliverReplaySpan() // v7 agent: no 'w' anywhere in the span
+
+        assertEquals(SizeAuthority.Solo, vm.sizeAuthority.value)
+        awaitFrames(2)
+        assertEquals(
+            listOf(
+                TerminalProtocol.encodeResize(40, 120),
+                TerminalProtocol.encodeResize(40, 120),
+            ),
+            frames(),
+        )
     }
 
     @Test

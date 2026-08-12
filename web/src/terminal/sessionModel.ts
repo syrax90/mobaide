@@ -892,6 +892,13 @@ export class TerminalSessionModel {
           // renumbered; iOS learned this the expensive way.
           this.term.clearSelection();
           this.rebaseline = true;
+          // Each replay span is its own winsize generation: a same-socket
+          // handshake replacement (relay swapping a v8 agent for a v7 one)
+          // must not inherit the previous handshake's `w`, or replay-end
+          // would skip the v7 fallback and strand a follower. A v8 agent
+          // re-emits `w` inside the span on both transports, so this reset
+          // never misfires against one.
+          this.winsizeSeen = false;
           // Each span owns its own end marker. A socket that dropped after `'e'`
           // but before the writes drained would otherwise leave the flag raised,
           // and a callback from the *old* span would clear the new span's

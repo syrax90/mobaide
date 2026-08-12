@@ -251,15 +251,41 @@ describe('TerminalSessionModel size arbitration (proto-v8)', () => {
     expect(model.state.getState().sizeAuthority).toBe('solo');
   });
 
-  it('keeps following at replay-end when a w did arrive on this socket', async () => {
+  it('keeps following at replay-end when a w arrived inside the replay span', async () => {
     const { model, deliverFrame, resizeFrames } = await harness();
     deliverFrame(winsizeFrame(50, 132, 2));
 
     deliverFrame(Uint8Array.from([TERMINAL_FRAME_TYPE.replayStart]));
+    // The in-span copy every v8 handshake carries on both transports — the
+    // pre-span `w` no longer counts, since replay-start begins a fresh
+    // winsize generation.
+    deliverFrame(winsizeFrame(50, 132, 2));
     deliverFrame(Uint8Array.from([TERMINAL_FRAME_TYPE.replayEnd]));
 
     expect(model.state.getState().sizeAuthority).toBe('follower');
     expect(resizeFrames()).toEqual([]);
+  });
+
+  it('a replacement handshake without a w reverts the follower to solo', async () => {
+    // A surviving socket can receive a whole new handshake when the relay
+    // swaps the agent tunnel underneath it. If the new agent is v7, its
+    // handshake carries no `w` anywhere — and a marker left raised by the
+    // previous v8 handshake would skip the fallback, stranding this follower
+    // with its resizes suppressed against an agent that has no arbitration.
+    const context = await soloWithCachedGrid();
+    context.deliverFrame(winsizeFrame(50, 132, 2)); // v8 agent: follower
+    expect(context.model.state.getState().sizeAuthority).toBe('follower');
+
+    context.deliverFrame(stateFrame('running')); // replacement handshake
+    context.deliverFrame(Uint8Array.from([TERMINAL_FRAME_TYPE.replayStart]));
+    context.deliverFrame(Uint8Array.from([TERMINAL_FRAME_TYPE.replayEnd]));
+
+    expect(context.model.state.getState().sizeAuthority).toBe('solo');
+    // The promotion re-delivers the natural grid to the new agent's PTY.
+    expect(context.resizeFrames()).toEqual([
+      resizeFrame(40, 120),
+      resizeFrame(40, 120),
+    ]);
   });
 
   it('suppresses the socket-open re-assert while following', async () => {
