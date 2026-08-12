@@ -20,33 +20,37 @@ interface AgentCardProps {
 export function AgentCard({ agent, busy, onReregister, onDelete }: AgentCardProps) {
   return (
     <li className="device-card">
-      <div className="device-card-head">
-        <span
-          className={`agent-status${agent.online ? ' agent-status-online' : ''}`}
-          aria-hidden="true"
-        />
+      <div className="device-card-head agent-card-head">
         <span className="device-name">{agent.name}</span>
-        <span className="agent-state-label">{agent.online ? 'Online' : 'Offline'}</span>
-        <button
-          type="button"
-          className="button"
-          disabled={busy}
-          onClick={() => {
-            onReregister(agent);
-          }}
-        >
-          Re-register
-        </button>
-        <button
-          type="button"
-          className="button button-danger"
-          disabled={busy}
-          onClick={() => {
-            onDelete(agent);
-          }}
-        >
-          Remove
-        </button>
+        <span className="agent-state">
+          <span
+            className={`agent-status${agent.online ? ' agent-status-online' : ''}`}
+            aria-hidden="true"
+          />
+          <span className="agent-state-label">{agent.online ? 'Online' : 'Offline'}</span>
+        </span>
+        <div className="button-row">
+          <button
+            type="button"
+            className="button"
+            disabled={busy}
+            onClick={() => {
+              onReregister(agent);
+            }}
+          >
+            Re-register
+          </button>
+          <button
+            type="button"
+            className="button button-danger"
+            disabled={busy}
+            onClick={() => {
+              onDelete(agent);
+            }}
+          >
+            Remove
+          </button>
+        </div>
       </div>
       <dl className="device-meta">
         <div>

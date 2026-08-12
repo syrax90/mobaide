@@ -353,6 +353,55 @@ defaults the opposite way. Only `step`, `mode` and the project selection
 live in the URL; the ~30 option fields do not, so no prompt text reaches
 browser history.
 
+**The wizard opens where the last launch left off** (CLA-232), which is both
+mobile clients' behaviour and the one part of WEB-07 that shipped as defaults
+only. `localStorage` key `mobaide-launch-prefs` holds the four option buckets
+plus the last project name, and `launchPrefs.ts` is the seam in both
+directions. Three things are load-bearing. The buckets are **global, not per
+agent** — mobile's scoping, kept because a model or an autonomy preset is a
+preference about how the user works rather than a fact about a machine, and
+because a global bucket has nothing to re-seed when the router keeps one
+wizard instance across a change of `:agentId` (the hazard that forces
+`recentPaths` into an effect). A bucket that was never launched stays `null`
+rather than being written out at its defaults, which is what keeps Auto Scan's
+`skipPermissions: true` alive for a fresh profile while letting a stored
+`false` win. And the values are **pinned by `submit` before the round trip**:
+the config step's controls are not disabled while a create is in flight (only
+Back, Create and Cancel are), so reading live state in `onSuccess` would file
+options the launch never carried — the mobile instance of that race is
+CLA-259. Rebuilding the blob from the request instead is not the way out,
+because `buildCreateRequest` drops a blank `append_system_prompt` and would
+turn `''` into `undefined` on the prefill path; only the *project* comes off
+the request, where its absence is exactly what keeps an ad-hoc directory a
+recent rather than the last-used project.
+
+Two rules follow the storage precedents rather than the mobile source.
+Sanitising on read is `recentPaths`'s all-or-nothing rule applied per bucket: a
+missing key takes the mobile data-class default (Kotlin's `encodeDefaults`,
+Swift's `decodeIfPresent ?? default`), but a present-but-wrong value or an
+out-of-vocabulary enum voids that whole bucket back to `INITIAL_WIZARD_STATE`,
+because a typed `@Serializable`/`Codable` decode fails outright rather than
+salvaging the readable fields. And `codex.reasoningEffort` persists nullable
+where Kotlin and Swift store a plain `String` — the web control has a real
+third state (`null` renders "Agent default"), and nothing in this blob crosses
+a device boundary, so the wider type costs no interop. Restore re-applies the
+Antigravity `sandbox && !skipPermissions` interlock, as both mobile clients do
+(the server 422s the pair), and additionally clamps a restored effort through
+`effectiveClaudeEffort` — display-only, since `buildCreateRequest` already
+clamps through the same helper, but it avoids the blank picker Android and iOS
+render when the stored effort outruns the model's ladder. Worktree/branch,
+`add_dirs` and the Auto Scan initial prompt are per-session and are not
+persisted on any client.
+
+Not purged at sign-out, matching mobile and unlike the recents below — a
+decision worth stating with its cost rather than as a parity note. What
+survives is a project name and `append_system_prompt`, free text the user
+typed, which the agent puts on argv. Android and iOS store the same values in
+per-OS-user app storage, while `localStorage` is per *browser profile*, so on a
+shared profile the next account to sign in inherits both, pre-filled. The
+parity argument is therefore weaker here than it looks; the decision stands
+deliberately, not by default.
+
 `skip_permissions` is the trap the wizard is built around: its **wire-absence
 default is `true`**, so an omitted field launches with
 `--dangerously-skip-permissions`. Requests are re-parsed through
@@ -648,7 +697,11 @@ Zustand store the React tree reads. `src/routes/terminal/` is presentation
 only. Models live in `terminalStore` outside React so navigating away and
 back keeps the buffer instead of paying for a fresh replay; three stay
 resident, least-recently-acquired evicted (iOS keeps one per session until
-the session dies, a signal web has no list to deliver yet). Each model
+the session dies, a signal web has no list to deliver yet). Residency is not
+the same as streaming, though — see *Unwatched sessions* below: a retained
+model that is off screen, or in a hidden tab, closes its socket once it has
+both gone unread past the grace and spent a ring's worth of output, and
+resuming it does pay a fresh replay. Each model
 self-registers with `liveChannels`, so `stopAllRealtime()` on a session
 change tears it down — the screen re-acquires when its entry disappears.
 
@@ -827,7 +880,8 @@ oversized frame trips the agent tunnel's 4 MB limit and drops *every*
 session on that agent. The toggle is the one piece of terminal state that
 outlives the tab: `terminalPrefsStore` persists it under `localStorage` key
 `mobaide-terminal`, the second persisted key after `mobaide-theme` (WEB-07
-adds `mobaide-agent` and `mobaide-sessions`; CLA-256 adds the wizard's
+adds `mobaide-agent` and `mobaide-sessions`, and CLA-232 the wizard's global
+`mobaide-launch-prefs`; CLA-256 adds the wizard's
 per-agent `recent_custom_paths::<agentId>`, deliberately unprefixed for
 mobile parity — the one prefix sweep in `src/` is CLA-258's
 `clearAllRecentPaths()`, which keys off `recent_custom_paths::` itself, so
@@ -1073,8 +1127,48 @@ in-app toast. Permission is requested only from the button in Settings, never
 on load, and `e2e/settings.spec.ts` asserts that by counting
 `Notification.requestPermission()` calls from before any app code runs.
 
-**Tab lifecycle: the socket stays open when hidden.** Presence gating for
-APNs became per device rather than per account
+**Unwatched sessions: the PTY socket does not stay open.** The paragraph below
+is about `ws/user-events`, which is cheap and must keep delivering. A session's
+PTY stream is the opposite case, and it is gated on whether anything is actually
+reading it: *watched* means the tab is visible **and** this session is the
+terminal the route is rendering, so the two retained-but-off-screen models
+`MAX_RETAINED` allows are treated exactly like a hidden tab.
+
+The session protocol has no pause frame — C→S is only `i`/`x`/`m`/`r`, and the
+relay routes `CH_SESSION_IO` solely to clients registered on `session_io:<sid>`
+— so closing the socket is the only way to stop the bytes, and every reopen
+costs a full ring replay (4 MiB by default, uncompressed, and it wipes the
+emulator). That rules out both obvious policies: suspending on a timer alone
+charges an idle session a replay to save nothing, and suspending on a byte
+budget alone fires on short absences where staying attached was already cheaper.
+`terminal/terminalSuspend.ts` is therefore a conjunction — suspend once the
+session has spent `RECOUP_BYTES` (4 MiB, one ring) **and** gone unwatched for
+`GRACE_MS` (60 s), with `FIREHOSE_BYTES` (32 MiB) cutting the grace short for
+`yes`-grade output. It is a pure predicate evaluated only as frames arrive, with
+no timers: a session that goes quiet after crossing a threshold is simply never
+re-examined and costs nothing. Android `TerminalSuspend` and iOS
+`TerminalSuspend` mirror the same three constants.
+
+The two inputs come from `realtime/tabVisibility.ts` (its own
+`visibilitychange` listener, deliberately not `resumeOnFocus`'s: that module's
+verb is `forceReconnect()`, which no-ops on a channel `disconnect()` has already
+stopped, and it is imported from the eager bundle where reaching a model would
+drag xterm into the initial chunk) and `terminal/watchedTerminal.ts` (the
+mounted-terminal pointer, split out of `terminalStore` because `sessionModel`
+now reads it and the store already imports `sessionModel` — the same no-import
+shape as `terminalEviction`). A deliberate suspend lands in the connection store
+as `stopped` like any other, so the model publishes `channelStopped` only when
+it is *not* suspended and the overlay says **Paused** rather than offering a
+Reconnect button nobody needs. Replay spans are never charged and never
+interrupted, so a reconnect that lands while still unwatched cannot re-suspend
+itself into a loop.
+
+The auto-scan socket is paused on tab hide too, with no budget: its subscribe
+frame is rebuilt from the live wire cursor on every open, so a resume picks up
+at the high-water mark and costs one handshake rather than a replay.
+
+**Tab lifecycle: the user-events socket stays open when hidden.** Presence
+gating for APNs became per device rather than per account
 (`relay/agent_ws.py::_handle_user_event` excluding
 `routing.get_user_device_ids()`), so a browser tab no longer mutes a phone.
 Web deliberately sends no `device_id` hint on `ws/user-events`, exactly as
@@ -1094,10 +1188,13 @@ registry owns, plus anything registered through its `onResume` seam. Not every
 `visibilitychange`: alt-tabbing is constant, and reconnecting on each would be
 its own handshake storm.
 
-The auto-scan monitor's socket uses that seam, and needs it most: at the default
-300 s scan interval it is silent for most of every cycle, behind a screen a user
-deliberately leaves open, so a black-holed connection is indistinguishable from a
-healthy idle scan. Firing it blindly is safe in both directions — `forceReconnect`
+The auto-scan monitor's socket uses that seam while it is open, and needs it
+most: at the default 300 s scan interval it is silent for most of every cycle,
+behind a screen a user deliberately leaves open, so a black-holed connection is
+indistinguishable from a healthy idle scan. A hidden tab is now the one case
+where the seam does not apply — the socket is closed after a minute, which
+leaves `shouldReconnect` false, so `onResume`'s `forceReconnect` no-ops until
+the visibility handler's own `connect()` re-arms it. Firing it blindly is safe in both directions — `forceReconnect`
 no-ops once `disconnect()` has cleared `shouldReconnect`, so a declined channel
 stays declined, and the replay a reconnect triggers is dropped by both cursors.
 The terminal is deliberately left out: it is user-driven, so a dead socket

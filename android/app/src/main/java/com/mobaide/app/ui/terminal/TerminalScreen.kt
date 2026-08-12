@@ -441,6 +441,11 @@ private fun ConnectionOverlay(state: ConnectionState) {
     val (label, bg) = when (state) {
         ConnectionState.Reconnecting -> "Reconnecting\u2026" to Color(0xCC202020)
         ConnectionState.ReplayingBuffer -> "Replaying buffer\u2026" to Color(0xCC2A4D6E)
+        // Rarely on screen: returning to the terminal resumes the stream in the
+        // same pass that recomposes this. It exists so the state is honest for
+        // the frame in between, and so the input gates read a suspend as "not
+        // live" rather than as a dropped connection.
+        ConnectionState.Suspended -> "Paused" to Color(0xCC202020)
         ConnectionState.Live -> return
     }
     Box(

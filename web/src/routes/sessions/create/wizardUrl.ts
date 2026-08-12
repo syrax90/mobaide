@@ -5,8 +5,10 @@
  * deliberately do not: there are around thirty of them, two are long free text
  * that would end up in browser history and any intermediary log, and keeping
  * them out means the no-leak invariant never depends on URL hygiene. The cost —
- * a reload inside `config` re-seeds options from defaults — is honest, and is
- * why the clamps below exist rather than a pretence of full restoration.
+ * a reload inside `config` re-seeds the options from the last **successfully
+ * launched** ones (`launchPrefs.ts`), or from the defaults where no launch of
+ * that kind has happened, discarding whatever was being edited — is honest, and
+ * is why the clamps below exist rather than a pretence of full restoration.
  */
 import type { ProjectSummary } from '../../../api/projectRepository';
 import {

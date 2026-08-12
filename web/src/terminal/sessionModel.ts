@@ -36,8 +36,11 @@ import { writeClipboardText } from '../lib/clipboard';
 import { SessionIoChannel, sessionChannelName } from '../realtime/channels';
 import { useConnectionStore } from '../realtime/connectionStore';
 import { registerDisposable, unregisterDisposable } from '../realtime/liveChannels';
+import { onTabVisibility, tabHidden } from '../realtime/tabVisibility';
 import { realScheduler, type Scheduler } from '../realtime/webSocketChannel';
 import { useToastStore } from '../stores/toastStore';
+import { shouldSuspend, type BackgroundSpend } from './terminalSuspend';
+import { mountedTerminal, onMountedTerminal } from './watchedTerminal';
 import { useTerminalPrefsStore } from '../stores/terminalPrefsStore';
 import { refuseOsc52Reads, TerminalClipboardProvider } from './terminalClipboard';
 import {
@@ -126,6 +129,8 @@ export interface TerminalViewState {
   connection: TerminalConnectionState;
   /** The socket's close policy gave up; nothing will reconnect on its own. */
   channelStopped: boolean;
+  /** Detached on purpose to stop spending bandwidth on an unwatched session. */
+  suspended: boolean;
   /** Replay bytes are queued but not painted yet — keeps the overlay up. */
   replayPainting: boolean;
   status: TerminalState | null;
@@ -143,6 +148,7 @@ function initialViewState(): TerminalViewState {
   return {
     connection: 'connecting',
     channelStopped: false,
+    suspended: false,
     replayPainting: false,
     status: null,
     pinned: true,
@@ -180,6 +186,14 @@ export interface TerminalSessionModelOptions {
   scheduler?: Scheduler;
   /** Injected in tests so the model runs without a real socket. */
   channel?: SessionIoChannel;
+  /** Injected so a test can drive the suspend grace without a fake clock. */
+  now?: () => number;
+  /**
+   * The suspend policy, injected so a test can exercise this wiring without
+   * pushing `RECOUP_BYTES` through the emulator. `terminalSuspend.test` owns
+   * the thresholds themselves.
+   */
+  suspendPolicy?: (spend: BackgroundSpend) => boolean;
   /**
    * Run last during {@link TerminalSessionModel.dispose}.
    *
@@ -212,6 +226,8 @@ export class TerminalSessionModel {
   private readonly io: SessionIoChannel;
   private readonly fit = new FitAddon();
   private readonly scheduler: Scheduler;
+  private readonly now: () => number;
+  private readonly suspendPolicy: (spend: BackgroundSpend) => boolean;
   private readonly onDispose: (() => void) | undefined;
   private readonly disposers: (() => void)[] = [];
 
@@ -269,6 +285,12 @@ export class TerminalSessionModel {
   /** An elapsed focus claim waiting for the send gate; see tryFocusTakeover. */
   private pendingFocusTakeover = false;
 
+  /** When the session stopped being read, or null while it is being read. */
+  private unwatchedSince: number | null = null;
+  /** Live output charged since then. Replay spans are not charged. */
+  private unwatchedBytes = 0;
+  private suspended = false;
+
   constructor(
     agentId: string,
     sessionId: string,
@@ -278,6 +300,8 @@ export class TerminalSessionModel {
     this.sessionId = sessionId;
     this.key = sessionChannelName(agentId, sessionId);
     this.scheduler = options.scheduler ?? realScheduler;
+    this.now = options.now ?? (() => Date.now());
+    this.suspendPolicy = options.suspendPolicy ?? shouldSuspend;
     this.onDispose = options.onDispose;
     this.state = create<TerminalViewState>()(() => initialViewState());
     this.scrollbar = create<ScrollbarView>()(() => initialScrollbarView());
@@ -320,6 +344,7 @@ export class TerminalSessionModel {
     this.io.setResendSuppressed(true);
     this.wireTerminal();
     this.wireChannel();
+    this.wireWatchGate();
 
     registerDisposable(this);
     this.io.channel.connect();
@@ -706,22 +731,14 @@ export class TerminalSessionModel {
         switch (event.kind) {
           case 'binary':
             this.handleInbound(decodeTerminalFrame(new Uint8Array(event.data)));
+            // Charged after the frame is handled, never before. Suspending
+            // resets the replay machine to `connecting`, and this same frame
+            // would then re-upgrade it to live through `reduceInboundFrame`'s
+            // connecting branch — reopening the send gate over a closed socket.
+            this.chargeInbound(event.data.byteLength);
             break;
           case 'disconnected':
-            this.replay = reduceDisconnected();
-            this.winsizeSeen = false;
-            this.stateSeen = false;
-            // A drop forfeits authority: whatever happened while this client
-            // was away, the reconnect handshake must arbitrate before any
-            // size leaves — an ex-owner resuming from the background would
-            // otherwise re-assert its stale grid at socket open and steal
-            // the PTY with zero user activity. The natural-grid cache and
-            // `lastSent*` survive, so the handshake `w` restores owner via
-            // the own-echo branch (or solo via the count) without a wasted
-            // frame, and the v7 replay-end fallback still promotes.
-            this.setAuthority('follower');
-            patchState(this.state, { connection: this.replay.connection });
-            this.syncStdinGate();
+            this.noteDisconnected();
             break;
           default:
             break;
@@ -729,12 +746,139 @@ export class TerminalSessionModel {
       }),
     );
     this.disposers.push(
-      useConnectionStore.subscribe((store) => {
-        patchState(this.state, {
-          channelStopped: store.channels[this.key]?.status === 'stopped',
-        });
+      useConnectionStore.subscribe(() => {
+        this.publishChannelStopped();
       }),
     );
+  }
+
+  private noteDisconnected(): void {
+    this.replay = reduceDisconnected();
+    this.winsizeSeen = false;
+    this.stateSeen = false;
+    // A drop forfeits authority: whatever happened while this client was
+    // away, the reconnect handshake must arbitrate before any size leaves —
+    // an ex-owner resuming from the background would otherwise re-assert its
+    // stale grid at socket open and steal the PTY with zero user activity.
+    // The natural-grid cache and `lastSent*` survive, so the handshake `w`
+    // restores owner via the own-echo branch (or solo via the count) without
+    // a wasted frame, and the v7 replay-end fallback still promotes. A
+    // deliberate suspend routes through here too and forfeits identically.
+    this.setAuthority('follower');
+    patchState(this.state, { connection: this.replay.connection });
+    this.syncStdinGate();
+  }
+
+  /**
+   * `channelStopped` means the reconnect loop gave up and nothing will re-arm
+   * it — the state that earns a Reconnect button. A deliberate suspend lands in
+   * the store as `stopped` too, since `disconnect()` is the only way to stop
+   * the bytes, but it is not a failure: the socket reopens on its own the
+   * moment the session is read again, and offering a button over it would
+   * invite the user to pay for a replay they did not need.
+   */
+  private publishChannelStopped(): void {
+    patchState(this.state, {
+      channelStopped:
+        !this.suspended &&
+        useConnectionStore.getState().channels[this.key]?.status === 'stopped',
+    });
+  }
+
+  /**
+   * A session is watched only while this tab is on screen *and* this is the
+   * terminal the route is rendering. `MAX_RETAINED` keeps three models attached
+   * while at most one is being read, so an off-screen model in a visible tab is
+   * as unwatched as anything in a hidden tab.
+   */
+  private wireWatchGate(): void {
+    this.syncWatched();
+    this.disposers.push(
+      onTabVisibility(() => {
+        this.syncWatched();
+      }),
+    );
+    this.disposers.push(
+      onMountedTerminal(() => {
+        this.syncWatched();
+      }),
+    );
+  }
+
+  private syncWatched(): void {
+    if (this.disposed) return;
+    if (!tabHidden() && mountedTerminal() === this.key) {
+      this.unwatchedSince = null;
+      this.unwatchedBytes = 0;
+      this.resume();
+      return;
+    }
+    // Re-baselined on the transition, not on suspend: bytes spent while the
+    // user was reading are not the background's to answer for, and without this
+    // a long-lived session would carry its whole history into the first hide
+    // and suspend instantly.
+    if (this.unwatchedSince === null) {
+      this.unwatchedSince = this.now();
+      this.unwatchedBytes = 0;
+    }
+  }
+
+  private chargeInbound(bytes: number): void {
+    if (this.suspended || this.disposed) return;
+    const since = this.unwatchedSince;
+    if (since === null) return;
+    this.unwatchedBytes += bytes;
+    // Never mid-replay: tearing one down wastes bytes already paid for and
+    // strands `replayPainting`, which only an `'e'` this span will never send
+    // could clear.
+    if (this.replay.inReplay || this.pendingReplayWrites > 0) return;
+    const spend = { unwatchedMs: this.now() - since, bytes: this.unwatchedBytes };
+    if (this.suspendPolicy(spend)) this.suspend();
+  }
+
+  /**
+   * Stop consuming this session's PTY output.
+   *
+   * Closing the socket is the only lever: the session protocol has no pause
+   * frame and the relay routes `CH_SESSION_IO` solely to clients registered on
+   * `session_io:<sid>`. Detaching is free on the agent — its
+   * `_handle_mobile_detach` only logs, the PTY keeps running and the ring keeps
+   * filling, so the next open replays everything missed.
+   */
+  suspend(): void {
+    if (this.suspended || this.disposed) return;
+    // Raised before the disconnect: the store write that triggers reaches
+    // `publishChannelStopped`, which has to see the latch already set.
+    this.suspended = true;
+    patchState(this.state, { suspended: true });
+    this.io.channel.disconnect();
+    // `disconnect()` nulls the socket's handlers before closing it, so no
+    // `disconnected` event will ever arrive to shut the send gate. Without this
+    // the model stays `live`, `disableStdin` stays false, and every keystroke
+    // is swallowed after xterm has already snapped the viewport to the tail and
+    // cleared the selection.
+    this.noteDisconnected();
+    // Explicit, not left to the store subscription: `connectionStore.sameState`
+    // swallows an identical `{stopped, 0, null}` write, so a channel that had
+    // already given up would keep its Reconnect button raised through a
+    // suspend.
+    this.publishChannelStopped();
+  }
+
+  resume(): void {
+    if (!this.suspended || this.disposed) return;
+    this.suspended = false;
+    this.unwatchedBytes = 0;
+    // The clock as well as the counter. `retryConnection()` reaches here on a
+    // model that is still unwatched, and leaving the old stamp standing would
+    // let the next `RECOUP_BYTES` re-suspend it at once — the opposite of a
+    // user-driven retry outranking the governor.
+    if (this.unwatchedSince !== null) this.unwatchedSince = this.now();
+    patchState(this.state, { suspended: false });
+    // `connect()`, not `forceReconnect()`: the latter early-returns while
+    // `shouldReconnect` is false, which is exactly what `disconnect()` left.
+    this.io.channel.connect();
+    this.publishChannelStopped();
   }
 
   private handleInbound(frame: TerminalInboundFrame | null): void {
@@ -766,6 +910,10 @@ export class TerminalSessionModel {
           break;
         case 'replayFinished':
           this.replayEndSeen = true;
+          // The replay is sunk cost already paid. Charging it would make the
+          // first live byte after any reconnect-while-unwatched blow the budget
+          // instantly, suspend again, and loop.
+          this.unwatchedBytes = 0;
           this.settleReplayPaint();
           // No `w` frame by replay-end means a v7 agent, which cannot have
           // another size authority. Revert to solo; the `enterLive` effect
@@ -1155,6 +1303,10 @@ export class TerminalSessionModel {
    */
   retryConnection(): void {
     if (this.disposed) return;
+    // A user-driven retry outranks the governor. Leaving the latch set would
+    // pin `chargeInbound` at its early return, so the session could never be
+    // suspended again.
+    this.resume();
     this.io.channel.connect();
   }
 

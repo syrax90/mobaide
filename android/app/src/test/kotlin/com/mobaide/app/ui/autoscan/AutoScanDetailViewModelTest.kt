@@ -6,6 +6,7 @@ import com.mobaide.app.data.network.AutoScanWsClient
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.RunNowResponse
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.data.repository.AutoScanUiEvent
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.coEvery
@@ -116,7 +117,7 @@ class AutoScanDetailViewModelTest {
 
     private fun Fixture.buildVm(): AutoScanDetailViewModel {
         val handle = SavedStateHandle(mapOf("projectName" to PROJECT))
-        return AutoScanDetailViewModel(handle, repository)
+        return AutoScanDetailViewModel(handle, repository, AppForegroundTracker())
     }
 
     // ---- Frame reducer ------------------------------------------------------

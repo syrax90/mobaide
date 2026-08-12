@@ -274,7 +274,8 @@ final class AppContainer {
         }
         self.appLifecycleController = AppLifecycleController(
             coordinator: attentionCoordinator,
-            agentEventBus: agentEventBus
+            agentEventBus: agentEventBus,
+            terminalSessionStore: terminalSessionStore
         )
         self.pushRegistrationCoordinator = PushRegistrationCoordinator(
             authStates: { sessionManager.authStates() },

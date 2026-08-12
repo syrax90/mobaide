@@ -10,7 +10,10 @@ import type { TerminalViewState } from '../../terminal/sessionModel';
  * actually consumed the replay, so the overlay never lifts on a blank screen.
  */
 export function overlayMessage(
-  view: Pick<TerminalViewState, 'channelStopped' | 'connection' | 'replayPainting'>,
+  view: Pick<
+    TerminalViewState,
+    'channelStopped' | 'connection' | 'replayPainting' | 'suspended'
+  >,
 ): string | null {
   // Not "Session ended": nothing in the close policy reports a session's death
   // this way. A stopped channel means the reconnect loop gave up — a terminal
@@ -18,6 +21,13 @@ export function overlayMessage(
   // nothing will re-arm it on its own, which is why this state carries a
   // button rather than just a label.
   if (view.channelStopped) return 'Disconnected';
+  // Ahead of the reconnect label, which a suspend would otherwise win: the
+  // model leaves `connection` at `'connecting'` when it detaches. Rarely on
+  // screen at all — coming back to the terminal resumes the stream in the same
+  // pass that renders this — but it must not read as a failure for the frame in
+  // between. Android `ConnectionOverlay` and iOS `connectionOverlay` say the
+  // same word for the same state.
+  if (view.suspended) return 'Paused';
   if (view.connection === 'connecting') return 'Reconnecting…';
   if (view.connection === 'replaying' || view.replayPainting) {
     return 'Replaying buffer…';

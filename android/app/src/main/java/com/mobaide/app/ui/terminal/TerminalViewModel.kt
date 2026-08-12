@@ -22,6 +22,7 @@ import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
+import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.ui.sessions.sessionHeaderLabel
 import com.termux.terminal.TerminalSession
@@ -56,8 +57,17 @@ import okio.ByteString
 import org.json.JSONObject
 import javax.inject.Inject
 
-/** Live, reconnecting, replaying — what the UI overlay should show on top of the terminal. */
-enum class ConnectionState { Live, Reconnecting, ReplayingBuffer }
+/**
+ * Live, reconnecting, replaying, suspended — what the UI overlay should show on
+ * top of the terminal.
+ *
+ * [Suspended] is deliberate, not a failure: nothing on screen was reading this
+ * session, so its socket was closed to stop paying for output nobody sees. It
+ * reopens by itself the moment the screen comes back, which is why it carries
+ * no retry affordance. Kept distinct from [Reconnecting] so the input gates and
+ * the overlay cannot mistake it for a dropped connection.
+ */
+enum class ConnectionState { Live, Reconnecting, ReplayingBuffer, Suspended }
 
 /**
  * This client's role in proto-v8 size arbitration (latest-active wins).
@@ -87,8 +97,30 @@ class TerminalViewModel @Inject constructor(
     private val templatesRepository: TemplatesRepository,
     private val shortcutsRepository: ShortcutsRepository,
     private val foregroundSessionTracker: ForegroundSessionTracker,
+    private val appForegroundTracker: AppForegroundTracker,
     private val preferencesStore: PreferencesStore,
 ) : ViewModel() {
+
+    /**
+     * The suspend policy, overridable in tests so a case can exercise this
+     * wiring without pushing [TerminalSuspend.RECOUP_BYTES] through the
+     * emulator. `TerminalSuspendPolicyTest` owns the thresholds themselves.
+     */
+    internal var suspendPolicy: (Long, Long) -> Boolean = TerminalSuspend::shouldSuspend
+
+    /** This session's terminal is composed on screen. */
+    private var screenVisible = false
+    private var appForeground = true
+
+    /** When the session stopped being read, or null while it is being read. */
+    private var unwatchedSinceMs: Long? = null
+
+    /** Live output charged since then. Replay spans are not charged. */
+    private var unwatchedBytes = 0L
+    private var streamSuspended = false
+
+    /** Consumed by the ON_START nudge so a resume is not reconnected twice. */
+    private var resumedFromSuspend = false
 
     val displayConfig: StateFlow<TerminalDisplayConfig> = combine(
         preferencesStore.terminalDisplayMode,
@@ -172,6 +204,13 @@ class TerminalViewModel @Inject constructor(
             }
         }
         connect()
+
+        viewModelScope.launch {
+            appForegroundTracker.isForeground.collect { foreground ->
+                appForeground = foreground
+                syncWatched()
+            }
+        }
 
         // Single consumer drains the send channel on IO, keeping the UI thread free.
         viewModelScope.launch(Dispatchers.IO) {
@@ -378,16 +417,30 @@ class TerminalViewModel @Inject constructor(
                         // handshake 'w' restores owner/solo without a wasted
                         // frame; the v7 replay-end fallback still promotes.
                         setAuthority(SizeAuthority.Follower)
-                        _connectionState.value = ConnectionState.Reconnecting
+                        if (!streamSuspended) {
+                            _connectionState.value = ConnectionState.Reconnecting
+                        }
                     }
                     is WsEvent.Error -> {
                         _isConnected.value = false
                         winsizeSeen = false
                         stateSeen = false
                         setAuthority(SizeAuthority.Follower)
-                        _connectionState.value = ConnectionState.Reconnecting
+                        // A send attempted over the socket a suspend just
+                        // closed — a debounced resize is the reachable one —
+                        // emits Error. Left ungated it would replace "Paused"
+                        // with a reconnect the governor is not performing.
+                        if (!streamSuspended) {
+                            _connectionState.value = ConnectionState.Reconnecting
+                        }
                     }
-                    is WsEvent.Binary -> handleBinary(event.bytes)
+                    is WsEvent.Binary -> {
+                        handleBinary(event.bytes)
+                        // Charged after the frame is handled, never before: a
+                        // suspend resets the replay machine, and this same
+                        // frame would then be read against the wrong state.
+                        chargeInbound(event.bytes.size.toLong())
+                    }
                     is WsEvent.Message -> { /* binary protocol only */ }
                 }
             }
@@ -400,6 +453,15 @@ class TerminalViewModel @Inject constructor(
         // Inbound binary traffic implies the WS is up — if we somehow
         // missed the Connected event, upgrade out of Reconnecting so the
         // overlay doesn't lie.
+        //
+        // Not while suspended, though. The events flow buffers, so the frames
+        // already queued behind the one that tripped the policy are delivered
+        // *after* `suspendStream` closed the socket, and this upgrade would
+        // hand them back a connected flag. `InputBar` gates only on
+        // `isConnected && sessionState`, so the composer would reopen over a
+        // dead socket and `sendInput` would clear the user's text into a frame
+        // that never leaves.
+        if (streamSuspended) return
         _isConnected.value = true
         if (_connectionState.value == ConnectionState.Reconnecting) {
             enterLiveState()
@@ -458,6 +520,10 @@ class TerminalViewModel @Inject constructor(
                     if (!winsizeSeen && _sizeAuthority.value == SizeAuthority.Follower) {
                         setAuthority(SizeAuthority.Solo)
                     }
+                    // The replay is sunk cost already paid. Charging it would
+                    // make the first live byte after any reconnect-while-
+                    // unwatched blow the budget instantly, suspend again, loop.
+                    unwatchedBytes = 0
                     enterLiveState()
                 }
             }
@@ -780,6 +846,9 @@ class TerminalViewModel @Inject constructor(
     /** Single entry point into [ConnectionState.Live]. */
     private fun enterLiveState() {
         _connectionState.value = ConnectionState.Live
+        // Reaching live retires the latch: an ON_START that never arrived
+        // must not suppress a later, genuine screen-on nudge.
+        resumedFromSuspend = false
         resendCachedSize()
         maybeRetryForegroundTakeover()
     }
@@ -1063,12 +1132,16 @@ class TerminalViewModel @Inject constructor(
      *  the user is already looking at. Alerts for other sessions still fire. */
     fun markScreenVisible() {
         foregroundSessionTracker.setVisible(sessionId)
+        screenVisible = true
+        syncWatched()
     }
 
     fun markScreenHidden() {
         foregroundSessionTracker.clearVisible(sessionId)
         // Leaving the screen cancels a not-yet-fired foreground takeover.
         cancelForegroundClaim()
+        screenVisible = false
+        syncWatched()
     }
 
     /** ON_STOP counterpart of [onScreenVisible]: the app leaving the
@@ -1078,6 +1151,81 @@ class TerminalViewModel @Inject constructor(
      *  re-arms it. */
     fun onScreenStopped() {
         cancelForegroundClaim()
+    }
+
+    /**
+     * A session is watched only while the app is on screen *and* this terminal
+     * is composed. The two halves are tracked separately because neither
+     * implies the other: backgrounding leaves the composable in place, and
+     * navigating forward disposes it without backgrounding the app.
+     */
+    private fun syncWatched() {
+        if (screenVisible && appForeground) {
+            unwatchedSinceMs = null
+            unwatchedBytes = 0
+            resumeStream()
+            return
+        }
+        // Re-baselined on the transition, not on suspend: bytes spent while the
+        // user was reading are not the background's to answer for, and without
+        // this a long-lived session would carry its whole history into the
+        // first hide and suspend instantly.
+        if (unwatchedSinceMs == null) {
+            unwatchedSinceMs = System.currentTimeMillis()
+            unwatchedBytes = 0
+        }
+    }
+
+    private fun chargeInbound(bytes: Long) {
+        if (streamSuspended) return
+        val since = unwatchedSinceMs ?: return
+        unwatchedBytes += bytes
+        // Never mid-replay: tearing one down wastes bytes already paid for and
+        // leaves the overlay pinned on a span whose terminator never arrives.
+        if (inReplay) return
+        if (suspendPolicy(System.currentTimeMillis() - since, unwatchedBytes)) {
+            suspendStream()
+        }
+    }
+
+    /**
+     * Stop consuming this session's PTY output.
+     *
+     * Closing the socket is the only lever — the session protocol has no pause
+     * frame. Detaching is free on the agent: its `_handle_mobile_detach` only
+     * logs, the PTY keeps running and the ring keeps filling, so the next open
+     * replays everything missed.
+     *
+     * [WebSocketConnection.pause] rather than `disconnect`, which would end the
+     * connection's scope and make the resume a silent no-op.
+     */
+    private fun suspendStream() {
+        if (streamSuspended) return
+        streamSuspended = true
+        inReplay = false
+        connection?.pause()
+        _isConnected.value = false
+        winsizeSeen = false
+        stateSeen = false
+        // A deliberate suspend forfeits size authority exactly like a drop:
+        // `pause()` may close the socket without a Disconnected event, and an
+        // ex-owner resuming would otherwise re-assert its stale grid at
+        // socket open. The resume handshake's 'w' re-arbitrates.
+        setAuthority(SizeAuthority.Follower)
+        _connectionState.value = ConnectionState.Suspended
+    }
+
+    private fun resumeStream() {
+        if (!streamSuspended) return
+        streamSuspended = false
+        resumedFromSuspend = true
+        unwatchedBytes = 0
+        // Explicitly false, not just left alone: the send gates read this flag
+        // on its own, and it has to stay shut across the whole reconnect and
+        // replay window until the new socket's `Connected` reopens it.
+        _isConnected.value = false
+        _connectionState.value = ConnectionState.Reconnecting
+        connection?.connect()
     }
 
     /**
@@ -1095,7 +1243,25 @@ class TerminalViewModel @Inject constructor(
     fun onScreenVisible() {
         // The screen coming (back) on-screen is a focus edge: a follower the
         // user is now looking at takes size authority after the debounce.
+        // Ahead of the suspend guards on purpose — a resumed stream is
+        // arbitrated by its fresh handshake, and the claim parks on the send
+        // gate until that handshake opens it.
         armForegroundTakeover()
+        // The watch gate owns the reconnect while suspended, and
+        // `forceReconnect` would no-op anyway: `pause()` cleared
+        // `shouldReconnect`.
+        if (streamSuspended) return
+        // Foregrounding fires both paths: the tracker's collector resumes the
+        // stream, and the activity's ON_START lands here. By then the resume
+        // has cleared `streamSuspended`, so without this latch the nudge would
+        // force-reconnect the socket that resume just opened — a second
+        // handshake and a second full ring replay, fanned out to every other
+        // client attached to the session, on the one path this exists to make
+        // cheap.
+        if (resumedFromSuspend) {
+            resumedFromSuspend = false
+            return
+        }
         if (_connectionState.value == ConnectionState.Live) return
         connection?.forceReconnect()
     }

@@ -96,4 +96,15 @@ final class TerminalSessionStore {
     func evict(_ id: String) {
         models.removeValue(forKey: id)?.disconnect()
     }
+
+    /// Publish the app's foreground state to every retained model.
+    ///
+    /// The models are app-scoped and outlive their views, so without this a
+    /// backgrounded app keeps a live PTY stream for every session the user
+    /// has ever opened.
+    func setAppActive(_ active: Bool) {
+        for model in models.values {
+            model.setAppActive(active)
+        }
+    }
 }

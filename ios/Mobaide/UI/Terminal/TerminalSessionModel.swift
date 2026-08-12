@@ -48,6 +48,11 @@ final class TerminalSessionModel {
         /// Terminal teardown — the session was killed or removed and the model
         /// was evicted; the socket will not reconnect.
         case closed
+        /// Detached on purpose because nothing on screen was reading this
+        /// session. Unlike `closed` it reopens by itself the moment the session
+        /// is read again, so it carries no retry affordance — and unlike
+        /// `reconnecting` it is not a failure.
+        case suspended
     }
 
     /// Android `MAX_UNREAD_DISPLAY`.
@@ -148,6 +153,23 @@ final class TerminalSessionModel {
     private var inReplay = false
     private var started = false
     private var isTornDown = false
+
+    /// This session's terminal is on screen.
+    private var screenVisible = false
+    /// The app is in the foreground.
+    private var appActive = true
+    /// When the session stopped being read, or nil while it is being read.
+    private var unwatchedSince: Date?
+    /// Live output charged since then. Replay spans are not charged.
+    private var unwatchedBytes = 0
+    private var streamSuspended = false
+
+    /// The suspend policy, overridable in tests so a case can exercise this
+    /// wiring without pushing `TerminalSuspend.recoupBytes` through the
+    /// emulator. `TerminalSuspendPolicyTests` owns the thresholds themselves.
+    var suspendPolicy: (TimeInterval, Int) -> Bool = {
+        TerminalSuspend.shouldSuspend(unwatchedSeconds: $0, bytes: $1)
+    }
     private var lastResizeRows = 0
     private var lastResizeCols = 0
 
@@ -174,10 +196,6 @@ final class TerminalSessionModel {
     private var foregroundTakeoverTask: Task<Void, Never>?
     /// An elapsed foreground claim waiting for the send gate; see `tryForegroundTakeover`.
     private var pendingForegroundTakeover = false
-    /// Whether the terminal screen is on screen (`markVisible`/`markHidden`).
-    /// Scene reactivation arms a foreground takeover only for the visible
-    /// screen — a retained model behind another screen must not claim.
-    private var isScreenVisible = false
 
     private let outboundStream: AsyncStream<Data>
     private let outboundContinuation: AsyncStream<Data>.Continuation
@@ -228,6 +246,12 @@ final class TerminalSessionModel {
     func start() {
         guard !started else { return }
         started = true
+        // Seeds the unwatched clock before the socket opens. `start()` runs
+        // from the screen's `init`, ahead of any `markVisible`/`markHidden`, so
+        // a model whose view never appears would otherwise sit at
+        // `unwatchedSince == nil` and stream past the policy forever — the
+        // invariant "nil while it is being read" is false at birth without it.
+        syncWatched()
         // Subscribed for the model's whole life (not lazily on picker open):
         // the control-key row renders saved-shortcut buttons without the
         // picker ever opening, and `shortcut.*` pushes must land there live.
@@ -255,12 +279,29 @@ final class TerminalSessionModel {
                 self?.handle(event)
             }
         }
-        sendTask = Task { [outboundStream] in
-            for await frame in outboundStream {
-                _ = await core.send(binary: frame)
+        // Created once and reused across suspend/resume. `outboundStream` is an
+        // `AsyncStream`, which supports exactly one iteration, so a second
+        // `for await` over it would be a programmer error — and the loop
+        // therefore resolves the core per frame instead of capturing one, so a
+        // resumed model sends to the core it actually has rather than to the
+        // one this call happened to build.
+        if sendTask == nil {
+            sendTask = Task { [weak self, outboundStream] in
+                for await frame in outboundStream {
+                    guard let current = self?.core else { continue }
+                    _ = await current.send(binary: frame)
+                }
             }
         }
         await core.connect()
+        // Re-validated after the await, because a resume makes this re-entrant
+        // and `core.connect()` can wait on a token refresh. A teardown or a
+        // second resume landing in that window would otherwise leave this core
+        // live with a cancelled consumer, streaming into a buffer nobody drains.
+        guard !isTornDown, self.core === core else {
+            await core.disconnect()
+            return
+        }
     }
 
     private func handle(_ event: WebSocketEvent) {
@@ -269,6 +310,10 @@ final class TerminalSessionModel {
             resendCachedSize()
         case .binary(let data):
             handleBinary(data)
+            // Charged after the frame is handled, never before: a suspend
+            // resets the replay machine, and this same frame would then be read
+            // against the wrong state.
+            chargeInbound(data.count)
         case .disconnected:
             winsizeSeen = false
             stateSeen = false
@@ -335,6 +380,10 @@ final class TerminalSessionModel {
                 if !winsizeSeen, sizeAuthority == .follower {
                     setAuthority(.solo)
                 }
+                // The replay is sunk cost already paid. Charging it would make
+                // the first live byte after any reconnect-while-unwatched blow
+                // the budget instantly, suspend again, and loop.
+                unwatchedBytes = 0
                 enterLiveState()
             }
         case .winsize(let rows, let cols, let attachedClients):
@@ -983,26 +1032,30 @@ final class TerminalSessionModel {
     // MARK: - Lifecycle
 
     func markVisible() {
-        isScreenVisible = true
         foregroundSessionTracker.setVisible(sessionId)
         // The screen coming (back) on-screen is a focus edge: a follower the
         // user is now looking at takes size authority after the debounce.
         armForegroundTakeover()
-        if connectionState != .live, let core {
+        screenVisible = true
+        syncWatched()
+        // The watch gate owns the reconnect while suspended; forcing one here
+        // would race it against a core it is about to replace.
+        if connectionState != .live, !streamSuspended, let core {
             Task { await core.forceReconnect() }
         }
     }
 
     func markHidden() {
-        isScreenVisible = false
         foregroundSessionTracker.clearVisible(sessionId)
         // Leaving the screen cancels a not-yet-fired foreground takeover.
         cancelForegroundClaim()
-        // Selection is per-visit UI. The view is retained and keeps consuming
-        // PTY output while hidden, and a live selection pins the viewport
-        // through `holdsAutoScroll` — with follow mode untouched, no unread
-        // rows accrue and the jump-to-bottom button stays hidden, so the user
-        // would come back to a frozen viewport and no affordance to escape it.
+        screenVisible = false
+        syncWatched()
+        // Selection is per-visit UI. The view is retained across a hide, and a
+        // live selection pins the viewport through `holdsAutoScroll` — with
+        // follow mode untouched, no unread rows accrue and the jump-to-bottom
+        // button stays hidden, so the user would come back to a frozen viewport
+        // and no affordance to escape it.
         endSelection()
         // Leaving the screen must drop the terminal keyboard (Android
         // dismiss-on-dispose parity) — the retained view would otherwise keep
@@ -1010,21 +1063,95 @@ final class TerminalSessionModel {
         dismissTerminalKeyboard()
     }
 
-    /// Scene reactivation while this screen is visible is a foreground edge —
-    /// `onAppear` does not re-run for an already-mounted screen, so without
-    /// this a terminal returning from the background never re-arms its claim.
-    /// Gated on visibility: a retained model behind another screen observes
-    /// the same scene transitions but must stay passive.
-    func sceneWillActivate() {
-        guard isScreenVisible else { return }
-        markVisible()
+    /// Scene-phase half of the watch gate, driven by `AppLifecycleController`.
+    /// Also the foreground edge for the size-arbitration takeover: `onAppear`
+    /// never re-runs for an already-mounted screen, so backgrounding must drop
+    /// the 400 ms claim in either stage (an armed task firing mid-background
+    /// would silently steal the grid from whichever client the user switched
+    /// to) and reactivation must re-arm it — only for the visible screen; a
+    /// retained model behind another screen sees the same transition but must
+    /// stay passive.
+    func setAppActive(_ active: Bool) {
+        appActive = active
+        if active {
+            if screenVisible { armForegroundTakeover() }
+        } else {
+            cancelForegroundClaim()
+        }
+        syncWatched()
     }
 
-    /// Leaving the foreground drops the claim in either stage — an armed task
-    /// that fired mid-background would silently steal the grid from whichever
-    /// client the user switched to. The next `.active` edge re-arms it.
-    func sceneDidBackground() {
-        cancelForegroundClaim()
+    /// A session is watched only while the app is active *and* this terminal is
+    /// on screen. The halves are tracked separately because neither implies the
+    /// other: backgrounding leaves the view in place, and leaving the screen
+    /// does not background the app.
+    private func syncWatched() {
+        guard !isTornDown else { return }
+        if screenVisible && appActive {
+            unwatchedSince = nil
+            unwatchedBytes = 0
+            resumeStream()
+            return
+        }
+        // Re-baselined on the transition, not on suspend: bytes spent while the
+        // user was reading are not the background's to answer for, and without
+        // this a long-lived session would carry its whole history into the first
+        // hide and suspend instantly.
+        if unwatchedSince == nil {
+            unwatchedSince = Date()
+            unwatchedBytes = 0
+        }
+    }
+
+    private func chargeInbound(_ bytes: Int) {
+        guard !streamSuspended, !isTornDown, let since = unwatchedSince else { return }
+        unwatchedBytes += bytes
+        // Never mid-replay: tearing one down wastes bytes already paid for and
+        // leaves the overlay pinned on a span whose terminator never arrives.
+        guard !inReplay else { return }
+        if suspendPolicy(Date().timeIntervalSince(since), unwatchedBytes) {
+            suspendStream()
+        }
+    }
+
+    /// Stop consuming this session's PTY output.
+    ///
+    /// Closing the socket is the only lever — the session protocol has no pause
+    /// frame. Detaching is free on the agent: its `_handle_mobile_detach` only
+    /// logs, the PTY keeps running and the ring keeps filling, so the next open
+    /// replays everything missed.
+    ///
+    /// Deliberately not `disconnect()`, whose three latches — `isTornDown`, the
+    /// finished outbound continuation, and `started` — are each one-way. This
+    /// leaves all of them alone, and drops the core rather than reusing it:
+    /// `WebSocketCore.events` is single-consumer and cannot be re-iterated once
+    /// its consumer is cancelled, so a resume builds a fresh one.
+    func suspendStream() {
+        guard !streamSuspended, !isTornDown else { return }
+        streamSuspended = true
+        inReplay = false
+        winsizeSeen = false
+        stateSeen = false
+        // A deliberate suspend forfeits size authority exactly like a drop:
+        // the event task is cancelled below, so the disconnect arm's reset
+        // never runs, and an ex-owner resuming would re-assert its stale grid
+        // at socket open. The resume handshake's `w` re-arbitrates.
+        setAuthority(.follower)
+        connectionState = .suspended
+        eventTask?.cancel()
+        eventTask = nil
+        if let core {
+            self.core = nil
+            Task { await core.disconnect() }
+        }
+    }
+
+    func resumeStream() {
+        guard streamSuspended, !isTornDown else { return }
+        streamSuspended = false
+        unwatchedBytes = 0
+        connectionState = .reconnecting
+        Task { await openConnection() }
     }
 
     func disconnect() {

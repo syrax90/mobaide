@@ -11,6 +11,7 @@ import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.TemplatesRepository
+import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.Runs
@@ -90,6 +91,7 @@ class TerminalViewModelSessionGoneTest {
             templatesRepository = templatesRepository,
             shortcutsRepository = mockk(),
             foregroundSessionTracker = ForegroundSessionTracker(),
+            appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
         )
 
