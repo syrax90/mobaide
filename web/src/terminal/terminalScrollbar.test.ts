@@ -6,6 +6,7 @@ import {
   offsetFromDrag,
   sameScrollbarView,
   scrollbarView,
+  wheelRows,
   type DragInput,
   type ScrollbarView,
 } from './terminalScrollbar';
@@ -131,5 +132,59 @@ describe('lineForOffset', () => {
 
   it('is the top of the buffer when there is no scrollback', () => {
     expect(lineForOffset(0.5, 0)).toBe(0);
+  });
+});
+
+describe('wheelRows', () => {
+  const CELL = 15;
+
+  it('does not turn a touchpad flick into dozens of rows', () => {
+    // The regression this exists for: 20 events of 10 px each used to be worth
+    // one notch apiece — 60 rows for 200 px of travel. Damped and carried the
+    // flick is worth 20 * (10/15) * 0.3 = 4 rows, and a band rather than 4
+    // exactly because the accumulator lands a hair under it in binary.
+    let carry = 0;
+    let total = 0;
+    for (let event = 0; event < 20; event += 1) {
+      const step = wheelRows(10, CELL, carry);
+      carry = step.carry;
+      total += step.rows;
+    }
+
+    expect(total).toBeGreaterThan(2);
+    expect(total).toBeLessThanOrEqual(4);
+  });
+
+  it('spends a large delta at one row per cell height', () => {
+    // Past the precision cut a classic mouse notch is undamped, so the travel
+    // matches the grid's exactly.
+    expect(wheelRows(150, CELL, 0).rows).toBe(10);
+  });
+
+  it('carries the sub-row remainder instead of rounding it away', () => {
+    // 60/15 = 4 exactly; 70/15 = 4 with 2/3 of a row left over, and the next
+    // event has to spend it or the wheel drifts slower than the content.
+    const first = wheelRows(70, CELL, 0);
+
+    expect(first.rows).toBe(4);
+    expect(first.carry).toBeCloseTo(2 / 3, 5);
+    expect(wheelRows(70, CELL, first.carry).rows).toBe(5);
+  });
+
+  it('scrolls up on a negative delta', () => {
+    expect(wheelRows(-150, CELL, 0).rows).toBe(-10);
+  });
+
+  it('drops a carry left pointing the other way', () => {
+    // It belongs to a gesture that already ended; subtracting it would eat the
+    // first rows of the reversal.
+    expect(wheelRows(-150, CELL, 0.9).rows).toBe(-10);
+  });
+
+  it('refuses to divide by an unmeasured grid', () => {
+    // Before the host is laid out; nothing has entered the scrollback yet
+    // either, so there is nothing to scroll to.
+    expect(wheelRows(120, 0, 0)).toEqual({ rows: 0, carry: 0 });
+    expect(wheelRows(0, CELL, 0.4)).toEqual({ rows: 0, carry: 0.4 });
   });
 });

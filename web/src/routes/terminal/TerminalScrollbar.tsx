@@ -3,8 +3,16 @@ import type { KeyboardEvent, WheelEvent } from 'react';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { offsetFromDrag } from '../../terminal/terminalScrollbar';
 
-/** Rows per wheel notch, the constant Android's `onGenericMotionEvent` uses. */
-const WHEEL_LINES = 3;
+/**
+ * A pointerdown this control acts on: the primary pointer's primary button.
+ *
+ * Without it a right-click would open the context menu *and* start a drag, a
+ * middle-click would page, and a second finger landing during a drag would
+ * fight the first for the thumb.
+ */
+function isPrimaryPress(event: PointerEvent<HTMLDivElement>): boolean {
+  return event.isPrimary && event.button === 0;
+}
 
 interface Drag {
   pointerId: number;
@@ -51,7 +59,9 @@ export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) 
 
   const startDrag = useCallback((event: PointerEvent<HTMLDivElement>) => {
     const track = trackRef.current;
-    if (track === null) return;
+    // Deliberately before `stopPropagation`, so a non-primary press falls
+    // through to the track handler — which refuses it on the same test.
+    if (track === null || !isPrimaryPress(event)) return;
     const thumbRect = event.currentTarget.getBoundingClientRect();
     const trackRect = track.getBoundingClientRect();
     dragRef.current = {
@@ -92,7 +102,7 @@ export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) 
   const pageToPointer = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
       const thumb = thumbRef.current;
-      if (thumb === null) return;
+      if (thumb === null || !isPrimaryPress(event)) return;
       const rect = thumb.getBoundingClientRect();
       if (event.clientY < rect.top) model.scrollByPages(-1);
       else if (event.clientY > rect.bottom) model.scrollByPages(1);
@@ -133,6 +143,10 @@ export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) 
   // without this a wheel over the last few pixels would land on a div and do
   // nothing. React registers `wheel` passively, so there is no `preventDefault`
   // to make here — the app shell does not scroll anyway.
+  //
+  // The three delta modes are kept apart rather than collapsed to a notch
+  // count: a precision touchpad reports pixels, in a stream, and one notch per
+  // event would run the scrollback many times faster here than over the grid.
   const onWheel = useCallback(
     (event: WheelEvent<HTMLDivElement>) => {
       if (event.deltaY === 0) return;
@@ -140,11 +154,11 @@ export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) 
         model.scrollByPages(Math.sign(event.deltaY));
         return;
       }
-      model.scrollByLines(
-        event.deltaMode === 1
-          ? Math.round(event.deltaY)
-          : Math.sign(event.deltaY) * WHEEL_LINES,
-      );
+      if (event.deltaMode === 1) {
+        model.scrollByLines(Math.round(event.deltaY));
+        return;
+      }
+      model.scrollByPixels(event.deltaY);
     },
     [model],
   );

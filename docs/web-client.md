@@ -697,16 +697,28 @@ DECSTBM region scrolls, because xterm shifts those in place; Android counts
 them because its Termux fork genuinely appends them.
 
 **The scrollback slider** is the visible half of that state, and on a touch
-device the only way to reach it: xterm 6 scrolls the buffer itself rather than
-through a native scroller — `.xterm-viewport`'s scroll height equals its client
-height and no gesture target is ever registered — so a finger swipe on the grid
-moves nothing, and the `overflow-y: scroll` xterm ships paints a permanently
-empty bar. The slider takes over that gutter, which `FitAddon` reserves as the
-**constant** `options.overviewRuler?.width || 14` whenever `scrollback` is
-non-zero (xterm 6 has no `scrollBarWidth` at all): the grid is inset by exactly
-that much regardless, so the track costs no columns and forces no reflow — and
-therefore no `r` frame and no cleared selection. `--terminal-scrollbar-width` is
-the other half of that pair; keep the two equal across an addon bump.
+device the only way to reach it: xterm 6 scrolls through a VS Code
+`ScrollableElement` rather than a native scroller, and registers no touch
+gesture target of its own (`Gesture.addTarget` is never called, only
+`ignoreTarget`), so a finger swipe on the grid moves nothing.
+
+**Three scrollbars want the same 14 px gutter, and the slider is the only one
+that stays.** `FitAddon` reserves that gutter as the **constant**
+`options.overviewRuler?.width || 14` whenever `scrollback` is non-zero — it
+measures no bar, and xterm 6 has no `scrollBarWidth` at all — so the grid is
+inset by exactly that much regardless and the track costs no columns and forces
+no reflow, hence no `r` frame and no cleared selection.
+`--terminal-scrollbar-width` is the other half of that pair; keep the two equal
+across an addon bump. The two that go: `.xterm-viewport` is a leftover layer
+whose scroll height equals its client height, so its `overflow-y: scroll` paints
+a permanently empty native bar wherever scrollbars are classic rather than
+overlay; and `ScrollableElement` renders its *own* 14 px slider into the same
+gutter at `z-index: 11`, held at `opacity: 0` until it fades in but with
+`pointer-events: auto` throughout — left in place it swallows every press, so
+the slider would paint here and be dragged there, losing the
+`role="scrollbar"`, the keyboard, the unread re-baseline and the coarse-pointer
+target. Only the widget is hidden; the wheel and the scroll APIs live on the
+scrollable element itself.
 
 Geometry is `size = rows / (baseY + rows)`, `offset = viewportY / baseY`, and it
 lives in a **second Zustand store** on the model. `TerminalView` subscribes to
@@ -718,7 +730,20 @@ CSS custom properties and measures nothing, which is also what makes it testable
 where jsdom computes no layout. Every scroll command re-baselines the tally
 first, so the slider cannot light its own unread badge. Drag, track-click
 paging, the wheel over the track, and ↑/↓/PageUp/PageDown/Home/End on a focused
-`role="scrollbar"` all route through the same four model methods.
+`role="scrollbar"` all route through the same model methods. A pixel-mode wheel
+converts through the cell height with a carried sub-row remainder, mirroring
+`CoreMouseService.consumeWheelEvent` including its damping below 50 px —
+a precision touchpad reports a stream of small deltas, and one notch apiece
+would run the scrollback many times faster over the track than over the grid.
+Presses are gated on the primary pointer's primary button, so a right-click
+opens the context menu without also grabbing the thumb. Where the primary
+pointer is coarse the thumb takes a 2.75rem transparent hit area reaching into
+the grid — 14 px is under half a fingertip and sits on the edge the browser's
+back gesture claims — and that widening is deliberately **not** on
+`any-pointer`, which would swallow mouse selections of the right-hand columns on
+a touchscreen laptop. Forced-colors rules live in their own block *after* the
+base ones: both selectors are one class, so the shared block earlier in the file
+would lose the cascade and leave the thumb the same Canvas white as its track.
 
 **Renderer.** WebGL, with `onContextLoss` → dispose (which reverts to the DOM
 renderer with the buffer intact) → one bounded re-arm → stay on DOM after a

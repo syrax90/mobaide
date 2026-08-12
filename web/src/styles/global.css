@@ -1031,18 +1031,34 @@ input[type='radio']:checked {
 }
 
 /*
- * xterm 6 scrolls the buffer itself and leaves this element's scroll height
- * equal to its client height, so the `overflow-y: scroll` it ships paints a
- * permanently empty native bar in the very gutter the slider occupies. Hiding
- * it removes dead chrome and nothing else: no scroll path runs through this
- * element, and FitAddon reserves the gutter as the constant above rather than
- * by measuring a bar, so the column count cannot move either.
+ * Two scrollbars have to be cleared out of this gutter, and neither is the one
+ * you would expect.
+ *
+ * `.xterm-viewport` is a leftover layer: xterm 6 scrolls through the VS Code
+ * `ScrollableElement` beside it, so this element's scroll height equals its
+ * client height and the `overflow-y: scroll` it still ships paints a
+ * permanently empty native bar wherever scrollbars are classic rather than
+ * overlay.
  */
 .terminal-host .xterm-viewport {
   scrollbar-width: none;
 }
 
 .terminal-host .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+ * The real one: `ScrollableElement` renders its own 14 px slider into exactly
+ * this gutter at `z-index: 11`, held at `opacity: 0` until it fades in on
+ * interaction — but with `pointer-events: auto` the whole time. Left in place
+ * it sits invisibly on top of ours and swallows every press, so the slider
+ * would paint here and be dragged there: no `role="scrollbar"`, no keyboard, no
+ * unread re-baseline, and none of the coarse-pointer target below. Only the
+ * widget is removed; the wheel and every scroll API live on the scrollable
+ * element itself and are untouched.
+ */
+.terminal-host .xterm-scrollable-element > .scrollbar {
   display: none;
 }
 
@@ -1093,6 +1109,56 @@ input[type='radio']:checked {
 .terminal-scrollbar:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+
+/*
+ * The visual gutter is pinned at 14 px by FitAddon's reservation, which is well
+ * under a fingertip and sits on the screen edge the browser's own back gesture
+ * claims. Where the pointer is coarse the thumb takes a transparent hit area
+ * reaching into the grid, so the drag can start clear of that edge; the thumb's
+ * own box is unchanged, and a pseudo-element is outside `getBoundingClientRect`,
+ * so the drag math still measures the 14 px it paints.
+ *
+ * Gated on the *primary* pointer being coarse, not `any-pointer`: on a
+ * touchscreen laptop this strip would otherwise swallow mouse selections of the
+ * right-hand columns.
+ */
+@media (pointer: coarse) {
+  .terminal-scrollbar-thumb::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 2.75rem;
+  }
+}
+
+/*
+ * Its own block rather than the shared one further up, and deliberately *after*
+ * the rules above: both selectors are one class, so the shared block — which
+ * sits earlier in the file — loses the cascade to the `--gray` fill and the
+ * thumb comes out the same Canvas white as its track.
+ *
+ * The thumb also needs the opposite treatment to everything in that block. A
+ * ring is enough for a button; here the whole signal is a filled block that
+ * differs from the track, and on a touch device this is the only route into the
+ * scrollback. System colour keywords survive the forced palette, so name them.
+ */
+@media (forced-colors: active) {
+  .terminal-scrollbar {
+    border-left: 1px solid ButtonBorder;
+  }
+
+  .terminal-scrollbar-thumb {
+    background: ButtonText;
+  }
+
+  .terminal-scrollbar-thumb:hover,
+  .terminal-scrollbar-thumb:active,
+  .terminal-scrollbar:focus-visible .terminal-scrollbar-thumb {
+    background: Highlight;
+  }
 }
 
 .terminal-overlay {

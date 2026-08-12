@@ -66,6 +66,7 @@ import {
   lineForOffset,
   sameScrollbarView,
   scrollbarView,
+  wheelRows,
   type ScrollbarView,
 } from './terminalScrollbar';
 import { executePayload, submitPayload } from './terminalSubmit';
@@ -187,6 +188,8 @@ export class TerminalSessionModel {
   /** Consumed by the next sample: re-baseline instead of accruing unread. */
   private rebaseline = false;
   private pointerDragging = false;
+  /** Sub-row wheel remainder, so a touchpad's small deltas are not rounded off. */
+  private wheelCarry = 0;
 
   private lastRows = 0;
   private lastCols = 0;
@@ -644,6 +647,26 @@ export class TerminalSessionModel {
     this.rebaseline = true;
     this.term.scrollPages(pages);
     this.sampleFollow();
+  }
+
+  /**
+   * Scroll by a pixel-mode wheel delta, in rows.
+   *
+   * The conversion belongs here rather than in the view because the cell height
+   * does: the client is the sole size authority, so the grid it fitted is what
+   * says how tall a row is.
+   */
+  scrollByPixels(deltaY: number): void {
+    const { rows, carry } = wheelRows(deltaY, this.cellHeight(), this.wheelCarry);
+    this.wheelCarry = carry;
+    this.scrollByLines(rows);
+  }
+
+  /** Row height in CSS pixels, or 0 before the host has been laid out. */
+  private cellHeight(): number {
+    const rows = this.term.rows;
+    if (rows <= 0 || this.host.clientHeight <= 0) return 0;
+    return this.host.clientHeight / rows;
   }
 
   /**

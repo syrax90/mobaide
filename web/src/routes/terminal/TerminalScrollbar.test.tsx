@@ -23,13 +23,24 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+interface PointerInit {
+  button?: number;
+  isPrimary?: boolean;
+}
+
 /**
  * jsdom builds no `PointerEvent`, and `fireEvent.pointerDown` then falls back
  * to a bare `Event`, which drops `clientY` — the one field the drag math reads.
+ * `button` and `isPrimary` are the two the press gate reads.
  */
-function pointer(type: string, clientY: number): Event {
-  const event = new MouseEvent(type, { bubbles: true, clientY });
+function pointer(type: string, clientY: number, init: PointerInit = {}): Event {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    clientY,
+    button: init.button ?? 0,
+  });
   Object.defineProperty(event, 'pointerId', { value: 1 });
+  Object.defineProperty(event, 'isPrimary', { value: init.isPrimary ?? true });
   return event;
 }
 
@@ -148,6 +159,37 @@ describe('TerminalScrollbar', () => {
     expect(page).not.toHaveBeenCalled();
   });
 
+  it('ignores a press that is not the primary button', () => {
+    // A right-click opens the context menu; it must not also grab the thumb, or
+    // dismissing the menu leaves the viewport somewhere else.
+    const { model, container } = mount(scrolled);
+    const seek = vi.spyOn(model, 'scrollToOffset').mockImplementation(() => undefined);
+    const page = vi.spyOn(model, 'scrollByPages').mockImplementation(() => undefined);
+    const bar = screen.getByRole('scrollbar');
+    const thumb = container.querySelector('.terminal-scrollbar-thumb');
+    if (thumb === null) throw new Error('no thumb');
+    stubBox(thumb, 100, 40);
+
+    fireEvent(thumb, pointer('pointerdown', 120, { button: 2 }));
+    fireEvent(thumb, pointer('pointermove', 200));
+    fireEvent(bar, pointer('pointerdown', 300, { button: 1 }));
+
+    expect(seek).not.toHaveBeenCalled();
+    expect(page).not.toHaveBeenCalled();
+  });
+
+  it('ignores a second finger landing during a drag', () => {
+    const { model, container } = mount(scrolled);
+    const seek = vi.spyOn(model, 'scrollToOffset').mockImplementation(() => undefined);
+    const thumb = container.querySelector('.terminal-scrollbar-thumb');
+    if (thumb === null) throw new Error('no thumb');
+
+    fireEvent(thumb, pointer('pointerdown', 120, { isPrimary: false }));
+    fireEvent(thumb, pointer('pointermove', 200));
+
+    expect(seek).not.toHaveBeenCalled();
+  });
+
   it('scrolls from the keyboard, so the slider is not pointer-only', () => {
     const { model } = mount(scrolled);
     const lines = vi.spyOn(model, 'scrollByLines').mockImplementation(() => undefined);
@@ -179,9 +221,13 @@ describe('TerminalScrollbar', () => {
   });
 
   it('scrolls on a wheel over the track the viewport no longer receives', () => {
+    // Each delta mode keeps its own route: pixels go through the row-height
+    // conversion, because collapsing them to a notch made a touchpad run the
+    // scrollback many times faster here than over the grid.
     const { model } = mount(scrolled);
     const lines = vi.spyOn(model, 'scrollByLines').mockImplementation(() => undefined);
     const pages = vi.spyOn(model, 'scrollByPages').mockImplementation(() => undefined);
+    const pixels = vi.spyOn(model, 'scrollByPixels').mockImplementation(() => undefined);
     const bar = screen.getByRole('scrollbar');
 
     fireEvent.wheel(bar, { deltaY: 240, deltaMode: 0 });
@@ -189,7 +235,8 @@ describe('TerminalScrollbar', () => {
     fireEvent.wheel(bar, { deltaY: 1, deltaMode: 2 });
     fireEvent.wheel(bar, { deltaY: 0, deltaMode: 0 });
 
-    expect(lines.mock.calls).toEqual([[3], [-2]]);
+    expect(pixels.mock.calls).toEqual([[240]]);
+    expect(lines.mock.calls).toEqual([[-2]]);
     expect(pages.mock.calls).toEqual([[1]]);
   });
 });
