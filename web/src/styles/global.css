@@ -1869,14 +1869,38 @@ input[type='radio']:checked {
 /* endregion */
 
 /* region agents & pairing (WEB-08) */
+.agent-card-head .device-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Fixed width, or "Online" and "Offline" measure differently and shift the
+   buttons from row to row. */
+.agent-state {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: none;
+  min-width: 4.5rem;
+}
+
 .agent-state-label {
   font-size: 0.85rem;
   color: var(--text-muted);
-  margin-left: auto;
 }
 
-.agent-state-label + .button {
+/* The base rule right-pushes the account devices row's single button; this head
+   places its own columns. */
+.agent-card-head .button {
   margin-left: 0;
+}
+
+.agent-card-head .button-row {
+  flex: none;
+  align-items: center;
 }
 
 .pair-card {
@@ -2653,6 +2677,21 @@ body:has(dialog[open]) {
 
   .terminal-toggle-label-short {
     display: inline;
+  }
+
+  /* Name, status and both buttons do not fit one line on a phone, and the name
+     is the column that loses — it collapses to a letter and an ellipsis. The
+     floor is what makes the head wrap instead. */
+  .agent-card-head {
+    flex-wrap: wrap;
+  }
+
+  .agent-card-head .device-name {
+    min-width: 8rem;
+  }
+
+  .agent-card-head .button-row {
+    margin-left: auto;
   }
 }
 
