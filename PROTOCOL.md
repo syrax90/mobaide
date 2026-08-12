@@ -25,6 +25,13 @@ cadence; they do **not** gate compatibility.
   per session, applies only *effective* resizes (an equal-size ``r`` frame is
   a no-op — this alone kills most of the storm), refuses resizes on a
   non-running session, and no longer crashes on a resize against a dead PTY.
+  Grids are bounded to a **1..1000 envelope per dimension**
+  (``MAX_GRID_DIM``): followers adopt the broadcast size into their own
+  emulators, so without the bound one client's 65535×65535 resize would make
+  every attached client allocate a matching buffer. Out-of-envelope ``r``
+  frames are ignored; create-time seeds are clamped (the clamped value is
+  what the PTY spawns with, so the stored grid never diverges from the real
+  winsize).
   It also tracks the attached-client count per session across both transports
   (direct-WS sockets natively; relay clients via ``conn_id``, below).
 * **New S→C binary frame ``w`` (0x77, winsize)** on ``/ws/session/<id>`` and

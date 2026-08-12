@@ -14,7 +14,7 @@ from typing import cast
 
 from mobaide.core.models import SessionConfig, SessionEvent, SessionState
 from mobaide.core.pty_backend import FakePtyBackend, PtyBackend
-from mobaide.core.session import TerminalSession
+from mobaide.core.session import MAX_GRID_DIM, TerminalSession
 
 
 def _config(rows: int = 24, cols: int = 80) -> SessionConfig:
@@ -85,16 +85,44 @@ class TestEffectiveResize:
         assert _drain_winsize_events(session) == []
         assert (session.rows, session.cols) == (24, 80)
 
-    async def test_max_u16_is_accepted(self) -> None:
-        # The bound is inclusive: 65535 is the largest grid the >HHH payload
-        # can carry and must pass validation.
+    async def test_grid_envelope_bound_is_inclusive(self) -> None:
+        # MAX_GRID_DIM is the largest grid the agent will store and broadcast:
+        # followers ADOPT the broadcast size into their own emulators, so an
+        # absurd grid from one client would make every attached client
+        # allocate a matching buffer.
         backend = FakePtyBackend()
         session = _running_session(backend)
 
-        assert await session.resize(0xFFFF, 0xFFFF) is True
+        assert await session.resize(MAX_GRID_DIM, MAX_GRID_DIM) is True
+        assert backend.resize_calls == [(MAX_GRID_DIM, MAX_GRID_DIM)]
+        assert (session.rows, session.cols) == (MAX_GRID_DIM, MAX_GRID_DIM)
 
-        assert backend.resize_calls == [(0xFFFF, 0xFFFF)]
-        assert (session.rows, session.cols) == (0xFFFF, 0xFFFF)
+    async def test_grid_above_the_envelope_is_rejected(self) -> None:
+        backend = FakePtyBackend()
+        session = _running_session(backend)
+
+        assert await session.resize(MAX_GRID_DIM + 1, 80) is False
+        assert await session.resize(24, MAX_GRID_DIM + 1) is False
+        assert await session.resize(0xFFFF, 0xFFFF) is False
+
+        assert backend.resize_calls == []
+        assert _drain_winsize_events(session) == []
+        assert (session.rows, session.cols) == (24, 80)
+
+    async def test_spawn_seed_is_clamped_into_the_envelope(self) -> None:
+        # A create request can carry any int the >HHHH spawn pack accepts; the
+        # stored/broadcast grid (and the PTY spawn itself) must stay inside
+        # the envelope so the handshake `w` cannot amplify an absurd seed.
+        backend = FakePtyBackend()
+        session = TerminalSession(
+            _config(rows=5000, cols=5000),
+            backend=backend,
+        )
+
+        assert (session.rows, session.cols) == (MAX_GRID_DIM, MAX_GRID_DIM)
+        assert session.winsize_payload() == struct.pack(
+            ">HHH", MAX_GRID_DIM, MAX_GRID_DIM, 0,
+        )
 
     async def test_resize_when_not_running_is_noop(self) -> None:
         backend = FakePtyBackend()

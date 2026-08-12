@@ -131,6 +131,14 @@ CHILD_EXIT_POLL_SECONDS = 0.05
 # than letting teardown block forever.
 TASK_JOIN_TIMEOUT_SECONDS = 2.0
 
+# Upper bound on the rows/cols the agent will hold and broadcast as the
+# authoritative grid (proto-v8). The PTY winsize itself is u16, but followers
+# ADOPT the broadcast size into their own emulators, so an absurd grid from
+# one client would make every attached client allocate a matching buffer.
+# 1000 leaves generous headroom over any real terminal — an ultra-wide 5K
+# display at a 6 px cell is ~850 columns.
+MAX_GRID_DIM = 1000
+
 
 class TerminalSession:
     """Owns a single PTY session with async I/O, scrollback, ring buffer,
@@ -194,9 +202,12 @@ class TerminalSession:
         self._user_input_seen = False
         self._stall_task: asyncio.Task[None] | None = None
         # Authoritative PTY size (latest-active-client arbitration, proto-v8).
-        # Seeded from the spawn config; updated only by an *effective* resize.
-        self._rows = config.rows
-        self._cols = config.cols
+        # Seeded from the spawn config — clamped into the broadcastable
+        # envelope, and the clamped values are what spawn() applies, so the
+        # stored grid never diverges from the real PTY winsize. Updated only
+        # by an *effective* resize.
+        self._rows = min(max(1, config.rows), MAX_GRID_DIM)
+        self._cols = min(max(1, config.cols), MAX_GRID_DIM)
         # Opaque tokens for every attached client across both transports
         # (direct WS sockets and relay conn_ids). The count rides the ``w``
         # winsize frame so clients can tell "solo" from "shared".
@@ -276,8 +287,8 @@ class TerminalSession:
             cmd=self._config.command,
             cwd=self._config.cwd,
             env=self._config.env,
-            rows=self._config.rows,
-            cols=self._config.cols,
+            rows=self._rows,
+            cols=self._cols,
         )
         self._state = SessionState.RUNNING
         await self._event_queue.put(
@@ -633,7 +644,7 @@ class TerminalSession:
         or a session that is no longer running. An applied resize updates the
         stored authoritative size and broadcasts a ``winsize`` event.
         """
-        if not (0 < rows <= 0xFFFF and 0 < cols <= 0xFFFF):
+        if not (0 < rows <= MAX_GRID_DIM and 0 < cols <= MAX_GRID_DIM):
             return False
         if (rows, cols) == (self._rows, self._cols):
             return False
