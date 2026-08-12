@@ -64,6 +64,7 @@ import {
 import {
   initialScrollbarView,
   lineForOffset,
+  relativeSteps,
   sameScrollbarView,
   scrollbarView,
   wheelRows,
@@ -594,9 +595,67 @@ export class TerminalSessionModel {
   }
 
   private publishScrollbar(sample: ScrollSample): void {
-    const next = scrollbarView(sample, this.term.rows);
+    const next = scrollbarView(sample, this.term.rows, {
+      altBuffer: this.term.buffer.active.type === 'alternate',
+      mouseReporting: this.term.modes.mouseTrackingMode !== 'none',
+    });
     if (sameScrollbarView(this.scrollbar.getState(), next)) return;
     this.scrollbar.setState(next);
+  }
+
+  /**
+   * Scroll a program that owns its own viewport, by handing xterm wheel events.
+   *
+   * The alternate screen has no scrollback and a program with mouse tracking on
+   * takes the wheel even without one, so there is nothing here for
+   * `scrollLines` to move — mobile solves it by sending wheel buttons 64/65 or
+   * cursor keys (iOS `TerminalWheelScroll`, Android `doScroll`). xterm already
+   * does exactly that ladder for a wheel event, including picking the active
+   * mouse *encoding* — X10 vs SGR vs urxvt, which no public API exposes — and
+   * honouring DECCKM for the arrow arm. So the control synthesizes the event
+   * rather than encoding a byte, and correctness stays xterm's problem.
+   *
+   * `deltaMode` is LINE with a unit delta because xterm's own accumulator is
+   * only a non-zero gate on that path: one event is one step, exactly.
+   */
+  relativeScroll(rows: number): void {
+    const steps = relativeSteps(rows, this.term.rows);
+    if (steps === 0 || !this.canSendBytes()) return;
+    const element = this.term.element;
+    if (element === undefined) return;
+    const screen = element.querySelector('.xterm-screen');
+    if (screen === null) return;
+    // A report carries the cell under the pointer, and coordinates outside the
+    // grid are dropped — so aim inside it rather than at the track that was
+    // actually dragged. Pinned per call, like the mobile anchor.
+    const box = screen.getBoundingClientRect();
+    const clientX = box.left + Math.min(60, box.width / 2);
+    const clientY = box.top + Math.min(60, box.height / 2);
+    const deltaY = rows > 0 ? 1 : -1;
+    for (let step = 0; step < steps; step += 1) {
+      screen.dispatchEvent(
+        new WheelEvent('wheel', {
+          deltaY,
+          deltaMode: WheelEvent.DOM_DELTA_LINE,
+          clientX,
+          clientY,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+  }
+
+  /** Rows a drag of `pixels` is worth, carrying the sub-row remainder. */
+  relativeScrollByPixels(pixels: number): void {
+    const { rows, carry } = wheelRows(pixels, this.cellHeight(), this.wheelCarry);
+    this.wheelCarry = carry;
+    this.relativeScroll(rows);
+  }
+
+  /** A screenful, which is also `relativeScroll`'s per-call ceiling. */
+  relativeScrollPage(pages: number): void {
+    this.relativeScroll(pages * Math.max(1, this.term.rows));
   }
 
   /**

@@ -28,17 +28,44 @@ import type { ScrollSample } from './terminalFollow';
  */
 const PUBLISH_STEPS = 1000;
 
+/**
+ * What the control can do, which is the web spelling of the mobile scroll
+ * ladder (iOS `TerminalWheelScroll.mode`, Android `doScroll`).
+ *
+ * The arms differ from mobile's only in who performs them: xterm already turns
+ * a wheel event into a mouse report while a program has tracking on, and into
+ * a DECCKM-correct arrow key on the alternate screen, so `relative` covers both
+ * of mobile's top two arms and the control never encodes a byte itself.
+ */
+export type ScrollbarMode =
+  /** Scrollback exists: the thumb shows where the viewport is and seeks to a line. */
+  | 'seek'
+  /**
+   * No scrollback, but scrolling still means something — the program owns it.
+   * The grip has no position to show, so it reports travel instead.
+   */
+  | 'relative'
+  /** Nothing to scroll and nobody to ask. */
+  | 'idle';
+
 export interface ScrollbarView {
-  /** Whether anything sits above the viewport. False on the alternate screen. */
-  scrollable: boolean;
-  /** Fraction of the track the thumb fills, 0..1. */
+  mode: ScrollbarMode;
+  /** Fraction of the track the thumb fills, 0..1. `seek` only. */
   size: number;
-  /** Fraction of the thumb's free travel that is above it, 0..1. 1 is the tail. */
+  /** Fraction of the thumb's free travel that is above it, 0..1. `seek` only. */
   offset: number;
 }
 
 export function initialScrollbarView(): ScrollbarView {
-  return { scrollable: false, size: 1, offset: 1 };
+  return { mode: 'idle', size: 1, offset: 1 };
+}
+
+/** The emulator state the ladder reads, in xterm's public terms. */
+export interface TerminalScrollState {
+  /** `buffer.active.type === 'alternate'` — no scrollback exists there. */
+  altBuffer: boolean;
+  /** `modes.mouseTrackingMode !== 'none'` — the program wants the wheel. */
+  mouseReporting: boolean;
 }
 
 function clamp01(value: number): number {
@@ -47,19 +74,31 @@ function clamp01(value: number): number {
 }
 
 /**
- * Thumb size and position for one buffer sample.
+ * Which arm of the ladder applies, and the thumb geometry if it is `seek`.
+ *
+ * Scrollback wins over the program: `scrollToLine` still works on the primary
+ * buffer even while a program has mouse tracking on, and a visible thumb
+ * promises a position, so it has to keep meaning one. Only when there is no
+ * position to show does the control hand the gesture to the program.
  *
  * `baseY + rows` rather than a scrollback constant: `baseY` is what the buffer
  * actually holds, so the thumb grows from full-height to its final size as
  * history accumulates and then stops moving once the ring saturates.
  */
-export function scrollbarView(sample: ScrollSample, rows: number): ScrollbarView {
-  // A full thumb parked at the tail, which is what a scrollbar over content
-  // that fits shows. Also the alternate screen, and a grid that has not been
-  // measured yet.
-  if (sample.baseY <= 0) return initialScrollbarView();
+export function scrollbarView(
+  sample: ScrollSample,
+  rows: number,
+  state: TerminalScrollState,
+): ScrollbarView {
+  if (sample.baseY <= 0) {
+    // The alternate screen has no scrollback by construction, and a program
+    // with tracking on takes the wheel even on the primary buffer — in both
+    // cases scrolling works, it just is not ours to position.
+    const mode = state.altBuffer || state.mouseReporting ? 'relative' : 'idle';
+    return { ...initialScrollbarView(), mode };
+  }
   return {
-    scrollable: true,
+    mode: 'seek',
     size: clamp01(rows / (sample.baseY + rows)),
     // `isPinned` reads a mid-reflow overshoot as parked rather than as a
     // scroll-up, so clamping here keeps the thumb agreeing with the badge.
@@ -67,10 +106,12 @@ export function scrollbarView(sample: ScrollSample, rows: number): ScrollbarView
   };
 }
 
-/** Whether two views would paint the same thumb. See {@link PUBLISH_STEPS}. */
+/** Whether two views would paint the same control. See {@link PUBLISH_STEPS}. */
 export function sameScrollbarView(a: ScrollbarView, b: ScrollbarView): boolean {
+  if (a.mode !== b.mode) return false;
+  // Only `seek` paints from these; the grip is parked wherever the mode says.
+  if (a.mode !== 'seek') return true;
   return (
-    a.scrollable === b.scrollable &&
     Math.round(a.size * PUBLISH_STEPS) === Math.round(b.size * PUBLISH_STEPS) &&
     Math.round(a.offset * PUBLISH_STEPS) === Math.round(b.offset * PUBLISH_STEPS)
   );
@@ -100,6 +141,19 @@ export function offsetFromDrag(input: DragInput): number {
   const travel = input.trackHeight - input.thumbHeight;
   if (travel <= 0) return 1;
   return clamp01((input.pointerY - input.trackTop - input.grabOffset) / travel);
+}
+
+/**
+ * Steps a relative scroll of `rows` should emit, capped at one screen.
+ *
+ * Each step is a whole wheel event crossing a WebSocket and a relay, where
+ * mobile's PTY is local — iOS caps the same way for the same reason, Android
+ * does not cap at all. A fast drag that outruns the cap simply stops at a page;
+ * the next move continues from there.
+ */
+export function relativeSteps(rows: number, pageRows: number): number {
+  if (!Number.isFinite(rows) || rows === 0) return 0;
+  return Math.min(Math.abs(Math.trunc(rows)), Math.max(1, pageRows));
 }
 
 /** The absolute buffer line an offset names. */

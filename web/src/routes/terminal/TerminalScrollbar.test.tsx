@@ -1,5 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+// Type-only, so it is erased and cannot defeat the `vi.mock` hoisting below.
+import type { ScrollbarMode } from '../../terminal/terminalScrollbar';
 
 // Same seam TerminalScreen.test.tsx uses: a token that never resolves to a
 // value keeps `buildUrl` from producing a URL, so the real model is built but
@@ -63,7 +65,7 @@ function stubBox(node: Element, top: number, height: number): void {
   });
 }
 
-function mount(view: { scrollable: boolean; size: number; offset: number }): {
+function mount(view: { mode: ScrollbarMode; size: number; offset: number }): {
   model: Model;
   container: HTMLElement;
 } {
@@ -73,13 +75,14 @@ function mount(view: { scrollable: boolean; size: number; offset: number }): {
   return { model, container };
 }
 
-const scrolled = { scrollable: true, size: 0.1, offset: 0.5 };
+const scrolled = { mode: 'seek' as const, size: 0.1, offset: 0.5 };
+const relative = { mode: 'relative' as const, size: 1, offset: 1 };
 
 describe('TerminalScrollbar', () => {
   it('exposes no control while there is nothing to scroll', () => {
     // The alternate screen, and any session that has not filled a page. The
     // track stays so the reserved gutter never looks like a gap.
-    const { container } = mount({ scrollable: false, size: 1, offset: 1 });
+    const { container } = mount({ mode: 'idle', size: 1, offset: 1 });
 
     expect(screen.queryByRole('scrollbar')).toBeNull();
     // Still painted, but out of the hit path — it lies over the terminal, and
@@ -89,6 +92,89 @@ describe('TerminalScrollbar', () => {
     expect(container.querySelector('.terminal-scrollbar')).toHaveClass(
       'terminal-scrollbar-idle',
     );
+  });
+
+  it('offers a grip where the program owns the scrolling', () => {
+    // The alternate screen and any program holding mouse tracking. There is no
+    // position to report, so it is a labelled button rather than a `scrollbar`
+    // with a fictional `aria-valuenow`.
+    mount(relative);
+
+    expect(screen.queryByRole('scrollbar')).toBeNull();
+    const grip = screen.getByRole('button', { name: 'Drag to scroll the terminal' });
+    expect(grip).toHaveClass('terminal-scrollbar-grip');
+    expect(grip).toHaveAttribute('aria-controls', 'surface-1');
+  });
+
+  it('reports travel since the last move, not since the press', () => {
+    // The grip is a rate of travel, not a position: measuring from the origin
+    // would re-send the whole drag on every move and scroll quadratically.
+    const { model } = mount(relative);
+    const scroll = vi
+      .spyOn(model, 'relativeScrollByPixels')
+      .mockImplementation(() => undefined);
+    const grip = screen.getByRole('button');
+
+    fireEvent(grip, pointer('pointerdown', 100));
+    fireEvent(grip, pointer('pointermove', 130));
+    fireEvent(grip, pointer('pointermove', 145));
+    fireEvent(grip, pointer('pointermove', 125));
+
+    expect(scroll.mock.calls).toEqual([[30], [15], [-20]]);
+  });
+
+  it('stops scrolling once the grip is released', () => {
+    const { model } = mount(relative);
+    const scroll = vi
+      .spyOn(model, 'relativeScrollByPixels')
+      .mockImplementation(() => undefined);
+    const grip = screen.getByRole('button');
+
+    fireEvent(grip, pointer('pointerdown', 100));
+    fireEvent(grip, pointer('pointerup', 130));
+    fireEvent(grip, pointer('pointermove', 200));
+
+    expect(scroll).not.toHaveBeenCalled();
+  });
+
+  it('keeps gripping when an unrelated finger lifts', () => {
+    const { model } = mount(relative);
+    const scroll = vi
+      .spyOn(model, 'relativeScrollByPixels')
+      .mockImplementation(() => undefined);
+    const grip = screen.getByRole('button');
+
+    fireEvent(grip, pointer('pointerdown', 100));
+    fireEvent(grip, pointer('pointerup', 110, { pointerId: 2, isPrimary: false }));
+    fireEvent(grip, pointer('pointermove', 130));
+
+    expect(scroll).toHaveBeenCalledWith(30);
+  });
+
+  it('routes the keyboard and the wheel to the program in relative mode', () => {
+    const { model } = mount(relative);
+    const step = vi.spyOn(model, 'relativeScroll').mockImplementation(() => undefined);
+    const page = vi
+      .spyOn(model, 'relativeScrollPage')
+      .mockImplementation(() => undefined);
+    const pixels = vi
+      .spyOn(model, 'relativeScrollByPixels')
+      .mockImplementation(() => undefined);
+    const seekLines = vi
+      .spyOn(model, 'scrollByLines')
+      .mockImplementation(() => undefined);
+    const grip = screen.getByRole('button');
+
+    fireEvent.keyDown(grip, { key: 'ArrowDown' });
+    fireEvent.keyDown(grip, { key: 'PageUp' });
+    fireEvent.wheel(grip, { deltaY: 90, deltaMode: 0 });
+    fireEvent.wheel(grip, { deltaY: -2, deltaMode: 1 });
+
+    expect(step.mock.calls).toEqual([[1], [-2]]);
+    expect(page.mock.calls).toEqual([[-1]]);
+    expect(pixels.mock.calls).toEqual([[90]]);
+    // The seek commands are meaningless here and must not fire.
+    expect(seekLines).not.toHaveBeenCalled();
   });
 
   it('publishes its position to assistive technology', () => {

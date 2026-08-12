@@ -109,7 +109,7 @@ describe('TerminalScreen scrollbar', () => {
     // `aria-controls` pairing is the half of it a test can hold, since the two
     // ids are minted in different components.
     const model = acquireTerminal('a1', 's1');
-    model.scrollbar.setState({ scrollable: true, size: 0.2, offset: 0.5 });
+    model.scrollbar.setState({ mode: 'seek', size: 0.2, offset: 0.5 });
 
     const { container } = renderTerminal();
 
