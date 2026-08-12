@@ -197,8 +197,16 @@ async def agent_tunnel(websocket: WebSocket) -> None:
     # per-client attaches with N broadcast re-handshakes, so it keeps the
     # legacy one-per-session replay.
     if (conn.protocol_version or 0) >= 8:
+        # Each replayed attach carries the session's WHOLE conn_id set: the
+        # agent registers the batch before sending the first handshake, so no
+        # retained client ever sees a transient count of one (which would
+        # promote it to solo and let it steal the grid on every tunnel blip).
+        by_session: dict[str, list[str]] = {}
         for sid, client in routing.iter_attached_session_clients(agent_id):
-            _enqueue_attach(conn, sid, conn_id=client.conn_id)
+            by_session.setdefault(sid, []).append(client.conn_id)
+        for sid, conn_ids in by_session.items():
+            for cid in conn_ids:
+                _enqueue_attach(conn, sid, conn_id=cid, conn_ids=conn_ids)
     else:
         for sid in routing.list_attached_sessions(agent_id):
             _enqueue_attach(conn, sid)
@@ -524,20 +532,29 @@ def _try_enqueue(client: MobileClient, payload: bytes, *, binary: bool) -> None:
         record_send_queue_drop("agent_to_mobile")
 
 
-def _enqueue_attach(conn, session_id: str, conn_id: str | None = None) -> None:
+def _enqueue_attach(
+    conn,
+    session_id: str,
+    conn_id: str | None = None,
+    conn_ids: list[str] | None = None,
+) -> None:
     """Queue a ``mobile_session_attach`` CH_CONTROL frame for the agent.
 
     Used on agent reconnect to replay attach for every mobile that was
     already registered before the tunnel died. ``conn_id`` (proto-v8)
-    names the specific mobile connection being replayed. Best-effort:
+    names the specific mobile connection being replayed; ``conn_ids``
+    carries the session's whole attached set so the agent can rebuild its
+    registry in one batch before the first replayed handshake. Best-effort:
     logs on a full queue and otherwise drops silently (the caller already
     resolved ``conn`` from routing, so ``None`` cannot occur here).
     """
-    ctrl: dict[str, str] = {
+    ctrl: dict[str, object] = {
         "type": "mobile_session_attach", "session_id": session_id,
     }
     if conn_id:
         ctrl["conn_id"] = conn_id
+    if conn_ids:
+        ctrl["conn_ids"] = conn_ids
     if not try_enqueue_control(conn, ctrl):
         logger.warning(
             "agent_tunnel.attach_replay_drop agent=%s session=%s — agent queue full",

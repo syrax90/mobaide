@@ -172,14 +172,12 @@ describe('TerminalSessionModel grid size', () => {
     expect(pendingResizes()).toBe(0);
   });
 
-  it('re-asserts the cached grid when a socket goes live', async () => {
-    // The agent spawns every session at 24x80 and never reports a size back,
-    // so the client is the sole size authority and has to re-assert on every
-    // connect. Once solo, this re-assert rides the channel's own `onOpen`
-    // hook (PR #409), independent of the model's `connecting`→`live` frame
-    // machinery below — so, unlike the pre-arbitration version, it needs a
-    // real reconnect (the promotion frame already spent this socket's one
-    // `connecting` transition) to observe.
+  it('re-asserts the cached grid once the handshake re-promotes after a drop', async () => {
+    // A drop forfeits authority (round 2): `disconnected` demotes to
+    // follower, which mutes both the channel's own `onOpen` resend and the
+    // model's `connecting`→`live` upgrade below until the reconnect
+    // handshake arbitrates. A solo `w` naming a grid other than the cache
+    // re-promotes and fires the corrective re-assert itself.
     const { model, flushResize, resizeFrames, deliverFrame, socket, sockets, flushChannel } =
       await harness();
     deliverFrame(winsizeFrame(24, 80, 1));
@@ -194,14 +192,21 @@ describe('TerminalSessionModel grid size', () => {
     if (reopened === undefined) throw new Error('no reconnect socket');
     reopened.accept();
 
+    // The socket-open resend stays suppressed: this client is a follower
+    // until the handshake says otherwise.
+    expect(resizeFrames(reopened)).toEqual([]);
+
+    reopened.deliver(winsizeFrame(24, 80, 1).buffer);
+
+    expect(model.state.getState().sizeAuthority).toBe('solo');
     expect(resizeFrames(reopened)).toEqual([resizeFrame(40, 120)]);
   });
 
-  it('re-asserts on a frame it could not decode', async () => {
-    // The upgrade to live precedes the decode, exactly as it does on Android.
-    // As above, exercising the model's own `connecting`→`live` upgrade (as
-    // opposed to the channel's `onOpen` hook a bare reconnect already covers)
-    // needs a fresh `connecting` streak, so this reconnects first.
+  it('re-asserts at the v7 replay-end fallback after a drop', async () => {
+    // The counterpart path: no `w` at all on the new socket. A replay span
+    // with no `w` by its end means a v7 agent, so `replayFinished` reverts
+    // the follower left over from the drop back to solo and the `enterLive`
+    // effect that follows in the same batch delivers the corrective.
     const {
       model, flushResize, resizeFrames, deliverFrame, socket, sockets, flushChannel,
     } = await harness();
@@ -214,13 +219,15 @@ describe('TerminalSessionModel grid size', () => {
     await settle();
     const reopened = sockets[1];
     if (reopened === undefined) throw new Error('no reconnect socket');
-    reopened.accept(); // channel-level onOpen re-assert (1st frame)
+    reopened.accept();
 
-    reopened.deliver(Uint8Array.from([0x00]).buffer);
+    expect(resizeFrames(reopened)).toEqual([]);
 
-    // 1st frame: the channel's onOpen resend. 2nd: the model's own
-    // connecting→live upgrade, triggered by this undecodable frame.
-    expect(resizeFrames(reopened)).toHaveLength(2);
+    reopened.deliver(Uint8Array.from([TERMINAL_FRAME_TYPE.replayStart]).buffer);
+    reopened.deliver(Uint8Array.from([TERMINAL_FRAME_TYPE.replayEnd]).buffer);
+
+    expect(model.state.getState().sizeAuthority).toBe('solo');
+    expect(resizeFrames(reopened)).toEqual([resizeFrame(40, 120)]);
   });
 });
 

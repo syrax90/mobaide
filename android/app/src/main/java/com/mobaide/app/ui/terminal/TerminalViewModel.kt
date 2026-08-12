@@ -362,14 +362,21 @@ class TerminalViewModel @Inject constructor(
                     }
                     is WsEvent.Disconnected -> {
                         _isConnected.value = false
-                        // Authority survives the drop; only the per-socket 'w'
-                        // marker resets so the next handshake re-decides.
                         winsizeSeen = false
+                        // A drop forfeits authority: the reconnect handshake
+                        // must arbitrate before any size leaves, or an
+                        // ex-owner resuming from a network switch would
+                        // re-assert its stale grid with zero user activity.
+                        // The natural-grid cache and lastSent survive, so the
+                        // handshake 'w' restores owner/solo without a wasted
+                        // frame; the v7 replay-end fallback still promotes.
+                        setAuthority(SizeAuthority.Follower)
                         _connectionState.value = ConnectionState.Reconnecting
                     }
                     is WsEvent.Error -> {
                         _isConnected.value = false
                         winsizeSeen = false
+                        setAuthority(SizeAuthority.Follower)
                         _connectionState.value = ConnectionState.Reconnecting
                     }
                     is WsEvent.Binary -> handleBinary(event.bytes)

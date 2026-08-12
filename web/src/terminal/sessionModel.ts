@@ -677,10 +677,16 @@ export class TerminalSessionModel {
             break;
           case 'disconnected':
             this.replay = reduceDisconnected();
-            // Authority survives the drop; only the per-socket `w` marker
-            // resets, so the next handshake re-decides (or the v7 fallback
-            // fires at its replay-end).
             this.winsizeSeen = false;
+            // A drop forfeits authority: whatever happened while this client
+            // was away, the reconnect handshake must arbitrate before any
+            // size leaves — an ex-owner resuming from the background would
+            // otherwise re-assert its stale grid at socket open and steal
+            // the PTY with zero user activity. The natural-grid cache and
+            // `lastSent*` survive, so the handshake `w` restores owner via
+            // the own-echo branch (or solo via the count) without a wasted
+            // frame, and the v7 replay-end fallback still promotes.
+            this.setAuthority('follower');
             patchState(this.state, { connection: this.replay.connection });
             this.syncStdinGate();
             break;

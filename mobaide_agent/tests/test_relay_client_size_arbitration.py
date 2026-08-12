@@ -108,12 +108,14 @@ class TestTargetedAttachHandshake:
         self, client, mock_session_manager
     ):
         # Register-before-send is what makes the handshake's own ``w`` frame
-        # already count the newcomer.
+        # already count the newcomer. Attach now batches through
+        # ``register_clients`` (a single-client batch here, no ``conn_ids``
+        # peer list on this ctrl frame).
         session = _mock_session()
         mock_session_manager.get_session = AsyncMock(return_value=session)
         order: list[str] = []
-        session.register_client = MagicMock(
-            side_effect=lambda tok: order.append(f"register:{tok}")
+        session.register_clients = MagicMock(
+            side_effect=lambda toks: [order.append(f"register:{tok}") for tok in toks]
         )
         ws = AsyncMock()
         ws.send = AsyncMock(side_effect=lambda _data: order.append("send"))
@@ -135,7 +137,7 @@ class TestTargetedAttachHandshake:
 
         await client._handle_control(_attach("s1"), ws)
 
-        session.register_client.assert_called_once_with("relay:legacy:s1")
+        session.register_clients.assert_called_once_with({"relay:legacy:s1"})
         assert ws.send.await_count == 5
         decoded = [decode(c[0][0]) for c in ws.send.call_args_list]
         assert all(ch == CH_SESSION_IO for ch, _, _ in decoded)
@@ -152,7 +154,7 @@ class TestTargetedAttachHandshake:
 
         await client._handle_control(_attach("s1", conn_id="c" * 256), ws)
 
-        session.register_client.assert_called_once_with("relay:legacy:s1")
+        session.register_clients.assert_called_once_with({"relay:legacy:s1"})
         channel, _, _ = decode(ws.send.call_args_list[0][0][0])
         assert channel == CH_SESSION_IO
 
@@ -230,7 +232,7 @@ class TestConnIdNormalization:
 
         await client._handle_control(_attach("s1", conn_id=conn_id), ws)
 
-        session.register_client.assert_called_once_with("relay:legacy:s1")
+        session.register_clients.assert_called_once_with({"relay:legacy:s1"})
         channel, _, _ = decode(ws.send.call_args_list[0][0][0])
         assert channel == CH_SESSION_IO
 

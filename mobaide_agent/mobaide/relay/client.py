@@ -770,14 +770,25 @@ class RelayClient:
             return
         # Register before the handshake so its ``w`` frame already counts this
         # client. A v7 relay sends no conn_id; the single legacy token then
-        # stands in for however many clients that relay multiplexes.
+        # stands in for however many clients that relay multiplexes. An
+        # agent-tunnel reconnect replay additionally carries ``conn_ids`` —
+        # the session's WHOLE attached set — which is registered as one batch
+        # here so the first replayed handshake already reports the true count
+        # (a sequential rebuild would tell the first client ``count=1`` and
+        # let it steal the grid on every tunnel blip).
         token = f"relay:{conn_id}" if conn_id else f"relay:legacy:{session_id}"
+        tokens = {token}
+        peers = ctrl.get("conn_ids")
+        if isinstance(peers, list):
+            tokens.update(
+                f"relay:{peer}" for peer in peers if self._valid_conn_id(peer)
+            )
         entry = self._relay_attachments.get(session_id)
         if entry is None:
             entry = (session, set())
             self._relay_attachments[session_id] = entry
-        entry[1].add(token)
-        session.register_client(token)
+        entry[1].update(tokens)
+        session.register_clients(tokens)
         await self._send_session_handshake(session_id, session, ws, conn_id=conn_id)
 
     async def _handle_request_events_snapshot(
@@ -831,21 +842,28 @@ class RelayClient:
             )
 
     @staticmethod
-    def _normalize_conn_id(ctrl: dict) -> str | None:
+    def _valid_conn_id(value: object) -> bool:
+        """Whether ``value`` is usable as a per-connection id.
+
+        The length cap is measured in UTF-8 bytes because that is what
+        ``encode_targeted`` enforces when the id is later used for targeting.
+        """
+        return (
+            isinstance(value, str)
+            and bool(value)
+            and len(value.encode("utf-8")) <= 255
+        )
+
+    @classmethod
+    def _normalize_conn_id(cls, ctrl: dict) -> str | None:
         """Validated per-connection id from a v8 relay's attach/detach frame.
 
         Shared by attach and detach so both derive identical registry tokens
         from identical input — a validation drift between them would leak a
-        token (registered under one name, unregistered under another). The
-        length cap is measured in UTF-8 bytes because that is what
-        ``encode_targeted`` enforces when the id is later used for targeting.
+        token (registered under one name, unregistered under another).
         """
         conn_id = ctrl.get("conn_id")
-        if not isinstance(conn_id, str) or not conn_id:
-            return None
-        if len(conn_id.encode("utf-8")) > 255:
-            return None
-        return conn_id
+        return conn_id if cls._valid_conn_id(conn_id) else None
 
     def _handle_mobile_detach(self, ctrl: dict) -> None:
         """Unregister a detached mobile from its session's client registry.

@@ -7,7 +7,7 @@ import re
 import struct
 import sys
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -247,9 +247,20 @@ class TerminalSession:
 
     def register_client(self, token: str) -> None:
         """Record an attached client; broadcast the new count when it changed."""
-        if token in self._clients:
+        self.register_clients((token,))
+
+    def register_clients(self, tokens: Iterable[str]) -> None:
+        """Record a batch of attached clients with at most ONE count broadcast.
+
+        The agent-tunnel reconnect replay rebuilds a session's whole registry;
+        registering those clients one by one would broadcast every
+        intermediate count, and a v8 client catching a transient ``count=1``
+        would wrongly promote itself to solo and assert its grid.
+        """
+        new = {token for token in tokens if token not in self._clients}
+        if not new:
             return
-        self._clients.add(token)
+        self._clients.update(new)
         self._emit_winsize()
 
     def unregister_client(self, token: str) -> None:

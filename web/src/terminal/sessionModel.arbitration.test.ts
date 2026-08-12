@@ -274,9 +274,11 @@ describe('TerminalSessionModel size arbitration (proto-v8)', () => {
     expect(context.resizeFrames(reopened)).toEqual([]);
   });
 
-  it('still re-asserts on socket open while solo', async () => {
-    // The counterpart proving the suppression is the follower gate and not
-    // a lost resend: a solo client keeps the PR #409 connect re-assert.
+  it('re-asserts once the handshake re-promotes to solo after a reconnect', async () => {
+    // A drop forfeits authority (round 2): `disconnected` demotes to
+    // follower, so the counterpart to the suppression test above is no
+    // longer "solo survives the drop" — it's "the socket-open resend stays
+    // suppressed until the handshake's `w` re-decides the role, then fires."
     const context = await soloWithCachedGrid();
 
     context.socket.serverClose(1006);
@@ -286,6 +288,11 @@ describe('TerminalSessionModel size arbitration (proto-v8)', () => {
     if (reopened === undefined) throw new Error('no reconnect socket');
     reopened.accept();
 
+    expect(context.resizeFrames(reopened)).toEqual([]);
+
+    reopened.deliver(winsizeFrame(24, 80, 1).buffer);
+
+    expect(context.model.state.getState().sizeAuthority).toBe('solo');
     expect(context.resizeFrames(reopened)).toEqual([resizeFrame(40, 120)]);
   });
 

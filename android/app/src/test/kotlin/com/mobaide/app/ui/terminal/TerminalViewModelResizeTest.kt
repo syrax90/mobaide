@@ -83,10 +83,17 @@ class TerminalViewModelResizeTest {
      * Fresh view models start as [SizeAuthority.Follower] (proto-v8
      * latest-active arbitration), so [TerminalViewModel.resize] discards
      * every layout pass until a solo `'w'` (or the replay-end fallback)
-     * resolves the role. Deliver one, then revert to the pre-connect
-     * [ConnectionState.Reconnecting] state these tests otherwise assume, so
-     * the promotion itself leaves no trace on the debounce/dedupe/connect-
-     * reassert behavior under test below.
+     * resolves the role. Deliver one and stay connected — this frame is
+     * itself the model's first inbound binary, so it also performs
+     * `handleBinary`'s "first binary out of Reconnecting" upgrade, leaving
+     * [ConnectionState.Live] + [SizeAuthority.Solo] for the tests below.
+     *
+     * A trailing `WsEvent.Disconnected` is deliberately NOT emitted here
+     * (round 2): a drop now demotes to [SizeAuthority.Follower] until the
+     * reconnect handshake re-arbitrates, so resetting to Reconnecting this
+     * way would leave every caller below a follower, not a solo, and none
+     * of the debounce/dedupe/connect-reassert behavior under test would fire.
+     * Tests that specifically need to exercise a real drop do so explicitly.
      */
     private suspend fun TestScope.promoteToSolo() {
         eventsFlow.emit(
@@ -94,8 +101,6 @@ class TerminalViewModelResizeTest {
                 byteArrayOf(TerminalProtocol.TYPE_WINSIZE, 0, 24, 0, 80, 0, 1).toByteString(),
             ),
         )
-        runCurrent()
-        eventsFlow.emit(WsEvent.Disconnected)
         runCurrent()
     }
 
@@ -288,7 +293,7 @@ class TerminalViewModelResizeTest {
     }
 
     @Test
-    fun reconnect_reAssertsCachedSize_onEveryLiveEntry() = runTest(testDispatcher) {
+    fun reconnect_reAssertsCachedSize_onceTheHandshakeRePromotes() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
         promoteToSolo()
@@ -304,12 +309,24 @@ class TerminalViewModelResizeTest {
         runCurrent()
         verify(atLeast = 2, timeout = 2000) { connection.sendBinary(expected) }
 
-        // Drop, then reconnect: the PTY a reconnect finds still at its spawn
-        // default of 24x80 must be re-corrected, so entering Live again emits a
-        // further resend.
+        // A drop forfeits authority (round 2): the reconnect handshake must
+        // arbitrate before any size leaves, so a bare Connected on the new
+        // socket — with no `w` yet — must NOT resend the stale grid, or an
+        // ex-owner resuming from the background would steal the PTY with
+        // zero user activity.
         eventsFlow.emit(WsEvent.Disconnected)
         runCurrent()
         eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+        verify(exactly = 2) { connection.sendBinary(expected) }
+
+        // The handshake's solo `w` (naming a grid other than the cache) is
+        // what re-promotes and delivers the corrective.
+        eventsFlow.emit(
+            WsEvent.Binary(
+                byteArrayOf(TerminalProtocol.TYPE_WINSIZE, 0, 10, 0, 40, 0, 1).toByteString(),
+            ),
+        )
         runCurrent()
         verify(atLeast = 3, timeout = 2000) { connection.sendBinary(expected) }
     }
@@ -324,13 +341,19 @@ class TerminalViewModelResizeTest {
         advanceTimeBy(200)
         runCurrent()
 
-        // No WsEvent.Connected arrives: inbound data lands while still Reconnecting,
-        // so handleBinary()'s safety upgrade is the sole path into Live. It reaches
-        // the same enterLiveState() choke point and must re-assert the cached size.
-        val outputFrame = byteArrayOf(TerminalProtocol.TYPE_OUTPUT)
-            .plus("x".toByteArray())
-            .toByteString()
-        eventsFlow.emit(WsEvent.Binary(outputFrame))
+        // A drop demotes to Follower and resets to Reconnecting (round 2). No
+        // WsEvent.Connected arrives on the new socket either: the handshake's
+        // own solo `w` is the first inbound binary, so it both re-promotes
+        // authority and — via handleBinary()'s safety upgrade, the sole path
+        // into Live here — reaches the same enterLiveState() choke point that
+        // re-asserts the cached size.
+        eventsFlow.emit(WsEvent.Disconnected)
+        runCurrent()
+        eventsFlow.emit(
+            WsEvent.Binary(
+                byteArrayOf(TerminalProtocol.TYPE_WINSIZE, 0, 24, 0, 80, 0, 1).toByteString(),
+            ),
+        )
         runCurrent()
 
         val expected = TerminalProtocol.encodeResize(50, 120)

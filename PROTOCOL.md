@@ -60,9 +60,15 @@ cadence; they do **not** gate compatibility.
   focus (web) / terminal-screen foreground (mobile) promotes after a 400 ms
   debounce, armed on focus *edges* only (never steady state, or an idle
   focused tab would steal authority back after every foreign resize). Applied
-  on receipt — no ACK roundtrip. **v7-agent fallback:** no ``w`` by replay-end
-  means no arbitration exists on the other side; the client reverts to solo
-  and re-asserts, i.e. exactly the pre-v8 contract, with no version sniffing.
+  on receipt — no ACK roundtrip. **A socket drop forfeits authority**: the
+  client demotes itself to follower on disconnect (keeping its natural-grid
+  cache and last-sent pair) so the reconnect handshake arbitrates before any
+  size leaves — an ex-owner resuming from the background must not re-assert a
+  stale grid with zero user activity; the handshake ``w`` restores owner (own
+  echo) or solo (count) without a wasted frame. **v7-agent fallback:** no
+  ``w`` by replay-end means no arbitration exists on the other side; the
+  client reverts to solo and re-asserts, i.e. exactly the pre-v8 contract,
+  with no version sniffing.
 * **``conn_id`` on the mobile attach/detach control frames.** The relay
   generates a per-connection id (uuid hex — per socket, not per device: two
   tabs of one browser must count as two clients) and adds it to
@@ -72,7 +78,12 @@ cadence; they do **not** gate compatibility.
   fires. On agent reconnect the relay replays **one attach per attached
   client** (v8 agents only; a v7 agent still gets the one-per-session replay,
   since it would answer per-client attaches with redundant broadcast
-  re-handshakes). The ``conn_id``'s *presence* is the capability gate: a v7
+  re-handshakes); each replayed attach additionally carries ``conn_ids`` —
+  the session's whole attached set — which the agent registers as **one
+  batch** (single count broadcast) before sending the first replayed
+  handshake, so no retained client ever observes a transient count of one
+  and wrongly promotes itself to solo. The ``conn_id``'s *presence* is the
+  capability gate: a v7
   relay never sends one, and the agent then falls back to broadcast
   handshakes and a single legacy registry token per session — which
   undercounts multiple v7-relayed clients, degrading those setups to

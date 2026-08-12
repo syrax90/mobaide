@@ -199,6 +199,13 @@ final class TerminalSessionModelTests: XCTestCase {
     /// and the first-binary upgrade is structurally the only path that can put
     /// the measured grid on the wire. `WebSocketCore.doConnect` assigns the
     /// connection before starting the transport, so sends still reach the fake.
+    ///
+    /// A drop forfeits authority (round 2): the close below demotes to
+    /// follower, so `resize` while down only records the cache — nothing is
+    /// even attempted on the wire to drop. The v7 replay-end fallback (`'b'`
+    /// then `'e'`, no `w` on this socket) is what re-promotes to solo and
+    /// delivers the corrective through `enterLiveState`, exactly like a real
+    /// v7 agent's reconnect handshake.
     func testFirstBinaryUpgradeReassertsSizeDroppedWhileSocketWasDown() async throws {
         let factory = FakeWebSocketTransportFactory()
         let model = makeModel(factory: factory)
@@ -215,21 +222,29 @@ final class TerminalSessionModelTests: XCTestCase {
         // the `connection` reference above.
         connection.emit(.closed(code: WebSocketCore.adminRevokedCloseCode, reason: "test reset"))
         _ = await poll { model.connectionState == .reconnecting }
+        XCTAssertEqual(model.sizeAuthority, .follower)
 
         connection.dropsBinaries = true
         model.resize(rows: 40, cols: 120)
-        let dropped = await poll { !connection.droppedBinaries.isEmpty }
-        XCTAssertTrue(dropped, "the debounced resize hit a socket that was down")
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertTrue(
+            connection.droppedBinaries.isEmpty,
+            "a follower's resize sends nothing to drop"
+        )
         connection.dropsBinaries = false
 
-        connection.emit(.binary(Data([0x73]) + Data(#"{"status":"running"}"#.utf8)))
+        connection.emit(.binary(Data([0x62]))) // replayStart — the first binary out of .reconnecting
+        let replaying = await poll { model.connectionState == .replayingBuffer }
+        XCTAssertTrue(replaying)
+        connection.emit(.binary(Data([0x65]))) // replayEnd — no `w` arrived on this socket
         let live = await poll { model.connectionState == .live }
         XCTAssertTrue(live)
+        XCTAssertEqual(model.sizeAuthority, .solo)
         let sent = await waitForBinaries(connection, atLeast: 1)
         XCTAssertEqual(
             sent.filter { $0.first == 0x72 },
             [Data([0x72, 0x00, 0x28, 0x00, 0x78])],
-            "the first-binary upgrade re-asserts the measured grid"
+            "the v7 fallback's first-binary upgrade re-asserts the measured grid"
         )
     }
 
