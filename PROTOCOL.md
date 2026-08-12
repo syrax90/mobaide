@@ -74,7 +74,20 @@ cadence; they do **not** gate compatibility.
   identical by construction, the first *differing* assert by either client
   demotes the other through the normal foreign-grid branch, and typing
   re-takes immediately; distinguishing claimants would need a client-visible
-  connection identity on the wire, which no client currently has. **A socket drop forfeits authority**: the
+  connection identity on the wire, which no client currently has. **Resizes
+  racing within one round-trip can end with no owner**: when the agent
+  processes the other client's ``r`` first, the loser's broadcast ``w``
+  reaches this client *before* its own echo, the foreign demotion voids the
+  send claim, and the genuine echo that follows is no longer recognized —
+  every client ends follower with the PTY on the last-processed grid.
+  Accepted for the same reason: rendering is consistent everywhere, nothing
+  fights, and the next typing/focus edge restores an owner. Keeping
+  un-echoed claims alive across foreign updates was rejected — the agent
+  answers equal-size, non-running and out-of-envelope resizes with silence,
+  so a claim can stay "outstanding" indefinitely, and any liveness granted
+  to it re-opens the historical-grid steal the voiding rule exists to
+  prevent (a passive client re-promoted by a later ``w`` that happens to
+  name its stale claim, with zero user activity). **A socket drop forfeits authority**: the
   client demotes itself to follower on disconnect (keeping its natural-grid
   cache and last-sent pair) so the reconnect handshake arbitrates before any
   size leaves — an ex-owner resuming from the background must not re-assert a
