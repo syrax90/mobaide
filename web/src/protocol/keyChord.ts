@@ -82,7 +82,7 @@ const SPECIAL_SET = new Set(SPECIALS);
 const LETTER_SET = new Set(LETTERS);
 const DIGIT_SET = new Set(DIGITS);
 
-/** The base-key domain of the shortcut picker, as canonical lowercase tokens. */
+/** The base-key domain of a saved shortcut chord, as canonical lowercase tokens. */
 export const KEY_CHORD_KEYS = {
   letters: LETTERS,
   digits: DIGITS,

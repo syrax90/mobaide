@@ -13,10 +13,6 @@ import { busyByResponseSchema, busyHolderSchema } from './dto/gitConflict';
 import { autoScanFilterSchema, projectInfoSchema } from './dto/projects';
 import { sessionKindSchema, sessionResponseSchema } from './dto/session';
 import {
-  createShortcutRequestSchema,
-  updateShortcutRequestSchema,
-} from './dto/shortcuts';
-import {
   antigravityOptionsSchema,
   claudeOptionsSchema,
   codexOptionsSchema,
@@ -25,8 +21,6 @@ import {
 import {
   customAgentTypeSchema,
   customTypeDeletedSchema,
-  shortcutDeletedSchema,
-  shortcutSchema,
   templateDeletedSchema,
   templateSchema,
 } from './dto/userEvents';
@@ -53,10 +47,6 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   BusyHolder: busyHolderSchema,
   TemplateDto: templateSchema,
   TemplateDeletedPayload: templateDeletedSchema,
-  ShortcutDto: shortcutSchema,
-  ShortcutDeletedPayload: shortcutDeletedSchema,
-  CreateShortcutRequest: createShortcutRequestSchema,
-  UpdateShortcutRequest: updateShortcutRequestSchema,
   CustomAgentTypeDto: customAgentTypeSchema,
   CustomTypeDeletedPayload: customTypeDeletedSchema,
 };
@@ -94,11 +84,11 @@ describe('DTO golden fixtures', () => {
  */
 describe('unknown wire data survives decoding', () => {
   it('preserves keys a newer server added', () => {
-    const decoded = shortcutSchema.parse({
-      shortcut_id: 'a1b2c3d4e5f6',
-      kind: 'claude',
-      chord_token: 'ctrl+c',
-      position: 0,
+    const decoded = templateSchema.parse({
+      template_id: 'a1b2c3d4e5f6',
+      name: 'Deploy checklist',
+      body: 'Run the deploy checklist.',
+      is_favorite: false,
       created_at: 'c',
       updated_at: 'u',
       version: 1,
@@ -132,6 +122,6 @@ describe('unknown wire data survives decoding', () => {
   it('rejects a payload whose required fields are missing', () => {
     // The bridge drops such an event instead of invalidating on it, matching
     // both mobile clients.
-    expect(shortcutSchema.safeParse({ shortcut_id: 'only-this' }).success).toBe(false);
+    expect(templateSchema.safeParse({ template_id: 'only-this' }).success).toBe(false);
   });
 });

@@ -1,14 +1,14 @@
 /**
  * Turn a physical key press into a chord the shared grammar can express.
  *
- * The composer records `event.code`, never `event.key`: `code` names the
+ * The recorder captures `event.code`, never `event.key`: `code` names the
  * physical key, so a Dvorak or AZERTY user records the key they actually
  * pressed, and Shift does not turn `2` into `@`. `key` would produce a token
  * that means a different key on someone else's layout — and the token syncs to
  * two mobile clients that have no layout at all.
  *
  * Everything the browser cannot express as a contract-valid chord is refused
- * here rather than half-recorded; the picker is the fallback for those.
+ * here rather than half-recorded.
  */
 import { KEY_CHORD_KEYS, type KeyChord } from '../protocol/keyChord';
 

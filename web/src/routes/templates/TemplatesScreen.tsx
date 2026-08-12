@@ -162,7 +162,7 @@ export function TemplatesScreen() {
 
       <p className="page-note">
         Reusable prompts, shared across every device on your account. Insert one from
-        the terminal&rsquo;s composer.
+        the Templates button in a session&rsquo;s terminal.
       </p>
 
       <div className="sessions-toolbar">

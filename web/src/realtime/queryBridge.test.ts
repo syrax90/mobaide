@@ -37,18 +37,15 @@ const template = {
 };
 
 describe('applyUserEvent', () => {
-  it('refetches the shortcut list when a custom agent type is deleted', () => {
-    // The server soft-deletes that type's shortcuts in the same transaction and
-    // sends no companion shortcut.deleted events, so the shortcut list would
-    // keep rendering dead rows if only its own key were invalidated.
+  it('refetches the custom type list when a custom agent type is deleted', () => {
     const outcome = applyUserEvent(client, frame('custom_type.deleted', { id: 'ab12cd34ef56' }));
 
     expect(outcome).toEqual({
       kind: 'invalidated',
       type: 'custom_type.deleted',
-      keys: [['custom-agent-types'], ['shortcuts']],
+      keys: [['custom-agent-types']],
     });
-    expect(invalidated).toEqual([['custom-agent-types'], ['shortcuts']]);
+    expect(invalidated).toEqual([['custom-agent-types']]);
   });
 
   it('invalidates the list a well-formed payload belongs to', () => {
@@ -72,6 +69,30 @@ describe('applyUserEvent', () => {
     const outcome = applyUserEvent(client, frame('template.archived', template));
 
     expect(outcome).toEqual({ kind: 'ignored', type: 'template.archived' });
+    expect(invalidated).toEqual([]);
+  });
+
+  const shortcut = {
+    shortcut_id: 'sc1',
+    kind: 'claude',
+    chord_token: 'ctrl+alt+d',
+    name: 'Deploy',
+    position: 0,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    version: 1,
+  };
+
+  it.each([
+    ['shortcut.created', shortcut],
+    ['shortcut.updated', { ...shortcut, version: 2 }],
+    ['shortcut.deleted', { shortcut_id: 'sc1', version: 3, updated_at: '2026-01-01T00:00:00Z' }],
+  ])('ignores %s now that web keeps no shortcut cache', (type, payload) => {
+    // Not a hypothetical unknown type: mobile clients still manage shortcuts,
+    // so the server keeps broadcasting this trio to every user socket — web's
+    // included. With the rules removed they must take the same unknown-type
+    // path as any future event: acknowledged as ignored, nothing invalidated.
+    expect(applyUserEvent(client, frame(type, payload))).toEqual({ kind: 'ignored', type });
     expect(invalidated).toEqual([]);
   });
 
@@ -235,7 +256,6 @@ describe('refresh on connect', () => {
       ['server-info'],
       ['agents'],
       ['templates'],
-      ['shortcuts'],
       ['custom-agent-types'],
     ]);
   });

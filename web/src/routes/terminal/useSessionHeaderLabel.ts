@@ -2,10 +2,10 @@
  * What the terminal bar names this session: its live OSC title while there is
  * one, else the kind label. Empty only until the session row resolves.
  *
- * Unlike `useSessionKind`'s one-way latch, the value must keep changing — the
- * agent repoints the title as the CLI works. It only refuses to go *back* to
- * empty, so a session vanishing from the snapshot (it ended, and the terminal
- * deliberately stays readable) does not blank the bar.
+ * Not a one-way latch: the value must keep changing — the agent repoints the
+ * title as the CLI works. It only refuses to go *back* to empty, so a session
+ * vanishing from the snapshot (it ended, and the terminal deliberately stays
+ * readable) does not blank the bar.
  *
  * What it retains is stamped with the route it was resolved for. A notification
  * tap navigates terminal→terminal, which swaps this route's params without
@@ -13,8 +13,8 @@
  * unstamped value would name the new terminal after the old one, indefinitely
  * if that agent never syncs.
  *
- * The sessions query is the one `useSessionGone` and `useSessionKind` already
- * run; TanStack dedupes on the key, so this costs no extra fetch.
+ * The sessions query is the one `useSessionGone` already runs; TanStack
+ * dedupes on the key, so this costs no extra fetch.
  */
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';

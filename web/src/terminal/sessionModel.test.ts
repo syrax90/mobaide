@@ -9,7 +9,6 @@ import { WS_CLOSE } from '../protocol/closeCodes';
 import { encodeTerminalFrame, TERMINAL_FRAME_TYPE } from '../protocol/terminalCodec';
 import { useToastStore } from '../stores/toastStore';
 import { MAX_PASTE_BYTES } from './terminalPaste';
-import { CLEAR_INPUT_LINE } from './terminalSubmit';
 
 // The credential seams are the only part of the channel that would go to the
 // network; the rest of the graph is the real thing, as in `channels.test.ts`.
@@ -432,35 +431,19 @@ describe('TerminalSessionModel outbound payload cap', () => {
   const toastKinds = (): string[] =>
     useToastStore.getState().toasts.map((toast) => toast.kind);
 
-  it('sends the composer body behind the line clear and empties the field', async () => {
-    const { model, framesOfType } = await liveRunning();
-    model.setComposer('list the open PRs');
-
-    model.submitComposer();
-
-    expect(framesOfType(TERMINAL_FRAME_TYPE.submit).map(payloadText)).toEqual([
-      `${CLEAR_INPUT_LINE}list the open PRs`,
-    ]);
-    expect(model.state.getState().composer).toBe('');
-    expect(toastKinds()).toEqual([]);
-  });
-
-  it('refuses an oversized composer body and explains instead of sending it', async () => {
-    // "Send to input" copies an arbitrarily large selection into the composer,
-    // so this is reachable without an attacker. The relay forwards the frame to
-    // the agent's tunnel unchunked and that tunnel is opened with
-    // `max_size=4 MB`, so one oversized frame closes it with 1009 and drops
-    // every session on that agent.
+  it('refuses an oversized paste and explains instead of sending it', async () => {
+    // "Send to input" pastes an arbitrarily large selection, so this is
+    // reachable without an attacker. The relay forwards the frame to the
+    // agent's tunnel unchunked and that tunnel is opened with `max_size=4 MB`,
+    // so one oversized frame closes it with 1009 and drops every session on
+    // that agent.
     const oversized = 'a'.repeat(MAX_PASTE_BYTES + 1);
     const { model, framesOfType } = await liveRunning();
-    model.setComposer(oversized);
 
-    model.submitComposer();
+    model.pasteText(oversized);
 
-    expect(framesOfType(TERMINAL_FRAME_TYPE.submit)).toEqual([]);
+    expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toEqual([]);
     expect(toastKinds()).toEqual(['error']);
-    // Kept in the field so the user can trim it rather than losing the text.
-    expect(model.state.getState().composer).toBe(oversized);
   });
 });
 
@@ -610,13 +593,12 @@ describe('TerminalSessionModel synchronized output guard', () => {
     expect(toastKinds()).toEqual(['info']);
   });
 
-  it('refuses a send-to-composer while the frame is still being painted', async () => {
-    const { model } = await selecting(ARM_SYNC);
+  it('refuses a send-to-input while the frame is still being painted', async () => {
+    const { model, framesOfType } = await selecting(ARM_SYNC);
 
-    model.sendSelectionToComposer();
+    model.pasteSelection();
 
-    expect(model.state.getState().composer).toBe('');
-    expect(model.state.getState().composerVisible).toBe(false);
+    expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toEqual([]);
     expect(toastKinds()).toEqual(['info']);
   });
 
@@ -643,12 +625,13 @@ describe('TerminalSessionModel synchronized output guard', () => {
     await settle();
 
     await model.copySelection();
-    model.sendSelectionToComposer();
+    model.pasteSelection();
     model.runSelection();
 
     expect(clipboardWrites).toEqual(['selected text']);
-    expect(model.state.getState().composer).toBe('selected text');
-    expect(model.state.getState().composerVisible).toBe(true);
+    expect(framesOfType(TERMINAL_FRAME_TYPE.input).map(payloadText)).toEqual([
+      'selected text',
+    ]);
     expect(framesOfType(TERMINAL_FRAME_TYPE.execute).map(payloadText)).toEqual([
       'selected text',
     ]);
@@ -684,13 +667,12 @@ describe('TerminalSessionModel synchronized output guard', () => {
     expect(toastKinds()).toEqual(['info']);
   });
 
-  it('refuses a send-to-composer while the replayed history is still being parsed', async () => {
-    const { model } = await replayDraining();
+  it('refuses a send-to-input while the replayed history is still being parsed', async () => {
+    const { model, framesOfType } = await replayDraining();
 
-    model.sendSelectionToComposer();
+    model.pasteSelection();
 
-    expect(model.state.getState().composer).toBe('');
-    expect(model.state.getState().composerVisible).toBe(false);
+    expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toEqual([]);
     expect(toastKinds()).toEqual(['info']);
   });
 
@@ -708,11 +690,13 @@ describe('TerminalSessionModel synchronized output guard', () => {
 
     await settle();
     await model.copySelection();
-    model.sendSelectionToComposer();
+    model.pasteSelection();
     model.runSelection();
 
     expect(clipboardWrites).toEqual(['selected text']);
-    expect(model.state.getState().composer).toBe('selected text');
+    expect(framesOfType(TERMINAL_FRAME_TYPE.input).map(payloadText)).toEqual([
+      'selected text',
+    ]);
     expect(framesOfType(TERMINAL_FRAME_TYPE.execute).map(payloadText)).toEqual([
       'selected text',
     ]);
@@ -796,18 +780,16 @@ describe('TerminalSessionModel selection focus', () => {
     expect(focus).not.toHaveBeenCalled();
   });
 
-  it('leaves the grid unfocused when the selection is sent to the composer', async () => {
-    // Deliberately unlike the other two: this action puts a text field on
-    // screen, so focusing the grid would feed the user's next keystrokes to the
-    // PTY instead of the message they opened the composer to write. Pinned so a
-    // later pass at making the three selection actions symmetric has to
-    // confront it.
-    const { model } = await selecting();
+  it('returns focus to the grid after the selection is sent to input', async () => {
+    // Symmetric with run and copy: the paste leaves no text field to type
+    // into, so the grid is the only sensible focus target once the toolbar
+    // unmounts with the cleared selection.
+    const { model, framesOfType } = await selecting();
     const focus = spyFocus(model);
 
-    model.sendSelectionToComposer();
+    model.pasteSelection();
 
-    expect(model.state.getState().composerVisible).toBe(true);
-    expect(focus).not.toHaveBeenCalled();
+    expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toHaveLength(1);
+    expect(focus).toHaveBeenCalledTimes(1);
   });
 });

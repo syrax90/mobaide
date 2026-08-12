@@ -2,10 +2,9 @@
  * Payload shapes carried by the user-scoped events channel (`ws/user-events`).
  *
  * Pinned by `tests/protocol_fixtures/dto/central/{TemplateDto,
- * TemplateDeletedPayload,ShortcutDto,ShortcutDeletedPayload,
- * CustomAgentTypeDto,CustomTypeDeletedPayload}.json`. `agent.status_changed`
- * and `session.attention` have no fixture file; their shapes come from
- * PROTOCOL.md and the Android/iOS payload structs.
+ * TemplateDeletedPayload,CustomAgentTypeDto,CustomTypeDeletedPayload}.json`.
+ * `agent.status_changed` and `session.attention` have no fixture file; their
+ * shapes come from PROTOCOL.md and the Android/iOS payload structs.
  */
 import { z } from 'zod';
 import { optionalWireString } from '../wireSchema';
@@ -28,28 +27,6 @@ export const templateSchema = z.looseObject({
 
 export const templateDeletedSchema = z.looseObject({
   template_id: z.string(),
-  version: z.number(),
-  updated_at: z.string(),
-});
-
-export const shortcutSchema = z.looseObject({
-  shortcut_id: z.string(),
-  /**
-   * The session-kind wire string, stored opaquely by the server. Not
-   * `openSessionKind()`: this field is never null on the wire, and coercing it
-   * would break the `unknown_kind_preserved` round trip.
-   */
-  kind: z.string(),
-  chord_token: z.string(),
-  name: optionalWireString(),
-  position: z.number(),
-  created_at: z.string(),
-  updated_at: z.string(),
-  version: z.number(),
-});
-
-export const shortcutDeletedSchema = z.looseObject({
-  shortcut_id: z.string(),
   version: z.number(),
   updated_at: z.string(),
 });
@@ -82,7 +59,6 @@ export const sessionAttentionSchema = z.looseObject({
 });
 
 export type Template = z.infer<typeof templateSchema>;
-export type Shortcut = z.infer<typeof shortcutSchema>;
 export type CustomAgentType = z.infer<typeof customAgentTypeSchema>;
 export type AgentStatusChanged = z.infer<typeof agentStatusChangedSchema>;
 export type SessionAttention = z.infer<typeof sessionAttentionSchema>;

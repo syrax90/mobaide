@@ -47,15 +47,16 @@ const OWNER = {
    * responses here on the same test, and kept Zod mirrors only for
    * `AutoScanInstanceDto` and `AutoScanListResponse` — the two that also arrive
    * over the agent channel and the `ws/autoscan` snapshot.
-   *
-   * WEB-06 went the other way for the two shortcut request bodies: both carry
-   * limits the generated types cannot express — a kind pattern, a 64-char chord
-   * token, and a name counted in code points — and `UpdateShortcutRequest`'s
-   * `""`-clears-the-name sentinel is a contract no schema states.
    */
   generated: 'shipped — typed by the generated OpenAPI schema',
   /** Editing a custom agent type on web: CLA-231. */
   customTypes: 'CLA-231 — custom agent type editing on web',
+  /**
+   * Saved shortcuts were removed from the web client — a physical keyboard
+   * makes the chord chips redundant — so no web code parses these shapes
+   * anymore. The fixture files stay: Android and iOS still assert them.
+   */
+  shortcutsRemoved: 'saved shortcuts removed from web; Android/iOS still consume',
   /** Web has no APNs equivalent; Web Push is not implemented. */
   notApplicable: 'not applicable on web',
   /**
@@ -89,12 +90,8 @@ export const COVERED_FIXTURES: readonly string[] = [
   'dto/agent/SessionResponse.json',
   'dto/agent/VersionInfoResponse.json',
   'dto/central/CreateCustomAgentTypeRequest.json',
-  'dto/central/CreateShortcutRequest.json',
   'dto/central/CustomAgentTypeDto.json',
   'dto/central/CustomTypeDeletedPayload.json',
-  'dto/central/ShortcutDeletedPayload.json',
-  'dto/central/ShortcutDto.json',
-  'dto/central/UpdateShortcutRequest.json',
   'dto/central/TemplateDeletedPayload.json',
   'dto/central/TemplateDto.json',
 ];
@@ -128,6 +125,7 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/central/CancelAccountDeletionResponse.json': OWNER.generated,
   'dto/central/CreateAgentRequest.json': OWNER.generated,
   'dto/central/CreateAgentResponse.json': OWNER.generated,
+  'dto/central/CreateShortcutRequest.json': OWNER.shortcutsRemoved,
   'dto/central/CreateTemplateRequest.json': OWNER.generated,
   'dto/central/DeleteAccountReauthDetail.json': OWNER.generated,
   'dto/central/DeleteAccountReauthErrorBody.json': OWNER.generated,
@@ -155,8 +153,11 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/central/ResetIpRateLimitedErrorBody.json': OWNER.generated,
   'dto/central/ResetPasswordRequest.json': OWNER.generated,
   'dto/central/ResetPasswordResponse.json': OWNER.generated,
+  'dto/central/ShortcutDeletedPayload.json': OWNER.shortcutsRemoved,
+  'dto/central/ShortcutDto.json': OWNER.shortcutsRemoved,
   'dto/central/TrustPinResponse.json': OWNER.generated,
   'dto/central/UpdateCustomAgentTypeRequest.json': OWNER.customTypes,
+  'dto/central/UpdateShortcutRequest.json': OWNER.shortcutsRemoved,
   'dto/central/UpdateTemplateRequest.json': OWNER.generated,
   'dto/central/UserAuthResponse.json': OWNER.generated,
   'dto/central/UserLoginRequest.json': OWNER.generated,
