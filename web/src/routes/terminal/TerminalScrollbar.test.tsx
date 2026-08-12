@@ -36,6 +36,9 @@ interface PointerInit {
 function pointer(type: string, clientY: number, init: PointerInit = {}): Event {
   const event = new MouseEvent(type, {
     bubbles: true,
+    // So `fireEvent` reports back whether the handler cancelled the press,
+    // which is how the focus behaviour below is observable at all.
+    cancelable: true,
     clientY,
     button: init.button ?? 0,
   });
@@ -157,6 +160,32 @@ describe('TerminalScrollbar', () => {
     fireEvent(thumb, pointer('pointerdown', 120));
 
     expect(page).not.toHaveBeenCalled();
+  });
+
+  it('does not let a press pull focus off the grid', () => {
+    // The div is `tabIndex={0}`, so an un-cancelled press focuses it and every
+    // following keystroke is delivered here instead of to the PTY — the
+    // terminal reads as dead until the user clicks the grid. Cancelling the
+    // press is what a native scrollbar does, and `Tab` still reaches this one.
+    const { model, container } = mount(scrolled);
+    vi.spyOn(model, 'scrollByPages').mockImplementation(() => undefined);
+    const bar = screen.getByRole('scrollbar');
+    const thumb = container.querySelector('.terminal-scrollbar-thumb');
+    if (thumb === null) throw new Error('no thumb');
+    stubBox(thumb, 100, 40);
+
+    expect(fireEvent(bar, pointer('pointerdown', 300))).toBe(false);
+    expect(fireEvent(thumb, pointer('pointerdown', 120))).toBe(false);
+    expect(bar).toHaveAttribute('tabindex', '0');
+  });
+
+  it('leaves a non-primary press for the browser to act on', () => {
+    // Cancelling a right-click here would suppress the context menu.
+    const { model } = mount(scrolled);
+    vi.spyOn(model, 'scrollByPages').mockImplementation(() => undefined);
+    const bar = screen.getByRole('scrollbar');
+
+    expect(fireEvent(bar, pointer('pointerdown', 300, { button: 2 }))).toBe(true);
   });
 
   it('ignores a press that is not the primary button', () => {

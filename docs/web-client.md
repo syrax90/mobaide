@@ -731,12 +731,17 @@ where jsdom computes no layout. Every scroll command re-baselines the tally
 first, so the slider cannot light its own unread badge. Drag, track-click
 paging, the wheel over the track, and ↑/↓/PageUp/PageDown/Home/End on a focused
 `role="scrollbar"` all route through the same model methods. A pixel-mode wheel
-converts through the cell height with a carried sub-row remainder, mirroring
-`CoreMouseService.consumeWheelEvent` including its damping below 50 px —
-a precision touchpad reports a stream of small deltas, and one notch apiece
-would run the scrollback many times faster over the track than over the grid.
-Presses are gated on the primary pointer's primary button, so a right-click
-opens the context menu without also grabbing the thumb. Where the primary
+converts at one row per cell height with a carried sub-row remainder — a
+precision touchpad reports a stream of small deltas, and one notch apiece ran
+the scrollback many times faster over the track than over the grid, while
+damping them would run it slower. Nothing is scaled:
+`CoreMouseService.consumeWheelEvent` does damp small deltas, but its only two
+call sites are the mouse-tracking path and the no-scrollback arrow-key path, so
+it governs wheel-to-mouse *reporting* and not this. Presses are gated on the
+primary pointer's primary button, so a right-click opens the context menu
+without also grabbing the thumb, and both pointer paths cancel the press: the
+track is `tabIndex={0}`, so an un-cancelled click would move focus off the grid
+and swallow every following keystroke. `Tab` still reaches it. Where the primary
 pointer is coarse the thumb takes a 2.75rem transparent hit area reaching into
 the grid — 14 px is under half a fingertip and sits on the edge the browser's
 back gesture claims — and that widening is deliberately **not** on

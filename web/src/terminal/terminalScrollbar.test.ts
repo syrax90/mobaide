@@ -138,11 +138,11 @@ describe('lineForOffset', () => {
 describe('wheelRows', () => {
   const CELL = 15;
 
-  it('does not turn a touchpad flick into dozens of rows', () => {
+  it('spends a touchpad flick at the same rate as one large delta', () => {
     // The regression this exists for: 20 events of 10 px each used to be worth
-    // one notch apiece — 60 rows for 200 px of travel. Damped and carried the
-    // flick is worth 20 * (10/15) * 0.3 = 4 rows, and a band rather than 4
-    // exactly because the accumulator lands a hair under it in binary.
+    // one notch apiece, 60 rows for 200 px of travel. The distance is physical,
+    // so 200 px is 200/15 rows however it is chopped up — and a stream of small
+    // deltas must not come out slower than a single big one either.
     let carry = 0;
     let total = 0;
     for (let event = 0; event < 20; event += 1) {
@@ -151,13 +151,11 @@ describe('wheelRows', () => {
       total += step.rows;
     }
 
-    expect(total).toBeGreaterThan(2);
-    expect(total).toBeLessThanOrEqual(4);
+    expect(total).toBe(13);
+    expect(total).toBe(wheelRows(200, CELL, 0).rows);
   });
 
   it('spends a large delta at one row per cell height', () => {
-    // Past the precision cut a classic mouse notch is undamped, so the travel
-    // matches the grid's exactly.
     expect(wheelRows(150, CELL, 0).rows).toBe(10);
   });
 

@@ -103,6 +103,11 @@ export function TerminalScrollbar({ model, surfaceId }: TerminalScrollbarProps) 
     (event: PointerEvent<HTMLDivElement>) => {
       const thumb = thumbRef.current;
       if (thumb === null || !isPrimaryPress(event)) return;
+      // Paging must not pull focus off the grid, or the next keystroke is
+      // delivered to this div and never reaches the PTY — the terminal looks
+      // dead until the user clicks the grid again. Native scrollbars do not
+      // take focus on a press either, and `Tab` still reaches this one.
+      event.preventDefault();
       const rect = thumb.getBoundingClientRect();
       if (event.clientY < rect.top) model.scrollByPages(-1);
       else if (event.clientY > rect.bottom) model.scrollByPages(1);

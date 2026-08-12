@@ -108,14 +108,6 @@ export function lineForOffset(offset: number, baseY: number): number {
   return Math.round(clamp01(offset) * baseY);
 }
 
-/**
- * Below this delta xterm reads the event as a precision touchpad and damps it,
- * because those emit a stream of small deltas where a mouse emits one large
- * one. Both constants mirror `CoreMouseService.consumeWheelEvent` in xterm 6.
- */
-const PRECISION_WHEEL_PX = 50;
-const PRECISION_WHEEL_DAMPING = 0.3;
-
 export interface WheelRows {
   rows: number;
   /** Sub-row remainder, carried into the next event. */
@@ -123,12 +115,19 @@ export interface WheelRows {
 }
 
 /**
- * Rows a pixel-mode wheel delta is worth.
+ * Rows a pixel-mode wheel delta is worth: a row per cell height, exactly.
  *
  * A precision touchpad emits dozens of events per flick, so treating each one
- * as a notch would race through the scrollback at many times the speed the same
- * gesture gets over the grid. Dividing by the cell height and carrying the
- * remainder is what makes a pixel of travel here worth a pixel of travel there.
+ * as a notch raced through the scrollback at many times the speed the same
+ * gesture gets over the grid. The distance is physical, though, so the
+ * conversion is the plain ratio and the whole job is not throwing away the
+ * sub-row remainder — xterm 6 scrolls through a VS Code `ScrollableElement`,
+ * which moves the content in pixels, so a pixel here is a pixel there.
+ *
+ * Nothing is damped. `CoreMouseService.consumeWheelEvent` does scale small
+ * deltas, but it governs wheel-to-mouse *reporting* — its only two call sites
+ * are the mouse-tracking path and the no-scrollback arrow-key path, neither of
+ * which is this one.
  *
  * A carry pointing the other way is dropped rather than subtracted: it belongs
  * to a gesture that has already ended, and applying it would eat the first rows
@@ -138,8 +137,7 @@ export function wheelRows(deltaY: number, cellHeight: number, carry: number): Wh
   // `cellHeight` is 0 until the host has been laid out. Nothing has scrolled
   // into the buffer by then either, so refusing is the whole handling.
   if (deltaY === 0 || cellHeight <= 0) return { rows: 0, carry };
-  let amount = deltaY / cellHeight;
-  if (Math.abs(deltaY) < PRECISION_WHEEL_PX) amount *= PRECISION_WHEEL_DAMPING;
+  const amount = deltaY / cellHeight;
   const total = carry > 0 === amount > 0 ? carry + amount : amount;
   const rows = Math.trunc(total);
   return { rows, carry: total - rows };
