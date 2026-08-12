@@ -4,6 +4,7 @@ import { isAuthenticated } from '../auth/authState';
 import { useSessionStore } from '../auth/sessionStore';
 import { startUserEvents, stopAllRealtime } from './channelRegistry';
 import { observeResume } from './resumeOnFocus';
+import { observeTabVisibility } from './tabVisibility';
 
 /**
  * Binds the user-events channel to the session, mirroring the mobile buses:
@@ -28,6 +29,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   // Independent of the session: the listeners are cheap, and a resume arriving
   // while signed out finds no channels to reconnect.
   useEffect(() => observeResume(), []);
+  // Separate from `observeResume`: that one re-opens sockets, this one publishes
+  // whether anything on screen still wants their bytes.
+  useEffect(() => observeTabVisibility(), []);
 
   useEffect(() => {
     if (!authenticated || userId === null) return;

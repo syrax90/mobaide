@@ -694,7 +694,11 @@ Zustand store the React tree reads. `src/routes/terminal/` is presentation
 only. Models live in `terminalStore` outside React so navigating away and
 back keeps the buffer instead of paying for a fresh replay; three stay
 resident, least-recently-acquired evicted (iOS keeps one per session until
-the session dies, a signal web has no list to deliver yet). Each model
+the session dies, a signal web has no list to deliver yet). Residency is not
+the same as streaming, though — see *Unwatched sessions* below: a retained
+model that is off screen, or in a hidden tab, closes its socket once it has
+both gone unread past the grace and spent a ring's worth of output, and
+resuming it does pay a fresh replay. Each model
 self-registers with `liveChannels`, so `stopAllRealtime()` on a session
 change tears it down — the screen re-acquires when its entry disappears.
 
@@ -1107,8 +1111,48 @@ in-app toast. Permission is requested only from the button in Settings, never
 on load, and `e2e/settings.spec.ts` asserts that by counting
 `Notification.requestPermission()` calls from before any app code runs.
 
-**Tab lifecycle: the socket stays open when hidden.** Presence gating for
-APNs became per device rather than per account
+**Unwatched sessions: the PTY socket does not stay open.** The paragraph below
+is about `ws/user-events`, which is cheap and must keep delivering. A session's
+PTY stream is the opposite case, and it is gated on whether anything is actually
+reading it: *watched* means the tab is visible **and** this session is the
+terminal the route is rendering, so the two retained-but-off-screen models
+`MAX_RETAINED` allows are treated exactly like a hidden tab.
+
+The session protocol has no pause frame — C→S is only `i`/`x`/`m`/`r`, and the
+relay routes `CH_SESSION_IO` solely to clients registered on `session_io:<sid>`
+— so closing the socket is the only way to stop the bytes, and every reopen
+costs a full ring replay (4 MiB by default, uncompressed, and it wipes the
+emulator). That rules out both obvious policies: suspending on a timer alone
+charges an idle session a replay to save nothing, and suspending on a byte
+budget alone fires on short absences where staying attached was already cheaper.
+`terminal/terminalSuspend.ts` is therefore a conjunction — suspend once the
+session has spent `RECOUP_BYTES` (4 MiB, one ring) **and** gone unwatched for
+`GRACE_MS` (60 s), with `FIREHOSE_BYTES` (32 MiB) cutting the grace short for
+`yes`-grade output. It is a pure predicate evaluated only as frames arrive, with
+no timers: a session that goes quiet after crossing a threshold is simply never
+re-examined and costs nothing. Android `TerminalSuspend` and iOS
+`TerminalSuspend` mirror the same three constants.
+
+The two inputs come from `realtime/tabVisibility.ts` (its own
+`visibilitychange` listener, deliberately not `resumeOnFocus`'s: that module's
+verb is `forceReconnect()`, which no-ops on a channel `disconnect()` has already
+stopped, and it is imported from the eager bundle where reaching a model would
+drag xterm into the initial chunk) and `terminal/watchedTerminal.ts` (the
+mounted-terminal pointer, split out of `terminalStore` because `sessionModel`
+now reads it and the store already imports `sessionModel` — the same no-import
+shape as `terminalEviction`). A deliberate suspend lands in the connection store
+as `stopped` like any other, so the model publishes `channelStopped` only when
+it is *not* suspended and the overlay says **Paused** rather than offering a
+Reconnect button nobody needs. Replay spans are never charged and never
+interrupted, so a reconnect that lands while still unwatched cannot re-suspend
+itself into a loop.
+
+The auto-scan socket is paused on tab hide too, with no budget: its subscribe
+frame is rebuilt from the live wire cursor on every open, so a resume picks up
+at the high-water mark and costs one handshake rather than a replay.
+
+**Tab lifecycle: the user-events socket stays open when hidden.** Presence
+gating for APNs became per device rather than per account
 (`relay/agent_ws.py::_handle_user_event` excluding
 `routing.get_user_device_ids()`), so a browser tab no longer mutes a phone.
 Web deliberately sends no `device_id` hint on `ws/user-events`, exactly as
@@ -1128,10 +1172,13 @@ registry owns, plus anything registered through its `onResume` seam. Not every
 `visibilitychange`: alt-tabbing is constant, and reconnecting on each would be
 its own handshake storm.
 
-The auto-scan monitor's socket uses that seam, and needs it most: at the default
-300 s scan interval it is silent for most of every cycle, behind a screen a user
-deliberately leaves open, so a black-holed connection is indistinguishable from a
-healthy idle scan. Firing it blindly is safe in both directions — `forceReconnect`
+The auto-scan monitor's socket uses that seam while it is open, and needs it
+most: at the default 300 s scan interval it is silent for most of every cycle,
+behind a screen a user deliberately leaves open, so a black-holed connection is
+indistinguishable from a healthy idle scan. A hidden tab is now the one case
+where the seam does not apply — the socket is closed after a minute, which
+leaves `shouldReconnect` false, so `onResume`'s `forceReconnect` no-ops until
+the visibility handler's own `connect()` re-arms it. Firing it blindly is safe in both directions — `forceReconnect`
 no-ops once `disconnect()` has cleared `shouldReconnect`, so a declined channel
 stays declined, and the replay a reconnect triggers is dropped by both cursors.
 The terminal is deliberately left out: it is user-driven, so a dead socket

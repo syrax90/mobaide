@@ -214,6 +214,12 @@ private struct TerminalScreenContent: View {
             overlayPill("Replaying buffer…", background: MobaideColors.terminalOverlayReplaying)
         case .closed:
             overlayPill("Session ended", background: MobaideColors.terminalOverlayReconnecting)
+        case .suspended:
+            // Rarely on screen: coming back to the terminal resumes the stream
+            // in the same pass that renders this. It exists so the state stays
+            // honest for the frame in between, and so the send gates read a
+            // suspend as "not live" rather than as a dropped connection.
+            overlayPill("Paused", background: MobaideColors.terminalOverlayReconnecting)
         }
     }
 

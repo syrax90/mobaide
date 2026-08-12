@@ -21,6 +21,9 @@ import { create } from 'zustand';
 import { TerminalSessionModel } from './sessionModel';
 import { sessionChannelName } from '../realtime/channels';
 import { setTerminalEvictor } from './terminalEviction';
+import { mountedTerminal } from './watchedTerminal';
+
+export { clearMountedTerminal, setMountedTerminal } from './watchedTerminal';
 
 /** How many attached sessions stay resident. */
 const MAX_RETAINED = 3;
@@ -41,7 +44,8 @@ function touch(key: string, order: readonly string[]): string[] {
 }
 
 /**
- * The terminal currently on screen, exempt from death-driven eviction.
+ * The terminal currently on screen — held in `watchedTerminal` — is exempt from
+ * death-driven eviction.
  *
  * A session ending under the user must leave its output readable — the screen
  * says so, and both mobile clients behave that way. Disposing the model the user
@@ -50,19 +54,6 @@ function touch(key: string, order: readonly string[]): string[] {
  * exemption ends when the screen unmounts, and `MAX_RETAINED` still bounds the
  * set. Background terminals for dead sessions are evicted as before.
  */
-let mountedKey: string | null = null;
-
-export function setMountedTerminal(key: string): void {
-  mountedKey = key;
-}
-
-/**
- * Clears only if `key` is still the mounted one — a route switch mounts the
- * next terminal before the previous one's cleanup runs.
- */
-export function clearMountedTerminal(key: string): void {
-  if (mountedKey === key) mountedKey = null;
-}
 
 /**
  * Return the model for a session, building and connecting one if needed.
@@ -115,9 +106,10 @@ export function evictTerminalSessions(
   sessionIds: readonly string[],
 ): void {
   const { models } = useTerminalStore.getState();
+  const exempt = mountedTerminal();
   for (const sessionId of sessionIds) {
     const key = sessionChannelName(agentId, sessionId);
-    if (key === mountedKey) continue;
+    if (key === exempt) continue;
     models[key]?.dispose();
   }
 }

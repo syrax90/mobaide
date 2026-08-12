@@ -78,7 +78,12 @@ vi.mock('../realtime/channels', async (importOriginal) => {
 const { useSessionStore } = await import('../auth/sessionStore');
 const { autoscanChannelName } = await import('../realtime/channels');
 const { useConnectionStore } = await import('../realtime/connectionStore');
+const { fakeEventTarget } = await import('../realtime/__testing__/fakeEventTarget');
+const { observeTabVisibility } = await import('../realtime/tabVisibility');
 const { useAutoScanDetail, useSecondTicker } = await import('./useAutoScanDetail');
+
+/** Matches `HIDDEN_DISCONNECT_MS` in the hook. */
+const HIDDEN_DISCONNECT_MS = 60_000;
 
 const CHANNEL = autoscanChannelName('agent-1');
 
@@ -280,6 +285,136 @@ describe('useAutoScanDetail', () => {
 
     expect(view.result.current.declined).toBe(false);
     expect(opened()?.connectCount).toBe(before + 1);
+  });
+});
+
+describe('useAutoScanDetail tab visibility', () => {
+  /** Mounts the hook with a fake document driving `tabVisibility`. */
+  function mountWithDoc() {
+    const doc = fakeEventTarget();
+    const uninstall = observeTabVisibility(doc);
+    const view = mount();
+    const set = (hidden: boolean): void => {
+      act(() => {
+        doc.hidden = hidden;
+        doc.fire('visibilitychange');
+      });
+    };
+    return { view, set, uninstall };
+  }
+
+  it('holds the socket through a brief hide', () => {
+    // `resumeOnFocus` documents the rule: alt-tabbing is constant, and a
+    // handshake per `visibilitychange` would be its own storm.
+    vi.useFakeTimers();
+    try {
+      const { set, uninstall } = mountWithDoc();
+      const before = opened()?.disconnectCount ?? 0;
+
+      set(true);
+      act(() => {
+        vi.advanceTimersByTime(HIDDEN_DISCONNECT_MS - 1);
+      });
+      expect(opened()?.disconnectCount).toBe(before);
+
+      set(false);
+      act(() => {
+        vi.advanceTimersByTime(HIDDEN_DISCONNECT_MS * 2);
+      });
+      expect(opened()?.disconnectCount).toBe(before);
+      uninstall();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('closes the socket once the tab stays hidden past the grace', () => {
+    vi.useFakeTimers();
+    try {
+      const { set, uninstall } = mountWithDoc();
+      const before = opened()?.disconnectCount ?? 0;
+
+      set(true);
+      act(() => {
+        vi.advanceTimersByTime(HIDDEN_DISCONNECT_MS);
+      });
+
+      expect(opened()?.disconnectCount).toBe(before + 1);
+      uninstall();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reopens the socket when the tab comes back', () => {
+    // Lossless: `onOpen` rebuilds the subscribe frame from the live wire
+    // cursor, so the resume picks up at the high-water mark.
+    vi.useFakeTimers();
+    try {
+      const { set, uninstall } = mountWithDoc();
+      set(true);
+      act(() => {
+        vi.advanceTimersByTime(HIDDEN_DISCONNECT_MS);
+      });
+      const before = opened()?.connectCount ?? 0;
+
+      set(false);
+
+      expect(opened()?.connectCount).toBe(before + 1);
+      uninstall();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('arms the disconnect when it mounts into an already-hidden tab', () => {
+    // `onTabVisibility` reports transitions, not the current value, so a hook
+    // that mounts while hidden gets no edge to react to and would stream until
+    // the tab was both shown and hidden again.
+    vi.useFakeTimers();
+    try {
+      const doc = fakeEventTarget();
+      doc.hidden = true;
+      const uninstall = observeTabVisibility(doc);
+      mount();
+      const before = opened()?.disconnectCount ?? 0;
+
+      act(() => {
+        vi.advanceTimersByTime(HIDDEN_DISCONNECT_MS);
+      });
+
+      expect(opened()?.disconnectCount).toBe(before + 1);
+      uninstall();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves a declined channel declined across a hide and show', () => {
+    // The agent turned this subscription down; only the banner's retry may
+    // re-arm it, and a tab switch is not that.
+    vi.useFakeTimers();
+    try {
+      const { view, set, uninstall } = mountWithDoc();
+      act(() => {
+        useConnectionStore
+          .getState()
+          .setChannelState(CHANNEL, { status: 'stopped', attempt: 0, lastCloseCode: 1013 });
+      });
+      expect(view.result.current.declined).toBe(true);
+      const before = opened()?.connectCount ?? 0;
+
+      set(true);
+      act(() => {
+        vi.advanceTimersByTime(HIDDEN_DISCONNECT_MS);
+      });
+      set(false);
+
+      expect(opened()?.connectCount).toBe(before);
+      uninstall();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

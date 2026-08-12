@@ -5,13 +5,14 @@ import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
 
 type OverlayView = Pick<
   TerminalViewState,
-  'channelStopped' | 'connection' | 'replayPainting'
+  'channelStopped' | 'connection' | 'replayPainting' | 'suspended'
 >;
 
 const view = (patch: Partial<OverlayView> = {}): OverlayView => ({
   channelStopped: false,
   connection: 'live',
   replayPainting: false,
+  suspended: false,
   ...patch,
 });
 
@@ -28,6 +29,14 @@ describe('overlayMessage', () => {
     expect(
       overlayMessage(view({ channelStopped: true, connection: 'connecting' })),
     ).toBe('Disconnected');
+  });
+
+  it('calls a deliberate detach paused, matching Android and iOS', () => {
+    // A suspend leaves `connection` at `'connecting'`, so without its own
+    // branch the overlay would tell the user their connection had dropped.
+    expect(overlayMessage(view({ suspended: true, connection: 'connecting' }))).toBe(
+      'Paused',
+    );
   });
 
   it('keeps the pill up until the replayed buffer has been painted', () => {

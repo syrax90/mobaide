@@ -90,8 +90,24 @@ class WebSocketConnection(
         SupervisorJob() + Dispatchers.Default + exceptionHandler,
     )
     private val mutex = Mutex()
+
+    /**
+     * `@Volatile` because [pause] reads and clears it synchronously on the
+     * caller's thread while [doConnect] publishes it from [scope]'s dispatcher.
+     * Without it a pause is not even guaranteed to observe the socket it needs
+     * to close.
+     */
+    @Volatile
     private var webSocket: WebSocket? = null
     private var reconnectJob: Job? = null
+
+    /**
+     * `@Volatile` for the same reason [generation] is: [pause] and [disconnect]
+     * write it synchronously from the caller's thread, while `scheduleReconnect`
+     * and `doConnect` read it from [scope]'s dispatcher and from OkHttp's, with
+     * no lock in between.
+     */
+    @Volatile
     private var shouldReconnect = true
     private var backoffMs = INITIAL_BACKOFF_MS
 
@@ -152,6 +168,36 @@ class WebSocketConnection(
     }
 
     /**
+     * Close the socket but keep the connection usable, so [connect] can re-arm
+     * it later.
+     *
+     * [disconnect] ends [scope], and every [connect] body runs inside
+     * `scope.launch` — so after a disconnect a reconnect is a silent no-op.
+     * That is right for teardown and useless for a client that stops streaming
+     * on purpose and means to come back.
+     *
+     * Bumps [generation] for the same reason [forceReconnect] does: OkHttp
+     * delivers the old listener's `onClosed` asynchronously, and without the
+     * bump it would arrive after a resume as a phantom [WsEvent.Disconnected].
+     */
+    fun pause() {
+        // The caller pauses and resumes from one thread and two `scope.launch`
+        // bodies on [Dispatchers.Default] have no ordering guarantee between
+        // them. A resume's `connect()` overtaking this body would leave
+        // `shouldReconnect = false` — wedged until the screen is popped.
+        shouldReconnect = false
+        generation++
+        reconnectJob?.cancel()
+        reconnectJob = null
+        try {
+            webSocket?.close(1000, "Client pause")
+        } catch (_: Throwable) {
+            // Already CLOSED — either way it is gone.
+        }
+        webSocket = null
+    }
+
+    /**
      * Tear the live socket down and rebuild immediately with the backoff
      * reset to [INITIAL_BACKOFF_MS]. The lifecycle layer calls this on
      * screen-on so the user does not sit through a 30 s Doze-accumulated
@@ -199,9 +245,18 @@ class WebSocketConnection(
             return
         }
 
+        // Re-checked after the URL resolves, because resolving it can block on a
+        // token refresh. [pause] is synchronous and is the one `generation++`
+        // that does not hold [mutex], so an attempt parked here would otherwise
+        // wake, capture the *new* generation, and build a socket that passes its
+        // own staleness guard — live and streaming while the caller believes the
+        // session is suspended, then orphaned when the next resume overwrites
+        // [webSocket].
+        if (!shouldReconnect) return
+
         val myGeneration = generation
         val request = Request.Builder().url(url).build()
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+        val opened = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (myGeneration != generation) return
                 backoffMs = INITIAL_BACKOFF_MS
@@ -255,6 +310,24 @@ class WebSocketConnection(
                 scheduleReconnect()
             }
         })
+
+        // Publish first, then re-read. OkHttp starts the socket inside
+        // `newWebSocket`, so a [pause] landing across that call bumps
+        // [generation] and nulls [webSocket] *before* this assignment — leaving
+        // a live socket whose listener is deaf on its stale generation and which
+        // nothing would ever close, streaming a full ring replay onto a
+        // connection the caller believes is suspended. Assigning before the
+        // recheck also covers the mirror case, a pause arriving just after it:
+        // the field then holds this socket for that pause to close.
+        webSocket = opened
+        if (!shouldReconnect || myGeneration != generation) {
+            webSocket = null
+            try {
+                opened.close(1000, "Client pause")
+            } catch (_: Throwable) {
+                // Already CLOSED — either way it is gone.
+            }
+        }
     }
 
     private fun scheduleReconnect() {
