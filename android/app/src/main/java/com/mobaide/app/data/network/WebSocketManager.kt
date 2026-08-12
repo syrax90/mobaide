@@ -92,6 +92,14 @@ class WebSocketConnection(
     private val mutex = Mutex()
     private var webSocket: WebSocket? = null
     private var reconnectJob: Job? = null
+
+    /**
+     * `@Volatile` for the same reason [generation] is: [pause] and [disconnect]
+     * write it synchronously from the caller's thread, while `scheduleReconnect`
+     * and `doConnect` read it from [scope]'s dispatcher and from OkHttp's, with
+     * no lock in between.
+     */
+    @Volatile
     private var shouldReconnect = true
     private var backoffMs = INITIAL_BACKOFF_MS
 
@@ -149,6 +157,36 @@ class WebSocketConnection(
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
         scope.cancel()
+    }
+
+    /**
+     * Close the socket but keep the connection usable, so [connect] can re-arm
+     * it later.
+     *
+     * [disconnect] ends [scope], and every [connect] body runs inside
+     * `scope.launch` — so after a disconnect a reconnect is a silent no-op.
+     * That is right for teardown and useless for a client that stops streaming
+     * on purpose and means to come back.
+     *
+     * Bumps [generation] for the same reason [forceReconnect] does: OkHttp
+     * delivers the old listener's `onClosed` asynchronously, and without the
+     * bump it would arrive after a resume as a phantom [WsEvent.Disconnected].
+     */
+    fun pause() {
+        // The caller pauses and resumes from one thread and two `scope.launch`
+        // bodies on [Dispatchers.Default] have no ordering guarantee between
+        // them. A resume's `connect()` overtaking this body would leave
+        // `shouldReconnect = false` — wedged until the screen is popped.
+        shouldReconnect = false
+        generation++
+        reconnectJob?.cancel()
+        reconnectJob = null
+        try {
+            webSocket?.close(1000, "Client pause")
+        } catch (_: Throwable) {
+            // Already CLOSED — either way it is gone.
+        }
+        webSocket = null
     }
 
     /**

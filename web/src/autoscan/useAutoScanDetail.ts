@@ -27,6 +27,7 @@ import { WS_CLOSE } from '../protocol/closeCodes';
 import { AutoScanChannel, autoscanChannelName } from '../realtime/channels';
 import { useConnectionStore } from '../realtime/connectionStore';
 import { onResume } from '../realtime/resumeOnFocus';
+import { onTabVisibility, tabHidden } from '../realtime/tabVisibility';
 import {
   initialAutoScanDetailState,
   reduceAutoScanFrames,
@@ -36,13 +37,23 @@ import {
 } from './autoscanModel';
 
 /**
+ * How long the tab must stay hidden before the monitor's socket is closed.
+ *
+ * The same value as `resumeOnFocus`'s `HIDDEN_RESUME_MS`, and for the same
+ * reason: it is the threshold at which a hide stops being an alt-tab and starts
+ * being an absence worth acting on.
+ */
+const HIDDEN_DISCONNECT_MS = 60_000;
+
+/**
  * How many buffered frames force a synchronous flush.
  *
- * `requestAnimationFrame` never fires in a hidden document, and this milestone's
- * tab-lifecycle contract deliberately keeps the socket open when hidden — so
- * without a cap the buffer would grow for the whole backgrounded lifetime and
- * then reduce in one long task on return. Well above any burst a visible tab
- * produces in a single frame, so batching is unaffected.
+ * `requestAnimationFrame` never fires in a hidden document, so without a cap the
+ * buffer would grow unflushed and then reduce in one long task on return. The
+ * socket now closes after {@link HIDDEN_DISCONNECT_MS}, which bounds that
+ * window rather than removing it — the cap still has to cover the first minute
+ * of a hide. Well above any burst a visible tab produces in a single frame, so
+ * batching is unaffected.
  */
 const FLUSH_CAP = 512;
 
@@ -165,6 +176,10 @@ export function useAutoScanDetail(agentId: string, projectName: string): AutoSca
 
   useEffect(() => {
     if (!authenticated || registered || declined) return;
+    // Not into a hidden tab. `onTabVisibility` only fires on transitions, so a
+    // revival landing while hidden — an account handover disposed the channel,
+    // say — would stream unwatched until the next hide *and* show.
+    if (tabHidden()) return;
     // `connect()` on the wrapper, not on `channel`: it re-registers as a
     // disposable first, so a revived socket stays reachable by
     // `stopAllRealtime()` at the next account handover.
@@ -179,6 +194,46 @@ export function useAutoScanDetail(agentId: string, projectName: string): AutoSca
     setDeclined(true);
     channelRef.current?.channel.disconnect();
   }, [lastCloseCode]);
+
+  // Nobody reads a log pane in a hidden tab, and a scan in its active phase
+  // streams every line it produces. Unlike the terminal this needs no budget to
+  // be worth doing: there is no ring replay to amortise, because `onOpen`
+  // rebuilds the subscribe frame from the live wire cursor, so a reconnect
+  // resumes at the high-water mark and costs one handshake.
+  //
+  // `disconnect()` keeps the connection-store entry, so `registered` stays true
+  // and the revival effect above does not race this back open.
+  useEffect(() => {
+    if (!authenticated) return;
+    let pending: ReturnType<typeof setTimeout> | null = null;
+    const cancelPending = (): void => {
+      if (pending !== null) clearTimeout(pending);
+      pending = null;
+    };
+    const unsubscribe = onTabVisibility((hidden) => {
+      cancelPending();
+      if (hidden) {
+        // Delayed, not immediate. `resumeOnFocus` states the rule this would
+        // otherwise break — "alt-tabbing is constant, and reconnecting on each
+        // one would be its own handshake storm" — and the stakes are higher
+        // here than bytes: the agent caps concurrent auto-scan streams, so
+        // open/close churn can trip the cap and leave the pane declined.
+        pending = setTimeout(() => {
+          pending = null;
+          channelRef.current?.channel.disconnect();
+        }, HIDDEN_DISCONNECT_MS);
+        return;
+      }
+      // A declined channel stays declined: the agent turned this subscription
+      // down, and only the banner's retry may re-arm it. Reconnecting a channel
+      // the timer never got to close is a no-op, so this needs no guard for it.
+      if (!declined) channelRef.current?.connect();
+    });
+    return () => {
+      cancelPending();
+      unsubscribe();
+    };
+  }, [authenticated, declined]);
 
   const retry = useCallback(() => {
     setDeclined(false);

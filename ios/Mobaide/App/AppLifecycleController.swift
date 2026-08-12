@@ -10,12 +10,18 @@ import UIKit
 final class AppLifecycleController {
     private let coordinator: AttentionCoordinator
     private let agentEventBus: AgentEventBus
+    private let terminalSessionStore: TerminalSessionStore
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var didEnterBackground = false
 
-    init(coordinator: AttentionCoordinator, agentEventBus: AgentEventBus) {
+    init(
+        coordinator: AttentionCoordinator,
+        agentEventBus: AgentEventBus,
+        terminalSessionStore: TerminalSessionStore
+    ) {
         self.coordinator = coordinator
         self.agentEventBus = agentEventBus
+        self.terminalSessionStore = terminalSessionStore
     }
 
     func handle(_ phase: ScenePhase) {
@@ -23,8 +29,17 @@ final class AppLifecycleController {
         case .background:
             didEnterBackground = true
             beginGrace()
+            // The grace above deliberately holds the *events* socket up so a
+            // late attention still posts. PTY streams are the opposite case:
+            // nobody is reading them, and on cellular they are the expensive
+            // ones. Each model still applies its own budget before detaching.
+            terminalSessionStore.setAppActive(false)
         case .active:
             endGrace()
+            // Unconditional, unlike the reconcile below: a model suspended on
+            // the way out has to be released even after an `.inactive` bounce
+            // that never reached `.background`.
+            terminalSessionStore.setAppActive(true)
             // Reconcile/reconnect only after a real background→foreground
             // resume. A transient `.inactive`→`.active` bounce (Control Center,
             // the notification shade, an app-switcher peek) never suspended the

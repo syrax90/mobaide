@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.AutoScanWsClient
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.AutoScanUiEvent
+import com.mobaide.app.notifications.AppForegroundTracker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
@@ -37,6 +38,7 @@ private fun stepToPhase(step: String): String = when (step) {
 class AutoScanDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: AutoScanRepository,
+    private val appForegroundTracker: AppForegroundTracker,
 ) : ViewModel() {
     val projectName: String = checkNotNull(savedStateHandle["projectName"])
 
@@ -93,7 +95,21 @@ class AutoScanDetailViewModel @Inject constructor(
     private var streamJob: Job? = null
 
     init {
-        startStream()
+        // The stream is started by the foreground collector below rather than
+        // here: `isForeground` is a StateFlow, so it replays its current value
+        // on collect and opens the socket on the first pass. Starting here as
+        // well would cancel that job and immediately rebuild it.
+        //
+        // Nobody reads a log pane from a backgrounded app, and a scan in its
+        // active phase streams every line it produces. Unlike the terminal this
+        // needs no byte budget to be worth doing: there is no ring replay to
+        // amortise, because `lastSeq` survives a stop and the next subscribe
+        // frame resumes from it.
+        viewModelScope.launch {
+            appForegroundTracker.isForeground.collect { foreground ->
+                if (foreground) startStream() else stopStream()
+            }
+        }
     }
 
     fun startStream() {

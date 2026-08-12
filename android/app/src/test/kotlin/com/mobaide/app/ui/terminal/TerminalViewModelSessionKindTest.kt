@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.SessionRepository
+import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.coEvery
@@ -82,6 +83,7 @@ class TerminalViewModelSessionKindTest {
             templatesRepository = templatesRepository,
             shortcutsRepository = mockk(),
             foregroundSessionTracker = ForegroundSessionTracker(),
+            appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
         )
 

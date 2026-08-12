@@ -17,6 +17,7 @@ struct AutoScanDetailScreen: View {
 private struct AutoScanDetailContent: View {
     @State private var model: AutoScanDetailModel
     @State private var toast: ToastMessage?
+    @Environment(\.scenePhase) private var scenePhase
 
     init(container: AppContainer, projectName: String) {
         _model = State(initialValue: AutoScanDetailModel(projectName: projectName, repository: container.autoScanRepository))
@@ -34,7 +35,23 @@ private struct AutoScanDetailContent: View {
         .navigationTitle(model.projectName)
         .navigationBarTitleDisplayMode(.inline)
         .toast($toast)
-        .task { await model.run() }
+        // Keyed on the scene phase so backgrounding cancels `run()`, which
+        // terminates the frame stream and closes the socket, and foregrounding
+        // starts a fresh one. Nobody reads a log pane from a backgrounded app,
+        // and a scan in its active phase streams every line it produces.
+        //
+        // Unlike the terminal this needs no byte budget: there is no ring
+        // replay to amortise, because `run()` rebuilds its subscribe frame from
+        // `lastSeq`, so the resume picks up at the high-water mark.
+        // Keyed on `.background`, not on `.active`: `AppLifecycleController` —
+        // which drives the terminal half of this same gate — deliberately
+        // ignores `.inactive`, because a Control Center pull, the notification
+        // shade or an app-switcher peek never suspends the app. Tearing the
+        // stream down for those would cost a reconnect per gesture.
+        .task(id: scenePhase != .background) {
+            guard scenePhase != .background else { return }
+            await model.run()
+        }
         .task {
             for await error in model.errors() {
                 toast = ToastMessage(text: error.message)

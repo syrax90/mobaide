@@ -14,6 +14,7 @@ import com.mobaide.app.data.network.dto.ShortcutDto
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
+import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.Called
@@ -103,6 +104,7 @@ class TerminalViewModelSavedShortcutsTest {
             templatesRepository = templatesRepository,
             shortcutsRepository = shortcutsRepository,
             foregroundSessionTracker = ForegroundSessionTracker(),
+            appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
         )
 

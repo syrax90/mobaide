@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fakeEventTarget } from './__testing__/fakeEventTarget';
 import { observeResume, onResume } from './resumeOnFocus';
 import { forceReconnectAllEvents } from './channelRegistry';
 
@@ -6,25 +7,7 @@ vi.mock('./channelRegistry', () => ({ forceReconnectAllEvents: vi.fn() }));
 
 const reconnect = vi.mocked(forceReconnectAllEvents);
 
-/** A stand-in for `window`/`document` that lets a test fire the listeners. */
-function fakeTarget() {
-  const listeners = new Map<string, Set<() => void>>();
-  return {
-    hidden: false,
-    addEventListener: (type: string, listener: () => void) => {
-      const set = listeners.get(type) ?? new Set();
-      set.add(listener);
-      listeners.set(type, set);
-    },
-    removeEventListener: (type: string, listener: () => void) => {
-      listeners.get(type)?.delete(listener);
-    },
-    fire: (type: string) => {
-      for (const listener of [...(listeners.get(type) ?? [])]) listener();
-    },
-    count: (type: string) => listeners.get(type)?.size ?? 0,
-  };
-}
+const fakeTarget = fakeEventTarget;
 
 let clock = 0;
 const now = () => clock;

@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.repository.SessionRepository
+import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.every
@@ -88,6 +89,7 @@ class TerminalViewModelChunkedReplayTest {
             templatesRepository = templatesRepository,
             shortcutsRepository = mockk(),
             foregroundSessionTracker = ForegroundSessionTracker(),
+            appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
         )
 
