@@ -152,7 +152,8 @@
       <li><span class="px-bullet"></span>Agent runs on <strong>Windows, macOS, Linux</strong></li>
       <li><span class="px-bullet"></span>Android app on Google Play</li>
       <li><span class="px-bullet"></span>Free, no paywalled features</li>
-      {# NOT "no inbound ports": the agent binds 0.0.0.0:8000 unconditionally
+      {# NOT "no inbound ports": the agent always starts a listener, on
+         0.0.0.0:8000 by default and wherever HOST/PORT point otherwise
          (mobaide_agent/mobaide/agent/config.py:51). What is true is that
          nothing has to be reachable from the internet. #}
       <li><span class="px-bullet"></span>No public IP or port forwarding</li>
