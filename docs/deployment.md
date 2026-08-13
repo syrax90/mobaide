@@ -254,7 +254,7 @@ The SPA row is enforced by the `(app_mobaide)` snippet in both `deploy/prod/Cadd
 
 #### Rolling out a CSP change — the report-only soak
 
-Deployment is manual and a bad CSP does not trigger the `/api/health` rollback, so it can break a page while the deploy reports success. Before changing any policy:
+Deployment is manual and a bad CSP does not fail the `/api/health` check, so it can break a page while the deploy reports success. Before changing any policy:
 
 1. Set `CSP_REPORT_ONLY=1` in `/opt/mobaide/.env` and deploy. The middleware emits `Content-Security-Policy-Report-Only` instead — violations are reported and nothing is blocked. **Four paths are the exception and stay enforced through a soak:** `/`, `/robots.txt`, `/sitemap.xml` and `/favicon.ico`. A soak is for a policy nobody has run yet; those already served this exact policy enforced from `marketing/router.py`, so de-enforcing them buys nothing and costs a live protection. Everything else soaks, `/privacy.html` included — `legal/router.py` set no security header before this middleware, so that page's policy is exactly as new as the portal's.
 2. Walk the surfaces in a browser with devtools open and confirm a clean console. Cover at minimum: `/portal/login` (password reveal, Google button, Apple button), `/portal/signup` (live password-match — its submit button stays disabled until JS arms, so a broken policy locks the form), `/portal/account` → delete-account modal (htmx swap, mode radios, email gate, Google and Apple re-auth), `/dashboard/users` (row expand, search swap, delete-user modal), `/privacy.html`, `/`. The Apple buttons ship `disabled` and are enabled only once their SDK answers, so a blocked `script-src` shows up as a button that never becomes clickable rather than as a failed sign-in.
@@ -299,8 +299,9 @@ Every WS endpoint checks the `Origin` header **before** accepting the handshake 
 
 ### Rollback
 
-- **Automatic**: if `docker compose up` or the `/api/health` check fails, the script swaps `central_server.prev` back in and rebuilds automatically.
-- **Manual**: `deploy_central.py --rollback` does the same swap on demand (useful if a regression only surfaces later).
+- **Automatic**: only if `docker compose up` itself fails (and only on a full deploy, not `--skip-build`) — the script swaps `central_server.prev` back in and rebuilds. Nothing was serving the new source at that point, so there is no evidence to lose.
+- **A failed `/api/health` check never rolls back.** Compose already came up, so the containers running were built from the deployed source: an automatic swap-and-rebuild would destroy the state the logs describe, and it fires just as readily for failures no source rollback can fix (DNS, Caddy, the Cloudflare edge, or this workstation's own trust store). The script prints the logs command and the rollback command instead.
+- **Manual**: `deploy_central.py --rollback` swaps `central_server.prev` back in on demand — the deliberate response to a failed health check, and to a regression that only surfaces later.
 
 ### Verify
 
