@@ -22,6 +22,11 @@ private struct TerminalScreenContent: View {
     @State private var showSaveTemplate = false
     @State private var templateName = ""
     @State private var showShortcutPicker = false
+    @State private var showFullScreenInput = false
+    /// Tracks `onAppear`/`onDisappear` so the keyboard observer is only ever
+    /// restarted onto a screen that is still mounted (see `showFullScreenInput`
+    /// below).
+    @State private var screenVisible = false
     @State private var renameShortcutTarget: SavedShortcutUi?
     /// Last known row for this session, the header label's source. Held rather
     /// than read from the repository on demand because `SessionRepository` is
@@ -128,6 +133,7 @@ private struct TerminalScreenContent: View {
                         model.refreshSavedShortcuts()
                         showShortcutPicker = true
                     },
+                    onExpand: { showFullScreenInput = true },
                     onRenameSavedShortcut: { renameShortcutTarget = $0 }
                 )
             }
@@ -151,6 +157,19 @@ private struct TerminalScreenContent: View {
         }
         .sheet(isPresented: $showShortcutPicker) {
             ShortcutPickerSheet(model: model)
+        }
+        .sheet(isPresented: $showFullScreenInput) {
+            FullScreenInputSheet(model: model)
+        }
+        // The keyboard observer listens on app-wide `UIResponder` notifications,
+        // so the expanded editor's keyboard would otherwise drive this screen's
+        // pan.
+        .onChange(of: showFullScreenInput) { _, presented in
+            if presented {
+                keyboard.stop()
+            } else if screenVisible {
+                keyboard.start()
+            }
         }
         .alert("Save as template", isPresented: $showSaveTemplate) {
             TextField("Name", text: $templateName)
@@ -193,11 +212,13 @@ private struct TerminalScreenContent: View {
             }
         }
         .onAppear {
+            screenVisible = true
             model.markVisible()
             keyboard.onKeyboardWillHide = { model.syncTerminalKeyboardState() }
             keyboard.start()
         }
         .onDisappear {
+            screenVisible = false
             model.markHidden()
             keyboard.stop()
         }

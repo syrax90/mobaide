@@ -108,6 +108,15 @@ final class TerminalSessionModel {
     /// `sendTerminalBytes` predicate. The show-keyboard affordance keys off
     /// this same property so the gate and its UI can never drift apart.
     var canSendTerminalBytes: Bool { connectionState == .live && isRunning }
+    /// Android `TerminalScreen`'s `isConnected && sessionState == "running"`
+    /// composer gate. Deliberately wider than `canSendTerminalBytes`:
+    /// `isConnected` spans the replay window.
+    var isComposerActive: Bool { isConnected && isRunning }
+    /// Reads the same `composerPayload` the send itself consumes, so the button
+    /// can never offer a submit `submitComposer` would then refuse. Diverges
+    /// from Android's untrimmed `text.text.isNotEmpty()` gate, which enables
+    /// Send for a whitespace-only buffer and makes the tap a silent no-op.
+    var canSubmitComposer: Bool { isComposerActive && composerPayload != nil }
 
     private let webSocketFactory: WebSocketCoreFactory
     private let sessionManager: SessionManager
@@ -330,11 +339,36 @@ final class TerminalSessionModel {
     /// bracketed paste (`ESC[200~ … ESC[201~`) only when it spans multiple
     /// lines. The server appends the CR as a separate PTY write, so no trailing
     /// CR is added here.
+    ///
+    /// Scalars, not `Character`s: Swift folds `CR LF` into one grapheme cluster
+    /// that equals neither `"\n"` nor `"\r"`. Kotlin's UTF-16 scan has no such
+    /// fold, so this is what keeps Android parity.
     func sendInput(_ text: String) {
-        let body = text.contains("\n") ? "\u{1B}[200~\(text)\u{1B}[201~" : text
+        let multiline = text.unicodeScalars.contains("\n")
+        let body = multiline ? "\u{1B}[200~\(text)\u{1B}[201~" : text
         enqueue(.submit("\u{01}\u{0B}" + body))
         setFollowMode(true)
         inputText = ""
+    }
+
+    /// The single definition of "is there something to send", shared by the
+    /// gate above and the submit below so the two cannot drift. Trims over
+    /// scalars for the same CRLF-grapheme reason as `sendInput`: a `Character`
+    /// loop stops dead on the `CR LF` pair and leaves it on the wire.
+    private var composerPayload: String? {
+        var scalars = inputText.unicodeScalars
+        while let last = scalars.last, last == "\n" || last == "\r" {
+            scalars.removeLast()
+        }
+        let text = String(scalars)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+    }
+
+    /// Submit the composer buffer. Lives on the model so the inline composer and
+    /// the expanded editor cannot drift apart on what "send" means.
+    func submitComposer() {
+        guard let text = composerPayload else { return }
+        sendInput(text)
     }
 
     func sendBytes(_ data: Data) {

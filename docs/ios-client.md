@@ -515,6 +515,39 @@ absolute workstation paths, at least as revealing as the host — while breaking
 the key format all three clients share and orphaning every existing bucket with
 no migration. The sign-out purge removes the key outright, name included.
 
+The composer gains an Android-parity **Expand editor** button (Android
+`FullScreenInputSheet.kt`; no iOS parity issue existed before this closed the
+gap) — gated on `TerminalSessionModel.isComposerActive`, not the send gate,
+since an empty buffer is still legitimate to expand into — that presents
+`FullScreenInputSheet` as a `.sheet` (not `fullScreenCover`, used nowhere else
+in the app) over the very same `inputText` the inline composer binds to, so
+expanding and collapsing move no text and any dismissal route (its own
+Collapse button, swipe-down, or the scrim) preserves the draft. Its
+`TextEditor` inserts a newline on Return and offers no `onSubmit`; the only
+submit path is `submitComposer()`, now the single definition of "send" shared
+by both composers, reading the same trimmed `composerPayload` the submit
+itself consumes so `canSubmitComposer` can never offer a Send that the tap
+would then refuse — unlike Android's untrimmed `text.isNotEmpty()` gate, which
+can present a Send button a whitespace-only buffer refuses. `TerminalScreen`
+suspends `TerminalKeyboardObserver` for as long as the sheet is presented
+(`keyboard.stop()`/`start()` on `showFullScreenInput`, gated on a new
+`screenVisible` flag so the observer never restarts onto an unmounted screen):
+presenting a `.sheet` does not refire the presenting view's `.onAppear`, so the
+sheet's own keyboard would otherwise visibly drive the terminal's
+pan-don't-resize lift. Two deliberate divergences from Android:
+cursor/selection position is not preserved across expand/collapse — SwiftUI exposes
+no `TextEditor` selection binding before iOS 18's `TextSelection`, and the
+deployment target is 17.0 — where Android carries the exact `TextRange`; and
+the presentation is a `.sheet` at the large detent rather than a
+`ModalBottomSheet`, matching the app's uniform modal convention. Folded into
+the same change: `sendInput` and the new `composerPayload` now trim over
+`unicodeScalars` rather than `Character`s, because Swift folds `CR LF` into one
+grapheme cluster equal to neither `"\n"` nor `"\r"` — a CRLF-line-ending prompt
+previously read as single-line, skipped the bracketed-paste wrap, and reached
+the PTY with a bare CR mid-payload, submitting at the first line break;
+Kotlin's UTF-16 scan has no such fold, so this restores Android parity rather
+than diverging from it.
+
 ## Layout
 
 ```

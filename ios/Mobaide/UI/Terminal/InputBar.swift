@@ -80,6 +80,7 @@ struct InputBar: View {
     let onOpenTemplates: () -> Void
     let onSaveTemplate: () -> Void
     let onOpenShortcuts: () -> Void
+    let onExpand: () -> Void
     let onRenameSavedShortcut: (SavedShortcutUi) -> Void
 
     @FocusState private var inputFocused: Bool
@@ -87,10 +88,6 @@ struct InputBar: View {
 
     private var trimmedInput: String {
         model.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var canSend: Bool {
-        model.isConnected && model.isRunning && !trimmedInput.isEmpty
     }
 
     var body: some View {
@@ -210,10 +207,22 @@ struct InputBar: View {
             }
             .disabled(trimmedInput.isEmpty)
 
-            Button(action: submit) {
+            // Same slot Android gives it — immediately left of Send — and the
+            // same session gate, not the send gate: an empty buffer is a
+            // legitimate thing to expand and start writing in.
+            Button(action: onExpand) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+            }
+            .disabled(!model.isComposerActive)
+            .accessibilityLabel("Expand editor")
+
+            Button {
+                model.submitComposer()
+            } label: {
                 Image(systemName: "paperplane.fill")
             }
-            .disabled(!canSend)
+            .disabled(!model.canSubmitComposer)
+            .accessibilityLabel("Send")
         }
         .padding(.horizontal, 8)
         .transition(.opacity)
@@ -251,14 +260,6 @@ struct InputBar: View {
         .transition(.opacity)
     }
 
-    private func submit() {
-        var text = model.inputText
-        while let last = text.last, last == "\n" || last == "\r" {
-            text.removeLast()
-        }
-        guard !text.isEmpty else { return }
-        model.sendInput(text)
-    }
 }
 
 /// A saved custom shortcut rendered at the end of the control-key row
