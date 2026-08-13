@@ -39,8 +39,8 @@ const utf8 = new TextEncoder();
 /**
  * Drop ESC and C1 without touching anything else.
  *
- * Split out from {@link sanitizePaste} because the execute builder needs the
- * escape-injection strip without the newline rewrite.
+ * Split out from {@link sanitizePaste} so the escape-injection strip — the
+ * half of the encoder that carries the CVE — can be tested on its own.
  */
 export function stripControls(text: string): string {
   return text.replace(ESCAPE_AND_C1, '');
@@ -64,10 +64,7 @@ export function measureUtf8Bytes(text: string): number {
   return utf8.encode(text).length;
 }
 
-/**
- * What to do with an encoded payload. Shared by the paste encoder and the
- * execute builder, which are bound by the same relay frame ceiling.
- */
+/** What to do with an encoded payload, once the relay frame ceiling is known. */
 export type PayloadOutcome =
   | { kind: 'send'; text: string }
   /** Nothing survived the sanitize — no frame, no message. */

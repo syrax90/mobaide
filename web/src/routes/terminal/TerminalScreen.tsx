@@ -16,7 +16,6 @@ import { useVisibleSessionStore } from '../../stores/visibleSessionStore';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
 import { JumpToBottom } from './JumpToBottom';
-import { SelectionActions } from './SelectionActions';
 import { TemplatesPicker } from './TemplatesPicker';
 import { TerminalScrollbar } from './TerminalScrollbar';
 import { TerminalSurface } from './TerminalSurface';
@@ -108,14 +107,13 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
   const surfaceId = useId();
 
   const running = isSessionRunning(view.status);
+  const overlay = overlayMessage(view);
   // `replayPainting` mirrors the model's own `pendingReplayWrites` term: after
   // `'e'` the connection flips live synchronously while the parser is still
-  // consuming replayed history, so without it the screen would offer enabled
-  // selection actions that the model silently swallows. It is a time-superset
-  // of the model's gate, so nothing that would have been allowed gets disabled.
-  const live = view.connection === 'live' && !view.replayPainting;
-  const overlay = overlayMessage(view);
-  const canSend = live && running;
+  // consuming replayed history, so without it the screen would offer an enabled
+  // send path that the model silently swallows. It is a time-superset of the
+  // model's gate, so nothing that would have been allowed gets disabled.
+  const canSend = view.connection === 'live' && !view.replayPainting && running;
 
   // Ctrl+R is a chord people press in a terminal on purpose, and a reload costs
   // the whole replay. See `useReloadGuard` for why this is capture-phase and
@@ -216,16 +214,6 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
               model.jumpToBottom();
             }}
           />
-        )}
-        {/*
-          Inside the stage, floating, alongside the other two overlays. As a
-          flex sibling it stole ~3 rows from the terminal the moment a selection
-          existed, and xterm clears the selection on any row-count change — so
-          the bar that appears because there is a selection destroyed it, then
-          unmounted itself and gave the rows back.
-        */}
-        {view.hasSelection && (
-          <SelectionActions model={model} canRun={live} canPaste={canSend} />
         )}
       </div>
 

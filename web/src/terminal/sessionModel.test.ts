@@ -280,28 +280,6 @@ describe('TerminalSessionModel send gate', () => {
     expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toEqual([]);
   });
 
-  it('holds a selection run back until the replayed history has been parsed', async () => {
-    // Worse than the input case: the selection an `x` frame carries is read off
-    // the buffer at the moment of the call, so between `'e'` and the parser
-    // draining it is taken from a screen that is still half-reconstructed —
-    // the frame would replay a command the user never selected.
-    const { model, deliverFrame, deliver, framesOfType } = await liveRunning();
-    vi.spyOn(model.term, 'getSelection').mockReturnValue('git status');
-    deliver(TERMINAL_FRAME_TYPE.replayStart);
-    deliverFrame(outputFrame('replayed history'));
-    deliver(TERMINAL_FRAME_TYPE.replayEnd);
-
-    expect(model.state.getState().connection).toBe('live');
-    model.runSelection();
-    expect(framesOfType(TERMINAL_FRAME_TYPE.execute)).toEqual([]);
-
-    await settle();
-    model.runSelection();
-
-    expect(framesOfType(TERMINAL_FRAME_TYPE.execute).map(payloadText)).toEqual([
-      'git status',
-    ]);
-  });
 });
 
 describe('TerminalSessionModel stdin gate', () => {
@@ -462,11 +440,10 @@ describe('TerminalSessionModel outbound payload cap', () => {
     useToastStore.getState().toasts.map((toast) => toast.kind);
 
   it('refuses an oversized paste and explains instead of sending it', async () => {
-    // "Send to input" pastes an arbitrarily large selection, so this is
-    // reachable without an attacker. The relay forwards the frame to the
-    // agent's tunnel unchunked and that tunnel is opened with `max_size=4 MB`,
-    // so one oversized frame closes it with 1009 and drops every session on
-    // that agent.
+    // A clipboard holding a whole file is reachable without an attacker. The
+    // relay forwards the frame to the agent's tunnel unchunked and that tunnel
+    // is opened with `max_size=4 MB`, so one oversized frame closes it with
+    // 1009 and drops every session on that agent.
     const oversized = 'a'.repeat(MAX_PASTE_BYTES + 1);
     const { model, framesOfType } = await liveRunning();
 
@@ -476,26 +453,6 @@ describe('TerminalSessionModel outbound payload cap', () => {
     expect(toastKinds()).toEqual(['error']);
   });
 
-  it('keeps the selection when sending it to input is refused over the cap', async () => {
-    // `pasteSelection` spends irreversible things only on a frame that went
-    // out: the selection, the scroll position, focus. An over-cap refusal has
-    // already toasted its explanation, and the selection is the user's only
-    // retry material — copy it, trim it, split it — so clearing it here would
-    // charge for a paste that never happened and destroy the retry with it.
-    const { model, framesOfType } = await liveRunning();
-    vi.spyOn(model.term, 'getSelection').mockReturnValue(
-      'a'.repeat(MAX_PASTE_BYTES + 1),
-    );
-    const clearSelection = vi.spyOn(model.term, 'clearSelection');
-    const focus = vi.spyOn(model.term, 'focus');
-
-    model.pasteSelection();
-
-    expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toEqual([]);
-    expect(toastKinds()).toEqual(['error']);
-    expect(clearSelection).not.toHaveBeenCalled();
-    expect(focus).not.toHaveBeenCalled();
-  });
 });
 
 describe('TerminalSessionModel clipboard copy', () => {
@@ -669,48 +626,53 @@ describe('TerminalSessionModel synchronized output guard', () => {
     expect(toastKinds()).toEqual(['info']);
   });
 
-  it('refuses a send-to-input while the frame is still being painted', async () => {
-    const { model, framesOfType } = await selecting(ARM_SYNC);
+  it('refuses the browser context menu copy while the frame is still being painted', async () => {
+    // xterm stages the selection into its helper textarea on `contextmenu` and
+    // answers the `copy` event from the buffer, never calling `copySelection` —
+    // so with no in-app toolbar this is the mouse path that has to be gated.
+    const { model } = await selecting(ARM_SYNC);
+    vi.spyOn(model.term, 'hasSelection').mockReturnValue(true);
 
-    model.pasteSelection();
-
-    expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toEqual([]);
+    expect(model.nativeCopyAllowed()).toBe(false);
     expect(toastKinds()).toEqual(['info']);
   });
 
-  it('refuses a run while the frame is still being painted', async () => {
-    const { model, framesOfType } = await selecting(ARM_SYNC);
+  it('lets the browser context menu copy through once the program ends the frame', async () => {
+    const { model, deliverFrame } = await selecting(ARM_SYNC);
+    vi.spyOn(model.term, 'hasSelection').mockReturnValue(true);
 
-    model.runSelection();
+    deliverFrame(outputFrame(DISARM_SYNC));
+    await settle();
 
-    expect(framesOfType(TERMINAL_FRAME_TYPE.execute)).toEqual([]);
-    expect(toastKinds()).toEqual(['info']);
+    expect(model.nativeCopyAllowed()).toBe(true);
+    expect(toastKinds()).toEqual([]);
   });
 
-  it('lets the same three actions through once the program ends the frame', async () => {
-    // Read at the instant of the action rather than cached in the view state:
+  it('leaves a copy carrying no terminal selection alone', async () => {
+    // The page's own selection — a header label, an error message — is not the
+    // terminal's to refuse, and must not raise a toast either.
+    const { model } = await selecting(ARM_SYNC);
+
+    expect(model.nativeCopyAllowed()).toBe(true);
+    expect(toastKinds()).toEqual([]);
+  });
+
+  it('lets the copy through once the program ends the frame', async () => {
+    // Read at the instant of the copy rather than cached in the view state:
     // xterm clears mode 2026 on a 1 s safety timeout inside `RenderService` with
     // no event of any kind, so a flag sampled on writes or selection changes has
-    // a transition it can never observe and would strand the toolbar over a
-    // screen that is actually current.
-    const { model, deliverFrame, framesOfType } = await selecting(ARM_SYNC);
-    model.runSelection();
-    expect(framesOfType(TERMINAL_FRAME_TYPE.execute)).toEqual([]);
+    // a transition it can never observe and would keep refusing over a screen
+    // that is actually current.
+    const { model, deliverFrame } = await selecting(ARM_SYNC);
+    await model.copySelection();
+    expect(clipboardWrites).toEqual([]);
 
     deliverFrame(outputFrame(DISARM_SYNC));
     await settle();
 
     await model.copySelection();
-    model.pasteSelection();
-    model.runSelection();
 
     expect(clipboardWrites).toEqual(['selected text']);
-    expect(framesOfType(TERMINAL_FRAME_TYPE.input).map(payloadText)).toEqual([
-      'selected text',
-    ]);
-    expect(framesOfType(TERMINAL_FRAME_TYPE.execute).map(payloadText)).toEqual([
-      'selected text',
-    ]);
     // The one refusal above is all that ever spoke.
     expect(toastKinds()).toEqual(['info']);
   });
@@ -718,7 +680,7 @@ describe('TerminalSessionModel synchronized output guard', () => {
   /**
    * A live session carrying a selection whose replayed history is still queued
    * in the parser. `'e'` flips the connection to live synchronously while
-   * `term.write` stays asynchronous, so the toolbar is reachable over a
+   * `term.write` stays asynchronous, so a copy is reachable over a
    * half-reconstructed buffer; not calling `settle()` is what holds it there.
    */
   async function replayDraining(): Promise<Harness> {
@@ -731,9 +693,9 @@ describe('TerminalSessionModel synchronized output guard', () => {
   }
 
   it('refuses a copy while the replayed history is still being parsed', async () => {
-    // The send gate held the `x` frame back from the start, but copy went
-    // straight to the buffer: the user would have got text off a screen that was
-    // still being rebuilt, on the system clipboard, with no way to tell.
+    // Copy goes straight to the buffer: the user would have got text off a
+    // screen that was still being rebuilt, on the system clipboard, with no way
+    // to tell.
     const { model } = await replayDraining();
     expect(model.state.getState().replayPainting).toBe(true);
 
@@ -743,39 +705,13 @@ describe('TerminalSessionModel synchronized output guard', () => {
     expect(toastKinds()).toEqual(['info']);
   });
 
-  it('refuses a send-to-input while the replayed history is still being parsed', async () => {
-    const { model, framesOfType } = await replayDraining();
-
-    model.pasteSelection();
-
-    expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toEqual([]);
-    expect(toastKinds()).toEqual(['info']);
-  });
-
-  it('says why a run was refused mid-replay instead of dropping it silently', async () => {
-    const { model, framesOfType } = await replayDraining();
-
-    model.runSelection();
-
-    expect(framesOfType(TERMINAL_FRAME_TYPE.execute)).toEqual([]);
-    expect(toastKinds()).toEqual(['info']);
-  });
-
-  it('lets the same three actions through once the parser drains', async () => {
-    const { model, framesOfType } = await replayDraining();
+  it('lets the copy through once the parser drains', async () => {
+    const { model } = await replayDraining();
 
     await settle();
     await model.copySelection();
-    model.pasteSelection();
-    model.runSelection();
 
     expect(clipboardWrites).toEqual(['selected text']);
-    expect(framesOfType(TERMINAL_FRAME_TYPE.input).map(payloadText)).toEqual([
-      'selected text',
-    ]);
-    expect(framesOfType(TERMINAL_FRAME_TYPE.execute).map(payloadText)).toEqual([
-      'selected text',
-    ]);
     expect(toastKinds()).toEqual([]);
   });
 });
@@ -816,22 +752,9 @@ describe('TerminalSessionModel selection focus', () => {
    */
   const spyFocus = (model: Model) => vi.spyOn(model.term, 'focus');
 
-  it('returns focus to the grid after a run', async () => {
-    // `SelectionService.clearSelection()` fires `onSelectionChange`
-    // unconditionally, which drops `hasSelection`, which unmounts the toolbar —
-    // taking the button the user just pressed out of the DOM. Focus falls to
-    // `document.body` and the keyboard stops reaching the PTY until the grid is
-    // clicked again, immediately after a core action.
-    const { model, framesOfType } = await selecting();
-    const focus = spyFocus(model);
-
-    model.runSelection();
-
-    expect(framesOfType(TERMINAL_FRAME_TYPE.execute)).toHaveLength(1);
-    expect(focus).toHaveBeenCalledTimes(1);
-  });
-
   it('returns focus to the grid after a copy', async () => {
+    // The clipboard write is async, so focus can drift while it is in flight;
+    // the grid is the only sensible target to hand it back to.
     const { model } = await selecting();
     const focus = spyFocus(model);
 
@@ -841,9 +764,9 @@ describe('TerminalSessionModel selection focus', () => {
   });
 
   it('leaves focus alone when the clipboard write was refused', async () => {
-    // The refusal returns ahead of `clearSelection`, so the toolbar is still
-    // mounted, still holds the focused button, and still offers the retry.
-    // Yanking focus to the grid there would take the retry off the keyboard.
+    // The refusal returns ahead of `clearSelection`, so the selection survives
+    // as the user's retry material. Yanking focus on the way out would move the
+    // caret off whatever they had turned to instead.
     clipboardAllows = false;
     const { model } = await selecting();
     const focus = spyFocus(model);
@@ -856,18 +779,6 @@ describe('TerminalSessionModel selection focus', () => {
     expect(focus).not.toHaveBeenCalled();
   });
 
-  it('returns focus to the grid after the selection is sent to input', async () => {
-    // Symmetric with run and copy: the paste leaves no text field to type
-    // into, so the grid is the only sensible focus target once the toolbar
-    // unmounts with the cleared selection.
-    const { model, framesOfType } = await selecting();
-    const focus = spyFocus(model);
-
-    model.pasteSelection();
-
-    expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toHaveLength(1);
-    expect(focus).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe('TerminalSessionModel scrollbar geometry', () => {

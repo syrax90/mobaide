@@ -85,28 +85,11 @@ afterEach(() => {
   useToastStore.setState({ toasts: [] });
 });
 
-describe('TerminalScreen selection toolbar', () => {
-  it('mounts the toolbar inside the stage rather than under it', () => {
-    // Under the stage the toolbar was a flex sibling in a column whose stage is
-    // `flex: 1`, so mounting it took rows off the grid, the fit observer
-    // re-measured, and xterm's `SelectionService` clears the selection on any
-    // row-count change — the toolbar deleted the selection that summoned it and
-    // then unmounted itself. Containment is the half of that fix a test can
-    // hold: jsdom computes no layout, so the `position: absolute` that keeps it
-    // off the grid inside the stage is left to the stylesheet.
-    const model = acquireTerminal('a1', 's1');
-    model.state.setState({ hasSelection: true });
-
-    const { container } = renderTerminal();
-
-    const stage = container.querySelector('.terminal-stage');
-    expect(stage).toContainElement(screen.getByRole('toolbar', { name: 'Selection' }));
-  });
-});
-
 describe('TerminalScreen scrollbar', () => {
   it('mounts the slider inside the stage and points it at the surface', () => {
-    // Same containment rule as the toolbar, for the same reason — and the
+    // Inside the stage, not under it: as a flex sibling in a column whose stage
+    // is `flex: 1` it would take rows off the grid, and xterm's
+    // `SelectionService` clears the selection on any row-count change. The
     // `aria-controls` pairing is the half of it a test can hold, since the two
     // ids are minted in different components.
     const model = acquireTerminal('a1', 's1');
