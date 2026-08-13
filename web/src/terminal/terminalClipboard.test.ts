@@ -1,8 +1,8 @@
 import type { Terminal } from '@xterm/xterm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  installOsc52Policy,
   isOsc52Read,
-  refuseOsc52Reads,
   TerminalClipboardProvider,
 } from './terminalClipboard';
 
@@ -69,24 +69,59 @@ describe('isOsc52Read', () => {
   });
 });
 
-describe('refuseOsc52Reads', () => {
-  it('swallows a query on OSC 52 and lets a write fall through to the addon', () => {
+/** The handler xterm would call, plus the ident it was registered under. */
+function installPolicy(isReplaying: () => boolean): {
+  ident?: number;
+  handler: (data: string) => boolean;
+} {
+  let registered: { ident?: number; handler?: (data: string) => boolean } = {};
+  const terminal = {
+    parser: {
+      registerOscHandler(ident: number, handler: (data: string) => boolean) {
+        registered = { ident, handler };
+        return { dispose: vi.fn() };
+      },
+    },
+  } as unknown as Terminal;
+
+  installOsc52Policy(terminal, isReplaying);
+  const handler = registered.handler;
+  if (handler === undefined) throw new Error('no OSC handler was registered');
+  return { ident: registered.ident, handler };
+}
+
+describe('installOsc52Policy', () => {
+  it('swallows a query on OSC 52 and lets a live write fall through to the addon', () => {
     // Returning true stops xterm's dispatch, so nothing is ever reported back
     // to the PTY; returning false lets the clipboard addon perform the write.
-    let registered: { ident?: number; handler?: (data: string) => boolean } = {};
-    const terminal = {
-      parser: {
-        registerOscHandler(ident: number, handler: (data: string) => boolean) {
-          registered = { ident, handler };
-          return { dispose: vi.fn() };
-        },
-      },
-    } as unknown as Terminal;
+    const { ident, handler } = installPolicy(() => false);
 
-    refuseOsc52Reads(terminal);
+    expect(ident).toBe(52);
+    expect(handler('c;?')).toBe(true);
+    expect(handler('c;aGVsbG8=')).toBe(false);
+  });
 
-    expect(registered.ident).toBe(52);
-    expect(registered.handler?.('c;?')).toBe(true);
-    expect(registered.handler?.('c;aGVsbG8=')).toBe(false);
+  it('swallows a write attributed to replayed history and passes a live one on', () => {
+    let replaying = false;
+    const { handler } = installPolicy(() => replaying);
+
+    expect(handler('c;aGVsbG8=')).toBe(false);
+
+    replaying = true;
+
+    expect(handler('c;aGVsbG8=')).toBe(true);
+  });
+
+  it('reads the flag per dispatch rather than at registration', () => {
+    // xterm parses asynchronously, so the span a chunk belongs to is only known
+    // when its terminator is dispatched — a value sampled when the handler was
+    // installed would attribute the whole session to whatever was true then.
+    let replaying = true;
+    const { handler } = installPolicy(() => replaying);
+    expect(handler('c;aGVsbG8=')).toBe(true);
+
+    replaying = false;
+
+    expect(handler('c;aGVsbG8=')).toBe(false);
   });
 });

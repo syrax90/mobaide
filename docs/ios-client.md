@@ -427,10 +427,18 @@ the Android mirror tracked separately. `Clipboard` gains `hasText`
 (`UIPasteboard.hasStrings`, a description-level probe that never raises the
 paste banner, so toolbar gating is free) and `readText()`, which reads contents
 and is therefore only ever called from an explicit tap. OSC 52 is
-write-direction only, matching Android's documented posture: a program may put
-text on the pasteboard (marked sensitive, so it is device-local and expires),
-but the read/query form `ESC]52;c;?ST` — which SwiftTerm 1.15 newly implements —
-is refused by `TerminalHostView.Coordinator.clipboardRead` returning `nil`, so
+write-direction and live-only, matching Android's documented posture: a program
+may put text on the pasteboard (marked sensitive, so it is device-local and
+expires), but only from live output — `clipboardCopy` refuses bytes fed inside
+`applyingEmulatorOutput(replayed:)`, because the agent replays its ring verbatim
+on every attach and one yank sitting in that history would otherwise re-copy on
+every session open. The gate costs nothing here: the user's own Copy never
+reaches this delegate, calling `Clipboard.copy` directly from the model, so it is
+the PTY's channel alone. (A sequence still straddling the replay→live boundary
+is attributed to the span its terminator lands in, and therefore honoured — the
+known gap tracked in GitHub issue #634.) The read/query form `ESC]52;c;?ST` —
+which SwiftTerm 1.15 newly implements — is refused by
+`TerminalHostView.Coordinator.clipboardRead` returning `nil`, so
 nothing on the agent host can lift the pasteboard across the relay. 1.15 also
 widened the accepted selection characters from a literal `c;` to any of
 `c`/`p`/`q`/`s`/`0-7`, so the write sink now fires for sequences 1.13 dropped.

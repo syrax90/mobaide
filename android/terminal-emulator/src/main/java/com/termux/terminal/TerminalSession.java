@@ -15,8 +15,8 @@ import java.util.UUID;
  *
  * <ul>
  *   <li>No subprocess is spawned, no native library is loaded.</li>
- *   <li>{@link #emitOutput(byte[], int)} is the entry point for PTY bytes received from the
- *       network — they are appended to the emulator on the main thread.</li>
+ *   <li>{@link #emitOutput(byte[], int, boolean)} is the entry point for PTY bytes received from
+ *       the network — they are appended to the emulator on the main thread.</li>
  *   <li>{@link #write(byte[], int, int)} (called by {@link TerminalEmulator} / TerminalView when
  *       the user types) is forwarded to a {@link TerminalInputListener} provided by the host.</li>
  * </ul>
@@ -51,6 +51,9 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Whether {@link TerminalEmulator#append} is currently parsing PTY output; main-thread only. */
     private boolean mApplyingEmulatorOutput;
+
+    /** Whether the bytes {@link TerminalEmulator#append} is parsing are replayed; main-thread only. */
+    private boolean mApplyingReplayOutput;
 
     private final Runnable mSyncFlushRunnable = new Runnable() {
         @Override
@@ -109,18 +112,26 @@ public final class TerminalSession extends TerminalOutput {
     /**
      * Feed PTY output bytes received from the server into the emulator. Safe to call from any
      * thread — the actual append + screen-update notification is posted to the main thread.
+     * <p>
+     * {@code replay} marks bytes that come from the server's ring replay rather than live output.
+     * It travels as a parameter rather than a flag the caller raises around the call because that
+     * post decouples the append from the frame handling that decided it: a host draining a burst
+     * of replay frames typically handles all of them — clearing its own replay state — before the
+     * first append runs.
      */
-    public void emitOutput(final byte[] data, final int length) {
+    public void emitOutput(final byte[] data, final int length, final boolean replay) {
         mMainThreadHandler.post(new Runnable() {
             @Override
             public void run() {
                 if (mEmulator == null) return;
                 final int resetsBefore = mEmulator.getSynchronizedOutputResets();
                 mApplyingEmulatorOutput = true;
+                mApplyingReplayOutput = replay;
                 try {
                     mEmulator.append(data, length);
                 } finally {
                     mApplyingEmulatorOutput = false;
+                    mApplyingReplayOutput = false;
                 }
                 // An ESU inside this chunk means a frame completed even when a following
                 // BSU re-activated the mode (coalesced ESU..BSU writes) — paint it now
@@ -219,6 +230,21 @@ public final class TerminalSession extends TerminalOutput {
      */
     public boolean isApplyingEmulatorOutput() {
         return mApplyingEmulatorOutput;
+    }
+
+    /**
+     * Whether the bytes {@link TerminalEmulator#append} is parsing came from the server's ring
+     * replay rather than from live output.
+     * <p>
+     * The ring is replayed verbatim on every attach, so a control whose effect lands outside the
+     * screen — OSC 52, which sets the system clipboard — re-fires on every session open unless the
+     * host refuses it for replayed bytes. Only true inside {@code append}, so a user gesture, which
+     * arrives on its own main-thread message, never observes it set.
+     * <p>
+     * Main thread only.
+     */
+    public boolean isApplyingReplayOutput() {
+        return mApplyingReplayOutput;
     }
 
     protected void notifyScreenUpdate() {

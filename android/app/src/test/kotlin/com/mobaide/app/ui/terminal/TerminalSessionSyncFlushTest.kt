@@ -39,7 +39,7 @@ class TerminalSessionSyncFlushTest {
     /** Emit [sequence] through the production path and run the posted main-looper task. */
     private fun emit(sequence: String) {
         val bytes = sequence.toByteArray(Charsets.UTF_8)
-        session.emitOutput(bytes, bytes.size)
+        session.emitOutput(bytes, bytes.size, false)
         shadowOf(Looper.getMainLooper()).idle()
     }
 

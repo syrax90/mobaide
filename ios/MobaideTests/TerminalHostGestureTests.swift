@@ -1253,6 +1253,11 @@ final class TerminalHostGestureTests: XCTestCase {
     /// OSC 52 route into this app is live — and it pins the direction the
     /// refusal deliberately left open, which 1.15.0 widened to selection
     /// characters 1.13.0 ignored.
+    ///
+    /// Scope: this feeds `terminalView.feed` directly, bypassing `handleBinary` and
+    /// `applyingEmulatorOutput(replayed:)`, so it says nothing about replay attribution —
+    /// that is pinned by the two wire-path tests below. Do not delete it as a duplicate of
+    /// them: it is the only oracle that SwiftTerm still routes OSC 52 into the delegate.
     func testOscClipboardWriteStillReachesTheCopyPath() {
         let model = scrollableModel()
         UIPasteboard.general.items = []
@@ -1263,6 +1268,37 @@ final class TerminalHostGestureTests: XCTestCase {
             UIPasteboard.general.string, "hello",
             "OSC 52 writes still travel emulator → Coordinator → pasteboard; only the read direction is refused"
         )
+    }
+
+    /// The bytes go in through the wire rather than `feed` because the replay attribution
+    /// is raised in `handleBinary`, and the visible tail is what pins the negative: the
+    /// frame really was parsed, only its clipboard write was refused.
+    func testOscClipboardWriteInsideAReplaySpanNeverReachesThePasteboard() async throws {
+        let (model, connection) = try await wiredModel()
+        UIPasteboard.general.items = []
+
+        connection.emit(.binary(Data([TerminalFrameType.replayStart])))
+        connection.emit(.binary(outputFrame("\u{1B}]52;c;cmVwbGF5ZWQ=\u{1B}\\HISTORY")))
+        connection.emit(.binary(Data([TerminalFrameType.replayEnd])))
+
+        let painted = await poll { visibleRow(model.terminalView, 0) == "HISTORY" }
+        XCTAssertTrue(painted, "the replayed screen content still has to land — only the clipboard write is dropped")
+        XCTAssertNil(
+            UIPasteboard.general.string,
+            "a yank the user performed some other day is not a yank the user just performed"
+        )
+    }
+
+    /// The other half: attribution, not a blanket refusal of the OSC 52 route.
+    /// A write outside a replay span is the user's own yank and still lands.
+    func testOscClipboardWriteFromLiveOutputStillReachesThePasteboard() async throws {
+        let (_, connection) = try await wiredModel()
+        UIPasteboard.general.items = []
+
+        connection.emit(.binary(outputFrame("\u{1B}]52;c;eWFua2Vk\u{1B}\\")))
+
+        let copied = await poll { UIPasteboard.general.string == "yanked" }
+        XCTAssertTrue(copied, "live OSC 52 writes are the half of the feature this app keeps")
     }
 
     // MARK: - resolveRow

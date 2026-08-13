@@ -43,7 +43,7 @@ import { useToastStore } from '../stores/toastStore';
 import { shouldSuspend, type BackgroundSpend } from './terminalSuspend';
 import { mountedTerminal, onMountedTerminal } from './watchedTerminal';
 import { useTerminalPrefsStore } from '../stores/terminalPrefsStore';
-import { refuseOsc52Reads, TerminalClipboardProvider } from './terminalClipboard';
+import { installOsc52Policy, TerminalClipboardProvider } from './terminalClipboard';
 import {
   foldSample,
   initialFollowState,
@@ -259,8 +259,8 @@ export class TerminalSessionModel {
     this.term.unicode.activeVersion = '11';
     this.term.loadAddon(new ClipboardAddon(undefined, new TerminalClipboardProvider()));
     // Registered after the addon on purpose: xterm dispatches OSC handlers
-    // last-registered-first, so this one sees the query first and swallows it.
-    this.track(refuseOsc52Reads(this.term));
+    // last-registered-first, so this one sees the sequence first and swallows it.
+    this.track(installOsc52Policy(this.term, () => this.isParsingReplay()));
 
     this.io = options.channel ?? new SessionIoChannel(agentId, sessionId);
     this.wireTerminal();
@@ -590,7 +590,7 @@ export class TerminalSessionModel {
     // Never mid-replay: tearing one down wastes bytes already paid for and
     // strands `replayPainting`, which only an `'e'` this span will never send
     // could clear.
-    if (this.replay.inReplay || this.pendingReplayWrites > 0) return;
+    if (this.isParsingReplay()) return;
     const spend = { unwatchedMs: this.now() - since, bytes: this.unwatchedBytes };
     if (this.suspendPolicy(spend)) this.suspend();
   }
@@ -732,6 +732,22 @@ export class TerminalSessionModel {
     if (!this.replayEndSeen || this.pendingReplayWrites > 0) return;
     this.replayEndSeen = false;
     patchState(this.state, { replayPainting: false });
+  }
+
+  /**
+   * Whether bytes reaching the parser right now are replayed history rather than
+   * live output.
+   *
+   * Both terms are needed. `inReplay` covers the span between `'b'` and `'e'`;
+   * `pendingReplayWrites` covers the tail after it, because `term.write` is
+   * asynchronous and on a multi-MiB ring the parser is still chewing through
+   * history long after `'e'` flipped the connection to live. `writeReplay`
+   * increments before the write and decrements in the post-parse callback, and
+   * xterm fires those callbacks in order between chunks, so a live chunk queued
+   * behind replay chunks parses with the counter already back at zero.
+   */
+  private isParsingReplay(): boolean {
+    return this.replay.inReplay || this.pendingReplayWrites > 0;
   }
 
   /**
@@ -944,9 +960,13 @@ export class TerminalSessionModel {
    * afterwards. Any query sequence in that history — DECRQM for mode 2026,
    * XTVERSION, DECRQSS, OSC 4, none of which the agent's ring scrub removes —
    * would be answered *after* the gate opened and injected into the user's live
-   * prompt. Android and iOS never see this because their replay append finishes
-   * before their gate flips. Outside a replay span the counter is zero, so live
-   * auto-replies are unaffected.
+   * prompt. Outside a replay span the counter is zero, so live auto-replies are
+   * unaffected.
+   *
+   * The mobile clients need the same discrimination and cannot borrow this term:
+   * iOS feeds synchronously on the main actor, and Android's append is posted to
+   * the main looper *behind* the frame handling that decided it — so there the
+   * replay flag has to travel with the bytes (`TerminalSession.emitOutput`).
    */
   private canSendBytes(): boolean {
     return (

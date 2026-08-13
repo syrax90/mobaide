@@ -250,10 +250,13 @@ class TerminalSessionCallback(
      * Set by the View layer (which owns a [android.content.Context]) so the terminal can
      * write text to the system clipboard. Reached by two callers: the ActionMode "Copy"
      * item (an explicit user gesture) and the OSC 52 escape sequence emitted by programs in
-     * the PTY (e.g. vim/tmux yank) — so enabling this sink also lets remote PTY output set
-     * the clipboard without a user gesture. The wiring marks the clip sensitive
-     * ([android.content.ClipDescription.EXTRA_IS_SENSITIVE]) because terminal text may
-     * contain secrets, which suppresses the clipboard preview on API 33+.
+     * the PTY (e.g. vim/tmux yank) — so enabling this sink also lets live PTY output set
+     * the clipboard without a user gesture. *Replayed* output may not: the server replays its
+     * ring verbatim on every attach, so one OSC 52 anywhere in the history would otherwise
+     * overwrite the clipboard every time the session is opened
+     * ([com.termux.terminal.TerminalSession.isApplyingReplayOutput]). The wiring marks the
+     * clip sensitive ([android.content.ClipDescription.EXTRA_IS_SENSITIVE]) because terminal
+     * text may contain secrets, which suppresses the clipboard preview on API 33+.
      */
     var onCopyToClipboard: ((String) -> Unit)? = null
 
@@ -272,6 +275,7 @@ class TerminalSessionCallback(
     override fun onTitleChanged(changedSession: TerminalSession) {}
     override fun onSessionFinished(finishedSession: TerminalSession) {}
     override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {
+        if (session.isApplyingReplayOutput) return
         if (!text.isNullOrEmpty()) onCopyToClipboard?.invoke(text)
     }
     override fun onPasteTextFromClipboard(session: TerminalSession?) {

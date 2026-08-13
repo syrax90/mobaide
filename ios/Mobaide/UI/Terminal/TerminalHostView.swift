@@ -679,10 +679,24 @@ final class MobaideTerminalView: TerminalView {
     /// read as the user returning to the tail and silently resume follow mode.
     private(set) var isApplyingEmulatorOutput = false
 
+    /// True while the bytes being fed are the server's ring *replay* rather than live output.
+    /// The ring is replayed verbatim on every attach, so a control whose effect lands outside
+    /// the screen — OSC 52, which writes the system pasteboard — would otherwise re-fire every
+    /// time the session is opened.
+    private(set) var isApplyingReplayOutput = false
+
     /// Feed PTY bytes to the emulator, attributing any offset move they cause.
-    func applyingEmulatorOutput(_ body: () -> Void) {
+    ///
+    /// `replayed` carries no default on purpose, matching the required parameter on Android's
+    /// `TerminalSession.emitOutput`: a caller that omitted it would silently claim "live", which
+    /// is the fail-open direction — and the trailing-closure spelling would hide the omission.
+    func applyingEmulatorOutput(replayed: Bool, _ body: () -> Void) {
         isApplyingEmulatorOutput = true
-        defer { isApplyingEmulatorOutput = false }
+        isApplyingReplayOutput = replayed
+        defer {
+            isApplyingEmulatorOutput = false
+            isApplyingReplayOutput = false
+        }
         body()
     }
 
@@ -1058,7 +1072,15 @@ struct TerminalHostView: UIViewRepresentable {
             panHost?.caretDidMove()
         }
 
+        /// OSC 52 *write*. The user's own Copy does not come through here — it calls
+        /// `Clipboard.copy` directly from the model — so this delegate is the PTY's channel
+        /// alone, and bytes the server replayed are refused: the ring is replayed verbatim on
+        /// every attach, so one yank would otherwise re-copy on every session open.
+        /// Both guards fail *closed*: an unrecognised source view refuses the copy rather than
+        /// waving it through, so rewiring the delegate can only disable the feature, never the gate.
         func clipboardCopy(source: TerminalView, content: Data) {
+            guard let terminal = source as? MobaideTerminalView else { return }
+            guard !terminal.isApplyingReplayOutput else { return }
             guard let text = String(data: content, encoding: .utf8) else { return }
             Clipboard.copy(text, isSensitive: true)
         }
