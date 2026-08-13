@@ -128,7 +128,7 @@ async function renderPickerWith(
   repo.templates = templates;
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <TemplatesPicker onPick={onPick} onClose={() => undefined} />
+      <TemplatesPicker onPick={onPick} onClose={() => undefined} canSend={true} />
     </QueryClientProvider>,
   );
   await screen.findByRole('heading', { name: 'All' });

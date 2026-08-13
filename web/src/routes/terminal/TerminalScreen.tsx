@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { sessionChannelName } from '../../realtime/channels';
 import { useKeyboardLock } from '../../keyboard/useKeyboardLock';
@@ -12,7 +12,6 @@ import {
 } from '../../terminal/terminalStore';
 import { isSessionRunning } from '../../protocol/dto/terminalState';
 import { useTerminalPrefsStore } from '../../stores/terminalPrefsStore';
-import { useToastStore } from '../../stores/toastStore';
 import { useVisibleSessionStore } from '../../stores/visibleSessionStore';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
@@ -124,6 +123,17 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
   useReloadGuard(true);
   useUnloadGuard(canSend);
 
+  // The grid takes focus back on every dismissal path, and it has to happen
+  // here rather than in the callbacks: `Modal` closes its `<dialog>` from a
+  // layout-effect cleanup, and the native close algorithm hands focus to the
+  // element that opened it — so a `focus()` called while dismissing is
+  // overwritten a moment later. A passive effect runs after that cleanup.
+  const templatesWereOpen = useRef(false);
+  useEffect(() => {
+    if (templatesWereOpen.current && !templatesOpen) model.focus();
+    templatesWereOpen.current = templatesOpen;
+  }, [templatesOpen, model]);
+
   return (
     <section className="terminal-page">
       <header className="terminal-bar">
@@ -221,30 +231,25 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
 
       {templatesOpen && (
         <TemplatesPicker
+          canSend={canSend}
           onClose={() => {
             setTemplatesOpen(false);
-            model.focus();
           }}
           onPick={(template) => {
             // A refused insert keeps the picker open: the body stays on
             // screen for a retry instead of silently vanishing while the
-            // recency stamp advertises success.
-            if (!canSend) {
-              useToastStore
-                .getState()
-                .show("The session isn't accepting input — the template was not inserted.", 'info');
-              return false;
-            }
+            // recency stamp advertises success. The picker disables its rows
+            // while the gate is shut and explains a refusal inline — a toast
+            // would render below the dialog's top layer, unseen.
+            if (!canSend) return false;
             // Paste, never execute: the body lands on the running program's
             // input line for review, mirroring the mobile clients' insert-
             // into-composer semantics.
             if (!model.pasteText(template.body)) return false;
             setTemplatesOpen(false);
-            // The paste bypasses xterm's user-input scroll and `focus()`
-            // preserves scroll position, so an insert made while scrolled up
-            // would otherwise land off-screen.
+            // The paste bypasses xterm's user-input scroll, so an insert made
+            // while scrolled up would otherwise land off-screen.
             model.jumpToBottom();
-            model.focus();
             return true;
           }}
         />
