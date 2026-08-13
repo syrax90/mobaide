@@ -734,9 +734,13 @@ decode. The overlay is driven by socket state, not by the first frame
 report parsed through their `write` callbacks.
 
 **Size authority.** The grid is cached before the 100 ms resize debounce and
-re-asserted at all three live entries — socket open, first inbound binary
-of a cycle, and `replayEnd` — because the agent spawns every PTY at 24×80
-and never reports back.
+re-asserted at all four live triggers — socket open, first inbound binary
+of a cycle, `replayEnd`, and the tab-shown / window-focus switch-back edge
+(GH #631) — because the agent spawns every PTY at 24×80 and never reports
+back. The switch-edge trigger bypasses the same-size dedupe cache, since a
+peer client may have resized the shared PTY while this one sat idle, and
+fires only while already live — every non-live state already re-asserts on
+its own path into live.
 
 **Follow mode is derived, not commanded**: pinned ⇔ `viewportY === baseY`.
 That gets the CLA-184/CLA-178 fix for free — xterm scrolls to the tail on
@@ -1358,7 +1362,8 @@ Android, iOS, and web (or a Linear issue filed) — with the transition rule
 that feature areas not yet built on web are covered by their planned WEB-*
 issue rather than per-change issues. Terminal behavior parity references:
 the client is the sole PTY size authority and must re-assert size on every
-reconnect (see `docs/ios-client.md` and PROTOCOL.md).
+reconnect and on the switch-back-to-this-client edge (GH #631) (see
+`docs/ios-client.md` and PROTOCOL.md).
 
 Web-only behaviour that needs **no** mirror issue is the platform-convention
 exemption the rule already carries: the desktop keyboard surface (Ctrl+C /

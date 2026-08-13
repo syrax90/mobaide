@@ -181,4 +181,125 @@ final class TerminalSessionSuspendTests: XCTestCase {
 
         XCTAssertEqual(model.connectionState, .closed)
     }
+
+    // MARK: - Switch-edge size re-assert
+    //
+    // A peer client may have resized the shared PTY while this one sat idle,
+    // so `markVisible` and the `setAppActive` rising edge re-assert the cached
+    // grid — bypassing `resize`'s dedupe, keeping the debounce, and only over
+    // a socket that is already live.
+
+    private func resizeFrames(_ connection: FakeWebSocketConnection) -> [Data] {
+        connection.sentBinaries.filter { $0.first == 0x72 }
+    }
+
+    private func waitForResizeFrames(
+        _ connection: FakeWebSocketConnection,
+        atLeast count: Int
+    ) async -> [Data] {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while ContinuousClock.now < deadline {
+            if resizeFrames(connection).count >= count { return resizeFrames(connection) }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return resizeFrames(connection)
+    }
+
+    private let resize40x120 = Data([0x72, 0x00, 0x28, 0x00, 0x78])
+
+    func testMarkVisibleWhileLiveReassertsCachedSizeBypassingDedupe() async throws {
+        let (model, connection, _) = try await watchedModel()
+        connection.emit(.binary(replayEnd))
+        await waitForState(model, .live)
+        model.resize(rows: 40, cols: 120)
+        let before = await waitForResizeFrames(connection, atLeast: 1).count
+        XCTAssertGreaterThanOrEqual(before, 1, "the measured grid reached the wire")
+
+        // Navigation back to a live terminal: the cache equals the frame
+        // already on the wire, so `resize`'s dedupe would swallow the re-send —
+        // the switch edge must not consult it.
+        model.markVisible()
+
+        let frames = await waitForResizeFrames(connection, atLeast: before + 1)
+        XCTAssertEqual(frames.count, before + 1)
+        XCTAssertEqual(frames.last, resize40x120)
+    }
+
+    func testMarkVisibleWhileReconnectingSendsNoSize() async throws {
+        let (model, connection, factory) = try await watchedModel()
+        connection.emit(.binary(replayEnd))
+        await waitForState(model, .live)
+        model.resize(rows: 40, cols: 120)
+        _ = await waitForResizeFrames(connection, atLeast: 1)
+
+        model.markHidden()
+        connection.emit(.binary(outputFrame("spending")))
+        await waitForState(model, .suspended)
+
+        // The return resumes the stream first, so the edge reads
+        // `.reconnecting` and must defer to the connect-path re-assert
+        // instead of double-sending.
+        model.markVisible()
+        XCTAssertEqual(model.connectionState, .reconnecting)
+
+        let reopened = try await factory.connection(2)
+        try? await Task.sleep(for: .milliseconds(250)) // past the 100 ms debounce
+        XCTAssertTrue(
+            resizeFrames(reopened).isEmpty,
+            "nothing may assert a size while the resumed socket is still reconnecting"
+        )
+    }
+
+    func testAppActiveRisingEdgeWhileLiveAndVisibleReasserts() async throws {
+        let (model, connection, _) = try await watchedModel()
+        connection.emit(.binary(replayEnd))
+        await waitForState(model, .live)
+        model.resize(rows: 40, cols: 120)
+        let before = await waitForResizeFrames(connection, atLeast: 1).count
+
+        // A background without spend keeps the socket live, so the return is
+        // the pure switch edge: no reconnect path will re-assert for it.
+        model.setAppActive(false)
+        model.setAppActive(true)
+
+        let frames = await waitForResizeFrames(connection, atLeast: before + 1)
+        XCTAssertEqual(frames.count, before + 1)
+        XCTAssertEqual(frames.last, resize40x120)
+    }
+
+    func testAppActiveRepeatWithoutFallDoesNotReassert() async throws {
+        let (model, connection, _) = try await watchedModel()
+        connection.emit(.binary(replayEnd))
+        await waitForState(model, .live)
+        model.resize(rows: 40, cols: 120)
+        let before = await waitForResizeFrames(connection, atLeast: 1).count
+
+        // Control Center: `.inactive` never reaches the store, and the return
+        // re-fires `.active` with no preceding fall — not a client switch.
+        model.setAppActive(true)
+        try? await Task.sleep(for: .milliseconds(250))
+
+        XCTAssertEqual(resizeFrames(connection).count, before)
+    }
+
+    func testAppActiveRisingEdgeOnHiddenModelStaysSilent() async throws {
+        // The store fans `setAppActive` out to every retained model; one
+        // sitting behind another screen must not speak just because the app
+        // woke up.
+        let factory = FakeWebSocketTransportFactory()
+        let model = TerminalTestSupport.model(transportFactory: factory)
+        model.start()
+        let connection = try await factory.connection(1)
+        connection.emit(.opened)
+        connection.emit(.binary(replayEnd))
+        await waitForState(model, .live)
+        model.resize(rows: 40, cols: 120)
+        let before = await waitForResizeFrames(connection, atLeast: 1).count
+
+        model.setAppActive(false)
+        model.setAppActive(true)
+        try? await Task.sleep(for: .milliseconds(250))
+
+        XCTAssertEqual(resizeFrames(connection).count, before)
+    }
 }

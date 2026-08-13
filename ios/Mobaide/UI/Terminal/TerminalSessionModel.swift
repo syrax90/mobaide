@@ -452,13 +452,19 @@ final class TerminalSessionModel {
         guard r != lastResizeRows || c != lastResizeCols else { return }
         lastResizeRows = r
         lastResizeCols = c
-        let rows16 = UInt16(clamping: r)
-        let cols16 = UInt16(clamping: c)
+        scheduleSizeReassert()
+    }
+
+    /// Debounced send of the cached grid with no dedupe consult. The single
+    /// `resizeTask` is what coalesces an edge assert with a concurrent layout
+    /// pass into one frame, and the cache is read at fire time so the last
+    /// re-arm wins with the newest grid.
+    private func scheduleSizeReassert() {
         resizeTask?.cancel()
         resizeTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(100))
-            guard !Task.isCancelled else { return }
-            self?.enqueue(.resize(rows: rows16, cols: cols16))
+            guard !Task.isCancelled, let self else { return }
+            self.resendCachedSize()
         }
     }
 
@@ -472,8 +478,9 @@ final class TerminalSessionModel {
         resendCachedSize()
     }
 
-    /// Re-assert the last measured grid: on `.connected`, and on every entry
-    /// into `.live`.
+    /// Re-assert the last measured grid: on `.connected`, on every entry into
+    /// `.live`, and as the delivery step of every `scheduleSizeReassert`
+    /// debounce.
     ///
     /// The PTY is spawned at the create default (24x80) and only a resize frame
     /// corrects it. `.connected` alone cannot carry that guarantee — the model is
@@ -805,6 +812,13 @@ final class TerminalSessionModel {
         if connectionState != .live, !streamSuspended, let core {
             Task { await core.forceReconnect() }
         }
+        // Returning over a healthy socket: a peer client may have resized the
+        // shared PTY meanwhile, and the local dedupe cache cannot know.
+        // Live-only on purpose — every other state re-asserts on its own entry
+        // into `.live`, so this edge is the one case nothing else covers.
+        if connectionState == .live, lastResizeRows > 0, lastResizeCols > 0 {
+            scheduleSizeReassert()
+        }
     }
 
     func markHidden() {
@@ -825,8 +839,18 @@ final class TerminalSessionModel {
 
     /// Scene-phase half of the watch gate, driven by `AppLifecycleController`.
     func setAppActive(_ active: Bool) {
+        let wasActive = appActive
         appActive = active
         syncWatched()
+        // Rising edge only: `.active` re-fires with no preceding background on
+        // Control-Center bounces, and the store fans this call out to every
+        // retained model, so `screenVisible` keeps off-screen models passive.
+        // Checked after `syncWatched()` so a resume it just started reads as
+        // `.reconnecting` here and defers to the connect-path re-assert.
+        if active, !wasActive, screenVisible, connectionState == .live,
+           lastResizeRows > 0, lastResizeCols > 0 {
+            scheduleSizeReassert()
+        }
     }
 
     /// A session is watched only while the app is active *and* this terminal is
