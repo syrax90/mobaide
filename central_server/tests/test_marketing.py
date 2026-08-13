@@ -57,11 +57,18 @@ CONTRADICTED_CLAIMS = (
     "32 sessions per",
     # The product is "Claude Code".
     "cloud code",
-    # The agent binds 0.0.0.0:8000 by default so the app can reach it over LAN
+    # The agent binds 0.0.0.0:8000 unconditionally
     # (mobaide_agent/mobaide/agent/config.py:51). What is true is that nothing
     # needs to be reachable from the internet — not that nothing listens.
     "no inbound ports",
     "nothing on your machine listens",
+    # No client can reach the agent without the relay: AuthRepository's
+    # connectAgent() has no UI caller on either platform, and the agent's
+    # UserStore.add_user() has no CLI verb or endpoint, so the store its
+    # /api/auth/token checks is always empty.
+    "direct connection",
+    "over lan",
+    "straight at the agent",
     # Reconnect replays from a byte ring (RING_MAX_BYTES = 4 MiB), not from the
     # 10,000-entry deque of read chunks that backs the REST /scrollback route.
     "10,000-line",
@@ -72,9 +79,9 @@ CONTRADICTED_CLAIMS = (
 VERIFIED_CLAIMS = (
     "opt-in per launch",
     "git projects only",
-    # The TLS guarantee must name relay mode. Unqualified it is false: the
-    # optional direct/LAN mode builds a ws:// URL unless the agent sits behind
-    # HTTPS, and the agent's own listener is plain HTTP by default.
+    # The TLS guarantee must name the relay path. Unqualified it would cover
+    # the clients' unreachable DIRECT plumbing, which builds a ws:// URL unless
+    # the agent sits behind HTTPS, and the agent's listener is plain HTTP.
     "going through the relay",
     "systemd",
     "launchd",
