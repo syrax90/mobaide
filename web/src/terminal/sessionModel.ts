@@ -37,6 +37,7 @@ import { SessionIoChannel, sessionChannelName } from '../realtime/channels';
 import { useConnectionStore } from '../realtime/connectionStore';
 import { registerDisposable, unregisterDisposable } from '../realtime/liveChannels';
 import { onTabVisibility, tabHidden } from '../realtime/tabVisibility';
+import { onWindowFocus } from '../realtime/windowFocus';
 import { realScheduler, type Scheduler } from '../realtime/webSocketChannel';
 import { useToastStore } from '../stores/toastStore';
 import { shouldSuspend, type BackgroundSpend } from './terminalSuspend';
@@ -265,6 +266,7 @@ export class TerminalSessionModel {
     this.wireTerminal();
     this.wireChannel();
     this.wireWatchGate();
+    this.wireSwitchReassert();
 
     registerDisposable(this);
     this.io.channel.connect();
@@ -527,6 +529,41 @@ export class TerminalSessionModel {
     );
   }
 
+  /**
+   * The "user is now using this client" edges: tab shown, window refocused.
+   * A peer client may have resized the shared PTY while this one sat idle,
+   * and the local dedupe cache cannot know — so the edge re-asserts without
+   * consulting it. The kernel drops a same-size TIOCSWINSZ before SIGWINCH,
+   * so a redundant re-assert costs one 5-byte frame and repaints nothing.
+   */
+  private wireSwitchReassert(): void {
+    this.disposers.push(
+      onTabVisibility((hidden) => {
+        if (!hidden) this.maybeReassertOnSwitch();
+      }),
+    );
+    this.disposers.push(
+      onWindowFocus((focused) => {
+        if (focused) this.maybeReassertOnSwitch();
+      }),
+    );
+  }
+
+  /**
+   * Live-only on purpose: every other connection state re-asserts on its own
+   * path into `'live'` (socket open, first binary, replayEnd) — including a
+   * resume from suspension, which sits at `'connecting'` until its first
+   * inbound frame. That one gate is what keeps a suspended model silent and
+   * the resume path down to a single assert.
+   */
+  private maybeReassertOnSwitch(): void {
+    if (this.disposed) return;
+    if (mountedTerminal() !== this.key) return;
+    if (this.replay.connection !== 'live') return;
+    if (this.lastRows <= 0 || this.lastCols <= 0) return;
+    this.scheduleSizeReassert();
+  }
+
   private syncWatched(): void {
     if (this.disposed) return;
     if (!tabHidden() && mountedTerminal() === this.key) {
@@ -710,6 +747,17 @@ export class TerminalSessionModel {
     if (rows === this.lastRows && cols === this.lastCols) return;
     this.lastRows = rows;
     this.lastCols = cols;
+    this.scheduleSizeReassert();
+  }
+
+  /**
+   * Debounced delivery of the cached grid, shared by {@link pushSize} and the
+   * switch-edge re-assert. The single `cancelResize` slot is what coalesces an
+   * edge assert with a concurrent layout pass into one frame, and
+   * {@link assertSize} reads the cache at fire time so the last re-arm wins
+   * with the newest grid.
+   */
+  private scheduleSizeReassert(): void {
     this.cancelResize?.();
     this.cancelResize = this.scheduler.schedule(() => {
       this.cancelResize = null;

@@ -628,7 +628,8 @@ class TerminalViewModel @Inject constructor(
     }
 
     /**
-     * Re-assert the last measured grid to the agent on every entry into Live.
+     * Re-assert the last measured grid to the agent: on every entry into Live,
+     * and as the delivery step of every [scheduleSizeReassert] debounce.
      *
      * The PTY is spawned at the create default (24x80) and only a resize frame
      * corrects it. The other resize trigger — a layout pass (TerminalScreen's
@@ -988,10 +989,12 @@ class TerminalViewModel @Inject constructor(
      * have dropped (Doze restricts network) and the exponential backoff
      * inside [WebSocketConnection.scheduleReconnect] can be sitting at the
      * 30 s ceiling, so without this nudge the user can stare at the
-     * "Reconnecting…" overlay for up to half a minute. No-op when the
-     * connection is already [ConnectionState.Live]: forcing a reconnect on
-     * a healthy socket would burn a server replay round-trip for nothing
-     * and flash the overlay unnecessarily.
+     * "Reconnecting…" overlay for up to half a minute. When the connection
+     * is already [ConnectionState.Live] the reconnect is skipped — forcing
+     * one on a healthy socket would burn a server replay round-trip for
+     * nothing and flash the overlay unnecessarily — but the cached PTY size
+     * is re-asserted: another client may have resized the shared PTY while
+     * this one was unwatched, and the local dedupe cache cannot know.
      */
     fun onScreenVisible() {
         // The watch gate owns the reconnect while suspended, and
@@ -1009,7 +1012,15 @@ class TerminalViewModel @Inject constructor(
             resumedFromSuspend = false
             return
         }
-        if (_connectionState.value == ConnectionState.Live) return
+        if (_connectionState.value == ConnectionState.Live) {
+            // Live-only on purpose: every non-Live state re-asserts on its own
+            // entry into Live via enterLiveState(), including a resume from
+            // suspension, so this edge is the one case nothing else covers. The
+            // kernel drops a same-size TIOCSWINSZ before SIGWINCH, so a
+            // redundant re-assert costs one 5-byte frame and repaints nothing.
+            if (lastResizeRows > 0 && lastResizeCols > 0) scheduleSizeReassert()
+            return
+        }
         connection?.forceReconnect()
     }
 
@@ -1020,10 +1031,20 @@ class TerminalViewModel @Inject constructor(
         // TerminalView.updateSize() already calls session.updateSize(...) with real
         // renderer metrics synchronously before this callback fires; calling it again here
         // with stub (12, 24) metrics would clobber the correct values.
+        scheduleSizeReassert()
+    }
+
+    /**
+     * Debounced send of the cached grid with no dedupe consult. The single
+     * [resizeJob] is what coalesces an edge assert with a concurrent layout
+     * pass into one frame, and the cache is read at fire time so the last
+     * re-arm wins with the newest grid.
+     */
+    private fun scheduleSizeReassert() {
         resizeJob?.cancel()
         resizeJob = viewModelScope.launch {
             delay(100)
-            sendChannel.trySend(TerminalProtocol.encodeResize(rows, cols))
+            resendCachedSize()
         }
     }
 

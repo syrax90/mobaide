@@ -44,6 +44,9 @@ import org.junit.Test
  *    re-asserted (bypassing the debounce and dedupe) so a PTY left at its
  *    24x80 spawn default is corrected even when the measuring layout pass
  *    settled before the socket connected. Mirrors iOS resendCachedSize().
+ * 5. onScreenVisible() over an already-Live socket re-asserts the cached size
+ *    through the shared debounce, bypassing the dedupe: a peer client may
+ *    have resized the shared PTY while this one was unwatched.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TerminalViewModelResizeTest {
@@ -306,5 +309,76 @@ class TerminalViewModelResizeTest {
 
         val expected = TerminalProtocol.encodeResize(50, 120)
         verify(atLeast = 2, timeout = 2000) { connection.sendBinary(expected) }
+    }
+
+    @Test
+    fun onScreenVisible_whenLiveWithCachedSize_reassertsBypassingDedupe() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+
+        vm.resize(24, 80)
+        advanceTimeBy(200)
+        runCurrent()
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+
+        // Debounced layout frame plus the connect-time resend.
+        val expected = TerminalProtocol.encodeResize(24, 80)
+        verify(exactly = 2) { connection.sendBinary(expected) }
+
+        // ON_START over a healthy Live socket: the cache equals the frame
+        // already on the wire, so resize()'s dedupe would swallow it — the
+        // switch edge must not consult it, but must still ride the debounce.
+        vm.onScreenVisible()
+        runCurrent()
+        verify(exactly = 2) { connection.sendBinary(expected) }
+
+        advanceTimeBy(200)
+        runCurrent()
+        verify(exactly = 3) { connection.sendBinary(expected) }
+    }
+
+    @Test
+    fun onScreenVisible_whenLiveWithoutMeasuredSize_sendsNothing() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+
+        // Live before any layout pass: the -1 sentinels must gate the edge, or
+        // a bogus -1x-1 grid goes on the wire.
+        vm.onScreenVisible()
+        advanceTimeBy(200)
+        runCurrent()
+
+        verify(exactly = 0) { connection.sendBinary(any()) }
+    }
+
+    @Test
+    fun onScreenVisible_reassertThenRealResize_lastSizeWins() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+
+        vm.resize(24, 80)
+        advanceTimeBy(200)
+        runCurrent()
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+
+        // The edge arms the shared debounce job with the cached 24x80 …
+        vm.onScreenVisible()
+        advanceTimeBy(20)
+        runCurrent()
+
+        // … and a layout pass lands inside its window with a new grid. One
+        // shared job reading the cache at fire time means only the newest size
+        // may go out — never a third, stale 24x80.
+        vm.resize(40, 100)
+        advanceTimeBy(200)
+        runCurrent()
+
+        verify(exactly = 1) { connection.sendBinary(TerminalProtocol.encodeResize(40, 100)) }
+        verify(exactly = 2) { connection.sendBinary(TerminalProtocol.encodeResize(24, 80)) }
     }
 }

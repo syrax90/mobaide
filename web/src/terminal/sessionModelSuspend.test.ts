@@ -28,6 +28,7 @@ vi.mock('../auth/agentTokens', () => ({
 const { SessionIoChannel, sessionChannelName } = await import('../realtime/channels');
 const { TerminalSessionModel } = await import('./sessionModel');
 const { observeTabVisibility } = await import('../realtime/tabVisibility');
+const { observeWindowFocus } = await import('../realtime/windowFocus');
 const { clearMountedTerminal, setMountedTerminal } = await import('./watchedTerminal');
 
 type Model = InstanceType<typeof TerminalSessionModel>;
@@ -38,12 +39,24 @@ const utf8 = new TextEncoder();
 const outputFrame = (body: string): Uint8Array =>
   Uint8Array.from([TERMINAL_FRAME_TYPE.output, ...utf8.encode(body)]);
 
+const resizeFrames = (socket: FakeSocket): Uint8Array[] =>
+  socket.sent.filter(
+    (frame): frame is Uint8Array =>
+      frame instanceof Uint8Array && frame[0] === TERMINAL_FRAME_TYPE.resize,
+  );
+
 interface Harness {
   model: Model;
   socket: FakeSocket;
   sockets: FakeSocket[];
   hide: () => void;
   show: () => void;
+  blurWindow: () => void;
+  focusWindow: () => void;
+  /** Fire the armed 100 ms size debounce; throws if none is armed. */
+  fireSizeDebounce: () => void;
+  /** Armed model-timer jobs — headless, only the size debounce ever schedules. */
+  pendingModelTimers: () => number;
   advance: (ms: number) => void;
   deliverOutput: (body: string) => void;
   deliverFrame: (frame: Uint8Array) => void;
@@ -77,9 +90,18 @@ async function harness(
   const channelTimers = fakeScheduler();
   const modelTimers = fakeScheduler();
   const doc = fakeEventTarget();
+  const win = fakeEventTarget();
+  let winFocused = true;
   let clock = 0;
 
   teardowns.push(observeTabVisibility(doc));
+  teardowns.push(
+    observeWindowFocus({
+      hasFocus: () => winFocused,
+      addEventListener: win.addEventListener,
+      removeEventListener: win.removeEventListener,
+    }),
+  );
   // Before the model is built: its constructor reads the pointer to decide
   // whether it starts watched.
   setMountedTerminal(KEY);
@@ -113,6 +135,18 @@ async function harness(
       doc.hidden = false;
       doc.fire('visibilitychange');
     },
+    blurWindow: () => {
+      winFocused = false;
+      win.fire('blur');
+    },
+    focusWindow: () => {
+      winFocused = true;
+      win.fire('focus');
+    },
+    fireSizeDebounce: () => {
+      modelTimers.runNext();
+    },
+    pendingModelTimers: () => modelTimers.pending.length,
     advance: (ms: number) => {
       clock += ms;
     },
@@ -349,5 +383,88 @@ describe('TerminalSessionModel unwatched-session suspension', () => {
 
     expect(h.socket.clientCloses).toEqual([]);
     expect(h.view().suspended).toBe(false);
+  });
+});
+
+/**
+ * The "user is now using this client" edges: another client may have resized
+ * the shared PTY while this one sat idle, so tab-shown and window-refocused
+ * re-assert the cached grid — bypassing `pushSize`'s dedupe, keeping the
+ * debounce, and only over a socket that is already live.
+ */
+describe('TerminalSessionModel switch-edge size re-assert', () => {
+  it('re-asserts the grid when the tab becomes visible over a live socket', async () => {
+    const h = await harness();
+    h.model.term.resize(120, 40);
+    h.fireSizeDebounce();
+    h.deliverOutput('x'); // first binary → live, with its own connect-path assert
+    const before = resizeFrames(h.socket).length;
+
+    h.hide();
+    h.show();
+
+    // The edge shares the 100 ms debounce…
+    expect(resizeFrames(h.socket)).toHaveLength(before);
+    h.fireSizeDebounce();
+
+    // …and skips the dedupe: the grid never changed, yet the frame repeats.
+    const frames = resizeFrames(h.socket);
+    expect(frames).toHaveLength(before + 1);
+    expect(frames.at(-1)).toEqual(frames.at(-2));
+  });
+
+  it('does not double-assert when the show also resumes a suspended socket', async () => {
+    const h = await harness();
+    h.model.term.resize(120, 40);
+    h.fireSizeDebounce();
+    h.hide();
+    h.deliverOutput('spending');
+    expect(h.view().suspended).toBe(true);
+
+    // The resume leaves the model at 'connecting', so the edge stays quiet.
+    h.show();
+    await settle();
+    const reopened = h.sockets[1];
+    if (reopened === undefined) throw new Error('no socket was reopened');
+    reopened.accept();
+    h.deliverOutput('first live frame');
+
+    // Exactly the two connect-path asserts — socket open and first binary —
+    // with no third frame armed by the visibility edge.
+    expect(h.pendingModelTimers()).toBe(0);
+    expect(resizeFrames(reopened)).toHaveLength(2);
+  });
+
+  it('re-asserts when the window regains focus over a live socket', async () => {
+    // `visibilitychange` never fires when the user switches between
+    // side-by-side windows; the focus edge is the only observer of that switch.
+    const h = await harness();
+    h.model.term.resize(120, 40);
+    h.fireSizeDebounce();
+    h.deliverOutput('x');
+    const before = resizeFrames(h.socket).length;
+
+    h.blurWindow();
+    h.focusWindow();
+    h.fireSizeDebounce();
+
+    expect(resizeFrames(h.socket)).toHaveLength(before + 1);
+  });
+
+  it('stays silent on focus while another terminal is mounted', async () => {
+    const h = await harness();
+    h.model.term.resize(120, 40);
+    h.fireSizeDebounce();
+    h.deliverOutput('x');
+    const before = resizeFrames(h.socket).length;
+
+    const other = sessionChannelName('a1', 's2');
+    setMountedTerminal(other);
+    h.blurWindow();
+    h.focusWindow();
+
+    expect(h.pendingModelTimers()).toBe(0);
+    expect(resizeFrames(h.socket)).toHaveLength(before);
+    clearMountedTerminal(other);
   });
 });

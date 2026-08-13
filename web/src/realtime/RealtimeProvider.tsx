@@ -5,6 +5,7 @@ import { useSessionStore } from '../auth/sessionStore';
 import { startUserEvents, stopAllRealtime } from './channelRegistry';
 import { observeResume } from './resumeOnFocus';
 import { observeTabVisibility } from './tabVisibility';
+import { observeWindowFocus } from './windowFocus';
 
 /**
  * Binds the user-events channel to the session, mirroring the mobile buses:
@@ -32,6 +33,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   // Separate from `observeResume`: that one re-opens sockets, this one publishes
   // whether anything on screen still wants their bytes.
   useEffect(() => observeTabVisibility(), []);
+  // Focus is the visibility gap's other half: switching between side-by-side
+  // windows never fires `visibilitychange`.
+  useEffect(() => observeWindowFocus(), []);
 
   useEffect(() => {
     if (!authenticated || userId === null) return;
