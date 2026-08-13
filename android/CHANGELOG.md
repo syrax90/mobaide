@@ -1,5 +1,31 @@
 # Android Changelog
 
+## [3.6.0](https://github.com/syrax90/claude_mobile/compare/android-v3.5.0...android-v3.6.0) (2026-08-13)
+
+
+### Features
+
+* **android:** allow removing a recent custom path ([5784c31](https://github.com/syrax90/claude_mobile/commit/5784c318d2193c9a199a38a57e0c14558e72ec95))
+* **central_server,mobaide_agent,web,android,ios:** reversed device-code pairing + account trust-key pin (CLA-199) ([6e56f2f](https://github.com/syrax90/claude_mobile/commit/6e56f2f00a3ee8e22825ed18b7b13dc3e9d95cd1))
+* make Claude Code --debug flag opt-in via toggle ([36af32b](https://github.com/syrax90/claude_mobile/commit/36af32b1122b2dfc6e57dcce88841c14c97e8d7e))
+* purge per-agent recent custom paths on sign-out/account deletion (CLA-258) ([8d7b5a3](https://github.com/syrax90/claude_mobile/commit/8d7b5a3a5f1188c9b431a9ae51c4837552030f4e))
+* **web,android,ios:** suspend session PTY sockets when unwatched ([9e385c3](https://github.com/syrax90/claude_mobile/commit/9e385c34509e8f725ff265a66c33e56f4abbeb6b))
+
+
+### Bug Fixes
+
+* **android,ios,mobaide_agent:** follow status-response deadline, canonicalize typed device codes ([0f23c75](https://github.com/syrax90/claude_mobile/commit/0f23c75095c6365b2c8341d324e368fc4b5cfafd))
+* **android,ios,web:** stop replayed OSC 52 from hijacking the clipboard on session open ([309fc93](https://github.com/syrax90/claude_mobile/commit/309fc93d93a95cd1f7ed43010b537c356a4a6f0c))
+* **android,ios,web:** stop replayed OSC 52 from hijacking the clipboard on session open ([56a58be](https://github.com/syrax90/claude_mobile/commit/56a58be2ce5d3159e1f110e945c864f77e2e1098))
+* **android:** allow removing a recent custom path ([1a0045a](https://github.com/syrax90/claude_mobile/commit/1a0045accde24019146a96dd240f1f63e03b8c79))
+* **android:** anchor device-code poll deadline to an overridable clock ([e438d10](https://github.com/syrax90/claude_mobile/commit/e438d104e8d95bf06f86c5e449ea856e6d2c6e61))
+* **android:** close socket orphaned by pause landing across newWebSocket ([a024912](https://github.com/syrax90/claude_mobile/commit/a02491289837140fe17b093b485d1fa3d5478810))
+* **android:** recheck shouldReconnect after URL resolution in doConnect ([8b939e7](https://github.com/syrax90/claude_mobile/commit/8b939e797abdb37bf563e9a5bb53b1f7bac24b6a))
+* make Claude Code --debug flag opt-in via toggle ([1fa0e8d](https://github.com/syrax90/claude_mobile/commit/1fa0e8df0713abe5c2852f9dcaf33ba22c96837d))
+* **web,android,ios:** fix unwatched-suspend regressions from Codex review ([15f37c7](https://github.com/syrax90/claude_mobile/commit/15f37c7860f1962d3306d32d48af58f342481858))
+* **web,android,ios:** re-assert PTY size on client-switch edges ([454c420](https://github.com/syrax90/claude_mobile/commit/454c4208bdcfbd4782ace47ba89338e19156cfd5))
+* **web,android,ios:** re-assert PTY size on client-switch edges ([7a5fcf0](https://github.com/syrax90/claude_mobile/commit/7a5fcf0db0b920bbc9c4d8d06645276d9bb4dd82))
+
 ## [3.5.0](https://github.com/syrax90/claude_mobile/compare/android-v3.4.0...android-v3.5.0) (2026-08-09)
 
 

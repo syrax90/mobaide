@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.1.3](https://github.com/syrax90/claude_mobile/compare/web-v0.1.2...web-v0.1.3) (2026-08-13)
+
+
+### Features
+
+* **central_server,mobaide_agent,web,android,ios:** reversed device-code pairing + account trust-key pin (CLA-199) ([6e56f2f](https://github.com/syrax90/claude_mobile/commit/6e56f2f00a3ee8e22825ed18b7b13dc3e9d95cd1))
+* make Claude Code --debug flag opt-in via toggle ([36af32b](https://github.com/syrax90/claude_mobile/commit/36af32b1122b2dfc6e57dcce88841c14c97e8d7e))
+* purge per-agent recent custom paths on sign-out/account deletion (CLA-258) ([8d7b5a3](https://github.com/syrax90/claude_mobile/commit/8d7b5a3a5f1188c9b431a9ae51c4837552030f4e))
+* **web,android,ios:** suspend session PTY sockets when unwatched ([9e385c3](https://github.com/syrax90/claude_mobile/commit/9e385c34509e8f725ff265a66c33e56f4abbeb6b))
+* **web:** adopt the portal "modern pixel" design system ([37f1155](https://github.com/syrax90/claude_mobile/commit/37f1155ab43514b7228bdf1fa7abbec9d4d4bca9))
+* **web:** draggable scrollback slider in the terminal (WEB-05) ([b7d10bc](https://github.com/syrax90/claude_mobile/commit/b7d10bc8f540b514c2280bf97bb4af3f9dcfd06b))
+* **web:** persist per-mode create-session option prefill (CLA-232) ([ee239bb](https://github.com/syrax90/claude_mobile/commit/ee239bbeb6b439120b6f2f7b1d2e6108939623fb))
+* **web:** remove shortcuts, command palette and composer; re-home Templates in-session ([cac8c6e](https://github.com/syrax90/claude_mobile/commit/cac8c6efacbbd1d558b6f7b2bc576ce41de46045))
+* **web:** remove shortcuts, command palette and composer; re-home Templates in-session ([aeb37a8](https://github.com/syrax90/claude_mobile/commit/aeb37a8cec087f91072aa8741bf7dea1984ad3b0))
+* **web:** show recent custom paths in create-session wizard (CLA-256) ([48f59d3](https://github.com/syrax90/claude_mobile/commit/48f59d3a014e025c78d0b34cd035fee2e35a13c0))
+
+
+### Bug Fixes
+
+* **android,ios,web:** stop replayed OSC 52 from hijacking the clipboard on session open ([309fc93](https://github.com/syrax90/claude_mobile/commit/309fc93d93a95cd1f7ed43010b537c356a4a6f0c))
+* **android,ios,web:** stop replayed OSC 52 from hijacking the clipboard on session open ([56a58be](https://github.com/syrax90/claude_mobile/commit/56a58be2ce5d3159e1f110e945c864f77e2e1098))
+* **central_server,mobaide_agent,web:** reserve before pairing, keep the nonce, expire locally ([153fee4](https://github.com/syrax90/claude_mobile/commit/153fee4180b381e090b250273e3ff7eb44fce617))
+* **central_server,mobaide_agent:** gate the confirm on terminal approval, drop the rotated tunnel ([956630c](https://github.com/syrax90/claude_mobile/commit/956630c37eeee1da487321535364056b72f9d8a0))
+* make Claude Code --debug flag opt-in via toggle ([1fa0e8d](https://github.com/syrax90/claude_mobile/commit/1fa0e8df0713abe5c2852f9dcaf33ba22c96837d))
+* **web,android,ios:** fix unwatched-suspend regressions from Codex review ([15f37c7](https://github.com/syrax90/claude_mobile/commit/15f37c7860f1962d3306d32d48af58f342481858))
+* **web,android,ios:** re-assert PTY size on client-switch edges ([454c420](https://github.com/syrax90/claude_mobile/commit/454c4208bdcfbd4782ace47ba89338e19156cfd5))
+* **web,android,ios:** re-assert PTY size on client-switch edges ([7a5fcf0](https://github.com/syrax90/claude_mobile/commit/7a5fcf0db0b920bbc9c4d8d06645276d9bb4dd82))
+* **web,ios:** fix inert templates picker via top-layer dialog ([53daf80](https://github.com/syrax90/claude_mobile/commit/53daf80922b328427c933c0a67aa6a09267b8d2f))
+* **web,ios:** fix inert templates picker via top-layer dialog ([74b0a6a](https://github.com/syrax90/claude_mobile/commit/74b0a6ae679f07ec049eb926c1e24f7c74b8b61c))
+* **web:** address Codex review on the scrollback slider ([5848637](https://github.com/syrax90/claude_mobile/commit/5848637ee88a9a28f275e98f45bf486c30a78aaf))
+* **web:** address Codex review round 1 — modal focus return, forced-colors controls, narrow toggle label ([d9826c6](https://github.com/syrax90/claude_mobile/commit/d9826c67b13debe171a9dbd96d6f705ef348f76a))
+* **web:** address Codex review round 2 — dialog centering, forced-colors boundaries, backdrop fallback, safe initial focus ([a87d485](https://github.com/syrax90/claude_mobile/commit/a87d48507fd43bc93683c6c4e3d11c5c561b56a0))
+* **web:** draggable scrollback slider in the terminal (WEB-05) ([a2c34ec](https://github.com/syrax90/claude_mobile/commit/a2c34ec36c9f98f5a695faad34cb77bb636cde64))
+* **web:** keep an in-flight Google sign-in armed across a theme flip ([07bc872](https://github.com/syrax90/claude_mobile/commit/07bc87260e3b5eb5d80247d7b4069db77ff239b7))
+* **web:** key drag end on its pointer, drop the idle track out of the hit path ([3ccdd22](https://github.com/syrax90/claude_mobile/commit/3ccdd2221c0218158a904d9ee98cb01c6f041cc5))
+* **web:** line the agent status and actions up into columns ([ffa2100](https://github.com/syrax90/claude_mobile/commit/ffa21006c1f98c4c5ff2db7b478e08b8db34009b))
+* **web:** line the agent status and actions up into columns ([3e676ea](https://github.com/syrax90/claude_mobile/commit/3e676ea80eb90958804de58bd897ef94e2a75e41))
+* **web:** make template/selection inserts refusal-safe; jump to tail on insert ([d0b3582](https://github.com/syrax90/claude_mobile/commit/d0b35822ca95e75dd85145978ae982033ac251fa))
+* **web:** show a working scroll control in full-screen sessions ([23cb5f0](https://github.com/syrax90/claude_mobile/commit/23cb5f04fa2684e868402f4e7843b270c0e282a1))
+* **web:** show a working scroll control in full-screen sessions ([6dc1823](https://github.com/syrax90/claude_mobile/commit/6dc1823982d0723dd9e1ba6a35df4cc20206170a))
+* **web:** show recent custom paths in create-session wizard (CLA-256) ([2d6cbb8](https://github.com/syrax90/claude_mobile/commit/2d6cbb8977ee372d11a329d35ff4e0e86347ccea))
+* **web:** undamped pixel wheel and focus-safe track paging ([5ec3af2](https://github.com/syrax90/claude_mobile/commit/5ec3af24a529d7f576b0659f49f5b22edaa76d19))
+
 ## [0.1.2](https://github.com/syrax90/claude_mobile/compare/web-v0.1.1...web-v0.1.2) (2026-08-09)
 
 

@@ -1,5 +1,22 @@
 # mobaide_agent Changelog
 
+## [0.3.9](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.8...agent-v0.3.9) (2026-08-13)
+
+
+### Features
+
+* **central_server,mobaide_agent,web,android,ios:** reversed device-code pairing + account trust-key pin (CLA-199) ([6e56f2f](https://github.com/syrax90/claude_mobile/commit/6e56f2f00a3ee8e22825ed18b7b13dc3e9d95cd1))
+* make Claude Code --debug flag opt-in via toggle ([36af32b](https://github.com/syrax90/claude_mobile/commit/36af32b1122b2dfc6e57dcce88841c14c97e8d7e))
+
+
+### Bug Fixes
+
+* **android,ios,mobaide_agent:** follow status-response deadline, canonicalize typed device codes ([0f23c75](https://github.com/syrax90/claude_mobile/commit/0f23c75095c6365b2c8341d324e368fc4b5cfafd))
+* **central_server,mobaide_agent,web:** reserve before pairing, keep the nonce, expire locally ([153fee4](https://github.com/syrax90/claude_mobile/commit/153fee4180b381e090b250273e3ff7eb44fce617))
+* **central_server,mobaide_agent:** gate the confirm on terminal approval, drop the rotated tunnel ([956630c](https://github.com/syrax90/claude_mobile/commit/956630c37eeee1da487321535364056b72f9d8a0))
+* make Claude Code --debug flag opt-in via toggle ([1fa0e8d](https://github.com/syrax90/claude_mobile/commit/1fa0e8df0713abe5c2852f9dcaf33ba22c96837d))
+* **mobaide_agent:** match relay's code alphabet, persist nonce before the confirm prompt ([3768a53](https://github.com/syrax90/claude_mobile/commit/3768a5399566b6f626fc116ee4bc055707bb04eb))
+
 ## [0.3.8](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.7...agent-v0.3.8) (2026-08-09)
 
 

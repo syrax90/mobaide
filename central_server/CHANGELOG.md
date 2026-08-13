@@ -1,5 +1,26 @@
 # central_server Changelog
 
+## [0.2.12](https://github.com/syrax90/claude_mobile/compare/server-v0.2.11...server-v0.2.12) (2026-08-13)
+
+
+### Features
+
+* **central_server,mobaide_agent,web,android,ios:** reversed device-code pairing + account trust-key pin (CLA-199) ([6e56f2f](https://github.com/syrax90/claude_mobile/commit/6e56f2f00a3ee8e22825ed18b7b13dc3e9d95cd1))
+* purge per-agent recent custom paths on sign-out/account deletion (CLA-258) ([8d7b5a3](https://github.com/syrax90/claude_mobile/commit/8d7b5a3a5f1188c9b431a9ae51c4837552030f4e))
+
+
+### Bug Fixes
+
+* **central_server,mobaide_agent,web:** reserve before pairing, keep the nonce, expire locally ([153fee4](https://github.com/syrax90/claude_mobile/commit/153fee4180b381e090b250273e3ff7eb44fce617))
+* **central_server,mobaide_agent:** gate the confirm on terminal approval, drop the rotated tunnel ([956630c](https://github.com/syrax90/claude_mobile/commit/956630c37eeee1da487321535364056b72f9d8a0))
+* **central_server:** clear push tokens when scheduled account deletion starts (CLA-128) ([e65fa36](https://github.com/syrax90/claude_mobile/commit/e65fa36993f6600aac8f92760cb62795ccb06348))
+* **central_server:** clear push tokens when scheduled account deletion starts (CLA-128) ([7b7b9e1](https://github.com/syrax90/claude_mobile/commit/7b7b9e13316d87f4e612bd47275c388fb9454904))
+
+
+### Documentation
+
+* **privacy:** fix factual claims added in this PR (CLA-258) ([a5e577b](https://github.com/syrax90/claude_mobile/commit/a5e577b256ceb9e35338e3cda28e743daf184488))
+
 ## [0.2.11](https://github.com/syrax90/claude_mobile/compare/server-v0.2.10...server-v0.2.11) (2026-08-09)
 
 
