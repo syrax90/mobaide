@@ -418,7 +418,7 @@ class TerminalViewModel @Inject constructor(
                 // contract is `'b' → 'o'(chunk)…'o'(chunk) → 'e'`, so a stray
                 // `'o'` outside replay is live data and is also just appended.
                 if (decoded.bytes.isNotEmpty()) {
-                    session.emitOutput(decoded.bytes, decoded.bytes.size)
+                    session.emitOutput(decoded.bytes, decoded.bytes.size, inReplay)
                 }
             }
             is TerminalFrame.State -> {
@@ -440,7 +440,8 @@ class TerminalViewModel @Inject constructor(
                 // so the replay reconstructs the screen cleanly. A fresh
                 // emulator is unaffected since the operations are no-ops on
                 // empty buffers.
-                session.emitOutput(CLEAR_BEFORE_REPLAY, CLEAR_BEFORE_REPLAY.size)
+                // `true` literally, not `inReplay` — the span opens on the next line.
+                session.emitOutput(CLEAR_BEFORE_REPLAY, CLEAR_BEFORE_REPLAY.size, true)
                 inReplay = true
                 setFollowMode(true)
                 _connectionState.value = ConnectionState.ReplayingBuffer

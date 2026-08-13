@@ -1,11 +1,20 @@
 /**
  * Clipboard policy for the terminal, including OSC 52.
  *
- * Writes are allowed, reads are refused — the same asymmetry both mobile
+ * Live writes are allowed, reads are refused — the same asymmetry both mobile
  * clients ship (`TerminalSurfaceView.onCopyToClipboard` /
- * `TerminalHostView.clipboardCopy`, with no handler for the query form). A
- * program that can *read* the clipboard can exfiltrate whatever the user copied
- * last, which on a shared machine is routinely a password.
+ * `TerminalHostView.clipboardCopy`; Android never answers the query form, iOS
+ * refuses it explicitly in `clipboardRead`). A program that can *read* the
+ * clipboard can exfiltrate whatever the user copied last, which on a shared
+ * machine is routinely a password.
+ *
+ * *Replayed* writes are refused too. The agent replays its ring verbatim on every
+ * attach, so a single OSC 52 left in that history — one vim/tmux yank — re-copies
+ * on every session open, which reads as the app hijacking the clipboard for no
+ * reason. All three clients gate this. The attribution rule they share, and the
+ * one boundary case it does not cover, are stated once in `docs/web-client.md`'s
+ * OSC 52 section — do not restate the guarantee here, where the caveat would be
+ * easy to miss.
  *
  * Refusing has to happen ahead of `ClipboardAddon`, not inside the provider:
  * the addon replies to a query unconditionally, so a provider returning `''`
@@ -63,9 +72,21 @@ export function isOsc52Read(data: string): boolean {
 }
 
 /**
- * Swallow OSC 52 queries before `ClipboardAddon` can answer them. Register
- * **after** the addon — later registration means earlier dispatch.
+ * Swallow the OSC 52 forms this app refuses, before `ClipboardAddon` can act on
+ * them: every write `isReplaying` attributes to replayed history, and the query
+ * form otherwise. Register **after** the addon — later registration means
+ * earlier dispatch.
+ *
+ * `isReplaying` is tested first because it is two field reads while
+ * `isOsc52Read` splits the payload, and xterm accumulates an OSC body up to its
+ * 10 MB `PAYLOAD_LIMIT` before dispatching. Both operands are pure, so `||`
+ * commutes; this just avoids allocating a copy of a payload about to be dropped.
+ * Matches the order iOS already ships, where the replay guard precedes the UTF-8
+ * decode.
  */
-export function refuseOsc52Reads(terminal: Terminal): IDisposable {
-  return terminal.parser.registerOscHandler(52, (data) => isOsc52Read(data));
+export function installOsc52Policy(
+  terminal: Terminal,
+  isReplaying: () => boolean,
+): IDisposable {
+  return terminal.parser.registerOscHandler(52, (data) => isReplaying() || isOsc52Read(data));
 }

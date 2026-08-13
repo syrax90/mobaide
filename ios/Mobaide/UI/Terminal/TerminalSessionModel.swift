@@ -289,7 +289,7 @@ final class TerminalSessionModel {
         switch frame {
         case .output(let bytes):
             guard !bytes.isEmpty else { return }
-            terminalView.applyingEmulatorOutput {
+            terminalView.applyingEmulatorOutput(replayed: inReplay) {
                 terminalView.feedTrackingSynchronizedOutput(Array(bytes)[...])
             }
         case .state(let json):
@@ -305,7 +305,8 @@ final class TerminalSessionModel {
             // content — a reconnect mid-selection must not let Copy lift text
             // the user never selected.
             endSelection()
-            terminalView.applyingEmulatorOutput {
+            // `true` literally, not `inReplay` — the span opens on the next line.
+            terminalView.applyingEmulatorOutput(replayed: true) {
                 terminalView.feedTrackingSynchronizedOutput(Self.clearBeforeReplay[...])
             }
             inReplay = true

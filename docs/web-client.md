@@ -871,11 +871,36 @@ mobile parity — the one prefix sweep in `src/` is CLA-258's
 `clearAllRecentPaths()`, which keys off `recent_custom_paths::` itself, so
 sitting outside the `mobaide-` namespace still costs nothing).
 
-**OSC 52**: writes allowed, reads refused. The refusal is a handler
-registered *after* `ClipboardAddon` (xterm dispatches OSC handlers
-last-registered-first) so the query is swallowed rather than answered with
-an empty payload. No browser analogue of Android's `EXTRA_IS_SENSITIVE` or
-iOS's `localOnly` + 60 s expiry exists — accepted divergence.
+**OSC 52**: live writes allowed, replayed writes and reads refused. Both
+refusals ride one handler registered *after* `ClipboardAddon` (xterm dispatches
+OSC handlers last-registered-first), so the sequence is swallowed rather than
+answered with an empty payload or acted on. The replay half exists because the
+agent replays its ring verbatim on every attach: a single vim/tmux yank left in
+that history would otherwise re-copy — and pop the OS clipboard chip — every
+time the session is opened. The gate is `isParsingReplay()`, i.e. `inReplay ||
+pendingReplayWrites > 0`; the second term because `term.write` is asynchronous,
+so on a multi-MiB ring the parser is still chewing through history well after
+`'e'`. All three clients gate this, and all three attribute a sequence to the
+span its *terminator* lands in, because each gates where its parser dispatches
+rather than scrubbing bytes — Android's flag additionally has to travel with the
+bytes through `TerminalSession.emitOutput`, since its append is posted to the
+main looper behind the frame handling that decided it.
+
+Known gap in that rule, tracked in GitHub issue #634: a program can end its
+output *inside* `ESC]52;c;<base64>` with no terminator. The ring then ends
+mid-sequence, every parser holds the payload across the boundary, and the first
+live byte that terminates it dispatches the write as live — re-opening the
+hijack on every attach. On web and iOS a bare `ESC` is enough (both parsers'
+`OSC_END` set includes `0x1b`, and only `CAN`/`SUB` abort without dispatching);
+Android needs a real `BEL`/`ST`. Any keystroke echo supplies the byte — not the
+connect-time size assert, which raises no SIGWINCH and so repaints nothing when
+the geometry is unchanged. The fix is to abort any open sequence at the replay
+boundary —
+a `CAN` (`0x18`) fed through the replay-attributed path — not to change the
+attribution rule.
+
+No browser analogue of Android's `EXTRA_IS_SENSITIVE` or iOS's `localOnly` +
+60 s expiry exists — accepted divergence.
 
 **Synchronized output (DEC 2026) is native** in xterm 6, so neither iOS's
 byte scanner nor Android's deferred-paint timer is ported. Their *consumer*

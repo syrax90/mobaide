@@ -114,6 +114,36 @@ const payloadText = (frame: Uint8Array): string =>
   new TextDecoder().decode(frame.subarray(1));
 
 /**
+ * Record what the terminal puts on the system clipboard.
+ *
+ * jsdom ships no `navigator.clipboard`, so one is installed for the enclosing
+ * describe and removed afterwards. Returns the live array, emptied before each
+ * test — call it in a describe body and keep the result.
+ */
+function recordingClipboard(): string[] {
+  const writes: string[] = [];
+
+  beforeEach(() => {
+    writes.length = 0;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: (text: string) => {
+          writes.push(text);
+          return Promise.resolve();
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'clipboard');
+  });
+
+  return writes;
+}
+
+/**
  * A model on an open socket with the process reported running — the state every
  * send gate needs before it will pass anything to the PTY. The `s` frame doubles
  * as the first inbound message, which is what upgrades the channel to live.
@@ -523,7 +553,7 @@ describe('TerminalSessionModel clipboard copy', () => {
 
 describe('TerminalSessionModel OSC 52 writes', () => {
   /** `ESC]52;c;<base64 "hello">BEL` — the write form, targeting the system selection. */
-  const OSC52_WRITE = ']52;c;aGVsbG8=';
+  const OSC52_WRITE = '\u001b]52;c;aGVsbG8=\u0007';
 
   beforeEach(() => {
     // Never settles. A provider that handed this promise back to `ClipboardAddon`
@@ -539,53 +569,78 @@ describe('TerminalSessionModel OSC 52 writes', () => {
     Reflect.deleteProperty(navigator, 'clipboard');
   });
 
-  it('does not let a replayed OSC 52 write stall the parser', async () => {
+  it('does not let a live OSC 52 write stall the parser', async () => {
     // `ClipboardAddon` returns the provider's result to the OSC dispatcher
     // whenever it is a promise, and xterm pauses the parser until that settles.
     // A paused parser fires no write callbacks, so `pendingReplayWrites` never
     // drains — and that counter holds up both the overlay and the send gate. A
-    // program could otherwise pack the agent's 4 MiB ring with OSC 52 writes and
-    // freeze the screen and the keyboard after every reconnect, with no way for
-    // the user to type the poisoned bytes back out of the ring.
-    const { model, deliverFrame, deliver, framesOfType } = await liveRunning();
+    // program could otherwise pack the agent's ring with OSC 52 writes and
+    // freeze the screen and the keyboard, with no way for the user to type the
+    // poisoned bytes back out.
+    //
+    // Deliberately the *live* path. `installOsc52Policy` now swallows a replayed
+    // OSC 52 before `ClipboardAddon` is reached at all, so driving this through a
+    // replay span would pass no matter what the provider returned — the sequence
+    // would never touch the promise that is the hazard. Only a live write still
+    // exercises it. The trailing chunk is the oracle: a stalled parser never
+    // reaches it.
+    const { model, deliverFrame } = await liveRunning();
+
+    deliverFrame(outputFrame(OSC52_WRITE));
+    deliverFrame(outputFrame('parsed past it'));
+    await settle();
+
+    expect(model.term.buffer.active.getLine(0)?.translateToString(true)).toContain(
+      'parsed past it',
+    );
+  });
+});
+
+describe('TerminalSessionModel OSC 52 replay attribution', () => {
+  /** The write form targeting the system selection; `Pd` is base64 of the label. */
+  const osc52Write = (base64: string): string => `\u001b]52;c;${base64}\u0007`;
+
+  const clipboardWrites = recordingClipboard();
+
+  it('drops a write out of the replayed ring and keeps the one that arrives live', async () => {
+    // The agent replays its ring verbatim on every attach, so one vim/tmux yank
+    // left in that history re-copies on every session open — the user sees the
+    // clipboard hijacked by merely opening a session.
+    //
+    // `'e'` lands here long before xterm parses the chunk it closed: `term.write`
+    // is asynchronous, so `replay.inReplay` is already false at dispatch time and
+    // only the pending-write counter still attributes these bytes to history. The
+    // live write afterwards is what keeps the empty expectation from passing for
+    // the trivial reason that nothing reaches the clipboard at all.
+    const { model, deliver, deliverFrame } = await liveRunning();
 
     deliver(TERMINAL_FRAME_TYPE.replayStart);
-    deliverFrame(outputFrame(OSC52_WRITE));
+    deliverFrame(outputFrame(osc52Write('cmVwbGF5ZWQ=')));
     deliver(TERMINAL_FRAME_TYPE.replayEnd);
     await settle();
 
+    expect(clipboardWrites).toEqual([]);
+    // Swallowing the sequence must not strand the replay bookkeeping: the
+    // handler returns a synchronous boolean, so the parser never pauses and the
+    // write callbacks that clear this still fire.
     expect(model.state.getState().replayPainting).toBe(false);
-    model.pasteText('ls\r');
-    expect(framesOfType(TERMINAL_FRAME_TYPE.input).map(payloadText)).toEqual(['ls\r']);
+
+    deliverFrame(outputFrame(osc52Write('bGl2ZQ==')));
+    await settle();
+
+    expect(clipboardWrites).toEqual(['live']);
   });
 });
 
 describe('TerminalSessionModel synchronized output guard', () => {
   /** DECSET/DECRST 2026. Never a raw 0x1B — repo convention. */
-  const ARM_SYNC = '[?2026h';
-  const DISARM_SYNC = '[?2026l';
+  const ARM_SYNC = '\u001b[?2026h';
+  const DISARM_SYNC = '\u001b[?2026l';
 
-  const clipboardWrites: string[] = [];
+  const clipboardWrites = recordingClipboard();
 
   const toastKinds = (): string[] =>
     useToastStore.getState().toasts.map((toast) => toast.kind);
-
-  beforeEach(() => {
-    clipboardWrites.length = 0;
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: {
-        writeText: (text: string) => {
-          clipboardWrites.push(text);
-          return Promise.resolve();
-        },
-      },
-    });
-  });
-
-  afterEach(() => {
-    Reflect.deleteProperty(navigator, 'clipboard');
-  });
 
   /**
    * A live session carrying a selection, with mode 2026 in the requested state.
@@ -816,9 +871,9 @@ describe('TerminalSessionModel selection focus', () => {
 });
 
 describe('TerminalSessionModel scrollbar geometry', () => {
-  const ALT_SCREEN_ON = '[?1049h';
-  const MOUSE_TRACKING_ON = '[?1000h';
-  const ALT_SCREEN_OFF = '[?1049l';
+  const ALT_SCREEN_ON = '\u001b[?1049h';
+  const MOUSE_TRACKING_ON = '\u001b[?1000h';
+  const ALT_SCREEN_OFF = '\u001b[?1049l';
 
   /** Comfortably past the 24-row default grid, so a real scrollback exists. */
   const lines = (count: number): string =>

@@ -172,7 +172,7 @@ class TerminalViewTapToRaiseTest {
      */
     private fun emitOutput(text: String) {
         val bytes = text.toByteArray(Charsets.UTF_8)
-        session.emitOutput(bytes, bytes.size)
+        session.emitOutput(bytes, bytes.size, false)
         shadowOf(Looper.getMainLooper()).idle()
     }
 
