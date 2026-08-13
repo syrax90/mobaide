@@ -1,5 +1,5 @@
 """Pins what the TLS work in ``deploy/prod`` actually SHOWS an operator, and
-which exception the auto-rollback path reads.
+which failure is allowed to swap the source back.
 
 The rules themselves live in ``tls_preflight`` and are covered by
 ``test_deploy_tls_preflight.py``. This file covers the two callers, where the
@@ -11,12 +11,15 @@ function:
   - a TLS finding that scrolled off the top of a failed deploy
     (``deploy_central.run``'s tail re-print, which is the entire compensating
     control for "warn, never fail");
+  - a health-check failure swapping the source back under an operator, when
+    compose already came up and the probe fails just as readily for causes no
+    source rollback can fix (``deploy_central._run_deploy``);
   - ``CertVerificationError`` widened past the two certificate verdicts --
-    callers read that class as "do not auto-rollback", so a server that is
-    simply down would keep a broken release live (``wait_http``);
+    callers read that class as "nothing was learned about the server", so a
+    server that is simply down would be reported as inconclusive (``wait_http``);
   - the mirror of that: a Cloudflare 52x answering every poll reported as
-    "Timed out waiting", which says nothing answered and sends the caller into
-    an auto-rollback it cannot possibly benefit from (``wait_http``);
+    "Timed out waiting", which says nothing answered and sends the operator
+    after a dead host instead of the edge (``wait_http``);
   - "Transient -- re-run the deploy" printed for the post-swap probe, which
     demands a 200 from this host and therefore cannot conclude that from a
     clean ``diagnose`` (``deploy_web.report_unreachable``);
@@ -323,6 +326,109 @@ class TestRunReprintsOutstandingWarnings:
         assert "Outstanding TLS warnings" not in capsys.readouterr().out
 
 
+class TestDeployRollbackBoundary:
+    """Which failure may swap the source back, and which one must not.
+
+    A compose-up failure never served the new source, so the automatic swap
+    loses nothing. A failed health check is the opposite case: compose already
+    came up, so the running containers are the deployed source and their logs
+    are the only evidence of the fault -- and the probe fails just as readily
+    for causes no source swap can fix (DNS, Caddy, the edge, this workstation's
+    trust store), which is how a rollback-on-health-failure ends up rebuilding
+    over the evidence and still not fixing anything.
+    """
+
+    @staticmethod
+    def _args(*argv: str) -> Any:
+        return deploy_central.build_parser().parse_args(list(argv))
+
+    @pytest.fixture(autouse=True)
+    def _no_side_effects(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for name in (
+            "check_local_tools",
+            "check_repo_artifacts",
+            "check_clean_tree",
+            "sync_sources",
+        ):
+            monkeypatch.setattr(deploy_central, name, lambda *a, **k: None)
+        monkeypatch.setattr(
+            deploy_central, "remote_preflight", lambda tls_mode: ("deploy", [])
+        )
+        monkeypatch.setattr(deploy_central, "resolve_tag", lambda: "abc1234")
+        monkeypatch.setattr(deploy_central, "invoke_ssh", _explodes("invoke_ssh"))
+
+    @pytest.fixture
+    def rollbacks(self, monkeypatch: pytest.MonkeyPatch) -> list[None]:
+        calls: list[None] = []
+        # Signature-tolerant on purpose: the assertion these tests owe the
+        # reader is "was the source swapped back", which a TypeError from a
+        # future argument would mask as a failure about something else.
+        monkeypatch.setattr(
+            deploy_central, "attempt_auto_rollback", lambda *a, **k: calls.append(None)
+        )
+        return calls
+
+    @pytest.mark.parametrize(
+        ("error", "headline"),
+        [
+            (
+                deploy_central.DeployError(
+                    f"Timed out after 120s waiting for {deploy_central.HEALTH_URL}"
+                ),
+                "Health check failed",
+            ),
+            (
+                deploy_central.CertVerificationError("could not verify the certificate"),
+                "Health check inconclusive",
+            ),
+        ],
+        ids=["timed-out", "cert-inconclusive"],
+    )
+    def test_a_failed_health_check_leaves_the_deployed_source_live(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        rollbacks: list[None],
+        error: Exception,
+        headline: str,
+    ) -> None:
+        monkeypatch.setattr(deploy_central, "compose_up", lambda tls_mode, skip: 0)
+        monkeypatch.setattr(deploy_central, "wait_http", _explodes_with(error))
+
+        assert deploy_central._run_deploy(self._args(), []) == 1
+
+        assert rollbacks == []
+        out = capsys.readouterr().out
+        assert headline in out
+        assert "NOT rolling back" in out
+        # The operator is left holding both halves: what the containers say,
+        # and the one command that undoes the deploy on purpose.
+        assert "logs --tail=60 central-server" in out
+        assert "deploy_central.py --rollback" in out
+
+    def test_a_failed_compose_up_still_rolls_back(
+        self, monkeypatch: pytest.MonkeyPatch, rollbacks: list[None]
+    ) -> None:
+        monkeypatch.setattr(deploy_central, "compose_up", lambda tls_mode, skip: 1)
+        monkeypatch.setattr(deploy_central, "wait_http", _explodes("wait_http"))
+
+        assert deploy_central._run_deploy(self._args(), []) == 1
+        assert rollbacks == [None]
+
+    def test_skip_build_never_rolls_back_a_source_it_did_not_ship(
+        self, monkeypatch: pytest.MonkeyPatch, rollbacks: list[None]
+    ) -> None:
+        """``--skip-build`` restarts the image over the source already on the
+        server, so swapping ``central_server.prev`` in would roll back a deploy
+        this run never made.
+        """
+        monkeypatch.setattr(deploy_central, "compose_up", lambda tls_mode, skip: 1)
+        monkeypatch.setattr(deploy_central, "wait_http", _explodes("wait_http"))
+
+        assert deploy_central._run_deploy(self._args("--skip-build"), []) == 1
+        assert rollbacks == []
+
+
 class TestRunTlsDiagnosisGuards:
     """``--diagnose-tls`` short-circuits ``run`` before ``check_local_tools``,
     so this function is the first thing to touch ssh and has to guard it.
@@ -536,8 +642,8 @@ class _FakeClock:
         self.now += seconds
 
 
-class TestWaitHttpRollbackContract:
-    """``CertVerificationError`` means "do not auto-rollback"."""
+class TestWaitHttpVerdictContract:
+    """``CertVerificationError`` means "nothing was learned about the server"."""
 
     @pytest.fixture(autouse=True)
     def _no_network_no_clock(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -556,7 +662,7 @@ class TestWaitHttpRollbackContract:
         )
 
     @pytest.mark.parametrize(
-        ("kind", "suppresses_rollback"),
+        ("kind", "certificate_verdict"),
         [
             ("tls_local", True),
             ("tls_server", True),
@@ -565,17 +671,17 @@ class TestWaitHttpRollbackContract:
             ("connect", False),
         ],
     )
-    def test_only_certificate_verdicts_suppress_the_auto_rollback(
+    def test_only_certificate_verdicts_raise_the_certificate_class(
         self,
         monkeypatch: pytest.MonkeyPatch,
         kind: str,
-        suppresses_rollback: bool,
+        certificate_verdict: bool,
     ) -> None:
         """``cert_error`` is latched by ANY poll iteration, so the state at the
         deadline can be something else entirely -- Caddy serving an untrusted
         cert while provisioning, then the container dying. Raising the cert
-        class for a server that is simply down suppresses the rollback and
-        leaves the broken release live.
+        class for a server that is simply down reports a dead service as
+        "inconclusive: the server may be healthy".
         """
         monkeypatch.setattr(
             tls_preflight,
@@ -590,15 +696,15 @@ class TestWaitHttpRollbackContract:
         raised_cert_class = isinstance(
             excinfo.value, deploy_central.CertVerificationError
         )
-        assert raised_cert_class is suppresses_rollback
+        assert raised_cert_class is certificate_verdict
         assert "why it failed" in str(excinfo.value)
 
     def test_an_unreproducible_cert_error_stays_conservative(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The classifier found nothing wrong on its own pass, so the only
-        evidence left is the latched verification failure. A rollback cannot fix
-        a certificate fault, so this stays the no-rollback class.
+        evidence left is the latched verification failure, which says nothing
+        about the service — so this stays the inconclusive class.
         """
         monkeypatch.setattr(tls_preflight, "diagnose", lambda *args, **kwargs: None)
         with pytest.raises(deploy_central.CertVerificationError) as excinfo:
@@ -611,8 +717,8 @@ class TestWaitHttpRollbackContract:
         """A 525 means something answered every single poll, over an edge
         certificate the workstation verified. Dropping it left the deadline gate
         shut, so the run ended in "Timed out waiting" -- reporting that nothing
-        answered -- and ``_run_deploy`` read that plain ``DeployError`` as
-        licence to swap the source back on an origin-certificate fault.
+        answered, and sending the operator to look for a dead origin instead of
+        at the edge certificate that is actually broken.
         """
         probed: list[str] = []
 
@@ -637,20 +743,20 @@ class TestWaitHttpRollbackContract:
         assert "Timed out" not in str(excinfo.value)
 
     @pytest.mark.parametrize(
-        ("code", "suppresses_rollback"),
+        ("code", "certificate_verdict"),
         [(525, True), (526, True), (521, False), (522, False), (523, False)],
     )
     def test_an_unreproducible_cloudflare_status_keeps_the_certificate_split(
         self,
         monkeypatch: pytest.MonkeyPatch,
         code: int,
-        suppresses_rollback: bool,
+        certificate_verdict: bool,
     ) -> None:
         """The classifier's own pass can miss what polling saw -- the edge
         answers it cleanly, or the fault clears between the two. The latched
         code is then the only evidence left, and it splits: 525/526 are
-        certificate faults no source rollback can fix, while 521/522/523 mean
-        the origin never answered the edge, which one plausibly does fix.
+        certificate faults that say nothing about the service, while 521/522/523
+        mean the origin never answered the edge -- a service failure.
         """
         monkeypatch.setattr(
             deploy_central.urllib.request,
@@ -665,7 +771,7 @@ class TestWaitHttpRollbackContract:
         raised_cert_class = isinstance(
             excinfo.value, deploy_central.CertVerificationError
         )
-        assert raised_cert_class is suppresses_rollback
+        assert raised_cert_class is certificate_verdict
         assert str(code) in str(excinfo.value)
         assert "Timed out" not in str(excinfo.value)
 
@@ -675,7 +781,7 @@ class TestWaitHttpRollbackContract:
     ) -> None:
         """Only Cloudflare's own edge range is evidence about the origin leg.
         Widening the latch to any status would spend a probe ladder on every
-        ordinary failure and suppress the rollback that is the fix for it.
+        ordinary failure and report a plainly broken app as a TLS question.
         """
         monkeypatch.setattr(
             deploy_central.urllib.request,

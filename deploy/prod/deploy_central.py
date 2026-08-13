@@ -17,7 +17,9 @@ What it does:
   3) scp docker-compose.prod.yml + Caddyfile.<TlsMode> to /opt/mobaide/
   4) ssh: docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
   5) Poll https://mobaide.com/api/health for up to 120s
-  6) On compose-up or health failure: auto-rollback by swapping central_server.prev back in
+  6) On compose-up failure: auto-rollback by swapping central_server.prev back in.
+     A failed health check never rolls back — the containers are already up, so
+     the deployed source is what the logs describe; roll back with --rollback.
 
 Server-side artifacts (survive across runs):
     /opt/mobaide/central_server/         current source
@@ -104,8 +106,8 @@ class CertVerificationError(DeployError):
     """Local TLS trust failure while polling the health URL.
 
     Says nothing about server health (the workstation could not verify the
-    certificate), so callers must never auto-rollback on it — and a source
-    rollback could not fix a certificate problem anyway.
+    certificate), so callers must report it as inconclusive rather than as a
+    service that failed to come up.
     """
 
 
@@ -275,8 +277,7 @@ def wait_http(
                 return
             # Latch it. A Cloudflare 52x means something answered every poll —
             # falling through to "timed out waiting" would report that nothing
-            # did, and would send the caller into an auto-rollback that cannot
-            # fix an origin-certificate fault.
+            # did, sending the operator after a dead host instead of the edge.
             http_status = e.code
         except urllib.error.URLError as e:
             if isinstance(e.reason, ssl.SSLCertVerificationError):
@@ -297,11 +298,11 @@ def wait_http(
             report_probe_failure(failure)
             # cert_error was latched by ANY poll iteration, so the state at the
             # deadline can be something else entirely. Only the two certificate
-            # verdicts may raise CertVerificationError — callers read that
-            # class as "do not auto-rollback".
+            # verdicts may raise CertVerificationError — callers read that class
+            # as "nothing was learned about the server".
             # "inconclusive" belongs with the certificate verdicts, not the
-            # transport ones: nothing was learned, and rolling the source back
-            # cannot fix a certificate fault in any case.
+            # transport ones: it means the probe reached no verdict, not that
+            # the service is down.
             if failure.kind in ("tls_local", "tls_server", "inconclusive"):
                 raise CertVerificationError(f"{url}: {failure.detail}")
             raise ClassifiedDeployError(f"{url}: {failure.detail}")
@@ -316,9 +317,9 @@ def wait_http(
             f"{url} answered HTTP {http_status} (Cloudflare edge->origin failure) "
             f"within {timeout_sec}s, but the classifier could not reproduce it"
         )
-        # 525/526 are certificate faults, so they keep the no-auto-rollback
-        # contract even unreproduced; 521/522/523 mean the origin was
-        # unreachable, which a source rollback plausibly does fix.
+        # 525/526 are certificate faults, so they stay inconclusive about the
+        # service even unreproduced; 521/522/523 mean the origin was
+        # unreachable, which is a service failure to report as one.
         if http_status in tls_preflight.CLOUDFLARE_TLS_STATUSES:
             raise CertVerificationError(detail)
         raise ClassifiedDeployError(detail)
@@ -776,17 +777,31 @@ def compose_up(tls_mode: str, skip_build: bool) -> int:
     return proc.returncode
 
 
-def attempt_auto_rollback(verify_hint: bool) -> None:
+def attempt_auto_rollback() -> None:
     warn("Attempting auto-rollback")
     roll = invoke_ssh(AUTO_ROLLBACK_SCRIPT)
     if "no_prev" in roll.output:
         fail("No previous version to roll back to.")
     elif roll.exit_code != 0:
         fail(f"Auto-rollback also failed. Investigate manually on {SSH_HOST}.")
-    elif verify_hint:
-        warn(f"Rolled back. Verify manually: curl {HEALTH_URL}")
     else:
         warn("Rolled back to previous version.")
+
+
+def report_health_hints() -> None:
+    """Next steps after a failed health check, which never auto-rolls back.
+
+    `docker compose up` already succeeded, so the running containers were built
+    from the deployed source: an automatic swap-and-rebuild would destroy the
+    state the logs describe, and it fires just as readily when the probe failed
+    for reasons no source rollback can fix (DNS, Caddy, the edge, this
+    workstation's trust store). Rolling back stays the operator's call.
+    """
+    info(
+        f"Logs     : ssh {SSH_HOST} 'docker compose -f {REMOTE_BASE}/docker-compose.prod.yml "
+        f"logs --tail=60 central-server'"
+    )
+    info("Rollback : python deploy/prod/deploy_central.py --rollback")
 
 
 # ------------------------------------------------------------ summary
@@ -906,7 +921,7 @@ def _run_deploy(
     if compose_exit != 0:
         fail(f"docker compose failed (exit {compose_exit})")
         if not args.skip_build:
-            attempt_auto_rollback(verify_hint=False)
+            attempt_auto_rollback()
         return 1
     ok("compose up complete")
 
@@ -916,14 +931,15 @@ def _run_deploy(
         ok("central-server healthy")
     except CertVerificationError as e:
         # Local trust-store problem, not a service failure: the server may be
-        # perfectly healthy, so rolling back would only cause churn.
+        # perfectly healthy.
         fail(f"Health check inconclusive: {e}")
         warn(f"NOT rolling back — the server may be healthy. Verify manually: curl {HEALTH_URL}")
+        report_health_hints()
         return 1
     except DeployError as e:
         fail(f"Health check failed: {e}")
-        if not args.skip_build:
-            attempt_auto_rollback(verify_hint=True)
+        warn("NOT rolling back — the deployed source stays live so the failure stays diagnosable.")
+        report_health_hints()
         return 1
 
     print_summary(tag, args.tls_mode)
