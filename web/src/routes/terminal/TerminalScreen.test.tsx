@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
   type RenderResult,
 } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -195,17 +196,43 @@ describe('TerminalScreen template picks', () => {
   it('keeps the picker open and explains when the session is not accepting input', async () => {
     // A closed send gate must not silently discard the body: the old composer
     // flow held it in local state, so the paste flow owes the user the same
-    // no-loss guarantee — the picker stays open for a retry and no recency
-    // stamp advertises an insert that never happened.
+    // no-loss guarantee — the picker stays open for a retry. The refusal is no
+    // longer a toast (the picker sits on the top layer, above `.toast-viewport`)
+    // but a persistent inline banner, and the pick rows themselves are disabled
+    // so a click cannot reach `onPick` at all.
     const model = acquireTerminal('a1', 's1');
     const paste = vi.spyOn(model, 'pasteText');
     renderTerminal();
 
     fireEvent.click(screen.getByRole('button', { name: 'Templates' }));
-    fireEvent.click(await screen.findByRole('button', { name: /body of alpha/ }));
+    const pickButton = await screen.findByRole('button', { name: /body of alpha/ });
+    expect(pickButton).toBeDisabled();
+    fireEvent.click(pickButton);
 
     expect(paste).not.toHaveBeenCalled();
     expect(screen.getByRole('dialog', { name: 'Templates' })).toBeInTheDocument();
-    expect(useToastStore.getState().toasts.map((toast) => toast.kind)).toEqual(['info']);
+    expect(screen.getByText(/session is not accepting input/)).toBeInTheDocument();
+    expect(useToastStore.getState().toasts).toEqual([]);
+  });
+
+  it('hands focus back to the grid when the picker is dismissed without a pick', async () => {
+    // Closing is a dismissal path like any other, and the grid has to end up
+    // with the caret — otherwise the next keystroke goes nowhere. It cannot be
+    // done from the dismiss callback: `Modal` closes its `<dialog>` in a
+    // layout-effect cleanup that runs afterwards, and the native close
+    // algorithm hands focus to the button that opened it.
+    const model = acquireTerminal('a1', 's1');
+    const focus = vi.spyOn(model, 'focus').mockImplementation(() => undefined);
+    renderTerminal();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Templates' }));
+    const picker = await screen.findByRole('dialog', { name: 'Templates' });
+    // The surface focuses the grid on attach, so only the calls after this
+    // point belong to the dismissal.
+    const beforeClose = focus.mock.calls.length;
+    fireEvent.click(within(picker).getByRole('button', { name: 'Close' }));
+
+    expect(screen.queryByRole('dialog', { name: 'Templates' })).toBeNull();
+    expect(focus.mock.calls.length).toBe(beforeClose + 1);
   });
 });

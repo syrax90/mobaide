@@ -1037,6 +1037,22 @@ input[type='radio']:checked {
 }
 
 /*
+ * Traps xterm's z-indexes. Its layers are numbered against each other (2 for
+ * addon-webgl's link canvas, 5 helpers, 6/7 decorations, 8 overview ruler, 10
+ * accessibility, 11 scrollbar) but nothing in xterm's own tree opens a stacking
+ * context, so without this they land in the *root* one and outrank every app
+ * overlay in the stage below — all of which are `z-index: auto`. The link
+ * canvas is the dangerous one: it spans the whole grid, hit-tests, and made the
+ * templates picker, the jump-to-bottom badge, the selection bar and the
+ * overlay's Reconnect button silently unclickable. Isolating here fixes the
+ * class; the `display: none` on xterm's own scrollbar below is the one instance
+ * that was patched by hand.
+ */
+.terminal-surface {
+  isolation: isolate;
+}
+
+/*
  * Two scrollbars have to be cleared out of this gutter, and neither is the one
  * you would expect.
  *
@@ -1315,31 +1331,56 @@ input[type='radio']:checked {
     var(--px) var(--px) 0 0 var(--modal-shadow);
 }
 
-.template-picker {
-  position: fixed;
-  inset: auto 1rem 1rem auto;
-  width: min(28rem, calc(100vw - 2rem));
-  max-height: 70vh;
+/*
+ * A `.dialog` modifier, not a floating panel: the frame, the scrim and the
+ * centring come from `.dialog`. Only the head and the search field are pinned —
+ * the list scrolls under them — so `overflow` moves from the dialog onto
+ * `.template-picker-body`.
+ *
+ * Both classes in the selector, because `.dialog` is declared further down this
+ * file and sets `width` and `overflow` itself: at equal specificity the later
+ * rule would win.
+ */
+.dialog.template-picker {
+  display: flex;
+  width: min(32rem, calc(100vw - 32px));
+  overflow: hidden;
+}
+
+.template-picker-inner {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
+}
+
+.template-picker-body {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 1rem;
-  background: var(--bg-2);
-  box-shadow: inset 0 0 0 2px var(--surface-2),
-    var(--px) var(--px) 0 0 var(--modal-shadow);
+}
+
+.template-picker-notice {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--rule);
+  color: var(--text-muted);
+  font-size: 0.85rem;
 }
 
 .template-picker-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0.75rem;
+  gap: 0.75rem;
 }
 
-.template-picker-head h2 {
+/* Typography comes from `.dialog h2`; only its bottom margin has to go, and
+   that rule is declared further down, so the selector has to outweigh it. */
+.dialog .template-picker-head h2 {
   margin: 0;
-  font-family: var(--font-chrome);
-  font-weight: 400;
-  font-size: 1.05rem;
-  color: var(--accent);
 }
 
 .template-section h3 {
@@ -1379,20 +1420,29 @@ input[type='radio']:checked {
   transition: background 120ms linear;
 }
 
-.template-pick:hover {
+.template-pick:hover:not(:disabled) {
   background: var(--surface);
+}
+
+.template-pick:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .template-name {
   font-weight: 600;
 }
 
+/* Two lines, not one: a single ellipsised line is rarely enough to tell two
+   templates apart, and the body is the only thing that distinguishes them. */
 .template-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
   color: var(--text-muted);
   font-size: 0.85rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .template-favorite {

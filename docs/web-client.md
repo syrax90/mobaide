@@ -708,6 +708,17 @@ owns and views adopt; a hidden terminal is an *unmounted* one, never a
 mis-measures under it. `open()` is further deferred until the container has
 a non-zero size.
 
+**`.terminal-surface { isolation: isolate }` traps xterm's own
+z-indexes.** xterm numbers its layers only against each other — 2 for
+`addon-webgl`'s link canvas, 5 helpers, 6/7 decorations, 8 overview ruler,
+10 accessibility, 11 scrollbar — but nothing in its own tree opens a
+stacking context, so without this rule they escaped into the *root* one
+and outranked every `z-index: auto` app overlay in the stage below. The
+link canvas is the dangerous one — full-grid and hit-testing — and it
+silently ate clicks meant for the templates picker, the jump-to-bottom
+badge, the selection toolbar and the connection overlay's Reconnect
+button until this rule trapped it.
+
 **A session that ends while open stays readable.** `useSessionGone` treats
 "absent from a synced snapshot" as the same proof of death auto-resume uses
 (`useSessionsSynced`) and returns to `/` with "That session has ended." — but
@@ -952,9 +963,19 @@ hand-encode them, and the control that drives them is a grip rather than a pan
 on the grid. Grid drag-to-scroll remains unported: under mouse reporting the
 program already claims the drag, and arbitrating that against xterm's text
 selection is the one risky piece; the grip reaches the same arms without it.
-The prompt-template picker is read-only here (list,
-recents/favourites grouping, filter, insert, favourite toggle); creating and
-deleting templates is WEB-09.
+The prompt-template picker is now a `Modal` — a native `<dialog>` on the
+browser top layer opened via `showModal()`, rather than the plain
+`position: fixed` div the isolation fix above made unnecessary — with the
+search field focused on open, Arrow-key row navigation, an Enter that
+picks the first match but steps into the list instead when the filter is
+empty (so nothing inserts blind), and Escape closing deterministically;
+focus returns to the terminal grid on dismissal. Failure messages render
+inline rather than as toasts, since `.toast-viewport` sits below the top
+layer. Loading, load failure (with Retry), an empty account and a filter
+with no matches are each their own state, and rows disable with an
+explanation while the session refuses input. It is read-only here (list,
+Recents/Favorites/All grouping, filter, insert, favourite toggle);
+creating and deleting templates is WEB-09.
 
 ## Desktop keyboard & shortcuts (WEB-06)
 
