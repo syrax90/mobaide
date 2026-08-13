@@ -929,6 +929,17 @@ timeout inside `RenderService` with **no** event, so a sampled flag has a
 transition it can never observe and would keep refusing over a screen that is
 actually current.
 
+**Both copy paths carry that guard**, which takes a second interception.
+Ctrl+C is ours already, but the context menu's Copy never reaches
+`copySelection`: xterm stages `SelectionService.selectionText` into its helper
+textarea on `contextmenu` and answers the `copy` event from the buffer, wholly
+inside xterm. A capture-phase `copy` listener refuses it on an unsettled
+screen — capture because the staged textarea is a descendant, so the event
+targets it and passes us on the way down, where xterm's own listener sits on
+the terminal element and would otherwise win the target phase on registration
+order. A copy carrying no terminal selection is left alone: it belongs to
+whatever the user selected elsewhere on the page.
+
 **Frames sent.** `i` from keystrokes, mouse reports (`onBinary`) and paste,
 carrying no trailing CR — the agent owns that timing (proto-v4). Web
 produces neither the `m` submit frame nor the `x` execute frame: the

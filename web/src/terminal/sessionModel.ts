@@ -395,6 +395,16 @@ export class TerminalSessionModel {
       event.stopPropagation();
       this.pasteText(event.clipboardData?.getData('text/plain') ?? '');
     };
+    const onCopy = (event: ClipboardEvent): void => {
+      // `contextmenu` leaves the selection staged in xterm's helper textarea, a
+      // descendant of this element, so the copy event targets *that* and this
+      // capture listener runs before xterm's own — which is registered on this
+      // same element back in `open()`, and would otherwise win the target phase
+      // on registration order.
+      if (this.nativeCopyAllowed()) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
     const onPointerDown = (): void => {
       this.pointerDragging = true;
       this.rebaseline = true;
@@ -404,6 +414,7 @@ export class TerminalSessionModel {
     };
 
     element.addEventListener('paste', onPaste, true);
+    element.addEventListener('copy', onCopy, true);
     element.addEventListener('pointerdown', onPointerDown, true);
     // On `window`, not the element: a drag released outside the terminal would
     // otherwise leave the flag stuck and suppress the tally for good.
@@ -412,6 +423,7 @@ export class TerminalSessionModel {
 
     this.disposers.push(() => {
       element.removeEventListener('paste', onPaste, true);
+      element.removeEventListener('copy', onCopy, true);
       element.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('pointerup', endDrag);
       window.removeEventListener('pointercancel', endDrag);
@@ -1060,6 +1072,24 @@ export class TerminalSessionModel {
       .getState()
       .show('The screen is still painting — try that again in a moment.', 'info');
     return false;
+  }
+
+  /**
+   * Whether the browser's own copy may reach xterm's `copyHandler`.
+   *
+   * The context menu's Copy is not routed through {@link copySelection}: xterm
+   * stages `SelectionService.selectionText` into its helper textarea on
+   * `contextmenu` and answers the `copy` event from the buffer, so the read
+   * happens entirely inside xterm and would otherwise skip the settled-screen
+   * check. With no in-app selection toolbar this is the primary mouse copy
+   * path, so it has to carry the same guard the keyboard one does.
+   *
+   * A copy with no terminal selection is left alone — it belongs to whatever
+   * the user actually selected elsewhere on the page.
+   */
+  nativeCopyAllowed(): boolean {
+    if (!this.term.hasSelection()) return true;
+    return this.screenIsSettled();
   }
 
   async copySelection(): Promise<void> {

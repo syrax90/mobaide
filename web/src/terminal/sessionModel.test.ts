@@ -626,6 +626,37 @@ describe('TerminalSessionModel synchronized output guard', () => {
     expect(toastKinds()).toEqual(['info']);
   });
 
+  it('refuses the browser context menu copy while the frame is still being painted', async () => {
+    // xterm stages the selection into its helper textarea on `contextmenu` and
+    // answers the `copy` event from the buffer, never calling `copySelection` —
+    // so with no in-app toolbar this is the mouse path that has to be gated.
+    const { model } = await selecting(ARM_SYNC);
+    vi.spyOn(model.term, 'hasSelection').mockReturnValue(true);
+
+    expect(model.nativeCopyAllowed()).toBe(false);
+    expect(toastKinds()).toEqual(['info']);
+  });
+
+  it('lets the browser context menu copy through once the program ends the frame', async () => {
+    const { model, deliverFrame } = await selecting(ARM_SYNC);
+    vi.spyOn(model.term, 'hasSelection').mockReturnValue(true);
+
+    deliverFrame(outputFrame(DISARM_SYNC));
+    await settle();
+
+    expect(model.nativeCopyAllowed()).toBe(true);
+    expect(toastKinds()).toEqual([]);
+  });
+
+  it('leaves a copy carrying no terminal selection alone', async () => {
+    // The page's own selection — a header label, an error message — is not the
+    // terminal's to refuse, and must not raise a toast either.
+    const { model } = await selecting(ARM_SYNC);
+
+    expect(model.nativeCopyAllowed()).toBe(true);
+    expect(toastKinds()).toEqual([]);
+  });
+
   it('lets the copy through once the program ends the frame', async () => {
     // Read at the instant of the copy rather than cached in the view state:
     // xterm clears mode 2026 on a 1 s safety timeout inside `RenderService` with
