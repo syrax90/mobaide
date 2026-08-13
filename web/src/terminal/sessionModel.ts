@@ -74,7 +74,6 @@ import {
   wheelRows,
   type ScrollbarView,
 } from './terminalScrollbar';
-import { executePayload } from './terminalSubmit';
 import { terminalTheme } from './terminalTheme';
 
 /** Matches Android's and iOS's 100 ms resize debounce. */
@@ -100,7 +99,6 @@ export interface TerminalViewState {
   status: TerminalState | null;
   pinned: boolean;
   unread: number;
-  hasSelection: boolean;
   renderer: RendererKind;
 }
 
@@ -113,7 +111,6 @@ function initialViewState(): TerminalViewState {
     status: null,
     pinned: true,
     unread: 0,
-    hasSelection: false,
     renderer: 'dom',
   };
 }
@@ -380,12 +377,6 @@ export class TerminalSessionModel {
         this.sampleFollow();
       }),
     );
-    this.track(
-      this.term.onSelectionChange(() => {
-        patchState(this.state, { hasSelection: this.term.hasSelection() });
-      }),
-    );
-
     this.term.attachCustomWheelEventHandler(() => {
       this.rebaseline = true;
       return true;
@@ -1020,7 +1011,7 @@ export class TerminalSessionModel {
    * `max_size=4 MB`, so one oversized frame closes it with 1009 and drops every
    * session on that agent — not just this one.
    */
-  private sendPayload(kind: 'input' | 'execute', outcome: PayloadOutcome): boolean {
+  private sendPayload(kind: 'input', outcome: PayloadOutcome): boolean {
     if (outcome.kind === 'empty') return false;
     if (outcome.kind === 'tooLarge') {
       useToastStore
@@ -1047,12 +1038,11 @@ export class TerminalSessionModel {
   /**
    * Whether the painted screen is trustworthy enough to act on a selection.
    *
-   * Checked at the instant of the action rather than cached in the view state:
+   * Checked at the instant of the copy rather than cached in the view state:
    * xterm clears mode 2026 on a 1 s safety timeout inside `RenderService` with
    * **no** event of any kind, so a flag sampled on writes or selection changes
-   * has a transition it can never observe and would strand the toolbar disabled
-   * on a screen that is actually current. Reading it here also means a button
-   * cannot go `disabled` between pointerdown and mouseup and swallow the click.
+   * has a transition it can never observe and would keep refusing on a screen
+   * that is actually current.
    *
    * Both mobile clients refuse the same reads for the same reason: while output
    * is synchronized the buffer is ahead of what the user can see, so a copy
@@ -1061,8 +1051,8 @@ export class TerminalSessionModel {
   private screenIsSettled(): boolean {
     // Two ways the buffer can be ahead of what the user can see: the program
     // armed mode 2026, or the parser is still reconstructing replayed history.
-    // Copy is the one that matters most — it would put text the user never saw
-    // onto the system clipboard.
+    // Either way a copy would put text the user never saw onto the system
+    // clipboard.
     if (!this.term.modes.synchronizedOutputMode && this.pendingReplayWrites === 0) {
       return true;
     }
@@ -1070,27 +1060,6 @@ export class TerminalSessionModel {
       .getState()
       .show('The screen is still painting — try that again in a moment.', 'info');
     return false;
-  }
-
-  /**
-   * Run the current selection.
-   *
-   * Gated on `live` only, not on `running` — the mobile row tap this stands in
-   * for is reachable on a stopped session too, which is how a crashed command
-   * gets retried.
-   */
-  runSelection(): void {
-    if (this.replay.connection !== 'live' || !this.screenIsSettled()) return;
-    if (!this.sendPayload('execute', executePayload(this.term.getSelection()))) {
-      return;
-    }
-    this.term.clearSelection();
-    this.jumpToBottom();
-    // Clearing the selection unmounts the toolbar, taking the focused button
-    // with it — focus would land on `document.body` and the keyboard would stop
-    // reaching the PTY until the user clicked the grid again. `Terminal.focus()`
-    // uses `preventScroll`, so it cannot yank a scrolled-up viewport.
-    this.focus();
   }
 
   async copySelection(): Promise<void> {
@@ -1107,37 +1076,8 @@ export class TerminalSessionModel {
       return;
     }
     this.term.clearSelection();
-    // Same reason as `runSelection`: the toolbar button that was clicked is
-    // about to leave the DOM. A no-op when the copy came from Ctrl+C.
-    this.focus();
-  }
-
-  /**
-   * Paste the current selection onto the program's input line.
-   *
-   * The desktop stand-in for mobile's send-to-composer: the text lands in the
-   * running program's line editor for review, so nothing executes until the
-   * user submits it themselves.
-   */
-  pasteSelection(): void {
-    // Settledness first so a mid-paint click gets the same explanation the
-    // other two actions give. The send gate then refuses silently: the view
-    // mirrors it into the button's `canPaste` prop, so this backstop only
-    // catches a state change between pointerdown and mouseup — and it keeps
-    // the selection intact when it does.
-    if (!this.screenIsSettled() || !this.canSendBytes()) return;
-    const text = this.term.getSelection();
-    if (text === '') return;
-    // Only a frame that actually went out may cost the user their selection —
-    // an over-cap refusal has already toasted and leaves the retry target.
-    if (!this.pasteText(text)) return;
-    this.term.clearSelection();
-    // The paste bypasses xterm's user-input path and `focus()` preserves
-    // scroll, so without the jump an insert made while scrolled up — the
-    // normal state when selecting older output — lands off-screen.
-    this.jumpToBottom();
-    // Same reason as `runSelection`: the toolbar button that was clicked is
-    // about to leave the DOM.
+    // Normally a no-op — Ctrl+C is dispatched from the grid — but the clipboard
+    // write is async and focus can drift while it is in flight.
     this.focus();
   }
 

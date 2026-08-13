@@ -716,8 +716,8 @@ stacking context, so without this rule they escaped into the *root* one
 and outranked every `z-index: auto` app overlay in the stage below. The
 link canvas is the dangerous one — full-grid and hit-testing — and it
 silently ate clicks meant for the templates picker, the jump-to-bottom
-badge, the selection toolbar and the connection overlay's Reconnect
-button until this rule trapped it.
+badge and the connection overlay's Reconnect button until this rule
+trapped it.
 
 **A session that ends while open stays readable.** `useSessionGone` treats
 "absent from a synced snapshot" as the same proof of death auto-resume uses
@@ -863,10 +863,12 @@ a different set entirely.
 
 **Copy/paste is web-only design**, not a port: mobile has no physical
 keyboard, its `Ctrl+C` is unconditionally `0x03`, and copy/paste live on the
-long-press selection toolbar. Here Ctrl+C copies when there is a selection,
-Ctrl+Shift+C always copies (never SIGINT), and Ctrl+V, Ctrl+Shift+V and
-Cmd+V hand off to the browser's native paste — deliberately, since
-`clipboard.readText()` is prompt-gated in Firefox and Safari. A persisted
+long-press selection toolbar. The web client has no in-app selection surface
+at all — the browser already owns both the selection and the context menu
+that copies it — so Ctrl+C copies when there is a selection, Ctrl+Shift+C
+always copies (never SIGINT), and Ctrl+V, Ctrl+Shift+V and Cmd+V hand off to
+the browser's native paste — deliberately, since `clipboard.readText()` is
+prompt-gated in Firefox and Safari. A persisted
 "pass Ctrl+V to terminal" toggle sends `0x16` instead, for Claude Code's
 image paste. The resulting `paste` event is intercepted in the **capture**
 phase, ahead of xterm's own handler, which does the newline rewrite and the
@@ -920,31 +922,28 @@ No browser analogue of Android's `EXTRA_IS_SENSITIVE` or iOS's `localOnly` +
 **Synchronized output (DEC 2026) is native** in xterm 6, so neither iOS's
 byte scanner nor Android's deferred-paint timer is ported. Their *consumer*
 discipline is: while `terminal.modes.synchronizedOutputMode` is armed the
-painted screen lags the buffer, so the selection actions refuse and say so —
-otherwise Copy would hand back text the user cannot see. The mode is read at
-the instant of the action, never cached in view state: xterm disarms it on a
-1 s safety timeout inside `RenderService` with **no** event, so a sampled
-flag has a transition it can never observe and would strand the toolbar
-disabled over a screen that is actually current.
+painted screen lags the buffer, so a copy refuses and says so — otherwise it
+would hand back text the user cannot see. The mode is read at the instant of
+the copy, never cached in view state: xterm disarms it on a 1 s safety
+timeout inside `RenderService` with **no** event, so a sampled flag has a
+transition it can never observe and would keep refusing over a screen that is
+actually current.
 
-**Frames sent.** `i` from keystrokes, mouse reports (`onBinary`) and paste
-— including the selection toolbar's "Send to input", which now pastes
-onto the running program's line instead of filling a composer; `x` from
-the selection's "Run" action, the desktop stand-in for mobile's
-tap-a-row-to-execute. Neither carries a trailing CR — the agent owns that
-timing (proto-v4). Web no longer produces the `m` submit frame: the
-composer that built it was removed as redundant on a physical keyboard,
-though the frame stays in the protocol for Android and iOS. Keystrokes and
-paste — including "Send to input", which needs a running program to have
-a line to land on — are gated on `live && running` **plus a web-only third
-term: the replay write queue must have drained.** `'e'` flips the connection
+**Frames sent.** `i` from keystrokes, mouse reports (`onBinary`) and paste,
+carrying no trailing CR — the agent owns that timing (proto-v4). Web
+produces neither the `m` submit frame nor the `x` execute frame: the
+composer that built `m` was removed as redundant on a physical keyboard, and
+`x` went with the selection toolbar (below). Both stay in the protocol for
+Android and iOS. Keystrokes and paste are gated on `live && running`
+**plus a web-only third term: the replay write queue must have drained.**
+`'e'` flips the connection
 synchronously while `term.write` is asynchronous, so a DECRQM / XTVERSION /
 DECRQSS / OSC 4 query still sitting in the replayed history would otherwise
 be answered after the gate opened and land in the user's live prompt — the
 agent's ring scrub does not cover those, and mobile never sees it because
-its replay append finishes before its gate flips. "Run" is on `live` only,
-like the row tap it replaces. Every outbound text frame is capped at 1 MiB,
-not just paste: the relay forwards a client frame to the agent's tunnel
+its replay append finishes before its gate flips. Every outbound text frame
+is capped at 1 MiB, not just paste: the relay forwards a client frame to the
+agent's tunnel
 unchunked and that tunnel is opened with `max_size=4 MB`, so one oversized
 frame closes it with 1009 and drops *every* session on that agent.
 
@@ -952,7 +951,13 @@ frame closes it with 1009 and drops *every* session on that agent.
 platform-convention exemption: **Full display mode only** — no Static /
 forced-column mode and no horizontal pan, because a desktop window is wide
 and fit-to-window is the browser convention, where a phone at ~40 columns
-needs the forced grid; and the whole desktop keyboard surface above. **A
+needs the forced grid; and the whole desktop keyboard surface above. **No
+in-app selection toolbar**: mobile's long-press bar (Send to Input · Copy ·
+Run) has no web counterpart. A selection here already carries the browser's
+own context menu, so an app-drawn bar over the grid duplicated Copy, stacked
+underneath that menu on right-click, and read as a mobile affordance in a
+desktop app. Removing it retires web's only "Send to input" path and its
+only producer of the `x` execute frame; the keyboard keeps Copy. **A
 draggable scrollback thumb**, which neither mobile client has and neither HIG
 asks for — Android exposes only the platform's fading indicator
 (`TerminalView.setVerticalScrollBarEnabled` plus `awakenScrollBars()`, not
