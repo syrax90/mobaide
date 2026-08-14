@@ -78,7 +78,7 @@ web/
 │   ├── app/                  # router + route guards, RootLayout/AuthLayout, AppGate, RouteError, AppErrorBoundary, ThemeProvider
 │   ├── routes/               # route components (sessions/*, auth/*, account/*, terminal/*)
 │   ├── terminal/             # framework-free terminal core (WEB-05): session model,
-│   │                         #   replay/follow/paste/submit/key reducers, clipboard,
+│   │                         #   replay/follow/paste/key reducers, clipboard,
 │   │                         #   renderer ladder, theme, model store
 │   ├── auth/                 # session store + transport, user/agent token axes, single-flight refresh,
 │   │                         #   GIS + Sign in with Apple loaders
@@ -687,7 +687,7 @@ rather than on the sign-in screen. It is reached from the sessions list at
 `/`.
 
 **Layering.** `src/terminal/` is framework-free — pure reducers
-(`terminalReplay`, `terminalFollow`, `terminalPaste`, `terminalSubmit`,
+(`terminalReplay`, `terminalFollow`, `terminalPaste`,
 `terminalKeys`), the clipboard/renderer/theme adapters, and
 `TerminalSessionModel`, which owns the socket, the emulator and a per-model
 Zustand store the React tree reads. `src/routes/terminal/` is presentation
@@ -985,13 +985,14 @@ browser top layer opened via `showModal()`, rather than the plain
 search field focused on open, Arrow-key row navigation, an Enter that
 picks the first match but steps into the list instead when the filter is
 empty (so nothing inserts blind), and Escape closing deterministically;
-focus returns to the terminal grid on dismissal. Failure messages render
-inline rather than as toasts, since `.toast-viewport` sits below the top
-layer. Loading, load failure (with Retry), an empty account and a filter
-with no matches are each their own state, and rows disable with an
-explanation while the session refuses input. It is read-only here (list,
-Recents/Favorites/All grouping, filter, insert, favourite toggle);
-creating and deleting templates is WEB-09.
+focus returns to the terminal grid on dismissal. Messages raised *while the
+picker is open* render inline rather than as toasts, since `.toast-viewport`
+sits below the top layer; the clipboard-outcome toast below is outside that
+rule because it fires after the dialog has closed. Loading, load failure
+(with Retry), an empty account and a filter with no matches are each their
+own state, and rows disable with an explanation while the session refuses
+input. It is read-only here (list, Recents/Favorites/All grouping, filter,
+insert, favourite toggle); creating and deleting templates is WEB-09.
 
 ## Desktop keyboard & shortcuts (WEB-06)
 
@@ -1017,6 +1018,38 @@ path (insert for review, never auto-execute, mirroring mobile's
 insert-into-composer semantics) rather than filling a composer. Android and
 iOS keep their control-key bar, saved shortcuts and composer unchanged; the
 central server keeps `/api/shortcuts` and `shortcut.*` for them.
+
+**A pick also copies the body to the system clipboard**, and says so in a
+toast. Claude Code collapses a paste over 800 characters, or with more than
+`min(rows - 10, 2)` newlines, into a `[Pasted text #n +m lines]` placeholder —
+nothing is lost, the full body is still submitted on Enter — and prints its
+own hint, `paste again to expand`. Expansion requires pasting text that
+normalises identically to the first paste, so without a clipboard copy that
+hint is unactionable and the template reads as truncated. That threshold is
+row-dependent and lives in a binary this repo does not pin, which is why the
+web client copies unconditionally instead of replicating the rule.
+
+What goes on the clipboard is the body minus ESC and C1, via `stripControls`
+— **not** the fully sanitized `\r`-joined form, which would render as one
+run-on line everywhere outside a terminal. The wire bytes are unaffected
+either way: a browser paste re-enters the same `pasteText` → `sanitizePaste`
+encoder, and `stripControls` is idempotent, so
+`sanitizePaste(stripControls(b)) === sanitizePaste(b)` and both attempts
+converge inside the CLI. Stripping matters because the clipboard is a
+consumer the encoder's escape-injection defense cannot reach — a native
+terminal pasted into next receives those bytes live (the CVE-2021-31701
+class `terminalPaste.ts` documents). That covers this path only: OSC 52
+writes (`terminalClipboard.ts`) still copy the program's bytes verbatim, as
+Android and iOS do. The write is best-effort (`writeClipboardText`), fires
+only after `pasteText` reported the frame sent, and is issued without an
+intervening `await` so Safari and Firefox still see the click's transient
+user activation. As with terminal copies (see above), a
+picked body lands in the ordinary system clipboard and in whatever history or
+cross-device sync the OS keeps — the web has no `EXTRA_IS_SENSITIVE` or
+`localOnly` analogue — and it cannot be purged on sign-out. **Mobile needs no
+mirror** — a template there lands in the app's own composer, visible and
+editable, and is submitted immediately, so no placeholder is ever left for the
+user to expand.
 
 **The shared chord contract is still a fixture, not three tables**, and
 outlives the bar: the token grammar (`ctrl+shift+i`: modifiers in ctrl, alt,
@@ -1473,7 +1506,11 @@ image of why mobile needs it. Android and iOS keep the bar, the shortcut
 picker and the composer, and the central server keeps `/api/shortcuts` and
 `shortcut.*` serving them. No Linear issue is needed for either direction:
 web is not "missing" what mobile has, and mobile is not "behind" what web
-dropped.
+dropped. The clipboard copy on a template pick is exempt for the same
+reason: a template on mobile lands in the app's own composer, visible and
+editable, and is submitted immediately, so no collapsed placeholder is ever
+left for the user to expand — copying there would clobber the clipboard for
+nothing. No Linear issue either direction.
 
 WEB-07's two divergences are **not** exempt and are tracked accordingly:
 recording the last-used session on open as well as on create is a behaviour

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
+import { writeClipboardText } from '../../lib/clipboard';
 import { sessionChannelName } from '../../realtime/channels';
 import { useKeyboardLock } from '../../keyboard/useKeyboardLock';
 import { useReloadGuard } from '../../keyboard/useReloadGuard';
@@ -12,8 +13,10 @@ import {
 } from '../../terminal/terminalStore';
 import { isSessionRunning } from '../../protocol/dto/terminalState';
 import { useTerminalPrefsStore } from '../../stores/terminalPrefsStore';
+import { useToastStore } from '../../stores/toastStore';
 import { useVisibleSessionStore } from '../../stores/visibleSessionStore';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
+import { stripControls } from '../../terminal/terminalPaste';
 import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
 import { JumpToBottom } from './JumpToBottom';
 import { TemplatesPicker } from './TemplatesPicker';
@@ -132,6 +135,19 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
     templatesWereOpen.current = templatesOpen;
   }, [templatesOpen, model]);
 
+  // A clipboard permission prompt can hold the write promise open long enough
+  // for the user to navigate away, and its continuation would then toast onto
+  // whatever screen replaced this one — the same reason `copySelection` checks
+  // `disposed`. Set on mount rather than only cleared on unmount, or
+  // StrictMode's simulated unmount latches it `false` for the real mount.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   return (
     <section className="terminal-page">
       <header className="terminal-bar">
@@ -238,6 +254,47 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
             // The paste bypasses xterm's user-input scroll, so an insert made
             // while scrolled up would otherwise land off-screen.
             model.jumpToBottom();
+            // Claude Code collapses a paste over 800 chars, or with more than
+            // `min(rows - 10, 2)` newlines, to a `[Pasted text #n +m lines]`
+            // placeholder and tells the user to paste again to expand it — an
+            // instruction nothing could act on, because the pick never touched
+            // the system clipboard.
+            //
+            // ESC and C1 come off first. `stripControls` is idempotent and the
+            // newline pass needs an `\n`, so `sanitizePaste(stripControls(b))`
+            // equals `sanitizePaste(b)` — a second paste re-runs this same
+            // encoder and still converges on the byte-identical input the CLI's
+            // equality check needs. What the strip buys is the consumer that
+            // encoder can never reach: paste into a native terminal instead and
+            // a live `ESC[201~` in the body closes the bracket early and runs
+            // its tail (the CVE-2021-31701 class `terminalPaste` defends).
+            //
+            // Called without an await in front of it, so Safari and Firefox
+            // still see the click's transient user activation. Only after
+            // `pasteText` reported the frame sent — with nothing on the input
+            // line there is nothing to expand, and clobbering the clipboard
+            // would be pure cost.
+            void writeClipboardText(stripControls(template.body)).then((written) => {
+              if (!mounted.current) return;
+              useToastStore
+                .getState()
+                .show(
+                  // Claims only the half the client can verify. Delivery past
+                  // the relay is not confirmable from here, and the Templates
+                  // button is unconditional — this screen cannot know whether
+                  // the session runs Claude Code or a plain shell, so it must
+                  // not name either.
+                  //
+                  // The refusal names the *copy* as what failed. A bare
+                  // "browser refused the clipboard write" reads as a failed
+                  // pick, and the obvious recovery — pick again — appends a
+                  // duplicate for any template the program did not collapse.
+                  written
+                    ? 'Template copied — paste again if it was collapsed.'
+                    : 'Could not copy the template — the browser refused the clipboard write.',
+                  written ? 'success' : 'error',
+                );
+            });
             return true;
           }}
         />

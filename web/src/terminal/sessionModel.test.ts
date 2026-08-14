@@ -8,6 +8,7 @@ import {
 import { WS_CLOSE } from '../protocol/closeCodes';
 import { encodeTerminalFrame, TERMINAL_FRAME_TYPE } from '../protocol/terminalCodec';
 import { useToastStore } from '../stores/toastStore';
+import { recordingClipboard } from '../test/clipboardStub';
 import { MAX_PASTE_BYTES } from './terminalPaste';
 
 // The credential seams are the only part of the channel that would go to the
@@ -112,36 +113,6 @@ const stateFrame = (status: string): Uint8Array =>
 
 const payloadText = (frame: Uint8Array): string =>
   new TextDecoder().decode(frame.subarray(1));
-
-/**
- * Record what the terminal puts on the system clipboard.
- *
- * jsdom ships no `navigator.clipboard`, so one is installed for the enclosing
- * describe and removed afterwards. Returns the live array, emptied before each
- * test — call it in a describe body and keep the result.
- */
-function recordingClipboard(): string[] {
-  const writes: string[] = [];
-
-  beforeEach(() => {
-    writes.length = 0;
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: {
-        writeText: (text: string) => {
-          writes.push(text);
-          return Promise.resolve();
-        },
-      },
-    });
-  });
-
-  afterEach(() => {
-    Reflect.deleteProperty(navigator, 'clipboard');
-  });
-
-  return writes;
-}
 
 /**
  * A model on an open socket with the process reported running — the state every
