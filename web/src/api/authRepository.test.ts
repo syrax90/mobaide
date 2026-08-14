@@ -72,7 +72,6 @@ describe('session-minting calls', () => {
       kind: 'session',
       session: {
         accessToken: 'access-1',
-        refreshToken: 'refresh-1',
         userId: 'user-1',
         email: 'user@example.com',
         role: 'viewer',
@@ -113,17 +112,14 @@ describe('session-minting calls', () => {
     expect(relay.calls).toEqual([
       {
         path: '/api/auth/apple',
-        body: { id_token: 'apple-id-token', nonce: 'nonce-1', refreshable: true },
+        body: {
+          id_token: 'apple-id-token',
+          nonce: 'nonce-1',
+          refreshable: true,
+          session_transport: 'cookie',
+        },
       },
     ]);
-  });
-
-  it('treats a session with no refresh token as non-refreshable', async () => {
-    succeed({ ...okBody, refresh_token: null });
-
-    const outcome = await login('user@example.com', 'hunter22');
-
-    expect(outcome.kind === 'session' && outcome.session.refreshToken).toBeNull();
   });
 });
 

@@ -109,7 +109,25 @@ export interface StubRelayOptions {
    * cannot accidentally pass by reading the claim's 200 as proof of pairing.
    */
   pendingPairing?: boolean;
+  /**
+   * Sign in without the readable marker cookie. The marker is what tells a
+   * booting tab to try the cookie restore, so suppressing it leaves the
+   * `BroadcastChannel` handover as the only way a second tab can get in —
+   * while rotation keeps working, because the credential cookie is still set.
+   * Blanket-401ing `/api/auth/refresh` would not do: `SESSION.access_token` is
+   * not a real JWT, so every relay request thinks it needs a rotation and the
+   * signed-in tab would sign itself out.
+   */
+  withoutSessionMarker?: boolean;
 }
+
+/**
+ * The names the server emits when `USER_SESSION_COOKIE_SECURE` is false, which
+ * is the shape Playwright sees: the preview server is plain http, and a
+ * `__Host-` cookie requires `Secure`.
+ */
+const REFRESH_COOKIE = 'mobaide_refresh';
+const MARKER_COOKIE = 'mobaide_signed_in';
 
 /**
  * Per-call, never module-level: two tests in one file share this module, and a
@@ -134,13 +152,53 @@ export async function stubRelay(
   };
 
   await target.route('**/api/version', (route) => route.fulfill(json(version)));
-  await target.route('**/api/auth/login', (route) => route.fulfill(json(SESSION)));
+  // Sign-in hands back the session cookie pair the real server sets in cookie
+  // mode: the HttpOnly credential and the readable marker the boot path reads.
+  // Unprefixed because Playwright serves the preview over plain http, which is
+  // exactly what the server emits at USER_SESSION_COOKIE_SECURE=false.
+  await target.route('**/api/auth/login', (route) =>
+    route.fulfill({
+      ...json(SESSION),
+      headers: {
+        'content-type': 'application/json',
+        'set-cookie': [
+          `${REFRESH_COOKIE}=e2e-refresh; Path=/; HttpOnly; SameSite=Strict`,
+          ...(options.withoutSessionMarker === true
+            ? []
+            : [`${MARKER_COOKIE}=1; Path=/; SameSite=Strict`]),
+        ].join('\n'),
+      },
+    }),
+  );
   await target.route('**/api/devices', (route) => route.fulfill(json(DEVICES)));
   // `SESSION.access_token` is not a real JWT, so the client cannot read an
   // `exp` from it and treats it as due for renewal before every request.
   // Stubbing the rotation keeps that off the network instead of leaving
   // ECONNREFUSED noise in the CI log.
-  await target.route('**/api/auth/refresh', (route) => route.fulfill(json(SESSION)));
+  //
+  // Cookie-aware on purpose. An unconditional 200 here would let the
+  // "session survives closing every tab" test pass with the cookie mechanism
+  // entirely broken — the same fixture-certifies-the-bug trap the agent-token
+  // and method-aware stubs below exist to avoid.
+  await target.route('**/api/auth/refresh', (route) => {
+    const cookies = route.request().headers()['cookie'] ?? '';
+    if (!cookies.includes(`${REFRESH_COOKIE}=`)) {
+      return route.fulfill({ ...json({ detail: 'no cookie' }), status: 401 });
+    }
+    return route.fulfill(json(SESSION));
+  });
+  await target.route('**/api/auth/logout', (route) =>
+    route.fulfill({
+      status: 204,
+      headers: {
+        'set-cookie': [
+          `${REFRESH_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`,
+          `${MARKER_COOKIE}=; Path=/; SameSite=Strict; Max-Age=0`,
+        ].join('\n'),
+      },
+      body: '',
+    }),
+  );
   // The sessions list is the index route, so a signed-in visitor hits these on
   // arrival. Without the agent-token mint the client retries a 404 and leaves
   // noise in the log, for the same reason the refresh stub exists.

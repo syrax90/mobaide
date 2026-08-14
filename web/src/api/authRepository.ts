@@ -4,6 +4,11 @@
  * Every call that mints a session sends `refreshable: true` — the browser is
  * the client the server's opt-in refreshable session exists for. Mobile omits
  * the flag and keeps its long-lived token.
+ *
+ * It also sends `session_transport: 'cookie'`, which routes the refresh token
+ * into an HttpOnly cookie instead of the response body. That is what lets a
+ * session survive closing the last tab, and it means nothing here ever handles
+ * the long-lived credential.
  */
 import type { UserSession } from '../auth/sessionTransport';
 import { relayClient } from './clients';
@@ -11,7 +16,6 @@ import { AdminLoginNotSupportedError, ApiError, toApiError } from './errors';
 
 type AuthResponseBody = {
   access_token?: string | null;
-  refresh_token?: string | null;
   user_id: string;
   email: string;
   role: string;
@@ -52,7 +56,6 @@ function toOutcome(body: AuthResponseBody): AuthOutcome {
     kind: 'session',
     session: {
       accessToken: body.access_token,
-      refreshToken: body.refresh_token ?? null,
       userId: body.user_id,
       email: body.email,
       role: body.role,
@@ -70,7 +73,7 @@ export async function register(
   password: string,
 ): Promise<AuthOutcome> {
   const { data, error, response } = await relayClient.POST('/api/auth/register', {
-    body: { email, password, refreshable: true },
+    body: { email, password, refreshable: true, session_transport: 'cookie' },
   });
   if (error !== undefined || data === undefined) fail(response, error);
   return toOutcome(data);
@@ -81,7 +84,7 @@ export async function login(
   password: string,
 ): Promise<AuthOutcome> {
   const { data, error, response } = await relayClient.POST('/api/auth/login', {
-    body: { email, password, refreshable: true },
+    body: { email, password, refreshable: true, session_transport: 'cookie' },
   });
   if (error !== undefined || data === undefined) {
     const apiError = toApiError(response, error);
@@ -99,7 +102,7 @@ export async function login(
 
 export async function loginWithGoogle(idToken: string): Promise<AuthOutcome> {
   const { data, error, response } = await relayClient.POST('/api/auth/google', {
-    body: { id_token: idToken, refreshable: true },
+    body: { id_token: idToken, refreshable: true, session_transport: 'cookie' },
   });
   if (error !== undefined || data === undefined) fail(response, error);
   return toOutcome(data);
@@ -115,7 +118,7 @@ export async function loginWithApple(
   nonce: string,
 ): Promise<AuthOutcome> {
   const { data, error, response } = await relayClient.POST('/api/auth/apple', {
-    body: { id_token: idToken, nonce, refreshable: true },
+    body: { id_token: idToken, nonce, refreshable: true, session_transport: 'cookie' },
   });
   if (error !== undefined || data === undefined) fail(response, error);
   return toOutcome(data);
@@ -127,7 +130,7 @@ export async function verifyEmail(
 ): Promise<AuthOutcome> {
   const { data, error, response } = await relayClient.POST(
     '/api/auth/verify-email',
-    { body: { email, code, refreshable: true } },
+    { body: { email, code, refreshable: true, session_transport: 'cookie' } },
   );
   if (error !== undefined || data === undefined) fail(response, error);
   return toOutcome(data);
@@ -200,6 +203,18 @@ export async function deleteAccount(input: DeleteAccountInput): Promise<void> {
       nonce: input.nonce ?? null,
     },
   });
+  if (error !== undefined) fail(response, error);
+}
+
+/**
+ * Revoke every browser session for this account, including this one.
+ *
+ * Through `relayClient`, unlike the per-browser `postLogout`: this one is
+ * authenticated by the user token, so a 401 genuinely means the session is
+ * already gone and the usual teardown should run.
+ */
+export async function signOutAllBrowsers(): Promise<void> {
+  const { error, response } = await relayClient.POST('/api/auth/logout/all', {});
   if (error !== undefined) fail(response, error);
 }
 

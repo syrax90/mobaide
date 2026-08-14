@@ -118,9 +118,17 @@ class RefreshableSessionRequest(BaseModel):
     browsers send ``Origin`` on same-origin POSTs and native clients do not,
     so sniffing it would work today but would silently hand a short-lived,
     refresh-requiring token to any future WebView-based client.
+
+    ``session_transport`` chooses where the refresh token is delivered.
+    ``"cookie"`` puts it in an HttpOnly cookie the page cannot read and omits
+    it from the body; ``"body"`` (and the legacy ``None``) return it in the
+    JSON. Nullable rather than defaulted because openapi-typescript emits a
+    property carrying a ``default`` as *non-optional* TypeScript, which would
+    make the field required on every existing caller of these five endpoints.
     """
 
     refreshable: bool = False
+    session_transport: Literal["body", "cookie"] | None = None
 
 
 class UserRegisterRequest(RefreshableSessionRequest):
@@ -150,13 +158,17 @@ class AppleAuthRequest(RefreshableSessionRequest):
 
 
 class UserRefreshRequest(BaseModel):
-    """Body for ``POST /api/auth/refresh``.
+    """Body for ``POST /api/auth/refresh`` and ``POST /api/auth/logout``.
 
     Unauthenticated by design — the refresh token *is* the credential, so
     presenting a dead access token alongside it must not matter.
+
+    Optional because a browser session carries the token in an HttpOnly
+    cookie instead and posts no body at all. A body token always wins, so a
+    native client's request is routed exactly as before.
     """
 
-    refresh_token: str = Field(..., min_length=1)
+    refresh_token: str | None = Field(None, min_length=1)
 
 
 class AuthTokenResponse(BaseModel):
@@ -176,6 +188,11 @@ class AuthTokenResponse(BaseModel):
     asked for a refreshable session (see ``RefreshableSessionRequest``). This
     is also the response of ``POST /api/auth/refresh``, where ``status`` is
     always ``"ok"``.
+
+    ``session_transport`` echoes where the refresh token went, so a client
+    can distinguish "refreshable, credential is in your cookie jar" from "not
+    refreshable, a 401 is terminal" — both carry a null ``refresh_token`` and
+    demand opposite recovery behaviour.
     """
 
     access_token: str | None = None
@@ -187,6 +204,7 @@ class AuthTokenResponse(BaseModel):
     scheduled_deletion_at: str | None = None
     refresh_token: str | None = None
     expires_in: int | None = None
+    session_transport: Literal["body", "cookie"] = "body"
 
 
 class VerifyEmailRequest(RefreshableSessionRequest):

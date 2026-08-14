@@ -81,6 +81,21 @@
             "default": false,
             "title": "Refreshable",
             "type": "boolean"
+          },
+          "session_transport": {
+            "anyOf": [
+              {
+                "enum": [
+                  "body",
+                  "cookie"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Transport"
           }
         },
         "required": [
@@ -91,7 +106,7 @@
         "type": "object"
       },
       "AuthTokenResponse": {
-        "description": "Response for register / login / verify-email / google.\n\nWhen ``status == \"verification_required\"`` (returned by /register when the\nserver enforces verification), ``access_token`` is ``None`` and the client\nmust call /verify-email with the code from the OTP email to obtain the JWT.\nFor all other ``status`` values (currently just ``\"ok\"``) a valid\n``access_token`` is always present.\n\n``scheduled_deletion_at`` (ISO-8601, UTC) is non-null when the account is\nin the soft-delete grace window \u2014 clients surface a \"cancel scheduled\ndeletion\" banner so the user can restore the account.\n\n``refresh_token`` and ``expires_in`` are non-null only when the request\nasked for a refreshable session (see ``RefreshableSessionRequest``). This\nis also the response of ``POST /api/auth/refresh``, where ``status`` is\nalways ``\"ok\"``.",
+        "description": "Response for register / login / verify-email / google.\n\nWhen ``status == \"verification_required\"`` (returned by /register when the\nserver enforces verification), ``access_token`` is ``None`` and the client\nmust call /verify-email with the code from the OTP email to obtain the JWT.\nFor all other ``status`` values (currently just ``\"ok\"``) a valid\n``access_token`` is always present.\n\n``scheduled_deletion_at`` (ISO-8601, UTC) is non-null when the account is\nin the soft-delete grace window \u2014 clients surface a \"cancel scheduled\ndeletion\" banner so the user can restore the account.\n\n``refresh_token`` and ``expires_in`` are non-null only when the request\nasked for a refreshable session (see ``RefreshableSessionRequest``). This\nis also the response of ``POST /api/auth/refresh``, where ``status`` is\nalways ``\"ok\"``.\n\n``session_transport`` echoes where the refresh token went, so a client\ncan distinguish \"refreshable, credential is in your cookie jar\" from \"not\nrefreshable, a 401 is terminal\" \u2014 both carry a null ``refresh_token`` and\ndemand opposite recovery behaviour.",
         "properties": {
           "access_token": {
             "anyOf": [
@@ -144,6 +159,15 @@
               }
             ],
             "title": "Scheduled Deletion At"
+          },
+          "session_transport": {
+            "default": "body",
+            "enum": [
+              "body",
+              "cookie"
+            ],
+            "title": "Session Transport",
+            "type": "string"
           },
           "status": {
             "default": "ok",
@@ -785,6 +809,21 @@
             "default": false,
             "title": "Refreshable",
             "type": "boolean"
+          },
+          "session_transport": {
+            "anyOf": [
+              {
+                "enum": [
+                  "body",
+                  "cookie"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Transport"
           }
         },
         "required": [
@@ -1471,6 +1510,21 @@
             "default": false,
             "title": "Refreshable",
             "type": "boolean"
+          },
+          "session_transport": {
+            "anyOf": [
+              {
+                "enum": [
+                  "body",
+                  "cookie"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Transport"
           }
         },
         "required": [
@@ -1481,17 +1535,21 @@
         "type": "object"
       },
       "UserRefreshRequest": {
-        "description": "Body for ``POST /api/auth/refresh``.\n\nUnauthenticated by design \u2014 the refresh token *is* the credential, so\npresenting a dead access token alongside it must not matter.",
+        "description": "Body for ``POST /api/auth/refresh`` and ``POST /api/auth/logout``.\n\nUnauthenticated by design \u2014 the refresh token *is* the credential, so\npresenting a dead access token alongside it must not matter.\n\nOptional because a browser session carries the token in an HttpOnly\ncookie instead and posts no body at all. A body token always wins, so a\nnative client's request is routed exactly as before.",
         "properties": {
           "refresh_token": {
-            "minLength": 1,
-            "title": "Refresh Token",
-            "type": "string"
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Token"
           }
         },
-        "required": [
-          "refresh_token"
-        ],
         "title": "UserRefreshRequest",
         "type": "object"
       },
@@ -1509,6 +1567,21 @@
             "default": false,
             "title": "Refreshable",
             "type": "boolean"
+          },
+          "session_transport": {
+            "anyOf": [
+              {
+                "enum": [
+                  "body",
+                  "cookie"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Transport"
           }
         },
         "required": [
@@ -1572,6 +1645,21 @@
             "default": false,
             "title": "Refreshable",
             "type": "boolean"
+          },
+          "session_transport": {
+            "anyOf": [
+              {
+                "enum": [
+                  "body",
+                  "cookie"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Transport"
           }
         },
         "required": [
@@ -1955,6 +2043,63 @@
         ]
       }
     },
+    "/api/auth/logout": {
+      "post": {
+        "description": "End one browser session: revoke its refresh token, clear its cookies.\n\nUnauthenticated for the same reason as ``/refresh`` \u2014 the access token is\nusually dead by the time a user signs out \u2014 and idempotent, so a caller\nwith no credential left still gets a clean 204 and a cookie deletion.\n\nThe cookies are set on the returned ``Response``, not on an injected one:\nFastAPI merges the injected response's headers only when the handler\nreturns something that is *not* already a ``Response``.",
+        "operationId": "logout_api_auth_logout_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/UserRefreshRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/logout/all": {
+      "post": {
+        "description": "Revoke every browser session for the calling account, including this one.\n\nBrowser-scoped, not account-wide: the mobile clients never opt into\n``refreshable``, so their tokens live in a different table and survive.\nAlready-issued access tokens also survive until they expire \u2014 there is no\nJWT denylist \u2014 so other browsers stop working within\n``user_session_access_expire_minutes``, not instantly. The UI copy says\nexactly that.",
+        "operationId": "logout_all_api_auth_logout_all_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout All",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/auth/me/delete": {
       "post": {
         "description": "Schedule or immediately purge the calling user's account.\n\n``body.mode`` chooses between ``'scheduled'`` (default \u2014 14-day soft-delete\nwith a cancel link) and ``'immediate'`` (irreversible cascade purge now).\nOlder clients that omit ``mode`` get the legacy scheduled behavior.\n\nRequires a fresh credential proof (current password OR fresh Google ID\ntoken with matching nonce) \u2014 the session JWT alone is rejected. On\nsuccess: writes the audit row, revokes refresh tokens, closes any live\nuser/agent WebSockets with code 4010, and (scheduled mode only) emails a\nsingle-use cancel link before returning 204.\n\nRefuses to act on the seed-admin account (mirrors the admin-path guard).",
@@ -2014,17 +2159,24 @@
     },
     "/api/auth/refresh": {
       "post": {
-        "description": "Rotate a user-session refresh token into a fresh access token.\n\nUnauthenticated by design: the refresh token is the credential, and the\naccess token this call replaces has usually already expired. The\npresented refresh token is consumed, so a replay returns 401 \u2014 clients\nmust serialize concurrent refreshes rather than racing them.",
+        "description": "Rotate a user-session refresh token into a fresh access token.\n\nUnauthenticated by design: the refresh token is the credential, and the\naccess token this call replaces has usually already expired. The\npresented refresh token is consumed, so a replay returns 401 \u2014 clients\nmust serialize concurrent refreshes rather than racing them.\n\nEvery failure below leaves via ``raise``, which builds a fresh response and\ntherefore drops anything set on ``http_response`` \u2014 exactly the required\nbehaviour, since one browser holds a single shared cookie and a loser in a\nconcurrent rotation must be incapable of overwriting the winner's jar.",
         "operationId": "refresh_session_api_auth_refresh_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UserRefreshRequest"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/UserRefreshRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {

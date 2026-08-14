@@ -2912,6 +2912,22 @@ class Database:
         await self.conn.commit()
         return row["user_id"]
 
+    async def revoke_user_refresh_token(self, raw_token: str) -> bool:
+        """Revoke one user-session refresh token, expired or not.
+
+        Sign-out, unlike rotation: it must retire the credential the browser
+        presented whatever its state, so there is no ``expires_at`` predicate
+        and no rotation. Reports whether a live row was actually revoked, but
+        callers treat sign-out as idempotent regardless.
+        """
+        cursor = await self.conn.execute(
+            "UPDATE user_refresh_tokens SET revoked_at = ? "
+            "WHERE token_hash = ? AND revoked_at IS NULL",
+            (_now_iso(), _hash_token(raw_token)),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
     async def _revoke_live_user_refresh_tokens(
         self, user_id: str, now: str
     ) -> int:

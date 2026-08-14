@@ -58,7 +58,10 @@ test('revoking warns that every paired agent is signed out too', async ({ page }
 test('a second tab inherits the session and follows the sign-out', async ({
   context,
 }) => {
-  await stubRelay(context);
+  // No marker cookie, so a booting tab never tries the cookie restore and the
+  // BroadcastChannel handover is the only way the second tab can get in —
+  // otherwise this test would keep passing with the handover entirely broken.
+  await stubRelay(context, SERVER_INFO, { withoutSessionMarker: true });
   const first = await context.newPage();
   await first.goto('/login');
   await signIn(first);
@@ -71,10 +74,67 @@ test('a second tab inherits the session and follows the sign-out', async ({
   await expect(second.getByRole('heading', { level: 1, name: 'Account' })).toBeVisible();
 
   await first.goto('/account');
-  await first.getByRole('button', { name: 'Sign out' }).click();
+  // Exact: /account also carries "Sign out of all browsers", and `getByRole`
+  // matches accessible names by substring.
+  await first.getByRole('button', { name: 'Sign out', exact: true }).click();
 
   await expect(second).toHaveURL(/\/login/);
   await expect(second.getByRole('button', { name: 'Sign In' })).toBeVisible();
+});
+
+test('the session survives closing every tab', async ({ context }) => {
+  // The reported bug, end to end. Closing the last tab used to end the session
+  // because it lived in per-tab sessionStorage; the refresh cookie is what
+  // brings it back. A Playwright BrowserContext shares one cookie jar across
+  // pages while giving each its own sessionStorage, so closing the page and
+  // opening a new one is a faithful "closed the last tab, opened a new one".
+  await stubRelay(context);
+  const first = await context.newPage();
+  await first.goto('/login');
+  await signIn(first);
+  // Land before closing, or the sign-in POST may never set the cookie.
+  await expect(first).toHaveURL(/:\d+\/$/);
+  await first.close();
+
+  const reopened = await context.newPage();
+  await reopened.goto('/account');
+  await expect(
+    reopened.getByRole('heading', { level: 1, name: 'Account' }),
+  ).toBeVisible();
+});
+
+test('closing every tab without the cookie lands on sign-in', async ({ context }) => {
+  // The negative twin. Without it the test above proves only that the stub
+  // returns 200, not that the cookie is what carried the session.
+  await stubRelay(context);
+  const first = await context.newPage();
+  await first.goto('/login');
+  await signIn(first);
+  await expect(first).toHaveURL(/:\d+\/$/);
+  await first.close();
+  await context.clearCookies();
+
+  const reopened = await context.newPage();
+  await reopened.goto('/account');
+  await expect(reopened).toHaveURL(/\/login/);
+  await expect(reopened.getByRole('button', { name: 'Sign In' })).toBeVisible();
+});
+
+test('signing out ends the session for good', async ({ context }) => {
+  // Sign-out must clear the cookie pair, or the next tab would silently sign
+  // the user back in — the failure mode that matters most on a shared machine.
+  await stubRelay(context);
+  const first = await context.newPage();
+  await first.goto('/login');
+  await signIn(first);
+  await first.goto('/account');
+  await first.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await expect(first).toHaveURL(/\/login/);
+  await first.close();
+
+  const reopened = await context.newPage();
+  await reopened.goto('/account');
+  await expect(reopened).toHaveURL(/\/login/);
 });
 
 test('an incompatible server takes the whole app over', async ({ page }) => {
