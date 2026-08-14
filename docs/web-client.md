@@ -1388,6 +1388,32 @@ restart, `--rollback` repoints at the previously-live release. Runbook: the
   `--force`, at the cost of a theme flash). The font needs no Caddyfile
   change: the SPA CSP has no `font-src`, so same-origin fonts ride
   `default-src 'self'`.
+- **Brand mark and icons** — the mirror extends past tokens to the assets.
+  `web/public/wordmark.png`, `favicon.ico`, `apple-touch-icon.png` and both
+  `fonts/DepartureMono-*` files are **byte-for-byte copies** of
+  `central_server/static/site/`, and `brandAssets.test.ts` holds that list and
+  fails if any of the five diverges — the two origins deploy separately with no
+  shared asset pipeline, so copying is the only mechanism and the test is what
+  keeps it honest. The font pre-dates the icons in that set and is the one most
+  likely to be regenerated alone, under an unchanged filename. `.brand-mark` in
+  `global.css` mirrors `site.css`'s rule (light `--plate` chip,
+  `image-rendering: pixelated`) one step down the same ladder — 128 → 104px
+  where the site goes 152 → 128px, with the padding scaled to match: the
+  terminal renders inside `RootLayout`, so header height comes straight out of
+  the PTY row count. That is also why `.app-header` is `flex-wrap: nowrap` with
+  `.app-nav` absorbing overflow by scrolling, the shape `.terminal-bar` already
+  uses — a wrapping header silently doubled and cost ~3 rows. Both shells carry
+  the mark — `RootLayout` as the brand link (its `alt` alone supplies the
+  accessible name an e2e assertion pins), `AuthLayout` unlinked but still named,
+  matching the site's own unlinked footer marks, since four of that shell's six
+  routes head their card with something other than the app name. `index.html`
+  declares the icons exactly as `marketing_landing.html` does, so the tab icon
+  matches across the crossing; the manifest carries the 180px PNG, which at
+  least avoids the known Chromium failure on an SVG-only `sizes: "any"` set.
+  Whether it clears Chrome's install bar is unverified — the published
+  criteria ask for 192 + 512, and closing that properly is CLA-252, so do not
+  treat the current icon set as evidence that `display-mode: standalone`
+  resolves true on Android.
 - **Errors, two tiers** — the router's `errorElement` (`RouteError`)
   renders loader/render errors and doubles as the 404 page;
   `AppErrorBoundary` (class component) wraps the providers as a last

@@ -53,6 +53,16 @@ a {
   min-height: 100%;
 }
 
+/*
+ * `nowrap`, and the nav absorbs the overflow by scrolling — the same shape
+ * `.terminal-bar` uses, and for the same reason: the terminal stage sizes its
+ * PTY grid from what this header leaves behind, so a header that silently
+ * doubles costs the user rows. Wrapping cannot be tuned away by shrinking the
+ * brand, because flex assigns items to lines by their *hypothetical* size,
+ * before any shrinking — so `.app-nav`'s `flex` and `min-width: 0` have no say
+ * in whether the toggle drops to a second row. Measured, wrapping cost 52.5px
+ * -> 96.7px (about three rows at the default cell height) from 694px down.
+ */
 .app-header {
   position: sticky;
   top: 0;
@@ -60,22 +70,45 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 1rem;
   padding: 0.65rem 1.25rem;
   background: var(--head-bg);
   border-bottom: 2px solid var(--surface-2);
 }
 
+/*
+ * Every link stays reachable: the functional nav scrolls, never collapses.
+ *
+ * The padding/negative-margin pair is what keeps focus rings visible, not
+ * spacing: `overflow-x: auto` forces `overflow-y` off `visible` too, and the
+ * brand is the tallest item here — its box IS the nav's box, so the global
+ * `:focus-visible` ring (3px at 3px offset) paints outside the padding box and
+ * gets clipped to nothing. 6px of padding gives the ring room inside the
+ * scroller; the equal negative margin cancels it again, so header height and
+ * the mark's position are unchanged. An inset `outline-offset` would not do:
+ * the ring would land on the --plate chip, where --accent measures ~1.5:1 on
+ * dark and fails WCAG 1.4.11.
+ */
 .app-nav {
   display: flex;
   align-items: center;
   gap: clamp(12px, 2.5vw, 26px);
   min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  padding: 6px;
+  margin: -6px;
   font-family: var(--font-chrome);
   font-size: var(--pix-sm);
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.app-nav::-webkit-scrollbar {
+  display: none;
 }
 
 .app-nav a {
@@ -98,23 +131,44 @@ a {
 .app-brand {
   display: inline-flex;
   align-items: center;
-  gap: 0.6rem;
-  color: var(--text);
-  font-size: 1rem;
+  /* `.app-nav` is the header's overflow absorber at every width now, so without
+     `flex: none` the mark shrinks instead of the nav scrolling. Both this and
+     `line-height: 0` mirror site.css `.brand`. */
+  flex: none;
+  line-height: 0;
 }
 
-.app-brand::before {
-  content: '';
-  width: 8px;
-  height: 8px;
-  background: var(--brand);
-  box-shadow: 3px 3px 0 0 var(--brand-2);
-  flex: none;
+/*
+ * Mirrors site.css `.brand-mark` — same asset, same plate, same pixelated
+ * upscale, so the app header and the portal header read as one brand. The
+ * wordmark is dark purple ink drawn for a light plate (it is lifted off the app
+ * icon), so it keeps its plate here too. On light that plate matches --head-bg
+ * and disappears; on dark it reads as a light chip, as it does on the site.
+ *
+ * Two deliberate deltas from that rule. The app runs one step down the same
+ * ladder — 128 -> 104px where the site goes 152 -> 128px — because the terminal
+ * route renders inside this shell and header height comes straight out of the
+ * PTY row count. The padding scales with it (5px 8px is 7px 11px x 128/152), so
+ * the chip keeps the site's proportions rather than its absolute inset.
+ */
+.brand-mark {
+  display: block;
+  width: 128px;
+  height: auto;
+  padding: 5px 8px;
+  background: var(--plate);
+  image-rendering: pixelated;
 }
 
 /* No text-transform here: e2e asserts the literal innerText "Theme: system",
-   and toHaveText sees through CSS uppercasing. */
+   and toHaveText sees through CSS uppercasing.
+
+   `flex: none` because the nav beside it is the designated overflow absorber
+   (`flex: 1 1 auto` + scroll). Left shrinkable, the toggle wraps its own label
+   to two lines instead and grows the header 28px -> 46px, which on the terminal
+   route is a PTY row lost to a button that had room all along. */
 .theme-toggle {
+  flex: none;
   padding: 5px 11px;
   border: 0;
   border-radius: 0;
@@ -235,11 +289,20 @@ a {
   font-size: 0.9rem;
 }
 
+/* Column, not a centred row: the header is a real first child rather than an
+   absolutely-positioned overlay, so it can never paint over the card. It used
+   to float, which was survivable while it held only the outline-only toggle —
+   the brand mark carries an opaque --plate fill and cut a notch out of the
+   card's border at every width where the centred 420px column reached under
+   it (below ~760px). `align-items` centres the column on the cross axis; the
+   card's distance from the top stays `padding` + the header's own height. */
 .auth-shell {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
   min-height: 100vh;
   padding: 2rem 1rem;
+  gap: 1.25rem;
 }
 
 .auth-main {
@@ -247,10 +310,14 @@ a {
   max-width: 26.25rem; /* 420px, the portal .login-card column (GIS floor) */
 }
 
+/* Brand left, toggle right — the same `space-between` shape as .app-header and
+   as the portal's .site-head, so the signed-out screens carry the mark too. */
 .auth-shell-header {
-  position: absolute;
-  top: 1rem;
-  right: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
 }
 
 .auth-card {
@@ -2684,16 +2751,8 @@ body:has(dialog[open]) {
     padding: 0.5rem 1rem;
   }
 
-  /* Every link stays reachable: the functional nav scrolls, never collapses. */
-  .app-nav {
-    flex: 1 1 auto;
-    overflow-x: auto;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .app-nav::-webkit-scrollbar {
-    display: none;
+  .brand-mark {
+    width: 104px;
   }
 
   .dialog {

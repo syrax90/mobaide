@@ -7,7 +7,17 @@ export function RootLayout() {
       <header className="app-header">
         <nav className="app-nav" aria-label="Main">
           <NavLink to="/" className="app-brand">
-            Mobaide
+            {/* Same asset and same single resolution as the portal header:
+                pixel art rendered `pixelated`, so a hidpi screen upscales it in
+                crisp blocks rather than fetching a finer, smoother source. The
+                alt text alone carries the link's accessible name. */}
+            <img
+              className="brand-mark"
+              src="/wordmark.png"
+              width={227}
+              height={40}
+              alt="Mobaide"
+            />
           </NavLink>
           <NavLink to="/agents">Agents</NavLink>
           <NavLink to="/projects">Projects</NavLink>

@@ -127,8 +127,8 @@
         # try_files rewrite so the /assets/* matcher sees the final path.
         route {
             try_files {path} /index.html
-            # index.html and unhashed public/ files (favicon.svg) must
-            # revalidate on every load so a deploy is visible immediately
+            # index.html and unhashed public/ files (wordmark.png, the icons)
+            # must revalidate on every load so a deploy is visible immediately
             # (file_server's ETag/Last-Modified make that a cheap 304);
             # Vite's content-hashed /assets/* are immutable by construction.
             header Cache-Control "no-cache, must-revalidate"

@@ -357,6 +357,17 @@ a one-off script, not committed; recreate it when assets need to change:
    shipped whole at 22.5 KB with its OFL licence alongside. No subsetting step —
    at that size it is not worth a build dependency.
 
+Five of these files are **mirrored byte-for-byte into `web/public/`** — the three
+brand images (`wordmark.png`, `favicon.ico`, `apple-touch-icon.png`) **and both
+font files from step 6** (`DepartureMono-Regular.woff2` and its OFL licence).
+The SPA is a separate origin with a separate deploy (`deploy_web.py`) and no
+shared asset pipeline, but it renders the same brand mark, tab icon and typeface,
+so a visitor crossing from the apex sees no seam. Regenerating **any** of the
+five means copying the new file over its `web/public/` twin in the same commit —
+the font included, and note that step 6 ships it under an unchanged filename, so
+nothing else would signal the drift. `web/src/app/brandAssets.test.ts` holds the
+canonical list and fails Web CI if any copy diverges.
+
 ## Deployment
 
 Manual, like the rest of the relay: an operator runs
