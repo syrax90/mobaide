@@ -1297,11 +1297,12 @@ attempted here.
 **Settings** is a hub plus the preferences that had nowhere else to live:
 notification permission and the in-app opt-out, the Ctrl+V terminal
 preference, support and privacy links (the same constants iOS and Android
-carry), sign out, and a protocol/server version footer. It links onward to
-agents, projects, templates, devices and the account danger zone, so someone
-who learned the app on a phone finds what they expect; `Devices` left the top
-nav in exchange. There is **no** terminal display-mode picker — web ships
-Full display only, the WEB-05 divergence above.
+carry), and sign out — no client shows a protocol or server version. It
+links onward to agents, projects, templates, devices and the account danger
+zone, so someone who learned the app on a phone finds what they expect;
+`Devices` left the top nav in exchange. There is **no** terminal
+display-mode picker — web ships Full display only, the WEB-05 divergence
+above.
 
 ## Sign in with Apple (WEB-11)
 

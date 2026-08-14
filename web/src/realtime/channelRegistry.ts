@@ -91,9 +91,12 @@ export function startUserEvents(client: QueryClient): WebSocketChannel {
         session.invalidateUserSession('accountRemoved');
         break;
       case 'incompatibleServer':
-        // `minClientVersion: 0` matches iOS: a close frame carries only a
-        // reason string, and the takeover screen renders only the reason. The
-        // real number arrives with the next `/api/version` probe.
+        // `minClientVersion: 0` matches iOS: a close frame carries no number,
+        // and the real one arrives with the next `/api/version` probe. Neither
+        // field reaches the screen — the takeover shows fixed first-party copy,
+        // and `reason` is server-controlled text kept only for state-model
+        // parity with Android's `SessionManager.AuthState` and iOS's
+        // `AuthState`. Do not render it.
         session.markIncompatibleServer({ reason: event.reason, minClientVersion: 0 });
         break;
       default:

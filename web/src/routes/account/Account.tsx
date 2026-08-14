@@ -48,10 +48,6 @@ export function Account() {
           <dt>Signed in as</dt>
           <dd>{session.email}</dd>
         </div>
-        <div>
-          <dt>Role</dt>
-          <dd>{session.role}</dd>
-        </div>
       </dl>
 
       <nav className="account-links">

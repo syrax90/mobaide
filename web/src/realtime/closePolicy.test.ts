@@ -20,8 +20,9 @@ describe('closePolicyFor on the user axis', () => {
   });
 
   it('substitutes a reason when the close frame carries none', () => {
-    // The takeover screen renders the reason verbatim, so an empty close frame
-    // must not leave it blank.
+    // No client renders the reason (see `channelRegistry.ts`), so the fallback is
+    // for the state model and the debugger: a blank string would make the
+    // terminal outcome indistinguishable from one that never carried a reason.
     expect(closePolicyFor(WS_CLOSE.protocolIncompatible, 'user', '')).toEqual({
       reconnect: false,
       terminal: { kind: 'incompatibleServer', reason: 'Server protocol incompatible' },

@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { APP_PROTOCOL_VERSION } from '../../api/bootstrap';
-import { useServerInfo } from '../../api/useServerInfo';
 import { useSessionStore } from '../../auth/sessionStore';
 import {
   notificationPermission,
@@ -13,7 +11,7 @@ import { useTerminalPrefsStore } from '../../stores/terminalPrefsStore';
 import {
   PRIVACY_POLICY_URL,
   SUPPORT_COMMUNITY_URL,
-  supportMailtoUrl,
+  SUPPORT_MAILTO_URL,
 } from './supportLinks';
 
 /**
@@ -22,8 +20,15 @@ import {
  * Mobile makes this the only way to reach agents, templates and devices,
  * because a phone has no persistent nav; the browser keeps the top nav and this
  * screen adds what has nowhere else to live — notification control, the terminal
- * preference, support, and the version footer — plus links onward, so someone
- * who learned the app on a phone still finds what they expect.
+ * preference, and support — plus links onward, so someone who learned the app on
+ * a phone still finds what they expect.
+ *
+ * Protocol and relay versions are deliberately absent, and no client shows them.
+ * The mobile clients do keep an *app* build version, which is a different thing:
+ * Android footers `Mobaide v${BuildConfig.VERSION_NAME}` (`SettingsScreen.kt`) and
+ * iOS puts it in the support-mail subject (`SupportModel.swift`). Web has no
+ * equivalent because the SPA ships with the relay it talks to, so "which build am
+ * I on" is answered by reloading.
  *
  * There is no terminal display-mode picker. Web ships Full display only, a
  * platform-convention divergence documented with WEB-05: a desktop window is
@@ -33,7 +38,6 @@ import {
 export function SettingsScreen() {
   const session = useSessionStore((state) => state.session);
   const invalidateUserSession = useSessionStore((state) => state.invalidateUserSession);
-  const serverInfo = useServerInfo();
 
   const notificationsEnabled = useNotificationPrefsStore((state) => state.enabled);
   const setNotificationsEnabled = useNotificationPrefsStore((state) => state.setEnabled);
@@ -149,7 +153,7 @@ export function SettingsScreen() {
           <a href={SUPPORT_COMMUNITY_URL} target="_blank" rel="noreferrer">
             Ask the community
           </a>
-          <a href={supportMailtoUrl(APP_PROTOCOL_VERSION)}>Email support</a>
+          <a href={SUPPORT_MAILTO_URL}>Email support</a>
           <a href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer">
             Privacy policy
           </a>
@@ -171,11 +175,6 @@ export function SettingsScreen() {
       >
         Sign out
       </button>
-
-      <p className="settings-version">
-        Mobaide web · protocol v{APP_PROTOCOL_VERSION}
-        {serverInfo.data?.serverVersion != null && ` · server ${serverInfo.data.serverVersion}`}
-      </p>
     </section>
   );
 }
