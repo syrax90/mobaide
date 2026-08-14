@@ -186,6 +186,17 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         logger.info("central_server.starting")
 
+        if not config.user_session_cookie_secure:
+            # The only runtime signal that this deployment is handing browsers a
+            # session cookie without `Secure` — and therefore without the
+            # `__Host-` prefix that stops a sibling host planting one.
+            logger.warning(
+                "session_cookie.insecure "
+                "USER_SESSION_COOKIE_SECURE=false: browser session cookies are "
+                "sent without Secure and without the __Host- prefix. Local "
+                "development only."
+            )
+
         db = Database(config.db_path)
         await db.connect()
         app.state.db = db

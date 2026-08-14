@@ -174,6 +174,16 @@ class CentralServerConfig:
     # positive minimum by `from_env`.
     user_session_access_expire_minutes: int = 15
     user_session_refresh_expire_minutes: int = 43200  # 30 days
+    # Whether the browser session cookies carry `Secure` — and therefore the
+    # `__Host-` name prefix, which RFC 6265bis makes conditional on it. The two
+    # travel together: a browser silently drops a whole `__Host-` cookie that
+    # arrives without `Secure`, so `session_cookie.py` derives the names from
+    # this flag rather than letting them drift apart. False exists only for
+    # Safari, which refuses `Secure` cookies on `http://localhost` where
+    # Chrome and Firefox accept them. Deliberately not derived from `env`:
+    # MOBAIDE_ENV defaults to "production", so a deployment that sets it to
+    # "development" would silently lose the prefix on a real host.
+    user_session_cookie_secure: bool = True
     db_path: str = "central_server.db"
     host: str = "0.0.0.0"
     port: int = 9000
@@ -370,6 +380,9 @@ class CentralServerConfig:
             user_session_refresh_expire_minutes=max(
                 1,
                 int(os.getenv("USER_SESSION_REFRESH_EXPIRE_MINUTES", "43200")),
+            ),
+            user_session_cookie_secure=_env_bool(
+                "USER_SESSION_COOKIE_SECURE", True,
             ),
             db_path=_storage_path(
                 "DB_PATH", "central_server.db", "central_server.db",

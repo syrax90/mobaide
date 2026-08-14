@@ -20,6 +20,14 @@
  */
 const inFlight = new Map<string, Promise<unknown>>();
 
+/** The Web Lock a given single-flight key serializes on. */
+export function lockNameFor(key: string): string {
+  return `mobaide-${key}`;
+}
+
+/** The user-session key, shared by rotation, boot restore and sign-out. */
+export const USER_REFRESH_KEY = 'user-refresh';
+
 export interface SingleFlightOptions<T> {
   /**
    * Runs while holding the cross-tab lock, before `task`. Returning a non-null
@@ -27,6 +35,14 @@ export interface SingleFlightOptions<T> {
    * shared storage that the winning tab just wrote.
    */
   recheck?: () => T | null;
+  /**
+   * Bounds the *wait* for the lock, which `task`'s own deadline cannot: an
+   * `AbortSignal.timeout` created inside `task` only starts once the lock is
+   * held, so without this the queue behind a slow holder is unbounded. Web
+   * Locks rejects the request with `AbortError` before granting, and ignores
+   * the signal afterwards, so this can never interrupt work already in flight.
+   */
+  signal?: AbortSignal;
 }
 
 export async function singleFlight<T>(
@@ -45,7 +61,10 @@ export async function singleFlight<T>(
       return fresh !== null ? fresh : await task();
     };
     if (typeof navigator !== 'undefined' && navigator.locks !== undefined) {
-      return await navigator.locks.request(`mobaide-${key}`, guarded);
+      const name = lockNameFor(key);
+      return options.signal === undefined
+        ? await navigator.locks.request(name, guarded)
+        : await navigator.locks.request(name, { signal: options.signal }, guarded);
     }
     return await guarded();
   };

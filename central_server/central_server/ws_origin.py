@@ -1,8 +1,17 @@
 """Pre-accept Origin gate for every WebSocket endpoint.
 
-Standard anti-CSWSH hygiene for the browser client: relay auth rides bearer
-tokens (never cookies), so a cross-site page cannot ride an existing session
-— this gate is defense in depth, not the primary control. The rules:
+Standard anti-CSWSH hygiene for the browser client: every WebSocket
+authenticates on a ``?token=`` bearer, so a cross-site page cannot ride an
+existing session — this gate is defense in depth, not the primary control.
+
+That stays true only as long as no WS endpoint reads ``websocket.cookies``.
+A session cookie now exists on the SPA origin (``auth/session_cookie.py``) and
+a handshake carries it like any other same-site request; the moment one of
+these endpoints authenticated off it, this gate would become the *primary*
+CSWSH control — and it deliberately allows any loopback origin on any port,
+which is nowhere near strong enough for that job. Keep WS auth on the bearer.
+
+The rules:
 
 * Absent ``Origin`` is always allowed — Android (OkHttp), iOS (URLSession)
   and the agent (``websockets.connect`` without ``origin=``) send none, and

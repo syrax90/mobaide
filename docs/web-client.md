@@ -441,11 +441,19 @@ client's identity teardown — `clearAllRecentPaths()` from
 `SessionManager.invalidateUserSession` on both mobile clients. It sweeps by
 prefix rather than by agent id because teardown clears the credentials that
 name the current agent in the same breath, and a current-key delete would
-strand every previously-connected agent's bucket. Two paths deliberately do
-**not** purge: `agentDisconnect` (an agent switch is not an identity change),
-and — web only — the boot-with-no-session branch, because the user session
-lives in `sessionStorage`, so closing every tab reaches that branch without the
-user ever signing out and recents, unlike agent tokens, cannot be re-minted.
+strand every previously-connected agent's bucket. `agentDisconnect`
+deliberately does **not** purge: an agent switch is not an identity change.
+
+Web's boot path used to be exempt for a reason that no longer holds — the
+session lived in `sessionStorage`, so closing every tab reached the
+no-session branch without the user ever signing out. With the refresh cookie
+that branch means something sharper, and the rule is now: **disk state follows
+the server's verdict, never the network's mood.** A boot whose cookie restore
+returns `terminal` (the server says the credential is dead) purges recents and
+agent tokens; one that returns `transient` — offline, timed out — touches
+neither, because a recent cannot be re-minted and a subway ride is not a
+sign-out. Without `navigator.locks`, concurrent boots can produce a spurious
+401, so the purge asks peers one final time before running.
 
 Custom agent types are listed, launched, created and deleted here; editing
 is CLA-231. A launch sends only `cli: "custom_<id>"` — the relay resolves the
@@ -1465,7 +1473,38 @@ restart, `--rollback` repoints at the previously-live release. Runbook: the
   short-lived (`USER_SESSION_ACCESS_EXPIRE_MINUTES`, default 15) and
   rotates against `POST /api/auth/refresh`; refreshes are single-flighted
   across tabs with `navigator.locks`, and a 401 is terminal (sign out)
-  while anything else is transient (keep the tokens). Route access is
+  while anything else is transient (keep the tokens).
+  The **refresh token is not in the page at all**: clients send
+  `session_transport: "cookie"` alongside `refreshable`, and the server
+  returns it as a `__Host-mobaide_refresh` HttpOnly cookie (see
+  docs/deployment.md). That is what lets a session survive closing the last
+  tab — the old per-tab model ended a session whenever the final tab
+  closed — and it caps an XSS at one tab's 15-minute token instead of a
+  30-day renewable session. Boot therefore has three legs, in order: this
+  tab's `sessionStorage`, a 300 ms peer handover, then
+  `restoreSessionFromCookie()`. A readable companion cookie
+  (`__Host-mobaide_signed_in`) gates only that last leg, so a visitor who never
+  signed in reaches the login form without a wasted request. It gates the
+  network leg rather than the handover on purpose: with cookies blocked,
+  sign-in still fills `sessionStorage`, so a peer can hold a real session while
+  no marker exists — checking the marker first would refuse that handover and
+  bounce a signed-in user to the login screen. The marker is read under **both**
+  names, because which one the server emits depends on its runtime
+  `USER_SESSION_COOKIE_SECURE` and a build-time guess would look for a cookie
+  that was never set; but only the `__Host-` name is *trusted*, since a sibling
+  host can plant the bare one. Presence licenses a restore attempt; only a
+  trusted marker licenses the `terminal` purge, so a planted cookie costs one
+  401 rather than a user's recents. The network
+  leg lives in `src/auth/userSessionApi.ts` rather than beside the rotation
+  in `userTokens.ts`, because `sessionStore` must be able to call it and
+  `userTokens` imports the store. Sign-out revokes server-side via
+  `POST /api/auth/logout`, and `POST /api/auth/logout/all` backs the
+  Account screen's "Sign out of all browsers" — browser-scoped by
+  construction, since mobile never opts into `refreshable`, and bounded by
+  the access-token TTL rather than instant, since there is still no JWT
+  denylist. Both cookie-reading routes require an `X-Mobaide-Session`
+  header: `SameSite=Strict` alone is not enough when a sibling host on the
+  same registrable domain is third-party-hosted. Route access is
   enforced by React Router **middleware**, not loaders — loaders run in
   parallel, a parent middleware short-circuits the whole match — and the
   wanted path survives the bounce as `?next=`. `GET /api/version` is the

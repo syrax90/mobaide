@@ -52,8 +52,7 @@ beforeEach(() => {
       email: 'dev@example.com',
       role: 'user',
       accessToken: 't',
-      refreshToken: null,
-    },
+      },
   } as never);
 });
 

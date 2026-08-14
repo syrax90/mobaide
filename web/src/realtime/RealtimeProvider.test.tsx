@@ -22,7 +22,6 @@ const { RealtimeProvider } = await import('./RealtimeProvider');
 function session(userId: string): UserSession {
   return {
     accessToken: 'jwt',
-    refreshToken: null,
     userId,
     email: `${userId}@example.com`,
     role: 'user',

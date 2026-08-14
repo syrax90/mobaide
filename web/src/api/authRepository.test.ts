@@ -72,7 +72,6 @@ describe('session-minting calls', () => {
       kind: 'session',
       session: {
         accessToken: 'access-1',
-        refreshToken: 'refresh-1',
         userId: 'user-1',
         email: 'user@example.com',
         role: 'viewer',
@@ -113,17 +112,14 @@ describe('session-minting calls', () => {
     expect(relay.calls).toEqual([
       {
         path: '/api/auth/apple',
-        body: { id_token: 'apple-id-token', nonce: 'nonce-1', refreshable: true },
+        body: {
+          id_token: 'apple-id-token',
+          nonce: 'nonce-1',
+          refreshable: true,
+          session_transport: 'cookie',
+        },
       },
     ]);
-  });
-
-  it('treats a session with no refresh token as non-refreshable', async () => {
-    succeed({ ...okBody, refresh_token: null });
-
-    const outcome = await login('user@example.com', 'hunter22');
-
-    expect(outcome.kind === 'session' && outcome.session.refreshToken).toBeNull();
   });
 });
 
@@ -134,6 +130,24 @@ describe('admin rejection', () => {
     await expect(login('admin@example.com', 'hunter22')).rejects.toThrow(
       AdminLoginNotSupportedError,
     );
+  });
+
+  it('revokes the cookie the server already set for the rejected admin', async () => {
+    // The rejection is client-side and the server has no admin gate on these
+    // routes, so the session cookie is installed before this check runs.
+    // Before the cookie the throw was enough — the body's refresh token was
+    // never read. Now the credential outlives the rejection unless revoked,
+    // and the next tab would restore the admin.
+    const logout = vi.fn(() => Promise.resolve({ status: 204, ok: true } as Response));
+    vi.stubGlobal('fetch', logout);
+    succeed({ ...okBody, role: 'admin' });
+
+    await expect(login('admin@example.com', 'hunter22')).rejects.toThrow(
+      AdminLoginNotSupportedError,
+    );
+
+    expect(logout).toHaveBeenCalledWith('/api/auth/logout', expect.anything());
+    vi.unstubAllGlobals();
   });
 
   it('rejects an admin arriving through Google with the shared copy', async () => {

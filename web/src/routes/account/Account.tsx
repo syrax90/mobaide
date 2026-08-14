@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useMutation } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { useSessionStore } from '../../auth/sessionStore';
+import { signOutAllBrowsers } from '../../api/authRepository';
 import { GraceBanner } from '../../components/account/GraceBanner';
+import { Modal } from '../../components/Modal';
+import { useToastStore } from '../../stores/toastStore';
 import { DeleteAccountPanel } from './DeleteAccountPanel';
 
 export function Account() {
@@ -10,6 +14,24 @@ export function Account() {
     (state) => state.invalidateUserSession,
   );
   const [deleting, setDeleting] = useState(false);
+  const [confirmingSignOutAll, setConfirmingSignOutAll] = useState(false);
+  const signOutAllCancelRef = useRef<HTMLButtonElement>(null);
+
+  const signOutAll = useMutation({
+    mutationFn: signOutAllBrowsers,
+    // Local teardown only after the server confirms, so a failed revoke leaves
+    // the user signed in rather than stranding live sessions elsewhere behind
+    // a signed-out-looking UI.
+    onSuccess: () => {
+      invalidateUserSession('manual');
+    },
+    onError: () => {
+      setConfirmingSignOutAll(false);
+      useToastStore
+        .getState()
+        .show('Could not sign out other browsers. Try again.', 'error');
+    },
+  });
 
   if (session === null) return null;
 
@@ -47,6 +69,58 @@ export function Account() {
       >
         Sign out
       </button>
+
+      <button
+        type="button"
+        className="button button-block"
+        onClick={() => {
+          setConfirmingSignOutAll(true);
+        }}
+      >
+        Sign out of all browsers
+      </button>
+
+      {confirmingSignOutAll && (
+        <Modal
+          role="alertdialog"
+          labelledBy="sign-out-all-title"
+          dismissible={!signOutAll.isPending}
+          initialFocus={signOutAllCancelRef}
+          onClose={() => {
+            setConfirmingSignOutAll(false);
+          }}
+        >
+          <h2 id="sign-out-all-title">Sign out of all browsers?</h2>
+          <p>
+            Every browser signed in to this account will be signed out, including
+            this one. Other browsers stop working within 15 minutes. Your phones
+            and tablets stay signed in.
+          </p>
+          <div className="button-row">
+            <button
+              type="button"
+              className="button button-danger"
+              disabled={signOutAll.isPending}
+              onClick={() => {
+                signOutAll.mutate();
+              }}
+            >
+              {signOutAll.isPending ? 'Signing out…' : 'Sign out of all browsers'}
+            </button>
+            <button
+              type="button"
+              ref={signOutAllCancelRef}
+              className="button"
+              disabled={signOutAll.isPending}
+              onClick={() => {
+                setConfirmingSignOutAll(false);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      )}
 
       <section className="danger-zone">
         <h2 className="danger-title">Danger zone</h2>

@@ -15,7 +15,6 @@ const STORAGE_KEY = 'mobaide-session';
 function session(overrides: Partial<UserSession> = {}): UserSession {
   return {
     accessToken: 'access-1',
-    refreshToken: 'refresh-1',
     userId: 'user-1',
     email: 'user@example.com',
     role: 'viewer',
@@ -195,7 +194,7 @@ describe('sessionStore recent custom paths', () => {
     await bootstrapSession();
 
     const peer = new BroadcastChannel('mobaide-session');
-    peer.postMessage({ type: 'logout', reason: 'manual' });
+    peer.postMessage({ type: 'logout', reason: 'manual', userId: session().userId });
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
@@ -204,6 +203,48 @@ describe('sessionStore recent custom paths', () => {
     expect(useSessionStore.getState().session).toBeNull();
     expect(localStorage.getItem(BUCKET)).toBeNull();
     expect(localStorage.getItem(OTHER_BUCKET)).toBeNull();
+  });
+
+  it('keeps them when a peer tab reports only a rejected token', async () => {
+    // The site that decides whether the rule means anything: recents live in
+    // `localStorage`, which every tab shares, so an ungated peer handler would
+    // delete for the whole browser exactly what the originating tab just took
+    // care to keep on a network failure.
+    seedRecents();
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    await bootstrapSession();
+
+    const peer = new BroadcastChannel('mobaide-session');
+    peer.postMessage({
+      type: 'logout',
+      reason: 'tokenRejected',
+      userId: session().userId,
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    peer.close();
+
+    expect(useSessionStore.getState().session).toBeNull();
+    expect(localStorage.getItem(BUCKET)).not.toBeNull();
+  });
+
+  it('follows a peer sign-out sent by a tab on the previous build', async () => {
+    // `origin/main` posts `{type:'logout', reason}` with no `userId` at all.
+    // Read raw, `undefined !== null` passes the mismatch guard and the
+    // sign-out is silently ignored — leaving a new-build tab authenticated
+    // after the user signed out next door, for the whole deploy window.
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    await bootstrapSession();
+
+    const peer = new BroadcastChannel('mobaide-session');
+    peer.postMessage({ type: 'logout', reason: 'manual' });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    peer.close();
+
+    expect(useSessionStore.getState().session).toBeNull();
   });
 
   it('drops them when the account was removed under a takeover', () => {
@@ -232,19 +273,6 @@ describe('sessionStore recent custom paths', () => {
     expect(localStorage.getItem(BUCKET)).toBe(JSON.stringify(['/srv/app']));
     expect(localStorage.getItem(OTHER_BUCKET)).toBe(JSON.stringify(['/home/alice/work']));
     expect(localStorage.getItem(AGENT_TOKENS)).toBeNull();
-  });
-
-  it('keeps them when a boot finds no session', async () => {
-    // The user session lives in sessionStorage, so closing every tab reaches
-    // this path without the user ever signing out. Agent tokens are dropped
-    // there because they can be re-minted; a typed directory cannot.
-    seedRecents();
-
-    await bootstrapSession();
-
-    expect(useSessionStore.getState().session).toBeNull();
-    expect(localStorage.getItem(AGENT_TOKENS)).toBeNull();
-    expect(localStorage.getItem(BUCKET)).toBe(JSON.stringify(['/srv/app']));
   });
 });
 

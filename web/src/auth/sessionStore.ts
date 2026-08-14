@@ -5,12 +5,19 @@ import { clearAllRecentPaths } from '../stores/recentPaths';
 import {
   adoptSession,
   clearSession,
+  clearSignedInMarker,
   connectSessionChannel,
   hydrateSession,
   readSession,
+  requestPeerSession,
   writeSession,
   type UserSession,
 } from './sessionTransport';
+import {
+  postLogout,
+  restoreSessionFromCookie,
+  type RefreshOutcome,
+} from './userSessionApi';
 
 interface SessionState {
   authState: AuthState;
@@ -30,6 +37,24 @@ interface SessionState {
   applyRotatedSession: (session: UserSession) => boolean;
   updateScheduledDeletion: (scheduledDeletionAt: string | null) => void;
   consumeInvalidation: () => InvalidationReason | null;
+}
+
+/**
+ * Whether a teardown means the identity is over, or only that this client
+ * could not reach the server.
+ *
+ * The recents name the user's own workstation, so they end with the identity
+ * that typed them — and they cannot be re-minted, unlike an agent token. But
+ * `tokenRejected` also fires when a refresh merely failed to complete, so
+ * treating it as an ending would destroy un-re-mintable paths over a flaky
+ * connection. Same rule `bootstrapSession` follows on the boot path: the
+ * server's verdict, never the network's mood.
+ *
+ * Deliberately not consulted by `agentDisconnect`, which is an agent switch
+ * rather than an identity change.
+ */
+function endsIdentity(reason: InvalidationReason): boolean {
+  return reason === 'manual' || reason === 'accountRemoved';
 }
 
 export const useSessionStore = create<SessionState>()((set, get) => ({
@@ -67,23 +92,30 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     if (state.authState.kind === 'unauthenticated' && state.session === null) {
       return;
     }
+    // Only a deliberate sign-out ends the browser's credential. A
+    // `tokenRejected` may be this tab reacting to a token that is already
+    // dead, and revoking on it would tear down a cookie that a *different*
+    // account's fresh tab in this browser has since installed.
+    //
+    // Above the takeover branch on purpose: signing out from the update screen
+    // must revoke like any other sign-out. Dropping the marker locally is what
+    // makes it stick when the POST cannot reach the server at all.
+    if (reason === 'manual') {
+      clearSignedInMarker();
+      postLogout();
+    }
     // An incompatible-server takeover outranks a sign-out: the update screen
     // must not be replaced by a login form the user cannot get past.
     if (state.authState.kind === 'incompatibleServer') {
       clearSession(reason);
       clearAgentTokens();
-      clearAllRecentPaths();
+      if (endsIdentity(reason)) clearAllRecentPaths();
       set({ session: null, lastInvalidation: reason });
       return;
     }
     clearSession(reason);
     clearAgentTokens();
-    // The recents name the user's workstation, so they end with the identity
-    // that typed them. Deliberately not in `agentDisconnect`, which is an agent
-    // switch, nor on a boot that finds no session: the user session lives in
-    // sessionStorage, so closing every tab reaches that path without the user
-    // ever signing out, and unlike agent tokens a recent cannot be re-minted.
-    clearAllRecentPaths();
+    if (endsIdentity(reason)) clearAllRecentPaths();
     set({
       session: null,
       authState: { kind: 'unauthenticated' },
@@ -150,9 +182,10 @@ let bootstrap: Promise<void> | null = null;
  * arrive in that order. Without this, the logout handler would clear the tab
  * and the resolving handover would then reinstate the very session that was
  * just signed out — in the store *and* on disk, since `hydrateSession`
- * persists whatever it accepts. Nothing server-side would undo that: this
- * milestone ships no logout endpoint, so the token stays valid for its full
- * lifetime.
+ * persists whatever it accepts. Sign-out now revokes the refresh cookie
+ * server-side, so the reinstated session could not renew itself; what the
+ * guard prevents is the tab presenting a signed-out user with an authenticated
+ * UI until that access token expires.
  */
 let logoutGeneration = 0;
 
@@ -162,12 +195,29 @@ export function bootstrapSession(): Promise<void> {
     connectSessionChannel((message) => {
       const store = useSessionStore.getState();
       if (message.type === 'logout') {
+        // The same rule the `update` branch below enforces, for the same
+        // reason: a sign-out belongs to one account. A stale tab signing out
+        // must not tear down a tab that has since signed in as someone else —
+        // which would now also mean purging that account's recents and, on
+        // the originating side, revoking its cookie.
+        if (
+          message.userId !== null &&
+          store.session !== null &&
+          store.session.userId !== message.userId
+        ) {
+          return;
+        }
         logoutGeneration += 1;
         // Already broadcast by the originating tab — applying it locally must
         // not echo it back around the channel.
         adoptSession(null);
         clearAgentTokens();
-        clearAllRecentPaths();
+        // Gated like the local teardown, and this is the site that decides
+        // whether the rule means anything: `clearAllRecentPaths` sweeps
+        // `localStorage`, which every tab shares, so an ungated peer handler
+        // would delete for the whole browser exactly what the originating tab
+        // just took care to keep.
+        if (endsIdentity(message.reason)) clearAllRecentPaths();
         useSessionStore.setState({
           session: null,
           // Same precedence rule as the local `invalidateUserSession`: an
@@ -201,7 +251,19 @@ export function bootstrapSession(): Promise<void> {
     });
 
     const generation = logoutGeneration;
-    const offered = await hydrateSession();
+    const hydrated = await hydrateSession();
+    // `restorable` means only that nothing local answered — the refresh cookie
+    // still might. This is the leg that makes a session outlive the last tab,
+    // and it is why the generation check below has to happen after it rather
+    // than after the handover: the window it guards is now a round trip wide,
+    // not 300 ms.
+    const trustedMarker = hydrated.kind === 'restorable' && hydrated.marker === 'trusted';
+    const restored: RefreshOutcome | { kind: 'absent' } =
+      hydrated.kind === 'session'
+        ? { kind: 'success', session: hydrated.session }
+        : hydrated.kind === 'restorable'
+          ? await restoreSessionFromCookie()
+          : { kind: 'absent' };
 
     // Reconcile against anything the channel handler did while hydration was
     // in flight — it ran on live messages, so it is more current than the
@@ -214,30 +276,76 @@ export function bootstrapSession(): Promise<void> {
         ? null
         : // A peer's rotation or sign-in landed mid-boot: keep it rather than
           // overwriting with a handover that resolved to nothing.
-          (store.session ?? offered);
+          (store.session ?? (restored.kind === 'success' ? restored.session : null));
 
     // `hydrateSession` may have accepted and persisted an offer that the
     // reconciliation above just rejected, so realign the transport before
     // anything reads a token from it.
     adoptSession(session);
-    // Agent tokens live in localStorage (shared across tabs, re-mintable), the
-    // user session in sessionStorage. Closing every tab therefore ends the
-    // session while leaving agent credentials on disk — so a boot that finds
-    // no session is exactly the moment to drop them.
-    if (session === null) clearAgentTokens();
-    // Hydration is async (it can wait on a peer tab), so the version probe
-    // often resolves first. Writing `authState` unconditionally here would
-    // clobber an incompatible-server takeover that already landed and drop the
-    // user back into a normal app against a server it cannot talk to. iOS
-    // guards the same ordering with its `refreshGeneration` check.
-    const takenOver = store.authState.kind === 'incompatibleServer';
+    // Disk state follows the server's verdict, never the network's mood — and
+    // `absent` is not a verdict, it is never having asked. Three outcomes:
+    //
+    //  - `absent`: no credential anywhere to ask about. Behaves exactly as it
+    //    did before the cookie existed — drop the agent tokens, which are
+    //    stale and re-mintable, and keep the recents, which are neither. This
+    //    is also the shape a cookie-blocked browser takes on every boot, so
+    //    purging recents here would quietly punish those users.
+    //  - `terminal`: the server rejected the cookie, so the identity is over
+    //    and the recents that name the user's workstation go with it — but
+    //    only on a marker this origin must have written. A sibling host can
+    //    plant the unprefixed name, and while it cannot authenticate anything,
+    //    it must not be able to trigger a purge on every boot either.
+    //  - `transient`: offline. Touch nothing.
+    //
+    // A peer logout (generation moved) already purged both on its way through.
+    let rescued: UserSession | null = null;
+    if (session === null && generation === logoutGeneration) {
+      if (restored.kind === 'absent') {
+        clearAgentTokens();
+      } else {
+        // Both remaining outcomes ask peers one last time, for the same
+        // reason: settling `unauthenticated` beside a live peer strands this
+        // tab on the login screen until a manual reload, because an
+        // unauthenticated tab drops the `update` broadcast that would
+        // otherwise rescue it. `terminal` reaches here when N tabs race the
+        // same cookie without Web Locks and all but one see a spurious 401;
+        // `transient` reaches here whenever a tab queued behind the others
+        // exhausts RESTORE_TIMEOUT_MS — which is the *expected* shape of a
+        // mass tab restore, not an edge case.
+        rescued = await requestPeerSession();
+        if (rescued !== null) {
+          adoptSession(rescued);
+        } else if (restored.kind === 'terminal') {
+          // Only a server verdict destroys anything. A `transient` boot is a
+          // user who is offline, and touches no disk state at all.
+          clearAgentTokens();
+          if (trustedMarker) clearAllRecentPaths();
+          // The server has rejected this credential, so the marker is now a
+          // standing lie: left alone it would re-enter the restore leg on
+          // every future load for the cookie's full 30 days, holding the
+          // splash through a round trip that cannot succeed.
+          clearSignedInMarker();
+        }
+      }
+    }
+    const settled = session ?? rescued;
+    // Hydration is async (it can wait on a peer tab, then on the server, then
+    // on peers again), so the version probe usually resolves first. Writing
+    // `authState` unconditionally here would clobber an incompatible-server
+    // takeover that already landed and drop the user back into a normal app
+    // against a server it cannot talk to. iOS guards the same ordering with
+    // its `refreshGeneration` check. Re-read rather than reusing the snapshot
+    // above: several awaits separate them, and a takeover can land in any of
+    // those gaps.
+    const takenOver =
+      useSessionStore.getState().authState.kind === 'incompatibleServer';
     useSessionStore.setState({
-      session,
+      session: settled,
       ...(takenOver
         ? {}
         : {
             authState:
-              session !== null ? { kind: 'userOnly' } : { kind: 'unauthenticated' },
+              settled !== null ? { kind: 'userOnly' } : { kind: 'unauthenticated' },
           }),
       hydrated: true,
     });

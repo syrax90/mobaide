@@ -172,6 +172,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logout
+         * @description End one browser session: revoke its refresh token, clear its cookies.
+         *
+         *     Unauthenticated for the same reason as ``/refresh`` — the access token is
+         *     usually dead by the time a user signs out — and idempotent, so a caller
+         *     with no credential left still gets a clean 204 and a cookie deletion.
+         *
+         *     The cookies are set on the returned ``Response``, not on an injected one:
+         *     FastAPI merges the injected response's headers only when the handler
+         *     returns something that is *not* already a ``Response``.
+         */
+        post: operations["logout_api_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/logout/all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logout All
+         * @description Revoke every browser session for the calling account, including this one.
+         *
+         *     Browser-scoped, not account-wide: the mobile clients never opt into
+         *     ``refreshable``, so their tokens live in a different table and survive.
+         *     Already-issued access tokens also survive until they expire — there is no
+         *     JWT denylist — so other browsers stop working within
+         *     ``user_session_access_expire_minutes``, not instantly. The UI copy says
+         *     exactly that.
+         */
+        post: operations["logout_all_api_auth_logout_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/me/delete": {
         parameters: {
             query?: never;
@@ -245,6 +300,11 @@ export interface paths {
          *     access token this call replaces has usually already expired. The
          *     presented refresh token is consumed, so a replay returns 401 — clients
          *     must serialize concurrent refreshes rather than racing them.
+         *
+         *     Every failure below leaves via ``raise``, which builds a fresh response and
+         *     therefore drops anything set on ``http_response`` — exactly the required
+         *     behaviour, since one browser holds a single shared cookie and a loser in a
+         *     concurrent rotation must be incapable of overwriting the winner's jar.
          */
         post: operations["refresh_session_api_auth_refresh_post"];
         delete?: never;
@@ -937,6 +997,8 @@ export interface components {
              * @default false
              */
             refreshable: boolean;
+            /** Session Transport */
+            session_transport?: ("body" | "cookie") | null;
         };
         /**
          * AuthTokenResponse
@@ -956,6 +1018,11 @@ export interface components {
          *     asked for a refreshable session (see ``RefreshableSessionRequest``). This
          *     is also the response of ``POST /api/auth/refresh``, where ``status`` is
          *     always ``"ok"``.
+         *
+         *     ``session_transport`` echoes where the refresh token went, so a client
+         *     can distinguish "refreshable, credential is in your cookie jar" from "not
+         *     refreshable, a 401 is terminal" — both carry a null ``refresh_token`` and
+         *     demand opposite recovery behaviour.
          */
         AuthTokenResponse: {
             /** Access Token */
@@ -970,6 +1037,12 @@ export interface components {
             role: string;
             /** Scheduled Deletion At */
             scheduled_deletion_at?: string | null;
+            /**
+             * Session Transport
+             * @default body
+             * @enum {string}
+             */
+            session_transport: "body" | "cookie";
             /**
              * Status
              * @default ok
@@ -1283,6 +1356,8 @@ export interface components {
              * @default false
              */
             refreshable: boolean;
+            /** Session Transport */
+            session_transport?: ("body" | "cookie") | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1601,17 +1676,23 @@ export interface components {
              * @default false
              */
             refreshable: boolean;
+            /** Session Transport */
+            session_transport?: ("body" | "cookie") | null;
         };
         /**
          * UserRefreshRequest
-         * @description Body for ``POST /api/auth/refresh``.
+         * @description Body for ``POST /api/auth/refresh`` and ``POST /api/auth/logout``.
          *
          *     Unauthenticated by design — the refresh token *is* the credential, so
          *     presenting a dead access token alongside it must not matter.
+         *
+         *     Optional because a browser session carries the token in an HttpOnly
+         *     cookie instead and posts no body at all. A body token always wins, so a
+         *     native client's request is routed exactly as before.
          */
         UserRefreshRequest: {
             /** Refresh Token */
-            refresh_token: string;
+            refresh_token?: string | null;
         };
         /** UserRegisterRequest */
         UserRegisterRequest: {
@@ -1624,6 +1705,8 @@ export interface components {
              * @default false
              */
             refreshable: boolean;
+            /** Session Transport */
+            session_transport?: ("body" | "cookie") | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -1649,6 +1732,8 @@ export interface components {
              * @default false
              */
             refreshable: boolean;
+            /** Session Transport */
+            session_transport?: ("body" | "cookie") | null;
         };
     };
     responses: never;
@@ -1939,6 +2024,55 @@ export interface operations {
             };
         };
     };
+    logout_api_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["UserRefreshRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logout_all_api_auth_logout_all_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     request_account_deletion_api_auth_me_delete_post: {
         parameters: {
             query?: never;
@@ -1997,9 +2131,9 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
-                "application/json": components["schemas"]["UserRefreshRequest"];
+                "application/json": components["schemas"]["UserRefreshRequest"] | null;
             };
         };
         responses: {

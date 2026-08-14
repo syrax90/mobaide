@@ -1025,6 +1025,20 @@ class AuthService:
         )
         return user, access, refresh, expires_in
 
+    async def revoke_user_session(self, refresh_token: str) -> bool:
+        """Retire one browser session. Idempotent — an unknown token is fine."""
+        return await self._db.revoke_user_refresh_token(refresh_token)
+
+    async def revoke_all_user_sessions(self, user_id: str) -> int:
+        """Retire every browser session for an account.
+
+        Browser-only today: the mobile clients never opt into ``refreshable``,
+        so their long-lived tokens live in a different table and are untouched.
+        The moment a native client does opt in, this starts signing phones out
+        and the UI copy that says otherwise has to change with it.
+        """
+        return await self._db.revoke_all_user_refresh_tokens(user_id)
+
     # Re-auth freshness window for self-delete via Google ID token. Auth0
     # guidance recommends 5 minutes for high-risk actions.
     _GOOGLE_REAUTH_FRESHNESS_SECONDS = 5 * 60

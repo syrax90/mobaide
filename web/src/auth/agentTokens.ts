@@ -17,7 +17,8 @@ import { relayClient } from '../api/clients';
 import { DEVICE_PLATFORM, getDeviceId, getDeviceName } from './deviceIdentity';
 import { readSession } from './sessionTransport';
 import { singleFlight } from './singleFlight';
-import { isAccessTokenExpiringSoon, REFRESH_TIMEOUT_MS } from './userTokens';
+import { isAccessTokenExpiringSoon } from './userTokens';
+import { REFRESH_TIMEOUT_MS } from './userSessionApi';
 
 const STORAGE_KEY = 'mobaide-agent-tokens';
 
