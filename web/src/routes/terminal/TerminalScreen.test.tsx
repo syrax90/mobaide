@@ -8,9 +8,11 @@ import {
   within,
   type RenderResult,
 } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PromptTemplate } from '../../api/templateRepository';
+import { recordingClipboard, refusingClipboard } from '../../test/clipboardStub';
 
 // The real model is the point — where the screen mounts the toolbar is a
 // property of the tree it builds around it — so only the two things a model
@@ -45,11 +47,40 @@ const alpha = vi.hoisted(
   }),
 );
 
+// A body the paste sanitizer would visibly rewrite: `sanitizePaste` turns every
+// `\n` into `\r` on the way to the PTY, so a clipboard carrying `\r` here holds
+// the sanitized form rather than the raw body.
+const multiline = vi.hoisted(
+  (): PromptTemplate => ({
+    templateId: 'id-multi',
+    name: 'multi',
+    body: 'first line\nsecond line',
+    isFavorite: false,
+    lastUsedAt: null,
+  }),
+);
+
+// A body carrying a live `ESC[201~` and a C1 byte — what the clipboard must
+// never hand a native terminal verbatim, since the marker would close the
+// bracketed-paste span early and leave its tail running as direct input.
+const escaped = vi.hoisted(
+  (): PromptTemplate => ({
+    templateId: 'id-escaped',
+    name: 'escaped',
+    body: 'review this \u001b[201~echo pwned\u009b0m',
+    isFavorite: false,
+    lastUsedAt: null,
+  }),
+);
+
+/** {@link escaped} with ESC and C1 gone; the markers degrade to literal text. */
+const escapedStripped = 'review this [201~echo pwned0m';
+
 vi.mock('../../api/templateRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/templateRepository')>();
   return {
     ...actual,
-    listTemplates: () => Promise.resolve([alpha]),
+    listTemplates: () => Promise.resolve([alpha, multiline, escaped]),
     touchTemplate: () => Promise.resolve(),
   };
 });
@@ -61,8 +92,8 @@ const { acquireTerminal, evictTerminalSessions, useTerminalStore } = await impor
 const { useToastStore } = await import('../../stores/toastStore');
 const { TerminalScreen } = await import('./TerminalScreen');
 
-function renderTerminal(): RenderResult {
-  return render(
+function renderTerminal({ strict = false }: { strict?: boolean } = {}): RenderResult {
+  const subject = (
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter initialEntries={['/agents/a1/sessions/s1']}>
         <Routes>
@@ -72,8 +103,9 @@ function renderTerminal(): RenderResult {
           />
         </Routes>
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  return render(strict ? <StrictMode>{subject}</StrictMode> : subject);
 }
 
 afterEach(() => {
@@ -138,6 +170,59 @@ describe('TerminalScreen eviction exemption', () => {
 });
 
 describe('TerminalScreen template picks', () => {
+  const clipboardWrites = recordingClipboard();
+
+  const toastKinds = (): string[] =>
+    useToastStore.getState().toasts.map((toast) => toast.kind);
+
+  const toastMessage = (): string | undefined =>
+    useToastStore.getState().toasts[0]?.message;
+
+  /**
+   * Let the clipboard promise and the toast hanging off it land.
+   *
+   * The write is issued with no `await` in front of it — the transient user
+   * activation Safari and Firefox require survives only a synchronous call — so
+   * its continuation is still queued when the click handler returns. One
+   * macrotask is past every microtask hop `writeClipboardText` takes.
+   */
+  const flush = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+  };
+
+  /**
+   * The model calls a pick makes, spied for the reasons the first test gives.
+   * Hands back the `pasteText` spy, which is the only one a caller inspects.
+   */
+  const stubModelCalls = (model: ReturnType<typeof acquireTerminal>, pasted: boolean) => {
+    const paste = vi.spyOn(model, 'pasteText').mockImplementation(() => pasted);
+    vi.spyOn(model, 'jumpToBottom').mockImplementation(() => undefined);
+    vi.spyOn(model, 'focus').mockImplementation(() => undefined);
+    return paste;
+  };
+
+  /**
+   * Open the picker over an opened send gate and hand back one row, unclicked —
+   * the caller clicks, because what happens in that same synchronous task is
+   * half of what these tests are about. Seeding order as in the first test.
+   */
+  const openPicker = async (
+    model: ReturnType<typeof acquireTerminal>,
+    body: RegExp,
+  ): Promise<HTMLElement> => {
+    fireEvent.click(screen.getByRole('button', { name: 'Templates' }));
+    const row = await screen.findByRole('button', { name: body });
+    act(() => {
+      model.state.setState({
+        connection: 'live',
+        status: { status: 'running', pid: undefined, exit_code: undefined },
+      });
+    });
+    return row;
+  };
+
   it('pastes the picked body into the terminal and hands focus back to the grid', async () => {
     // Picking must not execute anything: the body is pasted onto the program's
     // input line for review. The model calls are spied rather than observed
@@ -196,6 +281,9 @@ describe('TerminalScreen template picks', () => {
     expect(screen.getByRole('dialog', { name: 'Templates' })).toBeInTheDocument();
     expect(screen.getByText(/session is not accepting input/)).toBeInTheDocument();
     expect(useToastStore.getState().toasts).toEqual([]);
+    // Nothing reached the input line, so there is nothing a second paste could
+    // expand — the user's clipboard must survive the refused pick intact.
+    expect(clipboardWrites).toEqual([]);
   });
 
   it('hands focus back to the grid when the picker is dismissed without a pick', async () => {
@@ -217,5 +305,143 @@ describe('TerminalScreen template picks', () => {
 
     expect(screen.queryByRole('dialog', { name: 'Templates' })).toBeNull();
     expect(focus.mock.calls.length).toBe(beforeClose + 1);
+  });
+
+  it("keeps the body's line breaks on the clipboard, within the click", async () => {
+    // Claude Code collapses a multi-line paste to a `[Pasted text #n]`
+    // placeholder and tells the user to paste again to expand it, which only
+    // works if the body is on the system clipboard. It goes on with its line
+    // breaks intact rather than in the `\r`-joined form the PTY got: both
+    // pastes run the same encoder, which is idempotent on `\r` and absorbs the
+    // `\n` → `\r\n` a Windows clipboard round trip adds, so either form
+    // converges on the same bytes inside the CLI — but the `\r`-joined one
+    // renders as a single run-on line in every consumer that is not a
+    // terminal, which is where the user actually looks at what they copied.
+    const model = acquireTerminal('a1', 's1');
+    stubModelCalls(model, true);
+    renderTerminal();
+
+    const row = await openPicker(model, /second line/);
+    fireEvent.click(row);
+
+    // Asserted before the flush: an `await` anywhere ahead of the write would
+    // spend the click's transient user activation, which is the whole of
+    // Safari's and Firefox's permission for a programmatic clipboard write.
+    expect(clipboardWrites).toEqual([multiline.body]);
+    await flush();
+
+    expect(toastKinds()).toEqual(['success']);
+    // Pinned whole, because the wording is the claim: the client cannot
+    // confirm the body reached the PTY — a half-open socket still reads
+    // `readyState === OPEN` — and the Templates button is unconditional, so
+    // this screen never learns whether the session runs Claude Code or a plain
+    // shell. Only the copy and the collapse hint may be spoken aloud.
+    expect(toastMessage()).toBe('Template copied — paste again if it was collapsed.');
+  });
+
+  it('copies the body with ESC and C1 stripped, and pastes it unchanged', async () => {
+    // The clipboard is the one consumer the escape-injection defense cannot
+    // reach. `pasteText` strips ESC and C1 on the way to the PTY, but paste the
+    // copied body into a *native* terminal and a live `ESC[201~` in it closes
+    // the bracketed-paste span early, leaving the tail to run as direct input
+    // (the CVE-2021-31701 class `terminalPaste` documents). The wire is
+    // unaffected: `stripControls` is idempotent and the newline pass needs an
+    // `\n`, so `sanitizePaste(stripControls(b))` is `sanitizePaste(b)` and the
+    // model still receives the body exactly as stored.
+    const model = acquireTerminal('a1', 's1');
+    const paste = stubModelCalls(model, true);
+    renderTerminal();
+
+    const row = await openPicker(model, /review this/);
+    fireEvent.click(row);
+
+    expect(clipboardWrites).toEqual([escapedStripped]);
+    expect(paste).toHaveBeenCalledWith(escaped.body);
+  });
+
+  it('leaves the clipboard alone when the paste itself is refused', async () => {
+    // `pasteText` also refuses a body that is empty after control-stripping or
+    // over the 1 MiB frame cap, with the gate wide open. Nothing landed on the
+    // input line, so there is nothing a second paste could expand: clobbering
+    // the clipboard would cost the user what was on it and buy nothing, and a
+    // toast would announce a trade that should never have happened.
+    const model = acquireTerminal('a1', 's1');
+    stubModelCalls(model, false);
+    renderTerminal();
+
+    const row = await openPicker(model, /body of alpha/);
+    fireEvent.click(row);
+    await flush();
+
+    expect(clipboardWrites).toEqual([]);
+    expect(toastKinds()).toEqual([]);
+  });
+
+  it('drops the toast when the screen goes away while the write is in flight', async () => {
+    // A clipboard permission prompt can hold the write open long enough for the
+    // user to leave, and the continuation would then toast over whatever screen
+    // replaced this one. The unmount is synchronous with the click, so the
+    // promise is still pending when the component dies.
+    const model = acquireTerminal('a1', 's1');
+    stubModelCalls(model, true);
+    const { unmount } = renderTerminal();
+
+    const row = await openPicker(model, /body of alpha/);
+    fireEvent.click(row);
+    unmount();
+    await flush();
+
+    expect(clipboardWrites).toEqual([alpha.body]);
+    expect(toastKinds()).toEqual([]);
+  });
+
+  describe('with the clipboard write refused', () => {
+    const refusedWrites = refusingClipboard();
+
+    it('names the copy as what failed, and claims nothing else', async () => {
+      // Firefox and Safari refuse the write outright when they judge the user
+      // gesture spent. Only the copy failed, so the toast reports exactly that
+      // — it does not report the insert either way, which is the half the
+      // client cannot verify from here. The message leads with "the template"
+      // so it reads as a failed copy rather than a failed pick, and so it no
+      // longer collides with `sessionModel.copySelection`'s identical refusal
+      // toast — a failed template copy and a failed selection copy are now
+      // distinguishable in one viewport.
+      const model = acquireTerminal('a1', 's1');
+      stubModelCalls(model, true);
+      renderTerminal();
+
+      const row = await openPicker(model, /body of alpha/);
+      fireEvent.click(row);
+      await flush();
+
+      expect(refusedWrites).toEqual([alpha.body]);
+      expect(toastKinds()).toEqual(['error']);
+      expect(toastMessage()).toBe(
+        'Could not copy the template — the browser refused the clipboard write.',
+      );
+    });
+  });
+
+  // `main.tsx` wraps the whole tree in `<StrictMode>`, so this — not the bare
+  // render every test above uses — is the shape every real user gets. StrictMode
+  // runs each effect setup → cleanup → setup on mount, and the ref that decides
+  // whether the write's continuation may still toast is latched off by that
+  // simulated unmount unless the setup half restores it: refs survive the
+  // remount, so a cleanup-only ref would silently swallow every toast in
+  // production while passing the bare-render tests.
+  describe('under StrictMode, as the app mounts it', () => {
+    it('still toasts once the clipboard write lands', async () => {
+      const model = acquireTerminal('a1', 's1');
+      stubModelCalls(model, true);
+      renderTerminal({ strict: true });
+
+      const row = await openPicker(model, /body of alpha/);
+      fireEvent.click(row);
+      await flush();
+
+      expect(clipboardWrites).toEqual([alpha.body]);
+      expect(toastKinds()).toEqual(['success']);
+    });
   });
 });
