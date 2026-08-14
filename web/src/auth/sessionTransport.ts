@@ -64,6 +64,12 @@ export interface UserSession {
   accessToken: string;
   userId: string;
   email: string;
+  /**
+   * Carried for handover parity and `toSession`'s completeness check; nothing
+   * renders it. The only role *decision* is the login-time `body.role === 'admin'`
+   * rejection in `api/authRepository.ts`, which reads the response body before a
+   * `UserSession` exists — the restore path never re-checks the value.
+   */
   role: string;
   scheduledDeletionAt: string | null;
 }

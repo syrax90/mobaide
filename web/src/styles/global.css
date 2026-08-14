@@ -2619,13 +2619,6 @@ input[type='radio']:checked {
 .settings-links a:hover {
   text-decoration: underline;
 }
-
-.settings-version {
-  margin-top: 1rem;
-  font-family: var(--font-chrome);
-  font-size: 0.8rem;
-  color: var(--gray);
-}
 /* endregion */
 
 /* region: key sweep (dev, CLA-251) */

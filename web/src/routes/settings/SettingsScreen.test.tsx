@@ -21,10 +21,6 @@ vi.mock('../../notifications/notificationService', () => ({
   },
 }));
 
-vi.mock('../../api/useServerInfo', () => ({
-  useServerInfo: () => ({ data: { serverVersion: '1.2.3' } }),
-}));
-
 const { useNotificationPrefsStore } = await import('../../stores/notificationPrefsStore');
 const { useSessionStore } = await import('../../auth/sessionStore');
 const { SettingsScreen } = await import('./SettingsScreen');
@@ -123,6 +119,10 @@ describe('SettingsScreen', () => {
       ['Prompt templates', '/templates'],
       ['My devices', '/devices'],
       ['Account', '/account'],
+      [
+        'Email support',
+        'mailto:support@mobaide.com?subject=Mobaide%20web%20support',
+      ],
     ]) {
       expect(screen.getByRole('link', { name })).toHaveAttribute('href', href);
     }
@@ -140,9 +140,14 @@ describe('SettingsScreen', () => {
     ).toBeInTheDocument();
   });
 
-  it('reports both version numbers', () => {
+  it('reports no protocol or server version', () => {
+    // No client shows a protocol or relay version. Mobile does keep an *app*
+    // build version — Android footers `BuildConfig.VERSION_NAME`, iOS puts it in
+    // the support-mail subject — which web has no equivalent of, because the SPA
+    // ships with the relay it talks to.
     renderScreen();
-    expect(screen.getByText(/protocol v7/)).toHaveTextContent('server 1.2.3');
+    expect(screen.queryByText(/protocol v\d/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/server \d+\.\d+\.\d+/)).not.toBeInTheDocument();
   });
 
   it('signs out with the silent reason', () => {

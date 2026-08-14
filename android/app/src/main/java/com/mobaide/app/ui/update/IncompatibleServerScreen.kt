@@ -48,8 +48,15 @@ fun IncompatibleServerScreen(
                 style = MaterialTheme.typography.headlineMedium,
                 textAlign = TextAlign.Center,
             )
+            // `state.reason` is server-controlled on the 4002 close path, where in
+            // direct mode the peer is the paired agent host. Nothing reads it; it
+            // stays only for state parity with iOS and web. Do not render it.
+            //
+            // The gate is set membership, not a floor: it also fires when the app
+            // is newer than the relay, so the copy must not name a direction.
             Text(
-                text = state.reason,
+                text = "This app version can no longer connect to the server. " +
+                    "Check for an update to continue.",
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
             )

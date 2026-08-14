@@ -50,7 +50,7 @@ export function AppGate() {
   }
 
   if (authState.kind === 'incompatibleServer') {
-    return <IncompatibleServer info={authState.info} />;
+    return <IncompatibleServer />;
   }
 
   return <RouterProvider router={router} />;

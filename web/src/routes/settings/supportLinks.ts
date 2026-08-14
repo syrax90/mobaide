@@ -16,12 +16,10 @@ export const SUPPORT_COMMUNITY_URL =
 /**
  * `mailto:` for the support address.
  *
- * The subject carries the protocol version, which is the one diagnostic worth
- * having up front: nearly every "it stopped working" report is a version gate.
- * iOS attaches a fuller block because it can compose the mail itself; a browser
- * hands off to whatever the user has, so the URL stays short enough to survive.
+ * The subject carries no version diagnostic. It used to name the protocol
+ * version, but the browser hands the URL to whatever mail client the user has,
+ * so the number ended up in front of the one person it means nothing to.
  */
-export function supportMailtoUrl(protocolVersion: number): string {
-  const subject = encodeURIComponent(`Mobaide web support (protocol v${String(protocolVersion)})`);
-  return `mailto:${SUPPORT_EMAIL}?subject=${subject}`;
-}
+export const SUPPORT_MAILTO_URL = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
+  'Mobaide web support',
+)}`;
