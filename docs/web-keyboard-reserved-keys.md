@@ -87,8 +87,10 @@ To settle it: install the SPA on macOS, open a live terminal session, and press
 the branch that reads it. If the page survives and sees the keydown, the flag is
 real and the affected rows can be measured properly.
 
-Note that the SPA currently ships an SVG-only icon in its manifest, which may not
-satisfy Chrome's installability criteria; that is
+Note that the SPA's manifest now carries a single 180px PNG icon, which clears
+the known Chromium failure on an SVG-only `sizes: "any"` set but does not yet
+meet the published 192 + 512 installability criteria; whether the install bar
+appears at all is still unverified, and closing that properly is
 [CLA-252](https://linear.app/claude-mobile/issue/CLA-252).
 
 ## Results

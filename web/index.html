@@ -2,8 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <!--
+      Byte-identical to the marketing site's icons and declared the same way it
+      declares them (central_server/templates/marketing_landing.html), so a
+      visitor crossing from mobaide.com sees the same tab icon here.
+    -->
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <!--
       Same URL as theme.css's @font-face url() — keep the two byte-identical
       (a differing preload key downloads the font twice). No ?v= for the same
@@ -19,8 +24,11 @@
     <!--
       Installability is not the point: `display: standalone` is what makes
       `matchMedia('(display-mode: standalone)')` answer true, which is the signal
-      the Tier-1 keyboard widening reads (src/keyboard/reservedKeys.ts). Whether
-      Chrome offers to install an SVG-only icon set is CLA-252.
+      the Tier-1 keyboard widening reads (src/keyboard/reservedKeys.ts). The
+      manifest carries one 180px raster icon, which at least avoids the known
+      Chromium failure on an SVG-only `sizes: "any"` set. Whether it clears
+      Chrome's install bar is unverified — its published criteria ask for
+      192 + 512 — and closing that properly is CLA-252.
     -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
