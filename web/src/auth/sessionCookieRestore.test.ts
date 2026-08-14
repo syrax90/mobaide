@@ -202,6 +202,38 @@ describe('bootstrapSession cookie restore', () => {
     expect(localStorage.getItem(RECENTS)).toBe(JSON.stringify(['/srv/app']));
   });
 
+  it('takes a peer session rather than settling signed out on a transient boot', async () => {
+    // A tab queued behind the others in a mass restore exhausts its budget and
+    // aborts into `transient` — the expected shape of a browser restore, not
+    // an edge case. Settling `unauthenticated` beside a live peer would strand
+    // it on the login screen, because an unauthenticated tab drops the
+    // `update` broadcast that would otherwise rescue it.
+    const peer = new BroadcastChannel('mobaide-session');
+    peer.onmessage = (event: MessageEvent<{ type: string }>) => {
+      if (event.data.type === 'request') {
+        peer.postMessage({
+          type: 'offer',
+          session: {
+            accessToken: 'access-peer',
+            userId: 'user-1',
+            email: 'user@example.com',
+            role: 'viewer',
+            scheduledDeletionAt: null,
+          },
+        });
+      }
+    };
+    document.cookie = `${MARKER}=1; Path=/; Secure`;
+    stubFetch(httpResponse(503));
+
+    await bootstrapSession();
+    peer.close();
+
+    const state = useSessionStore.getState();
+    expect(state.authState).toEqual({ kind: 'userOnly' });
+    expect(state.session?.accessToken).toBe('access-peer');
+  });
+
   it('keeps both when the restore only fails transiently', async () => {
     // A 503 is a user on a subway, not an identity that ended. Agent tokens
     // can be re-minted; a typed directory cannot.

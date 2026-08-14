@@ -132,6 +132,24 @@ describe('admin rejection', () => {
     );
   });
 
+  it('revokes the cookie the server already set for the rejected admin', async () => {
+    // The rejection is client-side and the server has no admin gate on these
+    // routes, so the session cookie is installed before this check runs.
+    // Before the cookie the throw was enough — the body's refresh token was
+    // never read. Now the credential outlives the rejection unless revoked,
+    // and the next tab would restore the admin.
+    const logout = vi.fn(() => Promise.resolve({ status: 204, ok: true } as Response));
+    vi.stubGlobal('fetch', logout);
+    succeed({ ...okBody, role: 'admin' });
+
+    await expect(login('admin@example.com', 'hunter22')).rejects.toThrow(
+      AdminLoginNotSupportedError,
+    );
+
+    expect(logout).toHaveBeenCalledWith('/api/auth/logout', expect.anything());
+    vi.unstubAllGlobals();
+  });
+
   it('rejects an admin arriving through Google with the shared copy', async () => {
     succeed({ ...okBody, role: 'admin' });
 

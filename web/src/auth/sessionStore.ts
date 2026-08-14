@@ -302,14 +302,22 @@ export function bootstrapSession(): Promise<void> {
     if (session === null && generation === logoutGeneration) {
       if (restored.kind === 'absent') {
         clearAgentTokens();
-      } else if (restored.kind === 'terminal') {
-        // Without Web Locks, N tabs booting at once race the same cookie and
-        // all but one see a spurious 401. Ask the winner before destroying
-        // anything — and if one answers, take the session rather than merely
-        // declining to purge: settling `unauthenticated` next to a live peer
-        // would strand this tab on the login screen until a manual reload.
+      } else {
+        // Both remaining outcomes ask peers one last time, for the same
+        // reason: settling `unauthenticated` beside a live peer strands this
+        // tab on the login screen until a manual reload, because an
+        // unauthenticated tab drops the `update` broadcast that would
+        // otherwise rescue it. `terminal` reaches here when N tabs race the
+        // same cookie without Web Locks and all but one see a spurious 401;
+        // `transient` reaches here whenever a tab queued behind the others
+        // exhausts RESTORE_TIMEOUT_MS — which is the *expected* shape of a
+        // mass tab restore, not an edge case.
         rescued = await requestPeerSession();
-        if (rescued === null) {
+        if (rescued !== null) {
+          adoptSession(rescued);
+        } else if (restored.kind === 'terminal') {
+          // Only a server verdict destroys anything. A `transient` boot is a
+          // user who is offline, and touches no disk state at all.
           clearAgentTokens();
           if (trustedMarker) clearAllRecentPaths();
           // The server has rejected this credential, so the marker is now a
@@ -317,8 +325,6 @@ export function bootstrapSession(): Promise<void> {
           // every future load for the cookie's full 30 days, holding the
           // splash through a round trip that cannot succeed.
           clearSignedInMarker();
-        } else {
-          adoptSession(rescued);
         }
       }
     }

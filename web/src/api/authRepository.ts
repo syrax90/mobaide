@@ -10,7 +10,8 @@
  * session survive closing the last tab, and it means nothing here ever handles
  * the long-lived credential.
  */
-import type { UserSession } from '../auth/sessionTransport';
+import { clearSignedInMarker, type UserSession } from '../auth/sessionTransport';
+import { postLogout } from '../auth/userSessionApi';
 import { relayClient } from './clients';
 import { AdminLoginNotSupportedError, ApiError, toApiError } from './errors';
 
@@ -47,6 +48,14 @@ export type AuthOutcome =
  */
 function toOutcome(body: AuthResponseBody): AuthOutcome {
   if (body.role === 'admin') {
+    // The rejection is client-side — the server has no admin gate on these
+    // routes and has already installed the session cookie by the time we get
+    // here. Before the cookie, throwing was enough: the body's refresh token
+    // was simply never read. Now the credential outlives the rejection unless
+    // it is revoked, and the next tab would restore the admin into an app
+    // whose every agent route 403s.
+    clearSignedInMarker();
+    postLogout();
     throw new AdminLoginNotSupportedError();
   }
   if (body.status === 'verification_required' || !body.access_token) {
