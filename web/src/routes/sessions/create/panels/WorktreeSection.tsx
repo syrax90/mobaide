@@ -23,14 +23,18 @@ export function WorktreeSection({ git, dispatch }: WorktreeSectionProps) {
           dispatch({ type: 'setWorktree', value });
         }}
       />
-      <TextField
-        label="Branch name (optional)"
-        value={git.branchName}
-        placeholder="feature/my-change"
-        onChange={(value) => {
-          dispatch({ type: 'setBranchName', value });
-        }}
-      />
+      {/* Hidden rather than disabled, matching both mobile clients: without a
+          worktree the agent never reads the branch name at all. */}
+      {git.worktree && (
+        <TextField
+          label="Branch name (optional)"
+          value={git.branchName}
+          placeholder="feature/my-change"
+          onChange={(value) => {
+            dispatch({ type: 'setBranchName', value });
+          }}
+        />
+      )}
     </div>
   );
 }
