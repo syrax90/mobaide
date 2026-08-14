@@ -109,6 +109,9 @@ const CLAUDE_AT_DEFAULTS = {
 const project = (name: string): ProjectInfo =>
   projectInfoSchema.parse({ name, path: `/srv/${name}` });
 
+const gitProject = (name: string): ProjectInfo =>
+  projectInfoSchema.parse({ name, path: `/srv/${name}`, is_git: true });
+
 const session = (sessionId: string): SessionResponse =>
   sessionResponseSchema.parse({
     session_id: sessionId,
@@ -303,5 +306,43 @@ describe('NewSession launch prefs', () => {
     );
     expect(currentPath()).toBe('/agents/agent-1/new-session');
     expect(visited).toEqual(['']);
+  });
+});
+
+describe('NewSession worktree options', () => {
+  beforeEach(() => {
+    // `is_git` defaults to **false** in `projectInfoSchema`, so the default
+    // fixture renders no worktree group at all.
+    api.projects = [gitProject('alpha')];
+  });
+
+  it('shows the branch name only while a worktree is requested', async () => {
+    await renderWizard('?step=config&mode=claude&project=alpha');
+
+    const worktree = screen.getByLabelText('Create worktree');
+    expect(screen.queryByLabelText('Branch name (optional)')).not.toBeInTheDocument();
+
+    fireEvent.click(worktree);
+    expect(screen.getByLabelText('Branch name (optional)')).toBeInTheDocument();
+
+    fireEvent.click(worktree);
+    expect(screen.queryByLabelText('Branch name (optional)')).not.toBeInTheDocument();
+  });
+
+  it('gives the field back the branch the user already typed', async () => {
+    await renderWizard('?step=config&mode=claude&project=alpha');
+
+    const worktree = screen.getByLabelText('Create worktree');
+    fireEvent.click(worktree);
+    fireEvent.change(screen.getByLabelText('Branch name (optional)'), {
+      target: { value: 'feature/my-change' },
+    });
+
+    // Unticking hides the field but must not discard the draft — the reducer
+    // keeps it, exactly as both mobile clients do.
+    fireEvent.click(worktree);
+    fireEvent.click(worktree);
+
+    expect(screen.getByLabelText('Branch name (optional)')).toHaveValue('feature/my-change');
   });
 });
