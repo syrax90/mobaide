@@ -325,9 +325,9 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
     // Distinct from `setCustomPathDraft`: this reconciles *from* the URL after a
     // history navigation, so a null path (the entry selected a stored project,
-    // or nothing) must clear a stale draft rather than leave it to outrank the
-    // URL at Continue. Clearing must not raise "Path is required" — the field is
-    // optional and nobody typed in it.
+    // or nothing) must clear a stale draft rather than leave it enabling
+    // Continue for a directory this entry never named. Clearing must not raise
+    // "Path is required" — the field is optional and nobody typed in it.
     case 'syncCustomPathFromUrl':
       if (action.path === null) {
         return state.customPathDraft === ''

@@ -350,11 +350,34 @@ defaults the opposite way. Only `step`, `mode` and the project selection
 live in the URL; the ~30 option fields do not, so no prompt text reaches
 browser history.
 
+**Every step advances on the click that decides it.** Picking a project row,
+picking a recent directory, or picking an agent card is one act: it writes the
+URL and moves on. The project step keeps a Continue button for the single choice
+with no row to click — a path typed into the one-off directory field — and it is
+enabled only while that field holds a valid absolute path, so a highlighted
+project row never enables it. The advance is a single **push**, never a replace
+of the project entry followed by a push of the agent entry: two
+`setSearchParams` calls in one handler race the data router, which aborts the
+in-flight navigation when the second arrives, and the dropped one would be the
+replace — while `MemoryRouter`, being declarative and synchronous, would not
+show it in the tests. The cost is stated rather than hidden: browser Back
+returns to the project step *as it was before the click*, which can name a
+different project than the one just picked, while the wizard's own Back carries
+the selection forward and re-highlights the row (or refills the picked
+directory). This is a deliberate divergence from Android's dropdown + Continue
+and iOS's list + Continue, which keep theirs — on web each step is a URL that
+already records the selection, so the confirm click adds a history entry
+carrying nothing the row click has not decided, whereas on a phone the same
+button doubles as the reachable, thumb-sized commit target. The mirrors are
+tracked per platform as #650 (Android) and #651 (iOS).
+
 **The wizard opens where the last launch left off** (CLA-232), which is both
 mobile clients' behaviour and the one part of WEB-07 that shipped as defaults
 only. `localStorage` key `mobaide-launch-prefs` holds the four option buckets
 plus the last project name, and `launchPrefs.ts` is the seam in both
-directions. Three things are load-bearing. The buckets are **global, not per
+directions. The pre-fill only *highlights* the row; it never advances the step,
+which is what keeps a remembered project from launching the wizard past a
+screen the user never saw. Three things are load-bearing. The buckets are **global, not per
 agent** — mobile's scoping, kept because a model or an autonomy preset is a
 preference about how the user works rather than a fact about a machine, and
 because a global bucket has nothing to re-seed when the router keeps one
@@ -409,6 +432,10 @@ so a dropped flag is a compile error rather than a silent escalation.
 **Recent custom paths** (CLA-256) mirror the mobile stores exactly: up to 5
 per agent, newest first, deduped by exact string equality — no trailing-slash
 collapse, no `~` expansion — and never filtered against what is being typed.
+Picking one advances the step, exactly as a project row does; the container
+re-validates first, so a hand-edited blob holding a relative path fills the
+field with its inline error instead of pushing a URL the clamp would bounce
+back.
 A path is recorded in `create`'s `onSuccess` from the **mutation's variables**,
 not from live state: the wizard stays interactive during the POST, so
 re-reading afterwards could file a directory nobody launched. `cwd` is

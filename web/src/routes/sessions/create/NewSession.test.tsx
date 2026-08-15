@@ -10,7 +10,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useEffect } from 'react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubLocalStorage } from '../../../test/localStorageStub';
 import type { ProjectInfo } from '../../../api/projectRepository';
@@ -150,10 +150,24 @@ const visited: string[] = [];
 
 function Probe() {
   const location = useLocation();
+  const navigate = useNavigate();
   useEffect(() => {
     visited.push(location.search);
   }, [location]);
-  return <span data-testid="location">{`${location.pathname}${location.search}`}</span>;
+  return (
+    <>
+      <span data-testid="location">{`${location.pathname}${location.search}`}</span>
+      {/* The only way to exercise browser Back, which the wizard's own Back
+          button deliberately does not imitate. */}
+      <button
+        type="button"
+        data-testid="history-back"
+        onClick={() => {
+          void navigate(-1);
+        }}
+      />
+    </>
+  );
 }
 
 const currentPath = (): string | null => screen.getByTestId('location').textContent;
@@ -289,6 +303,10 @@ describe('NewSession launch prefs', () => {
         'true',
       );
     });
+    // It only highlights. Now that picking a project advances, a pre-fill that
+    // went through the same path would launch the wizard past a step the user
+    // never saw.
+    expect(screen.getByRole('heading', { name: 'Where should it run?' })).toBeInTheDocument();
     expect(currentPath()).toBe('/agents/agent-1/new-session?step=project&project=beta');
     // The latch is what keeps the clamp effect and this one from trading URLs.
     expect(visited).toEqual(['', '?step=project&project=beta']);
@@ -306,6 +324,100 @@ describe('NewSession launch prefs', () => {
     );
     expect(currentPath()).toBe('/agents/agent-1/new-session');
     expect(visited).toEqual(['']);
+  });
+});
+
+describe('NewSession project step', () => {
+  const RECENTS_KEY = 'recent_custom_paths::agent-1';
+
+  it('advances to the agent step on the project row itself', async () => {
+    await renderWizard();
+
+    fireEvent.click(screen.getByRole('button', { name: /alpha/ }));
+
+    expect(await screen.findByRole('heading', { name: 'What should it run?' })).toBeInTheDocument();
+    expect(currentPath()).toBe('/agents/agent-1/new-session?step=mode&project=alpha');
+    // One history write for one click: a replace of this entry followed by a
+    // push of the next races the data router's abort rule, and the dropped one
+    // would be the replace.
+    expect(visited).toEqual(['', '?step=mode&project=alpha']);
+  });
+
+  it('brings the picked row back highlighted on the wizard own Back', async () => {
+    await renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /alpha/ }));
+    await screen.findByRole('heading', { name: 'What should it run?' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+
+    expect(await screen.findByRole('heading', { name: 'Where should it run?' })).toBeInTheDocument();
+    expect(currentPath()).toBe('/agents/agent-1/new-session?step=project&project=alpha');
+    expect(screen.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('returns to the project step it came from on browser Back', async () => {
+    // The stated cost of the single push: Back undoes the pick rather than
+    // preserving it, because the entry it returns to predates the click.
+    await renderWizard();
+    fireEvent.click(screen.getByRole('button', { name: /alpha/ }));
+    await screen.findByRole('heading', { name: 'What should it run?' });
+
+    fireEvent.click(screen.getByTestId('history-back'));
+
+    expect(await screen.findByRole('heading', { name: 'Where should it run?' })).toBeInTheDocument();
+    expect(currentPath()).toBe('/agents/agent-1/new-session');
+    expect(screen.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('advances on a recent directory, carrying it in the URL', async () => {
+    // Seeded before the render: the recents read is a mount effect.
+    window.localStorage.setItem(RECENTS_KEY, JSON.stringify(['/srv/two']));
+    await renderWizard();
+
+    fireEvent.click(screen.getByRole('button', { name: '/srv/two' }));
+
+    expect(await screen.findByRole('heading', { name: 'What should it run?' })).toBeInTheDocument();
+    // `URLSearchParams` form-encodes the separators; `parseWizardLocation`
+    // reads them back through the same API.
+    expect(currentPath()).toBe('/agents/agent-1/new-session?step=mode&path=%2Fsrv%2Ftwo');
+  });
+
+  it('keeps a recent that is not an absolute path on the step, under its error', async () => {
+    // Only a hand-edited blob can hold one — `noteRecentPath` is fed cwds the
+    // launch already validated — but the guard is what keeps it from flashing
+    // the next step and being bounced back by the clamp.
+    window.localStorage.setItem(RECENTS_KEY, JSON.stringify(['srv/two']));
+    await renderWizard();
+
+    fireEvent.click(screen.getByRole('button', { name: 'srv/two' }));
+
+    expect(screen.getByRole('heading', { name: 'Where should it run?' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Absolute path')).toHaveValue('srv/two');
+    expect(screen.getByText('Path must be absolute')).toBeInTheDocument();
+    expect(visited).toEqual(['']);
+  });
+
+  it('still needs Continue for a path typed by hand', async () => {
+    await renderWizard();
+
+    fireEvent.change(screen.getByLabelText('Absolute path'), {
+      target: { value: '/srv/typed' },
+    });
+    // Typing never navigates: a `history.replaceState` per character is what
+    // browsers rate-limit.
+    expect(visited).toEqual(['']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(await screen.findByRole('heading', { name: 'What should it run?' })).toBeInTheDocument();
+    expect(currentPath()).toBe('/agents/agent-1/new-session?step=mode&path=%2Fsrv%2Ftyped');
+  });
+
+  it('leaves Continue disabled on a deep link that already names a project', async () => {
+    await renderWizard('?step=project&project=alpha');
+
+    expect(screen.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
   });
 });
 
