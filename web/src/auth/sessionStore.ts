@@ -4,6 +4,7 @@ import { clearAgentTokens } from './agentTokens';
 import { clearAllRecentPaths } from '../stores/recentPaths';
 import {
   adoptSession,
+  broadcastReasonCorrection,
   clearSession,
   clearSignedInMarker,
   connectSessionChannel,
@@ -73,6 +74,9 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   lastInvalidation: null,
 
   markUserLoggedIn: (session) => {
+    // A correction announced against the previous identity must not survive to
+    // mislabel a later, genuine admin revocation of this one.
+    pendingDeletionNotice = false;
     writeSession(session);
     // Drop any stale reason so a fresh sign-in does not immediately surface
     // "your session expired" from the previous one. Android does the same with
@@ -95,6 +99,13 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
 
   invalidateUserSession: (reason) => {
     const state = get();
+    // A peer announced a self-scheduled deletion before this tab's own 4010
+    // landed. `accountRemoved` is the only thing a 4010 produces, so this is
+    // that same teardown arriving late — take the truthful name instead.
+    if (reason === 'accountRemoved' && pendingDeletionNotice) {
+      pendingDeletionNotice = false;
+      reason = 'deletionScheduled';
+    }
     // Idempotent. A REST 401 and a WebSocket 4001 close routinely arrive
     // together on a dead token; without this guard the login screen would show
     // its "session expired" message twice. Android added the same no-op.
@@ -114,7 +125,12 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       // is skipped on this path, which only leaves the readable signed-in
       // marker behind for one boot — `request_account_deletion` already
       // revoked every refresh token server-side, so no credential outlives it.
-      if (reason === 'deletionScheduled') set({ lastInvalidation: reason });
+      if (reason === 'deletionScheduled') {
+        set({ lastInvalidation: reason });
+        // Every other tab took its own 4010 and labelled it `accountRemoved`;
+        // only this one knows the deletion was self-scheduled and cancellable.
+        broadcastReasonCorrection(reason);
+      }
       return;
     }
     // Only a deliberate sign-out ends the browser's credential. A
@@ -217,11 +233,37 @@ let bootstrap: Promise<void> | null = null;
  */
 let logoutGeneration = 0;
 
+/**
+ * Set when a peer announced a self-scheduled deletion before this tab's own
+ * 4010 close had arrived.
+ *
+ * `BroadcastChannel` does not order messages against this tab's WebSocket, so
+ * the correction can land on either side of the teardown it describes. Applied
+ * immediately when the teardown is already recorded, and consumed by the next
+ * `accountRemoved` otherwise — which is the only reason a 4010 produces.
+ */
+let pendingDeletionNotice = false;
+
 export function bootstrapSession(): Promise<void> {
   if (bootstrap !== null) return bootstrap;
   bootstrap = (async () => {
     connectSessionChannel((message) => {
       const store = useSessionStore.getState();
+      if (message.type === 'reasonCorrection') {
+        // Re-label, never re-tear-down: a peer that took the same 4010 has
+        // already purged and revoked, and running that again would be a second
+        // teardown. Gating on the recorded `accountRemoved` is what keeps this
+        // from touching a tab that never took the teardown being corrected.
+        if (
+          store.authState.kind === 'unauthenticated' &&
+          store.lastInvalidation === 'accountRemoved'
+        ) {
+          useSessionStore.setState({ lastInvalidation: message.reason });
+        } else {
+          pendingDeletionNotice = true;
+        }
+        return;
+      }
       if (message.type === 'logout') {
         // The same rule the `update` branch below enforces, for the same
         // reason: a sign-out belongs to one account. A stale tab signing out
@@ -384,6 +426,7 @@ export function bootstrapSession(): Promise<void> {
 /** Test seam — lets a test re-run bootstrap against fresh storage. */
 export function resetSessionBootstrap(): void {
   bootstrap = null;
+  pendingDeletionNotice = false;
 }
 
 /** Non-reactive read for module-level consumers (the bearer middleware). */

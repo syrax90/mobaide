@@ -95,7 +95,14 @@ type ChannelMessage =
   // `userId` carries the same rule the `update` handler already enforces: a
   // sign-out belongs to one account, and a stale tab must not tear down a tab
   // that has since signed in as someone else.
-  | { type: 'logout'; reason: InvalidationReason; userId: string | null };
+  | { type: 'logout'; reason: InvalidationReason; userId: string | null }
+  // Re-labels a teardown every tab already applied for itself. Deliberately not
+  // a `logout`: the server closes *every* user socket with 4010 before the
+  // delete response returns, so each tab has signed itself out already and only
+  // the reason is wrong. Carries no `userId` because it must not be able to
+  // reach a tab that did not take the teardown it corrects — the receiver gates
+  // on having recorded that teardown instead.
+  | { type: 'reasonCorrection'; reason: InvalidationReason };
 
 /**
  * `sessionStorage` is an untrusted boundary — another script on the origin, or
@@ -305,6 +312,18 @@ export function writeSession(session: UserSession, broadcast = true): void {
 export function adoptSession(session: UserSession | null): void {
   current = session;
   persist(session);
+}
+
+/**
+ * Tell peer tabs that the teardown they just applied has a better name.
+ *
+ * Separate from `clearSession` because by the time this is known the session is
+ * already gone, so `clearSession` would broadcast `userId: null` — which the
+ * peer `logout` gate reads as "applies to everyone" and would use to sign out a
+ * tab holding a different account.
+ */
+export function broadcastReasonCorrection(reason: InvalidationReason): void {
+  post({ type: 'reasonCorrection', reason });
 }
 
 export function clearSession(reason: InvalidationReason, broadcast = true): void {

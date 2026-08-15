@@ -6,7 +6,8 @@ import type { UserSession } from './sessionTransport';
 stubWebStorage('sessionStorage');
 stubWebStorage('localStorage');
 
-const { useSessionStore } = await import('./sessionStore');
+const { useSessionStore, bootstrapSession, resetSessionBootstrap } =
+  await import('./sessionStore');
 const { resetSessionTransport } = await import('./sessionTransport');
 
 const AGENT_TOKENS = 'mobaide-agent-tokens';
@@ -45,6 +46,7 @@ function seedLocalState(): void {
 
 beforeEach(() => {
   resetSessionTransport();
+  resetSessionBootstrap();
   sessionStorage.clear();
   localStorage.clear();
   document.cookie = `${MARKER}=; Max-Age=0; Path=/; Secure`;
@@ -151,6 +153,80 @@ describe('the server closing the socket before the delete response returns', () 
 
     useSessionStore.getState().invalidateUserSession('accountRemoved');
     useSessionStore.getState().invalidateUserSession('tokenRejected');
+
+    expect(useSessionStore.getState().consumeInvalidation()).toBe(
+      'accountRemoved',
+    );
+  });
+});
+
+describe('a peer tab that took the same 4010 close', () => {
+  // Every open tab holds its own user-events socket and the server closes all
+  // of them before the delete response returns, so each independently labels
+  // the teardown `accountRemoved`. Only the tab that issued the delete knows
+  // better, and it relays that over the session channel.
+  async function relayCorrection(): Promise<void> {
+    const peer = new BroadcastChannel('mobaide-session');
+    peer.postMessage({ type: 'reasonCorrection', reason: 'deletionScheduled' });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    peer.close();
+  }
+
+  it('is re-labelled when the correction lands after its own teardown', async () => {
+    sessionStorage.setItem('mobaide-session', JSON.stringify(session));
+    await bootstrapSession();
+    useSessionStore.getState().invalidateUserSession('accountRemoved');
+
+    await relayCorrection();
+
+    expect(useSessionStore.getState().consumeInvalidation()).toBe(
+      'deletionScheduled',
+    );
+  });
+
+  it('is re-labelled when the correction lands before its own teardown', async () => {
+    sessionStorage.setItem('mobaide-session', JSON.stringify(session));
+    await bootstrapSession();
+
+    await relayCorrection();
+    useSessionStore.getState().invalidateUserSession('accountRemoved');
+
+    expect(useSessionStore.getState().consumeInvalidation()).toBe(
+      'deletionScheduled',
+    );
+  });
+
+  it('is told about the deletion by the tab that issued it', async () => {
+    // The sender half. Without the relay the peers above would never hear
+    // anything, so assert the originating tab actually posts the correction —
+    // its own local promotion happens either way and proves nothing here.
+    sessionStorage.setItem('mobaide-session', JSON.stringify(session));
+    await bootstrapSession();
+    const seen: unknown[] = [];
+    const peer = new BroadcastChannel('mobaide-session');
+    peer.onmessage = (event: MessageEvent) => seen.push(event.data);
+
+    // The server's 4010 lands first, then our own delete response settles.
+    useSessionStore.getState().invalidateUserSession('accountRemoved');
+    useSessionStore.getState().invalidateUserSession('deletionScheduled');
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    peer.close();
+
+    expect(seen).toContainEqual({
+      type: 'reasonCorrection',
+      reason: 'deletionScheduled',
+    });
+  });
+
+  it('leaves a genuine admin revocation alone', async () => {
+    sessionStorage.setItem('mobaide-session', JSON.stringify(session));
+    await bootstrapSession();
+
+    useSessionStore.getState().invalidateUserSession('accountRemoved');
 
     expect(useSessionStore.getState().consumeInvalidation()).toBe(
       'accountRemoved',
