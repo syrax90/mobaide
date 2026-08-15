@@ -13,7 +13,9 @@ vi.mock('../../api/useServerInfo', () => ({
   useServerInfo: () => ({ data: undefined }),
 }));
 
-const { useSessionStore } = await import('../../auth/sessionStore');
+const { useSessionStore, bootstrapSession, resetSessionBootstrap } =
+  await import('../../auth/sessionStore');
+const { resetSessionTransport } = await import('../../auth/sessionTransport');
 const { Login } = await import('./Login');
 
 const renderLogin = () =>
@@ -69,5 +71,35 @@ describe('the notice the login screen shows on arrival', () => {
     renderLogin();
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('a peer tab corrected after it already showed the notice', () => {
+  // The ordering that actually happens: the server closes every user socket
+  // inside the delete handler, so a peer takes its 4010, renders "removed by an
+  // administrator" and consumes the reason — all before the originating tab's
+  // delete response resolves and it broadcasts the correction. A store-level
+  // test cannot see this; it only shows up once `Login` has rendered.
+  it('replaces the admin-revocation sentence with the deletion notice', async () => {
+    resetSessionTransport();
+    resetSessionBootstrap();
+    await bootstrapSession();
+    useSessionStore.setState({ lastInvalidation: 'accountRemoved' });
+    renderLogin();
+    expect(
+      await screen.findByText(/removed by an administrator/i),
+    ).toBeInTheDocument();
+
+    const peer = new BroadcastChannel('mobaide-session');
+    peer.postMessage({ type: 'reasonCorrection', reason: 'deletionScheduled' });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    peer.close();
+
+    expect(
+      await screen.findByText(/scheduled for deletion/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/removed by an administrator/i)).toBeNull();
   });
 });

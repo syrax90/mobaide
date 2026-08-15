@@ -77,6 +77,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     // A correction announced against the previous identity must not survive to
     // mislabel a later, genuine admin revocation of this one.
     pendingDeletionNotice = false;
+    lastConsumedInvalidation = null;
     writeSession(session);
     // Drop any stale reason so a fresh sign-in does not immediately surface
     // "your session expired" from the previous one. Android does the same with
@@ -204,7 +205,10 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
 
   consumeInvalidation: () => {
     const reason = get().lastInvalidation;
-    if (reason !== null) set({ lastInvalidation: null });
+    if (reason !== null) {
+      lastConsumedInvalidation = reason;
+      set({ lastInvalidation: null });
+    }
     return reason;
   },
 }));
@@ -244,6 +248,18 @@ let logoutGeneration = 0;
  */
 let pendingDeletionNotice = false;
 
+/**
+ * The reason the login screen has already read and rendered.
+ *
+ * `consumeInvalidation` nulls the store value the moment `Login` mounts, and
+ * the peer's 4010 always beats the correction — the server dispatches every
+ * close inside the delete handler, before the response the originating tab is
+ * still awaiting. So by the time a correction lands, the tab it is meant for
+ * has usually consumed the reason being corrected, and the pending value alone
+ * cannot tell us that. Remembering it is what lets the correction re-arm.
+ */
+let lastConsumedInvalidation: InvalidationReason | null = null;
+
 export function bootstrapSession(): Promise<void> {
   if (bootstrap !== null) return bootstrap;
   bootstrap = (async () => {
@@ -256,7 +272,8 @@ export function bootstrapSession(): Promise<void> {
         // from touching a tab that never took the teardown being corrected.
         if (
           store.authState.kind === 'unauthenticated' &&
-          store.lastInvalidation === 'accountRemoved'
+          (store.lastInvalidation === 'accountRemoved' ||
+            lastConsumedInvalidation === 'accountRemoved')
         ) {
           useSessionStore.setState({ lastInvalidation: message.reason });
         } else {
@@ -427,6 +444,7 @@ export function bootstrapSession(): Promise<void> {
 export function resetSessionBootstrap(): void {
   bootstrap = null;
   pendingDeletionNotice = false;
+  lastConsumedInvalidation = null;
 }
 
 /** Non-reactive read for module-level consumers (the bearer middleware). */
