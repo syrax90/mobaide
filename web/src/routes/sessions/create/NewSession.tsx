@@ -53,6 +53,7 @@ import {
   isCustomMode,
   validateCustomPath,
   wizardReducer,
+  type ProjectSelection,
   type WizardMode,
   type WizardStep,
 } from './wizardState';
@@ -231,6 +232,28 @@ export function NewSession() {
     [location.mode, location.selection, setSearchParams],
   );
 
+  /**
+   * Leave the project step.
+   *
+   * One **push**, never a replace of this entry followed by a push of the next:
+   * two `setSearchParams` in one handler race the data router, which aborts the
+   * in-flight navigation when the second arrives — and the dropped one would be
+   * the replace, silently degrading to this anyway. `MemoryRouter` is
+   * declarative and synchronous, so the tests would not show it either.
+   *
+   * The cost is that browser Back returns to the project step as it was
+   * *before* the click, which can name a different project than the one just
+   * picked. The wizard's own Back carries the selection (`go` preserves it), so
+   * the row comes back highlighted and a picked directory comes back in the
+   * field.
+   */
+  const advanceToMode = useCallback(
+    (selection: ProjectSelection) => {
+      setSearchParams(serializeWizardLocation({ step: 'mode', mode: null, selection }));
+    },
+    [setSearchParams],
+  );
+
   // Keep the URL honest: a hand-edited or stale deep link is replaced rather
   // than rendered against state that cannot support it.
   useEffect(() => {
@@ -261,6 +284,12 @@ export function NewSession() {
     // this fires only when a navigation actually changed the selection — which
     // is why clearing on `null` cannot wipe what the user is typing, and why
     // adding `customPathDraft` to the deps would make it do exactly that.
+    //
+    // Picking a recent directory dispatches the draft *and* navigates, so this
+    // re-dispatches the value the click already set. Idempotent, one extra
+    // render, and not a reason to drop either half: the click's dispatch is
+    // what keeps a directory that fails validation on screen, where no
+    // navigation happens at all.
   }, [urlPath]);
 
   // Seeded once per project, so re-entering the step never discards edits.
@@ -276,10 +305,14 @@ export function NewSession() {
 
   // Pre-select the project the last session was launched against — iOS's
   // `applyProjectPrefill`, translated to the model where the URL owns the
-  // selection. One shot per mount, and the latch arms only once an empty
-  // project step has actually been reached: the clamp effect above runs first
-  // and may still be redirecting a stale deep link, so arming on the list's
-  // arrival alone would spend the one attempt on a step the user never saw. A
+  // selection. It only *highlights*: writing `step: 'project'` explicitly
+  // rather than going through `advanceToMode` is what keeps a remembered
+  // project from launching the wizard past a screen the user never saw, now
+  // that picking one advances. One shot per mount, and the latch arms only
+  // once an empty project step has actually been reached: the clamp effect
+  // above runs first and may still be redirecting a stale deep link, so arming
+  // on the list's arrival alone would spend the one attempt on a step that is
+  // about to be redirected away. A
   // name the agent no longer has is silently skipped, exactly as on mobile, and
   // `replace` keeps the pre-fill out of history so Back still leaves the wizard.
   // Keyed by agent rather than a bare flag, for the reason `recentPaths` reads
@@ -532,34 +565,40 @@ export function NewSession() {
             // always what storage holds (iOS `refreshRecentCustomPaths`).
             setRecentPaths(readRecentPaths(resolvedAgentId));
           }}
-          dispatch={(action) => {
-            dispatch(action);
-            // Picking a project is one discrete act, so it reaches the URL at
-            // once. The custom-path field deliberately does not: writing per
-            // keystroke is a router navigation and a `history.replaceState` per
-            // character, which browsers rate-limit (Safari throws past 100 in
-            // 30s). The draft lives in the reducer until Continue.
-            if (action.type === 'selectStoredProject') {
-              setSearchParams(
-                serializeWizardLocation({
-                  step: 'project',
-                  mode: null,
-                  selection: { kind: 'stored', name: action.project.name },
-                }),
-                { replace: true },
-              );
-            }
+          onSelectProject={(project) => {
+            // The reducer still runs, for what the URL does not carry: it
+            // clears a half-typed path and drops the worktree bucket for a
+            // project that is not a repo. `syncCustomPathFromUrl` cannot do the
+            // first — its key stays `null` across this navigation, so it never
+            // fires.
+            dispatch({ type: 'selectStoredProject', project });
+            advanceToMode({ kind: 'stored', name: project.name });
           }}
+          onSelectRecentPath={(path) => {
+            // Fill the field first, so a directory that cannot be launched
+            // stays on screen under its own error instead of flashing the next
+            // step and being bounced back by the clamp. Only a hand-edited
+            // storage blob can hold one: `noteRecentPath` is fed cwds the
+            // launch already validated.
+            dispatch({ type: 'setCustomPathDraft', draft: path });
+            const trimmed = path.trim();
+            if (validateCustomPath(trimmed) !== null) return;
+            advanceToMode({ kind: 'customPath', path: trimmed });
+          }}
+          // The custom-path field writes the reducer only. Per keystroke it
+          // would be a router navigation and a `history.replaceState` per
+          // character, which browsers rate-limit (Safari throws past 100 in
+          // 30s); the draft reaches the URL once, on the act that leaves the
+          // step.
+          dispatch={dispatch}
           onContinue={() => {
+            // Reachable only for a path typed by hand — a project row and a
+            // recent both advance on their own click. The child's `disabled` is
+            // an affordance, not an invariant this container may lean on, and
+            // `validateCustomPath` refuses the empty draft under the same call.
             const draft = state.customPathDraft.trim();
-            setSearchParams(
-              serializeWizardLocation({
-                step: 'mode',
-                mode: null,
-                selection:
-                  draft === '' ? location.selection : { kind: 'customPath', path: draft },
-              }),
-            );
+            if (validateCustomPath(draft) !== null) return;
+            advanceToMode({ kind: 'customPath', path: draft });
           }}
         />
       ) : location.step === 'mode' ? (

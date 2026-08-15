@@ -1,26 +1,46 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { ProjectSummary } from '../../../api/projectRepository';
+import { projectInfoSchema } from '../../../protocol/dto/projects';
 import { ProjectStep } from './ProjectStep';
-import type { WizardAction } from './wizardState';
+import type { ProjectSelection, WizardAction } from './wizardState';
 
 const dispatched: WizardAction[] = [];
 const forgotten: string[] = [];
+const selected: string[] = [];
+const picked: string[] = [];
+let continued = 0;
+
+const project = (name: string): ProjectSummary =>
+  projectInfoSchema.parse({ name, path: `/srv/${name}` });
+
+interface Overrides {
+  projects?: readonly ProjectSummary[];
+  selection?: ProjectSelection;
+  recentPaths?: readonly string[];
+  customPathDraft?: string;
+  customPathError?: string | null;
+}
 
 /**
- * No stored projects: the recents block hangs off the custom-path group, and an
- * empty project list keeps the rest of the step out of the way.
+ * Defaults to no stored projects: the recents block hangs off the custom-path
+ * group, and an empty project list keeps the rest of the step out of the way.
  */
-function renderStep(over: { recentPaths?: readonly string[]; customPathDraft?: string } = {}) {
+function renderStep(over: Overrides = {}) {
   render(
     <ProjectStep
-      projects={[]}
-      selection={{ kind: 'none' }}
+      projects={over.projects ?? []}
+      selection={over.selection ?? { kind: 'none' }}
       customPathDraft={over.customPathDraft ?? ''}
-      customPathError={null}
+      customPathError={over.customPathError ?? null}
       recentPaths={over.recentPaths ?? []}
       onForgetRecent={(path) => forgotten.push(path)}
+      onSelectProject={(project) => selected.push(project.name)}
+      onSelectRecentPath={(path) => picked.push(path)}
       dispatch={(action) => dispatched.push(action)}
-      onContinue={() => undefined}
+      onContinue={() => {
+        continued += 1;
+      }}
     />,
   );
 }
@@ -28,12 +48,93 @@ function renderStep(over: { recentPaths?: readonly string[]; customPathDraft?: s
 const listedPaths = (): string[] =>
   [...document.querySelectorAll('.recent-path-pick')].map((node) => node.textContent ?? '');
 
+const continueButton = (): HTMLElement => screen.getByRole('button', { name: 'Continue' });
+
 beforeEach(() => {
   dispatched.length = 0;
   forgotten.length = 0;
+  selected.length = 0;
+  picked.length = 0;
+  continued = 0;
 });
 
 afterEach(cleanup);
+
+describe('ProjectStep project rows', () => {
+  it('commits on the row itself, with no confirm click', () => {
+    // The whole point of the step: picking is one act, as it already is on the
+    // mode step. The container is what navigates.
+    renderStep({ projects: [project('alpha'), project('beta')] });
+
+    fireEvent.click(screen.getByRole('button', { name: /beta/ }));
+
+    expect(selected).toEqual(['beta']);
+    expect(continued).toBe(0);
+  });
+
+  it('highlights the selection the step was arrived at with', () => {
+    // Only ever seen on a step that was navigated *to* — the last-launch
+    // pre-fill, the wizard's own Back, a deep link.
+    renderStep({
+      projects: [project('alpha'), project('beta')],
+      selection: { kind: 'stored', name: 'beta' },
+    });
+
+    expect(screen.getByRole('button', { name: /beta/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('drops the highlight while a one-off path is being typed', () => {
+    // A typed path is what Continue would send, so the stale row must not read
+    // as the pending choice.
+    renderStep({
+      projects: [project('beta')],
+      selection: { kind: 'stored', name: 'beta' },
+      customPathDraft: '/srv/typed',
+    });
+
+    expect(screen.getByRole('button', { name: /beta/ })).toHaveAttribute('aria-pressed', 'false');
+  });
+});
+
+describe('ProjectStep continue gate', () => {
+  it('stays disabled on a step nobody has typed into', () => {
+    // `customPathError` is null on an untouched field, so the emptiness test is
+    // the whole of what keeps a fresh step from reading as valid.
+    renderStep();
+
+    expect(continueButton()).toBeDisabled();
+  });
+
+  it('stays disabled for a highlighted project row', () => {
+    // The behaviour change itself: a stored project no longer waits on the
+    // button, so the button must not offer to re-send one.
+    renderStep({
+      projects: [project('beta')],
+      selection: { kind: 'stored', name: 'beta' },
+    });
+
+    expect(continueButton()).toBeDisabled();
+  });
+
+  it('stays disabled while the typed path is not absolute', () => {
+    renderStep({ customPathDraft: 'srv/two', customPathError: 'Path must be absolute' });
+
+    expect(continueButton()).toBeDisabled();
+  });
+
+  it('enables only for a valid one-off directory, and commits it once', () => {
+    renderStep({ customPathDraft: '  /srv/two  ' });
+
+    const button = continueButton();
+    expect(button).toBeEnabled();
+
+    fireEvent.click(button);
+
+    expect(continued).toBe(1);
+    expect(selected).toEqual([]);
+  });
+});
 
 describe('ProjectStep recent paths', () => {
   it('shows nothing at all when this agent has no recents', () => {
@@ -55,23 +156,27 @@ describe('ProjectStep recent paths', () => {
     expect(screen.getByRole('button', { name: '/srv/one' })).toHaveAttribute('title', '/srv/one');
   });
 
-  it('fills the field through the same action a keystroke dispatches', () => {
-    // Reusing `setCustomPathDraft` is what keeps validation, the resulting
-    // selection and the Continue gate identical to typed text.
+  it('hands a picked recent to the container rather than dispatching a keystroke', () => {
+    // Picking one is a complete act, like a project row: the container fills
+    // the field, re-validates and advances. The step no longer arbitrates.
     renderStep({ recentPaths: ['/srv/one', '/srv/two'] });
 
     fireEvent.click(screen.getByRole('button', { name: '/srv/two' }));
 
-    expect(dispatched).toEqual([{ type: 'setCustomPathDraft', draft: '/srv/two' }]);
-    expect(forgotten).toEqual([]);
+    expect(picked).toEqual(['/srv/two']);
+    expect(dispatched).toEqual([]);
+    expect(continued).toBe(0);
   });
 
   it('forgets the row whose × was pressed, and only that row', () => {
+    // The sibling button navigates now, so "× must not advance" is a real
+    // regression risk rather than a formality.
     renderStep({ recentPaths: ['/srv/one', '/srv/two'] });
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove /srv/two' }));
 
     expect(forgotten).toEqual(['/srv/two']);
+    expect(picked).toEqual([]);
     expect(dispatched).toEqual([]);
   });
 
