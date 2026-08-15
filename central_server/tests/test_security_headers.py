@@ -7,25 +7,29 @@ depends only on the request path, so most of what follows is a matrix: one
 policy per browser surface, the strict JSON policy for everything else, and no
 CSP at all on ``/docs``.
 
-Three of these can only fail silently in a browser console, which is why they
+Two of these can only fail silently in a browser console, which is why they
 are pinned as exact strings rather than substring checks:
 
 - the ``SITE`` policy has to stay byte-identical to the one
   ``marketing/router.py`` set per response before this middleware existed
   (``test_marketing.EXPECTED_CSP``) — a global policy that quietly loosened it
   would undo what already ships;
-- ``'unsafe-inline'`` may appear in exactly one policy, on ``/portal/*`` with a
-  Google client id configured, and nowhere else;
 - every served template has to stay free of inline ``<script>``, ``on*=``,
   ``hx-on:`` and ``style=``, because ``script-src 'self'`` / ``style-src 'self'``
   drop them with no server-side symptom at all.
 
+``/portal/*`` and ``/dashboard/*`` now share one policy irrespective of
+sign-in config — the portal no longer composes ``'unsafe-inline'`` or a
+third-party origin in for Google or Apple, because those buttons moved to the
+browser client. That sign-in-config independence is pinned in
+``test_portal_retirement.TestPortalPolicyIsSignInConfigIndependent``; this file
+sticks to the path-to-bucket matrix.
+
 ``Cross-Origin-Opener-Policy`` and ``Permissions-Policy`` belong to the same
 category and raise the stakes: neither has a report-only counterpart to soak
-behind, and the wrong COOP value breaks Google Sign-In outright — a blank popup
-or a flow that stalls after the credential is picked, with a clean 200 on every
-request this suite can make. Both are pinned by value here, and so is the copy
-the prod Caddyfiles serve to the SPA host, which mounts the same button.
+behind, with a clean 200 on every request this suite can make. Both are pinned
+by value here, and so is the copy the prod Caddyfiles serve to the SPA host,
+which mounts the same-origin-independent sign-in flow now.
 """
 from __future__ import annotations
 
@@ -36,17 +40,8 @@ import pytest
 from starlette.datastructures import Headers
 
 from central_server.config import CentralServerConfig
-from central_server.security_headers import (
-    APPLE_JS_SCRIPT_URL,
-    SecurityHeadersMiddleware,
-    portal_csp,
-    portal_permissions_policy,
-)
+from central_server.security_headers import SecurityHeadersMiddleware
 from central_server.templates_dir import resolve_templates_dir
-
-GOOGLE_CLIENT_ID = "test-client-id.apps.googleusercontent.com"
-# The Apple *Services ID*, the browser half of Sign in with Apple.
-APPLE_WEB_CLIENT_ID = "com.mobaide.app.web"
 
 # Byte-identical to ``test_marketing.EXPECTED_CSP`` on purpose — see the module
 # docstring. Keep the two in sync by changing neither.
@@ -60,44 +55,14 @@ API_CSP = (
     "frame-ancestors 'none'"
 )
 
-# The dashboard always, and the portal on an instance with no Google client id.
+# ``/portal/*`` and ``/dashboard/*`` both take this, irrespective of sign-in
+# config — see ``test_portal_retirement.SAME_ORIGIN_DOCUMENT_CSP``, which pins
+# the identical literal against production so a loosening edit has to be made
+# twice.
 SAME_ORIGIN_CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
     "font-src 'self'; connect-src 'self'; form-action 'self'; "
     "base-uri 'none'; frame-ancestors 'none'"
-)
-
-GOOGLE_PORTAL_CSP = (
-    "default-src 'none'; "
-    "script-src 'self' https://accounts.google.com/gsi/client; "
-    "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; "
-    "img-src 'self'; font-src 'self'; "
-    "connect-src 'self' https://accounts.google.com/gsi/; "
-    "frame-src https://accounts.google.com/gsi/; "
-    "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-)
-
-# Sign in with Apple JS costs one ``script-src`` entry and nothing else: under
-# ``usePopup`` the SDK calls ``window.open`` and reads the answer off a
-# ``postMessage`` listener.
-APPLE_PORTAL_CSP = (
-    "default-src 'none'; "
-    f"script-src 'self' {APPLE_JS_SCRIPT_URL}; "
-    "style-src 'self'; "
-    "img-src 'self'; font-src 'self'; "
-    "connect-src 'self'; "
-    "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-)
-
-BOTH_PROVIDERS_PORTAL_CSP = (
-    "default-src 'none'; "
-    "script-src 'self' https://accounts.google.com/gsi/client "
-    f"{APPLE_JS_SCRIPT_URL}; "
-    "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; "
-    "img-src 'self'; font-src 'self'; "
-    "connect-src 'self' https://accounts.google.com/gsi/; "
-    "frame-src https://accounts.google.com/gsi/; "
-    "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 )
 
 # Never the bare ``same-origin`` — see ``TestCrossOriginOpenerPolicy``.
@@ -110,18 +75,13 @@ UNIVERSAL_HEADERS = (
     ("Cross-Origin-Opener-Policy", COOP_POLICY),
 )
 
-# Every surface except a ``/portal/*`` on an instance with Google configured.
-# Spelled out rather than composed from the denied-feature list production
-# shares between the two, so a rewrite of either half still has to reproduce
-# this byte for byte.
+# Every surface, ``/portal/*`` and ``/dashboard/*`` included now that sign-in
+# moved to the browser client. Spelled out rather than composed from the
+# denied-feature list production shares between the two, so a rewrite of
+# either half still has to reproduce this byte for byte.
 BASELINE_PERMISSIONS_POLICY = (
     "camera=(), microphone=(), geolocation=(), payment=(), usb=(), "
     "identity-credentials-get=()"
-)
-
-GIS_PERMISSIONS_POLICY = (
-    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), "
-    'identity-credentials-get=(self "https://accounts.google.com")'
 )
 
 # Chrome answers each of these with `Error with Permissions-Policy header:
@@ -129,31 +89,31 @@ GIS_PERMISSIONS_POLICY = (
 # 2022 and its successor ``browsing-topics`` in Chrome 150.
 RETIRED_FEATURE_NAMES = ("interest-cohort", "browsing-topics")
 
-# The conftest config carries no Google client id, so the portal is on its
-# strict fallback policy here; the configured shape is covered separately.
+# ``/portal/login`` is gone; ``/portal/delete-account-info`` is the surviving
+# anonymous page and takes the same bucket.
 CSP_BY_PATH = (
     ("/", SITE_CSP),
     ("/privacy.html", SITE_CSP),
     ("/robots.txt", SITE_CSP),
     ("/sitemap.xml", SITE_CSP),
     ("/favicon.ico", SITE_CSP),
-    ("/portal/login", SAME_ORIGIN_CSP),
+    ("/portal/delete-account-info", SAME_ORIGIN_CSP),
     ("/dashboard/login", SAME_ORIGIN_CSP),
     ("/api/version", API_CSP),
     ("/static/style.css", API_CSP),
-    ("/static/site/portal.js", API_CSP),
+    ("/static/dashboard.js", API_CSP),
     ("/no-such-path", API_CSP),
 )
 
-# Per-bucket like the CSP, but only one of the two variants is in play here:
-# with no client id configured nothing on the instance mounts a Google button,
-# so every bucket denies FedCM outright. ``/docs`` is listed because the
-# CSP-exempt tuple is built by an early return that could drop the header, and
-# ``/`` and ``/privacy.html`` because they are two different site tiers.
+# Every bucket denies FedCM outright now — the concession was
+# sign-in-config-gated and both configs it used to gate on are gone from this
+# middleware. ``/docs`` is listed because the CSP-exempt tuple is built by an
+# early return that could drop the header, and ``/`` and ``/privacy.html``
+# because they are two different site tiers.
 PERMISSIONS_POLICY_BY_PATH = (
     ("/", BASELINE_PERMISSIONS_POLICY),
     ("/privacy.html", BASELINE_PERMISSIONS_POLICY),
-    ("/portal/login", BASELINE_PERMISSIONS_POLICY),
+    ("/portal/delete-account-info", BASELINE_PERMISSIONS_POLICY),
     ("/dashboard/login", BASELINE_PERMISSIONS_POLICY),
     ("/api/version", BASELINE_PERMISSIONS_POLICY),
     ("/static/style.css", BASELINE_PERMISSIONS_POLICY),
@@ -165,7 +125,7 @@ PERMISSIONS_POLICY_BY_PATH = (
 # only ones that must not depend on which bucket a path lands in.
 REPRESENTATIVE_PATHS = (
     "/",
-    "/portal/login",
+    "/portal/delete-account-info",
     "/dashboard/login",
     "/api/version",
     "/static/style.css",
@@ -197,14 +157,11 @@ _CADDY_SNIPPET_RE = re.compile(
     r"^\(app_mobaide\) \{\n(.*?)^\}$", re.DOTALL | re.MULTILINE
 )
 
-# The only cross-origin subresources any policy in this app permits, and both are
-# named by the policy itself rather than spelled again here. Anything else — a
-# CDN htmx, a remote font, an analytics beacon — is blocked at runtime by the
-# very policy that makes this suite pass.
-ALLOWED_CROSS_ORIGIN_SUBRESOURCES = (
-    "https://accounts.google.com/gsi/client",
-    APPLE_JS_SCRIPT_URL,
-)
+# No policy in this app permits a cross-origin subresource any more — the
+# Google and Apple sign-in buttons were the only reason one ever did, and they
+# live on the browser client now. Anything found here is blocked at runtime by
+# the very policy that makes this suite pass.
+ALLOWED_CROSS_ORIGIN_SUBRESOURCES: tuple[str, ...] = ()
 
 # Top-level glob only: ``templates/email/`` is deliberately excluded. Mail
 # clients strip <style> blocks, so those templates have to inline every
@@ -220,7 +177,7 @@ def config(config, request):
     """The shared config with the header-relevant fields pinned per class.
 
     ``object.__setattr__`` is how this frozen dataclass is poked in tests (see
-    ``test_api_docs_exposure.py``). All three fields are read inside
+    ``test_api_docs_exposure.py``). Both fields are read inside
     ``create_app``, so they have to be set before the ``app`` fixture runs.
     """
     for field, value in getattr(request, "param", {}).items():
@@ -228,26 +185,6 @@ def config(config, request):
     return config
 
 
-with_google = pytest.mark.parametrize(
-    "config", [{"google_client_id": GOOGLE_CLIENT_ID}], indirect=True, ids=["google"]
-)
-with_apple = pytest.mark.parametrize(
-    "config",
-    [{"apple_web_client_id": APPLE_WEB_CLIENT_ID}],
-    indirect=True,
-    ids=["apple"],
-)
-with_both_providers = pytest.mark.parametrize(
-    "config",
-    [
-        {
-            "google_client_id": GOOGLE_CLIENT_ID,
-            "apple_web_client_id": APPLE_WEB_CLIENT_ID,
-        }
-    ],
-    indirect=True,
-    ids=["google+apple"],
-)
 report_only = pytest.mark.parametrize(
     "config", [{"csp_report_only": True}], indirect=True, ids=["report_only"]
 )
@@ -317,11 +254,11 @@ class TestPerSurfacePolicy:
     async def test_each_surface_gets_its_permissions_policy(
         self, client, path, policy
     ) -> None:
-        """Per-bucket rather than universal, because ``/portal/*`` needs one
-        allowance nothing else does — but only on an instance with Google
-        configured, which this one is not. It rides along on JSON and static
-        responses where it is inert, on the same trade the universal headers
-        make: no document surface can be missed."""
+        """Per-bucket rather than universal so a future surface with its own
+        needs (a bucket that legitimately wants FedCM, say) is one line to add
+        without touching the rest. It rides along on JSON and static responses
+        where it is inert, on the same trade the universal headers make: no
+        document surface can be missed."""
         response = await client.get(path)
         assert response.headers["Permissions-Policy"] == policy
 
@@ -360,9 +297,9 @@ class TestPathMatchingIsAnchored:
         self, client, path, policy
     ) -> None:
         """A bare ``startswith("/portal")`` would hand a future ``/portalling``
-        route the portal's relaxations — including ``'unsafe-inline'`` once
-        Google is configured — while the exact ``/portal`` and ``/dashboard``
-        spellings still have to be treated as the surface they name."""
+        route the portal's same-origin document policy, while the exact
+        ``/portal`` and ``/dashboard`` spellings still have to be treated as
+        the surface they name."""
         response = await client.get(path)
         assert response.headers["Content-Security-Policy"] == policy
 
@@ -405,15 +342,16 @@ class TestCrossOriginOpenerPolicy:
     """The bare ``same-origin`` is the one wrong value with no server-side
     symptom at all: both values isolate this window from a cross-origin
     *opener*, but ``same-origin`` additionally drops the handle on popups we
-    open — which is the handle the Google Sign-In popup posts its credential
-    back through. The failure is a blank popup or a flow that stalls after the
-    account is picked, behind a clean 200 on every request this suite can make.
+    open. No surface this server renders opens one any more — sign-in moved to
+    the browser client — but the stricter value would still fail a popup added
+    to the portal or dashboard later as a blank window with nothing to see
+    server-side, so it is pinned here rather than left to drift back.
     """
 
-    async def test_the_portal_keeps_the_handle_the_popup_replies_through(
+    async def test_the_portal_keeps_the_handle_a_future_popup_would_reply_through(
         self, client
     ) -> None:
-        response = await client.get("/portal/login")
+        response = await client.get("/portal/delete-account-info")
         assert response.headers["Cross-Origin-Opener-Policy"] == COOP_POLICY
 
     def test_the_pinned_value_is_never_the_bare_same_origin(self) -> None:
@@ -437,159 +375,24 @@ class TestCrossOriginOpenerPolicy:
         assert response.headers["Cross-Origin-Opener-Policy"] == COOP_POLICY
 
 
-@with_google
 class TestPermissionsPolicyFeatureNames:
     @pytest.mark.parametrize("feature", RETIRED_FEATURE_NAMES)
-    @pytest.mark.parametrize("path", ("/portal/login", "/"))
+    @pytest.mark.parametrize("path", ("/portal/delete-account-info", "/"))
     async def test_no_retired_feature_name_is_advertised(
         self, client, path, feature
     ) -> None:
         """Chrome is the only engine that reads this header, and it answers a
         name it no longer knows with a console error on every page load — the
-        same console the deployment soak asks you to read clean. Google is
-        configured here so the GIS variant is on ``/portal/login`` and the
-        baseline on ``/``: a "harden the header" edit would have to reach both
-        to reintroduce one."""
+        same console the deployment soak asks you to read clean."""
         response = await client.get(path)
         assert feature not in response.headers["Permissions-Policy"]
 
 
-@with_google
-class TestGoogleSignInRelaxations:
-    async def test_the_portal_carries_the_gis_origins(self, client) -> None:
-        response = await client.get("/portal/login")
-        assert response.headers["Content-Security-Policy"] == GOOGLE_PORTAL_CSP
-
-    async def test_the_portal_carries_the_fedcm_allowance(self, client) -> None:
-        """The GIS button frame is created with
-        ``allow="identity-credentials-get"``, and a frame's ``allow`` only
-        delegates a feature this document's own policy grants to that origin.
-        Once the header names the feature at all, the allowlist has to carry
-        Google's origin — ``(self)`` alone would refuse the delegation and take
-        the FedCM path down with it."""
-        response = await client.get("/portal/login")
-        assert response.headers["Permissions-Policy"] == GIS_PERMISSIONS_POLICY
-
-    @pytest.mark.parametrize(
-        "path", ("/", "/privacy.html", "/dashboard/login", "/api/version")
-    )
-    async def test_no_other_surface_inherits_them(self, client, path) -> None:
-        """``google_client_id`` is instance-wide but the concession is not: the
-        admin dashboard and the two htmx-only site pages must keep a policy with
-        no ``'unsafe-inline'`` and no third-party origin in it, and must keep
-        FedCM switched off outright rather than merely undelegated."""
-        response = await client.get(path)
-        policy = response.headers["Content-Security-Policy"]
-        assert "'unsafe-inline'" not in policy
-        assert "accounts.google.com" not in policy
-        permissions = response.headers["Permissions-Policy"]
-        assert "identity-credentials-get=()" in permissions
-        assert "accounts.google.com" not in permissions
-
-
-class TestPortalPolicyWithoutGoogle:
-    @pytest.mark.parametrize("client_id", (None, ""))
-    def test_an_unconfigured_client_id_earns_the_strict_policy(
-        self, client_id
-    ) -> None:
-        """``portal_base.html`` emits the GIS ``<script>`` only under
-        ``{% if google_client_id %}``, so an instance without one — including
-        the ``GOOGLE_CLIENT_ID=`` spelling, which is empty rather than unset —
-        loads nothing that needs the relaxations and must not be granted them.
-        """
-        assert portal_csp(client_id) == SAME_ORIGIN_CSP
-
-    @pytest.mark.parametrize("client_id", (None, ""))
-    def test_an_unconfigured_client_id_denies_fedcm_outright(
-        self, client_id
-    ) -> None:
-        """Same gate, second header: with no button to mount there is nothing
-        to allow, so such an instance never advertises an origin it does not
-        talk to."""
-        assert portal_permissions_policy(client_id) == BASELINE_PERMISSIONS_POLICY
-
-
-class TestPortalPolicyProviderMatrix:
-    """``portal_csp`` is composed per provider now, not enumerated per
-    combination, so the four cases are the contract.
-
-    The Google-only row is the one that matters most: it has to stay
-    byte-identical to what shipped before Apple existed, or a portal that
-    configures only Google silently changes policy on deploy.
-    """
-
-    @pytest.mark.parametrize(
-        "google_client_id,apple_web_client_id,expected",
-        (
-            (None, None, SAME_ORIGIN_CSP),
-            # ``GOOGLE_CLIENT_ID=`` in an .env is empty, not unset.
-            ("", "", SAME_ORIGIN_CSP),
-            (GOOGLE_CLIENT_ID, None, GOOGLE_PORTAL_CSP),
-            (None, APPLE_WEB_CLIENT_ID, APPLE_PORTAL_CSP),
-            (GOOGLE_CLIENT_ID, APPLE_WEB_CLIENT_ID, BOTH_PROVIDERS_PORTAL_CSP),
-        ),
-        ids=["neither", "neither-empty", "google-only", "apple-only", "both"],
-    )
-    def test_each_combination_earns_exactly_its_own_relaxations(
-        self, google_client_id, apple_web_client_id, expected
-    ) -> None:
-        assert portal_csp(google_client_id, apple_web_client_id) == expected
-
-    def test_apple_alone_concedes_nothing_google_needs(self) -> None:
-        """Stated as properties as well as by value: ``'unsafe-inline'`` is
-        forced by the ``<style>`` block the GIS client injects, and the
-        ``frame-src`` by the iframe it renders the button into. Apple's SDK
-        does neither, so an Apple-only instance must not inherit either."""
-        policy = portal_csp(None, APPLE_WEB_CLIENT_ID)
-        assert "'unsafe-inline'" not in policy
-        assert "frame-src" not in policy
-        assert "accounts.google.com" not in policy
-
-
-@with_apple
-class TestAppleSignInRelaxations:
-    async def test_the_services_id_reaches_the_portal_policy(self, client) -> None:
-        """End to end through ``create_app``: the middleware only learns about
-        Apple because ``create_app`` threads ``apple_web_client_id`` into it.
-        A dropped kwarg leaves ``portal_base.html`` emitting a script the
-        policy blocks, with nothing to show for it server-side."""
-        response = await client.get("/portal/login")
-        assert response.headers["Content-Security-Policy"] == APPLE_PORTAL_CSP
-
-    async def test_apple_never_switches_fedcm_on(self, client) -> None:
-        """``portal_permissions_policy`` still takes the Google id alone, and
-        must: Apple's SDK uses ``window.open`` and ``postMessage``, never
-        FedCM, so an Apple-only instance advertises an origin it does not talk
-        to if this ever grows an Apple arm."""
-        response = await client.get("/portal/login")
-        assert response.headers["Permissions-Policy"] == BASELINE_PERMISSIONS_POLICY
-
-    @pytest.mark.parametrize("path", ("/", "/dashboard/login", "/api/version"))
-    async def test_no_other_surface_inherits_the_apple_origin(
-        self, client, path
-    ) -> None:
-        response = await client.get(path)
-        assert "appleid.cdn-apple.com" not in response.headers[
-            "Content-Security-Policy"
-        ]
-
-
-@with_both_providers
-class TestBothProvidersConfigured:
-    async def test_the_portal_carries_both_scripts_and_only_googles_extras(
-        self, client
-    ) -> None:
-        response = await client.get("/portal/login")
-        assert response.headers["Content-Security-Policy"] == BOTH_PROVIDERS_PORTAL_CSP
-
-    async def test_the_fedcm_allowance_is_unchanged_by_apple(self, client) -> None:
-        response = await client.get("/portal/login")
-        assert response.headers["Permissions-Policy"] == GIS_PERMISSIONS_POLICY
-
-
 @report_only
 class TestReportOnlyMode:
-    @pytest.mark.parametrize("path,policy", (("/portal/login", SAME_ORIGIN_CSP),))
+    @pytest.mark.parametrize(
+        "path,policy", (("/portal/delete-account-info", SAME_ORIGIN_CSP),)
+    )
     async def test_the_flag_swaps_the_header_name_only(
         self, client, path, policy
     ) -> None:
@@ -617,9 +420,9 @@ class TestReportOnlyMode:
         Reporting API alone and this deployment configures no collector, so the
         flag has to leave both enforcing under their own names — a rename would
         show up here as a missing header. Having no readable soak mode is the
-        whole reason their rollout is a staged deploy and a manual Google
-        Sign-In instead."""
-        response = await client.get("/portal/login")
+        whole reason their rollout is a staged deploy and a manual walk of the
+        surfaces instead."""
+        response = await client.get("/portal/delete-account-info")
         assert response.headers["Cross-Origin-Opener-Policy"] == COOP_POLICY
         assert response.headers["Permissions-Policy"] == BASELINE_PERMISSIONS_POLICY
 
@@ -707,16 +510,16 @@ class TestTemplatesCarryNoInlineCode:
         """``onclick=`` and ``hx-on:`` are inline script by another name —
         ``hx-on:`` doubly so, since htmx compiles it with ``new Function`` and
         ``allowEval: false`` now stops that too. Behaviour belongs in
-        ``portal.js`` / ``dashboard.js``, keyed off ``data-`` attributes."""
+        ``dashboard.js``, keyed off ``data-`` attributes."""
         source = _template_source(path)
         assert _EVENT_HANDLER_RE.findall(source) == []
         assert _HX_ON_RE.findall(source) == []
 
     @pytest.mark.parametrize("path", SERVED_TEMPLATES)
     def test_no_inline_style_attributes(self, path) -> None:
-        """``style-src 'self'`` covers the dashboard and the site pages with no
-        ``'unsafe-inline'``, and the portal only concedes it for Google's own
-        injected block — never for markup we control."""
+        """``style-src 'self'`` covers every served template with no
+        ``'unsafe-inline'`` anywhere — that concession lived on the portal for
+        Google's own injected block and left with it."""
         assert _INLINE_STYLE_RE.search(_template_source(path)) is None
 
     @pytest.mark.parametrize("path", SERVED_TEMPLATES)
@@ -724,9 +527,10 @@ class TestTemplatesCarryNoInlineCode:
         self, path
     ) -> None:
         """The dashboard used to pull htmx from ``unpkg.com``; under
-        ``script-src 'self'`` that is a blank page, not a slow one. Google's
-        and Apple's sign-in clients are the only origins any policy here
-        allows."""
+        ``script-src 'self'`` that is a blank page, not a slow one. No policy
+        rendered by this server names a third-party origin any more — the
+        Google and Apple sign-in buttons that used to justify one moved to the
+        browser client, so the allowlist is empty."""
         offenders = []
         for tag in _SUBRESOURCE_TAG_RE.findall(_template_source(path)):
             url = _SUBRESOURCE_URL_RE.search(tag)
@@ -741,30 +545,45 @@ class TestExternalisedBundlesAreServed:
     @pytest.mark.parametrize(
         "path,cache_control",
         (
-            ("/static/site/portal.js", "public, max-age=604800"),
+            ("/static/site/site.js", "public, max-age=604800"),
             ("/static/dashboard.js", "no-cache"),
         ),
     )
     async def test_the_new_bundles_are_reachable_on_their_cache_tier(
         self, client, path, cache_control
     ) -> None:
-        """Every behaviour the templates used to inline now lives in these two
-        files, and inline fallbacks no longer exist — a 404 here is a dead page.
-        ``portal.js`` sits under ``site/`` so the whole-tree ``?v=`` content hash
-        busts it, which is what earns it the 7-day tier; ``dashboard.js`` carries
-        no version query and stays on the short one."""
+        """Every behaviour the dashboard template used to inline now lives in
+        ``dashboard.js``, and inline fallbacks no longer exist — a 404 here is a
+        dead page. ``site.js`` sits under ``site/`` so the whole-tree ``?v=``
+        content hash busts it, which is what earns it the 7-day tier;
+        ``dashboard.js`` carries no version query and stays on the short one."""
         response = await client.get(path)
         assert response.status_code == 200
         assert response.headers["Cache-Control"] == cache_control
 
 
+# The SPA's own Google/Apple sign-in concessions, unrelated to the retired
+# server-rendered portal: Caddy stamps these for ``app.mobaide.com`` and this
+# middleware never sees that request. Spelled out here rather than imported —
+# ``security_headers.py`` no longer knows about either provider at all, now
+# that the portal composed no policy for them.
+SPA_GIS_PERMISSIONS_POLICY = (
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), "
+    'identity-credentials-get=(self "https://accounts.google.com")'
+)
+SPA_APPLE_JS_SCRIPT_URL = (
+    "https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/"
+    "appleid.auth.js"
+)
+
+
 @pytest.mark.skipif(
     not PROD_CADDY_DIR.is_dir(), reason="deploy/prod is not part of this checkout"
 )
-class TestCaddySpaHeadersMirrorThePortal:
+class TestCaddySpaHeadersMirrorTheProviderConcessions:
     """``app.mobaide.com`` serves the SPA off disk, so Caddy stamps its headers
-    and this middleware never runs — yet the SPA mounts the same Google Sign-In
-    button ``/portal/*`` does, in popup mode, on ``/login``, ``/register`` and
+    and this middleware never runs — yet the SPA mounts the Google and Apple
+    sign-in buttons, in popup mode, on ``/login``, ``/register`` and
     ``/account``. Both prod Caddyfiles say in prose that their ``(app_mobaide)``
     snippet has to stay identical, because the deploy copies exactly one of the
     two files to the server whole; nothing else in the repo checks that."""
@@ -779,16 +598,16 @@ class TestCaddySpaHeadersMirrorThePortal:
         assert letsencrypt == cloudflare
 
     @pytest.mark.parametrize("filename", PROD_CADDYFILES)
-    def test_the_spa_permissions_policy_matches_the_configured_portal(
+    def test_the_spa_permissions_policy_grants_the_fedcm_allowance(
         self, filename
     ) -> None:
-        """The FedCM allowance is unconditional here where the middleware makes
-        it conditional, for the same reason the CSP's Google origins already
-        are: Caddy cannot read ``GOOGLE_CLIENT_ID``, and the SPA's button never
-        mounts when ``GET /api/version`` reports no client id."""
+        """The FedCM allowance is unconditional here, for the same reason the
+        CSP's Google origin already is: Caddy cannot read ``GOOGLE_CLIENT_ID``,
+        and the SPA's button never mounts when ``GET /api/version`` reports no
+        client id."""
         snippet = _app_mobaide_snippet(filename)
         value = _caddy_header_value(snippet, "Permissions-Policy")
-        assert value == GIS_PERMISSIONS_POLICY
+        assert value == SPA_GIS_PERMISSIONS_POLICY
 
     @pytest.mark.parametrize("filename", PROD_CADDYFILES)
     def test_the_spa_script_src_carries_the_apple_bundle(self, filename) -> None:
@@ -803,12 +622,12 @@ class TestCaddySpaHeadersMirrorThePortal:
             for directive in policy.split(";")
             if directive.strip().startswith("script-src ")
         )
-        assert APPLE_JS_SCRIPT_URL in script_src.split()
+        assert SPA_APPLE_JS_SCRIPT_URL in script_src.split()
 
     @pytest.mark.parametrize("filename", PROD_CADDYFILES)
     def test_the_spa_opener_policy_matches_the_middlewares(self, filename) -> None:
-        """Same popup, same failure mode: ``same-origin`` here severs the
-        opener on ``app.mobaide.com`` exactly as it would on ``/portal/*``."""
+        """Same popup, same failure mode: ``same-origin`` here would sever the
+        opener the SPA's own sign-in popup posts its credential back through."""
         snippet = _app_mobaide_snippet(filename)
         value = _caddy_header_value(snippet, "Cross-Origin-Opener-Policy")
         assert value == COOP_POLICY

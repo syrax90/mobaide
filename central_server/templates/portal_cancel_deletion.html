@@ -5,7 +5,6 @@
 <meta name="referrer" content="no-referrer">
 {% endblock %}
 {% block title %}Cancel scheduled deletion — Mobaide{% endblock %}
-{% block nav_right %}<a href="/portal/login" class="btn btn-ghost">Sign in</a>{% endblock %}
 {% block content %}
 <div class="card login-card">
     {% if outcome == "confirm" %}
@@ -22,14 +21,14 @@
     {% elif outcome == "cancelled" %}
     <h2>Account restored</h2>
     <div class="alert alert-success">Your scheduled deletion has been cancelled.</div>
-    <p>You can <a href="/portal/login">sign back in</a> at any time.</p>
+    <p>You can <a href="{{ app_origin }}/login">sign back in</a> at any time.</p>
     {% elif outcome == "invalid_token" %}
     <h2>Link expired or already used</h2>
     <div class="alert alert-error">
         That cancel link is no longer valid. If your account is still in the grace window,
         sign back in and choose <strong>Cancel scheduled deletion</strong> from your account page.
     </div>
-    <p><a href="/portal/login" class="btn">Sign in</a></p>
+    <p><a href="{{ app_origin }}/login" class="btn">Sign in</a></p>
     {% else %}
     <h2>Missing token</h2>
     <div class="alert alert-error">

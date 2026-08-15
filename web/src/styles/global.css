@@ -320,6 +320,36 @@ a {
   width: 100%;
 }
 
+/* `margin-top: auto` rather than `justify-content: space-between` on the shell:
+   the shell centres its column on the cross axis and the card must stay at its
+   `padding` + header offset, which a space-between distribution would move. */
+.auth-shell-footer {
+  margin-top: auto;
+  padding-top: 1.5rem;
+}
+
+/* The marketing site's .foot-nav vocabulary, since these screens are where it
+   sends people — see docs/website.md on the mirror rule. */
+.auth-shell-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.625rem 1.375rem;
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.auth-shell-nav a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.auth-shell-nav a:hover {
+  color: var(--accent);
+}
+
 .auth-card {
   display: flex;
   flex-direction: column;

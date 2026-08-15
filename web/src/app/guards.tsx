@@ -100,19 +100,48 @@ export function safeNextPath(search: string): string {
 }
 
 /**
+ * Where a just-signed-in user belongs.
+ *
+ * `safeNextPath` answers "where were they headed"; this adds "and if nowhere in
+ * particular, where is the useful place to land". An account inside its deletion
+ * grace window goes to `/account`, because that is the only screen that mounts
+ * `GraceBanner` — the sole control that cancels. Without this the login screen's
+ * `deletionScheduled` notice, and the three server-rendered pages that give the
+ * same instruction, would all promise a cancellation the destination does not
+ * offer. An explicit `?next=` still wins: a deep link is a stronger signal than
+ * this default.
+ *
+ * Shared by `useAfterAuth` and `RequireAnonymous` for exactly the reason
+ * `safeNextPath` is — see the note on the guard below.
+ */
+export function postAuthPath(
+  search: string,
+  scheduledDeletionAt: string | null,
+): string {
+  const next = safeNextPath(search);
+  if (next === '/' && scheduledDeletionAt !== null) return '/account';
+  return next;
+}
+
+/**
  * Keeps a signed-in user off the auth screens — landing on /login while
  * already authenticated would otherwise offer a second sign-in.
  *
- * It resolves the same `next` target the sign-in handler does. That agreement
- * is load-bearing: adopting a session re-renders this guard, so it races the
- * handler's own redirect, and if the two disagreed the deep link would be lost
- * whenever this one won.
+ * It resolves the same target the sign-in handler does. That agreement is
+ * load-bearing: adopting a session re-renders this guard, so it races the
+ * handler's own redirect, and if the two disagreed the deep link — or the
+ * grace-window landing above — would be lost whenever this one won.
  */
 export function RequireAnonymous() {
   const authState = useSessionStore((state) => state.authState);
+  const scheduledDeletionAt = useSessionStore(
+    (state) => state.session?.scheduledDeletionAt ?? null,
+  );
   const location = useLocation();
   if (isAuthenticated(authState)) {
-    return <Navigate to={safeNextPath(location.search)} replace />;
+    return (
+      <Navigate to={postAuthPath(location.search, scheduledDeletionAt)} replace />
+    );
   }
   return <Outlet />;
 }

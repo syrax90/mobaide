@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router';
-import { safeNextPath } from '../../app/guards';
+import { postAuthPath } from '../../app/guards';
 import type { UserSession } from '../../auth/sessionTransport';
 import { useSessionStore } from '../../auth/sessionStore';
 
@@ -10,7 +10,7 @@ import { useSessionStore } from '../../auth/sessionStore';
  * The guard stores the blocked path in `?next=`, so a deep link survives the
  * detour through sign-in — which is what the `/pair` handoff relies on (the
  * payload itself rides in `sessionStorage`, since a fragment would not survive
- * the bounce). The destination is resolved with the same `safeNextPath` that
+ * the bounce). The destination is resolved with the same `postAuthPath` that
  * `RequireAnonymous` uses, because adopting the session re-renders that guard
  * and the two redirects race; agreeing on the target makes the race harmless.
  */
@@ -21,7 +21,7 @@ export function useAfterAuth(): (session: UserSession) => void {
 
   return useCallback(
     (session: UserSession) => {
-      const target = safeNextPath(location.search);
+      const target = postAuthPath(location.search, session.scheduledDeletionAt);
       markUserLoggedIn(session);
       void navigate(target, { replace: true });
     },

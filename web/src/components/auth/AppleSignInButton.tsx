@@ -32,8 +32,7 @@ interface AppleSignInButtonProps {
  * Only the flow comes from the SDK; the appearance follows Apple's Human
  * Interface Guidelines directly.
  *
- * Renders nothing when the server has no `APPLE_WEB_CLIENT_ID` configured,
- * which is the same condition under which the portal omits its own button.
+ * Renders nothing when the server has no `APPLE_WEB_CLIENT_ID` configured.
  */
 export function AppleSignInButton({
   clientId,
@@ -137,9 +136,9 @@ export function AppleSignInButton({
         disabled={disabled || !ready || pending}
         onClick={handleClick}
       >
-        {/* Duplicated in central_server/templates/_portal_apple_mark.html —
-            the two projects share no asset pipeline. Change one, change the
-            other. aria-hidden: the button's text already names the action. */}
+        {/* The only copy of the mark in the repo since the server-rendered
+            sign-in pages were retired; there is no longer a second one to keep
+            in sync. aria-hidden: the button's text already names the action. */}
         <svg
           className="apple-signin-logo"
           viewBox="0 0 14 17"

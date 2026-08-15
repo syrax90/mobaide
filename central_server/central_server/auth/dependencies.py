@@ -138,10 +138,10 @@ async def _get_session_user(
     via 303 to ``login_url`` on missing cookie, decode failure, or
     cascade-deleted user.
 
-    Shared core for :func:`get_dashboard_user` and :func:`get_portal_user` —
-    both are dashboard-type tokens, both should redirect to a login form
-    on any validation failure, and both must anchor authentication to a
-    still-existing user row.
+    Kept parameterised for :func:`get_dashboard_user`, its only caller since the
+    end-user portal's authenticated pages moved to the browser client: the
+    cookie name and the login URL are the whole difference between one
+    cookie-session surface and the next.
     """
     auth_service = _get_auth_service(request)
     token = request.cookies.get(cookie_name)
@@ -173,19 +173,6 @@ async def get_dashboard_user(request: Request) -> UserTokenPayload:
     """
     return await _get_session_user(
         request, cookie_name="dashboard_token", login_url="/dashboard/login"
-    )
-
-
-async def get_portal_user(request: Request) -> UserTokenPayload:
-    """Validate the portal JWT from the ``portal_token`` session cookie.
-
-    Distinct cookie namespace from the admin dashboard — a non-admin must
-    never gain a cookie at ``dashboard_token`` and vice versa. The role
-    check (admin vs viewer) lives in the routes that need it, not here.
-    Redirects to ``/portal/login`` on any validation failure.
-    """
-    return await _get_session_user(
-        request, cookie_name="portal_token", login_url="/portal/login"
     )
 
 

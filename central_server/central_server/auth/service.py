@@ -598,9 +598,9 @@ class AuthService:
         """Apply re-auth/freshness checks to an already-validated idinfo dict.
 
         Raises ``ValueError`` with a stable message on any failure. Callers
-        translate to their own exception type as needed (the portal Google
-        login path lets ``ValueError`` bubble; the delete re-auth path wraps
-        it in ``AccountDeletionAuthError``).
+        translate to their own exception type as needed (the API sign-in path
+        lets ``ValueError`` bubble; the delete re-auth path wraps it in
+        ``AccountDeletionAuthError``).
         """
         if expected_sub is not None and idinfo.get("sub") != expected_sub:
             raise ValueError("Google identity does not match this account")
@@ -975,11 +975,10 @@ class AuthService:
         ``register_user`` / ``login_user`` / ``verify_email`` /
         ``google_authenticate`` / ``apple_authenticate``. Those five return
         a plain dashboard token whose TTL is governed by
-        ``dashboard_token_expire_minutes``, and two of them are shared with
-        the server-rendered portal, which has no use for a refresh token.
-        Keeping the upgrade separate leaves every one of those signatures —
-        and the portal — untouched; the cost is one discarded HMAC signature
-        on the refreshable path.
+        ``dashboard_token_expire_minutes``, and the admin dashboard has no use
+        for a refresh token. Keeping the upgrade separate leaves every one of
+        those signatures untouched; the cost is one discarded HMAC signature on
+        the refreshable path.
 
         The token carries the same claims as the non-refreshable one, so
         ``decode_dashboard_token`` and every dependency that consumes it are

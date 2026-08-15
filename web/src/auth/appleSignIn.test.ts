@@ -7,9 +7,10 @@ import {
   signInWithApple,
 } from './appleSignIn';
 
-// Byte-identical to the URL `security_headers.APPLE_JS_SCRIPT_URL` names and
-// both prod Caddyfiles allow: the locale segment is part of the policy, so a
-// change here without a change there is a blocked script.
+// Byte-identical to the URL both prod Caddyfiles allow in the SPA's script-src
+// (pinned in tests as `test_security_headers.SPA_APPLE_JS_SCRIPT_URL`): the
+// locale segment is part of the policy, so a change here without a change there
+// is a blocked script.
 const APPLE_SCRIPT_URL =
   'https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js';
 const SELECTOR = `script[src="${APPLE_SCRIPT_URL}"]`;

@@ -18,9 +18,7 @@ still wins.
 report through the Reporting API alone rather than the console, and this
 deployment configures no collector — so there would be nothing to
 read. Both therefore go straight to enforcing, and the only rehearsal is a
-staged deploy plus a manual Google Sign-In. Each is set to a value that keeps
-that flow working; the reasoning is at the constant, because getting either
-wrong breaks sign-in outright rather than degrading it.
+staged deploy plus a manual walk of the surfaces.
 
 Two surfaces are deliberately not covered:
 
@@ -34,29 +32,18 @@ Two surfaces are deliberately not covered:
   ``API`` bucket. That fails closed: the strictest policy in the file, visibly
   broken rather than quietly permissive.
 
-The policies below are sized to what each surface actually loads. Two of those
-constraints are not discoverable from the docs and were read out of the shipped
-libraries:
+The policies below are sized to what each surface actually loads, and no policy
+here names a third-party origin or grants ``'unsafe-inline'``. The Google and
+Apple sign-in buttons were the only reason one ever did; they live on the
+browser client now, whose policy is static and lives in the Caddy site block
+instead (``deploy/prod/Caddyfile.*``), because Caddy cannot read this config.
 
-* The Google Identity Services client appends an inline ``<style>`` to the
-  *parent* document at load, before any API call, on top of the
-  ``accounts.google.com/gsi/style`` sheet Google documents. That inline block is
-  the only reason ``'unsafe-inline'`` appears anywhere in this file, and it is
-  confined to ``/portal/*`` with Google configured. GIS needs no ``img-src``
-  entry, no ``gstatic`` origin and no ``'unsafe-eval'``.
-* htmx injects its ``.htmx-indicator`` ``<style>`` block at init unconditionally.
-  ``includeIndicatorStyles: false`` in both base templates is what keeps
-  ``style-src 'self'`` viable on the dashboard and on ``/privacy.html``; those
-  three rules are shipped in ``static/style.css`` and ``static/site/portal.css``
-  instead. Turning that config off without adding the rules would silently
-  disable any future ``hx-indicator``.
-* The Sign in with Apple JS bundle contains no ``iframe``, no ``fetch`` and no
-  ``XMLHttpRequest``: under ``usePopup`` it calls ``window.open`` with
-  ``response_mode=web_message`` and reads the answer off a ``postMessage``
-  listener. So Apple costs one ``script-src`` entry and nothing else — no
-  ``frame-src``, no ``connect-src``, no inline style. ``window.open`` is
-  governed by no CSP directive at all, which is why ``appleid.apple.com``
-  itself never appears in a policy here.
+One constraint worth keeping in view: htmx injects its ``.htmx-indicator``
+``<style>`` block at init unconditionally. ``includeIndicatorStyles: false`` in
+``templates/base.html`` is what keeps ``style-src 'self'`` viable on the admin
+dashboard; those three rules ship in ``static/style.css`` instead. Turning that
+config off without adding the rules would silently disable any future
+``hx-indicator``.
 """
 from __future__ import annotations
 
@@ -71,12 +58,12 @@ _UNIVERSAL_HEADERS = (
     ("X-Frame-Options", "DENY"),
     # NOT `same-origin`. Both values isolate us from a cross-origin *opener*;
     # only `same-origin` additionally drops the handle on popups we open, which
-    # is the handle the Google Sign-In popup posts its credential back through.
-    # `/dashboard/*` opens no popup today and takes the same value anyway: one
-    # value across every surface keeps navigation between the same-origin `/`,
-    # `/portal/*` and `/dashboard/*` inside one browsing context group, and a
-    # popup added to the dashboard later would fail under the stricter value
-    # as a blank window with nothing to see server-side.
+    # is the handle a social sign-in popup posts its credential back through.
+    # No surface this server renders opens one any more — those flows moved to
+    # the browser client — but the value stays: it keeps navigation between the
+    # same-origin `/`, `/portal/*` and `/dashboard/*` inside one browsing
+    # context group, and a popup added to the dashboard later would fail under
+    # the stricter value as a blank window with nothing to see server-side.
     ("Cross-Origin-Opener-Policy", "same-origin-allow-popups"),
 )
 
@@ -86,9 +73,8 @@ _CSP_REPORT_ONLY_HEADER = "Content-Security-Policy-Report-Only"
 # Anonymous, form-free HTML plus the crawler files. Byte-identical to the policy
 # marketing/router.py used to set per response: the landing page is the one
 # surface already proven to satisfy it, and loosening it here would silently
-# weaken what already ships. `/privacy.html` qualifies because legal/router.py
-# never passes `google_client_id`, so its portal_base.html shell renders no
-# Google tag and loads same-origin htmx alone.
+# weaken what already ships. `/privacy.html` qualifies because its
+# portal_base.html shell now loads no script at all.
 _SITE_CSP = (
     "default-src 'self'; "
     "base-uri 'none'; "
@@ -108,9 +94,11 @@ _API_CSP = (
     "frame-ancestors 'none'"
 )
 
-# The admin dashboard, and the portal on an instance with no Google client id —
-# their subresource needs are identical once every inline script and style is
-# externalised.
+# The admin dashboard and the surviving `/portal/*` pages — their subresource
+# needs are identical once every inline script and style is externalised. The
+# portal pages load strictly less than this allows (no script at all); they take
+# the dashboard's policy rather than a third variant because `form-action 'self'`
+# is what the cancel-deletion POST needs and `_SITE_CSP` denies it.
 _SAME_ORIGIN_DOCUMENT_CSP = (
     "default-src 'none'; "
     "script-src 'self'; "
@@ -121,20 +109,6 @@ _SAME_ORIGIN_DOCUMENT_CSP = (
     "form-action 'self'; "
     "base-uri 'none'; "
     "frame-ancestors 'none'"
-)
-
-# Google documents the exact script path and the `/gsi/` parent for frames and
-# XHR, and asks that individual endpoints under it not be listed separately.
-_GIS_ORIGIN = "https://accounts.google.com"
-_GIS_SCRIPT_URL = f"{_GIS_ORIGIN}/gsi/client"
-_GIS_STYLE_URL = f"{_GIS_ORIGIN}/gsi/style"
-_GIS_PARENT_URL = f"{_GIS_ORIGIN}/gsi/"
-
-# Apple serves one bundle per locale and the portal is English-only, so the
-# exact script the templates load is nameable — same tightness as Google's.
-_APPLE_JS_ORIGIN = "https://appleid.cdn-apple.com"
-APPLE_JS_SCRIPT_URL = (
-    f"{_APPLE_JS_ORIGIN}/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js"
 )
 
 _PERMISSIONS_POLICY_HEADER = "Permissions-Policy"
@@ -153,16 +127,6 @@ _DENIED_FEATURES = "camera=(), microphone=(), geolocation=(), payment=(), usb=()
 # same-origin documents too — containment for an injected script, on surfaces
 # that have no use for the API.
 _BASELINE_PERMISSIONS_POLICY = f"{_DENIED_FEATURES}, identity-credentials-get=()"
-
-# The GIS button frame is created with `allow="identity-credentials-get"`, and
-# a frame's `allow` only delegates what this document's own policy grants to
-# that origin. So naming the feature obliges us to name Google's origin with
-# it: `identity-credentials-get=(self)` reads like the tighter choice and is
-# the one that refuses the delegation and takes the FedCM path down — the same
-# shape of trap as `COOP: same-origin` above.
-_GIS_PERMISSIONS_POLICY = (
-    f'{_DENIED_FEATURES}, identity-credentials-get=(self "{_GIS_ORIGIN}")'
-)
 
 _SITE_PATHS = frozenset(
     {"/", "/robots.txt", "/sitemap.xml", "/favicon.ico", "/privacy.html"}
@@ -184,58 +148,6 @@ _PROVEN_SITE_PATHS = frozenset({"/", "/robots.txt", "/sitemap.xml", "/favicon.ic
 _CSP_EXEMPT_PATHS = frozenset({"/docs", "/docs/", "/redoc", "/redoc/"})
 
 
-def portal_csp(
-    google_client_id: str | None,
-    apple_web_client_id: str | None = None,
-) -> str:
-    """Return the ``/portal/*`` policy for an instance with this sign-in config.
-
-    Composed per provider rather than enumerated per combination: each button's
-    ``<script>`` is emitted by ``portal_base.html`` only when its client id is
-    set. With neither configured the portal earns the strict same-origin policy
-    — including a ``style-src`` without ``'unsafe-inline'``.
-    """
-    if not google_client_id and not apple_web_client_id:
-        return _SAME_ORIGIN_DOCUMENT_CSP
-
-    script_src = "'self'"
-    style_src = "'self'"
-    connect_src = "'self'"
-    frame_src = ""
-    if google_client_id:
-        script_src += f" {_GIS_SCRIPT_URL}"
-        style_src += f" 'unsafe-inline' {_GIS_STYLE_URL}"
-        connect_src += f" {_GIS_PARENT_URL}"
-        frame_src = f"frame-src {_GIS_PARENT_URL}; "
-    if apple_web_client_id:
-        script_src += f" {APPLE_JS_SCRIPT_URL}"
-
-    return (
-        "default-src 'none'; "
-        f"script-src {script_src}; "
-        f"style-src {style_src}; "
-        "img-src 'self'; "
-        "font-src 'self'; "
-        f"connect-src {connect_src}; "
-        f"{frame_src}"
-        "form-action 'self'; "
-        "base-uri 'none'; "
-        "frame-ancestors 'none'"
-    )
-
-
-def portal_permissions_policy(google_client_id: str | None) -> str:
-    """Return the ``/portal/*`` Permissions-Policy for this Google config.
-
-    With no client id ``portal_base.html`` mounts no Google button, so the
-    portal takes the same deny-most baseline every other surface gets and an
-    instance without Google configured never advertises the FedCM allowance.
-    """
-    if not google_client_id:
-        return _BASELINE_PERMISSIONS_POLICY
-    return _GIS_PERMISSIONS_POLICY
-
-
 class SecurityHeadersMiddleware:
     """Attach the universal hardening headers and the path-scoped policies."""
 
@@ -243,8 +155,6 @@ class SecurityHeadersMiddleware:
         self,
         app: ASGIApp,
         *,
-        google_client_id: str | None = None,
-        apple_web_client_id: str | None = None,
         report_only: bool = False,
     ) -> None:
         self.app = app
@@ -270,12 +180,11 @@ class SecurityHeadersMiddleware:
         # already-built tuples.
         self._site_enforced = bucket(_SITE_CSP, _CSP_HEADER)
         self._site_soakable = bucket(_SITE_CSP, soak_header)
-        self._portal = bucket(
-            portal_csp(google_client_id, apple_web_client_id),
-            soak_header,
-            portal_permissions_policy(google_client_id),
-        )
-        self._dashboard = bucket(_SAME_ORIGIN_DOCUMENT_CSP, soak_header)
+        # One tuple for both surfaces: since the portal's sign-in and account
+        # pages moved to the browser client, what is left under `/portal/*` is
+        # static prose plus one native form POST, which is exactly the admin
+        # dashboard's subresource shape.
+        self._same_origin_document = bucket(_SAME_ORIGIN_DOCUMENT_CSP, soak_header)
         self._api = bucket(_API_CSP, soak_header)
         # `bucket` ignores the header for a `None` policy; passing `soak_header`
         # is the safe bias if this bucket is ever given one.
@@ -289,9 +198,9 @@ class SecurityHeadersMiddleware:
         if path in _SITE_PATHS:
             return self._site_soakable
         if path == "/portal" or path.startswith("/portal/"):
-            return self._portal
+            return self._same_origin_document
         if path == "/dashboard" or path.startswith("/dashboard/"):
-            return self._dashboard
+            return self._same_origin_document
         if path in _CSP_EXEMPT_PATHS:
             return self._exempt
         return self._api

@@ -95,7 +95,23 @@ type ChannelMessage =
   // `userId` carries the same rule the `update` handler already enforces: a
   // sign-out belongs to one account, and a stale tab must not tear down a tab
   // that has since signed in as someone else.
-  | { type: 'logout'; reason: InvalidationReason; userId: string | null };
+  | { type: 'logout'; reason: InvalidationReason; userId: string | null }
+  // Re-labels a teardown every tab already applied for itself. Deliberately not
+  // a `logout`: the server closes *every* user socket with 4010 before the
+  // delete response returns, so each tab has signed itself out already and only
+  // the reason is wrong. Carries no `userId` because it must not be able to
+  // reach a tab that did not take the teardown it corrects — the receiver gates
+  // on having recorded that teardown instead.
+  // `userId` names the account whose teardown is being re-labelled. Unlike
+  // `logout` this receiver never tears anything down, so carrying the id is
+  // free of the "null means everyone" hazard that gate has — it exists purely
+  // so a tab holding a *different* account ignores the correction instead of
+  // arming its latch against a later, genuine removal of its own account.
+  | {
+      type: 'reasonCorrection';
+      reason: InvalidationReason;
+      userId: string | null;
+    };
 
 /**
  * `sessionStorage` is an untrusted boundary — another script on the origin, or
@@ -307,8 +323,37 @@ export function adoptSession(session: UserSession | null): void {
   persist(session);
 }
 
+/**
+ * Tell peer tabs that the teardown they just applied has a better name.
+ *
+ * Separate from `clearSession` because by the time this is known the session is
+ * already gone, so `clearSession` would broadcast `userId: null` — which the
+ * peer `logout` gate reads as "applies to everyone" and would use to sign out a
+ * tab holding a different account.
+ */
+export function broadcastReasonCorrection(reason: InvalidationReason): void {
+  post({ type: 'reasonCorrection', reason, userId: lastClearedUserId });
+}
+
+/**
+ * Who the most recent teardown belonged to.
+ *
+ * Both halves of a correction need this and neither can read it from a live
+ * session: the sender is broadcasting *because* its session is already gone,
+ * and a peer that took the same 4010 has none either. Kept here rather than in
+ * the store because `clearSession` is the one place the id is still in hand.
+ */
+export function lastSignedOutUserId(): string | null {
+  return lastClearedUserId;
+}
+
+let lastClearedUserId: string | null = null;
+
 export function clearSession(reason: InvalidationReason, broadcast = true): void {
   const userId = current?.userId ?? null;
+  // Not `= userId`: a second teardown of an already-null session would wipe the
+  // id the first one recorded, which is the one a correction still needs.
+  if (userId !== null) lastClearedUserId = userId;
   current = null;
   persist(null);
   if (broadcast) post({ type: 'logout', reason, userId });
@@ -390,6 +435,7 @@ export async function hydrateSession(): Promise<HydrationResult> {
 /** Test seam — drops in-process state and tears the channel down. */
 export function resetSessionTransport(): void {
   current = null;
+  lastClearedUserId = null;
   remoteHandler = null;
   channel?.close();
   channel = null;

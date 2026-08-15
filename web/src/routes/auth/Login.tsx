@@ -35,14 +35,23 @@ export function Login() {
   const { register, handleSubmit } = useForm<LoginForm>({ defaultValues: { email: '', password: '' } });
 
   // Why the last session ended ("your session has expired", "your account was
-  // removed"). One-shot, so a later re-render does not resurrect it.
+  // removed"). Consumption nulls the store value, so this stays one-shot per
+  // reason and a re-render cannot resurrect it.
+  //
+  // Subscribed rather than mount-only because a reason can be *re-armed* after
+  // this screen has already read one: when another tab schedules an account
+  // deletion, every tab first takes the server's 4010 and renders "removed by
+  // an administrator", and the correcting broadcast arrives only afterwards.
+  // A mount-only read would leave the wrong sentence on screen.
+  const pendingInvalidation = useSessionStore((state) => state.lastInvalidation);
   useEffect(() => {
+    if (pendingInvalidation === null) return;
     const reason = consumeInvalidation();
     if (reason !== null) {
       const message = INVALIDATION_MESSAGES[reason];
       if (message !== null) setError(message);
     }
-  }, [consumeInvalidation]);
+  }, [pendingInvalidation, consumeInvalidation]);
 
   const settle = (outcome: AuthOutcome) => {
     if (outcome.kind === 'verificationRequired') {

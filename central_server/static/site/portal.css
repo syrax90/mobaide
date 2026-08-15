@@ -460,11 +460,13 @@ input[type="radio"]:checked {
   height: 20px;
 }
 
-/* Which of the two icons shows is derived from the button's own aria-pressed
-   state, which portal.js flips — so the accessible state and the visual state
-   cannot drift apart, and neither needs a style= attribute (the portal's CSP
-   drops those, and the eye-off icon's used to be load-bearing: without it BOTH
-   icons rendered). Source order matters: `.password-field .reveal-icon-hide`
+/* Dead since the sign-in pages moved to the browser client; kept because this
+   sheet is shared with /privacy.html and the SPA's own password field was
+   derived from these rules. Which of the two icons showed was derived from the
+   button's own aria-pressed state — so the accessible state and the visual state
+   could not drift apart, and neither needed a style= attribute (this surface's
+   CSP drops those, and the eye-off icon's used to be load-bearing: without it
+   BOTH icons rendered). Source order matters: `.password-field .reveal-icon-hide`
    ties with `.password-field .reveal-icon` above on specificity. */
 .password-field .reveal-icon-hide {
   display: none;
@@ -536,11 +538,12 @@ input[type="radio"]:checked {
   background: var(--surface-2);
 }
 
-/* Never give this row (or any ancestor of the GIS container) a transform,
-   filter or clip-path: it becomes a containing block and breaks the Google
-   popup's positioning. The button itself is a cross-origin iframe, so its small
-   corner radius is unreachable from here — `shape: 'rectangular'` in
-   static/site/portal.js is as square as Google allows. */
+/* Dead here since the sign-in pages moved to the browser client, but the rule
+   it encodes still binds that client: never give this row (or any ancestor of a
+   GIS container) a transform, filter or clip-path — it becomes a containing
+   block and breaks the Google popup's positioning. The button itself is a
+   cross-origin iframe, so its small corner radius is unreachable from CSS;
+   `shape: 'rectangular'` is as square as Google allows. */
 .gis-row {
   display: flex;
   justify-content: center;

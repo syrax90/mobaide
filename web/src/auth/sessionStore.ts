@@ -4,6 +4,8 @@ import { clearAgentTokens } from './agentTokens';
 import { clearAllRecentPaths } from '../stores/recentPaths';
 import {
   adoptSession,
+  broadcastReasonCorrection,
+  lastSignedOutUserId,
   clearSession,
   clearSignedInMarker,
   connectSessionChannel,
@@ -52,9 +54,18 @@ interface SessionState {
  *
  * Deliberately not consulted by `agentDisconnect`, which is an agent switch
  * rather than an identity change.
+ *
+ * `deletionScheduled` belongs here for the same reason `manual` does — it is a
+ * deliberate, server-confirmed teardown, and it was spelled `manual` until it
+ * grew its own login-screen notice. Leaving it out would silently stop purging
+ * the recents and agent tokens of an account on its way to being deleted.
  */
 function endsIdentity(reason: InvalidationReason): boolean {
-  return reason === 'manual' || reason === 'accountRemoved';
+  return (
+    reason === 'manual' ||
+    reason === 'accountRemoved' ||
+    reason === 'deletionScheduled'
+  );
 }
 
 export const useSessionStore = create<SessionState>()((set, get) => ({
@@ -64,6 +75,10 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   lastInvalidation: null,
 
   markUserLoggedIn: (session) => {
+    // A correction announced against the previous identity must not survive to
+    // mislabel a later, genuine admin revocation of this one.
+    pendingDeletionNotice = false;
+    lastConsumedInvalidation = null;
     writeSession(session);
     // Drop any stale reason so a fresh sign-in does not immediately surface
     // "your session expired" from the previous one. Android does the same with
@@ -86,21 +101,52 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
 
   invalidateUserSession: (reason) => {
     const state = get();
+    // A peer announced a self-scheduled deletion before this tab's own 4010
+    // landed. `accountRemoved` is the only thing a 4010 produces, so this is
+    // that same teardown arriving late — take the truthful name instead.
+    if (reason === 'accountRemoved' && pendingDeletionNotice) {
+      pendingDeletionNotice = false;
+      reason = 'deletionScheduled';
+    }
     // Idempotent. A REST 401 and a WebSocket 4001 close routinely arrive
     // together on a dead token; without this guard the login screen would show
     // its "session expired" message twice. Android added the same no-op.
     if (state.authState.kind === 'unauthenticated' && state.session === null) {
+      // …with one exception, because the server beats us to our own teardown.
+      // `request_account_deletion` closes the user channel with 4010 *before*
+      // it returns 204 (auth/service.py), and 4010 on the user axis means
+      // `accountRemoved`. So on a self-scheduled deletion that close lands
+      // first and this guard would drop the reason we raise a moment later,
+      // leaving the user reading "your account was removed by an administrator,
+      // sign up to start again" after scheduling a *cancellable* 14-day
+      // deletion — the opposite of what they need to know.
+      //
+      // Recording the reason is safe here: only `DeleteAccountPanel` (and a
+      // peer tab relaying it) ever raises this one, and this branch sets no
+      // session state, so it cannot double-tear-down. The revoke branch below
+      // is skipped on this path, which only leaves the readable signed-in
+      // marker behind for one boot — `request_account_deletion` already
+      // revoked every refresh token server-side, so no credential outlives it.
+      if (reason === 'deletionScheduled') {
+        set({ lastInvalidation: reason });
+        // Every other tab took its own 4010 and labelled it `accountRemoved`;
+        // only this one knows the deletion was self-scheduled and cancellable.
+        broadcastReasonCorrection(reason);
+      }
       return;
     }
     // Only a deliberate sign-out ends the browser's credential. A
     // `tokenRejected` may be this tab reacting to a token that is already
     // dead, and revoking on it would tear down a cookie that a *different*
-    // account's fresh tab in this browser has since installed.
+    // account's fresh tab in this browser has since installed. Scheduling a
+    // deletion is as deliberate as pressing Sign out — and it must revoke, or
+    // the refresh cookie survives to restore the session of an account the user
+    // just asked us to delete.
     //
     // Above the takeover branch on purpose: signing out from the update screen
     // must revoke like any other sign-out. Dropping the marker locally is what
     // makes it stick when the POST cannot reach the server at all.
-    if (reason === 'manual') {
+    if (reason === 'manual' || reason === 'deletionScheduled') {
       clearSignedInMarker();
       postLogout();
     }
@@ -160,7 +206,10 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
 
   consumeInvalidation: () => {
     const reason = get().lastInvalidation;
-    if (reason !== null) set({ lastInvalidation: null });
+    if (reason !== null) {
+      lastConsumedInvalidation = reason;
+      set({ lastInvalidation: null });
+    }
     return reason;
   },
 }));
@@ -189,11 +238,64 @@ let bootstrap: Promise<void> | null = null;
  */
 let logoutGeneration = 0;
 
+/**
+ * Set when a peer announced a self-scheduled deletion before this tab's own
+ * 4010 close had arrived.
+ *
+ * `BroadcastChannel` does not order messages against this tab's WebSocket, so
+ * the correction can land on either side of the teardown it describes. Applied
+ * immediately when the teardown is already recorded, and consumed by the next
+ * `accountRemoved` otherwise — which is the only reason a 4010 produces.
+ */
+let pendingDeletionNotice = false;
+
+/**
+ * The reason the login screen has already read and rendered.
+ *
+ * `consumeInvalidation` nulls the store value the moment `Login` mounts, and
+ * the peer's 4010 always beats the correction — the server dispatches every
+ * close inside the delete handler, before the response the originating tab is
+ * still awaiting. So by the time a correction lands, the tab it is meant for
+ * has usually consumed the reason being corrected, and the pending value alone
+ * cannot tell us that. Remembering it is what lets the correction re-arm.
+ */
+let lastConsumedInvalidation: InvalidationReason | null = null;
+
 export function bootstrapSession(): Promise<void> {
   if (bootstrap !== null) return bootstrap;
   bootstrap = (async () => {
     connectSessionChannel((message) => {
       const store = useSessionStore.getState();
+      if (message.type === 'reasonCorrection') {
+        // Only the deleted account's own tabs. A tab signed in as someone else
+        // must not arm its latch here, or a later *genuine* admin removal of
+        // that second account would be re-labelled as a cancellable deletion.
+        // A signed-out peer has no session to compare, so it falls back to the
+        // id its own teardown recorded. A null id means a tab on the previous
+        // build sent this; stay permissive rather than ignore it.
+        const owner = store.session?.userId ?? lastSignedOutUserId();
+        if (
+          message.userId !== null &&
+          owner !== null &&
+          owner !== message.userId
+        ) {
+          return;
+        }
+        // Re-label, never re-tear-down: a peer that took the same 4010 has
+        // already purged and revoked, and running that again would be a second
+        // teardown. Gating on the recorded `accountRemoved` is what keeps this
+        // from touching a tab that never took the teardown being corrected.
+        if (
+          store.authState.kind === 'unauthenticated' &&
+          (store.lastInvalidation === 'accountRemoved' ||
+            lastConsumedInvalidation === 'accountRemoved')
+        ) {
+          useSessionStore.setState({ lastInvalidation: message.reason });
+        } else {
+          pendingDeletionNotice = true;
+        }
+        return;
+      }
       if (message.type === 'logout') {
         // The same rule the `update` branch below enforces, for the same
         // reason: a sign-out belongs to one account. A stale tab signing out
@@ -356,6 +458,8 @@ export function bootstrapSession(): Promise<void> {
 /** Test seam — lets a test re-run bootstrap against fresh storage. */
 export function resetSessionBootstrap(): void {
   bootstrap = null;
+  pendingDeletionNotice = false;
+  lastConsumedInvalidation = null;
 }
 
 /** Non-reactive read for module-level consumers (the bearer middleware). */

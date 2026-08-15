@@ -21,13 +21,25 @@ export interface IncompatibleServerInfo {
  * Why a user session was torn down. Drives the message the login screen shows
  * on arrival — `manual` is silent because the user asked for it.
  */
-export type InvalidationReason = 'tokenRejected' | 'accountRemoved' | 'manual';
+export type InvalidationReason =
+  | 'tokenRejected'
+  | 'accountRemoved'
+  | 'deletionScheduled'
+  | 'manual';
 
-/** Copy lifted from Android `LoginViewModel`, which collects the same reasons. */
+/**
+ * Copy lifted from Android `LoginViewModel`, which collects the same reasons —
+ * except `deletionScheduled`, which carries the notice the retired
+ * `/portal/login?deleted=1` used to render. Scheduling a deletion signs you out
+ * everywhere, so without it the last thing a user sees is a login form with no
+ * explanation and no hint that the grace window is the way back.
+ */
 export const INVALIDATION_MESSAGES: Record<InvalidationReason, string | null> = {
   tokenRejected: 'Your session has expired. Please sign in again.',
   accountRemoved:
     'Your account was removed by an administrator. Sign up to start again or contact support.',
+  deletionScheduled:
+    'Your account is scheduled for deletion. Sign in again within the grace window to cancel it.',
   manual: null,
 };
 

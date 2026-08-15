@@ -13,9 +13,9 @@ from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
 
-# Design-system assets — shared by the landing page and the end-user portal —
-# are versioned by a ``?v=`` query both templates append, whose value is a
-# content hash over the whole ``site/`` tree (``marketing.loader.asset_version``)
+# Design-system assets — shared by the landing page and the account-deletion and
+# legal pages — are versioned by a ``?v=`` query both shells append, whose value
+# is a content hash over the whole ``site/`` tree (``marketing.loader.asset_version``)
 # — so an asset edit busts them immediately and this TTL only bounds how long an
 # unversioned request may serve a stale copy. That whole-tree hash is also why
 # ``portal.css`` lives here rather than beside ``style.css``: every edit to it
@@ -26,15 +26,16 @@ _SITE_CACHE_CONTROL = "public, max-age=604800"
 
 # The ADMIN DASHBOARD sheet (``static/style.css``, loaded by
 # ``templates/base.html``) is referenced without a version query, so it gets a
-# TTL short enough that a deploy propagates on its own. The end-user portal
-# deliberately does not live here: it loads ``site/site.css`` + ``site/portal.css``,
-# both stamped with the content hash, which puts them in the versioned tier above.
+# TTL short enough that a deploy propagates on its own. The pages extending
+# ``portal_base.html`` deliberately do not live here: they load ``site/site.css``
+# + ``site/portal.css``, both stamped with the content hash, which puts them in
+# the versioned tier above.
 _DEFAULT_CACHE_CONTROL = "public, max-age=3600"
 
 # Two unversioned filenames whose bytes must stay in lockstep with per-request
 # HTML, for different reasons:
 #
-#   * ``htmx.min.js`` — loaded by both base templates with a pinned SRI
+#   * ``htmx.min.js`` — loaded by ``templates/base.html`` with a pinned SRI
 #     `integrity` hash. If a client may reuse a cached copy WITHOUT
 #     revalidating, an htmx upgrade — which changes both the bytes and the hash
 #     in the HTML — hands that client new HTML plus stale JS, the hashes
@@ -47,9 +48,9 @@ _DEFAULT_CACHE_CONTROL = "public, max-age=3600"
 #     `data-modal-close`). Rename one on both sides and an admin holding a
 #     cached copy gets new markup plus stale JS: rows stop expanding, modals
 #     stop dismissing, the delete-user confirm gate stops arming — with no
-#     server-side symptom. The portal's ``site/portal.js`` is immune because the
-#     whole-tree `?v=` hash busts it; this file sits at the static root and has
-#     no such query.
+#     server-side symptom. ``site/site.js`` is immune because the whole-tree
+#     `?v=` hash busts it; this file sits at the static root and has no such
+#     query.
 #
 # `no-cache` still stores the response and still gets the 304 bandwidth saving;
 # it only forbids reuse without asking, which is the property both cases need.

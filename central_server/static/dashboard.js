@@ -8,10 +8,9 @@
  * particular is compiled by htmx with `new Function()`, which a nonce cannot
  * authorise; only 'unsafe-eval' would, and that is not worth one input handler.
  *
- * The portal has its own copy of the dismissal delegation in
- * static/site/portal.js. They are not shared: the two surfaces load disjoint
- * stylesheets and never appear on the same page, and a shared bundle would put
- * the portal's Google Sign-In machinery on the admin dashboard.
+ * This is now the only behaviour bundle the server ships: the end-user portal
+ * had its own copy of the dismissal delegation, and it went with the pages that
+ * needed it.
  *
  * Loaded by templates/base.html after htmx, so `window.htmx` is available.
  */

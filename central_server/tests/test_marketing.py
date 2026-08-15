@@ -181,22 +181,19 @@ class TestSecurityHeaderScope:
     apart: neither the marketing policy pinned above nor the portal's own was
     unified into, or copied over, the other."""
 
-    async def test_portal_login_carries_a_csp_distinct_from_the_marketing_policy(
+    async def test_portal_delete_account_info_carries_a_csp_distinct_from_the_marketing_policy(
         self, client
     ) -> None:
-        """Before ``SecurityHeadersMiddleware`` existed, ``/portal/login`` ran
-        with no CSP at all: the marketing policy above was set per response by
-        this router alone, never as middleware, and the portal loads Google
-        Sign-In plus (pre-restyle) inline script/style that policy would have
-        blocked. The site-wide rollout deliberately reverses that — every
-        surface now gets a policy, the portal included. What still belongs in
-        this file, rather than in ``test_security_headers.py`` which pins the
-        portal's exact string, is the scoping guarantee: the portal's CSP must
-        be present and different from — and, once Google Sign-In is
-        configured, looser than (``test_security_headers.TestGoogleSignInRelaxations``
-        covers that case) — the marketing ``EXPECTED_CSP`` pinned above, so the
-        two surfaces never silently collapse into one."""
-        response = await client.get("/portal/login")
+        """Before ``SecurityHeadersMiddleware`` existed, ``/portal/*`` ran with
+        no CSP at all: the marketing policy above was set per response by this
+        router alone, never as middleware. The site-wide rollout deliberately
+        reverses that — every surface now gets a policy, the portal included.
+        What still belongs in this file, rather than in
+        ``test_security_headers.py`` which pins the portal's exact string, is
+        the scoping guarantee: the portal's CSP must be present and different
+        from the marketing ``EXPECTED_CSP`` pinned above, so the two surfaces
+        never silently collapse into one."""
+        response = await client.get("/portal/delete-account-info")
         assert response.status_code == 200
         assert "Content-Security-Policy" in response.headers
         assert response.headers["Content-Security-Policy"] != EXPECTED_CSP
@@ -464,7 +461,12 @@ class TestMarketingLoader:
         """Fail loud during ``create_app`` rather than boot and serve an empty
         home page — same contract as ``render_privacy``."""
         with pytest.raises(FileNotFoundError):
-            render_landing("https://example.test", "0.0.0", templates_dir=tmp_path)
+            render_landing(
+                "https://example.test",
+                "https://app.example.test",
+                "0.0.0",
+                templates_dir=tmp_path,
+            )
 
     def test_render_robots_builds_the_sitemap_url_from_the_origin(self) -> None:
         robots = render_robots("https://example.test")

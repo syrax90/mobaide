@@ -92,7 +92,7 @@
     <a href="#how">How it works</a>
     <a href="#features">Features</a>
     <a href="#faq">FAQ</a>
-    <a class="btn btn-ghost" href="/portal/login">Sign in</a>
+    <a class="btn btn-ghost" href="{{ app_origin }}/login">Sign in</a>
   </nav>
 </header>
 
@@ -118,6 +118,13 @@
         {# A plain chip on purpose. Apple's badge artwork may not be imitated or
            altered, and the iOS client is not on the App Store yet. #}
         <span class="chip">iOS — coming soon</span>
+      </div>
+      {# Its own row rather than a third item in .cta: the Play badge is fixed
+         artwork at a mandated minimum size, so a text button beside it reads as
+         a caption instead of the peer entry point it is. #}
+      <div class="cta">
+        <a class="btn" href="{{ app_origin }}/">Open the web app</a>
+        <span class="cta-note">Runs in your browser — nothing to install.</span>
       </div>
       <p class="cta-note">
         Free — no subscription, no paywalled features. No public IP, port
@@ -291,6 +298,19 @@ irm https://get.mobaide.com/install.ps1 | iex</code></pre>
         </p>
       </article>
 
+      <article class="card notch">
+        <h3>Or just open a browser</h3>
+        {# Claims kept to what web/ actually ships. Deliberately no mention of
+           saved shortcut chips or the command palette: WEB-06 dropped both from
+           the browser client as redundant on a physical keyboard. #}
+        <p>
+          The same account works in a desktop browser at
+          <a href="{{ app_origin }}/">app.mobaide.com</a> — the same agents, the
+          same sessions, the same terminal, driven with your physical keyboard.
+          Nothing to install, and your phone stays in sync.
+        </p>
+      </article>
+
     </div>
   </section>
 
@@ -361,6 +381,17 @@ irm https://get.mobaide.com/install.ps1 | iex</code></pre>
           NAT, on a corporate router, on café Wi-Fi or on mobile data — no SSH,
           no tunnel to configure. (The agent does serve a local HTTP API on the
           machine it runs on; it is never exposed publicly.)
+        </p>
+      </details>
+
+      <details>
+        <summary>Do I have to install the app to try it?</summary>
+        <p>
+          No. Sign in at <a href="{{ app_origin }}/login">app.mobaide.com</a> and
+          the browser client gives you the same account, agents and sessions as
+          the phone app — install the Android app when you want it in your
+          pocket. You still install the agent on the computer the sessions run
+          on; that part is the product.
         </p>
       </details>
 
@@ -437,7 +468,7 @@ irm https://get.mobaide.com/install.ps1 | iex</code></pre>
     <nav class="foot-nav" aria-label="Footer">
       <a href="/privacy.html">Privacy policy</a>
       <a href="/portal/delete-account-info">Account deletion</a>
-      <a href="/portal/login">Sign in</a>
+      <a href="{{ app_origin }}/login">Sign in</a>
       <a href="https://github.com/syrax90/mobaide-community/discussions" rel="noopener">Community</a>
       <a href="mailto:support@mobaide.com">Email support</a>
     </nav>

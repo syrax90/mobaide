@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { safeNextPath } from './guards';
+import { postAuthPath, safeNextPath } from './guards';
 
 describe('safeNextPath', () => {
   it('returns the captured deep link', () => {
@@ -39,5 +39,40 @@ describe('safeNextPath', () => {
 
   it('rejects an empty target', () => {
     expect(safeNextPath('?next=')).toBe('/');
+  });
+});
+
+describe('postAuthPath', () => {
+  const SCHEDULED = '2026-09-01T00:00:00+00:00';
+
+  it('sends an account inside its deletion grace window to the screen that cancels', () => {
+    // `/account` is the only route that mounts `GraceBanner`. Landing on `/`
+    // would make the login screen's `deletionScheduled` notice promise a
+    // cancellation the destination does not offer.
+    expect(postAuthPath('', SCHEDULED)).toBe('/account');
+  });
+
+  it('sends everyone else to the root', () => {
+    expect(postAuthPath('', null)).toBe('/');
+    expect(postAuthPath('?other=1', null)).toBe('/');
+  });
+
+  it('lets a captured deep link win over the grace-window default', () => {
+    expect(postAuthPath('?next=%2Fsettings', SCHEDULED)).toBe('/settings');
+    expect(postAuthPath('?next=%2Fsettings', null)).toBe('/settings');
+  });
+
+  it('keeps the open-redirect defences intact through the wrapper', () => {
+    // A rejected target collapses to the root first, so inside the grace window
+    // it goes on to `/account`. Either way what must never survive is the
+    // attacker's host or a path a browser re-reads as an authority.
+    expect(postAuthPath('?next=%2F%2Fevil.example', null)).toBe('/');
+    expect(postAuthPath('?next=%2F%2Fevil.example', SCHEDULED)).toBe('/account');
+    expect(postAuthPath('?next=https%3A%2F%2Fevil.example%2Fsteal', null)).toBe('/');
+    expect(postAuthPath('?next=https%3A%2F%2Fevil.example%2Fsteal', SCHEDULED)).toBe(
+      '/account',
+    );
+    expect(postAuthPath('?next=%2F..%2F%2Fevil.example', null)).toBe('/');
+    expect(postAuthPath('?next=%2F..%2F%2Fevil.example', SCHEDULED)).toBe('/account');
   });
 });

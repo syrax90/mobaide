@@ -1,6 +1,8 @@
 /**
- * Support surfaces, mirroring iOS `AppConfig` and Android's `BuildConfig`
- * defaults.
+ * Support and marketing-site surfaces. The support trio mirrors iOS `AppConfig`
+ * and Android's `BuildConfig` defaults; the two marketing links below have no
+ * mobile counterpart, because only a browser client needs a way back to the site
+ * that sent it here.
  *
  * Plain constants rather than build-time configuration, matching the precedent
  * the store links set on iOS: the server publishes none of these, and the SPA
@@ -8,7 +10,16 @@
  * the one anonymous bootstrap call and it carries only the protocol gate and the
  * Google client id.
  */
+export const MARKETING_SITE_URL = 'https://mobaide.com/';
 export const PRIVACY_POLICY_URL = 'https://mobaide.com/privacy.html';
+
+/**
+ * The public deletion-info page, served by the central server under the retired
+ * portal's path. That path is registered in Google Play Console's Data Safety
+ * form, so it is fixed — do not "tidy" it onto this origin.
+ */
+export const ACCOUNT_DELETION_INFO_URL =
+  'https://mobaide.com/portal/delete-account-info';
 export const SUPPORT_EMAIL = 'support@mobaide.com';
 export const SUPPORT_COMMUNITY_URL =
   'https://github.com/syrax90/mobaide-community/discussions';
