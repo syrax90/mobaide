@@ -395,8 +395,6 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     # the inner two generate, not just the router's.
     app.add_middleware(
         SecurityHeadersMiddleware,
-        google_client_id=config.google_client_id,
-        apple_web_client_id=config.apple_web_client_id,
         report_only=config.csp_report_only,
     )
 
@@ -421,7 +419,13 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     # re-key the stylesheet and the wordmark per surface and make a
     # landing -> portal navigation refetch two 7-day-cached assets.
     app.state.asset_version = asset_version(_static_dir, __version__)
-    app.state.marketing_html = render_landing(_site_origin, app.state.asset_version)
+    # Same three render paths, same reason: every surface this server renders
+    # sends account traffic to the browser client, and they must all name the
+    # same origin.
+    app.state.web_app_origin = config.web_app_base_url.rstrip("/")
+    app.state.marketing_html = render_landing(
+        _site_origin, app.state.web_app_origin, app.state.asset_version
+    )
     app.state.marketing_robots = render_robots(_site_origin)
     app.state.marketing_sitemap = render_sitemap(_site_origin)
 
@@ -503,8 +507,8 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             "capabilities": {},
             # The browser SPA needs these to initialise Google Identity Services
             # and Sign in with Apple JS, and it has no build-time config channel.
-            # A client id for a public client is not a secret (the portal already
-            # renders both into anonymous HTML).
+            # A client id for a public client is not a secret: both providers
+            # require it to be readable by the page that mounts their button.
             "google_client_id": app.state.config.google_client_id,
             "apple_web_client_id": app.state.config.apple_web_client_id,
             "latest_agent_version": manifest.body.get("version") if manifest else None,

@@ -3,28 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="csrf-token" content="{{ csrf_token }}">
-    {# HTMX 2.0 default responseHandling drops 4xx swaps (errors fire
-       htmx:responseError but the body is discarded). Our portal forms return
-       re-rendered HTML with embedded error context on 4xx, so we override
-       the default to swap 4xx into the target too.
-
-       The other three keys exist for the CSP this page is served under:
-
-       * includeIndicatorStyles — htmx injects its .htmx-indicator <style> block
-         into <head> at init, unconditionally, whether or not anything uses an
-         indicator. That single block is what would force style-src
-         'unsafe-inline' onto /privacy.html and the dashboard. The three rules it
-         would have written live in portal.css instead.
-       * allowEval — htmx uses Function()/new Function() for hx-on:*, hx-vals and
-         hx-headers `js:` prefixes, and hx-trigger `[expr]` filters. Nothing here
-         uses any of them, and turning eval off keeps script-src 'unsafe-eval'
-         out of the policy for good. Note the failure mode if one is ever added:
-         a disabled hx-trigger filter fires unconditionally rather than never.
-       * allowScriptTags — no fragment this app swaps in carries a <script>
-         (portal.js owns all of it), so nothing legitimate is turned off, and an
-         injected one no longer executes. #}
-    <meta name="htmx-config" content='{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"[45]..","swap":true,"error":true}],"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
     <meta name="theme-color" content="#121212">
     <title>{% block title %}Mobaide{% endblock %}</title>
     {% block extra_head %}{% endblock %}
@@ -36,9 +14,9 @@
        (marketing_landing.html is the first); see docs/website.md. #}
     <link rel="preload" href="/static/site/fonts/DepartureMono-Regular.woff2"
           as="font" type="font/woff2" crossorigin>
-    {# The portal shares the marketing design system: site.css owns the tokens,
-       the webfont and the pixel kit, and portal.css adds the form, table, modal
-       and legal-document styles it deliberately lacks. Order matters —
+    {# These pages share the marketing design system: site.css owns the tokens,
+       the webfont and the pixel kit, and portal.css adds the form, table and
+       legal-document styles it deliberately lacks. Order matters —
        portal.css extends and overrides site.css.
 
        Both carry the same ?v= content hash the landing page stamps
@@ -48,47 +26,23 @@
        site.js is deliberately NOT loaded: nothing here uses [data-reveal] or
        [data-typewriter], and its first act is to set a `js` class that would arm
        site.css's opacity:0 animation start-states. Without that class no
-       site.css motion rule can ever hide portal content. #}
+       site.css motion rule can ever hide this content. #}
     <link rel="stylesheet" href="/static/site/site.css?v={{ asset_version }}">
     <link rel="stylesheet" href="/static/site/portal.css?v={{ asset_version }}">
-    {# Vendored htmx 2.0.4 — served from same origin (no CDN) so a compromised
-       CDN cannot inject JS into the end-user-facing portal. SRI hash is
-       computed from the bundled bytes; if you upgrade the vendored file,
-       refresh both ``/static/htmx.min.js`` and the integrity attribute.
-
-       Because the hash is pinned to an unversioned filename, this bundle is
-       held at ``no-cache`` by ``_MUST_REVALIDATE_ASSETS`` in
-       ``central_server/static_files.py`` — a client that could reuse a cached
-       copy without revalidating would pair this new hash with stale JS and the
-       browser would block htmx outright. Do not give it a TTL without also
-       versioning the src. #}
-    <script src="/static/htmx.min.js"
-            integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
-            crossorigin="anonymous"></script>
-    {# Every behaviour the portal templates used to ship as an inline <script> or
-       an onclick= attribute. `/portal/*` is served under a script-src with no
-       'unsafe-inline', so this file is not a tidiness preference — inline code
-       on these pages does not run at all. Loaded after htmx (not before, and not
-       deferred) because it registers its per-element initialisers through
-       htmx.onLoad so swapped-in fragments get wired too. #}
-    <script src="/static/site/portal.js?v={{ asset_version }}"></script>
-    {% if google_client_id %}
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
-    {% endif %}
-    {# Apple serves one bundle per locale; the portal is English-only, so the
-       exact URL is nameable and security_headers.APPLE_JS_SCRIPT_URL lists it
-       rather than the whole origin. Changing the locale segment here means
-       changing it there too. #}
-    {% if apple_web_client_id %}
-    <script src="https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js" async defer></script>
-    {% endif %}
+    {# No <script> of any kind, and that is the contract these pages are held to.
+       They used to load htmx, a behaviour bundle and the Google and Apple
+       sign-in SDKs for the account and login screens; those screens now live in
+       the browser client, so the three surfaces still extending this shell —
+       /privacy.html, /portal/delete-account-info and /portal/cancel-deletion —
+       are static prose plus one native form POST. Anything added here would put
+       third-party JS back on the page Play Console links to. #}
 </head>
-<body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+<body>
     <a class="skip" href="#main">Skip to content</a>
     {# Same chrome markup as marketing_landing.html, so .site-head, .brand-mark,
-       .site-nav, .site-foot and .foot-nav all come from site.css and the portal
-       header is indistinguishable from the landing page's. The wordmark keeps
-       its light plate because it is dark purple ink drawn for one. #}
+       .site-nav, .site-foot and .foot-nav all come from site.css and this header
+       is indistinguishable from the landing page's. The wordmark keeps its light
+       plate because it is dark purple ink drawn for one. #}
     <header class="site-head">
         <a class="brand" href="/" aria-label="Mobaide home">
             <img class="brand-mark" src="/static/site/img/wordmark.png?v={{ asset_version }}"
@@ -96,7 +50,7 @@
         </a>
         <nav class="site-nav" aria-label="Site">
             {% block nav_right %}
-            <a href="/portal/login" class="btn btn-ghost">Sign in</a>
+            <a href="{{ app_origin }}/login" class="btn btn-ghost">Sign in</a>
             {% endblock %}
         </nav>
     </header>
@@ -115,6 +69,5 @@
         </div>
         <p class="disclaimer">&copy; Mobaide</p>
     </footer>
-    <div id="modal-root"></div>
 </body>
 </html>

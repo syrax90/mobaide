@@ -4,19 +4,21 @@ Google Play and Apple App Store both require any app that supports account
 creation to ship two delete-account paths: one **in-app** and one
 **publicly reachable web URL**. GDPR Article 17 (right to erasure) adds a
 parallel obligation. CLA-61 satisfies both with a single 14-day
-soft-delete pipeline shared between Android and the new `mobaide.com/portal`
-web portal.
+soft-delete pipeline shared between the mobile apps and the browser client at
+`app.mobaide.com`. (The server-rendered portal that originally carried the web
+half has been retired; only its two anonymous pages remain — see *Public
+information page* below.)
 
 ## Architecture summary
 
 ```
 ┌────────────────────┐                  ┌────────────────────┐
-│  Android (Settings │                  │  Portal (browser)  │
-│   → Danger zone)   │                  │  /portal/account   │
+│  Android / iOS     │                  │  Web client        │
+│  (Settings         │                  │  app.mobaide.com   │
+│   → Danger zone)   │                  │  /account          │
 └─────────┬──────────┘                  └─────────┬──────────┘
-          │ POST /api/auth/me/delete             │  POST /portal/account/delete
-          │   {method, password|id_token,nonce,  │
-          │    mode:"scheduled"|"immediate"}      │
+          │ POST /api/auth/me/delete             │  POST /api/auth/me/delete
+          │   {method, password|id_token, nonce, mode:"scheduled"|"immediate"}
           ▼                                       ▼
        ┌─────────────────────────────────────────┐
        │ AuthService.request_account_deletion    │
@@ -63,22 +65,27 @@ accepts a fresh credential proof, validated by `AuthService._verify_fresh_creden
 
 This mirrors the Auth0 recommended pattern for destructive-action re-auth.
 
-### Portal authentication
+### Browser re-authentication
 
-The portal supports both social providers. `POST /portal/auth/google` accepts a
-GIS credential callback and `POST /portal/auth/apple` an identity token from
-Sign in with Apple JS; each logs in (or creates) an account via the same
-`AuthService` path the mobile apps use. Both run in popup mode so the
-credential reaches the server through a same-origin form POST that carries the
-CSRF token and the `portal_signin_nonce` cookie — Apple's own redirect mode
-would arrive cross-site, where `SameSite=Lax` withholds both.
+The web client's delete panel always offers "Continue with password", and adds a
+Google or Apple button for whichever providers the *server* has configured — it
+reads the two client ids from `GET /api/version` and nothing else. **It does not
+know which identities are linked to the account**: `UserSession` carries only
+`accessToken`/`userId`/`email`/`role`/`scheduledDeletionAt`, and no endpoint
+publishes the linked set. A wrong choice is caught server-side by
+`_verify_fresh_credentials`, which answers 403.
 
-The delete modal offers whichever methods the account can actually complete:
-password, Google re-auth, Apple re-auth, or a chooser between them. A method
-counts only when it is both linked on the account *and* configured on the
-server, because a re-auth panel whose button cannot mount is a dead end. This
-is what lets a social-only user — `google_sub` or `apple_sub` set,
-`password_hash` NULL — self-delete from the portal at all.
+That is a real divergence from the retired portal, which rendered its offerable
+methods from the user row and so could hide a method the account could not
+complete. In practice a social-only account (`password_hash` NULL) still deletes
+from a browser, because the provider button is offered whenever the server is
+configured — but it is also shown a password option it cannot use. Closing that
+properly needs the server to publish the linked providers on an
+`/api/auth/me`-style read; it is not a client-side fix.
+
+Both providers run in popup mode; the resulting identity token is posted to
+`POST /api/auth/me/delete` with the nonce the client minted, exactly as the
+mobile apps do.
 
 ### Deletion mode (`DeleteAccountRequest.mode`)
 
@@ -86,7 +93,7 @@ Both clients now send a `mode` field on the delete request:
 
 | Value | Behaviour |
 |---|---|
-| `"scheduled"` (default) | 14-day soft-delete grace window; cancellable via in-app banner, portal, or email link. |
+| `"scheduled"` (default) | 14-day soft-delete grace window; cancellable via the in-app banner, the web client's grace banner, or the email link. |
 | `"immediate"` | Irreversible cascade purge executed synchronously; no grace window, no cancel. |
 
 Older clients that omit `mode` (or send `null`) are normalised to `"scheduled"`,
@@ -100,11 +107,26 @@ A user can restore their account at any time within the grace window:
    authenticated landing screen whenever `UserIdentityStore.getScheduledDeletionAt()`
    returns non-null. Tapping "Cancel scheduled deletion" calls
    `AuthRepository.cancelAccountDeletion` → `POST /api/auth/me/delete/cancel`.
-2. **Portal banner** — The grace banner's "Cancel scheduled deletion" button
-   first fetches `GET /portal/account/cancel-deletion-modal` (a confirmation
-   modal rendered server-side), then the confirmed submit posts to
-   `/portal/account/cancel-deletion`. This two-step replaces the old
-   direct-POST to prevent accidental cancellations.
+2. **Web-client banner** — `GraceBanner` (`web/src/components/account/GraceBanner.tsx`)
+   renders whenever the session carries a `scheduled_deletion_at`. It is a
+   two-step: the button reveals a confirmation panel, and only "Keep account
+   active" calls `POST /api/auth/me/delete/cancel`. The two-step exists to
+   prevent accidental cancellations, the same reason the retired portal's
+   version fetched a modal first.
+
+   Scheduling a deletion from this client signs the browser out and lands the
+   user on `/login` with the notice `deletionScheduled` carries
+   (`web/src/auth/authState.ts`), which is what tells them the grace window is
+   the way back.
+
+   That notice has to be true on every path back in, so `postAuthPath`
+   (`web/src/app/guards.tsx`) sends a sign-in that would otherwise resolve to `/`
+   to `/account` instead whenever `scheduledDeletionAt` is set — an explicit
+   `?next=` still wins. Both `useAfterAuth` and `RequireAnonymous` call it,
+   because adopting a session re-renders the guard and the two redirects race.
+   **This is a divergence from mobile**, which mounts its grace banner on the
+   authenticated landing screen (`AgentListScreen` on both clients) rather than
+   only on the account screen, and so needs no redirect.
 3. **One-click email link** — The confirmation email carries a single-use
    token (`account_deletion_cancel_tokens` table; 24h TTL by default). Visiting
    `/portal/cancel-deletion?token=…` consumes the token and clears the
@@ -136,7 +158,10 @@ the runtime `PRAGMA user_version=11` / `user_version=12` blocks in
   source, status, mode, completed_at, cancellation_reason)` — **no FK** on
   `user_id` so audit rows survive the final cascade purge (GDPR Art. 17 trail).
   `source ∈ {android, portal, email_link}`, `status ∈ {pending, cancelled, completed, failed}`,
-  `mode ∈ {scheduled, immediate}` (migration `0010`; runtime guard `user_version < 12`).
+  `mode ∈ {scheduled, immediate}` (migration `0010`; runtime guard
+  `user_version < 12`). `'portal'` stays in the CHECK constraint permanently:
+  the surface that wrote it is gone, but its historical rows are not, and
+  dropping the value would invalidate them.
 
 `Database.delete_user` was also extended (latent-bug fix discovered during
 CLA-61 planning): it now cascades `password_reset_tokens` and
@@ -167,11 +192,11 @@ loop never raises — the next sweep tick will retry.
 | `ACCOUNT_DELETION_GRACE_DAYS` | `14` | Industry-norm window (X 30d, Spotify 7d, Pinterest 14d). |
 | `DELETION_SWEEPER_INTERVAL_SECONDS` | `3600` | Loop interval. Lower bound clamped to 60 s. |
 | `ACCOUNT_DELETION_CANCEL_TOKEN_TTL_HOURS` | `24` | Capped at the grace window — a link is useless past final purge. |
-| `PORTAL_TOKEN_EXPIRE_MINUTES` | `0` (session) | Portal cookie TTL; matches `dashboard_token` convention. |
-| `CSRF_SECRET_KEY` | derived from `JWT_SECRET_KEY` | Override only if you need to rotate CSRF independently of the JWT secret. |
+| `CSRF_SECRET_KEY` | derived from `JWT_SECRET_KEY` | Override only if you need to rotate CSRF independently of the JWT secret. Still required: the cancel-deletion page's form POST is CSRF-guarded. |
 | `PORTAL_BASE_URL` | falls back to `PUBLIC_BASE_URL` | Used to construct absolute URLs in the cancel-link email. |
+| `WEB_APP_BASE_URL` | `https://app.mobaide.com` | Origin the two surviving pages link to for sign-in and account management. |
 
-The portal footer always links to `/privacy.html`, which the central server
+Both pages' footers always link to `/privacy.html`, which the central server
 renders from `central_server/legal/privacy.md`.
 
 ## Public delete-info page

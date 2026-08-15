@@ -1,9 +1,10 @@
 /**
  * Google Identity Services integration.
  *
- * Ported from `central_server/static/site/portal.js`, which is the proven
- * browser path for this deployment — same client id, same popup flow. Two of
- * its decisions carry over and should not be revisited casually:
+ * Ported from the server-rendered portal's sign-in bundle (since retired with
+ * those pages), which was the proven browser path for this deployment — same
+ * client id, same popup flow. Two of its decisions carry over and should not be
+ * revisited casually:
  *
  *  - `renderButton`, never `google.accounts.id.prompt()`. On Chrome M125+
  *    `prompt()` routes through FedCM, which silently suppresses the UI when
@@ -58,10 +59,10 @@ let loader: Promise<GisIdApi> | null = null;
  * Load the GIS client once and resolve when its API is actually reachable.
  *
  * The `onload` event fires before `window.google.accounts.id` is necessarily
- * populated, so a short poll follows — the same belt-and-braces `portal.js`
- * uses, minus its long budget: there the script tag is `async defer` in the
- * document head and the poll may start before the download does, whereas here
- * the injection and the wait are the same call.
+ * populated, so a short poll follows — the same belt-and-braces the portal
+ * bundle used, minus its long budget: there the script tag was `async defer` in
+ * the document head and the poll could start before the download did, whereas
+ * here the injection and the wait are the same call.
  */
 export function loadGoogleIdentity(): Promise<GisIdApi> {
   if (loader !== null) return loader;

@@ -33,6 +33,10 @@ async def privacy_page(request: Request) -> HTMLResponse:
             # bare ``?v=`` and silently disables cache busting on a page whose
             # assets carry a 7-day TTL.
             "asset_version": request.app.state.asset_version,
+            # Same permissive-Undefined hazard as `asset_version`: omit this and
+            # the shell's Sign in button renders `href="/login"`, a same-origin
+            # path that does not exist on this host.
+            "app_origin": request.app.state.web_app_origin,
         },
     )
     response.headers["Cache-Control"] = _CACHE_CONTROL

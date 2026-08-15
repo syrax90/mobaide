@@ -32,9 +32,9 @@ Auto Scan monitor with its ANSI log pane, the attention-notification
 surface, and the settings hub. WEB-11 (CLA-198) added Sign in with Apple to
 login, register and the delete-account re-auth — the gate that lets an
 account created in the iOS app, private-relay address and no password, reach
-the web client at all; the same button also landed on `/portal/*`, and the
-server's Apple audience check grew to accept the browser Services ID
-alongside the iOS bundle id. WEB-12 (CLA-199) added pairing phase 2: the
+the web client at all, and the server's Apple audience check grew to accept
+the browser Services ID alongside the iOS bundle id. WEB-12 (CLA-199) added
+pairing phase 2: the
 reversed device-code direction at the guarded `/agents/pair` route,
 `/agents`'s new "Add an agent" / "Pair from a code" button pair, and the
 account-level `trust_key_fp` pin that outlives a wiped browser. The series
@@ -443,6 +443,17 @@ prefix rather than by agent id because teardown clears the credentials that
 name the current agent in the same breath, and a current-key delete would
 strand every previously-connected agent's bucket. `agentDisconnect`
 deliberately does **not** purge: an agent switch is not an identity change.
+
+Which reasons count as an identity ending is decided by `endsIdentity` in
+`sessionStore.ts`, and the same question is asked separately, with different
+membership, by the branch that revokes the browser's refresh cookie. `manual`
+and `deletionScheduled` are in both — scheduling a deletion is as deliberate as
+pressing Sign out, and leaving it out of either would keep a revoked account's
+recents on disk or let its refresh cookie restore the session. `accountRemoved`
+ends the identity but does not revoke, and `tokenRejected` does neither: it also
+fires when a refresh merely failed to complete, so treating it as an ending would
+destroy un-re-mintable paths over a flaky connection. **A new
+`InvalidationReason` must be classified against both.**
 
 Web's boot path used to be exempt for a reason that no longer holds — the
 session lived in `sessionStorage`, so closing every tab reached the
@@ -1445,10 +1456,18 @@ restart, `--rollback` repoints at the previously-live release. Runbook: the
   the PTY row count. That is also why `.app-header` is `flex-wrap: nowrap` with
   `.app-nav` absorbing overflow by scrolling, the shape `.terminal-bar` already
   uses — a wrapping header silently doubled and cost ~3 rows. Both shells carry
-  the mark — `RootLayout` as the brand link (its `alt` alone supplies the
-  accessible name an e2e assertion pins), `AuthLayout` unlinked but still named,
-  matching the site's own unlinked footer marks, since four of that shell's six
-  routes head their card with something other than the app name. `index.html`
+  the mark, and both link it — `RootLayout` to `/` (its `alt` alone supplies the
+  accessible name an e2e assertion pins), `AuthLayout` cross-origin to
+  `https://mobaide.com/`. The auth shell's mark used to be unlinked, on the
+  rationale that the marketing home was somewhere the SPA never sent anyone;
+  that stopped being true when mobaide.com's Sign in buttons started landing
+  here, so the shell also grew a footer carrying the site's own three links
+  (Home, Privacy policy, Account deletion) in the marketing `.foot-nav`
+  vocabulary. The signed-in `RootLayout` deliberately has no such footer —
+  Settings already carries those links, and a working surface does not need
+  marketing chrome. The mark stays named rather than decorative because four of
+  the auth shell's six routes head their card with something other than the app
+  name. `index.html`
   declares the icons exactly as `marketing_landing.html` does, so the tab icon
   matches across the crossing; the manifest carries the 180px PNG, which at
   least avoids the known Chromium failure on an SVG-only `sizes: "any"` set.

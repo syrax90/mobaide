@@ -23,13 +23,10 @@ from central_server.static_files import resolve_static_dir
 
 FONT_URL = "/static/site/fonts/DepartureMono-Regular.woff2"
 
-# Every page that extends ``portal_base.html`` and is reachable anonymously.
-# ``/portal/account`` is covered separately because it needs a session.
+# Every page that extends ``portal_base.html``. Sign-in, sign-up, verification
+# and password reset moved to the browser client, so these two anonymous
+# pages plus the privacy page are all that is left under this shell.
 ANONYMOUS_PORTAL_PAGES = (
-    "/portal/login",
-    "/portal/signup",
-    "/portal/forgot-password",
-    "/portal/reset-password",
     "/portal/cancel-deletion",
     "/portal/delete-account-info",
     "/privacy.html",
@@ -79,7 +76,7 @@ class TestPortalAssetStamping:
         preload alone downloads the 22.5 KB font twice and defeats the preload.
         This href must stay byte-identical to the ``@font-face`` ``url()`` in
         ``site.css``; rename the file if it is ever replaced."""
-        body = (await client.get("/portal/login")).text
+        body = (await client.get("/portal/delete-account-info")).text
         assert f'href="{FONT_URL}"' in body
         assert f"{FONT_URL}?v=" not in body
 

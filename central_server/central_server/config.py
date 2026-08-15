@@ -6,6 +6,7 @@ import tempfile
 from dataclasses import dataclass
 
 _DEFAULT_SITE_BASE_URL = "https://mobaide.com"
+_DEFAULT_WEB_APP_BASE_URL = "https://app.mobaide.com"
 
 # Browser origins allowed to open relay WebSockets. Native clients (Android,
 # iOS, the agent's Python client) send no Origin header and are always
@@ -271,19 +272,13 @@ class CentralServerConfig:
     # at the grace window — a link is useless past final purge.
     account_deletion_cancel_token_ttl_hours: int = 24
 
-    # End-user web portal (sibling of the admin dashboard at /portal/*).
-    # Separate cookie name from `dashboard_token` to avoid namespace collision
-    # (non-admin must never gain a cookie in the admin namespace).
-    portal_token_expire_minutes: int = 0
-
-    # CSRF for cookie-authenticated portal endpoints (HTMX). Falls back to
-    # a key derived from `jwt_secret_key` when unset so single-secret
-    # deployments work out of the box; supply CSRF_SECRET_KEY explicitly to
-    # rotate independently.
+    # CSRF for the form POST on `/portal/cancel-deletion`. Falls back to a key
+    # derived from `jwt_secret_key` when unset so single-secret deployments work
+    # out of the box; supply CSRF_SECRET_KEY explicitly to rotate independently.
     csrf_secret_key: str | None = None
 
-    # Public base URL of the portal — used in outbound emails for the
-    # cancel-deletion link. Falls back to `public_base_url` when unset.
+    # Public base URL of the surviving `/portal/*` pages — used in outbound
+    # emails for the cancel-deletion link. Falls back to `public_base_url`.
     portal_base_url: str | None = None
 
     # Release / manifest publishing
@@ -311,6 +306,12 @@ class CentralServerConfig:
     # site's canonical URL. Defaults to the apex the site is served from; a
     # malformed SITE_BASE_URL falls back to that default (see `_env_origin`).
     site_base_url: str = _DEFAULT_SITE_BASE_URL
+
+    # Origin of the browser client the marketing site hands users to. Every
+    # "Sign in" affordance on `mobaide.com` and every cross-link on the two
+    # surviving `/portal/*` pages is built from it, so a local checkout can
+    # point the whole site at a Vite dev server with one env var.
+    web_app_base_url: str = _DEFAULT_WEB_APP_BASE_URL
 
     # APNs push. All optional: when any of the four is unset the
     # push dispatcher is disabled and attention delivery falls back to the
@@ -480,9 +481,6 @@ class CentralServerConfig:
             account_deletion_cancel_token_ttl_hours=int(
                 os.getenv("ACCOUNT_DELETION_CANCEL_TOKEN_TTL_HOURS", "24"),
             ),
-            portal_token_expire_minutes=int(
-                os.getenv("PORTAL_TOKEN_EXPIRE_MINUTES", "0"),
-            ),
             csrf_secret_key=os.getenv("CSRF_SECRET_KEY") or None,
             portal_base_url=os.getenv("PORTAL_BASE_URL") or None,
             release_auth_token=os.getenv("RELEASE_AUTH_TOKEN") or None,
@@ -499,6 +497,9 @@ class CentralServerConfig:
             ),
             public_base_url=os.getenv("PUBLIC_BASE_URL") or None,
             site_base_url=_env_origin("SITE_BASE_URL", _DEFAULT_SITE_BASE_URL),
+            web_app_base_url=_env_origin(
+                "WEB_APP_BASE_URL", _DEFAULT_WEB_APP_BASE_URL
+            ),
             apns_key_path=os.getenv("APNS_KEY_PATH") or None,
             apns_key_id=os.getenv("APNS_KEY_ID") or None,
             apns_team_id=os.getenv("APNS_TEAM_ID") or None,

@@ -1,8 +1,8 @@
-"""End-user web portal — sibling of the admin dashboard.
+"""The anonymous account-deletion pages left over from the end-user portal.
 
-Mounted at ``/portal/*``. Cookie name (``portal_token``) is deliberately
-distinct from the admin dashboard's ``dashboard_token`` so a non-admin can
-never gain a session in the admin namespace.
+Mounted at ``/portal/*``. Everything that needed a session moved to the browser
+client; what remains is the emailed cancel-deletion link and the public
+deletion-info page Google Play Console points at.
 """
 
 from .router import router

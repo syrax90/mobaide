@@ -10,9 +10,9 @@ active, open this link:
 
     {{ cancel_url }}
 
-If you didn't request this, sign in to your account from the app or web
-portal and choose "Cancel scheduled deletion". We recommend you also
-change your password.
+If you didn't request this, sign in to your account from the Mobaide app
+or the web app and choose "Cancel scheduled deletion". We recommend you
+also change your password.
 
 —
 {{ from_name }}  ·  {{ from_domain }}

@@ -52,9 +52,18 @@ interface SessionState {
  *
  * Deliberately not consulted by `agentDisconnect`, which is an agent switch
  * rather than an identity change.
+ *
+ * `deletionScheduled` belongs here for the same reason `manual` does — it is a
+ * deliberate, server-confirmed teardown, and it was spelled `manual` until it
+ * grew its own login-screen notice. Leaving it out would silently stop purging
+ * the recents and agent tokens of an account on its way to being deleted.
  */
 function endsIdentity(reason: InvalidationReason): boolean {
-  return reason === 'manual' || reason === 'accountRemoved';
+  return (
+    reason === 'manual' ||
+    reason === 'accountRemoved' ||
+    reason === 'deletionScheduled'
+  );
 }
 
 export const useSessionStore = create<SessionState>()((set, get) => ({
@@ -90,17 +99,36 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     // together on a dead token; without this guard the login screen would show
     // its "session expired" message twice. Android added the same no-op.
     if (state.authState.kind === 'unauthenticated' && state.session === null) {
+      // …with one exception, because the server beats us to our own teardown.
+      // `request_account_deletion` closes the user channel with 4010 *before*
+      // it returns 204 (auth/service.py), and 4010 on the user axis means
+      // `accountRemoved`. So on a self-scheduled deletion that close lands
+      // first and this guard would drop the reason we raise a moment later,
+      // leaving the user reading "your account was removed by an administrator,
+      // sign up to start again" after scheduling a *cancellable* 14-day
+      // deletion — the opposite of what they need to know.
+      //
+      // Recording the reason is safe here: only `DeleteAccountPanel` (and a
+      // peer tab relaying it) ever raises this one, and this branch sets no
+      // session state, so it cannot double-tear-down. The revoke branch below
+      // is skipped on this path, which only leaves the readable signed-in
+      // marker behind for one boot — `request_account_deletion` already
+      // revoked every refresh token server-side, so no credential outlives it.
+      if (reason === 'deletionScheduled') set({ lastInvalidation: reason });
       return;
     }
     // Only a deliberate sign-out ends the browser's credential. A
     // `tokenRejected` may be this tab reacting to a token that is already
     // dead, and revoking on it would tear down a cookie that a *different*
-    // account's fresh tab in this browser has since installed.
+    // account's fresh tab in this browser has since installed. Scheduling a
+    // deletion is as deliberate as pressing Sign out — and it must revoke, or
+    // the refresh cookie survives to restore the session of an account the user
+    // just asked us to delete.
     //
     // Above the takeover branch on purpose: signing out from the update screen
     // must revoke like any other sign-out. Dropping the marker locally is what
     // makes it stick when the POST cannot reach the server at all.
-    if (reason === 'manual') {
+    if (reason === 'manual' || reason === 'deletionScheduled') {
       clearSignedInMarker();
       postLogout();
     }

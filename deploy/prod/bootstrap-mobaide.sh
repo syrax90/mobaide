@@ -236,7 +236,7 @@ JWT_SECRET_KEY=${JWT_SECRET}
 # ADMIN_SEED_EMAIL=you@example.com
 # ADMIN_SEED_PASSWORD=change-me
 
-# Required only if you use Google Sign-In (Android app, web client, portal).
+# Required only if you use Google Sign-In (Android app, iOS app, web client).
 # GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
 
 # Required only if you use Sign in with Apple. APPLE_CLIENT_ID is the iOS

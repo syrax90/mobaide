@@ -114,13 +114,10 @@ MOBILE_REFRESH_EXPIRE_MINUTES=10080   # mobile refresh token (e.g. 7 days)
 DASHBOARD_TOKEN_EXPIRE_MINUTES=480    # dashboard token      (e.g. 8 h)
 ```
 
-For the end-user web portal and account self-deletion (CLA-61), the defaults are sane but you may want to tune:
+For account self-deletion (CLA-61), the defaults are sane but you may want to tune:
 
 ```
-# Portal session token TTL (minutes); 0 = never-expires (default, same as other tokens above)
-PORTAL_TOKEN_EXPIRE_MINUTES=480
-
-# CSRF secret for cookie-authenticated portal endpoints; falls back to JWT_SECRET_KEY when unset
+# CSRF secret for the cancel-deletion form POST; falls back to JWT_SECRET_KEY when unset
 CSRF_SECRET_KEY=<random>
 
 # Grace period before a scheduled deletion is permanently purged (days, default 14)
@@ -131,6 +128,10 @@ DELETION_SWEEPER_INTERVAL_SECONDS=3600
 
 # Public base URL for cancel-deletion email links; falls back to PUBLIC_BASE_URL when unset
 PORTAL_BASE_URL=https://mobaide.com
+
+# Origin of the browser client every "Sign in" link on the marketing site points
+# at (default https://app.mobaide.com). A malformed value falls back to that default.
+WEB_APP_BASE_URL=https://app.mobaide.com
 ```
 
 Capacity-hardening knob (CLA-65): ONLINE agents' heartbeats are batch-flushed to

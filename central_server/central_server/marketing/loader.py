@@ -43,6 +43,7 @@ _DISALLOWED = ("/api/", "/portal/")
 
 def render_landing(
     site_origin: str,
+    app_origin: str,
     asset_version: str,
     *,
     templates_dir: Path | None = None,
@@ -50,7 +51,8 @@ def render_landing(
     """Render the landing page to a complete HTML document.
 
     ``site_origin`` is the scheme-and-host the page advertises in its canonical,
-    Open Graph, and JSON-LD URLs; ``asset_version`` is appended to same-origin
+    Open Graph, and JSON-LD URLs; ``app_origin`` is the browser client every
+    sign-in affordance links to; ``asset_version`` is appended to same-origin
     asset URLs as a cache-busting query.
 
     Raises ``FileNotFoundError`` when the template is missing. Failing loudly at
@@ -71,6 +73,7 @@ def render_landing(
     )
     return env.get_template(_TEMPLATE_NAME).render(
         site_origin=site_origin,
+        app_origin=app_origin,
         asset_version=asset_version,
     )
 

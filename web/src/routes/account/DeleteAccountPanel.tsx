@@ -73,7 +73,11 @@ export function DeleteAccountPanel({ email, onClose }: DeleteAccountPanelProps) 
       // close: a backgrounded tab or a network blip can drop that frame and
       // leave a locally-authenticated session holding a revoked account.
       // `invalidateUserSession` is idempotent, so a later 4010 is a no-op.
-      invalidateUserSession('manual');
+      //
+      // Only the scheduled mode gets a login-screen notice: immediate deletion
+      // leaves no grace window, so telling the user to sign back in to cancel
+      // would send them at an account that no longer exists.
+      invalidateUserSession(mode === 'scheduled' ? 'deletionScheduled' : 'manual');
     } catch (cause) {
       setError(deleteAccountMessage(cause));
       setBusy(false);

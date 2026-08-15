@@ -1,17 +1,18 @@
-"""Minimal CSRF helper for the cookie-authenticated portal.
+"""Minimal CSRF helper for the one surviving ``/portal/*`` form post.
 
 OWASP Double Submit Cookie pattern with HMAC-bound tokens:
 
-  * On ``GET`` of any portal page, the request handler calls
-    :func:`ensure_csrf_cookie` which (idempotently) sets a ``portal_csrf``
-    cookie containing an HMAC-signed token derived from the user's portal
-    session (or a fresh random nonce for unauthenticated pages).
-  * Templates render the raw token into a ``<meta>`` tag and into a global
-    ``hx-headers`` attribute on ``<body>`` so every HTMX request carries
-    ``X-CSRF-Token``. Plain form posts include it as a hidden ``csrf_token``
-    field.
-  * Before any state-changing handler runs, :func:`require_csrf` validates
-    the header (or form field) against the cookie via a constant-time compare.
+  * On ``GET``, the request handler calls :func:`ensure_csrf_cookie`, which
+    (idempotently) sets a ``portal_csrf`` cookie holding an HMAC-signed token
+    derived from a fresh random nonce — every page left here is anonymous.
+  * The template renders the raw token into a hidden ``csrf_token`` field.
+  * Before the state-changing handler runs, :func:`require_csrf` validates the
+    presented value against the cookie via a constant-time compare.
+
+The ``X-CSRF-Token`` header branch in :func:`require_csrf` is retained but no
+longer exercised: it existed for htmx, which left with the account and sign-in
+pages. It cannot weaken the form path — a cross-site form post cannot set a
+custom header, so the header is absent and the form-field branch runs.
 
 The signing key falls back to a deterministic SHA-256 derivative of
 ``jwt_secret_key`` when ``csrf_secret_key`` is unset, so single-secret

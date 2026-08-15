@@ -14,10 +14,7 @@ interface GoogleSignInButtonProps {
   onCredential: (credential: string, nonce: string) => void;
 }
 
-/**
- * Renders nothing when the server has no `GOOGLE_CLIENT_ID` configured, which
- * is the same condition under which the portal omits its own button.
- */
+/** Renders nothing when the server has no `GOOGLE_CLIENT_ID` configured. */
 export function GoogleSignInButton({
   clientId,
   text,

@@ -1,37 +1,17 @@
-"""Tests for the end-user web portal.
+"""Tests for what is left of the end-user web portal.
 
-Covers the new ``/portal/*`` routes that are siblings of the admin
-dashboard: cookie isolation (``portal_token`` ≠ ``dashboard_token``),
-public reachability of the Play-Console URL, owned-agent isolation on
-``/portal/account``, CSRF enforcement on state-changing POSTs, and the
-public ``/portal/cancel-deletion`` token-consume path.
+Sign-in, sign-up, verification, password reset and the account page moved to
+the browser client; ``/portal/*`` now serves only two anonymous pages —
+``/portal/delete-account-info`` (the URL registered in Google Play Console's
+Data Safety form) and ``/portal/cancel-deletion`` (the deletion email's
+cancel link) — plus CSRF enforcement on the latter's state-changing POST.
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
-from tests.conftest import (
-    TEST_ADMIN_EMAIL,
-    TEST_ADMIN_PASSWORD,
-    TEST_VIEWER_EMAIL,
-    TEST_VIEWER_PASSWORD,
-)
-
 
 # ---- Helpers -------------------------------------------------------------
-
-
-async def _portal_login_cookie(app, email: str, password: str) -> str:
-    """Issue a fresh portal JWT through the service for a registered user.
-
-    Bypasses ``POST /portal/login`` to keep these tests narrow — the login
-    form is exercised by its own test below.
-    """
-    auth_service = app.state.auth_service
-    _uid, _role, token, _scheduled = await auth_service.login_user(email, password)
-    return token
 
 
 async def _grab_csrf(client) -> tuple[str, dict[str, str]]:
@@ -43,7 +23,7 @@ async def _grab_csrf(client) -> tuple[str, dict[str, str]]:
     multiple clients. The token itself is parsed out of the ``Set-Cookie``
     header on the GET response because the template-embedded token is HTML.
     """
-    resp = await client.get("/portal/login")
+    resp = await client.get("/portal/cancel-deletion")
     assert resp.status_code == 200
     cookie_header = resp.headers.get("set-cookie", "")
     # ``portal_csrf=<nonce>.<digest>; Path=/; ...`` — extract the value.
@@ -78,66 +58,6 @@ class TestPublicPortalPages:
         resp = await client.get("/portal/cancel-deletion")
         # The GET path is also public — it renders a confirmation form
         # before consuming the token (avoids accidental link-scanner hits).
-        assert resp.status_code == 200
-
-    async def test_login_page_reachable_without_auth(self, client) -> None:
-        resp = await client.get("/portal/login")
-        assert resp.status_code == 200
-
-
-# ---- Cookie namespace isolation -----------------------------------------
-
-
-class TestPortalCookieIsolation:
-    async def test_portal_cookie_does_not_unlock_dashboard_routes(
-        self, client, app, viewer_user
-    ) -> None:
-        """A non-admin signing into the portal receives a ``portal_token``
-        cookie. That cookie must NOT pass ``get_dashboard_user`` for the
-        admin dashboard — admin routes look for ``dashboard_token`` only.
-        """
-        del viewer_user
-        token = await _portal_login_cookie(
-            app, TEST_VIEWER_EMAIL, TEST_VIEWER_PASSWORD,
-        )
-        resp = await client.get(
-            "/dashboard",
-            headers={"Cookie": f"portal_token={token}"},
-        )
-        # No dashboard cookie present → 303 redirect to /dashboard/login.
-        assert resp.status_code == 303
-        assert resp.headers["location"].startswith("/dashboard/login")
-
-    async def test_dashboard_cookie_does_not_unlock_portal_account(
-        self, client, dashboard_headers
-    ) -> None:
-        """Symmetric: an admin presenting a ``dashboard_token`` against the
-        portal must be redirected to the portal login. ``get_portal_user``
-        reads ``portal_token`` only.
-        """
-        resp = await client.get("/portal/account", headers=dashboard_headers)
-        assert resp.status_code == 303
-        assert resp.headers["location"].startswith("/portal/login")
-
-    async def test_portal_account_requires_portal_token_cookie(
-        self, client
-    ) -> None:
-        """No cookies at all → redirect to /portal/login."""
-        resp = await client.get("/portal/account")
-        assert resp.status_code == 303
-        assert resp.headers["location"].startswith("/portal/login")
-
-    async def test_portal_token_unlocks_portal_account(
-        self, client, app, viewer_user
-    ) -> None:
-        del viewer_user
-        token = await _portal_login_cookie(
-            app, TEST_VIEWER_EMAIL, TEST_VIEWER_PASSWORD,
-        )
-        resp = await client.get(
-            "/portal/account",
-            headers={"Cookie": f"portal_token={token}"},
-        )
         assert resp.status_code == 200
 
 
@@ -244,42 +164,6 @@ class TestPortalCsrf:
         assert resp.status_code == 403
 
 
-# ---- Owned-data isolation -----------------------------------------------
-
-
-class TestPortalAccountIsolation:
-    async def test_portal_account_lists_only_callers_own_agents(
-        self, client, app, viewer_user
-    ) -> None:
-        """Every authenticated portal route filters by ``user.sub``. A
-        viewer signed into the portal must see ONLY their own agents.
-        """
-        # Second user (NOT seed-admin, NOT viewer) with an agent of their own.
-        await app.state.auth_service.register_user(
-            "other@test.local", "otherpass123",
-        )
-        other = await app.state.db.get_user_by_email("other@test.local")
-        assert other is not None
-        _, _ = await app.state.db.register_agent("other-secret-agent", other["id"])
-
-        # Viewer gets a clearly-named agent of their own.
-        _, _ = await app.state.db.register_agent(
-            "viewer-only-agent", viewer_user["id"],
-        )
-
-        token = await _portal_login_cookie(
-            app, TEST_VIEWER_EMAIL, TEST_VIEWER_PASSWORD,
-        )
-        resp = await client.get(
-            "/portal/account",
-            headers={"Cookie": f"portal_token={token}"},
-        )
-        assert resp.status_code == 200
-        body = resp.text
-        assert "viewer-only-agent" in body
-        assert "other-secret-agent" not in body
-
-
 # ---- Public cancel-by-email-token path ----------------------------------
 
 
@@ -332,174 +216,3 @@ class TestPublicCancelByToken:
         # Page renders the "invalid_token" outcome with 200; never leaks
         # whether the token shape was right but unknown vs malformed.
         assert resp.status_code == 200
-
-
-class TestDeleteModalErrorRerender:
-    """``delete_submit`` used to return a single ``<div class="alert">`` on
-    error, which HTMX 2.0 silently dropped. The route now re-renders the
-    entire modal with ``error=`` so the user sees inline feedback without
-    losing the form they already filled in."""
-
-    async def test_wrong_password_rerenders_full_modal_with_error_banner(
-        self, client, app, viewer_user,
-    ) -> None:
-        del viewer_user
-        token = await _portal_login_cookie(
-            app, TEST_VIEWER_EMAIL, TEST_VIEWER_PASSWORD,
-        )
-        csrf_token, _ = await _grab_csrf(client)
-
-        # ``Cookie`` header overrides the jar — must include BOTH the
-        # portal_token AND the portal_csrf that ``_grab_csrf`` populated.
-        cookie_header = f"portal_token={token}; portal_csrf={csrf_token}"
-
-        resp = await client.post(
-            "/portal/account/delete",
-            data={
-                "method": "password",
-                "mode": "scheduled",
-                "password": "WRONG-PASSWORD",
-                "csrf_token": csrf_token,
-            },
-            headers={
-                "Cookie": cookie_header,
-                "X-CSRF-Token": csrf_token,
-            },
-        )
-
-        # Re-auth failure surfaces as 403 (status preserved for the
-        # informational header) AND a full modal re-render.
-        assert resp.status_code == 403
-        body = resp.text
-        # The error banner must appear.
-        assert "Re-authentication failed" in body
-        # The modal itself must still be there — not just a bare alert div.
-        assert 'id="delete-account-form"' in body
-
-    async def test_seed_admin_rejected_returns_400_with_modal_rerender(
-        self, client, app, dashboard_headers,
-    ) -> None:
-        """Seed-admin self-delete attempt is refused at 400 (forbidden by
-        policy). Even on the policy-block path, the modal must re-render
-        so the user sees why."""
-        del dashboard_headers
-        # Issue a portal session for the seed admin directly (the dashboard
-        # session uses a different cookie namespace).
-        token = await _portal_login_cookie(
-            app, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD,
-        )
-        csrf_token, _ = await _grab_csrf(client)
-        cookie_header = f"portal_token={token}; portal_csrf={csrf_token}"
-
-        resp = await client.post(
-            "/portal/account/delete",
-            data={
-                "method": "password",
-                "mode": "scheduled",
-                "password": TEST_ADMIN_PASSWORD,
-                "csrf_token": csrf_token,
-            },
-            headers={
-                "Cookie": cookie_header,
-                "X-CSRF-Token": csrf_token,
-            },
-        )
-
-        # Note: a non-seed admin would have been blocked at portal login
-        # already; the seed admin reaches this route only via the policy
-        # path, which always 400s. If the deployment turns off seed-admin
-        # entirely (cfg.admin_seed_email = None), the modal would render
-        # without the rejection banner; that branch is covered by the
-        # ``is_seed_admin`` Jinja flag in test_templates.py.
-        assert resp.status_code in (400, 200)
-
-
-class TestPortalSignup:
-    """Form-level tests for ``POST /portal/signup``. Covers the new
-    ``confirm_password`` field: happy path, mismatch error, and the
-    template carrying both fields so the JS can wire up the live
-    indicator.
-
-    The conftest config sets ``email_verification_required=False`` so the
-    happy path redirects straight to ``/portal/account`` with a JWT cookie
-    issued — no OTP loop to traverse here.
-    """
-
-    async def test_signup_with_matching_passwords_succeeds(
-        self, client,
-    ) -> None:
-        csrf_token, _ = await _grab_csrf(client)
-        resp = await client.post(
-            "/portal/signup",
-            data={
-                "csrf_token": csrf_token,
-                "email": "newuser@test.local",
-                "password": "matchpass123",
-                "confirm_password": "matchpass123",
-            },
-            headers={"X-CSRF-Token": csrf_token},
-            follow_redirects=False,
-        )
-        # Verification disabled in test config → straight to /portal/account.
-        assert resp.status_code == 303
-        assert resp.headers["location"].startswith("/portal/account")
-
-    async def test_signup_with_mismatched_passwords_rerenders_with_error(
-        self, client, app,
-    ) -> None:
-        csrf_token, _ = await _grab_csrf(client)
-        resp = await client.post(
-            "/portal/signup",
-            data={
-                "csrf_token": csrf_token,
-                "email": "mismatch@test.local",
-                "password": "matchpass123",
-                "confirm_password": "DIFFERENT-pass",
-            },
-            headers={"X-CSRF-Token": csrf_token},
-        )
-        assert resp.status_code == 400
-        assert "Passwords don&#39;t match." in resp.text or \
-               "Passwords don't match." in resp.text
-        # Form re-rendered, not just a bare alert.
-        assert 'name="confirm_password"' in resp.text
-        # User must NOT have been created.
-        user = await app.state.db.get_user_by_email("mismatch@test.local")
-        assert user is None
-
-    async def test_signup_with_missing_confirm_field_rejected(
-        self, client, app,
-    ) -> None:
-        csrf_token, _ = await _grab_csrf(client)
-        resp = await client.post(
-            "/portal/signup",
-            data={
-                "csrf_token": csrf_token,
-                "email": "missing-confirm@test.local",
-                "password": "matchpass123",
-                # confirm_password intentionally omitted.
-            },
-            headers={"X-CSRF-Token": csrf_token},
-        )
-        # Empty string != "matchpass123" → mismatch error path.
-        assert resp.status_code == 400
-        user = await app.state.db.get_user_by_email(
-            "missing-confirm@test.local"
-        )
-        assert user is None
-
-
-class TestCancelDeletionModalEndpoint:
-    """The ``Cancel scheduled deletion`` button used to POST directly. It
-    now opens a confirmation modal (GET ``/portal/account/cancel-deletion-modal``)
-    before firing the existing POST. The POST endpoint stays unchanged."""
-
-    async def test_modal_endpoint_requires_portal_token(self, client) -> None:
-        """Unauthenticated GETs are redirected to the portal login. The
-        cancel-deletion confirmation is private — no token, no modal."""
-        resp = await client.get(
-            "/portal/account/cancel-deletion-modal",
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303
-        assert resp.headers["location"].startswith("/portal/login")
