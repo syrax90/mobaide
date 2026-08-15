@@ -167,7 +167,11 @@ describe('a peer tab that took the same 4010 close', () => {
   // better, and it relays that over the session channel.
   async function relayCorrection(): Promise<void> {
     const peer = new BroadcastChannel('mobaide-session');
-    peer.postMessage({ type: 'reasonCorrection', reason: 'deletionScheduled' });
+    peer.postMessage({
+      type: 'reasonCorrection',
+      reason: 'deletionScheduled',
+      userId: session.userId,
+    });
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
@@ -216,10 +220,39 @@ describe('a peer tab that took the same 4010 close', () => {
     });
     peer.close();
 
+    // Naming the owner is load-bearing: it is what stops a tab holding another
+    // account from arming its latch against a later removal of its own.
     expect(seen).toContainEqual({
       type: 'reasonCorrection',
       reason: 'deletionScheduled',
+      userId: session.userId,
     });
+  });
+
+  it('ignores a correction meant for a different account', async () => {
+    // This browser supports two accounts at once (`sessionStore`'s `update`
+    // branch guards for exactly that). Account A schedules a deletion while
+    // this tab holds account B; without an owner check the latch would arm and
+    // a later *genuine* admin removal of B would read as a cancellable
+    // deletion — the same false statement, aimed at the wrong user.
+    sessionStorage.setItem('mobaide-session', JSON.stringify(session));
+    await bootstrapSession();
+
+    const peer = new BroadcastChannel('mobaide-session');
+    peer.postMessage({
+      type: 'reasonCorrection',
+      reason: 'deletionScheduled',
+      userId: 'someone-else',
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    peer.close();
+    useSessionStore.getState().invalidateUserSession('accountRemoved');
+
+    expect(useSessionStore.getState().consumeInvalidation()).toBe(
+      'accountRemoved',
+    );
   });
 
   it('leaves a genuine admin revocation alone', async () => {

@@ -5,6 +5,7 @@ import { clearAllRecentPaths } from '../stores/recentPaths';
 import {
   adoptSession,
   broadcastReasonCorrection,
+  lastSignedOutUserId,
   clearSession,
   clearSignedInMarker,
   connectSessionChannel,
@@ -266,6 +267,20 @@ export function bootstrapSession(): Promise<void> {
     connectSessionChannel((message) => {
       const store = useSessionStore.getState();
       if (message.type === 'reasonCorrection') {
+        // Only the deleted account's own tabs. A tab signed in as someone else
+        // must not arm its latch here, or a later *genuine* admin removal of
+        // that second account would be re-labelled as a cancellable deletion.
+        // A signed-out peer has no session to compare, so it falls back to the
+        // id its own teardown recorded. A null id means a tab on the previous
+        // build sent this; stay permissive rather than ignore it.
+        const owner = store.session?.userId ?? lastSignedOutUserId();
+        if (
+          message.userId !== null &&
+          owner !== null &&
+          owner !== message.userId
+        ) {
+          return;
+        }
         // Re-label, never re-tear-down: a peer that took the same 4010 has
         // already purged and revoked, and running that again would be a second
         // teardown. Gating on the recorded `accountRemoved` is what keeps this
