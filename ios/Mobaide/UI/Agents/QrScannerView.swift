@@ -59,7 +59,7 @@ struct QrScannerView: View {
             Text("Mobaide uses the camera only to read the pairing QR rendered on your agent host. The code is never uploaded.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
-            Button("Allow camera access") {
+            Button("Continue") {
                 AVCaptureDevice.requestAccess(for: .video) { granted in
                     Task { @MainActor in
                         status = granted ? .authorized : .denied
