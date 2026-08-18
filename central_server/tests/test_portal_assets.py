@@ -41,7 +41,7 @@ def portal_css() -> str:
     documents them in prose ("No ``:root`` and no ``@font-face`` here") — matching
     that prose would fail every one of these tests on a correct file.
     """
-    raw = (resolve_static_dir() / "site" / "portal.css").read_text()
+    raw = (resolve_static_dir() / "site" / "portal.css").read_text(encoding="utf-8")
     return re.sub(r"/\*.*?\*/", "", raw, flags=re.DOTALL)
 
 
@@ -83,7 +83,9 @@ class TestPortalAssetStamping:
     async def test_the_font_url_matches_the_font_face_rule(self) -> None:
         """The other half of the byte-identical contract, checked against the
         stylesheet rather than the template."""
-        site_css = (resolve_static_dir() / "site" / "site.css").read_text()
+        site_css = (
+            (resolve_static_dir() / "site" / "site.css").read_text(encoding="utf-8")
+        )
         assert f'url("{FONT_URL}")' in site_css
 
     async def test_the_privacy_page_stamps_the_asset_version(

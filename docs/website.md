@@ -37,7 +37,7 @@ ships its own copy of the Departure Mono woff2 + OFL under `web/public/fonts/`
 | `central_server/static/site/portal.css` | Additions `site.css` lacks: forms, alerts, tables, choice fieldsets, legal-doc layout. Loaded **after** `site.css`. Declares no tokens and no `@font-face`. |
 | `central_server/templates/portal_base.html` | Shell for the static pages — loads both sheets, carries the shared chrome markup, and loads **no script at all**. |
 | `central_server/static/style.css` | **Admin dashboard only.** Light sheet (`--primary: #0d6efd`, `--radius: 6px`), not part of this design system. |
-| `central_server/static/site/site.js` | Reveal-on-scroll + hero typewriter. Landing page only — `portal_base.html` deliberately does not load it. |
+| `central_server/static/site/site.js` | Reveal-on-scroll, hero typewriter, and the install-command copy buttons. Landing page only — `portal_base.html` deliberately does not load it. |
 | `central_server/static/site/img/`, `fonts/` | Assets — see *Regenerating assets*. |
 | `central_server/tests/test_marketing.py` | Route, header, and copy-accuracy tests. |
 | `central_server/tests/test_portal_assets.py` | Static-page asset stamping + the `portal.css` invariants. |
@@ -347,6 +347,54 @@ them and any future `hx-indicator` is silently dead.
 `.badge*`, `.info-grid`, `.qr-*`, `.token-display`, `.search-bar`, `.user-row` and
 `.detail-row` are intentionally **not** ported: they stay in `static/style.css`
 for the admin dashboard.
+
+## Copyable command blocks
+
+The two install one-liners in step 01 each sit in their own `.copyblock` — a
+label row carrying an icon-only copy button, over the framed `<pre class="code">`
+holding the command. It is the marketing-side port of the clients' install
+sheets; Android's `InstallCommandCard` is the closest mirror, an icon-only
+button whose `contentDescription` names the OS.
+
+**The command exists in exactly one place: the `<code>` element.** `site.js`
+reads `code.textContent` at click time, and the button carries a bare `data-copy`
+hook with no value. A `data-copy="curl …"` would be a second copy of the string
+that can drift from the one on screen — a visitor would copy something other
+than what they read, with nothing visibly wrong. `test_marketing.py` asserts
+each command appears exactly once for that reason.
+
+**The buttons are `display: none` until `site.js` sets `can-copy`** on the root
+element, which it does only after the Clipboard API checks out and every button
+is wired. Deliberately not gated on the `js` class: that says only that
+scripting ran, while `navigator.clipboard` is undefined on an insecure origin —
+so `js` alone would show a button that silently does nothing. A button that
+cannot copy is worse than no button, and the command underneath is selectable
+text either way. This is *not* the hidden-by-default state the accessibility
+invariants forbid: `can-copy` is set synchronously from `init()` and the banned
+pattern is a hidden state that only a *successful animation* can undo — no
+animation is in this path at all. `setUpCopyButtons()` is likewise called
+**before** `init()`'s reduced-motion early return, since copying is not motion.
+
+Colour choices follow the invariants above rather than inventing any: the
+button's boundary is `--gray` (WCAG 1.4.11 wants 3:1 for a control the user has
+to find, and `--rule` misses at 2.78:1), the copied state is `--ok` as both icon
+colour and 2px ring, and a refused write is `--danger` the same way. Note that
+`.copy-btn svg` deliberately sets no `display`: a flex item is blockified
+already, and at (0,1,1) that declaration outranks `.copy-ico-done`'s (0,1,0)
+`display: none` and paints the checkmark permanently beside the clipboard glyph.
+
+Failure is handled rather than swallowed. `navigator.clipboard` is absent on an
+insecure origin and Safari/Firefox can refuse a write outright, so a failed copy
+selects the command's text — the visitor presses Ctrl+C, or Command+C on macOS,
+which the announcement names rather than guesses at — and says so in the
+block's `role="status"` region. That region exists because the button's
+`aria-label` is its whole accessible name: the icon carries no text, and
+rewriting the name of the control someone just pressed is not an announcement.
+
+**The three `portal_base.html` pages get no copy button**, deliberately. They
+load no JavaScript at all (see *Static-page styling*), and none of them shows a
+command worth copying; adding one there would mean re-admitting a script to
+those pages, which is a policy change rather than a tweak.
 
 ## Store badge rules
 

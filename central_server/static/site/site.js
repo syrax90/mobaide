@@ -1,4 +1,5 @@
-/* Mobaide marketing site — reveal-on-scroll and the hero typewriter.
+/* Mobaide marketing site — reveal-on-scroll, the hero typewriter, and the
+ * install-command copy buttons.
  *
  * Loaded synchronously from <head> (not deferred) so the `js` class lands
  * before first paint: site.css gates every animation start-state on that class,
@@ -29,6 +30,137 @@
   var TRANSCRIPT_STALL_MS = 1500;
   // Bound on waiting for the webfont before typing; see setUpTypewriter().
   var FONT_WAIT_MS = 1200;
+  // How long the copy button holds its checkmark. Roughly Android's
+  // Toast.LENGTH_SHORT, which is the confirmation this mirrors.
+  var COPIED_MS = 2000;
+
+  /* ---- install-command copy buttons ---- */
+
+  /* Puts the command on the clipboard, resolving true/false rather than
+   * rejecting: Firefox and Safari refuse a gesture-less write, and an unhandled
+   * rejection inside a click handler surfaces somewhere unhelpful. Mirrors the
+   * web client's writeClipboardText().
+   */
+  function writeClipboard(text) {
+    try {
+      return navigator.clipboard.writeText(text).then(
+        function () {
+          return true;
+        },
+        function () {
+          return false;
+        }
+      );
+    } catch (err) {
+      return Promise.resolve(false);
+    }
+  }
+
+  /* Fallback for a refused write: hand the visitor a ready-made selection so
+   * Ctrl+C (Command+C on macOS) still works. Deliberately not
+   * document.execCommand("copy") — it is deprecated, and the selection is the
+   * part that actually helps.
+   */
+  function selectContents(node) {
+    if (!window.getSelection || !document.createRange) {
+      return false;
+    }
+    var selection = window.getSelection();
+    if (!selection) {
+      return false;
+    }
+    var range = document.createRange();
+    range.selectNodeContents(node);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+  }
+
+  function wireCopyButton(button) {
+    var block = button.closest(".copyblock");
+    if (!block) {
+      return;
+    }
+    var code = block.querySelector("code");
+    var status = block.querySelector("[role='status']");
+    if (!code) {
+      return;
+    }
+
+    var timer = null;
+    // Bumped per activation so a write that settles after a newer click is
+    // recognised as stale. Without it two in-flight writes both repaint the
+    // button and both schedule a reset, and only the newest reset is
+    // cancellable — the older one then fires early and cuts the newer hold
+    // short, or an older failure repaints over a newer success.
+    var generation = 0;
+
+    // The button's own aria-label is the stable accessible name, so the
+    // outcome goes to a separate live region instead — changing the name of
+    // the control the user just pressed is not an announcement.
+    var announce = function (message) {
+      if (status) {
+        status.textContent = message;
+      }
+    };
+
+    var reset = function () {
+      button.removeAttribute("data-copied");
+      button.removeAttribute("data-copy-failed");
+      announce("");
+    };
+
+    button.addEventListener("click", function () {
+      var mine = ++generation;
+      // Clear first, so a second click re-arms the full hold rather than
+      // inheriting the remainder of the previous one.
+      window.clearTimeout(timer);
+      reset();
+
+      writeClipboard(code.textContent).then(function (ok) {
+        if (mine !== generation) {
+          return; // a newer click owns the button now
+        }
+        if (ok) {
+          button.setAttribute("data-copied", "");
+          announce("Command copied");
+        } else {
+          button.setAttribute("data-copy-failed", "");
+          // Naming both chords beats guessing the platform: macOS is one of
+          // the two targets this very block installs onto, and Ctrl+C alone
+          // would send half those visitors a shortcut that does nothing.
+          announce(
+            selectContents(code)
+              ? "Could not copy — the command is selected, press Ctrl+C " +
+                  "(Command+C on macOS)"
+              : "Could not copy — select the command and copy it manually"
+          );
+        }
+        timer = window.setTimeout(reset, COPIED_MS);
+      });
+    });
+  }
+
+  function setUpCopyButtons() {
+    // navigator.clipboard is undefined on an insecure origin, so scripting
+    // running is not enough to promise a working button. Returning here leaves
+    // .copy-btn at its display:none default rather than showing a dead
+    // control; the command below it stays selectable text either way.
+    if (
+      !window.Promise ||
+      !navigator.clipboard ||
+      !navigator.clipboard.writeText ||
+      !Element.prototype.closest
+    ) {
+      return;
+    }
+    var buttons = document.querySelectorAll(".copy-btn[data-copy]");
+    for (var i = 0; i < buttons.length; i++) {
+      wireCopyButton(buttons[i]);
+    }
+    // Only now, with every button wired, does the stylesheet reveal them.
+    document.documentElement.classList.add("can-copy");
+  }
 
   function setUpReveals() {
     var targets = document.querySelectorAll("[data-reveal]");
@@ -211,6 +343,10 @@
   }
 
   function init() {
+    // Ahead of the reduced-motion return below: copying is not motion, and a
+    // visitor who asked for less of it still needs the button to work.
+    setUpCopyButtons();
+
     if (reduceMotion) {
       // The `.js` class has already armed the hidden states, so hand the
       // transcript straight back rather than leaving it hidden.
