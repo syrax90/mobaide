@@ -1,6 +1,7 @@
 package com.mobaide.app.data.local
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -26,6 +27,8 @@ class PreferencesStore(private val context: Context) {
     private val keyLastAutoScanOptions = stringPreferencesKey("last_used_auto_scan_options")
     private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
+    private val keyExternalSessionsNoticeDismissed =
+        booleanPreferencesKey("external_sessions_notice_dismissed")
 
     // Lenient (ignore unknown keys) so adding fields server-side later doesn't
     // crash a stale cached blob.
@@ -58,6 +61,9 @@ class PreferencesStore(private val context: Context) {
                 runCatching { TerminalDisplayMode.valueOf(stored) }.getOrNull()
             } ?: TerminalDisplayMode.Static
         }
+
+    val externalSessionsNoticeDismissed: Flow<Boolean> =
+        context.dataStore.data.map { it[keyExternalSessionsNoticeDismissed] ?: false }
 
     val terminalStaticColumns: Flow<Int> =
         context.dataStore.data.map { prefs ->
@@ -140,6 +146,12 @@ class PreferencesStore(private val context: Context) {
     suspend fun setTerminalDisplayMode(mode: TerminalDisplayMode) {
         context.dataStore.edit { prefs ->
             prefs[keyTerminalDisplayMode] = mode.name
+        }
+    }
+
+    suspend fun setExternalSessionsNoticeDismissed() {
+        context.dataStore.edit { prefs ->
+            prefs[keyExternalSessionsNoticeDismissed] = true
         }
     }
 

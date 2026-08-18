@@ -17,6 +17,7 @@ final class SessionListModel {
     /// the second link of the label chain (`kind_label` snapshot → this →
     /// "Custom").
     private(set) var customTypeNames: [String: String] = [:]
+    private(set) var showExternalSessionsNotice = false
 
     private let repository: SessionRepository
     private let agentEventBus: AgentEventBus
@@ -46,6 +47,14 @@ final class SessionListModel {
         self.sessions = repository.currentSessions
         self.activeScans = autoScanRepository.currentScans
         self.customTypeNames = Self.typeNames(customAgentTypesRepository.currentTypes)
+        self.showExternalSessionsNotice = !preferencesStore.isExternalSessionsNoticeDismissed()
+    }
+
+    /// Permanent: the flag is written before the view updates, so the notice
+    /// stays gone across relaunches and across sign-out (nothing purges it).
+    func dismissExternalSessionsNotice() {
+        preferencesStore.setExternalSessionsNoticeDismissed()
+        showExternalSessionsNotice = false
     }
 
     var isEmpty: Bool { sessions.isEmpty && !isReconnecting }

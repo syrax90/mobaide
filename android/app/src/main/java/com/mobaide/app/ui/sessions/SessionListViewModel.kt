@@ -34,6 +34,9 @@ data class SessionListUiState(
     // ("custom_<id>" → name). Fallback label source for custom sessions whose
     // wire kind_label snapshot is absent.
     val customTypeNames: Map<String, String> = emptyMap(),
+    // Defaults to hidden so an already-dismissed notice never flashes while
+    // the DataStore read is in flight.
+    val showExternalSessionsNotice: Boolean = false,
 )
 
 @HiltViewModel
@@ -57,6 +60,12 @@ class SessionListViewModel @Inject constructor(
 
     init {
         agentEventBus.start()
+
+        viewModelScope.launch {
+            preferencesStore.externalSessionsNoticeDismissed.collect { dismissed ->
+                _uiState.update { it.copy(showExternalSessionsNotice = !dismissed) }
+            }
+        }
 
         viewModelScope.launch {
             combine(
@@ -196,6 +205,12 @@ class SessionListViewModel @Inject constructor(
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "Failed to stop scan: ${e.message}") }
             }
+        }
+    }
+
+    fun dismissExternalSessionsNotice() {
+        viewModelScope.launch {
+            preferencesStore.setExternalSessionsNoticeDismissed()
         }
     }
 

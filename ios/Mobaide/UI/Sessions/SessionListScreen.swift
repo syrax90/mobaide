@@ -33,6 +33,11 @@ private struct SessionListContent: View {
     var body: some View {
         content
             .navigationTitle("Sessions")
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if model.showExternalSessionsNotice {
+                    ExternalSessionsNotice { model.dismissExternalSessionsNotice() }
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {

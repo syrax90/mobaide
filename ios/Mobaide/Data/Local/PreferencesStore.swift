@@ -14,6 +14,7 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyLastUsedAntigravityOptions = "last_used_antigravity_options"
     static let keyTerminalDisplayMode = "terminal_display_mode"
     static let keyTerminalStaticColumns = "terminal_static_columns"
+    static let keyExternalSessionsNoticeDismissed = "external_sessions_notice_dismissed"
 
     static let attentionSeenPrefix = "attention_seen::"
     static let recentCustomPathsPrefix = "recent_custom_paths::"
@@ -102,6 +103,16 @@ struct PreferencesStore: @unchecked Sendable {
 
     func setTerminalStaticColumns(_ columns: Int) {
         defaults.set(TerminalDisplayDefaults.clampColumns(columns), forKey: Self.keyTerminalStaticColumns)
+    }
+
+    /// Absent means "not dismissed": `bool(forKey:)` returns false for a
+    /// missing key, so a fresh install shows the notice.
+    func isExternalSessionsNoticeDismissed() -> Bool {
+        defaults.bool(forKey: Self.keyExternalSessionsNoticeDismissed)
+    }
+
+    func setExternalSessionsNoticeDismissed() {
+        defaults.set(true, forKey: Self.keyExternalSessionsNoticeDismissed)
     }
 
     func getCachedLinearLabels(projectName: String) -> [LinearLabelDto] {
