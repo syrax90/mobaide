@@ -301,4 +301,30 @@ final class SessionListModelTests: XCTestCase {
         let noReplay = await second.expectNoElement(within: .milliseconds(200))
         XCTAssertTrue(noReplay, "a cleared auto-resume id must not replay to a returning list subscriber")
     }
+
+    // MARK: - External-sessions notice
+
+    func testExternalSessionsNoticeShowsOnceThenStaysHiddenForEveryLaterLaunch() {
+        let prefs = isolatedPrefs()
+        let (model, _, _, _) = makeStack(prefs: prefs)
+        XCTAssertTrue(model.showExternalSessionsNotice, "nothing dismissed yet, so the notice is seeded visible")
+
+        model.dismissExternalSessionsNotice()
+
+        XCTAssertFalse(model.showExternalSessionsNotice)
+
+        // A relaunch: a new model seeded from the same store. The flag lives in
+        // the store, not in this model's lifetime.
+        let (relaunched, _, _, _) = makeStack(prefs: prefs)
+        XCTAssertFalse(relaunched.showExternalSessionsNotice)
+    }
+
+    func testExternalSessionsNoticeStaysHiddenForAStoreThatAlreadyRecordedTheDismissal() {
+        let prefs = isolatedPrefs()
+        prefs.setExternalSessionsNoticeDismissed()
+
+        let (model, _, _, _) = makeStack(prefs: prefs)
+
+        XCTAssertFalse(model.showExternalSessionsNotice, "seeded hidden, so a dismissed notice never flashes")
+    }
 }

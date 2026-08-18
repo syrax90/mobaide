@@ -928,7 +928,8 @@ session on that agent. The toggle is the one piece of terminal state that
 outlives the tab: `terminalPrefsStore` persists it under `localStorage` key
 `mobaide-terminal`, the second persisted key after `mobaide-theme` (WEB-07
 adds `mobaide-agent` and `mobaide-sessions`, and CLA-232 the wizard's global
-`mobaide-launch-prefs`; CLA-256 adds the wizard's
+`mobaide-launch-prefs`; the dismissible external-sessions notice above the
+sessions list adds `mobaide-external-sessions-notice`; CLA-256 adds the wizard's
 per-agent `recent_custom_paths::<agentId>`, deliberately unprefixed for
 mobile parity — the one prefix sweep in `src/` is CLA-258's
 `clearAllRecentPaths()`, which keys off `recent_custom_paths::` itself, so

@@ -46,6 +46,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.ui.autoscan.AutoScanCard
+import com.mobaide.app.ui.common.ExternalSessionsNotice
 import com.mobaide.app.ui.theme.StateCrashed
 import com.mobaide.app.ui.update.AgentOutdatedBanner
 import com.mobaide.app.ui.theme.StateRunning
@@ -130,6 +131,9 @@ fun SessionListScreen(
                     onInstallNow = viewModel::forceUpdateNow,
                     onDismiss = {},
                 )
+            }
+            if (uiState.showExternalSessionsNotice) {
+                ExternalSessionsNotice(onDismiss = viewModel::dismissExternalSessionsNotice)
             }
             PullToRefreshBox(
                 isRefreshing = uiState.isReconnecting,

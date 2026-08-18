@@ -1539,6 +1539,31 @@ input[type='radio']:checked {
 /* endregion */
 
 /* region sessions (WEB-07) */
+/* One-time explainer above the sessions list. Informational, so the frame
+   rings in --rule ("decorative frames only" — the heading text, not the
+   colour, carries the meaning) rather than a status token. */
+.notice-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 1rem;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--rule);
+}
+
+.notice-banner-title {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.notice-banner-body {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--text-muted);
+}
+
 .sessions-toolbar {
   display: flex;
   flex-wrap: wrap;
