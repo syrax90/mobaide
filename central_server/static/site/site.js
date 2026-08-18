@@ -57,8 +57,9 @@
   }
 
   /* Fallback for a refused write: hand the visitor a ready-made selection so
-   * Ctrl+C still works. Deliberately not document.execCommand("copy") — it is
-   * deprecated, and the selection is the part that actually helps.
+   * Ctrl+C (Command+C on macOS) still works. Deliberately not
+   * document.execCommand("copy") — it is deprecated, and the selection is the
+   * part that actually helps.
    */
   function selectContents(node) {
     if (!window.getSelection || !document.createRange) {
@@ -87,6 +88,12 @@
     }
 
     var timer = null;
+    // Bumped per activation so a write that settles after a newer click is
+    // recognised as stale. Without it two in-flight writes both repaint the
+    // button and both schedule a reset, and only the newest reset is
+    // cancellable — the older one then fires early and cuts the newer hold
+    // short, or an older failure repaints over a newer success.
+    var generation = 0;
 
     // The button's own aria-label is the stable accessible name, so the
     // outcome goes to a separate live region instead — changing the name of
@@ -104,20 +111,28 @@
     };
 
     button.addEventListener("click", function () {
+      var mine = ++generation;
       // Clear first, so a second click re-arms the full hold rather than
       // inheriting the remainder of the previous one.
       window.clearTimeout(timer);
       reset();
 
       writeClipboard(code.textContent).then(function (ok) {
+        if (mine !== generation) {
+          return; // a newer click owns the button now
+        }
         if (ok) {
           button.setAttribute("data-copied", "");
           announce("Command copied");
         } else {
           button.setAttribute("data-copy-failed", "");
+          // Naming both chords beats guessing the platform: macOS is one of
+          // the two targets this very block installs onto, and Ctrl+C alone
+          // would send half those visitors a shortcut that does nothing.
           announce(
             selectContents(code)
-              ? "Could not copy — the command is selected, press Ctrl+C"
+              ? "Could not copy — the command is selected, press Ctrl+C " +
+                  "(Command+C on macOS)"
               : "Could not copy — select the command and copy it manually"
           );
         }

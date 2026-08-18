@@ -385,7 +385,8 @@ already, and at (0,1,1) that declaration outranks `.copy-ico-done`'s (0,1,0)
 
 Failure is handled rather than swallowed. `navigator.clipboard` is absent on an
 insecure origin and Safari/Firefox can refuse a write outright, so a failed copy
-selects the command's text — the visitor presses Ctrl+C — and says so in the
+selects the command's text — the visitor presses Ctrl+C, or Command+C on macOS,
+which the announcement names rather than guesses at — and says so in the
 block's `role="status"` region. That region exists because the button's
 `aria-label` is its whole accessible name: the icon carries no text, and
 rewriting the name of the control someone just pressed is not an announcement.
