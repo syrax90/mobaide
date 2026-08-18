@@ -198,4 +198,8 @@ echo ""
 echo "  Agent status:  systemctl status mobaide-agent"
 echo "  Agent logs:    journalctl -u mobaide-agent -f"
 echo "  Health check:  curl http://localhost:8000/api/health"
+# Absolute venv path and sudo -u are both required here: this from-source
+# layout puts no console script on PATH, and running show-qr as root would
+# leave a root-owned run/pending_pairing.json the agent cannot rewrite.
+echo "  Pair agent:    sudo -u ${RUN_USER} ${VENV_DIR}/bin/mobaide-agent show-qr"
 echo ""

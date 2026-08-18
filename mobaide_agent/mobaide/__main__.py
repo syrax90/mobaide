@@ -665,7 +665,7 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
         save_pending_pairing(layout, pending)
 
     sys.stdout.write(
-        "[mobaide-agent] Pairing QR — scan from the Mobaide mobile app:\n"
+        "[mobaide-agent] Pairing QR - scan from the Mobaide mobile app:\n"
     )
     render_qr_to_terminal(pending.qr_payload)
     write_pairing_hints(pending.qr_payload)
@@ -1055,7 +1055,7 @@ def _run_show_qr(args: argparse.Namespace) -> int:
     pending = load_pending_pairing(layout)
     if pending is not None:
         sys.stdout.write(
-            "[mobaide-agent] Pending pairing QR — scan from the Mobaide "
+            "[mobaide-agent] Pending pairing QR - scan from the Mobaide "
             "mobile app:\n"
         )
         render_qr_to_terminal(pending.qr_payload)

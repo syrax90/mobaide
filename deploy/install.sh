@@ -28,6 +28,16 @@ set -euo pipefail
 # CI / multi-user hosts where SUDO_USER is unset or wrong.
 : "${MOBAIDE_RUN_AS_USER:=}"
 : "${MOBAIDE_AGENT_INSTALL_URL:=https://get.mobaide.com/install.sh}"
+# Origin of the web client the pairing link points at. Must stay equal to
+# mobaide.agent.pairing_qr.DEFAULT_PAIRING_WEB_ORIGIN, which builds the link
+# this banner sends the user back to; tests/test_install_sh.py pins the pair.
+DEFAULT_PAIRING_WEB_ORIGIN="https://app.mobaide.com"
+: "${MOBAIDE_AGENT_PAIR_WEB_ORIGIN:=}"
+# Set to 1 by show_pairing_qr_from_service once the QR and the pairing hints
+# have actually been printed. print_completion reads it: on an already-paired
+# re-install nothing is rendered, and a banner pointing at "the link above"
+# would point at nothing. Intentionally NOT `local` - it crosses functions.
+QR_RENDERED=0
 
 info()  { printf '[INFO]  %s\n' "$*"; }
 warn()  { printf '[WARN]  %s\n' "$*" >&2; }
@@ -64,7 +74,7 @@ require_root_when_writing_system_dir() {
         info "Installing to $MOBAIDE_AGENT_PREFIX requires root — re-executing under sudo."
         info "(With 'curl|bash', sudo applies only to curl; auto-elevating now.)"
         exec sudo \
-            --preserve-env=MOBAIDE_AGENT_PREFIX,MOBAIDE_AGENT_MANIFEST_URL,MOBAIDE_AGENT_TRUST_KEY_B64,MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH,MOBAIDE_RUN_AS_USER,MOBAIDE_AGENT_INSTALL_URL \
+            --preserve-env=MOBAIDE_AGENT_PREFIX,MOBAIDE_AGENT_MANIFEST_URL,MOBAIDE_AGENT_TRUST_KEY_B64,MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH,MOBAIDE_RUN_AS_USER,MOBAIDE_AGENT_INSTALL_URL,MOBAIDE_AGENT_PAIR_WEB_ORIGIN,MOBAIDE_AGENT_SKIP_INSTALL_QR \
             bash -c 'curl -fsSL "$1" | bash' _ "$MOBAIDE_AGENT_INSTALL_URL"
     fi
 
@@ -75,6 +85,31 @@ Re-run as root, or set MOBAIDE_AGENT_PREFIX to a user-writable directory:
 
 check_command() {
     command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
+}
+
+# Mirrors mobaide.agent.pairing_qr.pairing_web_origin(). The *validation* is
+# mirrored, not just the default: the Python silently ignores an override that
+# is not printable-ASCII http(s), so a bare ${VAR:-default} expansion here
+# would print a host the pairing link rendered twenty lines above does not use
+# - exactly the misconfiguration where the two disagreeing is worst.
+pairing_web_origin() {
+    local override="${MOBAIDE_AGENT_PAIR_WEB_ORIGIN:-}" trimmed
+    case "$override" in
+        http://*|https://*) ;;
+        *) printf '%s\n' "$DEFAULT_PAIRING_WEB_ORIGIN"; return 0 ;;
+    esac
+    if printf '%s' "$override" | LC_ALL=C grep -q '[^[:print:]]'; then
+        printf '%s\n' "$DEFAULT_PAIRING_WEB_ORIGIN"
+        return 0
+    fi
+    trimmed="$override"
+    while [ "${trimmed%/}" != "$trimmed" ]; do
+        trimmed="${trimmed%/}"
+    done
+    case "$trimmed" in
+        http:|https:) printf '%s\n' "$DEFAULT_PAIRING_WEB_ORIGIN" ;;
+        *)            printf '%s\n' "$trimmed" ;;
+    esac
 }
 
 check_python() {
@@ -772,6 +807,12 @@ initiate a nonce on its own. Run 'mobaide-agent show-qr' to re-display."
     # central server rejects the loser with WS close 4001.
     "$release_dir/venv/bin/mobaide-agent" show-qr --require-pending \
         --prefix "$MOBAIDE_AGENT_PREFIX"
+    # Only reachable when the CLI exited 0: the call above is unguarded under
+    # `set -e`, so a failure aborts the installer (install.ps1 does the same
+    # thing explicitly via Write-Fail). Note this assignment also makes the
+    # function's exit status unconditionally 0 - harmless while the sole caller
+    # is unguarded, but it would mask the CLI's failure under an `if`.
+    QR_RENDERED=1
 }
 
 resolve_run_as_user() {
@@ -1162,6 +1203,10 @@ print_completion() {
         echo "  Logs:    tail -f $MOBAIDE_AGENT_PREFIX/agent.err.log"
     fi
     echo
+    if [ "$QR_RENDERED" = "1" ]; then
+        echo "  Web app:       $(pairing_web_origin)/pair"
+        echo "                 (use the link or MOBA1 code above)"
+    fi
     echo "  Re-render QR:  mobaide-agent show-qr"
     echo "  Re-pair:       mobaide-agent re-pair"
     echo "============================================"

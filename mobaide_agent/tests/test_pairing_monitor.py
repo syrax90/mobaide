@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
 import json
 import logging
+import sys
 import types
 from pathlib import Path
 from unittest.mock import patch
@@ -2056,6 +2058,35 @@ class TestRenderPendingToStdout:
             "expected the pairing-hint write to sit inside the same "
             "must-not-raise try as the QR render; if this fires, a failed "
             "hint write kills pairing permanently"
+        )
+
+    async def test_renders_on_a_cp437_stdout_without_skipping(
+        self, monkeypatch, caplog
+    ) -> None:
+        # The safety net above turns an encoding failure into a silent one:
+        # the operator gets no QR, no link and no code, only a warning. So the
+        # header this function writes itself has to be encodable on the codec
+        # a redirected Windows service log actually uses. cp1252 cannot show
+        # this — it carries an em dash — which is why the probe is cp437.
+        monkeypatch.setattr(_pm, "render_qr_to_terminal", lambda *_a, **_k: None)
+        monkeypatch.setattr(_pm, "write_pairing_hints", lambda *_a, **_k: None)
+        monkeypatch.setattr(
+            sys,
+            "stdout",
+            io.TextIOWrapper(
+                io.BytesIO(), encoding="cp437", newline="", write_through=True
+            ),
+        )
+        caplog.set_level(logging.WARNING, logger="mobaide.agent.pairing_monitor")
+
+        await _pm._render_pending_to_stdout(self._make_pending())
+
+        assert not [
+            rec for rec in caplog.records
+            if "qr_render_skipped" in rec.getMessage()
+        ], (
+            "a non-ASCII character in this function's own writes makes the "
+            "whole pairing block vanish from a cp437/cp932 service log"
         )
 
     async def test_writes_the_pairing_hints_after_the_qr(

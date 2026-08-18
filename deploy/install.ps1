@@ -41,6 +41,16 @@ $Script:TrustKeyB64 = $env:MOBAIDE_AGENT_TRUST_KEY_B64
 # only on a trusted local network.
 $Script:AllowInsecureTrustKeyFetch = ($env:MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH -eq "1")
 $Script:ServiceName = "MobaideAgent"
+# Origin of the web client the pairing link points at. Must stay equal to
+# mobaide.agent.pairing_qr.DEFAULT_PAIRING_WEB_ORIGIN, which builds the link
+# this banner sends the user back to; the pair is pinned by
+# tests/test_install_ps1_pairing_banner.py.
+$Script:DefaultPairWebOrigin = "https://app.mobaide.com"
+# Set to $true by Show-PairingQrFromService once the QR and the pairing hints
+# have actually been printed. Write-Completion reads it: on an already-paired
+# re-install nothing is rendered, and a banner pointing at "the link above"
+# would point at nothing.
+$Script:QrRendered = $false
 # Used by Assert-AdminOrElevate to re-fetch this script under UAC. Override
 # for self-hosted distributions of install.ps1.
 $Script:InstallUrl = if ($env:MOBAIDE_AGENT_INSTALL_URL) {
@@ -67,6 +77,24 @@ $Script:SkipPythonInstall = [bool]$env:MOBAIDE_AGENT_SKIP_PYTHON_INSTALL
 function Write-Info  { param($Msg) Write-Host "[INFO]  $Msg" }
 function Write-Warn  { param($Msg) Write-Warning $Msg }
 function Write-Fail  { param($Msg) Write-Error $Msg; exit 1 }
+
+# Mirrors mobaide.agent.pairing_qr.pairing_web_origin(). The *validation* is
+# mirrored, not just the default: the Python silently ignores an override that
+# is not printable-ASCII http(s), so echoing $env:... verbatim here would print
+# a host the pairing link rendered twenty lines above does not use. -cmatch is
+# deliberate - PowerShell's -match is case-insensitive, the Python startswith
+# is not.
+function Get-PairWebOrigin {
+    $override = $env:MOBAIDE_AGENT_PAIR_WEB_ORIGIN
+    if (-not ($override -cmatch '^https?://[\x20-\x7E]*\z')) {
+        return $Script:DefaultPairWebOrigin
+    }
+    $trimmed = $override.TrimEnd('/')
+    if ($trimmed -eq 'https:' -or $trimmed -eq 'http:') {
+        return $Script:DefaultPairWebOrigin
+    }
+    return $trimmed
+}
 
 # Pass a multi-line Python script to python.exe via a temp file rather than
 # `-c <heredoc>`. Windows PowerShell 5.1 silently drops embedded " characters
@@ -216,6 +244,7 @@ function Assert-AdminOrElevate {
         'MOBAIDE_AGENT_TRUST_KEY_B64', 'MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH',
         'MOBAIDE_AGENT_INSTALL_URL', 'MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL',
         'MOBAIDE_AGENT_SKIP_INSTALL_QR', 'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL',
+        'MOBAIDE_AGENT_PAIR_WEB_ORIGIN',
         'MOBAIDE_AGENT_CLAUDE_BIN_HINT', 'MOBAIDE_AGENT_CODEX_BIN_HINT',
         'MOBAIDE_AGENT_AGY_BIN_HINT'
     )
@@ -1205,6 +1234,9 @@ initiate a nonce on its own. Run `mobaide-agent show-qr` to re-display.
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "mobaide-agent show-qr --require-pending failed (exit $LASTEXITCODE). Run `mobaide-agent show-qr` from a new PowerShell window."
     }
+    # $Script: on the assignment is load-bearing: a bare $QrRendered would
+    # create a function-local and the banner would never fire.
+    $Script:QrRendered = $true
 }
 
 function Install-Service {
@@ -1351,6 +1383,10 @@ function Write-Completion {
     Write-Host "  Version: $Version"
     Write-Host "  Task:    $Script:ServiceName (Running as $env:USERNAME)"
     Write-Host ""
+    if ($Script:QrRendered) {
+        Write-Host "  Web app:       $(Get-PairWebOrigin)/pair"
+        Write-Host "                 (use the link or MOBA1 code above)"
+    }
     Write-Host "  Re-render QR:  mobaide-agent show-qr"
     Write-Host "  Re-pair:       mobaide-agent re-pair"
     Write-Host "  Restart:       Stop-ScheduledTask $Script:ServiceName; Start-ScheduledTask $Script:ServiceName"

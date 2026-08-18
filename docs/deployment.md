@@ -494,9 +494,13 @@ random `JWT_SECRET_KEY` and prefilled `RELAY_SERVER_URL=wss://mobaide.com`,
 so the agent boots in **pairing-pending** state immediately. The install
 script starts the supervisor, waits for the agent to be healthy and for the
 service to write the pairing nonce file, then renders the pairing QR code
-for the operator to scan from the Mobaide mobile app. If the operator misses
-the QR, run `mobaide-agent show-qr` on the agent host to re-render the most-recent
-pending QR (or initiate a fresh one if the cached nonce expired). See
+for the operator to scan from the Mobaide mobile app. No phone is needed:
+under the QR the agent prints a labelled block with a one-click
+`app.mobaide.com/pair` link and the same `MOBA1|…` payload for pasting into
+the web client, and the completion banner names that destination again. If
+the operator misses all of it, run `mobaide-agent show-qr` on the agent host
+to re-render the most-recent pending QR and its browser block (or initiate a
+fresh one if the cached nonce expired). See
 [docs/qr-pairing.md](qr-pairing.md) for the full flow.
 
 Until paired, the agent exposes `pairing_pending: true` on `/api/health`.
@@ -624,7 +628,9 @@ sudo systemctl restart mobaide-agent
 5. Scan the QR code rendered on the agent host (printed by the install
    script after the service is up and healthy, or via `mobaide-agent show-qr`). The
    server pushes the credentials directly to the agent over a
-   pairing WebSocket; no token ever appears in the mobile UI. See
+   pairing WebSocket; no token ever appears in the mobile UI. From a browser
+   instead, open the `/pair` link printed under that QR, or paste the
+   `MOBA1|…` line into the web client's **Pairing code** box. See
    [docs/qr-pairing.md](qr-pairing.md) for the protocol details.
 6. The agent will show up as online in the app within a few seconds
 

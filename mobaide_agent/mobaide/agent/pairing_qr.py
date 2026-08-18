@@ -147,14 +147,19 @@ def _stream_can_encode(out, text: str) -> bool:
     return True
 
 
+# ASCII by construction, including the punctuation: this is what gets written
+# when the stream's codec cannot carry the payload, and an em dash here would
+# raise on the cp437 consoles the notice exists to serve.
 _UNPRINTABLE_HINT = (
     "[mobaide-agent] The pairing code contains characters this console cannot "
-    "render — scan the QR above instead.\n"
+    "render; scan the QR above instead.\n"
 )
+
+_HINT_RULE = "[mobaide-agent] " + "-" * 60 + "\n"
 
 
 def write_pairing_hints(payload: str, *, stream=None) -> None:
-    """Print the pasteable payload and the browser link under a rendered QR.
+    """Print the browser link and the pasteable payload under a rendered QR.
 
     Two hard constraints, both learned from this module's existing failure
     modes:
@@ -173,7 +178,19 @@ def write_pairing_hints(payload: str, *, stream=None) -> None:
       ``_stream_supports_block_glyphs`` documents — while the same error on the
       ``show-qr`` path fails the installer.
 
-    Pasteable artifact first, link second, following ``gh auth login``.
+    Link first, code second. The order does *not* follow ``gh auth login``,
+    whose premise is absent here: ``gh`` prints its code first because the user
+    must memorize eight characters and retype them into a URL ``gh`` is about
+    to open, stealing focus. This link instead carries the whole payload in its
+    fragment, is click-activated by every mainstream terminal, and lands on a
+    pre-filled ``/pair``, so it is the shorter path and goes first. The code
+    still prints, second, because it is the host-independent one: a self-hosted
+    deployment that never set ``MOBAIDE_AGENT_PAIR_WEB_ORIGIN`` gets a link
+    pointing at the wrong host, while the code pastes into any web-app host.
+
+    The rules and labels exist because the QR above is ~50 lines tall and was
+    swallowing the browser route whole. They frame the block; they never touch
+    the two copyable lines, which is why neither is boxed or guttered.
     """
     out = stream if stream is not None else sys.stdout
     link = format_pairing_link(payload)
@@ -181,10 +198,18 @@ def write_pairing_hints(payload: str, *, stream=None) -> None:
         out.write(_UNPRINTABLE_HINT)
         out.flush()
         return
-    out.write("[mobaide-agent] Pairing code (copy this entire line):\n")
-    out.write(f"{payload}\n")
-    out.write("[mobaide-agent] Or open this link in a browser:\n")
+    out.write(_HINT_RULE)
+    out.write(
+        "[mobaide-agent] Using Mobaide in a browser? Ignore the QR above.\n"
+    )
+    out.write("[mobaide-agent] Open this link to pair this machine:\n")
     out.write(f"{link}\n")
+    out.write(
+        "[mobaide-agent] Or paste this line into the web app's "
+        '"Pairing code" box:\n'
+    )
+    out.write(f"{payload}\n")
+    out.write(_HINT_RULE)
     out.flush()
 
 

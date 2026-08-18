@@ -309,16 +309,19 @@ class TestWritePairingHints:
 
         assert self._PAYLOAD in lines
 
-    def test_link_occupies_its_own_line_after_the_payload(self, monkeypatch):
+    def test_link_occupies_its_own_line_before_the_payload(self, monkeypatch):
         out = self._render(monkeypatch)
         lines = out.split("\n")
         link = f"{DEFAULT_PAIRING_WEB_ORIGIN}/pair#"
 
         assert any(line.startswith(link) for line in lines)
-        # Pasteable artifact first, link second — `gh auth login`'s order.
-        assert lines.index(self._PAYLOAD) < next(
+        # Link first: it carries the whole payload in its fragment and is
+        # click-activated, so it needs no second surface. The code below it is
+        # pasted rather than retyped, which is why `gh auth login`'s
+        # code-first order does not transfer.
+        assert next(
             index for index, line in enumerate(lines) if line.startswith(link)
-        )
+        ) < lines.index(self._PAYLOAD)
 
     def test_link_matches_format_pairing_link(self, monkeypatch):
         out = self._render(monkeypatch)
@@ -368,6 +371,45 @@ class TestWritePairingHints:
         stream.flush()
 
         assert self._PAYLOAD in buf.getvalue().decode("cp1252").split("\n")
+
+    def test_names_the_browser_route(self, monkeypatch):
+        # The whole point of the block: a ~50-line QR sits directly above it,
+        # so the two copyable lines have to be introduced as the browser
+        # alternative rather than read as a footnote to the QR.
+        out = self._render(monkeypatch)
+
+        assert "browser" in out
+        assert out.count("[mobaide-agent] " + "-" * 60) == 2
+
+    def test_never_raises_on_a_cp437_stream(self, monkeypatch):
+        # cp1252 carries an em dash, cp437 does not, so the sibling cp1252
+        # tests cannot see a non-ASCII character in the framing or in the
+        # unprintable notice. cp437/cp932 is what a Windows service's
+        # redirected stdout actually is.
+        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
+        stream, buf = _cp437_stream()
+
+        write_pairing_hints(self._PAYLOAD, stream=stream)
+        stream.flush()
+
+        assert self._PAYLOAD in buf.getvalue().decode("cp437").split("\n")
+
+    def test_unprintable_notice_itself_encodes_on_a_cp437_stream(
+        self, monkeypatch
+    ):
+        # The notice is written precisely when the stream's codec is too
+        # narrow for the payload, so a non-ASCII character in the notice
+        # raises the UnicodeEncodeError the whole branch exists to avoid.
+        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
+        stream, buf = _cp437_stream()
+        payload = f"MOBA1|https://релэй.test|nonce-abc|{'ff' * 32}|1700000000"
+
+        write_pairing_hints(payload, stream=stream)
+        stream.flush()
+        out = buf.getvalue().decode("cp437")
+
+        assert "cannot render" in out
+        assert "nonce-abc" not in out
 
     def test_defaults_to_stdout(self, monkeypatch, capsys):
         monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
@@ -475,6 +517,19 @@ def _cp1252_stream() -> tuple[io.TextIOWrapper, io.BytesIO]:
     buf = io.BytesIO()
     return io.TextIOWrapper(
         buf, encoding="cp1252", newline="", write_through=True
+    ), buf
+
+
+def _cp437_stream() -> tuple[io.TextIOWrapper, io.BytesIO]:
+    """The narrower sibling of ``_cp1252_stream``.
+
+    cp1252 can encode an em dash; cp437, cp850, cp720 and cp932 cannot. Only
+    the narrower codec can catch a stray dash in framing that is supposed to
+    be ASCII by construction.
+    """
+    buf = io.BytesIO()
+    return io.TextIOWrapper(
+        buf, encoding="cp437", newline="", write_through=True
     ), buf
 
 

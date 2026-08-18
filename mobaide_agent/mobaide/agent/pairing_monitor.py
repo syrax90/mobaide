@@ -411,8 +411,12 @@ async def _render_pending_to_stdout(pending: PendingPairing) -> None:
     incident).
     """
     try:
+        # Every literal written here stays ASCII. This stdout is routinely a
+        # cp437/cp932-encoded service log, where one non-ASCII character raises
+        # before the QR and the pairing hints are written and the operator sees
+        # nothing at all but the warning below.
         sys.stdout.write(
-            "[mobaide-agent] Pairing QR — scan from the Mobaide mobile app:\n"
+            "[mobaide-agent] Pairing QR - scan from the Mobaide mobile app:\n"
         )
         render_qr_to_terminal(pending.qr_payload)
         write_pairing_hints(pending.qr_payload)

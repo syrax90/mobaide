@@ -207,6 +207,28 @@ class TestRunShowQr:
         assert payload in lines
         assert format_pairing_link(payload) in lines
 
+    def test_render_output_is_pure_ascii(self, tmp_path, capsys, monkeypatch):
+        # Covers the header, the hints block and the "expires at" line in one
+        # assertion. This is the verb both installers shell out to, and on a
+        # cp437/cp932 console a single non-ASCII character in any of them
+        # exits non-zero, which install.sh and install.ps1 treat as fatal.
+        # The QR itself is exempt: its half-block glyphs are legitimately
+        # non-ASCII and ``render_qr_to_terminal`` has its own codec probe.
+        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
+        # ``_run_show_qr`` imports the renderer inside the function body, so
+        # patching the module attribute is what the call site actually reads.
+        monkeypatch.setattr(
+            "mobaide.agent.pairing_qr.render_qr_to_terminal",
+            lambda *_a, **_k: None,
+        )
+        _seed_pending(tmp_path)
+
+        rc = _run_show_qr(_ns(prefix=str(tmp_path)))
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert out.isascii(), f"non-ASCII byte in show-qr output: {out!r}"
+
     def test_already_paired_prints_no_link(self, tmp_path, capsys):
         # The early return is the one render site that must stay silent: an
         # agent that is already paired has no live nonce, so a printed link

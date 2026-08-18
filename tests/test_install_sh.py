@@ -114,4 +114,74 @@ def test_stage_release_staging_python_does_no_urllib_network() -> None:
     )
 
 
+def test_pairing_web_origin_default_matches_the_agent() -> None:
+    """The installer's default web origin must equal the agent's.
+
+    The banner sends the user to the same host the pairing link rendered
+    above it points at, and that link is built by
+    ``pairing_qr.format_pairing_link``. Two copies of one hostname is the
+    price of a shell script that cannot import Python; this is the guard
+    that keeps them equal.
+    """
+    sys.path.insert(0, str(_REPO_ROOT / "mobaide_agent"))
+    try:
+        from mobaide.agent.pairing_qr import DEFAULT_PAIRING_WEB_ORIGIN
+    except ImportError:  # pragma: no cover - agent deps absent
+        pytest.skip("mobaide_agent not importable on this host")
+    finally:
+        sys.path.pop(0)
+
+    assert (
+        f'DEFAULT_PAIRING_WEB_ORIGIN="{DEFAULT_PAIRING_WEB_ORIGIN}"'
+        in _read_install_sh_text()
+    )
+
+
+def test_sudo_reexec_preserves_the_pairing_env_vars() -> None:
+    """``sudo curl | bash`` is the common path, and it re-execs.
+
+    Anything missing from ``--preserve-env`` is silently dropped there, so
+    an operator's self-hosted web origin would revert to the production
+    default and the documented QR opt-out would stop working.
+    """
+    body = _function_body("require_root_when_writing_system_dir")
+    for name in (
+        "MOBAIDE_AGENT_PAIR_WEB_ORIGIN",
+        "MOBAIDE_AGENT_SKIP_INSTALL_QR",
+    ):
+        assert name in body, f"{name} missing from the sudo --preserve-env list"
+
+
+def test_qr_rendered_flag_is_script_scoped_and_set_after_the_render() -> None:
+    text = _read_install_sh_text()
+    assert re.search(r"^QR_RENDERED=0$", text, re.M), (
+        "QR_RENDERED must be initialised at script scope — `set -u` makes "
+        "print_completion die on an unbound variable otherwise"
+    )
+    assert "local QR_RENDERED" not in text, (
+        "QR_RENDERED crosses functions; a `local` copy would never reach "
+        "print_completion"
+    )
+    body = _function_body("show_pairing_qr_from_service")
+    statements = [line.strip() for line in body.splitlines() if line.strip()]
+    assert statements[-1] == "QR_RENDERED=1", (
+        "the flag must be set *after* the show-qr call, so an aborted render "
+        "leaves it at 0. Body:\n" + repr(body)
+    )
+    assert body.count("QR_RENDERED=1") == 1
+
+
+def test_completion_banner_points_at_the_web_app_only_when_rendered() -> None:
+    """A re-install on a paired host renders no QR and no link.
+
+    "use the link or MOBA1 code above" would then point at nothing, which is
+    the same trap ``test_already_paired_prints_no_link`` guards on the CLI
+    side.
+    """
+    body = _function_body("print_completion")
+    assert '[ "$QR_RENDERED" = "1" ]' in body
+    assert "pairing_web_origin" in body
+    assert "MOBA1" in body
+
+
 _ = sys  # silence unused-import noise on hosts without Git Bash

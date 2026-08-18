@@ -96,20 +96,41 @@ rather than a named function, in CLA-236.
 
 ### Printed pairing link (webcam-less pairing)
 
-Under the QR, the agent also prints the payload on one unbroken line and a
-browser link, in that order — pasteable artifact first, following
-`gh auth login`:
+Under the QR, the agent prints a ruled block that names the browser route
+and carries a one-click link plus the same payload on one unbroken line:
 
 ```
-[mobaide-agent] Pairing code (copy this entire line):
-MOBA1|https://api.mobaide.com|<nonce>|<fp>|<exp>
-[mobaide-agent] Or open this link in a browser:
+[mobaide-agent] ------------------------------------------------------------
+[mobaide-agent] Using Mobaide in a browser? Ignore the QR above.
+[mobaide-agent] Open this link to pair this machine:
 https://app.mobaide.com/pair#<base64url(payload)>
+[mobaide-agent] Or paste this line into the web app's "Pairing code" box:
+MOBA1|https://api.mobaide.com|<nonce>|<fp>|<exp>
+[mobaide-agent] ------------------------------------------------------------
 ```
 
-Both lines come from `pairing_qr.write_pairing_hints`, which all three
-print sites call (`pair-qr`, `show-qr`, and the pairing monitor — the last
-inside its must-not-raise `try`). Two constraints hold them together:
+The frame is not decoration. The QR above it is ~50 lines tall, and the two
+artifacts previously printed as unlabelled trailing lines that read as a
+footnote to it — users with no phone concluded the install had left them
+stuck. The rules use `-`, deliberately not the installers' `=`, so the block
+never reads as a completion banner; the label lines keep the
+`[mobaide-agent]` tag while the two copyable lines stay flush at column 0,
+which with no colour available is the only signal for "copy these two".
+
+**Link first, payload second**, which is *not* `gh auth login`'s order. That
+precedent does not transfer: `gh` prints its code first because the user must
+memorize eight characters and retype them into a URL `gh` is about to open,
+stealing focus. Here the link carries the whole payload in its fragment, is
+click-activated by every mainstream terminal and lands on a pre-filled
+`/pair`, so it is the shorter path. The payload still prints, second, because
+it is the host-independent one: a self-hosted deployment that never set
+`MOBAIDE_AGENT_PAIR_WEB_ORIGIN` gets a link naming the wrong host, while the
+payload pastes into any web-app host. `"Pairing code"` is quoted verbatim
+because that is the literal field label in `web/src/routes/pair/Pair.tsx`.
+
+All of it comes from `pairing_qr.write_pairing_hints`, which all three print
+sites call (`pair-qr`, `show-qr`, and the pairing monitor — the last inside
+its must-not-raise `try`). Two constraints hold them together:
 
 * **Never wrapped, never prefixed.** A terminal's soft wrap is invisible,
   but a copied soft-wrapped line carries embedded newlines. The web paste
@@ -123,6 +144,16 @@ inside its must-not-raise `try`). Two constraints hold them together:
   tears down the pairing WebSocket before `wait_for_claim` — the incident
   `_stream_supports_block_glyphs` documents — and the same error on the
   `show-qr` path fails the installer, which treats a non-zero exit as fatal.
+  This extends to every literal the render path writes, not just the framing:
+  the three pre-QR header lines and `_UNPRINTABLE_HINT` itself each carried a
+  U+2014 em dash until PR #655. cp1252 *has* an em dash, so the cp1252 tests
+  could not see it; cp437, cp850, cp720 and cp932 do not, and cp932 is the
+  ANSI code page on Japanese Windows. The failure was asymmetric and worth
+  remembering: on the `show-qr` path it aborted the installer, while in the
+  monitor the must-not-raise `try` swallowed it and the operator got no QR,
+  no link and no payload at all — only a `qr_render_skipped` warning.
+  `test_never_raises_on_a_cp437_stream` and
+  `test_renders_on_a_cp437_stdout_without_skipping` pin both halves.
 
 The payload is base64url-encoded without padding in the fragment: a raw `|`
 is not a legal URL character and terminal linkifiers stop at it, and a
@@ -136,6 +167,8 @@ is a separate host. It is therefore a fixed default with an env override:
 | Variable | Default | Effect |
 |---|---|---|
 | `MOBAIDE_AGENT_PAIR_WEB_ORIGIN` | `https://app.mobaide.com` | Origin of the web client the printed link points at. Self-hosted and development deployments set it; a value that is not ASCII `http(s)` is ignored rather than printed. |
+
+Both install scripts mirror this variable's **default and its validation**, because their completion banner names the same origin (see *First install* below) and a shell script cannot import the Python. Mirroring only the default would be worse than not mirroring at all: a bare `${MOBAIDE_AGENT_PAIR_WEB_ORIGIN:-…}` expansion prints overrides `pairing_web_origin()` deliberately discards, so the banner would name a host the link twenty lines above does not use — exactly the misconfiguration where the disagreement matters. `test_install_sh.py::test_pairing_web_origin_default_matches_the_agent` and its `install.ps1` twin pin the shared literal.
 
 Because the agent fleet auto-updates on a 60-minute poll, the printed link
 only converges after the release ships — the web paste box and manual
@@ -301,6 +334,20 @@ left `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` empty. SSH-attached
 operators see the QR once the service is up and can scan it from the
 Mobaide mobile app to complete pairing.
 
+Pairing does not require a phone. Under the QR the agent prints the ruled
+browser block described above, and when a QR was actually rendered the
+installers' completion banner repeats the destination:
+
+```
+  Web app:       https://app.mobaide.com/pair
+                 (use the link or MOBA1 code above)
+```
+
+Those two lines are gated on a `QR_RENDERED` / `$Script:QrRendered` flag the
+render step sets. An idempotent re-run against an already-paired host renders
+nothing, and pointing at "the link above" when there is no link above is the
+same trap the CLI's already-paired early return avoids by printing no link.
+
 If the operator misses the QR (e.g., SSH disconnected before scanning),
 the agent's boot-time autorun re-renders it. Run on the agent host:
 
@@ -363,7 +410,13 @@ nonce), so the next claim registers a brand-new agent. Then rescan the QR.
 Set `MOBAIDE_AGENT_SKIP_INSTALL_QR=1` before running the installer (or
 `$env:MOBAIDE_AGENT_SKIP_INSTALL_QR = "1"` on PowerShell) to suppress
 the install-time render. The boot-time autorun still produces a QR on
-the next service start.
+the next service start. The completion banner's web-app lines are
+suppressed with it, since they refer to a link that was never printed.
+
+The bash installer omitted this variable from its sudo `--preserve-env`
+list until PR #655, so under the common `sudo curl … | bash` one-liner —
+which re-execs the whole script under sudo — the opt-out was silently
+dropped. `install.ps1` always carried it in `$passthrough`.
 
 ## Device-code pairing (the reversed direction)
 
@@ -651,6 +704,7 @@ it, so the user sees "waiting for the agent" until the timeout. Mitigations:
 | `pair <code>` returns 429 | Redeem rate limit tripped (per-IP or the global circuit breaker) | Wait for the `Retry-After` interval. Behind a proxy, check `FORWARDED_ALLOW_IPS` — without it every redeem is attributed to the proxy and shares one bucket |
 | Client shows "This relay's signing key is not the one this account first paired with" (409 `trust_key_pin_mismatch`) | The relay's `MANIFEST_SIGNING_*` keypair was rotated after this account pinned it | Compare fingerprints with `mobaide-agent show-trust-fp` on an already-paired host. If the rotation was intentional, follow the trust-key rotation runbook above; otherwise treat as a security incident |
 | Browser sits on "waiting for a machine to enter the code" until the code expires | Nothing redeemed the code, the operator has not answered the agent's `y/N` prompt yet (an expected intermediate state — the request stays `pending` until it is answered), or the relay runs multiple workers and the confirm landed on a worker without the agent's WS | Check the command actually ran on the agent host; confirm the relay is single-worker (see "Multi-worker deployments"). All three clients now bound this screen with the deadline the relay reported, so it ends in an expiry message rather than waiting forever even if the poll that would have reported it fails |
+| Install finished but no QR, link or pairing code appeared anywhere — service log shows only `qr_render_skipped` | The render path wrote a non-ASCII character to a stdout whose codec cannot carry it. Until PR #655 the three pre-QR header lines and `_UNPRINTABLE_HINT` each held a U+2014 em dash; cp437/cp850/cp720/cp932 have no em dash (cp932 is the ANSI code page on Japanese Windows), so the header raised before the QR and the hints were ever written. In the pairing monitor the must-not-raise `try` swallowed it silently; on the `show-qr` path it aborted the installer instead. | Upgrade the agent. On an older build, render from a UTF-8 console instead of the service log: `mobaide-agent show-qr` from an interactive session, or `chcp 65001` first on Windows. |
 | QR scan succeeded but mobile shows "Waiting for agent…" then times out with an error after 60 s | Agent relay client did not come online within the timeout. Possible causes: agent process crashed after writing `.env`, Windows service stdout silenced (pre-v0.1.9), Windows service log file encoded as cp1252/cp437 causing `UnicodeEncodeError` in QR render and aborting the WS before `wait_for_claim` (pre-v0.1.11), or `relay_url` scheme mismatch caused the agent to discard its own credentials. | On the agent host run: `mobaide-agent show-qr` (re-render QR and restart pairing), `Get-Service MobaideAgent` (check service state on Windows), `Get-Content "$env:ProgramFiles\MobaideAgent\logs\agent.err.log" -Tail 50` (Windows error log). Upgrade to v0.1.11+ if on Windows service builds below that version. |
 | QR scan succeeded (mobile shows "Paired") but agent stays offline / `pairing_pending: true` persists | Pre-v0.1.5 agent: post-pairing restart used `sudo -n systemctl restart`, which silently no-op'd when the install user lacked NOPASSWD. v0.1.5–v0.1.6 used `sys.exit(75)` + supervisor restart, which failed when credentials were not flushed before the process exited. v0.1.7–v0.1.8 on Windows service builds: the service host redirected stdout to DEVNULL, silently dropping every structlog line (the issue is visible only after checking `<prefix>\logs\agent.out.log`, which v0.1.9+ captures); a fast mobile scan could also hit the WS-recovery path and receive a push with a `relay_url` scheme that mismatched the initiate-time value (https vs http behind a proxy) — agent strict-equality check discarded its own credentials. | Upgrade to v0.1.9+. The agent now (a) captures stdout to `<prefix>\logs\agent.out.log`, (b) writes `pending_pairing.json` only after the WS is open, and (c) uses `pairing_tokens.relay_url` as the single source of truth for both the dispatch and recovery paths. On older installs: for Linux/macOS, manually run `sudo systemctl restart mobaide-agent` or `launchctl unload … && launchctl load …` once after the initial pairing scan. |
 

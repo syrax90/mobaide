@@ -19,7 +19,7 @@ export const WAIT_FOR_ONLINE_TIMEOUT_SECONDS = 60;
  * box can be wrong in ways a camera cannot.
  */
 export const MALFORMED_PAYLOAD_MESSAGE =
-  'That is not a Mobaide pairing code. Copy the whole MOBA1|… line the agent printed, or the link next to it.';
+  'That is not a Mobaide pairing code. Copy the whole MOBA1|… line the agent printed, or the link above it.';
 
 const FRESH_CODE_HINT =
   'On the agent host, run `mobaide-agent show-qr` to render a fresh one.';
