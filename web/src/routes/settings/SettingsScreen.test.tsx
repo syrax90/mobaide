@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubLocalStorage } from '../../test/localStorageStub';
+import { stubPrefersDark } from '../../test/matchMediaStub';
 
 // Before importing anything that pulls in a persisted store.
 stubLocalStorage();
@@ -23,6 +24,7 @@ vi.mock('../../notifications/notificationService', () => ({
 
 const { useNotificationPrefsStore } = await import('../../stores/notificationPrefsStore');
 const { useSessionStore } = await import('../../auth/sessionStore');
+const { useThemeStore } = await import('../../stores/themeStore');
 const { SettingsScreen } = await import('./SettingsScreen');
 
 let client: QueryClient;
@@ -42,6 +44,8 @@ beforeEach(() => {
   notifications.answer = 'granted';
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   useNotificationPrefsStore.setState({ enabled: true });
+  useThemeStore.setState({ preference: 'system' });
+  stubPrefersDark(false);
   useSessionStore.setState({
     session: {
       userId: 'u-1',
@@ -108,6 +112,39 @@ describe('SettingsScreen', () => {
     fireEvent.click(toggle);
 
     expect(useNotificationPrefsStore.getState().enabled).toBe(false);
+  });
+
+  it('carries the theme picker and states what Auto resolves to', () => {
+    // The header picker names the OS appearance only in a `title`, which a
+    // touchscreen cannot reach; this card is where it is readable.
+    renderScreen();
+
+    const picker = screen.getByRole('radiogroup', { name: 'Theme' });
+    expect(picker).toBeInTheDocument();
+
+    fireEvent.click(within(picker).getByRole('radio', { name: 'Dark' }));
+
+    expect(useThemeStore.getState().preference).toBe('dark');
+    expect(screen.getByText(/Auto follows your system appearance/)).toBeInTheDocument();
+  });
+
+  /**
+   * The card's whole reason for existing is that a touchscreen cannot reach the
+   * header's `title`, so the value it prints has to be the one Auto would give —
+   * the OS appearance, not what is painted. An explicit Light under a dark OS is
+   * the only configuration where those differ, so it is the only one that can
+   * catch this being wired to `useResolvedTheme`.
+   */
+  it('states the OS appearance rather than the theme currently painted', () => {
+    stubPrefersDark(true);
+    useThemeStore.setState({ preference: 'light' });
+
+    renderScreen();
+
+    expect(
+      screen.getByText(/Auto follows your system appearance — currently dark\./),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Light' })).toBeChecked();
   });
 
   it('links onward to the surfaces mobile keeps behind this screen', () => {

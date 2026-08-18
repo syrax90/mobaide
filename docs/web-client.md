@@ -107,7 +107,7 @@ web/
 │   │   ├── errors.ts         # HTTP/network error normalisation
 │   │   └── *Repository.ts    # typed call wrappers (auth, devices) + anonymous bootstrap
 │   ├── styles/               # theme tokens (data-theme) + global styles
-│   └── test/                 # jest-dom matchers + the localStorage stand-in
+│   └── test/                 # jest-dom matchers + the localStorage and matchMedia stand-ins
 ├── e2e/                      # Playwright specs
 └── vite.config.ts, tsconfig*.json, eslint.config.js, playwright.config.ts
 ```
@@ -1332,12 +1332,15 @@ black-holing while the tab stays visible) needs a heartbeat the browser can
 observe, which is a protocol change across all three clients and is not
 attempted here.
 
-**Settings** is a hub plus the preferences that had nowhere else to live:
-notification permission and the in-app opt-out, the Ctrl+V terminal
-preference, support and privacy links (the same constants iOS and Android
-carry), and sign out — no client shows a protocol or server version. It
-links onward to agents, projects, templates, devices and the account danger
-zone, so someone who learned the app on a phone finds what they expect;
+**Settings** is a hub plus the preferences that had nowhere else to live: the
+Appearance picker, notification permission and the in-app opt-out, the Ctrl+V
+terminal preference, support and privacy links (the same constants iOS and
+Android carry), and sign out — no client shows a protocol or server version.
+The Appearance card mounts the same `ThemePicker` the header carries, and adds
+the one thing the header cannot: the OS appearance as body text, because the
+header's `title` is unreachable on a touchscreen. Settings links onward to
+agents, projects, templates, devices and the account danger zone, so someone
+who learned the app on a phone finds what they expect;
 `Devices` left the top nav in exchange. There is **no** terminal
 display-mode picker — web ships Full display only, the WEB-05 divergence
 above.
@@ -1445,8 +1448,20 @@ restart, `--rollback` repoints at the previously-live release. Runbook: the
   (`localStorage` key `mobaide-theme`); `ThemeProvider` resolves it to
   `document.documentElement.dataset.theme` and tracks
   `prefers-color-scheme` while in `system`. An inline pre-paint script in
-  `index.html` stamps `data-theme` before first paint (no theme flash). All
-  colors are CSS custom properties under `:root[data-theme=…]` in
+  `index.html` stamps `data-theme` before first paint (no theme flash).
+  The control is `ThemePicker`: a three-segment `radiogroup` of native radios
+  (Auto | Light | Dark), rendered by `RootLayout` and `AuthLayout` and again in
+  the Settings Appearance card, with the group `name` from `useId()` so two
+  mounted instances stay separate groups. It replaced a button that cycled
+  `system → light → dark`, where one step per lap was a **pixel no-op**:
+  `system` paints identically to whichever of light/dark the OS is, so under a
+  light OS the first click from the default `system` looked dead. Direct
+  selection cannot have that problem — the checked segment moves on every
+  choice, which is the only feedback a colour-neutral change has. Auto's
+  `title` and `aria-label` name the OS value, from `useSystemTheme()`; that
+  hook exists because what Auto *would* give you and what is *painted* diverge
+  the moment an explicit Light or Dark is selected.
+  All colors are CSS custom properties under `:root[data-theme=…]` in
   `src/styles/theme.css`. The SPA ships the marketing "modern pixel"
   design system (docs/website.md): the dark block mirrors `site.css`'s
   tokens **verbatim** (`site.css` stays the source of truth — a token

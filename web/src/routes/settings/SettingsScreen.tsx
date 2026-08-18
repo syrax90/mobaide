@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
+import { ThemePicker } from '../../app/ThemePicker';
+import { useSystemTheme } from '../../app/useResolvedTheme';
 import { useSessionStore } from '../../auth/sessionStore';
 import {
   notificationPermission,
@@ -19,9 +21,9 @@ import {
  *
  * Mobile makes this the only way to reach agents, templates and devices,
  * because a phone has no persistent nav; the browser keeps the top nav and this
- * screen adds what has nowhere else to live — notification control, the terminal
- * preference, and support — plus links onward, so someone who learned the app on
- * a phone still finds what they expect.
+ * screen adds what has nowhere else to live — the appearance picker, notification
+ * control, the terminal preference, and support — plus links onward, so someone
+ * who learned the app on a phone still finds what they expect.
  *
  * Protocol and relay versions are deliberately absent, and no client shows them.
  * The mobile clients do keep an *app* build version, which is a different thing:
@@ -41,6 +43,7 @@ export function SettingsScreen() {
 
   const notificationsEnabled = useNotificationPrefsStore((state) => state.enabled);
   const setNotificationsEnabled = useNotificationPrefsStore((state) => state.setEnabled);
+  const systemTheme = useSystemTheme();
   const passCtrlV = useTerminalPrefsStore((state) => state.passCtrlVToTerminal);
   const setPassCtrlV = useTerminalPrefsStore((state) => state.setPassCtrlVToTerminal);
 
@@ -75,6 +78,18 @@ export function SettingsScreen() {
           <Link to="/devices">My devices</Link>
           <Link to="/account">Account</Link>
         </nav>
+      </section>
+
+      <section className="settings-card">
+        <h2 className="settings-heading">Appearance</h2>
+        <ThemePicker />
+        {/* The header picker names the OS appearance in a `title`, which a
+            touchscreen cannot reach. Here it is body text. */}
+        <p className="page-note">
+          Auto follows your system appearance — currently {systemTheme}. Light and
+          Dark override it. The terminal grid stays dark in every theme, because an
+          ANSI palette is a matched set with its background.
+        </p>
       </section>
 
       <section className="settings-card">

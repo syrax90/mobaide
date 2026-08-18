@@ -78,3 +78,32 @@ test('settings links onward to the surfaces mobile keeps behind it', async ({ pa
   // Web ships Full display only, so there is no columns control to find.
   await expect(page.getByRole('spinbutton')).toHaveCount(0);
 });
+
+test('settings carries a theme picker that drives the header one', async ({ page }) => {
+  await stubRelay(page);
+  // Pinned so `system` resolves deterministically rather than inheriting the
+  // machine's appearance.
+  await page.emulateMedia({ colorScheme: 'light' });
+
+  await page.goto('/login');
+  await signIn(page);
+  await expect(page).toHaveURL(/:\d+\/$/);
+  await page.goto('/settings');
+
+  // Both pickers are mounted here — the header's and the card's. They must be
+  // two radio groups, not one: radios group by `name` document-wide, so a
+  // shared literal name would make checking one uncheck the other.
+  const pickers = page.getByRole('radiogroup', { name: 'Theme' });
+  await expect(pickers).toHaveCount(2);
+
+  // The radio is visually hidden behind its label, so the segment text is both
+  // the real click target and the only one Playwright can act on.
+  await pickers.last().getByText('Dark', { exact: true }).click();
+
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  // `exact` keeps the substring match off Auto's "(currently dark)" name.
+  await expect(
+    pickers.first().getByRole('radio', { name: 'Dark', exact: true }),
+  ).toBeChecked();
+  await expect(page.getByText(/Auto follows your system appearance/)).toBeVisible();
+});

@@ -4,7 +4,7 @@ import {
   MARKETING_SITE_URL,
   PRIVACY_POLICY_URL,
 } from '../routes/settings/supportLinks';
-import { ThemeToggle } from './ThemeToggle';
+import { ThemePicker } from './ThemePicker';
 
 /**
  * Centred single-column chrome for the signed-out screens, and for `/pair`.
@@ -44,7 +44,7 @@ export function AuthLayout() {
             alt="Mobaide"
           />
         </a>
-        <ThemeToggle />
+        <ThemePicker />
       </header>
       <main className="auth-main">
         <Outlet />
