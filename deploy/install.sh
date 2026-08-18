@@ -820,6 +820,10 @@ initiate a nonce on its own. Run 'mobaide-agent show-qr' to re-display."
     # claim the nonce inside the pending-file poll window. Re-read the
     # credential the agent writes on a successful claim rather than trusting
     # the exit status, so the banner never advertises a link nobody saw.
+    #
+    # The other half of that guarantee is write_pairing_hints, which emits the
+    # link even when the payload fails its codec check. Without it a 0 exit
+    # could still mean an empty block on an ASCII-only console.
     if [ -z "$(read_env_value "${MOBAIDE_AGENT_PREFIX}/mobaide_agent/.env" \
         'RELAY_AGENT_TOKEN')" ]; then
         QR_RENDERED=1

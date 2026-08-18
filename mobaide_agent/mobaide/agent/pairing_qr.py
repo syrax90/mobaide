@@ -155,6 +155,11 @@ _UNPRINTABLE_HINT = (
     "render; scan the QR above instead.\n"
 )
 
+_UNPRINTABLE_PAYLOAD_HINT = (
+    "[mobaide-agent] (The code line contains characters this console cannot "
+    "render; use the link.)\n"
+)
+
 _HINT_RULE = "[mobaide-agent] " + "-" * 60 + "\n"
 
 
@@ -170,13 +175,20 @@ def write_pairing_hints(payload: str, *, stream=None) -> None:
       manual break turns a working paste into a malformed one.
     * This must never raise. The labels are ASCII, but ``relay_url`` comes from
       the operator's ``PUBLIC_BASE_URL`` and may be an internationalized host,
-      so the payload and link are probed against the stream's codec first and
-      replaced with an ASCII notice when they do not fit. A Windows service
+      so the payload is probed against the stream's codec first and replaced
+      with an ASCII notice when it does not fit. A Windows service
       redirects stdout to a ``cp437``/``cp1252`` log file, and a
       ``UnicodeEncodeError`` from the pairing monitor's render tears down the
       pairing WebSocket before ``wait_for_claim`` — the incident
       ``_stream_supports_block_glyphs`` documents — while the same error on the
       ``show-qr`` path fails the installer.
+
+      The probe is per-artifact, not all-or-nothing. The link is ASCII whatever
+      the payload holds — ``pairing_web_origin`` refuses a non-ASCII override
+      and base64url output is ASCII by definition — so an internationalized
+      ``relay_url`` must not cost the operator the browser route on top of it.
+      Suppressing both is what it used to do, on exactly the consoles where the
+      alternative (reading a QR out of a redirected log) is hardest.
 
     Link first, code second. The order does *not* follow ``gh auth login``,
     whose premise is absent here: ``gh`` prints its code first because the user
@@ -194,7 +206,9 @@ def write_pairing_hints(payload: str, *, stream=None) -> None:
     """
     out = stream if stream is not None else sys.stdout
     link = format_pairing_link(payload)
-    if not _stream_can_encode(out, payload) or not _stream_can_encode(out, link):
+    # Unreachable by construction (see above), kept as the guard that makes
+    # "never raises" true rather than merely likely.
+    if not _stream_can_encode(out, link):
         out.write(_UNPRINTABLE_HINT)
         out.flush()
         return
@@ -204,11 +218,14 @@ def write_pairing_hints(payload: str, *, stream=None) -> None:
     )
     out.write("[mobaide-agent] Open this link to pair this machine:\n")
     out.write(f"{link}\n")
-    out.write(
-        "[mobaide-agent] Or paste this line into the web app's "
-        '"Pairing code" box:\n'
-    )
-    out.write(f"{payload}\n")
+    if _stream_can_encode(out, payload):
+        out.write(
+            "[mobaide-agent] Or paste this line into the web app's "
+            '"Pairing code" box:\n'
+        )
+        out.write(f"{payload}\n")
+    else:
+        out.write(_UNPRINTABLE_PAYLOAD_HINT)
     out.write(_HINT_RULE)
     out.flush()
 

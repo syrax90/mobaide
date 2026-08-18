@@ -136,10 +136,18 @@ its must-not-raise `try`). Two constraints hold them together:
   but a copied soft-wrapped line carries embedded newlines. The web paste
   box strips all whitespace before parsing so it survives anyway, but the
   printer must not manufacture the problem.
-* **Never raises.** The labels are ASCII, but `relay_url` is the operator's
-  `PUBLIC_BASE_URL` and may be an internationalized host, so the payload and
-  the link are probed against the stream's codec first and replaced with an
-  ASCII notice when they do not fit. A Windows service redirects stdout to a
+* **Never raises, and degrades per artifact.** The labels are ASCII, but
+  `relay_url` is the operator's `PUBLIC_BASE_URL` and may be an
+  internationalized host, so the payload is probed against the stream's codec
+  first and replaced with an ASCII notice when it does not fit. The link is
+  *not* withheld with it: `format_pairing_link` is ASCII whatever the payload
+  holds, because `pairing_web_origin` refuses a non-ASCII override and
+  base64url output is ASCII by definition. An all-or-nothing probe threw away a
+  perfectly printable link on exactly the consoles where the alternative —
+  reading a QR out of a redirected log — is hardest, and it let `show-qr` exit
+  0 having printed nothing but a notice, which the installers' banner then
+  advertised as "use the link above". The invariant the banner rests on is:
+  **whenever a QR was rendered, the link was printed.** A Windows service redirects stdout to a
   `cp437`/`cp1252` log file: a `UnicodeEncodeError` from the monitor's render
   tears down the pairing WebSocket before `wait_for_claim` — the incident
   `_stream_supports_block_glyphs` documents — and the same error on the
@@ -349,7 +357,8 @@ nothing, and pointing at "the link above" when there is no link above is the
 same trap the CLI's already-paired early return avoids by printing no link.
 
 The flag is set from `RELAY_AGENT_TOKEN` in the agent `.env`, **not** from
-`show-qr`'s exit status. A 0 exit is necessary but not sufficient: `show-qr`
+`show-qr`'s exit status, and it relies on the per-artifact probe above for the
+other half of the guarantee. A 0 exit is necessary but not sufficient: `show-qr`
 also exits 0 on its already-paired branch, and pairing can complete between the
 health check and the render call — the service's own boot-time QR is already in
 the log, so a phone can claim the nonce inside the pending-file poll window.

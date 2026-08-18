@@ -1243,8 +1243,14 @@ initiate a nonce on its own. Run `mobaide-agent show-qr` to re-display.
     # the service's own boot-time QR is already in the log, so a phone can
     # claim the nonce inside the pending-file poll window. Re-read the
     # credential the agent writes on a successful claim rather than trusting
-    # the exit status. $Script: on the assignment is load-bearing too - a bare
-    # $QrRendered would create a function-local and the banner would never fire.
+    # the exit status, so the banner never advertises a link nobody saw.
+    #
+    # The other half of that guarantee is write_pairing_hints, which emits the
+    # link even when the payload fails its codec check. Without it a 0 exit
+    # could still mean an empty block on an ASCII-only console.
+    #
+    # $Script: on the assignment is load-bearing too - a bare $QrRendered
+    # would create a function-local and the banner would never fire.
     $envFile = Join-Path (Join-Path $Prefix "mobaide_agent") ".env"
     if (-not (Read-EnvValue -Path $envFile -Key "RELAY_AGENT_TOKEN")) {
         $Script:QrRendered = $true

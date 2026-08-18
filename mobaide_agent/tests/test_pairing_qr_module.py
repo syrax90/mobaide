@@ -361,7 +361,42 @@ class TestWritePairingHints:
         out = buf.getvalue().decode("cp1252")
 
         assert "cannot render" in out
-        assert "nonce-abc" not in out
+        # The raw line is what is withheld. The payload still reaches the user
+        # base64url-encoded inside the link, which is the point of the
+        # per-artifact probe.
+        assert payload not in out.split("\n")
+
+    def test_prints_the_link_even_when_the_payload_cannot_be_encoded(
+        self, monkeypatch
+    ):
+        """The browser route survives a console the payload cannot cross.
+
+        ``format_pairing_link`` is ASCII whatever the payload holds:
+        ``pairing_web_origin`` refuses a non-ASCII override and base64url
+        output is ASCII by definition. An all-or-nothing probe therefore threw
+        away a link that was perfectly printable, on exactly the consoles where
+        the alternative — reading a QR out of a redirected log — is hardest.
+
+        The installer banner depends on this: it advertises "use the link
+        above", and that claim has to hold whenever a QR was rendered.
+        """
+        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
+        payload = f"MOBA1|https://релэй.test|nonce-abc|{'ff' * 32}|1700000000"
+        link = format_pairing_link(payload)
+        assert link.isascii(), "precondition: the link is ASCII by construction"
+
+        for factory, codec in (
+            (_cp437_stream, "cp437"),
+            (_cp1252_stream, "cp1252"),
+        ):
+            stream, buf = factory()
+
+            write_pairing_hints(payload, stream=stream)
+            stream.flush()
+
+            assert link in buf.getvalue().decode(codec).split("\n"), (
+                f"the browser link must still be emitted on a {codec} stream"
+            )
 
     def test_still_prints_an_ascii_payload_on_a_cp1252_stream(self, monkeypatch):
         monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
@@ -409,7 +444,7 @@ class TestWritePairingHints:
         out = buf.getvalue().decode("cp437")
 
         assert "cannot render" in out
-        assert "nonce-abc" not in out
+        assert payload not in out.split("\n")
 
     def test_defaults_to_stdout(self, monkeypatch, capsys):
         monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
