@@ -666,6 +666,29 @@ input.field-input:-webkit-autofill {
   gap: 0.5rem;
 }
 
+/* GIS draws its button into a cross-origin iframe, and the browser paints that
+   frame's canvas opaque white — the document inside is transparent, but it is
+   out-of-process, so nothing here can recolour it. GIS then bleeds the frame
+   past its own layout box (`width: 340px; height: 44px; margin: -2px -10px` on
+   a 320x40 button), which on the dark card framed the button in a white halo
+   and made it read as wider and taller than Apple's. This slot's box already
+   is the button's 320x40, so clipping to it cuts exactly the bleed and needs no
+   magic numbers; the radius matches the button's own corners so the clip does
+   not square them off. */
+.google-signin-slot {
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+/* GIS paints its focus ring into the 2px margin the clip removes, and the
+   global :focus-visible rule cannot reach inside a frame. Focus in a
+   cross-origin frame still matches :focus-within out here, and an outline on
+   the clipping element is not clipped by its own overflow. */
+.google-signin-slot:focus-within {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
 /* Drawn here rather than by Apple's SDK, so it is ours to match to the GIS
    button beside it: the same 320px/40px box, and a 14px/500 label because that
    is what GIS renders at `size: 'large'` inside its cross-origin frame. Apple's
@@ -692,10 +715,11 @@ input.field-input:-webkit-autofill {
 
 /* GIS has no dark-surface fill, so on the dark theme the Google button is
    rendered with its `outline` theme — a white button — and Apple's white
-   variant pairs with it. The hairline is GIS outline's own border colour so
-   the two edges agree; box-sizing keeps the height at 40px. */
+   variant pairs with it. The hairline is the border GIS outline draws, read off
+   the rendered button rather than guessed, so the two edges agree; box-sizing
+   keeps the height at 40px. */
 :root[data-theme='dark'] .apple-signin-button {
-  border: 1px solid #747775;
+  border: 1px solid #dadce0;
   background: #fff;
   color: #000;
 }

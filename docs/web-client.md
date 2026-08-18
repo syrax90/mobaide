@@ -1402,6 +1402,17 @@ clears the container first because GIS appends rather than replaces. The rest is
 matched by hand: the same 320×40 box, and a 14px/500 label, which is what GIS
 renders at `size: 'large'`.
 
+That box is not the whole of what GIS paints. The browser gives the button's
+frame an opaque white canvas — the document inside is transparent, but it is
+out-of-process, so no rule here can recolour it — and GIS bleeds the frame past
+its own layout box with `width: 340px; height: 44px; margin: -2px -10px`. On the
+light card that white overhang is invisible; on the dark one it framed the
+button in a white halo — 10px down each side, 2px above and below — which read
+as the Google button simply being bigger than Apple's. `.google-signin-slot` therefore
+clips to its own box, which already is the button's 320×40, and takes over the
+focus ring GIS drew in the margin being cut. No `theme` option avoids this — the
+halo is there for `filled_black` and for the undocumented `outline_dark` too.
+
 That redraw is why `initGoogleIdentity` and `renderGoogleButton` are two calls
 rather than one. `initialize` binds the nonce that every popup's token will be
 minted against, so it is keyed on the client id alone; the theme can flip while
