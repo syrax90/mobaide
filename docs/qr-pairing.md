@@ -182,6 +182,12 @@ Because the agent fleet auto-updates on a 60-minute poll, the printed link
 only converges after the release ships — the web paste box and manual
 `POST /api/agents` are the day-one paths.
 
+The same lag is why every web-client string describing this block stays
+**order-neutral** ("the link printed with it", never "the link above it").
+`/pair` has no signal for which agent build produced the output, and an
+offline or pinned agent keeps the old payload-first ordering indefinitely, so
+any positional wording is wrong for part of the fleet.
+
 ### Pairing WS URL is agent-derived
 
 The `/api/pairing/initiate` response intentionally omits a `ws_url`

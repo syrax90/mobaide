@@ -17,9 +17,15 @@ export const WAIT_FOR_ONLINE_TIMEOUT_SECONDS = 60;
  * Android says "Scanned QR is not a Mobaide pairing code"; there is nothing to
  * scan here, and the two things a user can paste are named instead — a paste
  * box can be wrong in ways a camera cannot.
+ *
+ * Order-neutral on purpose. This screen has no signal for which agent build
+ * printed the block, and the two artifacts swapped order when the browser
+ * route was promoted above the code. The fleet only converges on the
+ * 60-minute update poll, and an offline or pinned agent never does, so
+ * "the link printed with it" is the only phrasing true of both orderings.
  */
 export const MALFORMED_PAYLOAD_MESSAGE =
-  'That is not a Mobaide pairing code. Copy the whole MOBA1|… line the agent printed, or the link above it.';
+  'That is not a Mobaide pairing code. Copy the whole MOBA1|… line the agent printed, or the link printed with it.';
 
 const FRESH_CODE_HINT =
   'On the agent host, run `mobaide-agent show-qr` to render a fresh one.';

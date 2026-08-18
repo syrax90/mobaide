@@ -177,7 +177,7 @@ export function Pair() {
           <p className="auth-subtitle">
             Run <code>mobaide-agent show-qr</code> on the machine you want to work on,
             then paste the <code>MOBA1|…</code> line it prints — or open the link it
-            prints above that line.
+            prints with it.
           </p>
           <form
             onSubmit={(event) => {
