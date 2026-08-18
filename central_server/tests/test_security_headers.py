@@ -199,13 +199,20 @@ def _template_source(path) -> str:
     Every template that lost its inline code documents the ban in prose that
     names the banned construct ("an onclick= attribute would not run here"), so
     a scan over raw bytes fails on correct files.
+
+    ``encoding`` is pinned because ``read_text()`` defaults to the locale
+    encoding: on a Windows box running cp1252 these templates' curly quotes are
+    undecodable, and the whole class errors out instead of checking anything.
     """
-    return _HTML_COMMENT_RE.sub("", _JINJA_COMMENT_RE.sub("", path.read_text()))
+    source = path.read_text(encoding="utf-8")
+    return _HTML_COMMENT_RE.sub("", _JINJA_COMMENT_RE.sub("", source))
 
 
 def _app_mobaide_snippet(filename: str) -> str:
     """The body of the ``(app_mobaide)`` snippet in one prod Caddyfile."""
-    match = _CADDY_SNIPPET_RE.search((PROD_CADDY_DIR / filename).read_text())
+    match = _CADDY_SNIPPET_RE.search(
+        (PROD_CADDY_DIR / filename).read_text(encoding="utf-8")
+    )
     assert match is not None, f"no (app_mobaide) snippet in {filename}"
     return match.group(1)
 

@@ -179,11 +179,33 @@
         <span class="step-n">01</span>
         <h3>Install the agent</h3>
         <p>One line on the machine you want to reach.</p>
-        <pre class="code px-frame"><code><span class="c-dim"># macOS / Linux</span>
-curl -fsSL https://get.mobaide.com/install.sh | bash
-
-<span class="c-dim"># Windows (PowerShell)</span>
-irm https://get.mobaide.com/install.ps1 | iex</code></pre>
+        {# One .copyblock per command, rather than the single <pre> that held
+           both: a per-command copy button needs a per-command block. The
+           command string lives in exactly ONE place — the <code> element —
+           and site.js reads it from there, so no data-copy="..." value can
+           drift away from what the page actually shows. #}
+        <div class="copyblock">
+          <div class="copyblock-head">
+            <span class="copyblock-label c-dim"># macOS / Linux</span>
+            <button type="button" class="copy-btn" data-copy aria-label="Copy the macOS and Linux install command">
+              <svg class="copy-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.75 5.75h8.5v8.5h-8.5z"/><path d="M10.25 5.75V1.75H1.75v8.5h4"/></svg>
+              <svg class="copy-ico-done" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m2.5 8.25 3.5 3.5 7.5-7.5"/></svg>
+            </button>
+            <span class="sr-only" role="status"></span>
+          </div>
+          <pre class="code px-frame"><code>curl -fsSL https://get.mobaide.com/install.sh | bash</code></pre>
+        </div>
+        <div class="copyblock">
+          <div class="copyblock-head">
+            <span class="copyblock-label c-dim"># Windows (PowerShell)</span>
+            <button type="button" class="copy-btn" data-copy aria-label="Copy the Windows install command">
+              <svg class="copy-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.75 5.75h8.5v8.5h-8.5z"/><path d="M10.25 5.75V1.75H1.75v8.5h4"/></svg>
+              <svg class="copy-ico-done" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m2.5 8.25 3.5 3.5 7.5-7.5"/></svg>
+            </button>
+            <span class="sr-only" role="status"></span>
+          </div>
+          <pre class="code px-frame"><code>irm https://get.mobaide.com/install.ps1 | iex</code></pre>
+        </div>
       </li>
       <li class="step notch">
         <span class="step-n">02</span>

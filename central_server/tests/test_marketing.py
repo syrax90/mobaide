@@ -13,6 +13,8 @@ Covers the contract documented in ``docs/website.md``:
   honest. These are the tests a copy edit is most likely to trip.
 - **CSP self-containment.** No inline ``style=`` and no inline ``<script>``,
   because the response ships ``default-src 'self'`` without ``'unsafe-inline'``.
+- **The install one-liners and their copy buttons.** Each command is rendered
+  exactly once, so the copied text cannot drift from the displayed text.
 - Social metadata: OG/Twitter tags and a parseable JSON-LD block, all pointing
   at ``config.site_base_url`` rather than the relay origin.
 - ``/robots.txt``, ``/sitemap.xml``, ``/favicon.ico``, and the two
@@ -131,6 +133,20 @@ _SUBRESOURCE_URL_RE = re.compile(r'\s(?:src|href)="([^"]*)"')
 _LD_JSON_RE = re.compile(
     r'<script type="application/ld\+json">(.*?)</script>', re.DOTALL
 )
+
+# The host install one-liners. Kept verbatim rather than imported: this is the
+# public page a first-time user copies from, and a silent edit to either string
+# sends people to a URL that does not serve an installer.
+INSTALL_COMMANDS = (
+    "curl -fsSL https://get.mobaide.com/install.sh | bash",
+    "irm https://get.mobaide.com/install.ps1 | iex",
+)
+
+_COPY_BUTTON_RE = re.compile(r"<button\b[^>]*\bdata-copy\b[^>]*>")
+_ARIA_LABEL_RE = re.compile(r'\saria-label="([^"]+)"')
+# `on...=` in a tag. CSP blocks event-handler attributes exactly as it blocks an
+# inline <script>, and the copy button is the page's first interactive control.
+_INLINE_HANDLER_RE = re.compile(r"<[a-z][^>]*\son[a-z]+\s*=", re.IGNORECASE)
 
 
 @pytest.fixture
@@ -498,3 +514,54 @@ class TestSiteOriginNormalisation:
         assert "<loc>https://example.test/</loc>" in app.state.marketing_sitemap
         assert "https://example.test//" not in app.state.marketing_html
         assert "https://example.test//" not in app.state.marketing_robots
+
+
+class TestLandingInstallCommands:
+    """The two install one-liners and the copy button beside each.
+
+    Ported from the clients' install sheets — Android's ``InstallCommandCard``
+    is the closest mirror, an icon-only button whose ``contentDescription``
+    names the OS.
+    """
+
+    @pytest.mark.parametrize("command", INSTALL_COMMANDS)
+    async def test_both_one_liners_are_rendered_verbatim(
+        self, landing, command
+    ) -> None:
+        assert command in landing
+
+    @pytest.mark.parametrize("command", INSTALL_COMMANDS)
+    async def test_each_command_appears_exactly_once(self, landing, command) -> None:
+        """``site.js`` reads the text out of the ``<code>`` element, so the
+        button carries a bare ``data-copy`` hook and no copy of the string.
+
+        A second occurrence means someone reintroduced ``data-copy="..."`` (or
+        an equivalent duplicate), and the copied text can then silently drift
+        from the text on screen — the failure mode a visitor cannot see.
+        """
+        assert landing.count(command) == 1
+
+    async def test_every_command_has_its_own_copy_button(self, landing) -> None:
+        buttons = _COPY_BUTTON_RE.findall(landing)
+        assert len(buttons) == len(INSTALL_COMMANDS)
+        assert all('type="button"' in button for button in buttons)
+
+    async def test_copy_buttons_are_labelled_and_distinguishable(
+        self, landing
+    ) -> None:
+        """The icon carries no text, so ``aria-label`` is the entire accessible
+        name — and two buttons both reading "Copy" would leave a screen-reader
+        user unable to tell which OS they are copying."""
+        labels = [
+            _ARIA_LABEL_RE.search(button) for button in _COPY_BUTTON_RE.findall(landing)
+        ]
+        assert all(label is not None for label in labels)
+        names = [label.group(1) for label in labels if label is not None]
+        assert len(set(names)) == len(INSTALL_COMMANDS)
+
+    async def test_no_inline_event_handler_attributes(self, landing) -> None:
+        """``onclick=`` is blocked by ``default-src 'self'`` just as an inline
+        ``<script>`` is, and it fails silently in the browser — the behaviour
+        belongs in ``static/site/site.js``."""
+        assert _INLINE_HANDLER_RE.search(landing) is None
+
