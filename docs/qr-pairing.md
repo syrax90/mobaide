@@ -168,7 +168,7 @@ is a separate host. It is therefore a fixed default with an env override:
 |---|---|---|
 | `MOBAIDE_AGENT_PAIR_WEB_ORIGIN` | `https://app.mobaide.com` | Origin of the web client the printed link points at. Self-hosted and development deployments set it; a value that is not ASCII `http(s)` is ignored rather than printed. |
 
-Both install scripts mirror this variable's **default and its validation**, because their completion banner names the same origin (see *First install* below) and a shell script cannot import the Python. Mirroring only the default would be worse than not mirroring at all: a bare `${MOBAIDE_AGENT_PAIR_WEB_ORIGIN:-…}` expansion prints overrides `pairing_web_origin()` deliberately discards, so the banner would name a host the link twenty lines above does not use — exactly the misconfiguration where the disagreement matters. `test_install_sh.py::test_pairing_web_origin_default_matches_the_agent` and its `install.ps1` twin pin the shared literal.
+Both install scripts mirror this variable's **default and its validation**, because their completion banner names the same origin (see *First install* below) and a shell script cannot import the Python. Mirroring only the default would be worse than not mirroring at all: a bare `${MOBAIDE_AGENT_PAIR_WEB_ORIGIN:-…}` expansion prints overrides `pairing_web_origin()` deliberately discards, so the banner would name a host the link twenty lines above does not use — exactly the misconfiguration where the disagreement matters. `test_install_sh.py::test_pairing_web_origin_agrees_with_the_agent_on_every_input` runs both implementations over the same table of inputs — including the whitespace forms, where mirroring only the scheme check leaves a leading space reverting to the default and a trailing one rendering `<origin> /pair`.
 
 Because the agent fleet auto-updates on a 60-minute poll, the printed link
 only converges after the release ships — the web paste box and manual
@@ -347,6 +347,12 @@ Those two lines are gated on a `QR_RENDERED` / `$Script:QrRendered` flag the
 render step sets. An idempotent re-run against an already-paired host renders
 nothing, and pointing at "the link above" when there is no link above is the
 same trap the CLI's already-paired early return avoids by printing no link.
+
+The flag is set from `RELAY_AGENT_TOKEN` in the agent `.env`, **not** from
+`show-qr`'s exit status. A 0 exit is necessary but not sufficient: `show-qr`
+also exits 0 on its already-paired branch, and pairing can complete between the
+health check and the render call — the service's own boot-time QR is already in
+the log, so a phone can claim the nonce inside the pending-file poll window.
 
 If the operator misses the QR (e.g., SSH disconnected before scanning),
 the agent's boot-time autorun re-renders it. Run on the agent host:

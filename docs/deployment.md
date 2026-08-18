@@ -516,6 +516,20 @@ sudo bash deploy/setup.sh
 MOBAIDE_RUN_AS_USER=alice sudo -E bash deploy/setup.sh
 ```
 
+It also pins the relay's manifest-signing key via `fetch-trust-key`, which the
+end-user installer does through its own `bootstrap_trust_key` step. Without a
+pinned key the pairing monitor logs `no_trust_key` and returns, so the service
+never initiates a nonce and the agent cannot pair at all — the failure is quiet,
+because nothing on the happy path reads it back. The step is non-fatal (a dev
+box may be offline, or aimed at a relay that is not up yet) and the warning
+names the command to re-run.
+
+The completion banner's pairing command carries `--require-pending` for the same
+reason the installers do: the service restarted a moment earlier is already
+initiating its own nonce, and a bare `show-qr` inside that window falls through
+to `pair-qr` and initiates a second one. Whichever writes `pending_pairing.json`
+last leaves the other's QR with no waiter on the pairing WebSocket.
+
 ### macOS file-access permissions (Full Disk Access / TCC)
 
 On macOS, the first time the agent — or a `claude` session it spawns — reads files in

@@ -94,6 +94,12 @@ check_command() {
 # - exactly the misconfiguration where the two disagreeing is worst.
 pairing_web_origin() {
     local override="${MOBAIDE_AGENT_PAIR_WEB_ORIGIN:-}" trimmed
+    # The Python strips before it validates, and shell quoting picks up stray
+    # whitespace easily. Without this a leading space fails the scheme test and
+    # silently reverts to the default, while a trailing one survives every
+    # check and renders "<origin> /pair".
+    override="${override#"${override%%[![:space:]]*}"}"
+    override="${override%"${override##*[![:space:]]}"}"
     case "$override" in
         http://*|https://*) ;;
         *) printf '%s\n' "$DEFAULT_PAIRING_WEB_ORIGIN"; return 0 ;;
@@ -807,12 +813,17 @@ initiate a nonce on its own. Run 'mobaide-agent show-qr' to re-display."
     # central server rejects the loser with WS close 4001.
     "$release_dir/venv/bin/mobaide-agent" show-qr --require-pending \
         --prefix "$MOBAIDE_AGENT_PREFIX"
-    # Only reachable when the CLI exited 0: the call above is unguarded under
-    # `set -e`, so a failure aborts the installer (install.ps1 does the same
-    # thing explicitly via Write-Fail). Note this assignment also makes the
-    # function's exit status unconditionally 0 - harmless while the sole caller
-    # is unguarded, but it would mask the CLI's failure under an `if`.
-    QR_RENDERED=1
+    # A 0 exit is necessary but not sufficient. `show-qr` also exits 0 on its
+    # already-paired branch, which prints "Already paired" and renders nothing,
+    # and pairing can complete between wait_agent_healthy above and this call:
+    # the service's own boot-time QR is already in the log, so a phone can
+    # claim the nonce inside the pending-file poll window. Re-read the
+    # credential the agent writes on a successful claim rather than trusting
+    # the exit status, so the banner never advertises a link nobody saw.
+    if [ -z "$(read_env_value "${MOBAIDE_AGENT_PREFIX}/mobaide_agent/.env" \
+        'RELAY_AGENT_TOKEN')" ]; then
+        QR_RENDERED=1
+    fi
 }
 
 resolve_run_as_user() {

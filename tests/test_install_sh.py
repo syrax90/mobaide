@@ -17,6 +17,7 @@ manual verification steps in the plan and by CI distro images.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -163,12 +164,19 @@ def test_qr_rendered_flag_is_script_scoped_and_set_after_the_render() -> None:
         "print_completion"
     )
     body = _function_body("show_pairing_qr_from_service")
-    statements = [line.strip() for line in body.splitlines() if line.strip()]
-    assert statements[-1] == "QR_RENDERED=1", (
+    assert body.count("QR_RENDERED=1") == 1
+    render, _, after = body.partition("show-qr --require-pending")
+    assert "QR_RENDERED=1" not in render, (
         "the flag must be set *after* the show-qr call, so an aborted render "
         "leaves it at 0. Body:\n" + repr(body)
     )
-    assert body.count("QR_RENDERED=1") == 1
+    # A 0 exit is not proof of a render: show-qr also exits 0 on its
+    # already-paired branch, and a phone can claim the nonce between the
+    # health check and this call.
+    assert "RELAY_AGENT_TOKEN" in after, (
+        "the flag must be gated on the agent still being unpaired, not on "
+        "the CLI's exit status alone. Body:\n" + repr(body)
+    )
 
 
 def test_completion_banner_points_at_the_web_app_only_when_rendered() -> None:
@@ -182,6 +190,79 @@ def test_completion_banner_points_at_the_web_app_only_when_rendered() -> None:
     assert '[ "$QR_RENDERED" = "1" ]' in body
     assert "pairing_web_origin" in body
     assert "MOBA1" in body
+
+
+_ORIGIN_CASES = (
+    "",
+    "https://mobaide.example.dev",
+    "http://127.0.0.1:5173",
+    "https://mobaide.example.dev/",
+    "https://mobaide.example.dev///",
+    # Whitespace: the Python strips before validating, and shell quoting picks
+    # it up easily. Untrimmed, a leading space reverts to the production
+    # default while a trailing one renders "<origin> /pair".
+    " https://mobaide.example.dev",
+    "https://mobaide.example.dev ",
+    "   https://mobaide.example.dev///   ",
+    "\thttps://mobaide.example.dev\n",
+    # Rejected by the Python, so the mirror must reject them too.
+    "mobaide.example.dev",
+    "https://",
+    "http:",
+    "ftp://mobaide.example.dev",
+    "HTTPS://mobaide.example.dev",
+    "https://релэй.test",
+)
+
+
+def test_pairing_web_origin_agrees_with_the_agent_on_every_input() -> None:
+    """Behavioural parity, not a text pin.
+
+    The banner names the same host as the link rendered above it, so the
+    shell has to mirror ``pairing_web_origin()``'s *validation* — not just
+    its default. Only running both implementations over the same table
+    catches a divergence; a text pin cannot.
+    """
+    from test_install_script_trap import _BASH
+
+    if _BASH is None:
+        pytest.skip("bash unavailable on this platform")
+    sys.path.insert(0, str(_REPO_ROOT / "mobaide_agent"))
+    try:
+        from mobaide.agent.pairing_qr import (
+            PAIRING_WEB_ORIGIN_ENV,
+            pairing_web_origin,
+        )
+    except ImportError:  # pragma: no cover - agent deps absent
+        pytest.skip("mobaide_agent not importable on this host")
+    finally:
+        sys.path.pop(0)
+
+    # Extract just the function under test, so nothing else in the installer
+    # runs. Matches the `sed -n '/^name()/,/^}$/p'` convention above.
+    body = _function_body("pairing_web_origin")
+    snippet = (
+        'DEFAULT_PAIRING_WEB_ORIGIN="https://app.mobaide.com"\n'
+        f"pairing_web_origin() {{{body}}}\n"
+        'pairing_web_origin\n'
+    )
+
+    for case in _ORIGIN_CASES:
+        env = {**os.environ, "MOBAIDE_AGENT_PAIR_WEB_ORIGIN": case}
+        proc = subprocess.run(
+            [_BASH, "-c", snippet], capture_output=True, text=True, env=env
+        )
+        assert proc.returncode == 0, f"{case!r}: {proc.stderr!r}"
+        os.environ[PAIRING_WEB_ORIGIN_ENV] = case
+        try:
+            expected = pairing_web_origin()
+        finally:
+            os.environ.pop(PAIRING_WEB_ORIGIN_ENV, None)
+
+        assert proc.stdout.rstrip("\n") == expected, (
+            f"install.sh and pairing_qr disagree on {case!r}: shell said "
+            f"{proc.stdout.rstrip(chr(10))!r}, agent said {expected!r}"
+        )
 
 
 _ = sys  # silence unused-import noise on hosts without Git Bash

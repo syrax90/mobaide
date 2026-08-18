@@ -85,7 +85,10 @@ function Write-Fail  { param($Msg) Write-Error $Msg; exit 1 }
 # deliberate - PowerShell's -match is case-insensitive, the Python startswith
 # is not.
 function Get-PairWebOrigin {
-    $override = $env:MOBAIDE_AGENT_PAIR_WEB_ORIGIN
+    # .Trim() before validating, mirroring the Python's leading .strip():
+    # a leading space would otherwise fail the scheme test and silently revert
+    # to the default, and a trailing one would render "<origin> /pair".
+    $override = "$($env:MOBAIDE_AGENT_PAIR_WEB_ORIGIN)".Trim()
     if (-not ($override -cmatch '^https?://[\x20-\x7E]*\z')) {
         return $Script:DefaultPairWebOrigin
     }
@@ -1234,9 +1237,18 @@ initiate a nonce on its own. Run `mobaide-agent show-qr` to re-display.
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "mobaide-agent show-qr --require-pending failed (exit $LASTEXITCODE). Run `mobaide-agent show-qr` from a new PowerShell window."
     }
-    # $Script: on the assignment is load-bearing: a bare $QrRendered would
-    # create a function-local and the banner would never fire.
-    $Script:QrRendered = $true
+    # A 0 exit is necessary but not sufficient. `show-qr` also exits 0 on its
+    # already-paired branch, which prints "Already paired" and renders nothing,
+    # and pairing can complete between Wait-AgentHealthy above and this call:
+    # the service's own boot-time QR is already in the log, so a phone can
+    # claim the nonce inside the pending-file poll window. Re-read the
+    # credential the agent writes on a successful claim rather than trusting
+    # the exit status. $Script: on the assignment is load-bearing too - a bare
+    # $QrRendered would create a function-local and the banner would never fire.
+    $envFile = Join-Path (Join-Path $Prefix "mobaide_agent") ".env"
+    if (-not (Read-EnvValue -Path $envFile -Key "RELAY_AGENT_TOKEN")) {
+        $Script:QrRendered = $true
+    }
 }
 
 function Install-Service {

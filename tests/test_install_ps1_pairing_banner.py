@@ -80,6 +80,32 @@ def test_qr_rendered_flag_is_script_scoped_and_set_after_the_failure_guard(
     assert "$QrRendered = $true" not in text.replace(
         "$Script:QrRendered = $true", ""
     ), "a bare $QrRendered would create a function-local and never fire"
+    # A 0 exit is not proof of a render: show-qr also exits 0 on its
+    # already-paired branch, and a phone can claim the nonce between the
+    # health check and this call.
+    assert "RELAY_AGENT_TOKEN" in text[guard:setter], (
+        "the flag must be gated on the agent still being unpaired, not on "
+        "the CLI's exit status alone"
+    )
+
+
+def test_pairing_web_origin_trims_before_validating() -> None:
+    """The Python strips before it validates; the mirror has to as well.
+
+    Untrimmed, a leading space fails the scheme test and silently reverts to
+    the production default, while a trailing one survives every check and
+    renders "<origin> /pair". The bash twin is covered behaviourally by
+    ``test_install_sh.py`` — PowerShell cannot be executed here, so this is a
+    text pin on the same contract.
+    """
+    text = _text()
+    origin_fn = text[text.index("function Get-PairWebOrigin"):]
+    origin_fn = origin_fn[: origin_fn.index("\n}")]
+
+    assert ".Trim()" in origin_fn
+    assert origin_fn.index(".Trim()") < origin_fn.index("-cmatch"), (
+        "the trim must happen before the scheme check, not after it"
+    )
 
 
 def test_completion_banner_points_at_the_web_app_only_when_rendered() -> None:

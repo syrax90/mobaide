@@ -136,6 +136,21 @@ info "Installing agent package..."
 info "Generating agent .env via init-env..."
 "${VENV_DIR}/bin/python" -m mobaide.agent.config init-env --prefix "${INSTALL_DIR}"
 
+# --- Trust key ---
+
+# Without a pinned key the pairing monitor logs `no_trust_key` and returns, so
+# the service never initiates a nonce and the agent can never pair. install.sh
+# covers this with its own bootstrap_trust_key/write_trust_key pair; from-source
+# setups have to call the CLI. Runs before the chown below so the trust dir this
+# creates ends up owned by RUN_USER. Not fatal: a dev box may be offline or
+# pointed at a relay that is not up yet, and the rest of the install is still
+# useful — but pairing will not work until this succeeds.
+info "Pinning the relay's manifest-signing key..."
+"${VENV_DIR}/bin/mobaide-agent" fetch-trust-key --prefix "${INSTALL_DIR}" \
+    --no-restart || \
+    warn "Could not fetch the trust key. Pairing stays unavailable until you run:
+    sudo -u ${RUN_USER} ${VENV_DIR}/bin/mobaide-agent fetch-trust-key --prefix ${INSTALL_DIR}"
+
 # --- Permissions ---
 
 chown -R "${RUN_USER}:${RUN_GROUP}" "$INSTALL_DIR"
@@ -198,8 +213,16 @@ echo ""
 echo "  Agent status:  systemctl status mobaide-agent"
 echo "  Agent logs:    journalctl -u mobaide-agent -f"
 echo "  Health check:  curl http://localhost:8000/api/health"
-# Absolute venv path and sudo -u are both required here: this from-source
-# layout puts no console script on PATH, and running show-qr as root would
-# leave a root-owned run/pending_pairing.json the agent cannot rewrite.
-echo "  Pair agent:    sudo -u ${RUN_USER} ${VENV_DIR}/bin/mobaide-agent show-qr"
+# Three things are load-bearing in this one line. The absolute venv path,
+# because a from-source layout puts no console script on PATH. `sudo -u`,
+# because show-qr as root would leave a root-owned run/pending_pairing.json the
+# agent cannot rewrite. And `--require-pending`, because the service restarted
+# above is already initiating its own nonce: a bare show-qr run inside that
+# window falls through to pair-qr and initiates a *second* one, and whichever
+# writes pending_pairing.json last leaves the other's QR with no waiter on the
+# pairing WebSocket. The flag makes the CLI render-from-file only, exactly as
+# install.sh does; before the service has written the file it exits 7 with a
+# message saying to wait, which is the honest answer.
+echo "  Pair agent:    sudo -u ${RUN_USER} ${VENV_DIR}/bin/mobaide-agent show-qr --require-pending"
+echo "                 (web app: use the link or MOBA1 code it prints)"
 echo ""
