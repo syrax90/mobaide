@@ -160,31 +160,65 @@ a {
   image-rendering: pixelated;
 }
 
-/* No text-transform here: e2e asserts the literal innerText "Theme: system",
-   and toHaveText sees through CSS uppercasing.
-
-   `flex: none` because the nav beside it is the designated overflow absorber
-   (`flex: 1 1 auto` + scroll). Left shrinkable, the toggle wraps its own label
+/* `flex: none` because the nav beside it is the designated overflow absorber
+   (`flex: 1 1 auto` + scroll). Left shrinkable, the picker wraps its own labels
    to two lines instead and grows the header 28px -> 46px, which on the terminal
-   route is a PTY row lost to a button that had room all along. */
-.theme-toggle {
+   route is a PTY row lost to a control that had room all along. The group runs
+   ~28px wider than the button it replaced; width is free (the nav scroller
+   absorbs it), height is not. `min-inline-size` overrides the UA fieldset
+   `min-content` floor, which would otherwise fight the flex sizing. */
+.theme-picker {
+  display: flex;
   flex: none;
-  padding: 5px 11px;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
   border: 0;
-  border-radius: 0;
-  background: transparent;
+}
+
+/* Vertical padding is pinned at 5px: it is what keeps the control 28px tall. */
+.theme-seg {
+  padding: 5px 9px;
   color: var(--text-muted);
   box-shadow: inset 0 0 0 2px var(--gray);
   font-family: var(--font-chrome);
   font-size: var(--pix-sm);
+  text-transform: uppercase;
   letter-spacing: 0.08em;
   cursor: pointer;
-  transition: color 120ms linear, box-shadow 120ms linear;
+  transition: color 120ms linear, box-shadow 120ms linear, background 120ms linear;
 }
 
-.theme-toggle:hover {
+/* Pull adjacent 2px rings onto each other so neighbours share one divider
+   rather than stacking a 4px seam. */
+.theme-seg + .theme-seg {
+  margin-left: -2px;
+}
+
+.theme-seg:hover {
   color: var(--accent);
   box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* Same active treatment as `.preset-card-active` and `.chip`. Stacked above the
+   neighbours it overlaps, or the collapsed seam would cut its ring in half. */
+.theme-seg:has(input:checked) {
+  position: relative;
+  z-index: 1;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+}
+
+/* The radio is clipped to zero area by `.visually-hidden`'s `clip-path`, so it
+   can never paint the global ring — the label wears it. Nothing clips the ring
+   itself: `.theme-picker` is a sibling of the `overflow-x: auto` nav, not a
+   child. */
+.theme-seg:has(input:focus-visible) {
+  position: relative;
+  z-index: 2;
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
 }
 
 .app-main {
@@ -956,10 +990,19 @@ input[type='radio']:checked {
   .field-affix,
   .code-input-box,
   .button,
-  .theme-toggle,
+  .theme-seg,
   .recent-path-pick,
   .terminal-overlay-retry {
     border: 1px solid ButtonBorder;
+  }
+
+  /* The picker's whole selected state is background + box-shadow, so without
+     this all three segments read identically here. `appearance: auto` above
+     does reach its radio, but `clip-path` is not a property forced-colors
+     overrides, so the square stays hidden and the label carries the state. */
+  .theme-seg:has(input:checked) {
+    border-color: Highlight;
+    color: Highlight;
   }
 }
 

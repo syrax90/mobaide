@@ -1,42 +1,13 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubLocalStorage } from '../test/localStorageStub';
+import { stubPrefersDark } from '../test/matchMediaStub';
 
 // Before importing the store, so zustand's `persist` captures the stand-in.
 stubLocalStorage();
 
-const { useResolvedTheme } = await import('./useResolvedTheme');
+const { useResolvedTheme, useSystemTheme } = await import('./useResolvedTheme');
 const { useThemeStore } = await import('../stores/themeStore');
-
-/**
- * jsdom ships no `matchMedia` at all, so it is stubbed onto the global rather
- * than spied on. One mutable object is handed back from every call, so the
- * listener the hook registers is the one `set` fires.
- *
- * Never cleared with `vi.unstubAllGlobals`: that would take the localStorage
- * stand-in with it. Every test installs its own instead.
- */
-function stubPrefersDark(initial: boolean): { set: (next: boolean) => void } {
-  const listeners = new Set<() => void>();
-  const media = {
-    matches: initial,
-    addEventListener: (_type: string, listener: () => void) => {
-      listeners.add(listener);
-    },
-    removeEventListener: (_type: string, listener: () => void) => {
-      listeners.delete(listener);
-    },
-  };
-  vi.stubGlobal('matchMedia', () => media as unknown as MediaQueryList);
-  return {
-    set: (next: boolean) => {
-      media.matches = next;
-      listeners.forEach((listener) => {
-        listener();
-      });
-    },
-  };
-}
 
 beforeEach(() => {
   useThemeStore.setState({ preference: 'system' });
@@ -101,5 +72,38 @@ describe('useResolvedTheme', () => {
     });
 
     expect(result.current).toBe('dark');
+  });
+});
+
+describe('useSystemTheme', () => {
+  it('reports the OS appearance and tracks it live', () => {
+    const media = stubPrefersDark(false);
+    const { result } = renderHook(() => useSystemTheme());
+    expect(result.current).toBe('light');
+
+    act(() => {
+      media.set(true);
+    });
+
+    expect(result.current).toBe('dark');
+  });
+
+  // The distinction ThemePicker's Auto hint depends on: with an explicit
+  // preference set, the painted theme says nothing about what Auto would give.
+  it('ignores the stored preference', () => {
+    stubPrefersDark(true);
+    useThemeStore.setState({ preference: 'light' });
+
+    const { result } = renderHook(() => useSystemTheme());
+
+    expect(result.current).toBe('dark');
+  });
+
+  it('falls back to light on an engine with no matchMedia', () => {
+    vi.stubGlobal('matchMedia', undefined);
+
+    const { result } = renderHook(() => useSystemTheme());
+
+    expect(result.current).toBe('light');
   });
 });

@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router';
-import { ThemeToggle } from './ThemeToggle';
+import { ThemePicker } from './ThemePicker';
 
 export function RootLayout() {
   return (
@@ -28,7 +28,7 @@ export function RootLayout() {
               where the first five are the daily ones. */}
           <NavLink to="/settings">Settings</NavLink>
         </nav>
-        <ThemeToggle />
+        <ThemePicker />
       </header>
       <main className="app-main">
         <Outlet />

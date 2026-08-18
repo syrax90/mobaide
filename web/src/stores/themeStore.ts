@@ -29,8 +29,8 @@ export const useThemeStore = create<ThemeState>()(
     {
       name: 'mobaide-theme',
       // localStorage is an untrusted boundary: an unknown persisted value
-      // would otherwise flow into data-theme (no CSS tokens match) and wedge
-      // the RootLayout toggle cycle. Same whitelist as the boot script.
+      // would otherwise flow into data-theme (no CSS tokens match) and leave
+      // the picker with no segment selected. Same whitelist as the boot script.
       merge: (persisted, current) => ({
         ...current,
         preference: sanitizePreference(

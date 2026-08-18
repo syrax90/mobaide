@@ -12,18 +12,16 @@ function systemPrefersDark(): boolean {
 }
 
 /**
- * The theme actually painted, as opposed to the stored preference.
+ * The OS appearance, tracked live — what the `system` preference would give you
+ * right now, which is not the same question as what is currently on screen.
+ * `ThemePicker` needs this one: while an explicit Light or Dark is selected, the
+ * painted theme says nothing about what choosing Auto would do.
  *
- * `ThemeProvider` stamps this onto `data-theme` for the CSS to read. Anything
- * that has to hand a concrete theme to a third-party SDK needs the same value
- * in JS — the Google Identity Services button picks its `theme` this way,
- * because it renders into a cross-origin frame that our CSS cannot reach.
- *
- * The media listener is attached whatever the preference, so that switching
- * back to `system` resolves against the OS value current at that moment.
+ * The media listener is attached whatever the stored preference, so that
+ * switching back to `system` resolves against the OS value current at that
+ * moment.
  */
-export function useResolvedTheme(): 'light' | 'dark' {
-  const preference = useThemeStore((state) => state.preference);
+export function useSystemTheme(): 'light' | 'dark' {
   const [prefersDark, setPrefersDark] = useState(systemPrefersDark);
 
   useEffect(() => {
@@ -39,5 +37,20 @@ export function useResolvedTheme(): 'light' | 'dark' {
     };
   }, []);
 
-  return resolveTheme(preference, prefersDark);
+  return prefersDark ? 'dark' : 'light';
+}
+
+/**
+ * The theme actually painted, as opposed to the stored preference.
+ *
+ * `ThemeProvider` stamps this onto `data-theme` for the CSS to read. Anything
+ * that has to hand a concrete theme to a third-party SDK needs the same value
+ * in JS — the Google Identity Services button picks its `theme` this way,
+ * because it renders into a cross-origin frame that our CSS cannot reach.
+ */
+export function useResolvedTheme(): 'light' | 'dark' {
+  const preference = useThemeStore((state) => state.preference);
+  const systemTheme = useSystemTheme();
+
+  return resolveTheme(preference, systemTheme === 'dark');
 }
