@@ -356,6 +356,20 @@ h1 {
   height: auto;
 }
 
+/* Google's asset bakes in its own clear space (41 of 250 px per side), Apple's
+   does not, and neither may be cropped. So both rules reproduce it rather than
+   remove it: the height matches the Play *lockup* (194px * 168/646 = 50px, not
+   its 75px box), and the padding restores the inset the lockups would otherwise
+   misalign by once .cta wraps them into a column. */
+.badge-link.badge-apple {
+  padding: 12px;
+}
+
+.badge-link.badge-apple img {
+  width: auto;
+  height: 50px;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;

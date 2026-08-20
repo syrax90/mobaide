@@ -61,10 +61,8 @@ enum AppConfig {
     static let privacyPolicyURL = "https://mobaide.com/privacy.html"
 
     /// Numeric App Store id the takeover store links are built from (Android:
-    /// Play Store deep links keyed by the package id). Placeholder until the
-    /// app is listed on the App Store.
-    // TODO(iOS launch): replace with the real App Store Connect numeric id.
-    static let appStoreID = "0000000000"
+    /// Play Store deep links keyed by the package id).
+    static let appStoreID = "6797191741"
 
     /// App Store links for the IncompatibleServer takeover (Android:
     /// Play Store deep links). `appStoreURL` deep-links into the App Store

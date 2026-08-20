@@ -236,10 +236,14 @@ this host — so both are asserted in `test_marketing.py` and `test_portal.py`.
 ## Weight budget
 
 Keep the page under **200 KB** all-inclusive (raw, before Caddy's gzip). It is
-currently ~187 KB, of which ~87 KB is the initial render — the four screenshots
+currently ~194 KB, of which ~96 KB is the initial render — the four screenshots
 are `loading="lazy"` below the fold. Measure by summing the HTML plus every
 same-origin URL it references; the four WebP screenshots dominate, so that is
 where to look first if the budget is at risk.
+
+**Headroom is now ~6 KB**, the 10.8 KB App Store badge having spent half of
+what was left. The next asset of any size needs the screenshots re-encoded
+first — they are ~100 KB of the total on their own.
 
 The budget covers the **landing page only**. The `portal_base.html` pages ship
 none of the screenshots and no JavaScript whatsoever; they add only `portal.css`
@@ -398,11 +402,27 @@ those pages, which is a policy change rather than a tweak.
 
 ## Store badge rules
 
-The Google Play badge (`img/google-play-badge.png`) is the unmodified official
-asset from Google's Partner Marketing Hub — do not recolour, crop or re-render
-it, and keep it no smaller than any other store badge on the page. The "iOS —
-coming soon" element is a plain text chip on purpose: Apple's badge artwork may
-not be imitated or altered, and the iOS client is not listed yet.
+Both badges are **unmodified official assets** — `img/google-play-badge.png`
+from Google's Partner Marketing Hub, `img/app-store-badge.svg` from Apple's
+marketing resources (see *Regenerating assets*). Neither vendor permits
+recolouring, cropping or re-rendering, so the files are committed byte-for-byte;
+the Apple SVG is not even whitespace-minified, which would have saved 380 bytes.
+Each must also stay no smaller than the other.
+
+**They are not directly comparable at the same box height.** Google's asset
+bakes its own clear space into the canvas — 41 px on every side of 646×250, so
+the visible lockup is 564×168 — while Apple's SVG (119.66×40) has none. Sizing
+both boxes alike renders the Apple lockup 1.49× taller, which reads as Apple
+being favoured rather than as a mistake. `site.css` therefore matches the
+*lockups*: the Play badge renders at `width: 194px`, making its lockup
+`194 × 168/646 = 50px` tall, and `.badge-link.badge-apple img` pins the Apple
+badge to `height: 50px`. Re-derive that number if either width changes.
+
+The same asymmetry misaligns the two lockups on the left once `.cta` wraps them
+into a column, so `.badge-link.badge-apple` carries `padding: 12px` — Google's
+inset at render size (`194 × 41/646`), reproduced rather than cropped away. Do
+not close the remaining gap from the other direction: that is Google's mandated
+clear space doing its job, and Apple asks for clear space of its own.
 
 ## Regenerating assets
 
@@ -442,6 +462,12 @@ five means copying the new file over its `web/public/` twin in the same commit �
 the font included, and note that step 6 ships it under an unchanged filename, so
 nothing else would signal the drift. `web/src/app/brandAssets.test.ts` holds the
 canonical list and fails Web CI if any copy diverges.
+
+The two store badges are **not** generated here — they are vendor artwork,
+downloaded and committed as-is. Refresh the Apple one from
+`https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg`
+and the Google one from the Partner Marketing Hub; see *Store badge rules* for
+what may not be done to either.
 
 ## Deployment
 
