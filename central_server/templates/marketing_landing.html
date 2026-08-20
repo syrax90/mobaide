@@ -60,10 +60,13 @@
   "name": "Mobaide",
   "url": "{{ site_origin }}/",
   "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "Android",
+  "operatingSystem": "Android, iOS",
   "description": "Mobaide turns your phone into a real terminal for AI coding agents — Claude Code, Codex CLI, Antigravity CLI, custom agent types and raw shells — running on your own Windows, macOS or Linux computer. No public IP, port forwarding, VPN or SSH.",
   "image": "{{ site_origin }}/static/site/img/og.png",
-  "downloadUrl": "https://play.google.com/store/apps/details?id=com.mobaide.app",
+  "downloadUrl": [
+    "https://play.google.com/store/apps/details?id=com.mobaide.app",
+    "https://apps.apple.com/app/id6797191741"
+  ],
   "offers": {
     "@type": "Offer",
     "price": "0",
@@ -115,9 +118,12 @@
           <img src="/static/site/img/google-play-badge.png?v={{ asset_version }}"
                width="323" height="125" alt="Get it on Google Play">
         </a>
-        {# A plain chip on purpose. Apple's badge artwork may not be imitated or
-           altered, and the iOS client is not on the App Store yet. #}
-        <span class="chip">iOS — coming soon</span>
+        <a class="badge-link badge-apple" href="https://apps.apple.com/app/id6797191741" rel="noopener">
+          {# Unmodified official badge from Apple's marketing resources. Apple's
+             artwork may not be recoloured, cropped or re-rendered either. #}
+          <img src="/static/site/img/app-store-badge.svg?v={{ asset_version }}"
+               width="120" height="40" alt="Download on the App Store">
+        </a>
       </div>
       {# Its own row rather than a third item in .cta: the Play badge is fixed
          artwork at a mandated minimum size, so a text button beside it reads as
@@ -157,7 +163,7 @@
   <section class="strip" aria-label="At a glance">
     <ul class="strip-list">
       <li><span class="px-bullet"></span>Agent runs on <strong>Windows, macOS, Linux</strong></li>
-      <li><span class="px-bullet"></span>Android app on Google Play</li>
+      <li><span class="px-bullet"></span>Android and iOS apps</li>
       <li><span class="px-bullet"></span>Free, no paywalled features</li>
       {# NOT "no inbound ports": the agent always starts a listener, on
          0.0.0.0:8000 by default and wherever HOST/PORT point otherwise
@@ -411,9 +417,9 @@
         <p>
           No. Sign in at <a href="{{ app_origin }}/login">app.mobaide.com</a> and
           the browser client gives you the same account, agents and sessions as
-          the phone app — install the Android app when you want it in your
-          pocket. You still install the agent on the computer the sessions run
-          on; that part is the product.
+          the phone app — install the Android or iOS app when you want it in
+          your pocket. You still install the agent on the computer the sessions
+          run on; that part is the product.
         </p>
       </details>
 
@@ -466,15 +472,16 @@
           authenticates to the relay with a JWT, and each agent authenticates
           with its own per-agent token; pairing pins the relay's signing key on
           first use. Tokens are held in Android's EncryptedSharedPreferences,
-          backed by the Keystore.
+          backed by the Keystore, and in the system Keychain on iOS.
         </p>
       </details>
 
       <details>
-        <summary>When is the iPhone app out?</summary>
+        <summary>Is there an iPhone app?</summary>
         <p>
-          The iOS client is in active development and is not on the App Store
-          yet. Android is available today.
+          Yes — Mobaide is on the App Store and on Google Play. Both apps use
+          the same account, so your agents and sessions follow you between them
+          and the browser client.
         </p>
       </details>
 
@@ -497,10 +504,12 @@
   </div>
   <p class="disclaimer">
     Mobaide is an independent app and is not affiliated with or endorsed by
-    Anthropic, OpenAI, Google or Linear. “Claude” and “Claude Code” are
+    Anthropic, OpenAI, Google, Apple or Linear. “Claude” and “Claude Code” are
     trademarks of Anthropic. “Codex” is a trademark of OpenAI. “Antigravity” is a
     trademark of Google. Google Play and the Google Play logo are trademarks of
-    Google LLC. All other trademarks are the property of their respective owners.
+    Google LLC. Apple and the Apple logo are trademarks of Apple Inc.,
+    registered in the U.S. and other countries; App Store is a service mark of
+    Apple Inc. All other trademarks are the property of their respective owners.
   </p>
   <p class="disclaimer">&copy; Mobaide</p>
 </footer>
