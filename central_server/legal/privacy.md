@@ -1,11 +1,11 @@
 # Privacy Policy for Mobaide
 
 **Effective date:** 22 May 2026
-**Last updated:** 15 August 2026
+**Last updated:** 20 August 2026
 
 This Privacy Policy describes how the Mobaide mobile application ("**Mobaide**", "**the app**", "**we**", "**our**") collects, uses, stores, and discloses information about you ("**you**", "**user**") when you install and use the app on an Android or iOS device, when you use the browser client at `app.mobaide.com`, and when you use the supporting Mobaide central server hosted at `api.mobaide.com`.
 
-Where the two mobile platforms behave differently — the operating-system facility that stores your credentials, the permissions each app requests, how notifications are delivered — this policy says so explicitly. Everything else applies to both.
+Where the three clients behave differently — the facility that stores your credentials, the permissions each one asks for, how notifications are delivered, what a browser can do that an app cannot — this policy says so explicitly. Everything else applies to all of them.
 
 Mobaide is a developer tool. It lets you remotely interact with [Claude Code](https://claude.ai/code) or [OpenAI Codex](https://developers.openai.com/codex/cli) CLI sessions running on a "Mobaide agent" that you, the user, install and operate on your own workstation. The mobile app communicates with the agent through a relay (the **central server**) operated by the developer of the app.
 
@@ -68,7 +68,7 @@ When you use Mobaide from a phone or a browser, the central server stores:
 | Optional device name (e.g. "Anna's Pixel") that you can set in-app | Helping you identify your devices in the agent's paired-devices list | Central server database (with possible local cache on the app). **Web application:** you do not type this one — it is derived from your browser and operating system (e.g. "Chrome on macOS") from the `User-Agent` string the browser already sends |
 | Agent identifier, pairing identifier | Routing your traffic to the correct agent | App + central server database |
 | Hashed JWT refresh tokens | Keeping you signed in across app restarts | Central server database (hashes only) |
-| JWT access & refresh tokens | Authenticating your requests to the central server | App. Android: EncryptedSharedPreferences (AES-256-GCM, Android Keystore master key). iOS: the system Keychain, readable only after the device has been unlocked once since boot, and never synchronised to iCloud Keychain. **Web application:** the short-lived access token lives in the browser tab's `sessionStorage` (cleared when you close the tab); the refresh token is a `Secure`, `HttpOnly`, `SameSite=Strict` cookie (`__Host-mobaide_refresh`, 30 days) that JavaScript on the page cannot read, alongside a small non-secret marker cookie that only tells the page a session may exist |
+| JWT access & refresh tokens | Authenticating your requests to the central server | App. Android: EncryptedSharedPreferences (AES-256-GCM, Android Keystore master key). iOS: the system Keychain, readable only after the device has been unlocked once since boot, and never synchronised to iCloud Keychain. **Web application:** the short-lived access token lives in the browser tab's `sessionStorage`, alongside your email address and account role, and is cleared when you close the tab; the refresh token is a `Secure`, `HttpOnly`, `SameSite=Strict` cookie (`__Host-mobaide_refresh`, 30 days) that JavaScript on the page cannot read, alongside a small non-secret marker cookie (`__Host-mobaide_signed_in`, value `1`) that only tells the page a session may exist |
 | **iOS only:** the Apple Push Notification service (APNs) device token issued to this installation, together with the platform name and whether the token targets Apple's sandbox or production environment | Delivering "a session on your agent is waiting for your input" alerts to your iPhone when the app is not in the foreground. The token itself is only an address Apple issues for this app on this device, and is not readable by other apps — but see Section 6 for what the alert we send through Apple actually contains. | App (held in memory) + central server database. Removed server-side when the device is revoked, or as soon as you request account deletion — immediately, not only once the 14-day grace window ends. When you sign out from Settings the app also asks us to remove it, but that request is best-effort — if it does not reach us (for example you are offline), the token stays registered until the device is revoked or Apple retires it |
 
 ### 3.3 User content stored on the server
@@ -94,7 +94,7 @@ The central server acts as a **transit relay** for this traffic. It forwards byt
 The following is held locally on the device or browser you use Mobaide from. Except where a row in Section 3.2 says otherwise, none of it is stored on our servers:
 
 - Auth tokens (Android: EncryptedSharedPreferences under an AES-256-GCM Android Keystore master key. iOS: the system Keychain).
-- Your "last-used project" / "last-used session" UI state.
+- Your "last-used project" / "last-used session" UI state, and the options your last session was launched with — including any extra instructions you typed into the launch form, which are kept verbatim so the form can offer them again.
 - Terminal display preferences (display mode, column count).
 - Up to 5 recently used custom launch directories per agent — the directory paths you type into the New Session wizard — so the app can offer them again next time. These are paths on **your own workstation**, kept unencrypted in the app's private preferences. The remembered list itself is never sent to our servers — though, like the app's other non-credential preferences, it is included in your device's own platform backup. The path you actually launch does travel through the relay to your own agent as part of that launch, exactly like the rest of the traffic in Section 3.4. You can delete individual entries in-app, and the app deletes **all** of them, for every agent, when you sign out or delete your account.
 - The keyboard shortcut chords you have most recently sent to a session, so the shortcut bar can offer them again.
@@ -105,37 +105,42 @@ In the **web application** the equivalents live in your browser's own storage fo
 
 - Per-agent access **and refresh** tokens, in `localStorage`. These authenticate you to one agent, are always re-mintable from your account session, and — as on mobile — carry no expiry by default. Signing out deletes them from the browser.
 - The same "up to 5 recently used custom launch directories per agent" described above — paths on **your own workstation** — in `localStorage`. As on mobile, the remembered list is never sent to our servers, and the browser deletes **all** of them, for every agent, when you sign out or delete your account.
-- A random device identifier (UUID) for this browser profile, so the browser stays one row on your Devices screen instead of adding one per sign-in. Unlike everything else here it deliberately survives signing out; clearing site data removes it, and the browser is then registered as a new device.
+- A random device identifier (UUID) for this browser profile, so the browser stays one row on your Devices screen instead of adding one per sign-in. It deliberately survives signing out — of the items in this list only the per-agent tokens and the remembered launch directories are deleted then; clearing site data removes it, and the browser is then registered as a new device.
 - The relay signing-key fingerprint this browser pinned the first time you paired an agent, used to refuse a later pairing against a different key.
-- Your theme choice, selected agent, and the other non-credential UI preferences the screens remember between visits.
+- Your theme choice, selected agent, and the other non-credential UI preferences the screens remember between visits — including the options and project name your last session was launched with. Like the device identifier and the pinned fingerprint above, these stay after you sign out; clearing site data is what removes them.
 
 Clearing site data for `app.mobaide.com` in your browser removes all of the above and ends the session in that browser; use **Sign out** if you also want the session revoked on our servers.
 
-The Mobaide website (`mobaide.com`) sets one further cookie, `portal_csrf`, on the account-deletion pages: a random anti-forgery token carrying no account or tracking information, discarded when you close the browser.
+On the account-deletion pages, the Mobaide website (`mobaide.com`) sets one further cookie, `portal_csrf`: a random anti-forgery token carrying no account or tracking information, discarded when you close the browser.
+
+**Cookies.** That is the complete list of cookies we set for you: `__Host-mobaide_refresh`, `__Host-mobaide_signed_in`, and `portal_csrf`. (Our internal admin dashboard sets a session cookie of its own, which you will only ever meet if you are an administrator of the service.) Every one of them is strictly necessary to sign you in, keep you signed in, or protect a form from cross-site abuse. We set **no** analytics, advertising, profiling, or cross-site tracking cookies on any of our sites — which is why Mobaide asks you to accept nothing. Separately, the sign-in components Google and Apple serve into the web application run in their own browser contexts, under their own policies; Section 6 describes when your browser contacts them.
 
 ### 3.6 In-app support requests
 
-The app includes an in-app **Help & Support** screen (reachable from the Login and Settings screens, including when you are signed out). It offers two actions:
+Both **mobile** apps include an in-app **Help & Support** screen (reachable from the Login and Settings screens, including when you are signed out). It offers two actions:
 
 - **Email support.** When you tap "Email support", the app opens *your own email client* with a message pre-filled to our support address (`support@mobaide.com`) (this does **not** go through the Mobaide central server). The body includes a short diagnostics block to help us troubleshoot: the **app version**, your **device model** (manufacturer and model name, e.g. "Google Pixel 8" on Android or "Apple iPhone17,2" on iOS), the random **device identifier (UUID)** described in Section 3.2, and — **only if you are signed in** — your **account email address**. You can read and edit the whole message before sending, and **nothing is sent unless you yourself send the email**. If no email app is installed, the app only copies the support address to your clipboard and sends nothing. Support emails are processed by us (and our email-delivery provider) solely to answer your request.
 - **Ask the community.** When you tap "Ask the community", the app opens our public **GitHub Discussions** page in an in-app browser tab. This is a third-party service operated by GitHub, Inc.; the app sends it none of your data. Reading is anonymous; posting requires a GitHub account. Your activity there is governed by [GitHub's Privacy Statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
 
+The **web application** collects less here, not more. It has no Help & Support screen and offers no support link at all while you are signed out. Its Settings screen links to the same two destinations, but the support link opens a plain email draft carrying **a subject line only** — no diagnostics block, no app version, no device model, no device identifier and no account email — and the community link opens an ordinary new browser tab.
+
 ### 3.7 Information we do **not** collect
 
-For transparency, the app does **not** collect or use:
+For transparency, none of the three clients collects or uses:
 
 - Your real name (unless you put it in your prompt-template body yourself).
 - Your phone number, address, or any contact details other than the email address you register with.
-- Your location (no location permission is requested or used).
+- Your location. No client requests or uses a location permission, and the web application is served with a `Permissions-Policy` header that denies geolocation outright.
 - Your contacts, calendar, SMS, call logs, or any other personal-information surface on the device.
-- Photos or microphone input. Neither app requests access to your photo library or your microphone.
-- Camera imagery. Both apps can scan a pairing QR code, and the two platforms do it differently:
+- Photos or microphone input. Neither mobile app requests access to your photo library or your microphone, and the web application asks your browser for neither — the site is served with a `Permissions-Policy` header that denies the microphone outright, so the browser would refuse even if the page asked.
+- Camera imagery. Both **mobile** apps can scan a pairing QR code, and the two platforms do it differently:
   - **Android:** QR pairing uses the Google Play Services "Code Scanner" module, which runs in a separate Google Play process and only returns the decoded text of the scanned QR code — the Android app does not request the `CAMERA` permission and never receives raw camera frames.
   - **iOS:** there is no equivalent out-of-process scanner, so the iOS app asks for camera permission and reads the camera itself while the scanner sheet is open. Frames are decoded on your device, in the app, purely to read the QR code. They are never recorded, never written to storage, and never sent to the central server or anyone else, and the camera is released as soon as you leave the scanner. You can decline the permission and still pair, using the device-code flow or by adding the agent manually.
-- Advertising identifiers. The Android Advertising ID is not read, and the iOS app does not use Apple's IDFA, the AdSupport framework, or App Tracking Transparency — its App Store privacy manifest declares that the app performs no tracking.
-- Crash reports or telemetry from third-party SDKs. The app does **not** integrate Firebase Analytics, Firebase Crashlytics, Google Analytics, Sentry, Amplitude, Mixpanel, Facebook SDK, or any comparable analytics/tracking SDK.
+  - **Web application:** there is no camera scanner at all. You pair by opening the link your agent prints, by pasting the pairing code, or with the device-code flow — and the site's `Permissions-Policy` denies the camera outright.
+- Advertising identifiers. The Android Advertising ID is not read, the web application reads no advertising or fingerprinting identifier, and the iOS app does not use Apple's IDFA, the AdSupport framework, or App Tracking Transparency — its App Store privacy manifest declares that the app performs no tracking.
+- Crash reports or telemetry from third-party SDKs. No client integrates Firebase Analytics, Firebase Crashlytics, Google Analytics, Sentry, Amplitude, Mixpanel, Facebook SDK, or any comparable analytics/tracking SDK. The web application ships no analytics script and sends no telemetry beacon of any kind.
 
-The in-app support diagnostics described in Section 3.6 are not an exception to the above: they are **not** collected automatically or in the background. They are assembled only when you tap "Email support", are shown to you in your own email client, and reach us only if you choose to send the message.
+The mobile support diagnostics described in Section 3.6 are not an exception to the above: they are **not** collected automatically or in the background. They are assembled only when you tap "Email support", are shown to you in your own email client, and reach us only if you choose to send the message.
 
 ---
 
@@ -163,6 +168,18 @@ iOS asks you for permission at the moment a feature needs it, and each request c
 
 All three are optional: declining the camera leaves the device-code and manual pairing paths, declining local network leaves relay mode, and declining notifications only means you check the app yourself. The iOS app declares no photo-library, microphone, location, or tracking usage, so iOS will never prompt you for them.
 
+### Web application
+
+The browser client asks your browser for one permission, and only when you ask it to:
+
+| Permission | When you are asked | Why it is needed |
+|---|---|---|
+| Notifications | Only when you press **Enable notifications** in Settings — never on page load | Tell you when a session on your agent is waiting for your input. The alert is composed by the page itself, in your browser, out of data that has already arrived over the session connection. It is not a push message: the web client registers no push address, and no third-party push service is involved. |
+
+The web application also **writes** to your clipboard — when you copy from the terminal, and when a session uses the terminal's copy escape sequence. It never reads your clipboard programmatically; pasting goes through your browser's own paste action, so nothing leaves the clipboard unless you paste it yourself.
+
+It asks for no other permission. It never uses the camera, the microphone, or your location, and the site is served with a `Permissions-Policy` header that denies all three outright — so the browser would refuse them even if a page tried.
+
 ---
 
 ## 5. How and why we use the data — legal bases (GDPR)
@@ -187,14 +204,16 @@ We do **not** use your data for advertising, profiling, automated decision-makin
 We do **not** sell, rent, or trade your personal data. Your information is shared only with the following categories of recipients, strictly for the purposes listed below:
 
 - **Hosting / infrastructure providers** for the central server (located in the EU/EEA). They process data only on our instructions and under a data-processing agreement.
-- **Google LLC** — only when you choose "Sign in with Google". Google verifies your Google ID token; we receive your email and your Google `sub` from Google's identity service. Google's processing is governed by [Google's Privacy Policy](https://policies.google.com/privacy).
+- **Google LLC** — when you choose "Sign in with Google", Google verifies your Google ID token; we receive your email and your Google `sub` from Google's identity service. In the **mobile apps** that is the whole of it: nothing reaches Google until you tap the button. In the **web application** the contact starts earlier, and you should know it. Google's sign-in button is not ours to draw — it is code your browser fetches from `accounts.google.com` and renders inside a frame Google serves, and the sign-in and registration screens set that going as soon as they appear, whether or not you go on to use Google. From then until you leave the screen, Google can see your IP address and your browser's user-agent string, knows the request came from `app.mobaide.com` (we send only the site name, never which page you are on), and may exchange data with that frame. What Google does with the contact, including any cookies in its own browser context, is governed by [Google's Privacy Policy](https://policies.google.com/privacy). The one Mobaide screen that offers Google sign-in *without* loading it up front is account deletion, where the component loads only after you pick Google to re-verify yourself.
 - **Google Play services** — for distributing the Android app, delivering in-app updates, and providing the GMS Code Scanner module used for QR pairing. Google Play's processing of installation telemetry is governed by [Google Play's terms](https://play.google.com/about/play-terms/).
-- **Apple Inc.** — in three distinct roles. (a) **Sign in with Apple**, only if you choose it, and available both in the iOS app and in the `app.mobaide.com` web application: Apple verifies your Apple identity token, and we receive your Apple `sub` and the email address you agreed to share, which may be one of Apple's private-relay addresses. The remaining two roles are iOS-only. (b) **Apple Push Notification service**, which carries the "a session is waiting for your input" alerts to your iPhone. Apple receives, and holds until delivery, the whole alert we send — which is a short headline plus one line naming the session, using the session's title where it has one (a coding CLI often sets that title to a few words about what it is currently doing) or otherwise your project's name, together with the session and agent identifiers. This is the one place where something derived from your session leaves our relay in stored form, and it is the price of an alert that is useful on a lock screen; the terminal traffic itself is still only relayed and discarded as described in Section 3.4. Switching notifications off in iOS Settings suppresses the alert on your screen but does not stop it being sent. Signing out from Settings asks us to delete the push address, but that request is best-effort — if it does not reach us, revoking the device or requesting account deletion is what reliably stops the alerts — the latter takes effect immediately, ahead of the 14-day grace window. (c) **App Store** distribution of the iOS app. Apple's processing is governed by [Apple's Privacy Policy](https://www.apple.com/legal/privacy/).
+- **Apple Inc.** — in three distinct roles. (a) **Sign in with Apple**, available both in the iOS app and in the `app.mobaide.com` web application: Apple verifies your Apple identity token, and we receive your Apple `sub` and the email address you agreed to share, which may be one of Apple's private-relay addresses. On iOS nothing reaches Apple until you choose it. In the web application, as with Google above, the sign-in and registration screens fetch Apple's sign-in script from `appleid.cdn-apple.com` as they appear, which shows Apple your IP address, your user-agent string, and the fact that the request came from `app.mobaide.com`. Apple's exposure stops there until you act: unlike Google's, the script draws no frame of its own and opens no channel back, and Apple's sign-in service itself is contacted only once you press the Apple button. The remaining two roles are iOS-only. (b) **Apple Push Notification service**, which carries the "a session is waiting for your input" alerts to your iPhone. Apple receives, and holds until delivery, the whole alert we send — which is a short headline plus one line naming the session, using the session's title where it has one (a coding CLI often sets that title to a few words about what it is currently doing) or otherwise your project's name, together with the session and agent identifiers. This is the one place where something derived from your session leaves our relay in stored form, and it is the price of an alert that is useful on a lock screen; the terminal traffic itself is still only relayed and discarded as described in Section 3.4. Switching notifications off in iOS Settings suppresses the alert on your screen but does not stop it being sent. Signing out from Settings asks us to delete the push address, but that request is best-effort — if it does not reach us, revoking the device or requesting account deletion is what reliably stops the alerts — the latter takes effect immediately, ahead of the 14-day grace window. (c) **App Store** distribution of the iOS app. Apple's processing is governed by [Apple's Privacy Policy](https://www.apple.com/legal/privacy/).
 - **Email-delivery providers** (SMTP transactional email) that send our verification, password-reset, and security-notification emails, and that carry the support emails you send us through the in-app "Email support" action. These providers process the recipient address and the email body strictly to deliver the message.
 - **Anthropic** — when you type a prompt that is routed through your own agent to Claude Code. The content you send to Claude is processed by Anthropic according to [Anthropic's Privacy Policy](https://www.anthropic.com/legal/privacy). Mobaide is not a party to your Anthropic relationship; we merely relay the bytes.
 - **OpenAI** — when you choose to use Codex as your managed agent and type a prompt that is routed through your own agent to Codex. The content you send to Codex is processed by OpenAI according to [OpenAI's Privacy Policy](https://openai.com/policies/privacy-policy/). Mobaide is not a party to your OpenAI relationship; we merely relay the bytes.
 - **GitHub, Inc.** — when you tap "Ask the community", the app opens our public GitHub Discussions page in your browser. The app does not send GitHub any of your data; anything you choose to post there is provided by you and processed by GitHub under [GitHub's Privacy Statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
 - **Public authorities**, if compelled by a valid legal order and only to the extent legally required.
+
+Those two sign-in components are the only third-party code any Mobaide surface loads, and they load only in the web application. The Mobaide website (`mobaide.com`) — including the page you are reading — runs no third-party code at all: its content-security policy permits scripts from our own origin and names no outside party. Neither mobile app loads anything comparable at runtime; on iOS, Google's sign-in ships as a library inside the app and Sign in with Apple uses Apple's own system framework.
 
 We do **not** share your data with advertisers, data brokers, or analytics aggregators.
 
@@ -236,7 +255,7 @@ We apply industry-standard safeguards:
 - Pairing tokens, refresh tokens, and OTP codes are stored only as **SHA-256 / HMAC-SHA-256 hashes**; the raw tokens are not retained.
 - On **Android**, auth tokens are stored in **EncryptedSharedPreferences** under an AES-256-GCM master key managed by the Android Keystore. The app's backup rules exclude both the encrypted auth file and the device-identity DataStore from Android Auto Backup.
 - On **iOS**, auth tokens are stored in the system **Keychain**, protected so that they are readable only after you have unlocked the device at least once since it booted, and never synchronised to iCloud Keychain. Your device identity is held to a stricter class again — "this device only" — so it is excluded from backups and never migrates to a replacement device. Be aware of the corresponding limit: unlike the device identity, the Keychain items holding your tokens **are** included in an encrypted iPhone backup, so a party who can restore your encrypted backup could restore your signed-in session with it. Signing out deletes the app's copies on that device, but it does not invalidate them on our server, and by default these tokens carry no expiry. If you are concerned about an old backup: revoking that device (Settings → Devices) invalidates its refresh tokens and stops its push alerts, but an access token that was already issued carries no expiry by default and cannot be withdrawn once minted. Deleting your account is what invalidates every credential tied to it.
-- In the **web application**, the refresh token is held in a `Secure`, `HttpOnly`, `SameSite=Strict`, `__Host-`-prefixed cookie that page JavaScript cannot read, and the short-lived account access token is kept per-tab in `sessionStorage` rather than in long-lived browser storage. Per-agent tokens are the exception — they sit in `localStorage` and are deleted when you sign out. Cookie-authenticated requests additionally carry a custom header, which a cross-site page cannot set. Signing out — and scheduling account deletion — revokes the refresh token on our server, not only in the browser.
+- In the **web application**, the refresh token is held in a `Secure`, `HttpOnly`, `SameSite=Strict`, `__Host-`-prefixed cookie that page JavaScript cannot read, and the short-lived account access token — together with your email address and account role — is kept per-tab in `sessionStorage` rather than in long-lived browser storage. Per-agent tokens are the exception — they sit in `localStorage` and are deleted when you sign out. Cookie-authenticated requests additionally carry a custom header, which a cross-site page cannot set. Signing out — and scheduling account deletion — revokes the refresh token on our server, not only in the browser.
 - On first pairing, all three clients — both mobile apps and the browser client — pin the central server's manifest-signing public-key fingerprint (SHA-256). Subsequent pairings against the same relay must match the pinned hash; a mismatch hard-fails and cannot be bypassed by user confirmation.
 - The mobile↔server WebSocket and the agent↔server WebSocket authenticate independently with separate JWTs / bearer tokens.
 
@@ -280,7 +299,7 @@ In the EU/EEA, the minimum age for consenting to information-society services wi
 
 ## 12. Open-source components
 
-The apps are built with, among others, the following third-party components. None of them, as integrated, transmits personal data to any party other than as described in this policy.
+The three clients are built with, among others, the following third-party components. None of them, as integrated, transmits personal data to any party other than as described in this policy.
 
 **Android:**
 
@@ -303,6 +322,19 @@ The apps are built with, among others, the following third-party components. Non
 - swift-argument-parser (Apache-2.0)
 
 Networking, the Keychain, the camera-based QR scanner, Sign in with Apple, and push notifications on iOS all use Apple's own system frameworks rather than third-party libraries.
+
+**Web application:**
+
+- React and React DOM (MIT) — user interface
+- React Router (MIT) — navigation
+- TanStack Query (MIT) — server-state cache
+- Zustand (MIT) — local state and preference storage
+- Zod (MIT) — validation of messages received from the server
+- openapi-fetch (MIT) — typed HTTPS client
+- React Hook Form (MIT) — form handling
+- xterm.js (MIT), with its clipboard, fit, unicode11 and WebGL add-ons (MIT) — terminal renderer
+
+Their own dependencies are MIT-licensed too, apart from `js-base64` (BSD-3-Clause), which the clipboard add-on uses. All of the above are bundled into the web application and served from `app.mobaide.com` itself, as are its fonts and images — your browser fetches nothing from a third party to render the app. The two exceptions are Google's and Apple's sign-in components, which by their nature are loaded from Google and Apple directly; Sections 4 and 6 describe when and what that discloses.
 
 ---
 
