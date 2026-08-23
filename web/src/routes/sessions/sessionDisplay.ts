@@ -58,6 +58,24 @@ export function sessionHeaderLabel(
   return sessionKindLabel(session, customTypeNames);
 }
 
+/**
+ * How a confirm dialog names a session. Neither of the helpers above fits: a
+ * destructive prompt must never fall back to an id the way [sessionTitle] can,
+ * and [sessionHeaderLabel]'s bare kind is too vague when the list it was raised
+ * from holds three sessions of that kind.
+ */
+export function sessionDialogLabel(
+  session: SessionResponse,
+  customTypeNames: ReadonlyMap<string, string>,
+): string {
+  if (session.title !== undefined && session.title.trim() !== '') return session.title;
+  const kindLabel = sessionKindLabel(session, customTypeNames);
+  if (session.project_name !== undefined && session.project_name.trim() !== '') {
+    return `${kindLabel} · ${session.project_name}`;
+  }
+  return kindLabel;
+}
+
 export type SessionStateTone = 'running' | 'pending' | 'stopped' | 'crashed';
 
 /**

@@ -119,7 +119,7 @@ describe('GitScreen busy conflict', () => {
 
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByText('Item is in use')).toBeInTheDocument();
-    expect(within(dialog).getByText('Session s1: /wt/x')).toBeInTheDocument();
+    expect(within(dialog).getByText('Session: /wt/x')).toBeInTheDocument();
     expect(within(dialog).getByText('Auto-scan proj: /wt/y')).toBeInTheDocument();
     // The guard runs before any deletion, so the row is back.
     expect(screen.getByRole('button', { name: 'Delete feature-a' })).toBeInTheDocument();

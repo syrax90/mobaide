@@ -189,6 +189,17 @@ enum SessionDisplay {
         return kindLabel(session, customTypeNames: customTypeNames)
     }
 
+    /// How a confirm dialog names a session. Neither helper above fits: a
+    /// destructive prompt must never fall back to an id, and `headerLabel`'s
+    /// bare kind is too vague when the list it was raised from holds three
+    /// sessions of that kind (web `sessionDialogLabel` parity).
+    static func dialogLabel(_ session: SessionResponse, customTypeNames: [String: String]) -> String {
+        if let title = session.title, !title.isBlank { return title }
+        let kind = kindLabel(session, customTypeNames: customTypeNames)
+        if let project = session.project_name, !project.isBlank { return "\(kind) · \(project)" }
+        return kind
+    }
+
     static func stateColor(_ state: String) -> Color {
         switch state {
         case "running": return MobaideColors.stateRunning

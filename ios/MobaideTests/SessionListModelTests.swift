@@ -131,6 +131,63 @@ final class SessionListModelTests: XCTestCase {
         XCTAssertEqual(SessionDisplay.headerLabel(session, customTypeNames: names), "Aider Renamed")
     }
 
+    func testDialogLabelPrefersTitle() {
+        XCTAssertEqual(
+            SessionDisplay.dialogLabel(
+                makeSessionResponse(title: "Fix the parser", projectName: "mobaide", kind: .codex),
+                customTypeNames: [:]
+            ),
+            "Fix the parser"
+        )
+    }
+
+    func testDialogLabelFallsBackToKindAndProject() {
+        XCTAssertEqual(
+            SessionDisplay.dialogLabel(
+                makeSessionResponse(projectName: "mobaide", kind: .codex), customTypeNames: [:]
+            ),
+            "Codex · mobaide",
+            "two sessions of one kind must stay apart in a destructive prompt"
+        )
+        XCTAssertEqual(
+            SessionDisplay.dialogLabel(
+                makeSessionResponse(kind: .custom("custom_ab12cd34ef56"), kindLabel: "Aider"),
+                customTypeNames: [:]
+            ),
+            "Aider",
+            "no project leaves the bare kind"
+        )
+    }
+
+    func testDialogLabelTreatsBlankTitleAndProjectAsAbsent() {
+        XCTAssertEqual(
+            SessionDisplay.dialogLabel(
+                makeSessionResponse(title: "   ", projectName: "mobaide"), customTypeNames: [:]
+            ),
+            "Claude Code · mobaide"
+        )
+        XCTAssertEqual(
+            SessionDisplay.dialogLabel(
+                makeSessionResponse(title: "", projectName: " ", kind: .shell), customTypeNames: [:]
+            ),
+            "Terminal"
+        )
+    }
+
+    func testDialogLabelNeverRendersTheSessionId() {
+        let sessions = [
+            makeSessionResponse(id: "6f2a91c4"),
+            makeSessionResponse(id: "6f2a91c4", projectName: "mobaide"),
+            makeSessionResponse(id: "6f2a91c4", title: "", kind: .shell),
+        ]
+        for session in sessions {
+            XCTAssertFalse(
+                SessionDisplay.dialogLabel(session, customTypeNames: [:]).contains("6f2a91c4"),
+                "a prompt asking you to destroy a session must name it in words"
+            )
+        }
+    }
+
     func testAttentionMapping() {
         XCTAssertEqual(SessionDisplay.attention("awaiting_permission")?.text, "Needs permission")
         XCTAssertEqual(SessionDisplay.attention("turn_finished")?.text, "Ready")

@@ -4,6 +4,7 @@ import {
   attentionChip,
   canStopSession,
   customTypeNameMap,
+  sessionDialogLabel,
   sessionHeaderLabel,
   sessionKindLabel,
   sessionStateTone,
@@ -69,6 +70,44 @@ describe('sessionTitle', () => {
     expect(sessionTitle(session({ title: '', project_name: 'mobaide' }), 'Codex')).toBe(
       'Codex · mobaide',
     );
+  });
+});
+
+describe('sessionDialogLabel', () => {
+  it('uses the agent-supplied title when there is one', () => {
+    expect(sessionDialogLabel(session({ title: 'Fix the parser', kind: 'codex' }), names)).toBe(
+      'Fix the parser',
+    );
+  });
+
+  it('falls back to the kind and the project, so two of a kind stay apart', () => {
+    expect(sessionDialogLabel(session({ kind: 'codex', project_name: 'mobaide' }), names)).toBe(
+      'Codex · mobaide',
+    );
+    expect(
+      sessionDialogLabel(session({ kind: 'custom_0123456789ab', project_name: 'mobaide' }), names),
+    ).toBe('My Linter · mobaide');
+  });
+
+  it('falls back to the bare kind when there is no project either', () => {
+    expect(sessionDialogLabel(session({ kind: 'shell' }), names)).toBe('Terminal');
+  });
+
+  it('treats a blank title or project as absent', () => {
+    expect(sessionDialogLabel(session({ title: '   ', project_name: 'mobaide' }), names)).toBe(
+      'Claude Code · mobaide',
+    );
+    expect(sessionDialogLabel(session({ title: '', project_name: '  ' }), names)).toBe(
+      'Claude Code',
+    );
+  });
+
+  it('never renders the session id, in any branch', () => {
+    // The whole point of the helper: a prompt asking you to destroy something
+    // must name it in words, and `sessionTitle`'s composite can end in an id.
+    for (const over of [{}, { project_name: 'mobaide' }, { title: '' }, { kind: 'shell' }]) {
+      expect(sessionDialogLabel(session(over), names)).not.toContain('0123');
+    }
   });
 });
 

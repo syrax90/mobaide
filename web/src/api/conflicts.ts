@@ -54,7 +54,7 @@ export function busyHolders(error: unknown): BusyHolder[] | null {
 export function busyHolderLine(holder: BusyHolder): string {
   switch (holder.kind) {
     case 'session':
-      return `Session ${holder.session_id ?? '?'}: ${holder.cwd ?? '?'}`;
+      return `Session: ${holder.cwd ?? '?'}`;
     case 'auto_scan':
       return `Auto-scan ${holder.project_name ?? '?'}: ${holder.worktree_path ?? '?'}`;
     default:

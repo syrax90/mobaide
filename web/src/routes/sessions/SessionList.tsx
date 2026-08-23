@@ -18,7 +18,7 @@ import { evictTerminals } from '../../terminal/terminalEviction';
 import { AutoScanSection } from '../autoscan/AutoScanSection';
 import { SessionCard } from './SessionCard';
 import { StopSessionDialog } from './StopSessionDialog';
-import { customTypeNameMap, sessionKindLabel } from './sessionDisplay';
+import { customTypeNameMap, sessionDialogLabel, sessionKindLabel } from './sessionDisplay';
 import { newSessionPath } from './terminalPath';
 import { useAutoResume } from './useAutoResume';
 
@@ -159,7 +159,7 @@ export function SessionList({ agentId, online }: SessionListProps) {
 
       {stopTarget !== null && (
         <StopSessionDialog
-          session={stopTarget}
+          label={sessionDialogLabel(stopTarget, names)}
           busy={stop.isPending}
           onStop={(force) => {
             stop.mutate({ sessionId: stopTarget.session_id, force });

@@ -67,9 +67,9 @@ describe('busyHolders', () => {
 });
 
 describe('busyHolderLine', () => {
-  it('names a session holder by id and working directory', () => {
+  it('names a session holder by working directory, never by id', () => {
     expect(busyHolderLine(holder({ kind: 'session', session_id: 's1', cwd: '/wt/x' }))).toBe(
-      'Session s1: /wt/x',
+      'Session: /wt/x',
     );
   });
 
@@ -83,6 +83,6 @@ describe('busyHolderLine', () => {
     expect(busyHolderLine(holder({ kind: 'autoscan', worktree_path: '/wt/x' }))).toBe(
       'autoscan: /wt/x',
     );
-    expect(busyHolderLine(holder({ kind: 'session' }))).toBe('Session ?: ?');
+    expect(busyHolderLine(holder({ kind: 'session' }))).toBe('Session: ?');
   });
 });

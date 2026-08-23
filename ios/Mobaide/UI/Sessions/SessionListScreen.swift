@@ -61,7 +61,7 @@ private struct SessionListContent: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { session in
-                Text("Stop “\(session.title ?? session.session_id)”?")
+                Text("Stop “\(SessionDisplay.dialogLabel(session, customTypeNames: model.customTypeNames))”?")
             }
             .toast($toast)
             .task { await model.observeSessions() }
