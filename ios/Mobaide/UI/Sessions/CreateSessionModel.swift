@@ -456,7 +456,17 @@ final class CreateSessionModel {
         antigravityAvailable = version.cliAvailable("antigravity")
         if let models = version.cliModels("codex"), !models.isEmpty { codexModels = models }
         if let models = version.cliModels("antigravity"), !models.isEmpty { antigravityModels = models }
-        if let details = version.cliModelDetails("codex") { codexModelDetails = details }
+        let details = version.cliModelDetails("codex")
+        if let details { codexModelDetails = details }
+        // An agent advertising no model_details may be a pre-catalog build
+        // whose wire schema still 422s efforts outside the static vocabulary,
+        // so a persisted catalog effort (e.g. "ultra") reconciles to the
+        // default. An agent advertising details provably accepts free-form
+        // efforts — the selection stands. Decided on this probe's own result,
+        // not the keep-last-known property above.
+        if details == nil, !CreateSessionModel.reasoningEfforts.contains(codexReasoningEffort) {
+            codexReasoningEffort = "high"
+        }
     }
 
     /// Mirrors the repository's push-driven cache into the wizard. The loop

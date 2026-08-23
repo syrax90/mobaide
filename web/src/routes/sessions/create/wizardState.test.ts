@@ -264,6 +264,40 @@ describe('wizardReducer', () => {
     ).toBe('xhigh');
   });
 
+  it('reconciles a persisted catalog effort against an agent without model_details', () => {
+    // An agent advertising no per-model details may be a pre-catalog build
+    // whose wire schema still 422s efforts outside the static vocabulary, so
+    // a restored `ultra` drops to the default when the probe resolves empty.
+    const state = reduce([{ type: 'setCodexReasoningEffort', effort: 'ultra' }]);
+
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details: null }], state).codex.reasoningEffort,
+    ).toBe('high');
+    // An agent that advertises details provably accepts free-form efforts —
+    // the restored selection stands even when unadvertised (keep-selected).
+    expect(
+      reduce(
+        [
+          {
+            type: 'reconcileCodexEffort',
+            details: [{ id: 'gpt-5.6-sol', efforts: ['low'], defaultEffort: 'low' }],
+          },
+        ],
+        state,
+      ).codex.reasoningEffort,
+    ).toBe('ultra');
+    // In-vocabulary and null ("Agent default") values always stand.
+    const inVocab = reduce([{ type: 'setCodexReasoningEffort', effort: 'medium' }]);
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details: null }], inVocab).codex.reasoningEffort,
+    ).toBe('medium');
+    const agentDefault = reduce([{ type: 'setCodexReasoningEffort', effort: null }]);
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details: null }], agentDefault).codex
+        .reasoningEffort,
+    ).toBeNull();
+  });
+
   it('keeps the Agent-default (null) effort on any model switch', () => {
     const state = reduce([{ type: 'setCodexReasoningEffort', effort: null }]);
 

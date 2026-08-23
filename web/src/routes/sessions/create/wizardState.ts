@@ -299,6 +299,7 @@ export type WizardAction =
     }
   | { type: 'setCodexPreset'; preset: CodexPreset }
   | { type: 'setCodexModel'; model: string | null; detail?: CliModelDetail | null }
+  | { type: 'reconcileCodexEffort'; details: readonly CliModelDetail[] | null }
   | { type: 'setCodexReasoningEffort'; effort: CodexReasoningEffort | null }
   | { type: 'setCodexSandbox'; sandbox: CodexSandbox }
   | { type: 'setCodexApproval'; approval: CodexApproval }
@@ -440,6 +441,20 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
     case 'setCodexReasoningEffort':
       return { ...state, codex: { ...state.codex, reasoningEffort: action.effort } };
+
+    // Dispatched when the capabilities probe resolves. An agent that advertises
+    // `model_details` provably accepts free-form efforts, so a restored
+    // selection is kept even when unadvertised (the keep-selected posture). An
+    // agent that advertises none may be a pre-catalog build whose wire schema
+    // still closes over the static vocabulary — submitting a persisted catalog
+    // effort like `ultra` to it would 422 — so anything outside that vocabulary
+    // reconciles to the default. The null "Agent default" effort always stands.
+    case 'reconcileCodexEffort': {
+      const effort = state.codex.reasoningEffort;
+      if (action.details !== null || effort === null) return state;
+      if ((CODEX_REASONING_EFFORTS as readonly string[]).includes(effort)) return state;
+      return { ...state, codex: { ...state.codex, reasoningEffort: 'high' } };
+    }
 
     case 'setCodexSandbox':
       return { ...state, codex: { ...state.codex, sandbox: action.sandbox } };

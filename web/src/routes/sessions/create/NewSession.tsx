@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { fetchAgentCapabilities } from '../../../api/agentCapabilities';
+import { cliModelDetails } from '../../../protocol/dto/agentVersion';
 import { startAutoScan } from '../../../api/autoscanRepository';
 import { codexLogin } from '../../../api/codexAuthRepository';
 import {
@@ -291,6 +292,22 @@ export function NewSession() {
     // what keeps a directory that fails validation on screen, where no
     // navigation happens at all.
   }, [urlPath]);
+
+  // Once the probe resolves, reconcile a restored Codex effort against what
+  // this agent can accept: an agent advertising no `model_details` may still
+  // 422 catalog efforts (pre-catalog wire schema), so the reducer drops an
+  // out-of-vocabulary value back to the default. Keyed on the probe result —
+  // a failed probe (undefined) reconciles nothing, same optimistic posture as
+  // the availability flags.
+  const codexDetails = useMemo(
+    () =>
+      capabilities.data === undefined ? undefined : cliModelDetails(capabilities.data, 'codex'),
+    [capabilities.data],
+  );
+  useEffect(() => {
+    if (codexDetails === undefined) return;
+    dispatch({ type: 'reconcileCodexEffort', details: codexDetails });
+  }, [codexDetails]);
 
   // Seeded once per project, so re-entering the step never discards edits.
   useEffect(() => {

@@ -565,6 +565,7 @@ class CreateSessionViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val version = sessionRepository.getAgentVersion()
+                val codexDetails = version.cliModelDetails("codex")
                 _uiState.update {
                     it.copy(
                         claudeAvailable = version.cliAvailable("claude"),
@@ -572,7 +573,19 @@ class CreateSessionViewModel @Inject constructor(
                         antigravityAvailable = version.cliAvailable("antigravity"),
                         codexModels = version.cliModels("codex"),
                         antigravityModels = version.cliModels("antigravity"),
-                        codexModelDetails = version.cliModelDetails("codex"),
+                        codexModelDetails = codexDetails,
+                        // An agent advertising no model_details may be a
+                        // pre-catalog build whose wire schema still 422s
+                        // efforts outside the static vocabulary, so a persisted
+                        // catalog effort (e.g. "ultra") reconciles to the
+                        // default. An agent advertising details provably
+                        // accepts free-form efforts — the selection stands.
+                        codexReasoningEffort =
+                            if (codexDetails == null && it.codexReasoningEffort !in REASONING_EFFORTS) {
+                                "high"
+                            } else {
+                                it.codexReasoningEffort
+                            },
                         cliAvailabilityLoading = false,
                     )
                 }

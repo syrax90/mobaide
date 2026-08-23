@@ -190,6 +190,46 @@ final class CreateSessionModelTests: XCTestCase {
         return model
     }
 
+    func testRefreshReconcilesCatalogEffortAgainstDetailLessAgent() async {
+        // A persisted catalog effort (e.g. "ultra" from a newer agent) aimed at
+        // an agent advertising no model_details must drop to the default: that
+        // agent may be a pre-catalog build whose wire schema still 422s efforts
+        // outside the static vocabulary. In-vocabulary values stand.
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{"available":true}}}}
+        """#)
+        let model = stubbedModel()
+        model.codexReasoningEffort = "ultra"
+        await model.refreshCliAvailability()
+        XCTAssertEqual(model.codexReasoningEffort, "high")
+
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{"available":true}}}}
+        """#)
+        model.codexReasoningEffort = "medium"
+        await model.refreshCliAvailability()
+        XCTAssertEqual(model.codexReasoningEffort, "medium")
+    }
+
+    func testRefreshKeepsCatalogEffortWhenDetailsAreAdvertised() async {
+        // An agent advertising model_details provably accepts free-form
+        // efforts — a restored catalog effort stands even when unadvertised
+        // for the selected model (keep-selected).
+        let model = await modelWithCodexDetails()
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{
+           "available":true,
+           "model_details":[{"id":"gpt-5.6-sol","efforts":["low"],"default_effort":"low"}]}}}}
+        """#)
+        model.codexReasoningEffort = "ultra"
+        await model.refreshCliAvailability()
+        XCTAssertEqual(model.codexReasoningEffort, "ultra")
+    }
+
     func testCodexEffortsFallBackToStaticListWithoutDetails() {
         let model = makeModel()
         XCTAssertEqual(model.codexEfforts(for: "gpt-5.6-sol"), CreateSessionModel.reasoningEfforts)

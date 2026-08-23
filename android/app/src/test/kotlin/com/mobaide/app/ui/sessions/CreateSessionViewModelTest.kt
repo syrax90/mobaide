@@ -2598,6 +2598,49 @@ class CreateSessionViewModelTest {
     }
 
     @Test
+    fun refreshCliAvailability_noModelDetails_reconcilesCatalogEffortToDefault() = runTest {
+        // A persisted catalog effort (e.g. "ultra" from a newer agent) aimed at
+        // an agent that advertises no model_details must drop to the default:
+        // that agent may be a pre-catalog build whose wire schema still 422s
+        // efforts outside the static vocabulary.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.setCodexReasoningEffort("ultra")
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(codex = true)
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        assertEquals("high", vm.uiState.value.codexReasoningEffort)
+    }
+
+    @Test
+    fun refreshCliAvailability_reconcileKeepsInVocabAndDetailAdvertisedEfforts() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        // In-vocabulary effort survives a detail-less agent untouched.
+        vm.setCodexReasoningEffort("medium")
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(codex = true)
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        assertEquals("medium", vm.uiState.value.codexReasoningEffort)
+
+        // An agent advertising details provably accepts free-form efforts —
+        // a catalog effort stands even when unadvertised (keep-selected).
+        vm.setCodexReasoningEffort("ultra")
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModelDetails = listOf(CliModelDetail("gpt-5.6-sol", listOf("low"), "low")),
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        assertEquals("ultra", vm.uiState.value.codexReasoningEffort)
+    }
+
+    @Test
     fun codexEffortsFor_advertisedModel_overridesStaticList() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
