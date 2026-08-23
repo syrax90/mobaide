@@ -207,15 +207,25 @@ async def test_get_version_marks_models_pending_while_warmup_outlasts_the_wait(
     app.state.cli_models_warmup = asyncio.create_task(asyncio.sleep(60))
     try:
         response = await client.get("/api/version")
+
+        assert response.status_code == 200
+        cli = response.json()["capabilities"]["cli"]
+        assert cli["codex"]["models_pending"] is True
+        assert cli["antigravity"]["models_pending"] is True
+        # Claude never enumerates, so its entry must not read as "still warming".
+        assert "models_pending" not in cli["claude"]
+
+        # The warm task probes sequentially: once a CLI's own enumeration has
+        # memoized (Codex always does), its entry must stop reading as pending
+        # even while a sibling's probe keeps the task running — otherwise its
+        # final answer would sit un-reconciled behind an unrelated probe.
+        app.state.codex_launcher._cached_models = ("gpt-5.6-sol",)
+        response = await client.get("/api/version")
+        cli = response.json()["capabilities"]["cli"]
+        assert cli["codex"] == {"available": True, "models": ["gpt-5.6-sol"]}
+        assert cli["antigravity"]["models_pending"] is True
     finally:
         app.state.cli_models_warmup.cancel()
-
-    assert response.status_code == 200
-    cli = response.json()["capabilities"]["cli"]
-    assert cli["codex"]["models_pending"] is True
-    assert cli["antigravity"]["models_pending"] is True
-    # Claude never enumerates, so its entry must not read as "still warming".
-    assert "models_pending" not in cli["claude"]
 
 
 async def test_get_version_waits_for_a_pending_model_warmup(app, client) -> None:

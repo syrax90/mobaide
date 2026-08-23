@@ -357,16 +357,19 @@ def build_cli_capabilities(
     latency is unaffected.
 
     ``models_pending=True`` (the caller saw the startup warm task still
-    running after its bounded wait) additionally marks every enumeration-
-    capable launcher's entry with ``{"models_pending": true}`` — omitted, never
-    false, otherwise. The marker tells clients the absence of ``models`` /
-    ``model_details`` in this response is a cache still warming, NOT an agent
-    without enumeration: they keep persisted catalog selections instead of
-    reconciling them away, and may re-probe. Keyed on the warm task rather
-    than per-launcher cache state on purpose: once the task finishes the
-    marker disappears for good, so a CLI whose enumeration deliberately
-    memoizes nothing on failure (Antigravity) is never reported as eternally
-    pending.
+    running after its bounded wait) additionally marks each enumeration-
+    capable launcher whose own cache is still cold with
+    ``{"models_pending": true}`` — omitted, never false, otherwise. The marker
+    tells clients the absence of ``models`` / ``model_details`` in that entry
+    is a cache still warming, NOT an agent without enumeration: they keep
+    persisted catalog selections instead of reconciling them away, and may
+    re-probe. The per-entry cold-cache condition matters because the warm task
+    probes launchers sequentially: a CLI that already memoized its result
+    (Codex always does, fallback included) must not read as pending — and
+    therefore un-reconciled — merely because a sibling's probe is still
+    running. Gating on the running task (not cache state alone) is what keeps
+    a CLI whose enumeration deliberately memoizes nothing on failure
+    (Antigravity) from ever being reported as eternally pending.
 
     Shared by both transports that answer ``GET /api/version`` — the FastAPI
     handler (direct) and the relay client's proxy branch (relay) — so they
@@ -384,7 +387,11 @@ def build_cli_capabilities(
         details = getattr(launcher, "cached_model_details", None)
         if details:
             entry["model_details"] = [dict(detail) for detail in details]
-        if models_pending and callable(getattr(launcher, "list_models", None)):
+        if (
+            models_pending
+            and models is None
+            and callable(getattr(launcher, "list_models", None))
+        ):
             entry["models_pending"] = True
         capabilities[cli_id] = entry
     return capabilities

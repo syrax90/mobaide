@@ -579,9 +579,13 @@ class CreateSessionViewModel @Inject constructor(
     // writers run on viewModelScope's main dispatcher, so no synchronization.
     private var cliProbeResolved = false
 
-    // One-shot guard for the models_pending re-probe, so a wedged agent-side
-    // warmup schedules a single delayed retry rather than a poll loop.
-    private var warmupRetryScheduled = false
+    // Remaining models_pending re-probes. A budget rather than a one-shot: a
+    // legitimately slow warmup (each agent-side probe attempt may take 10s,
+    // and the old-CLI path takes two) can outlive several client probes, and
+    // a terminal pending answer would strand the visit on fallback lists with
+    // no reconciliation. Refilled by any non-pending answer; exhausted, it
+    // stops — a truly wedged warmup must not become an endless poll loop.
+    private var warmupRetriesLeft = WARMUP_MAX_RETRIES
 
     /**
      * The reasoning effort actually submittable to the probed agent. No
@@ -648,8 +652,10 @@ class CreateSessionViewModel @Inject constructor(
                         cliAvailabilityLoading = false,
                     )
                 }
-                if (pending && !warmupRetryScheduled) {
-                    warmupRetryScheduled = true
+                if (!pending) {
+                    warmupRetriesLeft = WARMUP_MAX_RETRIES
+                } else if (warmupRetriesLeft > 0) {
+                    warmupRetriesLeft -= 1
                     viewModelScope.launch {
                         delay(WARMUP_RETRY_DELAY_MS)
                         refreshCliAvailability()
@@ -1417,11 +1423,15 @@ class CreateSessionViewModel @Inject constructor(
         const val MAX_TYPE_NAME_LENGTH = 60
         const val MAX_TYPE_COMMAND_LENGTH = 1000
 
-        // Single delayed re-probe after a models_pending answer: long enough
-        // for the agent's warm task to finish its typical probe, short enough
-        // that the wizard usually has the warmed catalog before the user
-        // reaches the Codex config step.
+        // Delayed re-probes after a models_pending answer: the interval is
+        // long enough for the agent's warm task to finish its typical probe,
+        // short enough that the wizard usually has the warmed catalog before
+        // the user reaches the Codex config step. The budget covers the
+        // legitimate worst-case warmup (~30s: two 10s codex attempts + a 10s
+        // agy probe; each retry cycle spends the delay plus the agent's ~3s
+        // in-handler wait) with headroom, then stops.
         const val WARMUP_RETRY_DELAY_MS = 2_500L
+        const val WARMUP_MAX_RETRIES = 8
 
         /**
          * Fallback Codex model quick-picks for the wizard dropdown, used when the

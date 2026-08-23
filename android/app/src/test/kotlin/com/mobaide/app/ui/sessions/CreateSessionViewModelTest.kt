@@ -2646,16 +2646,19 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun refreshCliAvailability_modelsPending_keepsEffort_thenReprobesOnce() = runTest {
+    fun refreshCliAvailability_modelsPending_keepsEffort_andRetriesUntilWarm() = runTest {
         // A models_pending answer (agent warmup still running) is provisional:
-        // no clamp fires on it, and a single delayed re-probe fetches the
-        // warmed answer, whose result IS authoritative.
+        // no clamp fires on it, and delayed re-probes continue past a SECOND
+        // pending answer (a slow-but-legitimate warmup can outlive several
+        // probes) until the warmed answer arrives, whose result IS
+        // authoritative.
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
         vm.setCodexReasoningEffort("ultra")
 
         coEvery { fx.sessionRepo.getAgentVersion() } returnsMany listOf(
+            versionResponse(codex = true, codexModelsPending = true),
             versionResponse(codex = true, codexModelsPending = true),
             versionResponse(codex = true),
         )
@@ -2671,12 +2674,30 @@ class CreateSessionViewModelTest {
 
         advanceUntilIdle()
 
-        coVerify(exactly = 2) { fx.sessionRepo.getAgentVersion() }
+        coVerify(exactly = 3) { fx.sessionRepo.getAgentVersion() }
         assertEquals(
             "the warmed (non-pending, detail-less) answer clamps as usual",
             "high",
             vm.uiState.value.codexReasoningEffort,
         )
+    }
+
+    @Test
+    fun refreshCliAvailability_modelsPendingForever_stopsAfterTheRetryBudget() = runTest {
+        // A truly wedged agent-side warmup must not become an endless poll
+        // loop: the initial probe plus WARMUP_MAX_RETRIES re-probes, then stop.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(codex = true, codexModelsPending = true)
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1 + CreateSessionViewModel.WARMUP_MAX_RETRIES) {
+            fx.sessionRepo.getAgentVersion()
+        }
     }
 
     @Test
