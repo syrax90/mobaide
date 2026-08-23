@@ -341,6 +341,8 @@ def probe_cli_available(launcher: CliLauncher) -> bool:
 
 def build_cli_capabilities(
     launchers: Mapping[str, CliLauncher],
+    *,
+    models_pending: bool = False,
 ) -> dict[str, dict[str, object]]:
     """Map each registered CLI launcher to its capability entry.
 
@@ -353,6 +355,18 @@ def build_cli_capabilities(
     lists on the same absent/empty signal for old and new agents alike. Reads
     only in-memory caches: never spawns a subprocess, so ``GET /api/version``
     latency is unaffected.
+
+    ``models_pending=True`` (the caller saw the startup warm task still
+    running after its bounded wait) additionally marks every enumeration-
+    capable launcher's entry with ``{"models_pending": true}`` — omitted, never
+    false, otherwise. The marker tells clients the absence of ``models`` /
+    ``model_details`` in this response is a cache still warming, NOT an agent
+    without enumeration: they keep persisted catalog selections instead of
+    reconciling them away, and may re-probe. Keyed on the warm task rather
+    than per-launcher cache state on purpose: once the task finishes the
+    marker disappears for good, so a CLI whose enumeration deliberately
+    memoizes nothing on failure (Antigravity) is never reported as eternally
+    pending.
 
     Shared by both transports that answer ``GET /api/version`` — the FastAPI
     handler (direct) and the relay client's proxy branch (relay) — so they
@@ -370,14 +384,19 @@ def build_cli_capabilities(
         details = getattr(launcher, "cached_model_details", None)
         if details:
             entry["model_details"] = [dict(detail) for detail in details]
+        if models_pending and callable(getattr(launcher, "list_models", None)):
+            entry["models_pending"] = True
         capabilities[cli_id] = entry
     return capabilities
 
 
 # Upper bound on how long a version handler waits for the startup warm task.
-# Generous vs the observed ~100ms enumeration, tiny vs the pathological worst
-# case (two 10s codex attempts + a 10s agy probe), so a wedged probe degrades
-# to the cold-cache shape instead of stalling ``GET /api/version``.
+# Generous vs the observed ~100ms enumeration, deliberately SHORTER than one
+# legitimate probe attempt (each subprocess gets 10s, and the old-CLI path may
+# take two): waiting out the full legitimate worst case (~30s across CLIs)
+# would run ``GET /api/version`` into the mobile clients' 30s read deadlines.
+# A warm task still running after this wait is not lied about — the response
+# carries ``models_pending`` so clients treat the cold shape as provisional.
 _MODEL_WARMUP_WAIT = 3.0
 
 

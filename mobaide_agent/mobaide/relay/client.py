@@ -1301,10 +1301,11 @@ class RelayClient:
             manifest = self._latest_manifest
             # Same bounded mid-warmup wait as the direct handler (see
             # await_model_cache_warmup) so both transports advertise the same
-            # capabilities to a probe that lands right after agent start.
-            await await_model_cache_warmup(
-                getattr(self._app_state, "cli_models_warmup", None)
-            )
+            # capabilities to a probe that lands right after agent start; a
+            # warm task still running after the wait is reported via
+            # models_pending rather than as an authoritative cold shape.
+            warm_task = getattr(self._app_state, "cli_models_warmup", None)
+            await await_model_cache_warmup(warm_task)
             return {
                 "status": 200,
                 "body": {
@@ -1319,6 +1320,8 @@ class RelayClient:
                         "cli": await asyncio.to_thread(
                             build_cli_capabilities,
                             getattr(self._app_state, "cli_launchers", {}),
+                            models_pending=warm_task is not None
+                            and not warm_task.done(),
                         )
                     },
                     "latest_agent_version": (manifest or {}).get("version"),

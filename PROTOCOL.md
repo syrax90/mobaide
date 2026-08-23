@@ -127,7 +127,14 @@ cadence; they do **not** gate compatibility.
   ``codex debug models``). Both keys are omitted — never emitted empty or null —
   when enumeration is unsupported or produced nothing; clients then fall back to
   their hardcoded model/effort lists, so old and new agents degrade identically.
-  Emitted by the shared ``build_cli_capabilities`` builder on both the direct
+  An entry may also carry ``"models_pending": true`` (omitted, never false): the
+  agent's startup enumeration was still running when this response was built
+  (the handler waits a short bound, but a single probe attempt may legitimately
+  take longer), so the absence of ``models``/``model_details`` here is
+  provisional, not authoritative — clients keep persisted catalog selections
+  instead of reconciling them away, and may re-probe. Its presence also proves
+  a catalog-era agent (pre-catalog agents never emit it). Emitted by the shared
+  ``build_cli_capabilities`` builder on both the direct
   and relay transports. (``models`` itself had shipped earlier without a
   PROTOCOL.md entry; this bullet is its documentation of record.)
   * ``codex_options.reasoning_effort`` is relaxed from the proto-v5 enum

@@ -6,6 +6,7 @@ import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.CliModelDetail
 import com.mobaide.app.data.network.dto.cliAvailable
 import com.mobaide.app.data.network.dto.cliModelDetails
+import com.mobaide.app.data.network.dto.cliModelsPending
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -702,6 +703,41 @@ class RestApiTest {
         assertNull("all-unusable entries must collapse to null", resp.cliModelDetails("codex"))
         assertNull("non-array shape must not throw", resp.cliModelDetails("antigravity"))
         assertNull("absent key must map to null", resp.cliModelDetails("claude"))
+    }
+
+    @Test
+    fun getAgentVersion_modelsPending_parsesMarker_tolerantly() = runTest {
+        // capabilities.cli.<id>.models_pending → cliModelsPending(): true only
+        // for a literal boolean true; absent keys (old agents / finished
+        // warmup) and unreadable shapes read as false, never throw.
+        val (api, client) = newApi()
+        stubCall(client) { req ->
+            responseFor(
+                req,
+                200,
+                bodyJson = """
+                  {
+                    "name":"mobaide_agent",
+                    "server_version":"0.3.10",
+                    "protocol_versions":[7],
+                    "min_client_version":7,
+                    "capabilities":{"cli":{
+                      "codex":{"available":true,"models_pending":true},
+                      "antigravity":{"available":true,"models_pending":"yes"},
+                      "claude":{"available":true}
+                    }},
+                    "latest_agent_version":null
+                  }
+                """.trimIndent(),
+            )
+        }
+
+        val resp = api.getAgentVersion()
+
+        assertEquals(true, resp.cliModelsPending("codex"))
+        assertEquals(false, resp.cliModelsPending("antigravity"))
+        assertEquals(false, resp.cliModelsPending("claude"))
+        assertEquals(false, resp.cliModelsPending("missing"))
     }
 
     // ---- ApiException mapping: 401 / 403 / 404 / 409 / 429 / 500 ------------

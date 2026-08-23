@@ -82,6 +82,19 @@ export function cliModels(
   return names.length > 0 ? names : null;
 }
 
+/**
+ * Whether the agent's startup model enumeration was still running when this
+ * response was built — the absence of `models`/`model_details` is then
+ * provisional, not authoritative: callers keep persisted catalog selections
+ * instead of reconciling them away, and may re-probe. Absent key (old agents,
+ * finished warmup) or any unreadable shape reads as `false`.
+ */
+export function cliModelsPending(info: AgentVersionInfo | undefined, cliId: string): boolean {
+  const entry = cliEntry(info, cliId);
+  if (typeof entry !== 'object' || entry === null) return false;
+  return (entry as { models_pending?: unknown }).models_pending === true;
+}
+
 export interface CliModelDetail {
   readonly id: string;
   readonly efforts: readonly string[];

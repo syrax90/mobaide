@@ -187,6 +187,37 @@ async def test_get_version_reports_model_details_for_warm_codex_cache(
     assert "model_details" not in cli["antigravity"]
 
 
+async def test_get_version_marks_models_pending_while_warmup_outlasts_the_wait(
+    app, client, monkeypatch
+) -> None:
+    """A warm task still running after the bounded wait (a legitimately slow
+    probe — each subprocess attempt may take 10s, more than the wait) must be
+    reported via ``models_pending`` on every enumeration-capable entry, so
+    clients treat the cold shape as provisional instead of reconciling
+    persisted catalog efforts away. The awaiter is stubbed out so the test
+    exercises the marker, not the (separately tested) wait."""
+    import asyncio
+
+    import mobaide.agent.app as app_module
+
+    async def _no_wait(*_a, **_kw) -> None:
+        return None
+
+    monkeypatch.setattr(app_module, "await_model_cache_warmup", _no_wait)
+    app.state.cli_models_warmup = asyncio.create_task(asyncio.sleep(60))
+    try:
+        response = await client.get("/api/version")
+    finally:
+        app.state.cli_models_warmup.cancel()
+
+    assert response.status_code == 200
+    cli = response.json()["capabilities"]["cli"]
+    assert cli["codex"]["models_pending"] is True
+    assert cli["antigravity"]["models_pending"] is True
+    # Claude never enumerates, so its entry must not read as "still warming".
+    assert "models_pending" not in cli["claude"]
+
+
 async def test_get_version_waits_for_a_pending_model_warmup(app, client) -> None:
     """A probe landing mid-warmup must see the warmed caches, not the cold
     ones — a cold response is indistinguishable from an old agent without

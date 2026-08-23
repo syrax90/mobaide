@@ -4,6 +4,7 @@ import {
   cliAvailable,
   cliModelDetails,
   cliModels,
+  cliModelsPending,
   type AgentVersionInfo,
 } from './agentVersion';
 
@@ -73,6 +74,24 @@ describe('cliModels', () => {
     expect(cliModels(info({ cli: { claude: { models: 'opus' } } }), 'claude')).toBeNull();
     expect(cliModels(info({ cli: { claude: { available: true } } }), 'claude')).toBeNull();
     expect(cliModels(undefined, 'claude')).toBeNull();
+  });
+});
+
+describe('cliModelsPending', () => {
+  it('reads the warming marker, defaulting to false for anything else', () => {
+    const probe = info({
+      cli: { codex: { available: true, models_pending: true }, claude: { available: true } },
+    });
+
+    expect(cliModelsPending(probe, 'codex')).toBe(true);
+    // Absent key (old agent / finished warmup), unreadable shapes, and a
+    // missing probe all read as "not pending" — the marker is opt-in.
+    expect(cliModelsPending(probe, 'claude')).toBe(false);
+    expect(cliModelsPending(info({ cli: { codex: { models_pending: 'yes' } } }), 'codex')).toBe(
+      false,
+    );
+    expect(cliModelsPending(info({}), 'codex')).toBe(false);
+    expect(cliModelsPending(undefined, 'codex')).toBe(false);
   });
 });
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { fetchAgentCapabilities } from '../../../api/agentCapabilities';
-import { cliModelDetails } from '../../../protocol/dto/agentVersion';
+import { cliModelDetails, cliModelsPending } from '../../../protocol/dto/agentVersion';
 import { startAutoScan } from '../../../api/autoscanRepository';
 import { codexLogin } from '../../../api/codexAuthRepository';
 import {
@@ -197,6 +197,12 @@ export function NewSession() {
     // their per-entry view models. This is the key's only observer, so the
     // zero gcTime leaks into no other screen.
     gcTime: 0,
+    // A `models_pending` answer means the agent's startup enumeration was
+    // still warming — without a re-probe, `staleTime: Infinity` would pin
+    // that provisional shape for the whole visit. Interval refetches ignore
+    // staleness, so this polls only until the warmed answer arrives.
+    refetchInterval: (query) =>
+      cliModelsPending(query.state.data, 'codex') ? 2000 : false,
     ...wsBackedQueryOptions,
   });
 
@@ -308,12 +314,16 @@ export function NewSession() {
   // 422 catalog efforts (pre-catalog wire schema), so the reducer drops an
   // out-of-vocabulary value back to the default. Keyed on the probe result —
   // a failed probe (undefined) reconciles nothing, same optimistic posture as
-  // the availability flags.
-  const codexDetails = useMemo(
-    () =>
-      capabilities.data === undefined ? undefined : cliModelDetails(capabilities.data, 'codex'),
-    [capabilities.data],
-  );
+  // the availability flags. A `models_pending` response reconciles nothing
+  // either: the agent's enumeration is still warming, so the absent details
+  // are provisional — and the marker itself proves a catalog-era agent, so
+  // keeping the persisted effort is safe, not just optimistic. The
+  // refetchInterval below re-probes until the warmup answer arrives.
+  const codexDetails = useMemo(() => {
+    if (capabilities.data === undefined) return undefined;
+    if (cliModelsPending(capabilities.data, 'codex')) return undefined;
+    return cliModelDetails(capabilities.data, 'codex');
+  }, [capabilities.data]);
   useEffect(() => {
     if (codexDetails === undefined) return;
     dispatch({ type: 'reconcileCodexEffort', details: codexDetails });

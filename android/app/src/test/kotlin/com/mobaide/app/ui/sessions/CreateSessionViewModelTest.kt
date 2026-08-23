@@ -30,6 +30,7 @@ import io.mockk.slot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -2372,12 +2373,14 @@ class CreateSessionViewModelTest {
         codexModels: List<String>? = null,
         antigravityModels: List<String>? = null,
         codexModelDetails: List<CliModelDetail>? = null,
+        codexModelsPending: Boolean = false,
     ): VersionInfoResponse {
         fun cliEntry(
             id: String,
             available: Boolean?,
             models: List<String>? = null,
             details: List<CliModelDetail>? = null,
+            pending: Boolean = false,
         ): String? {
             val fields = buildList {
                 if (available != null) add("\"available\":$available")
@@ -2393,12 +2396,14 @@ class CreateSessionViewModelTest {
                     }
                     add("\"model_details\":[$entries]")
                 }
+                // Omitted — never false — on the wire.
+                if (pending) add("\"models_pending\":true")
             }
             return if (fields.isEmpty()) null else "\"$id\":{${fields.joinToString(",")}}"
         }
         val entries = listOfNotNull(
             cliEntry("claude", claude),
-            cliEntry("codex", codex, codexModels, codexModelDetails),
+            cliEntry("codex", codex, codexModels, codexModelDetails, codexModelsPending),
             cliEntry("antigravity", antigravity, antigravityModels),
         )
         val capabilitiesJson =
@@ -2638,6 +2643,40 @@ class CreateSessionViewModelTest {
         vm.refreshCliAvailability()
         advanceUntilIdle()
         assertEquals("ultra", vm.uiState.value.codexReasoningEffort)
+    }
+
+    @Test
+    fun refreshCliAvailability_modelsPending_keepsEffort_thenReprobesOnce() = runTest {
+        // A models_pending answer (agent warmup still running) is provisional:
+        // no clamp fires on it, and a single delayed re-probe fetches the
+        // warmed answer, whose result IS authoritative.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.setCodexReasoningEffort("ultra")
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returnsMany listOf(
+            versionResponse(codex = true, codexModelsPending = true),
+            versionResponse(codex = true),
+        )
+        vm.refreshCliAvailability()
+        advanceTimeBy(1_000)
+
+        assertEquals(
+            "a provisional (pending) answer must not clamp",
+            "ultra",
+            vm.uiState.value.codexReasoningEffort,
+        )
+        coVerify(exactly = 1) { fx.sessionRepo.getAgentVersion() }
+
+        advanceUntilIdle()
+
+        coVerify(exactly = 2) { fx.sessionRepo.getAgentVersion() }
+        assertEquals(
+            "the warmed (non-pending, detail-less) answer clamps as usual",
+            "high",
+            vm.uiState.value.codexReasoningEffort,
+        )
     }
 
     @Test

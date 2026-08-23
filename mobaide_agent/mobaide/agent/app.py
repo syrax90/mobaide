@@ -836,9 +836,13 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         manifest = relay_client.latest_manifest if relay_client else None
         # A probe that lands mid-warmup would advertise cold caches — on the
         # wire indistinguishable from an old agent without model enumeration
-        # (see await_model_cache_warmup). Bounded, so a wedged probe cannot
-        # stall the endpoint.
-        await await_model_cache_warmup(getattr(app.state, "cli_models_warmup", None))
+        # (see await_model_cache_warmup). Bounded, so a wedged OR legitimately
+        # slow probe (each subprocess attempt may take up to 10s) cannot stall
+        # the endpoint; if the warm task is STILL running after the wait, the
+        # response says so via models_pending instead of letting clients treat
+        # the cold shape as authoritative.
+        warm_task = getattr(app.state, "cli_models_warmup", None)
+        await await_model_cache_warmup(warm_task)
         return {
             "name": "mobaide_agent",
             "server_version": __version__,
@@ -849,7 +853,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             # event loop — mirrors the full_disk_access offload in /api/health.
             "capabilities": {
                 "cli": await asyncio.to_thread(
-                    build_cli_capabilities, app.state.cli_launchers
+                    build_cli_capabilities,
+                    app.state.cli_launchers,
+                    models_pending=warm_task is not None and not warm_task.done(),
                 )
             },
             "latest_agent_version": (manifest or {}).get("version"),

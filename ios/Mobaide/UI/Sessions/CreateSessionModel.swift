@@ -121,6 +121,9 @@ final class CreateSessionModel {
     /// nil until an agent advertises them, so `codexEfforts(for:)` falls back
     /// to the static `reasoningEfforts` list.
     private(set) var codexModelDetails: [CliModelDetail]?
+    /// One-shot guard for the `models_pending` re-probe, so a wedged
+    /// agent-side warmup schedules a single delayed retry, never a poll loop.
+    private var warmupRetryScheduled = false
 
     // Claude / Standard
     var claudeModel: String?
@@ -475,6 +478,21 @@ final class CreateSessionModel {
         // agent may reject.
         let details = version.cliModelDetails("codex")
         codexModelDetails = details
+        // models_pending: the agent's startup enumeration was still warming
+        // when it answered, so absent details are provisional — no reconcile
+        // (the marker itself proves a catalog-era agent, so a persisted
+        // catalog effort is safe to keep), and one delayed re-probe fetches
+        // the warmed answer. One-shot, so a wedged warmup never polls.
+        if version.cliModelsPending("codex") {
+            if !warmupRetryScheduled {
+                warmupRetryScheduled = true
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 2_500_000_000)
+                    await self?.refreshCliAvailability()
+                }
+            }
+            return
+        }
         codexReasoningEffort = reconciledCodexEffort(
             model: codexModel, effort: codexReasoningEffort, details: details
         )

@@ -3865,6 +3865,36 @@ class TestProxyVersionCapabilities:
             },
         }
 
+    async def test_version_marks_models_pending_while_warmup_outlasts_the_wait(
+        self, client, mock_app_state, monkeypatch,
+    ):
+        """Relay mirror of the direct handler's ``models_pending`` marker: a
+        warm task still running after the bounded wait is reported as pending
+        on every enumeration-capable entry. Awaiter stubbed for speed."""
+        from mobaide.relay import client as client_module
+
+        async def _no_wait(*_a, **_kw):
+            return None
+
+        monkeypatch.setattr(client_module, "await_model_cache_warmup", _no_wait)
+        launcher = self._launcher(resolves=True)
+        launcher.list_models = AsyncMock()
+        mock_app_state.cli_launchers = {"codex": launcher}
+        mock_app_state.cli_models_warmup = asyncio.create_task(asyncio.sleep(60))
+        ws = AsyncMock()
+
+        try:
+            result = await client._dispatch_proxy(
+                "GET", "/api/version", None, None, ws,
+            )
+        finally:
+            mock_app_state.cli_models_warmup.cancel()
+
+        assert result["status"] == 200
+        assert result["body"]["capabilities"]["cli"] == {
+            "codex": {"available": True, "models_pending": True},
+        }
+
     async def test_version_waits_for_a_pending_model_warmup(
         self, client, mock_app_state,
     ):

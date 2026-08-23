@@ -298,8 +298,11 @@ as available. Entries for CLIs whose startup model enumeration succeeded also
 carry a `models` array — and, when the CLI's catalog exposes per-model
 reasoning levels, a `model_details` array — which the New-session pickers
 prefer over their hardcoded model/effort fallbacks; both keys are omitted, never
-emitted empty, on failure. See `PROTOCOL.md` (proto-v5 bullet plus the
-2026-08-23 proto-v7 additive delta) for the full shape.)
+emitted empty, on failure. A probe answered while the agent's startup
+enumeration is still running instead carries `"models_pending": true` per
+enumeration-capable entry, telling clients the absence is provisional. See
+`PROTOCOL.md` (proto-v5 bullet plus the 2026-08-23 proto-v7 additive delta)
+for the full shape.)
 
 (The signed manifest body / signature is NOT echoed back through this REST
 surface — it is delivered to the agent inline over the relay WebSocket as

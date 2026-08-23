@@ -194,6 +194,35 @@ class TestBuildCliCapabilities:
             "antigravity": {"available": True, "models": ["Gemini 3.1 Flash"]}
         }
 
+    def test_models_pending_marks_only_enumeration_capable_launchers(self):
+        """``models_pending=True`` (warm task still running) marks every
+        launcher that duck-types ``list_models`` — telling clients the absent
+        ``models``/``model_details`` are a cache still warming, not an agent
+        without enumeration — and never a launcher that cannot enumerate."""
+        codex = _launcher("/bin/codex")
+        codex.list_models = AsyncMock()
+        claude = _launcher("/bin/claude")
+        del claude.list_models  # getattr now raises AttributeError
+
+        caps = build_cli_capabilities(
+            {"codex": codex, "claude": claude}, models_pending=True
+        )
+
+        assert caps == {
+            "codex": {"available": True, "models_pending": True},
+            "claude": {"available": True},
+        }
+
+    def test_models_pending_omitted_never_false_by_default(self):
+        """The marker follows the omitted-never-false convention: a finished
+        (or absent) warm task emits no key at all."""
+        codex = _launcher("/bin/codex", models=["gpt-5.6-sol"])
+        codex.list_models = AsyncMock()
+
+        caps = build_cli_capabilities({"codex": codex})
+
+        assert caps == {"codex": {"available": True, "models": ["gpt-5.6-sol"]}}
+
 
 class TestWarmCliModelCaches:
     """``warm_cli_model_caches`` populates each launcher's model cache once at

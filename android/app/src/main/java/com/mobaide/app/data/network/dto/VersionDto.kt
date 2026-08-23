@@ -56,6 +56,20 @@ fun VersionInfoResponse.cliModels(cliId: String): List<String>? = runCatching {
 }.getOrNull()
 
 /**
+ * Whether the agent's startup model enumeration was still running when this
+ * response was built (`capabilities.cli.<id>.models_pending`). The absence of
+ * `models`/`model_details` is then provisional, not authoritative: callers
+ * keep persisted catalog selections instead of reconciling them away, and may
+ * re-probe. Absent key (old agents, finished warmup) or any unreadable shape
+ * reads as `false`. Same loose, never-throwing walk as [cliAvailable].
+ */
+fun VersionInfoResponse.cliModelsPending(cliId: String): Boolean = runCatching {
+    capabilities["cli"]?.jsonObject
+        ?.get(cliId)?.jsonObject
+        ?.get("models_pending")?.jsonPrimitive?.booleanOrNull
+}.getOrNull() == true
+
+/**
  * One entry of `capabilities.cli.<id>.model_details`: the reasoning efforts a
  * model supports and (when the catalog names one) its default effort. Plain
  * data class, not `@Serializable` — it is only ever built by the loose walk in

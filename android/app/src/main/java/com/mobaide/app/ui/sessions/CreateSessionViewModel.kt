@@ -18,6 +18,7 @@ import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.cliAvailable
 import com.mobaide.app.data.network.dto.cliModelDetails
 import com.mobaide.app.data.network.dto.cliModels
+import com.mobaide.app.data.network.dto.cliModelsPending
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.ProjectsRepository
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -572,9 +574,14 @@ class CreateSessionViewModel @Inject constructor(
     // Whether a capability probe has resolved this wizard session. Lets the
     // async prefs restore tell "details unknown, probe still pending" (keep
     // the saved effort — refresh reconciles later) apart from "probe resolved
-    // with no details" (reconcile now, or the restore stomps the clamp). Both
+    // with no details" (reconcile now, or the restore stomps the clamp). A
+    // models_pending answer deliberately does NOT count as resolved. Both
     // writers run on viewModelScope's main dispatcher, so no synchronization.
     private var cliProbeResolved = false
+
+    // One-shot guard for the models_pending re-probe, so a wedged agent-side
+    // warmup schedules a single delayed retry rather than a poll loop.
+    private var warmupRetryScheduled = false
 
     /**
      * The reasoning effort actually submittable to the probed agent. No
@@ -612,7 +619,15 @@ class CreateSessionViewModel @Inject constructor(
             try {
                 val version = sessionRepository.getAgentVersion()
                 val codexDetails = version.cliModelDetails("codex")
-                cliProbeResolved = true
+                // models_pending: the agent's startup enumeration was still
+                // warming when it answered, so absent details are provisional
+                // — the probe does not count as resolved (no reconcile, and a
+                // late prefs restore stays untouched too) and one delayed
+                // re-probe fetches the warmed answer. The marker itself
+                // proves a catalog-era agent, so keeping a persisted catalog
+                // effort meanwhile is safe, not just optimistic.
+                val pending = version.cliModelsPending("codex")
+                if (!pending) cliProbeResolved = true
                 _uiState.update {
                     it.copy(
                         claudeAvailable = version.cliAvailable("claude"),
@@ -621,13 +636,24 @@ class CreateSessionViewModel @Inject constructor(
                         codexModels = version.cliModels("codex"),
                         antigravityModels = version.cliModels("antigravity"),
                         codexModelDetails = codexDetails,
-                        codexReasoningEffort = reconciledCodexEffort(
-                            model = it.codexModel,
-                            effort = it.codexReasoningEffort,
-                            details = codexDetails,
-                        ),
+                        codexReasoningEffort = if (pending) {
+                            it.codexReasoningEffort
+                        } else {
+                            reconciledCodexEffort(
+                                model = it.codexModel,
+                                effort = it.codexReasoningEffort,
+                                details = codexDetails,
+                            )
+                        },
                         cliAvailabilityLoading = false,
                     )
+                }
+                if (pending && !warmupRetryScheduled) {
+                    warmupRetryScheduled = true
+                    viewModelScope.launch {
+                        delay(WARMUP_RETRY_DELAY_MS)
+                        refreshCliAvailability()
+                    }
                 }
             } catch (_: Exception) {
                 _uiState.update { it.copy(cliAvailabilityLoading = false) }
@@ -1390,6 +1416,12 @@ class CreateSessionViewModel @Inject constructor(
         // client-side too so the editor errors without a round trip.
         const val MAX_TYPE_NAME_LENGTH = 60
         const val MAX_TYPE_COMMAND_LENGTH = 1000
+
+        // Single delayed re-probe after a models_pending answer: long enough
+        // for the agent's warm task to finish its typical probe, short enough
+        // that the wizard usually has the warmed catalog before the user
+        // reaches the Codex config step.
+        const val WARMUP_RETRY_DELAY_MS = 2_500L
 
         /**
          * Fallback Codex model quick-picks for the wizard dropdown, used when the

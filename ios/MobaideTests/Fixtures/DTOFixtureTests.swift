@@ -81,10 +81,14 @@ final class DTOFixtureTests: XCTestCase {
         )
         XCTAssertNil(version.cliModelDetails("claude"))
         XCTAssertNil(version.cliModelDetails("missing"))
+        XCTAssertTrue(version.cliModelsPending("antigravity"))
+        XCTAssertFalse(version.cliModelsPending("codex"))
+        XCTAssertFalse(version.cliModelsPending("missing"))
 
         let empty = VersionInfoResponse(name: "x", server_version: "1", protocol_versions: [6], min_client_version: 6)
         XCTAssertNil(empty.cliAvailable("claude"))
         XCTAssertNil(empty.cliModels("claude"))
         XCTAssertNil(empty.cliModelDetails("codex"))
+        XCTAssertFalse(empty.cliModelsPending("codex"))
     }
 }

@@ -230,6 +230,23 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(model.codexReasoningEffort, "ultra")
     }
 
+    func testRefreshSkipsReconcileWhileModelsPending() async {
+        // A models_pending answer (agent warmup still running) is provisional:
+        // the marker itself proves a catalog-era agent, so a persisted catalog
+        // effort must survive it instead of being clamped on absent details.
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{"available":true,"models_pending":true}}}}
+        """#)
+        let model = stubbedModel()
+        model.codexReasoningEffort = "ultra"
+
+        await model.refreshCliAvailability()
+
+        XCTAssertEqual(model.codexReasoningEffort, "ultra")
+    }
+
     func testRefreshClearsStaleDetailsWhenALaterProbeOmitsThem() async {
         // Agent restarted on an older build between probes: the retained
         // catalog would keep offering efforts (e.g. "ultra") the current

@@ -62,6 +62,19 @@ extension VersionInfoResponse {
         }
     }
 
+    /// Whether the agent's startup model enumeration was still running when
+    /// this response was built (`capabilities.cli.<id>.models_pending`): the
+    /// absence of `models`/`model_details` is then provisional, not
+    /// authoritative — callers keep persisted catalog selections instead of
+    /// reconciling them away, and may re-probe. Absent key or any unreadable
+    /// shape reads as `false`.
+    func cliModelsPending(_ cliId: String) -> Bool {
+        guard case .bool(let flag)? = capabilities["cli"]?[cliId]?["models_pending"] else {
+            return false
+        }
+        return flag
+    }
+
     /// Per-model reasoning-effort sets from `capabilities.cli.<id>.model_details`
     /// (today only Codex populates it, from `codex debug models`). Entries with
     /// a blank id or no usable efforts are dropped; nil when nothing usable
