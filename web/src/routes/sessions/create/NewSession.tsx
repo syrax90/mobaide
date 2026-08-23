@@ -187,6 +187,16 @@ export function NewSession() {
     // single visit is not picked up until the wizard is re-entered, which the
     // disabled card's explicit reason makes survivable.
     refetchOnMount: 'always',
+    // The cache dies with the visit: `refetchOnMount` alone would serve the
+    // PREVIOUS visit's response while the re-probe is in flight, and treating
+    // that as authoritative lets a since-downgraded agent's stale
+    // `model_details` keep catalog efforts selectable (and reconciled-to)
+    // until the refetch lands. With no cross-visit entry, re-entry starts
+    // from `undefined` — the same optimistic absent-probe posture as a failed
+    // probe, and the same fresh-state-per-visit the mobile wizards get from
+    // their per-entry view models. This is the key's only observer, so the
+    // zero gcTime leaks into no other screen.
+    gcTime: 0,
     ...wsBackedQueryOptions,
   });
 

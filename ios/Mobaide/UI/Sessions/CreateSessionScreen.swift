@@ -455,7 +455,10 @@ private struct CreateSessionContent: View {
                 set: { model.setCodexModel($0) }
             )) {
                 Text("Default").tag(String?.none)
-                ForEach(model.codexModels, id: \.self) { Text($0).tag(String?.some($0)) }
+                // codexModelOptions, not codexModels: a restored model missing
+                // from the list needs its tag or the Picker renders unselected
+                // while the request still sends it.
+                ForEach(model.codexModelOptions, id: \.self) { Text($0).tag(String?.some($0)) }
             }
             // Keep-selected repair: a restored-prefs or late-probe effort
             // outside the advertised set must stay in the options, or the

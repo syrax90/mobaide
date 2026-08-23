@@ -266,6 +266,24 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(model.codexReasoningEffort, "medium")
     }
 
+    func testCodexModelOptionsKeepAnUnlistedRestoredSelection() {
+        // A model persisted before the fallback refresh (gpt-5.3-codex-spark)
+        // is no longer in the list; without the append the Picker renders no
+        // selection while buildRequest still submits the hidden value.
+        let model = makeModel()
+        XCTAssertEqual(model.codexModelOptions, CreateSessionModel.codexModelsFallback)
+
+        model.codexModel = "gpt-5.3-codex-spark"
+        XCTAssertEqual(
+            model.codexModelOptions,
+            CreateSessionModel.codexModelsFallback + ["gpt-5.3-codex-spark"]
+        )
+
+        // A listed selection appends nothing.
+        model.codexModel = CreateSessionModel.codexModelsFallback[0]
+        XCTAssertEqual(model.codexModelOptions, CreateSessionModel.codexModelsFallback)
+    }
+
     func testCodexEffortsFallBackToStaticListWithoutDetails() {
         let model = makeModel()
         XCTAssertEqual(model.codexEfforts(for: "gpt-5.6-sol"), CreateSessionModel.reasoningEfforts)

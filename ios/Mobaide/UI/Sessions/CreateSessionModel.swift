@@ -320,6 +320,19 @@ final class CreateSessionModel {
             : ["low", "medium", "high"]
     }
 
+    /// The Codex model picker's options, with the keep-selected repair: a
+    /// restored model absent from the advertised/fallback list (e.g. a
+    /// pre-refresh `gpt-5.3-codex-spark` from persisted prefs) must stay in
+    /// the options, or the SwiftUI Picker — which renders selection by tag —
+    /// shows no selection while `buildRequest()` still submits the hidden
+    /// value. Mirrors the effort picker's append and web's `modelOptions`.
+    var codexModelOptions: [String] {
+        guard let selected = codexModel, !codexModels.contains(selected) else {
+            return codexModels
+        }
+        return codexModels + [selected]
+    }
+
     /// The effort options for a Codex model: the agent-advertised per-model set
     /// when `model_details` knows it, else the static `reasoningEfforts`
     /// fallback. The Default (nil) model always takes the fallback — which

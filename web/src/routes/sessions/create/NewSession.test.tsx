@@ -458,3 +458,24 @@ describe('NewSession worktree options', () => {
     expect(screen.getByLabelText('Branch name (optional)')).toHaveValue('feature/my-change');
   });
 });
+
+describe('NewSession capability probe', () => {
+  it('drops the capabilities cache with the visit, so re-entry starts from a fresh probe', async () => {
+    await renderWizard();
+    const key = queryKeys.agentCapabilities('agent-1');
+    await waitFor(() => {
+      expect(client.getQueryData(key)).toBeDefined();
+    });
+
+    cleanup();
+
+    // gcTime: 0 pins the entry to the visit: with a cross-visit cache,
+    // `refetchOnMount: 'always'` would serve the previous visit's response
+    // while the re-probe is in flight, keeping a since-downgraded agent's
+    // stale `model_details` (catalog efforts like `ultra`) selectable and
+    // reconciled-to until the refetch lands.
+    await waitFor(() => {
+      expect(client.getQueryData(key)).toBeUndefined();
+    });
+  });
+});
