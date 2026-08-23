@@ -170,7 +170,7 @@ private struct GitContent: View {
     static func busyLine(_ holder: BusyHolder) -> String {
         switch holder.kind {
         case "session":
-            return "Session \(holder.session_id ?? "?"): \(holder.cwd ?? "?")"
+            return "Session: \(holder.cwd ?? "?")"
         case "auto_scan":
             return "Auto-scan \(holder.project_name ?? "?"): \(holder.worktree_path ?? "?")"
         default:

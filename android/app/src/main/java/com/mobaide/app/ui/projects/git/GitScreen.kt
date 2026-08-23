@@ -231,7 +231,7 @@ private fun BusyConflictDialog(
         text = {
             val lines = holders.map { holder ->
                 when (holder.kind) {
-                    "session" -> "Session ${holder.session_id ?: "?"}: ${holder.cwd ?: "?"}"
+                    "session" -> "Session: ${holder.cwd ?: "?"}"
                     "auto_scan" -> "Auto-scan ${holder.project_name ?: "?"}: ${holder.worktree_path ?: "?"}"
                     else -> "${holder.kind}: ${holder.cwd ?: holder.worktree_path ?: "?"}"
                 }

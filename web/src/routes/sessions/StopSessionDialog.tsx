@@ -1,9 +1,9 @@
 import { useRef } from 'react';
 import { Modal } from '../../components/Modal';
-import type { SessionResponse } from '../../protocol/dto/session';
 
 interface StopSessionDialogProps {
-  session: SessionResponse;
+  /** `sessionDialogLabel` of the target — never its id. */
+  label: string;
   busy: boolean;
   onStop: (force: boolean) => void;
   onCancel: () => void;
@@ -14,7 +14,7 @@ interface StopSessionDialogProps {
  * worse trade on a desktop-sized click target than on a phone.
  */
 export function StopSessionDialog({
-  session,
+  label,
   busy,
   onStop,
   onCancel,
@@ -29,10 +29,7 @@ export function StopSessionDialog({
       onClose={onCancel}
     >
       <h2 id="stop-session-title">Stop session?</h2>
-      <p>
-        Stop {session.title !== undefined ? `"${session.title}"` : session.session_id}? Force
-        Stop kills the process immediately.
-      </p>
+      <p>Stop &quot;{label}&quot;? Force Stop kills the process immediately.</p>
       <div className="button-row">
         <button
           type="button"
