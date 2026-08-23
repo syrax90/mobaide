@@ -1077,17 +1077,13 @@ private fun CodexConfigSection(
     )
 
     Text("Reasoning effort", style = MaterialTheme.typography.labelLarge)
-    val efforts = CreateSessionViewModel.REASONING_EFFORTS
-    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-        efforts.forEachIndexed { index, effort ->
-            SegmentedButton(
-                selected = state.codexReasoningEffort == effort,
-                onClick = { viewModel.setCodexReasoningEffort(effort) },
-                shape = SegmentedButtonDefaults.itemShape(index = index, count = efforts.size),
-                icon = {},
-            ) { Text(effort.replaceFirstChar { it.uppercase() }) }
-        }
-    }
+    // A dropdown, not the old 4-button segmented row: the agent-advertised
+    // per-model sets run to 6 levels (low…ultra), which segments would truncate
+    // on phone width.
+    CodexEffortDropdown(
+        state = state,
+        onSelect = viewModel::setCodexReasoningEffort,
+    )
 
     var advancedExpanded by remember { mutableStateOf(false) }
     TextButton(
@@ -1460,6 +1456,48 @@ private fun ClaudeEffortDropdown(
         )
         DropdownMenu(
             expanded = expanded && enabled,
+            onDismissRequest = { expanded = false },
+        ) {
+            options.forEach { effort ->
+                DropdownMenuItem(
+                    text = { Text(effort.replaceFirstChar { it.uppercase() }) },
+                    onClick = {
+                        onSelect(effort)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CodexEffortDropdown(
+    state: CreateSessionUiState,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val advertised = state.codexEffortsFor(state.codexModel)
+    // Keep-selected repair: a restored-prefs or late-probe effort outside the
+    // advertised set must stay in the menu, or the field would display a value
+    // its own options cannot reproduce while the request still sends it.
+    val options = if (state.codexReasoningEffort in advertised) advertised
+    else advertised + state.codexReasoningEffort
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+    ) {
+        OutlinedTextField(
+            value = state.codexReasoningEffort.replaceFirstChar { it.uppercase() },
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Effort") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+        )
+        DropdownMenu(
+            expanded = expanded,
             onDismissRequest = { expanded = false },
         ) {
             options.forEach { effort ->

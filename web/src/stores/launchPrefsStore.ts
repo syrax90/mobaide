@@ -22,14 +22,14 @@ import { persist } from 'zustand/middleware';
 import {
   CLAUDE_EFFORTS,
   CODEX_APPROVALS,
-  CODEX_REASONING_EFFORTS,
   CODEX_SANDBOXES,
 } from '../protocol/dto/sessionCreate';
 
 type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
 type CodexSandbox = (typeof CODEX_SANDBOXES)[number];
 type CodexApproval = (typeof CODEX_APPROVALS)[number];
-type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+/** Free-form like the wire field — see `isCodexReasoningEffort` below. */
+type CodexReasoningEffort = string;
 
 /** Android `ClaudeLaunchPrefs`, iOS `ClaudeLaunchPrefs`. Backs two independent buckets. */
 export interface ClaudeLaunchPrefs {
@@ -159,8 +159,14 @@ const isClaudeEffort = memberOf(CLAUDE_EFFORTS);
 const isCodexSandbox = memberOf(CODEX_SANDBOXES);
 const isCodexApproval = memberOf(CODEX_APPROVALS);
 
+/**
+ * Any string validates, not just `CODEX_REASONING_EFFORTS`: the vocabulary is
+ * agent-enumerated per model (`capabilities.cli.codex.model_details`), so a
+ * persisted catalog effort like `ultra` must restore rather than void the
+ * bucket the next time the wizard opens.
+ */
 function isCodexReasoningEffort(value: unknown): value is CodexReasoningEffort | null {
-  return value === null || memberOf(CODEX_REASONING_EFFORTS)(value);
+  return isNullableString(value);
 }
 
 /**

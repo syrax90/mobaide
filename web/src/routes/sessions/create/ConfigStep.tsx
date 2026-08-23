@@ -1,4 +1,8 @@
-import { cliModels, type AgentVersionInfo } from '../../../protocol/dto/agentVersion';
+import {
+  cliModelDetails,
+  cliModels,
+  type AgentVersionInfo,
+} from '../../../protocol/dto/agentVersion';
 import { customSessionTypeId } from '../../../protocol/wireSchema';
 import type { ProjectSummary } from '../../../api/projectRepository';
 import type { CustomAgentType } from '../../../api/customAgentTypeRepository';
@@ -91,6 +95,7 @@ export function ConfigStep({
         <CodexOptionsPanel
           bucket={state.codex}
           models={cliModels(capabilities, 'codex')}
+          modelDetails={cliModelDetails(capabilities, 'codex')}
           dispatch={dispatch}
         />
       )}

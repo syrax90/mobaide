@@ -150,3 +150,38 @@ async def test_get_version_reports_models_for_warm_cache(app, client) -> None:
         "models": ["Gemini 3.1 Pro (Low)", "GPT-OSS 120B (Medium)"],
     }
     assert "models" not in cli["claude"]
+
+
+async def test_get_version_reports_model_details_for_warm_codex_cache(
+    app, client
+) -> None:
+    """A Codex launcher whose catalog enumeration captured per-model reasoning
+    levels carries ``model_details`` next to ``models``; ``default_effort`` is
+    omitted — never null — when unknown. Seeded directly for the same
+    no-lifespan reason as the ``models`` test above."""
+    from mobaide.core.codex_launcher import CodexModelInfo
+
+    app.state.codex_launcher._cached_models = ("gpt-5.6-sol", "gpt-5.4-mini")
+    app.state.codex_launcher._cached_model_details = (
+        CodexModelInfo(
+            id="gpt-5.6-sol", efforts=("low", "high", "ultra"), default_effort="low"
+        ),
+        CodexModelInfo(id="gpt-5.4-mini", efforts=("low",), default_effort=None),
+    )
+
+    response = await client.get("/api/version")
+    assert response.status_code == 200
+    cli = response.json()["capabilities"]["cli"]
+    assert cli["codex"] == {
+        "available": True,
+        "models": ["gpt-5.6-sol", "gpt-5.4-mini"],
+        "model_details": [
+            {
+                "id": "gpt-5.6-sol",
+                "efforts": ["low", "high", "ultra"],
+                "default_effort": "low",
+            },
+            {"id": "gpt-5.4-mini", "efforts": ["low"]},
+        ],
+    }
+    assert "model_details" not in cli["antigravity"]

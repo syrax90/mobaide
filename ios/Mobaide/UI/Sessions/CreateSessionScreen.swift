@@ -447,12 +447,24 @@ private struct CreateSessionContent: View {
             Button("Full access") { applyCodexPreset(sandbox: "danger-full-access", approval: "never", fullAuto: true) }
         }
         Section("Codex") {
-            Picker("Model", selection: $model.codexModel) {
+            // Routed through setCodexModel (not a bare binding) so a stranded
+            // effort re-defaults when the new model's advertised set lacks it —
+            // the setAntigravitySkipPermissions Binding precedent.
+            Picker("Model", selection: Binding(
+                get: { model.codexModel },
+                set: { model.setCodexModel($0) }
+            )) {
                 Text("Default").tag(String?.none)
                 ForEach(model.codexModels, id: \.self) { Text($0).tag(String?.some($0)) }
             }
+            // Keep-selected repair: a restored-prefs or late-probe effort
+            // outside the advertised set must stay in the options, or the
+            // Picker renders blank while the request still sends the value.
+            let advertisedEfforts = model.codexEfforts(for: model.codexModel)
+            let effortOptions = advertisedEfforts.contains(model.codexReasoningEffort)
+                ? advertisedEfforts : advertisedEfforts + [model.codexReasoningEffort]
             Picker("Reasoning effort", selection: $model.codexReasoningEffort) {
-                ForEach(CreateSessionModel.reasoningEfforts, id: \.self) { Text($0).tag($0) }
+                ForEach(effortOptions, id: \.self) { Text($0).tag($0) }
             }
             Picker("Sandbox", selection: $model.codexSandbox) {
                 ForEach(CreateSessionModel.codexSandboxes, id: \.self) { Text($0).tag($0) }

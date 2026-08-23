@@ -12,9 +12,11 @@ import com.mobaide.app.data.network.dto.AntigravityOptionsModel
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
+import com.mobaide.app.data.network.dto.CliModelDetail
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.cliAvailable
+import com.mobaide.app.data.network.dto.cliModelDetails
 import com.mobaide.app.data.network.dto.cliModels
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
@@ -108,6 +110,10 @@ data class CreateSessionUiState(
     // companion constants.
     val codexModels: List<String>? = null,
     val antigravityModels: List<String>? = null,
+    // Per-model Codex reasoning-effort sets (capabilities.cli.codex
+    // .model_details). null = agent too old or catalog carried no levels →
+    // the effort control falls back to REASONING_EFFORTS.
+    val codexModelDetails: List<CliModelDetail>? = null,
     val noMemory: Boolean = false,
     val skipPermissions: Boolean = false,
     // Claude reasoning controls (replace the old boolean "Max effort"). model is
@@ -197,6 +203,17 @@ val CreateSessionUiState.codexPreset: CodexAutonomyPreset?
         codexSandbox == "workspace-write" && codexApproval == "on-request" -> CodexAutonomyPreset.Auto
         else -> null
     }
+
+/**
+ * Effort levels offered for a Codex [model]: the agent-advertised per-model set
+ * when `model_details` knows the model, else the static
+ * [CreateSessionViewModel.REASONING_EFFORTS] fallback. The Default (null) model
+ * always takes the fallback — which model the agent resolves it to is unknown
+ * here — mirroring [CreateSessionViewModel.claudeEffortsFor]'s null posture.
+ */
+fun CreateSessionUiState.codexEffortsFor(model: String?): List<String> =
+    model?.let { m -> codexModelDetails?.firstOrNull { it.id == m }?.efforts }
+        ?: CreateSessionViewModel.REASONING_EFFORTS
 
 /** Snapshot of the Claude reasoning controls for persistence / re-defaulting. */
 private fun CreateSessionUiState.toClaudeLaunchPrefs() = ClaudeLaunchPrefs(
@@ -555,6 +572,7 @@ class CreateSessionViewModel @Inject constructor(
                         antigravityAvailable = version.cliAvailable("antigravity"),
                         codexModels = version.cliModels("codex"),
                         antigravityModels = version.cliModels("antigravity"),
+                        codexModelDetails = version.cliModelDetails("codex"),
                         cliAvailabilityLoading = false,
                     )
                 }
@@ -794,7 +812,21 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
-    fun setCodexModel(v: String?) = _uiState.update { it.copy(codexModel = v) }
+    fun setCodexModel(v: String?) = _uiState.update { state ->
+        // Same clamp as setClaudeModel, with the target upgraded from a
+        // hardcoded "high" to the catalog's per-model default. A model without
+        // a catalog entry (or the null Default model) keeps the effort — its
+        // capabilities are unknown, so never downshift on a guess.
+        val detail = v?.let { m -> state.codexModelDetails?.firstOrNull { it.id == m } }
+        val effort = when {
+            detail == null || state.codexReasoningEffort in detail.efforts ->
+                state.codexReasoningEffort
+            else -> detail.defaultEffort
+                ?: "high".takeIf { it in detail.efforts }
+                ?: detail.efforts.first()
+        }
+        state.copy(codexModel = v, codexReasoningEffort = effort)
+    }
     fun setCodexReasoningEffort(v: String) = _uiState.update { it.copy(codexReasoningEffort = v) }
     fun setCodexSandbox(v: String) = _uiState.update { it.copy(codexSandbox = v) }
     fun setCodexApproval(v: String) = _uiState.update { it.copy(codexApproval = v) }
@@ -1312,11 +1344,21 @@ class CreateSessionViewModel @Inject constructor(
          * (older agent). Matches the agent's own enumeration fallback. The
          * server's `model` field is free-form, so "Default" (a null model,
          * Codex's account default) is always offered alongside these. Current as
-         * of 2026-07.
+         * of 2026-08.
          */
-        val CODEX_MODELS = listOf("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark")
+        val CODEX_MODELS = listOf(
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+        )
 
-        /** Codex reasoning-effort levels, low→high; "high" is the wizard default. */
+        /** Codex reasoning-effort levels, low→high; "high" is the wizard default.
+         *  Fallback only — when the agent advertises per-model sets
+         *  (`capabilities.cli.codex.model_details`), [codexEffortsFor] serves the
+         *  selected model's own levels instead. */
         val REASONING_EFFORTS = listOf("minimal", "low", "medium", "high")
 
         /**

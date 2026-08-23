@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   agentVersionSchema,
   cliAvailable,
+  cliModelDetails,
   cliModels,
   type AgentVersionInfo,
 } from './agentVersion';
@@ -72,5 +73,56 @@ describe('cliModels', () => {
     expect(cliModels(info({ cli: { claude: { models: 'opus' } } }), 'claude')).toBeNull();
     expect(cliModels(info({ cli: { claude: { available: true } } }), 'claude')).toBeNull();
     expect(cliModels(undefined, 'claude')).toBeNull();
+  });
+});
+
+describe('cliModelDetails', () => {
+  it('parses the advertised per-model effort sets', () => {
+    const probe = info({
+      cli: {
+        codex: {
+          model_details: [
+            { id: 'gpt-5.6-sol', efforts: ['low', 'high', 'ultra'], default_effort: 'low' },
+            { id: 'gpt-5.4-mini', efforts: ['low'] },
+          ],
+        },
+      },
+    });
+
+    expect(cliModelDetails(probe, 'codex')).toEqual([
+      { id: 'gpt-5.6-sol', efforts: ['low', 'high', 'ultra'], defaultEffort: 'low' },
+      { id: 'gpt-5.4-mini', efforts: ['low'], defaultEffort: null },
+    ]);
+  });
+
+  it('drops malformed entries and salvages the rest', () => {
+    const probe = info({
+      cli: {
+        codex: {
+          model_details: [
+            'not an object',
+            { id: '', efforts: ['low'] },
+            { id: 'no-efforts' },
+            { id: 'empty-efforts', efforts: [] },
+            { id: 'non-string-efforts', efforts: [1, ''] },
+            { id: 'ok', efforts: ['medium'], default_effort: '' },
+          ],
+        },
+      },
+    });
+
+    expect(cliModelDetails(probe, 'codex')).toEqual([
+      { id: 'ok', efforts: ['medium'], defaultEffort: null },
+    ]);
+  });
+
+  it('answers null when nothing usable was advertised', () => {
+    // Same posture as cliModels: absent, empty, or unreadable all mean
+    // "use the client's hardcoded effort list".
+    expect(cliModelDetails(info({ cli: { codex: { model_details: [] } } }), 'codex')).toBeNull();
+    expect(cliModelDetails(info({ cli: { codex: { model_details: 'x' } } }), 'codex')).toBeNull();
+    expect(cliModelDetails(info({ cli: { codex: { available: true } } }), 'codex')).toBeNull();
+    expect(cliModelDetails(info({ cli: {} }), 'codex')).toBeNull();
+    expect(cliModelDetails(undefined, 'codex')).toBeNull();
   });
 });

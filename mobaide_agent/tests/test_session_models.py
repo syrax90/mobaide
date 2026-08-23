@@ -205,10 +205,22 @@ class TestCodexToOptions:
 
         from mobaide.agent.sessions.models import CodexOptionsModel
 
-        for bad in ({"sandbox": "bogus"}, {"approval": "always"},
-                    {"reasoning_effort": "ultra"}):
+        for bad in ({"sandbox": "bogus"}, {"approval": "always"}):
             with pytest.raises(pydantic.ValidationError):
                 CodexOptionsModel.model_validate(bad)
+
+    def test_reasoning_effort_is_free_form_for_dynamic_catalog(self):
+        """``reasoning_effort`` must NOT be a closed Literal: the vocabulary is
+        enumerated per-model at runtime (``capabilities.cli.codex.model_details``),
+        so a closed set would 422 efforts the agent itself just advertised —
+        e.g. ``xhigh``/``max``/``ultra`` on the gpt-5.6 catalog."""
+        from mobaide.agent.sessions.models import CodexOptionsModel
+
+        for effort in ("ultra", "xhigh", "max", "minimal"):
+            opts = CodexOptionsModel.model_validate(
+                {"reasoning_effort": effort}
+            ).to_options()
+            assert opts.reasoning_effort == effort
 
 
 class TestAntigravityOptionsModel:

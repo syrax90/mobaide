@@ -100,7 +100,7 @@ def _pin_model_enumeration(monkeypatch):
         antigravity_launcher, "_run_agy_models", lambda *_a, **_kw: None
     )
     monkeypatch.setattr(
-        codex_launcher, "_run_codex_models_json", lambda *_a, **_kw: None
+        codex_launcher, "_run_codex_models", lambda *_a, **_kw: None
     )
     yield
 

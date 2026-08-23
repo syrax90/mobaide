@@ -38,14 +38,21 @@ if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
 
 _CODEX_BIN_ENV_VAR = "MOBAIDE_CODEX_BIN"
-# ``codex debug models --json`` is a fast local listing; bound it so a wedged
-# probe can never stall the startup model-cache warm task indefinitely.
+# ``codex debug models`` is a fast local listing; bound it so a wedged probe
+# can never stall the startup model-cache warm task indefinitely.
 _MODELS_TIMEOUT = 10.0
 # Served when enumeration fails for any reason (missing binary, non-zero exit,
 # unparseable JSON): ``debug models`` has no stability contract (a stable
 # top-level listing was declined in openai/codex#8871), so a new agent always
 # reports Codex models — at worst this curated set.
-_CODEX_FALLBACK_MODELS = ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark")
+_CODEX_FALLBACK_MODELS = (
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+)
 
 
 class CodexBinaryNotFoundError(CliBinaryNotFoundError):
@@ -100,15 +107,21 @@ def _resolve_codex_binary(override: str | None = None) -> str:
     )
 
 
-def _run_codex_models_json(binary: str) -> str | None:
-    """Run ``codex debug models --json`` and return stdout, ``None`` on non-zero
-    exit. Module-level so tests can monkeypatch the subprocess seam (mirrors
-    ``_resolve_codex_binary``). Blocking — callers offload via
-    ``asyncio.to_thread`` (see ``codex_auth`` for the Windows-event-loop
-    rationale).
+def _run_codex_models(binary: str, json_flag: bool) -> str | None:
+    """Run ``codex debug models`` and return stdout, ``None`` on non-zero exit.
+
+    Codex CLI >= 0.148 prints JSON by default and rejects the historical
+    ``--json`` flag with exit 2; ``json_flag=True`` is the backward-compat retry
+    for older CLIs that required the flag. Module-level so tests can monkeypatch
+    the subprocess seam (mirrors ``_resolve_codex_binary``). Blocking — callers
+    offload via ``asyncio.to_thread`` (see ``codex_auth`` for the
+    Windows-event-loop rationale).
     """
+    args = ["debug", "models"]
+    if json_flag:
+        args.append("--json")
     completed = subprocess.run(
-        shim_safe_argv(binary, "debug", "models", "--json"),
+        shim_safe_argv(binary, *args),
         capture_output=True,
         timeout=_MODELS_TIMEOUT,
         creationflags=WINDOWS_NO_WINDOW,
@@ -118,14 +131,50 @@ def _run_codex_models_json(binary: str) -> str | None:
     return completed.stdout.decode(errors="replace") if completed.stdout else ""
 
 
-def _parse_codex_models(output: str) -> list[str] | None:
-    """Best-effort parse of ``codex debug models --json`` output.
+@dataclass(frozen=True)
+class CodexModelInfo:
+    """Per-model reasoning-effort capabilities extracted from the catalog."""
+
+    id: str
+    efforts: tuple[str, ...]
+    default_effort: str | None
+
+
+def _parse_reasoning_levels(item: dict) -> tuple[tuple[str, ...], str | None]:
+    """Extract (efforts, default_effort) from one catalog entry, best-effort.
+
+    ``supported_reasoning_levels`` elements are ``{"effort": ...}`` dicts in the
+    current catalog but bare strings are tolerated too; ``default_reasoning_level``
+    is tolerated in both shapes as well.
+    """
+    efforts: list[str] = []
+    levels = item.get("supported_reasoning_levels")
+    if isinstance(levels, list):
+        for level in levels:
+            effort = level.get("effort") if isinstance(level, dict) else level
+            if isinstance(effort, str) and effort.strip():
+                efforts.append(effort.strip())
+    default = item.get("default_reasoning_level")
+    if isinstance(default, dict):
+        default = default.get("effort")
+    if not (isinstance(default, str) and default.strip()):
+        default = None
+    else:
+        default = default.strip()
+    return tuple(efforts), default
+
+
+def _parse_codex_models(output: str) -> tuple[list[str], list[CodexModelInfo]] | None:
+    """Best-effort parse of ``codex debug models`` JSON output.
 
     A debug-namespace command carries no output-stability promise, so every
     plausible shape is accepted: a bare JSON list of strings, a list of objects
     (first of ``id``/``name``/``model``/``slug`` wins), or an object wrapping
-    either under ``"models"``. Anything else yields ``None`` and the caller
-    serves the curated fallback list.
+    either under ``"models"``. Object entries whose ``visibility`` is ``"hide"``
+    (internal models like ``codex-auto-review``) are skipped. Returns the model
+    names plus per-model :class:`CodexModelInfo` for entries that advertise
+    reasoning levels (bare-string and id-only entries contribute none). Anything
+    unusable yields ``None`` and the caller serves the curated fallback list.
     """
     try:
         payload = json.loads(output)
@@ -136,19 +185,31 @@ def _parse_codex_models(output: str) -> list[str] | None:
     if not isinstance(payload, list):
         return None
     models: list[str] = []
+    details: list[CodexModelInfo] = []
     for item in payload:
         name = ""
         if isinstance(item, str):
             name = item.strip()
         elif isinstance(item, dict):
+            if item.get("visibility") == "hide":
+                continue
             for key in ("id", "name", "model", "slug"):
                 value = item.get(key)
                 if isinstance(value, str) and value.strip():
                     name = value.strip()
                     break
-        if name:
-            models.append(name)
-    return models or None
+        if not name:
+            continue
+        models.append(name)
+        if isinstance(item, dict):
+            efforts, default = _parse_reasoning_levels(item)
+            if efforts:
+                details.append(
+                    CodexModelInfo(id=name, efforts=efforts, default_effort=default)
+                )
+    if not models:
+        return None
+    return models, details
 
 
 @dataclass(frozen=True)
@@ -187,6 +248,7 @@ class CodexLauncher:
         self._worktree_mgr = worktree_mgr
         self._resolved_binary: str | None = None
         self._cached_models: tuple[str, ...] | None = None
+        self._cached_model_details: tuple[CodexModelInfo, ...] | None = None
 
     def _resolve_binary(self) -> str:
         if self._resolved_binary is None:
@@ -205,30 +267,65 @@ class CodexLauncher:
         """Model names enumerated by a prior :meth:`list_models` — never spawns."""
         return self._cached_models
 
+    @property
+    def cached_model_details(self) -> tuple[dict[str, object], ...] | None:
+        """Wire-ready per-model detail dicts from a prior :meth:`list_models`.
+
+        Returns ``None`` when enumeration failed or the catalog carried no
+        reasoning levels — the ``model_details`` capability key is then omitted
+        and clients use their static effort lists. ``default_effort`` is present
+        only when known (omitted, never null, on the wire). Dicts rather than
+        :class:`CodexModelInfo` so ``build_cli_capabilities`` stays CLI-agnostic
+        and the relay proxy can ``json.dumps`` the body untouched.
+        """
+        if self._cached_model_details is None:
+            return None
+        entries: list[dict[str, object]] = []
+        for info in self._cached_model_details:
+            entry: dict[str, object] = {"id": info.id, "efforts": list(info.efforts)}
+            if info.default_effort is not None:
+                entry["default_effort"] = info.default_effort
+            entries.append(entry)
+        return tuple(entries)
+
     async def list_models(self) -> list[str]:
         """Enumerate Codex models once and memoize the result.
 
         Run from the startup warm task (``warm_cli_model_caches``) — never from
-        the ``/api/version`` request path. ANY failure (missing binary,
-        non-zero exit, timeout, unparseable output) memoizes the curated
-        ``_CODEX_FALLBACK_MODELS`` instead, so capabilities from a new agent
-        always carry a Codex model list.
+        the ``/api/version`` request path. The plain invocation is retried once
+        with ``--json`` for pre-0.148 CLIs (which printed a human-readable table
+        with exit 0 when the flag was omitted, so a parse failure triggers the
+        retry too). When both attempts fail for any reason (missing binary,
+        non-zero exit, timeout, unparseable output) the curated
+        ``_CODEX_FALLBACK_MODELS`` is memoized instead — with no per-model
+        details, since the fallback models' capabilities are unknown — so
+        capabilities from a new agent always carry a Codex model list.
         """
         if self._cached_models is not None:
             return list(self._cached_models)
-        models: list[str] | None = None
+        parsed: tuple[list[str], list[CodexModelInfo]] | None = None
         try:
             binary = self._resolve_binary()
         except CliBinaryNotFoundError:
             binary = None
         if binary is not None:
-            try:
-                output = await asyncio.to_thread(_run_codex_models_json, binary)
-            except (OSError, subprocess.SubprocessError):
-                output = None
-            if output is not None:
-                models = _parse_codex_models(output)
-        self._cached_models = tuple(models) if models else _CODEX_FALLBACK_MODELS
+            for json_flag in (False, True):
+                try:
+                    output = await asyncio.to_thread(
+                        _run_codex_models, binary, json_flag
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    output = None
+                if output is not None:
+                    parsed = _parse_codex_models(output)
+                if parsed:
+                    break
+        if parsed:
+            models, details = parsed
+            self._cached_models = tuple(models)
+            self._cached_model_details = tuple(details) or None
+        else:
+            self._cached_models = _CODEX_FALLBACK_MODELS
         return list(self._cached_models)
 
     async def build(

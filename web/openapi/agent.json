@@ -445,7 +445,7 @@
         "type": "object"
       },
       "CodexOptionsModel": {
-        "description": "Wire DTO for Codex CLI launch options (see :class:`CodexOptions`).\n\nThe enum-like fields are ``Literal``-typed so an invalid value is rejected\nwith a 422 at the wire boundary rather than producing a broken ``codex``\nargv. ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for\nthe legitimately-named ``model`` field.",
+        "description": "Wire DTO for Codex CLI launch options (see :class:`CodexOptions`).\n\n``sandbox`` and ``approval`` are ``Literal``-typed so an invalid value is\nrejected with a 422 at the wire boundary rather than producing a broken\n``codex`` argv. ``reasoning_effort`` is free-form like ``model``: the\nvocabulary is enumerated per-model at runtime and advertised via\n``capabilities.cli.codex.model_details``, so a closed Literal would 422\nvalues the agent itself just advertised whenever the Codex catalog grows.\nThe value is embedded after ``=`` inside a single exec'd argv element\n(``-c model_reasoning_effort=<v>``), so there is no flag-smuggling path.\n``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the\nlegitimately-named ``model`` field.",
         "properties": {
           "approval": {
             "default": "never",
@@ -498,12 +498,6 @@
           "reasoning_effort": {
             "anyOf": [
               {
-                "enum": [
-                  "minimal",
-                  "low",
-                  "medium",
-                  "high"
-                ],
                 "type": "string"
               },
               {

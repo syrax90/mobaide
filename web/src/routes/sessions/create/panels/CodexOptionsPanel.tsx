@@ -1,16 +1,13 @@
 import { SelectField } from '../../../../components/form/SelectField';
-import {
-  CODEX_APPROVALS,
-  CODEX_REASONING_EFFORTS,
-  CODEX_SANDBOXES,
-} from '../../../../protocol/dto/sessionCreate';
+import { CODEX_APPROVALS, CODEX_SANDBOXES } from '../../../../protocol/dto/sessionCreate';
+import type { CliModelDetail } from '../../../../protocol/dto/agentVersion';
 import {
   CODEX_MODELS,
+  codexEffortsFor,
   codexPreset,
   type CodexApproval,
   type CodexBucket,
   type CodexPreset,
-  type CodexReasoningEffort,
   type CodexSandbox,
   type WizardAction,
 } from '../wizardState';
@@ -19,6 +16,7 @@ import { modelOptions } from './ClaudeOptionsPanel';
 interface CodexOptionsPanelProps {
   bucket: CodexBucket;
   models: readonly string[] | null;
+  modelDetails: readonly CliModelDetail[] | null;
   dispatch: (action: WizardAction) => void;
 }
 
@@ -40,8 +38,21 @@ const PRESETS: readonly { preset: CodexPreset; label: string; description: strin
   },
 ];
 
-export function CodexOptionsPanel({ bucket, models, dispatch }: CodexOptionsPanelProps) {
+export function CodexOptionsPanel({
+  bucket,
+  models,
+  modelDetails,
+  dispatch,
+}: CodexOptionsPanelProps) {
   const active = codexPreset(bucket);
+  const efforts = codexEffortsFor(modelDetails, bucket.model);
+  // Same keep-selected repair as `modelOptions`: a restored or late-probe
+  // effort outside the advertised set must stay renderable, or the controlled
+  // <select> goes blank while the request still sends the value.
+  const effortOptions =
+    bucket.reasoningEffort !== null && !efforts.includes(bucket.reasoningEffort)
+      ? [...efforts, bucket.reasoningEffort]
+      : efforts;
 
   return (
     <div className="option-group">
@@ -71,7 +82,13 @@ export function CodexOptionsPanel({ bucket, models, dispatch }: CodexOptionsPane
         value={bucket.model}
         options={modelOptions(models, CODEX_MODELS, bucket.model)}
         onChange={(model) => {
-          dispatch({ type: 'setCodexModel', model });
+          dispatch({
+            type: 'setCodexModel',
+            model,
+            detail: model !== null
+              ? (modelDetails?.find((detail) => detail.id === model) ?? null)
+              : null,
+          });
         }}
       />
       <SelectField
@@ -81,13 +98,10 @@ export function CodexOptionsPanel({ bucket, models, dispatch }: CodexOptionsPane
         // emit no --reasoning-effort flag at all.
         options={[
           { value: null, label: 'Agent default' },
-          ...CODEX_REASONING_EFFORTS.map((effort) => ({ value: effort, label: effort })),
+          ...effortOptions.map((effort) => ({ value: effort, label: effort })),
         ]}
         onChange={(effort) => {
-          dispatch({
-            type: 'setCodexReasoningEffort',
-            effort: effort as CodexReasoningEffort | null,
-          });
+          dispatch({ type: 'setCodexReasoningEffort', effort });
         }}
       />
 

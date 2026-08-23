@@ -72,8 +72,14 @@ export const codexOptionsSchema = z.strictObject({
    * `high`, an explicit `null` means "emit no `--reasoning-effort` flag at all",
    * and a value overrides. Collapsing null into undefined would lose the middle
    * state — `explicit_null_reasoning_effort_round_trips_as_null` pins it.
+   *
+   * Free-form string, not `z.enum(CODEX_REASONING_EFFORTS)`: the vocabulary is
+   * agent-enumerated per model (`capabilities.cli.codex.model_details`), so a
+   * closed enum would reject efforts the agent itself advertised (e.g. `ultra`)
+   * — `catalog_effort_passes_free_form` pins it. `CODEX_REASONING_EFFORTS` is
+   * purely the UI's fallback option list.
    */
-  reasoning_effort: z.enum(CODEX_REASONING_EFFORTS).nullable().default('high'),
+  reasoning_effort: z.string().nullable().default('high'),
   full_auto: z.boolean().default(false),
   initial_prompt: optionalWireString(),
   worktree: z.boolean().default(false),

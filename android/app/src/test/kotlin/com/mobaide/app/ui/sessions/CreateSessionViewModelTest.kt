@@ -8,6 +8,7 @@ import com.mobaide.app.data.local.CodexLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
+import com.mobaide.app.data.network.dto.CliModelDetail
 import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
@@ -2370,17 +2371,34 @@ class CreateSessionViewModelTest {
         antigravity: Boolean? = null,
         codexModels: List<String>? = null,
         antigravityModels: List<String>? = null,
+        codexModelDetails: List<CliModelDetail>? = null,
     ): VersionInfoResponse {
-        fun cliEntry(id: String, available: Boolean?, models: List<String>? = null): String? {
+        fun cliEntry(
+            id: String,
+            available: Boolean?,
+            models: List<String>? = null,
+            details: List<CliModelDetail>? = null,
+        ): String? {
             val fields = buildList {
                 if (available != null) add("\"available\":$available")
                 if (models != null) add("\"models\":[${models.joinToString(",") { "\"$it\"" }}]")
+                if (details != null) {
+                    val entries = details.joinToString(",") { detail ->
+                        buildList {
+                            add("\"id\":\"${detail.id}\"")
+                            add("\"efforts\":[${detail.efforts.joinToString(",") { "\"$it\"" }}]")
+                            // Omitted — never null — on the wire when unknown.
+                            detail.defaultEffort?.let { add("\"default_effort\":\"$it\"") }
+                        }.joinToString(",", prefix = "{", postfix = "}")
+                    }
+                    add("\"model_details\":[$entries]")
+                }
             }
             return if (fields.isEmpty()) null else "\"$id\":{${fields.joinToString(",")}}"
         }
         val entries = listOfNotNull(
             cliEntry("claude", claude),
-            cliEntry("codex", codex, codexModels),
+            cliEntry("codex", codex, codexModels, codexModelDetails),
             cliEntry("antigravity", antigravity, antigravityModels),
         )
         val capabilitiesJson =
@@ -2551,6 +2569,134 @@ class CreateSessionViewModelTest {
         val s = vm.uiState.value
         assertNull("absent codex models array must map to null", s.codexModels)
         assertNull("absent antigravity models array must map to null", s.antigravityModels)
+        assertNull("absent model_details array must map to null", s.codexModelDetails)
+    }
+
+    @Test
+    fun refreshCliAvailability_capturesCodexModelDetails() = runTest {
+        // The probe also captures the per-model reasoning-effort sets
+        // (capabilities.cli.codex.model_details) so the effort control can
+        // offer the selected model's own levels instead of the static list.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val details = listOf(
+            CliModelDetail("gpt-5.6-sol", listOf("low", "high", "ultra"), "low"),
+            CliModelDetail("gpt-5.4-mini", listOf("low"), null),
+        )
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModels = listOf("gpt-5.6-sol", "gpt-5.4-mini"),
+            codexModelDetails = details,
+        )
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        assertEquals(details, vm.uiState.value.codexModelDetails)
+    }
+
+    @Test
+    fun codexEffortsFor_advertisedModel_overridesStaticList() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModelDetails = listOf(
+                CliModelDetail("gpt-5.6-sol", listOf("low", "medium", "high", "ultra"), "low"),
+            ),
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals(listOf("low", "medium", "high", "ultra"), s.codexEffortsFor("gpt-5.6-sol"))
+        // Unknown model and the Default (null) model both take the fallback —
+        // their capabilities are unknown here.
+        assertEquals(CreateSessionViewModel.REASONING_EFFORTS, s.codexEffortsFor("gpt-5.5"))
+        assertEquals(CreateSessionViewModel.REASONING_EFFORTS, s.codexEffortsFor(null))
+    }
+
+    @Test
+    fun setCodexModel_unsupportedEffort_resetsToModelDefaultEffort() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModelDetails = listOf(
+                CliModelDetail("gpt-5.6-sol", listOf("low", "medium", "ultra"), "low"),
+            ),
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.setCodexReasoningEffort("high")
+        vm.setCodexModel("gpt-5.6-sol")
+
+        val s = vm.uiState.value
+        assertEquals("gpt-5.6-sol", s.codexModel)
+        assertEquals("stranded effort must re-default to the catalog default", "low", s.codexReasoningEffort)
+    }
+
+    @Test
+    fun setCodexModel_missingDefaultEffort_fallsBackWithinAdvertisedSet() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModelDetails = listOf(
+                CliModelDetail("with-high", listOf("medium", "high"), null),
+                CliModelDetail("without-high", listOf("low", "medium"), null),
+            ),
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.setCodexReasoningEffort("minimal")
+        vm.setCodexModel("with-high")
+        assertEquals("'high' wins when advertised", "high", vm.uiState.value.codexReasoningEffort)
+
+        vm.setCodexReasoningEffort("minimal")
+        vm.setCodexModel("without-high")
+        assertEquals("else the first advertised entry", "low", vm.uiState.value.codexReasoningEffort)
+    }
+
+    @Test
+    fun setCodexModel_supportedEffort_andUnknownModel_keepEffort() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModelDetails = listOf(
+                CliModelDetail("gpt-5.6-sol", listOf("low", "medium", "ultra"), "low"),
+            ),
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.setCodexReasoningEffort("ultra")
+        vm.setCodexModel("gpt-5.6-sol")
+        assertEquals("a still-supported effort survives the switch", "ultra", vm.uiState.value.codexReasoningEffort)
+
+        vm.setCodexReasoningEffort("minimal")
+        vm.setCodexModel("mystery-model")
+        assertEquals(
+            "a model with no catalog entry keeps the effort — never downshift on a guess",
+            "minimal",
+            vm.uiState.value.codexReasoningEffort,
+        )
+
+        vm.setCodexModel(null)
+        assertEquals("the Default model keeps the effort too", "minimal", vm.uiState.value.codexReasoningEffort)
     }
 
     @Test

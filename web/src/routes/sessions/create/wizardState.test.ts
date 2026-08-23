@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ProjectSummary } from '../../../api/projectRepository';
+import { CODEX_REASONING_EFFORTS } from '../../../protocol/dto/sessionCreate';
+import type { CliModelDetail } from '../../../protocol/dto/agentVersion';
 import {
   claudeEffortsFor,
+  codexEffortsFor,
   codexPreset,
   effectiveClaudeEffort,
   effectiveClaudeModel,
@@ -55,6 +58,19 @@ describe('selectors', () => {
     expect(effectiveClaudeEffort({ ...bucket, effort: 'low' })).toBe('low');
     // Fast mode promotes the model, which widens the range back out.
     expect(effectiveClaudeEffort({ ...bucket, fastMode: true })).toBe('max');
+  });
+
+  it('derives codex effort options from the selected model catalog', () => {
+    const details: CliModelDetail[] = [
+      { id: 'gpt-5.6-sol', efforts: ['low', 'high', 'ultra'], defaultEffort: 'low' },
+    ];
+
+    expect(codexEffortsFor(details, 'gpt-5.6-sol')).toEqual(['low', 'high', 'ultra']);
+    // An unknown model and the Default (null) model both take the static
+    // fallback — which model the agent resolves Default to is unknown here.
+    expect(codexEffortsFor(details, 'gpt-5.5')).toEqual(CODEX_REASONING_EFFORTS);
+    expect(codexEffortsFor(details, null)).toEqual(CODEX_REASONING_EFFORTS);
+    expect(codexEffortsFor(null, 'gpt-5.6-sol')).toEqual(CODEX_REASONING_EFFORTS);
   });
 
   it('reads the pressed Codex preset, full access first', () => {
@@ -188,6 +204,81 @@ describe('wizardReducer', () => {
       sandbox: 'read-only',
       approval: 'on-request',
     });
+  });
+
+  it('re-defaults a stranded codex effort to the model default on switch', () => {
+    const detail: CliModelDetail = {
+      id: 'gpt-5.6-sol',
+      efforts: ['low', 'medium', 'ultra'],
+      defaultEffort: 'low',
+    };
+    const state = reduce([{ type: 'setCodexReasoningEffort', effort: 'xhigh' }]);
+
+    expect(
+      reduce([{ type: 'setCodexModel', model: 'gpt-5.6-sol', detail }], state).codex,
+    ).toMatchObject({ model: 'gpt-5.6-sol', reasoningEffort: 'low' });
+    // Without a catalog default, 'high' wins when advertised, else the first entry.
+    expect(
+      reduce(
+        [{ type: 'setCodexModel', model: 'x', detail: { ...detail, id: 'x', defaultEffort: null } }],
+        state,
+      ).codex.reasoningEffort,
+    ).toBe('low');
+    expect(
+      reduce(
+        [
+          {
+            type: 'setCodexModel',
+            model: 'y',
+            detail: { id: 'y', efforts: ['medium', 'high'], defaultEffort: null },
+          },
+        ],
+        state,
+      ).codex.reasoningEffort,
+    ).toBe('high');
+  });
+
+  it('keeps a still-supported codex effort on switch', () => {
+    const detail: CliModelDetail = {
+      id: 'gpt-5.6-sol',
+      efforts: ['low', 'medium', 'high', 'ultra'],
+      defaultEffort: 'low',
+    };
+    const state = reduce([{ type: 'setCodexReasoningEffort', effort: 'ultra' }]);
+
+    expect(
+      reduce([{ type: 'setCodexModel', model: 'gpt-5.6-sol', detail }], state).codex
+        .reasoningEffort,
+    ).toBe('ultra');
+  });
+
+  it('keeps the effort when the new model has no catalog entry or is Default', () => {
+    const state = reduce([{ type: 'setCodexReasoningEffort', effort: 'xhigh' }]);
+
+    expect(reduce([{ type: 'setCodexModel', model: 'mystery' }], state).codex).toMatchObject({
+      model: 'mystery',
+      reasoningEffort: 'xhigh',
+    });
+    expect(
+      reduce([{ type: 'setCodexModel', model: null, detail: null }], state).codex.reasoningEffort,
+    ).toBe('xhigh');
+  });
+
+  it('keeps the Agent-default (null) effort on any model switch', () => {
+    const state = reduce([{ type: 'setCodexReasoningEffort', effort: null }]);
+
+    expect(
+      reduce(
+        [
+          {
+            type: 'setCodexModel',
+            model: 'gpt-5.6-sol',
+            detail: { id: 'gpt-5.6-sol', efforts: ['low'], defaultEffort: 'low' },
+          },
+        ],
+        state,
+      ).codex.reasoningEffort,
+    ).toBeNull();
   });
 
   it('seeds the Auto Scan prompt once per project', () => {

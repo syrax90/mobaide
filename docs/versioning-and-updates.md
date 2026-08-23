@@ -277,7 +277,13 @@ range is rejected up front.
   "capabilities": {
     "cli": {
       "claude": { "available": true },
-      "codex": { "available": false }
+      "codex": {
+        "available": true,
+        "models": ["gpt-5.6-sol", "gpt-5.5"],
+        "model_details": [
+          { "id": "gpt-5.6-sol", "efforts": ["low", "high", "ultra"], "default_effort": "low" }
+        ]
+      }
     }
   },
   "latest_agent_version": "0.1.0"
@@ -288,7 +294,12 @@ range is rejected up front.
 the agent registers — additive, no `protocol_version` bump — and the Android
 mode-select screen disables a per-CLI button when its binary is absent. The
 client parses it tolerantly: an absent / old-agent / malformed value is treated
-as available. See `PROTOCOL.md` (proto-v5) for the full shape.)
+as available. Entries for CLIs whose startup model enumeration succeeded also
+carry a `models` array — and, when the CLI's catalog exposes per-model
+reasoning levels, a `model_details` array — which the New-session pickers
+prefer over their hardcoded model/effort fallbacks; both keys are omitted, never
+emitted empty, on failure. See `PROTOCOL.md` (proto-v5 bullet plus the
+2026-08-23 proto-v7 additive delta) for the full shape.)
 
 (The signed manifest body / signature is NOT echoed back through this REST
 surface — it is delivered to the agent inline over the relay WebSocket as

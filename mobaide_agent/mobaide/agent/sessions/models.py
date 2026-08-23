@@ -47,10 +47,16 @@ class ClaudeOptionsModel(BaseModel):
 class CodexOptionsModel(BaseModel):
     """Wire DTO for Codex CLI launch options (see :class:`CodexOptions`).
 
-    The enum-like fields are ``Literal``-typed so an invalid value is rejected
-    with a 422 at the wire boundary rather than producing a broken ``codex``
-    argv. ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for
-    the legitimately-named ``model`` field.
+    ``sandbox`` and ``approval`` are ``Literal``-typed so an invalid value is
+    rejected with a 422 at the wire boundary rather than producing a broken
+    ``codex`` argv. ``reasoning_effort`` is free-form like ``model``: the
+    vocabulary is enumerated per-model at runtime and advertised via
+    ``capabilities.cli.codex.model_details``, so a closed Literal would 422
+    values the agent itself just advertised whenever the Codex catalog grows.
+    The value is embedded after ``=`` inside a single exec'd argv element
+    (``-c model_reasoning_effort=<v>``), so there is no flag-smuggling path.
+    ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the
+    legitimately-named ``model`` field.
     """
 
     model_config = ConfigDict(protected_namespaces=())
@@ -60,7 +66,7 @@ class CodexOptionsModel(BaseModel):
         "workspace-write"
     )
     approval: Literal["untrusted", "on-request", "never"] = "never"
-    reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = "high"
+    reasoning_effort: str | None = "high"
     full_auto: bool = False
     initial_prompt: str | None = None
     worktree: bool = False

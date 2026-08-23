@@ -11,7 +11,14 @@
         "capabilities": {
           "cli": {
             "claude": { "available": true, "models": ["opus", "sonnet"] },
-            "codex": { "available": false, "models": [] }
+            "codex": {
+              "available": false,
+              "models": [],
+              "model_details": [
+                { "id": "gpt-5.6-sol", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"], "default_effort": "low" },
+                { "id": "gpt-5.4-mini", "efforts": ["low"] }
+              ]
+            }
           },
           "extra": [1, "two", null, { "nested": true }]
         },

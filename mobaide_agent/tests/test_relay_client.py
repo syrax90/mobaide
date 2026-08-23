@@ -3758,13 +3758,18 @@ class TestProxyVersionCapabilities:
     """
 
     def _launcher(
-        self, resolves: bool, cached_models: tuple[str, ...] | None = None,
+        self,
+        resolves: bool,
+        cached_models: tuple[str, ...] | None = None,
+        cached_model_details: tuple[dict, ...] | None = None,
     ):
         launcher = MagicMock(name="launcher")
-        # Explicit ``cached_models`` (default None): a bare MagicMock would
-        # auto-create a truthy attribute and make ``build_cli_capabilities``
-        # emit a spurious ``models`` key.
+        # Explicit ``cached_models`` / ``cached_model_details`` (default None):
+        # a bare MagicMock would auto-create truthy attributes and make
+        # ``build_cli_capabilities`` emit spurious ``models`` /
+        # ``model_details`` keys.
         launcher.cached_models = cached_models
+        launcher.cached_model_details = cached_model_details
         if resolves:
             launcher.resolve_binary.return_value = "/bin/cli"
         else:
@@ -3817,6 +3822,46 @@ class TestProxyVersionCapabilities:
             "antigravity": {
                 "available": True,
                 "models": ["Gemini 3.1 Pro (Low)", "GPT-OSS 120B (Medium)"],
+            },
+        }
+
+    async def test_warm_detail_cache_adds_model_details_key(
+        self, client, mock_app_state,
+    ):
+        """A launcher whose per-model detail cache is warm carries
+        ``model_details`` in its capability entry on the relay path too — same
+        omitted-key contract as ``models``."""
+        mock_app_state.cli_launchers = {
+            "codex": self._launcher(
+                resolves=True,
+                cached_models=("gpt-5.6-sol",),
+                cached_model_details=(
+                    {
+                        "id": "gpt-5.6-sol",
+                        "efforts": ["low", "ultra"],
+                        "default_effort": "low",
+                    },
+                ),
+            ),
+        }
+        ws = AsyncMock()
+
+        result = await client._dispatch_proxy(
+            "GET", "/api/version", None, None, ws,
+        )
+
+        assert result["status"] == 200
+        assert result["body"]["capabilities"]["cli"] == {
+            "codex": {
+                "available": True,
+                "models": ["gpt-5.6-sol"],
+                "model_details": [
+                    {
+                        "id": "gpt-5.6-sol",
+                        "efforts": ["low", "ultra"],
+                        "default_effort": "low",
+                    }
+                ],
             },
         }
 

@@ -345,11 +345,13 @@ def build_cli_capabilities(
 
     Every entry carries ``{"available": <bool>}``. Launchers whose model list
     has been enumerated (see :func:`warm_cli_model_caches`) additionally carry
-    ``{"models": [...]}``; the key is omitted — never emitted empty — when
-    enumeration is unsupported or produced nothing, so clients fall back to
-    their hardcoded lists on the same absent/empty signal for old and new
-    agents alike. Reads only in-memory caches: never spawns a subprocess, so
-    ``GET /api/version`` latency is unaffected.
+    ``{"models": [...]}``, and — when the CLI's catalog exposes per-model
+    reasoning levels — ``{"model_details": [{"id", "efforts", "default_effort"?},
+    ...]}``. Both keys are omitted — never emitted empty — when enumeration is
+    unsupported or produced nothing, so clients fall back to their hardcoded
+    lists on the same absent/empty signal for old and new agents alike. Reads
+    only in-memory caches: never spawns a subprocess, so ``GET /api/version``
+    latency is unaffected.
 
     Shared by both transports that answer ``GET /api/version`` — the FastAPI
     handler (direct) and the relay client's proxy branch (relay) — so they
@@ -364,6 +366,9 @@ def build_cli_capabilities(
         models = getattr(launcher, "cached_models", None)
         if models:
             entry["models"] = list(models)
+        details = getattr(launcher, "cached_model_details", None)
+        if details:
+            entry["model_details"] = [dict(detail) for detail in details]
         capabilities[cli_id] = entry
     return capabilities
 

@@ -61,4 +61,39 @@ extension VersionInfoResponse {
             }
         }
     }
+
+    /// Per-model reasoning-effort sets from `capabilities.cli.<id>.model_details`
+    /// (today only Codex populates it, from `codex debug models`). Entries with
+    /// a blank id or no usable efforts are dropped; nil when nothing usable
+    /// remains — an older agent or a failed probe — so callers fall back to
+    /// their static effort list. Never throws, like the walks above.
+    func cliModelDetails(_ cliId: String) -> [CliModelDetail]? {
+        guard let entries = capabilities["cli"]?[cliId]?["model_details"]?.arrayValue else {
+            return nil
+        }
+        let parsed = entries.compactMap { entry -> CliModelDetail? in
+            guard case .string(let id)? = entry["id"], !id.isEmpty else { return nil }
+            guard let effortValues = entry["efforts"]?.arrayValue else { return nil }
+            let efforts = effortValues.compactMap { value -> String? in
+                guard case .string(let effort) = value, !effort.isEmpty else { return nil }
+                return effort
+            }
+            guard !efforts.isEmpty else { return nil }
+            var defaultEffort: String?
+            if case .string(let value)? = entry["default_effort"], !value.isEmpty {
+                defaultEffort = value
+            }
+            return CliModelDetail(id: id, efforts: efforts, defaultEffort: defaultEffort)
+        }
+        return parsed.isEmpty ? nil : parsed
+    }
+}
+
+/// One entry of `capabilities.cli.<id>.model_details`: the reasoning efforts a
+/// model supports and (when the catalog names one) its default effort. Built
+/// only by the loose walk in `cliModelDetails` — never decoded directly.
+struct CliModelDetail: Equatable, Sendable {
+    let id: String
+    let efforts: [String]
+    let defaultEffort: String?
 }

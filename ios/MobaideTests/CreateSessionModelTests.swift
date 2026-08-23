@@ -171,6 +171,72 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertNil(request.claude_options)
     }
 
+    /// `refreshCliAvailability` against a stubbed agent advertising per-model
+    /// Codex effort sets (`capabilities.cli.codex.model_details`).
+    private func modelWithCodexDetails() async -> CreateSessionModel {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{
+           "available":true,
+           "models":["gpt-5.6-sol","gpt-5.4-mini"],
+           "model_details":[
+             {"id":"gpt-5.6-sol","efforts":["low","medium","ultra"],"default_effort":"low"},
+             {"id":"gpt-5.4-mini","efforts":["medium","high"]}
+           ]}}}}
+        """#)
+        let model = stubbedModel()
+        await model.refreshCliAvailability()
+        return model
+    }
+
+    func testCodexEffortsFallBackToStaticListWithoutDetails() {
+        let model = makeModel()
+        XCTAssertEqual(model.codexEfforts(for: "gpt-5.6-sol"), CreateSessionModel.reasoningEfforts)
+        XCTAssertEqual(model.codexEfforts(for: nil), CreateSessionModel.reasoningEfforts)
+    }
+
+    func testCodexEffortsUseAdvertisedCatalogForSelectedModel() async {
+        let model = await modelWithCodexDetails()
+        XCTAssertEqual(model.codexModels, ["gpt-5.6-sol", "gpt-5.4-mini"])
+        XCTAssertEqual(model.codexEfforts(for: "gpt-5.6-sol"), ["low", "medium", "ultra"])
+        // Unknown model and the Default (nil) model both take the fallback —
+        // their capabilities are unknown here.
+        XCTAssertEqual(model.codexEfforts(for: "mystery"), CreateSessionModel.reasoningEfforts)
+        XCTAssertEqual(model.codexEfforts(for: nil), CreateSessionModel.reasoningEfforts)
+    }
+
+    func testSetCodexModelResetsUnsupportedEffortToModelDefault() async {
+        let model = await modelWithCodexDetails()
+        model.codexReasoningEffort = "high"
+        model.setCodexModel("gpt-5.6-sol")
+        XCTAssertEqual(
+            model.codexReasoningEffort, "low",
+            "a stranded effort re-defaults to the catalog's per-model default"
+        )
+
+        // No catalog default → "high" wins when advertised.
+        model.codexReasoningEffort = "minimal"
+        model.setCodexModel("gpt-5.4-mini")
+        XCTAssertEqual(model.codexReasoningEffort, "high")
+    }
+
+    func testSetCodexModelKeepsSupportedEffortAndUnknownModels() async {
+        let model = await modelWithCodexDetails()
+        model.codexReasoningEffort = "ultra"
+        model.setCodexModel("gpt-5.6-sol")
+        XCTAssertEqual(model.codexReasoningEffort, "ultra", "a still-supported effort survives")
+
+        model.codexReasoningEffort = "minimal"
+        model.setCodexModel("mystery")
+        XCTAssertEqual(
+            model.codexReasoningEffort, "minimal",
+            "a model with no catalog entry keeps the effort — never downshift on a guess"
+        )
+        model.setCodexModel(nil)
+        XCTAssertEqual(model.codexReasoningEffort, "minimal", "the Default model keeps it too")
+    }
+
     func testAntigravityExclusivityAndAddDirs() throws {
         let model = makeModel()
         model.selection = .stored("a")

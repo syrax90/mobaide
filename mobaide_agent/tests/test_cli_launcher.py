@@ -28,17 +28,19 @@ class _MissingError(CliBinaryNotFoundError):
     _INSTALL_HINT = "fake CLI not found."
 
 
-def _launcher(resolves_to: str | None, models=None):
+def _launcher(resolves_to: str | None, models=None, model_details=None):
     """A minimal ``CliLauncher`` stand-in.
 
     ``resolves_to=None`` makes ``resolve_binary`` raise ``CliBinaryNotFoundError``
-    (the binary-missing case); a string makes it return that path. ``models``
-    seeds ``cached_models``; the ``None`` default mirrors a launcher whose model
-    cache is cold (or that never enumerates) — pinned explicitly because a bare
-    ``MagicMock`` attribute would read as truthy.
+    (the binary-missing case); a string makes it return that path. ``models`` /
+    ``model_details`` seed ``cached_models`` / ``cached_model_details``; the
+    ``None`` defaults mirror a launcher whose model cache is cold (or that never
+    enumerates) — pinned explicitly because a bare ``MagicMock`` attribute would
+    read as truthy.
     """
     launcher = MagicMock(name="launcher")
     launcher.cached_models = models
+    launcher.cached_model_details = model_details
     if resolves_to is None:
         launcher.resolve_binary.side_effect = _MissingError(["PATH:fake"])
     else:
@@ -141,8 +143,55 @@ class TestBuildCliCapabilities:
         at all (e.g. Claude's) is reported with availability only."""
         launcher = _launcher("/bin/claude")
         del launcher.cached_models  # getattr now raises AttributeError
+        del launcher.cached_model_details
         caps = build_cli_capabilities({"claude": launcher})
         assert caps == {"claude": {"available": True}}
+
+    def test_model_details_key_added_when_cached_details_truthy(self):
+        """A launcher with warm per-model details additionally carries
+        ``model_details`` — as fresh dict copies, so a caller mutating the
+        capability payload can never corrupt the launcher's cache."""
+        detail = {"id": "gpt-5.6-sol", "efforts": ["low", "ultra"]}
+        launcher = _launcher(
+            "/bin/codex", models=["gpt-5.6-sol"], model_details=(detail,)
+        )
+
+        caps = build_cli_capabilities({"codex": launcher})
+
+        assert caps == {
+            "codex": {
+                "available": True,
+                "models": ["gpt-5.6-sol"],
+                "model_details": [{"id": "gpt-5.6-sol", "efforts": ["low", "ultra"]}],
+            }
+        }
+        emitted = caps["codex"]["model_details"]
+        assert isinstance(emitted, list)
+        assert emitted[0] is not detail
+
+    def test_model_details_key_omitted_when_none_or_empty(self):
+        """Details follow the same omitted-never-empty contract as ``models`` —
+        a cold or empty cache yields no ``model_details`` key at all."""
+        caps = build_cli_capabilities(
+            {
+                "codex": _launcher("/bin/codex", models=["gpt-x"], model_details=None),
+                "agy": _launcher("/bin/agy", models=["m"], model_details=()),
+            }
+        )
+        assert caps == {
+            "codex": {"available": True, "models": ["gpt-x"]},
+            "agy": {"available": True, "models": ["m"]},
+        }
+
+    def test_model_details_key_omitted_when_launcher_lacks_attribute(self):
+        """A launcher exposing ``cached_models`` but not ``cached_model_details``
+        (e.g. Antigravity's) still gets its ``models`` key with no details."""
+        launcher = _launcher("/bin/agy", models=["Gemini 3.1 Flash"])
+        del launcher.cached_model_details
+        caps = build_cli_capabilities({"antigravity": launcher})
+        assert caps == {
+            "antigravity": {"available": True, "models": ["Gemini 3.1 Flash"]}
+        }
 
 
 class TestWarmCliModelCaches:

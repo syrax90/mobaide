@@ -726,10 +726,16 @@ export interface components {
          * CodexOptionsModel
          * @description Wire DTO for Codex CLI launch options (see :class:`CodexOptions`).
          *
-         *     The enum-like fields are ``Literal``-typed so an invalid value is rejected
-         *     with a 422 at the wire boundary rather than producing a broken ``codex``
-         *     argv. ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for
-         *     the legitimately-named ``model`` field.
+         *     ``sandbox`` and ``approval`` are ``Literal``-typed so an invalid value is
+         *     rejected with a 422 at the wire boundary rather than producing a broken
+         *     ``codex`` argv. ``reasoning_effort`` is free-form like ``model``: the
+         *     vocabulary is enumerated per-model at runtime and advertised via
+         *     ``capabilities.cli.codex.model_details``, so a closed Literal would 422
+         *     values the agent itself just advertised whenever the Codex catalog grows.
+         *     The value is embedded after ``=`` inside a single exec'd argv element
+         *     (``-c model_reasoning_effort=<v>``), so there is no flag-smuggling path.
+         *     ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the
+         *     legitimately-named ``model`` field.
          */
         CodexOptionsModel: {
             /**
@@ -753,7 +759,7 @@ export interface components {
              * Reasoning Effort
              * @default high
              */
-            reasoning_effort: ("minimal" | "low" | "medium" | "high") | null;
+            reasoning_effort: string | null;
             /**
              * Sandbox
              * @default workspace-write
