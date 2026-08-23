@@ -10,6 +10,7 @@ do not duplicate the platform-probing logic.
 """
 from __future__ import annotations
 
+import asyncio
 import glob
 import logging
 import os
@@ -371,6 +372,46 @@ def build_cli_capabilities(
             entry["model_details"] = [dict(detail) for detail in details]
         capabilities[cli_id] = entry
     return capabilities
+
+
+# Upper bound on how long a version handler waits for the startup warm task.
+# Generous vs the observed ~100ms enumeration, tiny vs the pathological worst
+# case (two 10s codex attempts + a 10s agy probe), so a wedged probe degrades
+# to the cold-cache shape instead of stalling ``GET /api/version``.
+_MODEL_WARMUP_WAIT = 3.0
+
+
+async def await_model_cache_warmup(
+    warm_task: asyncio.Task | None, timeout: float = _MODEL_WARMUP_WAIT
+) -> None:
+    """Briefly await the startup model-cache warm task before answering
+    ``GET /api/version``.
+
+    A version probe that lands while the warm task is still running would see
+    cold caches and emit no ``models`` / ``model_details`` keys — on the wire
+    indistinguishable from an old agent without enumeration, which makes
+    clients reconcile a persisted catalog reasoning effort down to the static
+    default. Bounded and best-effort: a finished or absent task returns
+    immediately, a wedged one falls through after ``timeout`` to today's
+    absent-keys shape, and ``shield`` keeps the timeout from cancelling the
+    warm task itself. Shared by both ``/api/version`` transports (direct
+    FastAPI handler and relay proxy) so they stay in lockstep.
+    """
+    if warm_task is None or warm_task.done():
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(warm_task), timeout=timeout)
+    except TimeoutError:
+        pass
+    except asyncio.CancelledError:
+        # The warm task dying at shutdown must not error the handler; the
+        # handler's own cancellation still propagates.
+        if not warm_task.cancelled():
+            raise
+    except Exception:
+        # warm_cli_model_caches isolates per-CLI failures, so this is a bug
+        # guard: never let it break the version endpoint.
+        logger.warning("model warmup wait failed", exc_info=True)
 
 
 async def warm_cli_model_caches(launchers: Mapping[str, CliLauncher]) -> None:

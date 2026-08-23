@@ -15,6 +15,7 @@ import pytest
 
 from mobaide.core.cli_launcher import (
     CliBinaryNotFoundError,
+    await_model_cache_warmup,
     build_cli_capabilities,
     probe_cli_available,
     shim_safe_argv,
@@ -241,6 +242,56 @@ class TestWarmCliModelCaches:
         carry no registry; the warm task must no-op rather than raise."""
         await warm_cli_model_caches(None)  # type: ignore[arg-type]
         await warm_cli_model_caches({})
+
+
+class TestAwaitModelCacheWarmup:
+    """``await_model_cache_warmup`` is the bounded mid-warmup wait both
+    ``/api/version`` transports run: a probe landing right after agent start
+    must not advertise a cold cache (indistinguishable from an old agent
+    without enumeration), but a wedged warm task must not stall the endpoint
+    either.
+    """
+
+    async def test_none_and_done_tasks_return_immediately(self):
+        import asyncio
+
+        await await_model_cache_warmup(None)
+        done = asyncio.create_task(asyncio.sleep(0))
+        await done
+        await await_model_cache_warmup(done)
+
+    async def test_waits_for_a_pending_task(self):
+        import asyncio
+
+        ran = []
+
+        async def _warm():
+            await asyncio.sleep(0)
+            ran.append(True)
+
+        await await_model_cache_warmup(asyncio.create_task(_warm()), timeout=5)
+        assert ran == [True]
+
+    async def test_wedged_task_times_out_without_being_cancelled(self):
+        import asyncio
+
+        wedged = asyncio.create_task(asyncio.sleep(60))
+        await await_model_cache_warmup(wedged, timeout=0.01)
+        # ``shield`` must keep the timeout from killing the warm task itself —
+        # a later probe may still profit from it finishing.
+        assert not wedged.cancelled()
+        wedged.cancel()
+
+    async def test_warm_task_cancellation_does_not_error_the_handler(self):
+        import asyncio
+
+        warm = asyncio.create_task(asyncio.sleep(60))
+        waiter = asyncio.create_task(await_model_cache_warmup(warm, timeout=5))
+        await asyncio.sleep(0)
+        warm.cancel()
+        # The warm task dying (agent shutdown) degrades to the cold-cache
+        # shape; the version handler awaiting it must not error.
+        await waiter
 
 
 class TestShimSafeArgv:

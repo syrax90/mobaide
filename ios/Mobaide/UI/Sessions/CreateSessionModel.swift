@@ -456,17 +456,38 @@ final class CreateSessionModel {
         antigravityAvailable = version.cliAvailable("antigravity")
         if let models = version.cliModels("codex"), !models.isEmpty { codexModels = models }
         if let models = version.cliModels("antigravity"), !models.isEmpty { antigravityModels = models }
+        // Overwritten, never keep-last-known (unlike the model lists above): a
+        // stale catalog retained from a previous probe — the agent restarted
+        // on an older build, say — would keep offering efforts the current
+        // agent may reject.
         let details = version.cliModelDetails("codex")
-        if let details { codexModelDetails = details }
-        // An agent advertising no model_details may be a pre-catalog build
-        // whose wire schema still 422s efforts outside the static vocabulary,
-        // so a persisted catalog effort (e.g. "ultra") reconciles to the
-        // default. An agent advertising details provably accepts free-form
-        // efforts — the selection stands. Decided on this probe's own result,
-        // not the keep-last-known property above.
-        if details == nil, !CreateSessionModel.reasoningEfforts.contains(codexReasoningEffort) {
-            codexReasoningEffort = "high"
+        codexModelDetails = details
+        codexReasoningEffort = reconciledCodexEffort(
+            model: codexModel, effort: codexReasoningEffort, details: details
+        )
+    }
+
+    /// The reasoning effort actually submittable to the probed agent. No
+    /// `model_details` advertised → possibly a pre-catalog agent whose wire
+    /// schema still 422s efforts outside the static vocabulary, so anything
+    /// outside it drops to the default. Details advertised and the selected
+    /// model's entry omits the effort → the catalog says the model cannot
+    /// serve it, so the same re-default `setCodexModel` applies on a switch
+    /// runs here. A model without a catalog entry (or the nil Default model)
+    /// keeps the effort — its capabilities are unknown, never downshift on a
+    /// guess.
+    private func reconciledCodexEffort(
+        model: String?, effort: String, details: [CliModelDetail]?
+    ) -> String {
+        guard let details else {
+            return CreateSessionModel.reasoningEfforts.contains(effort) ? effort : "high"
         }
+        guard let model,
+              let detail = details.first(where: { $0.id == model }),
+              !detail.efforts.contains(effort)
+        else { return effort }
+        return detail.defaultEffort
+            ?? (detail.efforts.contains("high") ? "high" : detail.efforts[0])
     }
 
     /// Mirrors the repository's push-driven cache into the wizard. The loop

@@ -355,7 +355,20 @@ class CreateSessionViewModel @Inject constructor(
                         codexSandbox = saved.sandbox,
                         codexApproval = saved.approval,
                         codexFullAuto = saved.fullAuto,
-                        codexReasoningEffort = saved.reasoningEffort,
+                        // The DataStore read races the ModePick capability
+                        // probe: when the probe already resolved, its
+                        // reconcile ran before this restore landed, so the
+                        // restored effort must pass through the same rule or
+                        // a stale catalog effort would stomp the clamp.
+                        codexReasoningEffort = if (cliProbeResolved) {
+                            reconciledCodexEffort(
+                                model = saved.model,
+                                effort = saved.reasoningEffort,
+                                details = it.codexModelDetails,
+                            )
+                        } else {
+                            saved.reasoningEffort
+                        },
                     )
                 }
             }
@@ -556,6 +569,39 @@ class CreateSessionViewModel @Inject constructor(
      * user-facing error (this is a passive probe, not a user action) — a missing
      * CLI that slips through still falls back to the create-time 503 handling.
      */
+    // Whether a capability probe has resolved this wizard session. Lets the
+    // async prefs restore tell "details unknown, probe still pending" (keep
+    // the saved effort — refresh reconciles later) apart from "probe resolved
+    // with no details" (reconcile now, or the restore stomps the clamp). Both
+    // writers run on viewModelScope's main dispatcher, so no synchronization.
+    private var cliProbeResolved = false
+
+    /**
+     * The reasoning effort actually submittable to the probed agent. No
+     * `model_details` advertised → possibly a pre-catalog agent whose wire
+     * schema still 422s efforts outside [REASONING_EFFORTS], so anything
+     * outside it drops to the default. Details advertised and the selected
+     * model's entry omits the effort → the catalog says the model cannot
+     * serve it, so the same re-default [setCodexModel] applies on a switch
+     * runs here. A model without a catalog entry (or the null Default model)
+     * keeps the effort — its capabilities are unknown, never downshift on a
+     * guess.
+     */
+    private fun reconciledCodexEffort(
+        model: String?,
+        effort: String,
+        details: List<CliModelDetail>?,
+    ): String {
+        if (details == null) {
+            return if (effort in REASONING_EFFORTS) effort else "high"
+        }
+        val detail = model?.let { m -> details.firstOrNull { it.id == m } } ?: return effort
+        if (effort in detail.efforts) return effort
+        return detail.defaultEffort
+            ?: "high".takeIf { it in detail.efforts }
+            ?: detail.efforts.first()
+    }
+
     fun refreshCliAvailability() {
         // In-flight dedup: set the flag before launch so the guard holds even
         // when the coroutine body is queued (StandardTestDispatcher) — same
@@ -566,6 +612,7 @@ class CreateSessionViewModel @Inject constructor(
             try {
                 val version = sessionRepository.getAgentVersion()
                 val codexDetails = version.cliModelDetails("codex")
+                cliProbeResolved = true
                 _uiState.update {
                     it.copy(
                         claudeAvailable = version.cliAvailable("claude"),
@@ -574,18 +621,11 @@ class CreateSessionViewModel @Inject constructor(
                         codexModels = version.cliModels("codex"),
                         antigravityModels = version.cliModels("antigravity"),
                         codexModelDetails = codexDetails,
-                        // An agent advertising no model_details may be a
-                        // pre-catalog build whose wire schema still 422s
-                        // efforts outside the static vocabulary, so a persisted
-                        // catalog effort (e.g. "ultra") reconciles to the
-                        // default. An agent advertising details provably
-                        // accepts free-form efforts — the selection stands.
-                        codexReasoningEffort =
-                            if (codexDetails == null && it.codexReasoningEffort !in REASONING_EFFORTS) {
-                                "high"
-                            } else {
-                                it.codexReasoningEffort
-                            },
+                        codexReasoningEffort = reconciledCodexEffort(
+                            model = it.codexModel,
+                            effort = it.codexReasoningEffort,
+                            details = codexDetails,
+                        ),
                         cliAvailabilityLoading = false,
                     )
                 }

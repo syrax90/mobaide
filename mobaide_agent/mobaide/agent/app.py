@@ -25,7 +25,11 @@ from mobaide.core import (
     SessionManager,
     create_pty_backend,
 )
-from mobaide.core.cli_launcher import build_cli_capabilities, warm_cli_model_caches
+from mobaide.core.cli_launcher import (
+    await_model_cache_warmup,
+    build_cli_capabilities,
+    warm_cli_model_caches,
+)
 from mobaide.core.hook_settings import sweep_hooks_dir
 from mobaide.core.macos_access import full_disk_access
 from mobaide.linear.config import AutoScanConfig
@@ -393,8 +397,10 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         sweep_hooks_dir(config.port)
         await app.state.session_manager.start_liveness_monitor()
         # Warm the per-CLI model-list caches off the request path: /api/version
-        # only ever reads the in-memory caches, so a slow `agy models` /
-        # `codex debug models` can neither delay boot nor add request latency.
+        # reads the in-memory caches (waiting at most a short bound for this
+        # task if a probe lands mid-warmup — see await_model_cache_warmup), so
+        # a slow `agy models` / `codex debug models` can neither delay boot nor
+        # stall requests.
         app.state.cli_models_warmup = asyncio.create_task(
             warm_cli_model_caches(app.state.cli_launchers),
             name="cli-models-warmup",
@@ -828,6 +834,11 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     async def version_info() -> dict[str, object]:
         relay_client = getattr(app.state, "relay_client", None)
         manifest = relay_client.latest_manifest if relay_client else None
+        # A probe that lands mid-warmup would advertise cold caches — on the
+        # wire indistinguishable from an old agent without model enumeration
+        # (see await_model_cache_warmup). Bounded, so a wedged probe cannot
+        # stall the endpoint.
+        await await_model_cache_warmup(getattr(app.state, "cli_models_warmup", None))
         return {
             "name": "mobaide_agent",
             "server_version": __version__,

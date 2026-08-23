@@ -442,18 +442,31 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
     case 'setCodexReasoningEffort':
       return { ...state, codex: { ...state.codex, reasoningEffort: action.effort } };
 
-    // Dispatched when the capabilities probe resolves. An agent that advertises
-    // `model_details` provably accepts free-form efforts, so a restored
-    // selection is kept even when unadvertised (the keep-selected posture). An
-    // agent that advertises none may be a pre-catalog build whose wire schema
-    // still closes over the static vocabulary — submitting a persisted catalog
-    // effort like `ultra` to it would 422 — so anything outside that vocabulary
-    // reconciles to the default. The null "Agent default" effort always stands.
+    // Dispatched when the capabilities probe resolves, reconciling a restored
+    // effort against what this agent can actually accept. No `model_details`
+    // advertised → possibly a pre-catalog build whose wire schema still closes
+    // over the static vocabulary (submitting `ultra` would 422), so anything
+    // outside it drops to the default. Details advertised and the selected
+    // model's entry omits the effort → the catalog says the model cannot serve
+    // it, so the same per-model re-default `setCodexModel` applies on a switch
+    // runs here too. A model without a catalog entry (or the null Default
+    // model) keeps the effort — its capabilities are unknown. The null "Agent
+    // default" effort always stands.
     case 'reconcileCodexEffort': {
       const effort = state.codex.reasoningEffort;
-      if (action.details !== null || effort === null) return state;
-      if ((CODEX_REASONING_EFFORTS as readonly string[]).includes(effort)) return state;
-      return { ...state, codex: { ...state.codex, reasoningEffort: 'high' } };
+      if (effort === null) return state;
+      if (action.details === null) {
+        if ((CODEX_REASONING_EFFORTS as readonly string[]).includes(effort)) return state;
+        return { ...state, codex: { ...state.codex, reasoningEffort: 'high' } };
+      }
+      const model = state.codex.model;
+      const detail =
+        model !== null ? action.details.find((entry) => entry.id === model) : undefined;
+      if (detail === undefined || detail.efforts.includes(effort)) return state;
+      const next =
+        detail.defaultEffort ??
+        (detail.efforts.includes('high') ? 'high' : (detail.efforts[0] ?? effort));
+      return { ...state, codex: { ...state.codex, reasoningEffort: next } };
     }
 
     case 'setCodexSandbox':

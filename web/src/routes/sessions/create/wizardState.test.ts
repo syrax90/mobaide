@@ -273,8 +273,8 @@ describe('wizardReducer', () => {
     expect(
       reduce([{ type: 'reconcileCodexEffort', details: null }], state).codex.reasoningEffort,
     ).toBe('high');
-    // An agent that advertises details provably accepts free-form efforts —
-    // the restored selection stands even when unadvertised (keep-selected).
+    // Details advertised but no model selected: nothing to check against —
+    // the restored value stands (free-form era proven by the details).
     expect(
       reduce(
         [
@@ -296,6 +296,38 @@ describe('wizardReducer', () => {
       reduce([{ type: 'reconcileCodexEffort', details: null }], agentDefault).codex
         .reasoningEffort,
     ).toBeNull();
+  });
+
+  it('reconciles a restored effort against the selected model catalog entry', () => {
+    // Same per-model re-default as setCodexModel, applied when the probe
+    // resolves after the restore: the catalog says the selected model cannot
+    // serve the effort, so keeping it would submit a value Codex rejects.
+    const restored = reduce([
+      { type: 'setCodexModel', model: 'gpt-5.6-luna' },
+      { type: 'setCodexReasoningEffort', effort: 'ultra' },
+    ]);
+    const details = [
+      { id: 'gpt-5.6-luna', efforts: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' },
+      { id: 'gpt-5.4', efforts: ['low', 'high'], defaultEffort: null },
+    ];
+
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details }], restored).codex.reasoningEffort,
+    ).toBe('medium');
+    // No catalog default → 'high' when advertised, else the first entry.
+    const onOther = reduce([{ type: 'setCodexModel', model: 'gpt-5.4' }], restored);
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details }], onOther).codex.reasoningEffort,
+    ).toBe('high');
+    // A still-supported effort and an unknown model both stand.
+    const supported = reduce([{ type: 'setCodexReasoningEffort', effort: 'xhigh' }], restored);
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details }], supported).codex.reasoningEffort,
+    ).toBe('xhigh');
+    const unknownModel = reduce([{ type: 'setCodexModel', model: 'mystery' }], restored);
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details }], unknownModel).codex.reasoningEffort,
+    ).toBe('ultra');
   });
 
   it('keeps the Agent-default (null) effort on any model switch', () => {

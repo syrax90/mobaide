@@ -185,3 +185,28 @@ async def test_get_version_reports_model_details_for_warm_codex_cache(
         ],
     }
     assert "model_details" not in cli["antigravity"]
+
+
+async def test_get_version_waits_for_a_pending_model_warmup(app, client) -> None:
+    """A probe landing mid-warmup must see the warmed caches, not the cold
+    ones — a cold response is indistinguishable from an old agent without
+    enumeration and would make clients reconcile persisted catalog efforts
+    away. The warm task here only releases after the request is already in
+    flight, so a handler that did not wait would answer with no ``models``."""
+    import asyncio
+
+    release = asyncio.Event()
+
+    async def _warm() -> None:
+        await release.wait()
+        app.state.codex_launcher._cached_models = ("gpt-5.6-sol",)
+
+    app.state.cli_models_warmup = asyncio.create_task(_warm())
+    request = asyncio.create_task(client.get("/api/version"))
+    await asyncio.sleep(0.05)
+    release.set()
+
+    response = await request
+    assert response.status_code == 200
+    codex = response.json()["capabilities"]["cli"]["codex"]
+    assert codex["models"] == ["gpt-5.6-sol"]

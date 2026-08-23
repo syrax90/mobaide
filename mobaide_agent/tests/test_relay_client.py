@@ -3865,6 +3865,35 @@ class TestProxyVersionCapabilities:
             },
         }
 
+    async def test_version_waits_for_a_pending_model_warmup(
+        self, client, mock_app_state,
+    ):
+        """Relay mirror of the direct handler's mid-warmup wait: the warm task
+        releases only after the proxy dispatch is already in flight, so a
+        branch that did not await it would answer with the cold cache."""
+        launcher = self._launcher(resolves=True)
+        mock_app_state.cli_launchers = {"codex": launcher}
+        release = asyncio.Event()
+
+        async def _warm() -> None:
+            await release.wait()
+            launcher.cached_models = ("gpt-5.6-sol",)
+
+        mock_app_state.cli_models_warmup = asyncio.create_task(_warm())
+        ws = AsyncMock()
+
+        request = asyncio.create_task(
+            client._dispatch_proxy("GET", "/api/version", None, None, ws),
+        )
+        await asyncio.sleep(0.05)
+        release.set()
+
+        result = await request
+        assert result["status"] == 200
+        assert result["body"]["capabilities"]["cli"]["codex"]["models"] == [
+            "gpt-5.6-sol",
+        ]
+
     async def test_capabilities_equal_shared_builder_locks_direct_relay_parity(
         self, client, mock_app_state,
     ):

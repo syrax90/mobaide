@@ -230,6 +230,42 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(model.codexReasoningEffort, "ultra")
     }
 
+    func testRefreshClearsStaleDetailsWhenALaterProbeOmitsThem() async {
+        // Agent restarted on an older build between probes: the retained
+        // catalog would keep offering efforts (e.g. "ultra") the current
+        // agent may reject, so a detail-less probe must clear it.
+        let model = await modelWithCodexDetails()
+        XCTAssertEqual(model.codexEfforts(for: "gpt-5.6-sol"), ["low", "medium", "ultra"])
+
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{"available":true}}}}
+        """#)
+        await model.refreshCliAvailability()
+
+        XCTAssertEqual(model.codexEfforts(for: "gpt-5.6-sol"), CreateSessionModel.reasoningEfforts)
+    }
+
+    func testRefreshReconcilesEffortAgainstSelectedModelCatalogEntry() async {
+        // Details advertised AND the selected model's entry omits the current
+        // effort: the catalog says the model cannot serve it, so the probe
+        // applies the same re-default setCodexModel uses on a switch.
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{
+           "available":true,
+           "model_details":[{"id":"gpt-5.6-luna","efforts":["low","medium","xhigh"],"default_effort":"medium"}]}}}}
+        """#)
+        let model = stubbedModel()
+        model.codexModel = "gpt-5.6-luna"
+        model.codexReasoningEffort = "ultra"
+
+        await model.refreshCliAvailability()
+
+        XCTAssertEqual(model.codexReasoningEffort, "medium")
+    }
+
     func testCodexEffortsFallBackToStaticListWithoutDetails() {
         let model = makeModel()
         XCTAssertEqual(model.codexEfforts(for: "gpt-5.6-sol"), CreateSessionModel.reasoningEfforts)

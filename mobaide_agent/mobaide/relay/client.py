@@ -28,6 +28,7 @@ import websockets
 from websockets.asyncio.client import ClientConnection
 
 from mobaide.core.cli_launcher import (
+    await_model_cache_warmup,
     build_cli_capabilities,
     CliAuthRequiredError,
     CliBinaryNotFoundError,
@@ -1298,6 +1299,12 @@ class RelayClient:
 
         if method == "GET" and path == "/api/version":
             manifest = self._latest_manifest
+            # Same bounded mid-warmup wait as the direct handler (see
+            # await_model_cache_warmup) so both transports advertise the same
+            # capabilities to a probe that lands right after agent start.
+            await await_model_cache_warmup(
+                getattr(self._app_state, "cli_models_warmup", None)
+            )
             return {
                 "status": 200,
                 "body": {

@@ -2641,6 +2641,79 @@ class CreateSessionViewModelTest {
     }
 
     @Test
+    fun refreshCliAvailability_selectedModelCatalogOmitsEffort_reconcilesToModelDefault() = runTest {
+        // Details advertised AND the selected model's entry omits the current
+        // effort: the catalog says the model cannot serve it, so the probe
+        // applies the same re-default setCodexModel uses on a switch.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.setCodexModel("gpt-5.6-luna")
+        vm.setCodexReasoningEffort("ultra")
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModelDetails = listOf(
+                CliModelDetail("gpt-5.6-luna", listOf("low", "medium", "xhigh"), "medium"),
+            ),
+        )
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        assertEquals("medium", vm.uiState.value.codexReasoningEffort)
+    }
+
+    @Test
+    fun prefsRestore_landingAfterProbe_reconcilesInsteadOfStompingTheClamp() = runTest {
+        // The DataStore reads race the ModePick probe: when the probe resolves
+        // first (no model_details -> pre-catalog agent), a late restore of a
+        // persisted catalog effort must pass through the same reconcile
+        // instead of writing "ultra" over the clamp and 422ing the create.
+        val fx = newFixture()
+        val gate = CompletableDeferred<CodexLaunchPrefs?>()
+        coEvery { fx.prefs.getLastUsedCodexOptions() } coAnswers { gate.await() }
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(codex = true)
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        gate.complete(
+            CodexLaunchPrefs(
+                model = null,
+                sandbox = "workspace-write",
+                approval = "on-request",
+                fullAuto = false,
+                reasoningEffort = "ultra",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals("high", vm.uiState.value.codexReasoningEffort)
+    }
+
+    @Test
+    fun prefsRestore_beforeProbe_keepsSavedEffortForRefreshToReconcile() = runTest {
+        // Probe not yet resolved at restore time: the saved value must be kept
+        // untouched (the agent may well advertise it) — the later probe owns
+        // the reconcile.
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedCodexOptions() } returns CodexLaunchPrefs(
+            model = null,
+            sandbox = "workspace-write",
+            approval = "on-request",
+            fullAuto = false,
+            reasoningEffort = "ultra",
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        assertEquals("ultra", vm.uiState.value.codexReasoningEffort)
+    }
+
+    @Test
     fun codexEffortsFor_advertisedModel_overridesStaticList() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
