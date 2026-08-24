@@ -166,6 +166,12 @@ policy promises no un-consented tracking:
   denied because it is an Ads tag, not an analytics rollout. **Decline**
   stores `denied` and nothing ever loads. Google's "one tag per page" rule is
   enforced by an injected-once flag.
+- **Withdrawal is one click too** (GDPR Art. 7(3)): the footer's "Cookie
+  settings" button — hidden until `site.js` arms the flow, same `can-copy`
+  contract as the copy buttons — reopens the banner regardless of the stored
+  choice. Declining after a prior Accept pushes `consent update: denied` to a
+  tag already running on the page and expires every `_gcl_*` cookie (both
+  domain spellings — gtag registers them on the registrable domain).
 - Because the tag is injected at runtime, the served HTML stays same-origin
   and inline-free — the two `test_marketing.py` self-containment guards still
   hold unchanged, and `TestConsentBanner` adds the reverse guard: the HTML must
@@ -290,18 +296,19 @@ this host — so both are asserted in `test_marketing.py` and `test_portal.py`.
 
 ## Weight budget
 
-Keep the page under **200 KB** all-inclusive (raw, before Caddy's gzip). It is
-currently ~194 KB, of which ~96 KB is the initial render — the four screenshots
-are `loading="lazy"` below the fold. Measure by summing the HTML plus every
-same-origin URL it references; the four WebP screenshots dominate, so that is
-where to look first if the budget is at risk.
+Keep the page under **200 KB** all-inclusive (raw, before Caddy's gzip).
+Measure by summing the HTML plus every same-origin URL it references (the
+screenshots are `loading="lazy"` below the fold, but they count).
 
-**Headroom is now ~1 KB**, the consent banner (markup + styles + the `site.js`
-consent module, ~5 KB across the three files) having spent most of what the
-10.8 KB App Store badge left. `gtag.js` itself is outside the budget by the
-measurement rule above — third-party, and loaded only after the visitor accepts
-the banner. The next asset of any size needs the screenshots re-encoded first —
-they are ~100 KB of the total on their own.
+**Measured 2026-08-24: ~220 KB — over budget.** Two findings from that
+measurement: the ~194 KB figure this section used to carry had gone stale —
+the page was already ~211 KB before the Ads consent banner landed — and the
+banner plus its withdrawal control then added ~9 KB across the HTML,
+`site.css` and `site.js`. (`gtag.js` itself is outside the budget by the
+measurement rule: third-party, and loaded only after the visitor accepts.)
+The four WebP screenshots are ~100 KB on their own and are the documented
+lever: re-encoding them is what brings the page back under 200 KB, and the
+next asset of any size needs that done first.
 
 The budget covers the **landing page only**. The `portal_base.html` pages ship
 none of the screenshots and no JavaScript whatsoever; they add only `portal.css`

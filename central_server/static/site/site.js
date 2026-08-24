@@ -372,6 +372,16 @@
 
   var googleTagInjected = false;
 
+  /* The official snippet's `function gtag(){dataLayer.push(arguments)}`,
+   * shared so the withdrawal path can queue commands too. gtag.js consumes
+   * Arguments objects specifically, so this must push `arguments` itself —
+   * never an array literal.
+   */
+  function gtagPush() {
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push(arguments);
+  }
+
   /* Injects gtag.js exactly once (Google's one-tag-per-page rule). Runs only
    * after an explicit Accept — nothing here may execute pre-consent, which is
    * what keeps the EU/ePrivacy side of this honest. The Consent Mode v2
@@ -391,22 +401,18 @@
     }
     googleTagInjected = true;
 
-    window.dataLayer = window.dataLayer || [];
-    function gtag() {
-      window.dataLayer.push(arguments);
-    }
-    gtag("consent", "default", {
+    gtagPush("consent", "default", {
       ad_storage: "denied",
       ad_user_data: "denied",
       ad_personalization: "denied",
       analytics_storage: "denied",
     });
-    gtag("consent", "update", {
+    gtagPush("consent", "update", {
       ad_storage: "granted",
       ad_user_data: "granted",
     });
-    gtag("js", new Date());
-    gtag("config", ADS_TAG_ID);
+    gtagPush("js", new Date());
+    gtagPush("config", ADS_TAG_ID);
 
     var script = document.createElement("script");
     script.async = true;
@@ -414,9 +420,36 @@
     document.head.appendChild(script);
   }
 
+  /* GDPR Art. 7(3): withdrawing consent must be as easy as giving it, so
+   * Decline is also the withdrawal path. A tag already running this page is
+   * told to stop via the consent API, and Google's `_gcl_*` cookies are
+   * expired outright — gtag writes them from script on this origin, so script
+   * can remove them. Both domain spellings are expired because gtag registers
+   * them on the registrable domain, not the host.
+   */
+  function withdrawGoogleTag() {
+    if (googleTagInjected) {
+      gtagPush("consent", "update", {
+        ad_storage: "denied",
+        ad_user_data: "denied",
+      });
+    }
+    var cookies = document.cookie.split(";");
+    for (var i = 0; i < cookies.length; i++) {
+      var name = cookies[i].split("=")[0].replace(/^\s+/, "");
+      if (name.indexOf("_gcl") === 0) {
+        document.cookie = name + "=; Max-Age=0; path=/";
+        document.cookie =
+          name + "=; Max-Age=0; path=/; domain=." + window.location.hostname;
+      }
+    }
+  }
+
   /* The banner ships with the `hidden` attribute and is revealed only when no
    * choice is stored — so a no-JS visitor, who can never load the tag, is
-   * never asked, and a returning visitor is not asked twice.
+   * never asked, and a returning visitor is not asked twice — or when the
+   * visitor reopens it from the footer's "Cookie settings" control, which is
+   * what makes a stored choice reversible on the site itself.
    */
   function setUpConsentBanner() {
     // The static assets ship identically to every environment, but the Ads
@@ -435,21 +468,14 @@
       return;
     }
 
-    var choice = readAdsConsent();
-    if (choice === "granted") {
-      loadGoogleTag();
-      return;
-    }
-    if (choice === "denied") {
-      return;
-    }
-
     var accept = banner.querySelector("[data-consent-accept]");
     var decline = banner.querySelector("[data-consent-decline]");
     if (!accept || !decline) {
       return;
     }
 
+    // Bound before the stored-choice branch: a visitor who already chose can
+    // reopen the banner from the footer and choose differently.
     accept.addEventListener("click", function () {
       storeAdsConsent("granted");
       banner.hidden = true;
@@ -458,8 +484,27 @@
     decline.addEventListener("click", function () {
       storeAdsConsent("denied");
       banner.hidden = true;
+      withdrawGoogleTag();
     });
 
+    var settings = document.querySelector("[data-consent-settings]");
+    if (settings) {
+      settings.addEventListener("click", function () {
+        banner.hidden = false;
+      });
+      // Only now, with the control wired, does the stylesheet reveal it —
+      // same contract as the copy buttons' `can-copy`.
+      document.documentElement.classList.add("has-consent-ui");
+    }
+
+    var choice = readAdsConsent();
+    if (choice === "granted") {
+      loadGoogleTag();
+      return;
+    }
+    if (choice === "denied") {
+      return;
+    }
     banner.hidden = false;
   }
 

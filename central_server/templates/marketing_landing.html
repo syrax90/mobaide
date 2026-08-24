@@ -496,6 +496,10 @@
          width="227" height="40" alt="Mobaide">
     <nav class="foot-nav" aria-label="Footer">
       <a href="/privacy.html">Privacy policy</a>
+      {# Reopens the consent banner so a stored choice can be reversed on the
+         site itself (GDPR Art. 7(3)). Hidden until site.js arms the consent
+         flow — on any non-production host the control would do nothing. #}
+      <button class="consent-settings" type="button" data-consent-settings>Cookie settings</button>
       <a href="/portal/delete-account-info">Account deletion</a>
       <a href="{{ app_origin }}/login">Sign in</a>
       <a href="https://github.com/syrax90/mobaide-community/discussions" rel="noopener">Community</a>
@@ -515,9 +519,10 @@
 </footer>
 
 {# Cookie-consent banner for the Google Ads tag. Ships `hidden`; site.js
-   reveals it only when no stored choice exists, wires the two buttons, and
-   injects gtag.js after Accept — so this document itself stays free of
-   inline and cross-origin script, exactly as constraint 1 above demands. #}
+   reveals it when no stored choice exists — or when the footer's "Cookie
+   settings" control reopens it — wires the two buttons, and injects gtag.js
+   after Accept — so this document itself stays free of inline and
+   cross-origin script, exactly as constraint 1 above demands. #}
 <aside class="consent" data-consent-banner hidden aria-label="Cookie consent">
   <p class="consent-text">
     May we use Google Ads cookies to measure which ads bring visitors

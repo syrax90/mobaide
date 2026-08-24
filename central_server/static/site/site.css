@@ -848,6 +848,30 @@ h1 {
   color: var(--accent);
 }
 
+/* Stays out of the document until site.js arms the consent flow and wires the
+   click handler (production hostname only) — everywhere else this would be a
+   visible control that silently does nothing, the same contract as
+   `.copy-btn`/`can-copy`. Styled to sit as one more footer-nav item. */
+.consent-settings {
+  display: none;
+}
+
+.has-consent-ui .consent-settings {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--text-muted);
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.has-consent-ui .consent-settings:hover {
+  color: var(--accent);
+}
+
 .disclaimer {
   margin: 0 0 10px;
   color: var(--gray);
@@ -931,9 +955,10 @@ h1 {
 
 /* ---------- consent banner ---------- */
 
-/* Ships with the `hidden` attribute; site.js reveals it only when no stored
-   consent choice exists. The visible state's `display: flex` would outrank
-   the UA's `[hidden]` rule, so the guard below restores it explicitly.
+/* Ships with the `hidden` attribute; site.js reveals it when no stored
+   consent choice exists, or when the footer's Cookie settings control reopens
+   it. The visible state's `display: flex` would outrank the UA's `[hidden]`
+   rule, so the guard below restores it explicitly.
 
    This is NOT the hidden-by-default state the accessibility invariants
    forbid: the reveal is a synchronous init() decision, not an animation. */

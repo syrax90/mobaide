@@ -342,10 +342,19 @@ class TestConsentBanner:
 
     async def test_banner_links_the_privacy_policy(self, landing) -> None:
         """Consent must be informed: the policy's Section 3.5 is where the
-        Google Ads cookie is actually described."""
+        Google Ads cookies are actually described."""
         match = _CONSENT_BANNER_RE.search(landing)
         assert match is not None
         assert 'href="/privacy.html"' in match.group(1)
+
+    async def test_footer_carries_the_withdrawal_control(self, landing) -> None:
+        """GDPR Art. 7(3): withdrawing must be as easy as the one-click
+        Accept, so the footer ships the "Cookie settings" reopener the policy's
+        Section 3.5 points visitors at. ``site.js`` reveals it only after
+        wiring it, so the markup's job is to exist with the hook."""
+        buttons = re.findall(r"<button\b[^>]*\bdata-consent-settings\b[^>]*>", landing)
+        assert len(buttons) == 1
+        assert 'type="button"' in buttons[0]
 
 
 class TestLandingSocialMetadata:
