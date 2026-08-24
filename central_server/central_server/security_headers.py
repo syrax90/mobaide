@@ -32,10 +32,12 @@ Two surfaces are deliberately not covered:
   ``API`` bucket. That fails closed: the strictest policy in the file, visibly
   broken rather than quietly permissive.
 
-The policies below are sized to what each surface actually loads, and no policy
-here names a third-party origin or grants ``'unsafe-inline'``. The Google and
-Apple sign-in buttons were the only reason one ever did; they live on the
-browser client now, whose policy is static and lives in the Caddy site block
+The policies below are sized to what each surface actually loads, and none
+grants ``'unsafe-inline'``. One policy names third-party origins: the landing
+page's, for the consent-gated Google Ads tag that ``static/site/site.js``
+injects only after the visitor accepts the cookie banner — the served HTML
+itself stays same-origin-only. The Google and Apple sign-in buttons live on
+the browser client, whose policy is static and lives in the Caddy site block
 instead (``deploy/prod/Caddyfile.*``), because Caddy cannot read this config.
 
 One constraint worth keeping in view: htmx injects its ``.htmx-indicator``
@@ -77,6 +79,37 @@ _CSP_REPORT_ONLY_HEADER = "Content-Security-Policy-Report-Only"
 # portal_base.html shell now loads no script at all.
 _SITE_CSP = (
     "default-src 'self'; "
+    "base-uri 'none'; "
+    "form-action 'none'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'"
+)
+
+# The landing page alone: `_SITE_CSP` widened with the origins Google's CSP
+# guide (https://developers.google.com/tag-platform/security/guides/csp) lists
+# for Ads conversion tracking + remarketing. site.js injects gtag.js only
+# after the visitor accepts the cookie banner, so the HTML still satisfies
+# `_SITE_CSP`; the header must nevertheless admit the post-consent loads. A
+# strict superset of a proven policy can only unblock, so it ships enforced
+# with no report-only soak — and must never be soaked off, for the same reason
+# `/` used to sit in `_PROVEN_SITE_PATHS`. (Google also lists per-country
+# `www.google.<tld>` hosts for img/connect — not enumerable in a static
+# header. site.js keeps `ad_personalization` denied, which is what stops gtag
+# from calling them; `www.google.com` carries the conversion path.)
+_LANDING_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' https://www.googletagmanager.com"
+    " https://www.googleadservices.com https://www.google.com"
+    " https://pagead2.googlesyndication.com"
+    " https://googleads.g.doubleclick.net; "
+    "img-src 'self' https://www.googletagmanager.com"
+    " https://googleads.g.doubleclick.net https://www.google.com"
+    " https://www.googleadservices.com"
+    " https://pagead2.googlesyndication.com; "
+    "connect-src 'self' https://pagead2.googlesyndication.com"
+    " https://www.googleadservices.com https://googleads.g.doubleclick.net"
+    " https://ad.doubleclick.net https://www.google.com; "
+    "frame-src https://www.googletagmanager.com; "
     "base-uri 'none'; "
     "form-action 'none'; "
     "object-src 'none'; "
@@ -128,17 +161,21 @@ _DENIED_FEATURES = "camera=(), microphone=(), geolocation=(), payment=(), usb=()
 # that have no use for the API.
 _BASELINE_PERMISSIONS_POLICY = f"{_DENIED_FEATURES}, identity-credentials-get=()"
 
+# `/` is deliberately absent: the landing page has its own `_LANDING_CSP`
+# bucket, matched ahead of these sets in `_headers_for()`.
 _SITE_PATHS = frozenset(
-    {"/", "/robots.txt", "/sitemap.xml", "/favicon.ico", "/privacy.html"}
+    {"/robots.txt", "/sitemap.xml", "/favicon.ico", "/privacy.html"}
 )
 
 # The subset of `_SITE_PATHS` that marketing/router.py already served in
-# production, so `CSP_REPORT_ONLY` deliberately cannot reach them. `/privacy.html`
-# is NOT one: legal/router.py set no security header at all before this
-# middleware, which makes its policy exactly as unproven as the portal's, and it
-# extends the same portal_base.html shell — the surface most likely to grow a
+# production, so `CSP_REPORT_ONLY` deliberately cannot reach them. `/` is
+# handled before this set is consulted — its widened `_LANDING_CSP` bucket is
+# always enforced, for the same already-proven reason. `/privacy.html` is NOT
+# one: legal/router.py set no security header at all before this middleware,
+# which makes its policy exactly as unproven as the portal's, and it extends
+# the same portal_base.html shell — the surface most likely to grow a
 # subresource. It soaks with the rest.
-_PROVEN_SITE_PATHS = frozenset({"/", "/robots.txt", "/sitemap.xml", "/favicon.ico"})
+_PROVEN_SITE_PATHS = frozenset({"/robots.txt", "/sitemap.xml", "/favicon.ico"})
 
 # FastAPI renders both from a cdn.jsdelivr.net bundle with an inline bootstrap
 # script, so any policy strict enough to be worth setting would break them, and
@@ -178,6 +215,7 @@ class SecurityHeadersMiddleware:
 
         # Resolved once per app, so the request path only chooses between
         # already-built tuples.
+        self._landing_enforced = bucket(_LANDING_CSP, _CSP_HEADER)
         self._site_enforced = bucket(_SITE_CSP, _CSP_HEADER)
         self._site_soakable = bucket(_SITE_CSP, soak_header)
         # One tuple for both surfaces: since the portal's sign-in and account
@@ -193,6 +231,8 @@ class SecurityHeadersMiddleware:
     def _headers_for(self, path: str) -> tuple[tuple[str, str], ...]:
         # Prefix tests are anchored on the separator: a bare `startswith`
         # would also claim a future `/portalling` route.
+        if path == "/":
+            return self._landing_enforced
         if path in _PROVEN_SITE_PATHS:
             return self._site_enforced
         if path in _SITE_PATHS:

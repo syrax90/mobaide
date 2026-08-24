@@ -342,10 +342,178 @@
     observer.observe(root);
   }
 
+
+  /* ---- Google Ads consent banner ---- */
+
+  // Public Ads tag id — the same value every visitor's DOM would show, so it
+  // ships in source rather than through template plumbing.
+  var ADS_TAG_ID = "AW-18403068615";
+  var ADS_CONSENT_KEY = "mobaide-ads-consent";
+
+  /* localStorage can throw on access (private windows, blocked site data), so
+   * both accessors degrade to "no stored choice": the tag stays unloaded and
+   * the banner simply asks again on the next visit.
+   */
+  function readAdsConsent() {
+    try {
+      return window.localStorage.getItem(ADS_CONSENT_KEY);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function storeAdsConsent(value) {
+    try {
+      window.localStorage.setItem(ADS_CONSENT_KEY, value);
+    } catch (err) {
+      // The choice still governs this visit; only the memory of it is lost.
+    }
+  }
+
+  var googleTagInjected = false;
+
+  /* The official snippet's `function gtag(){dataLayer.push(arguments)}`,
+   * shared so the withdrawal path can queue commands too. gtag.js consumes
+   * Arguments objects specifically, so this must push `arguments` itself —
+   * never an array literal.
+   */
+  function gtagPush() {
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push(arguments);
+  }
+
+  /* Injects gtag.js exactly once (Google's one-tag-per-page rule). Runs only
+   * after an explicit Accept — nothing here may execute pre-consent, which is
+   * what keeps the EU/ePrivacy side of this honest. The Consent Mode v2
+   * default-denied → update-granted pair is queued ahead of the script so the
+   * tag boots already knowing consent state. Only the two measurement signals
+   * are granted: the banner promises measurement, not remarketing, so
+   * ad_personalization stays denied (analytics_storage too — this is an Ads
+   * conversion tag, not an analytics rollout). Denying personalization is
+   * also what keeps the tag off the per-country `www.google.<tld>`
+   * remarketing endpoints, which the landing page's static CSP cannot
+   * enumerate — granting it makes the browser log a CSP violation per visit
+   * for most EU geographies.
+   */
+  function loadGoogleTag() {
+    if (googleTagInjected) {
+      return;
+    }
+    googleTagInjected = true;
+
+    gtagPush("consent", "default", {
+      ad_storage: "denied",
+      ad_user_data: "denied",
+      ad_personalization: "denied",
+      analytics_storage: "denied",
+    });
+    gtagPush("consent", "update", {
+      ad_storage: "granted",
+      ad_user_data: "granted",
+    });
+    gtagPush("js", new Date());
+    gtagPush("config", ADS_TAG_ID);
+
+    var script = document.createElement("script");
+    script.async = true;
+    script.src = "https://www.googletagmanager.com/gtag/js?id=" + ADS_TAG_ID;
+    document.head.appendChild(script);
+  }
+
+  /* GDPR Art. 7(3): withdrawing consent must be as easy as giving it, so
+   * Decline is also the withdrawal path. A tag already running this page is
+   * told to stop via the consent API, and Google's `_gcl_*` cookies are
+   * expired outright — gtag writes them from script on this origin, so script
+   * can remove them. Both domain spellings are expired because gtag registers
+   * them on the registrable domain, not the host.
+   */
+  function withdrawGoogleTag() {
+    if (googleTagInjected) {
+      gtagPush("consent", "update", {
+        ad_storage: "denied",
+        ad_user_data: "denied",
+      });
+    }
+    var cookies = document.cookie.split(";");
+    for (var i = 0; i < cookies.length; i++) {
+      var name = cookies[i].split("=")[0].replace(/^\s+/, "");
+      if (name.indexOf("_gcl") === 0) {
+        document.cookie = name + "=; Max-Age=0; path=/";
+        document.cookie =
+          name + "=; Max-Age=0; path=/; domain=." + window.location.hostname;
+      }
+    }
+  }
+
+  /* The banner ships with the `hidden` attribute and is revealed only when no
+   * choice is stored — so a no-JS visitor, who can never load the tag, is
+   * never asked, and a returning visitor is not asked twice — or when the
+   * visitor reopens it from the footer's "Cookie settings" control, which is
+   * what makes a stored choice reversible on the site itself.
+   */
+  function setUpConsentBanner() {
+    // The static assets ship identically to every environment, but the Ads
+    // property is production-only: an Accept on localhost or a staging deploy
+    // would feed that environment's page and click signals into live tag
+    // diagnostics and campaign data. Gating the whole flow here — not just
+    // the injection — also spares those visitors a banner whose consent
+    // would gate nothing. For local verification, launch Chrome with
+    // --host-resolver-rules="MAP mobaide.com 127.0.0.1" and browse
+    // http://mobaide.com:<port>/ — location.hostname never carries the port.
+    if (window.location.hostname !== "mobaide.com") {
+      return;
+    }
+    var banner = document.querySelector("[data-consent-banner]");
+    if (!banner) {
+      return;
+    }
+
+    var accept = banner.querySelector("[data-consent-accept]");
+    var decline = banner.querySelector("[data-consent-decline]");
+    if (!accept || !decline) {
+      return;
+    }
+
+    // Bound before the stored-choice branch: a visitor who already chose can
+    // reopen the banner from the footer and choose differently.
+    accept.addEventListener("click", function () {
+      storeAdsConsent("granted");
+      banner.hidden = true;
+      loadGoogleTag();
+    });
+    decline.addEventListener("click", function () {
+      storeAdsConsent("denied");
+      banner.hidden = true;
+      withdrawGoogleTag();
+    });
+
+    var settings = document.querySelector("[data-consent-settings]");
+    if (settings) {
+      settings.addEventListener("click", function () {
+        banner.hidden = false;
+      });
+      // Only now, with the control wired, does the stylesheet reveal it —
+      // same contract as the copy buttons' `can-copy`.
+      document.documentElement.classList.add("has-consent-ui");
+    }
+
+    var choice = readAdsConsent();
+    if (choice === "granted") {
+      loadGoogleTag();
+      return;
+    }
+    if (choice === "denied") {
+      return;
+    }
+    banner.hidden = false;
+  }
+
   function init() {
     // Ahead of the reduced-motion return below: copying is not motion, and a
     // visitor who asked for less of it still needs the button to work.
     setUpCopyButtons();
+    // Likewise not motion — and consent must not depend on animation settings.
+    setUpConsentBanner();
 
     if (reduceMotion) {
       // The `.js` class has already armed the hidden states, so hand the

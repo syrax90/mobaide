@@ -1,7 +1,7 @@
 # Privacy Policy for Mobaide
 
 **Effective date:** 22 May 2026
-**Last updated:** 15 August 2026
+**Last updated:** 24 August 2026
 
 This Privacy Policy describes how the Mobaide mobile application ("**Mobaide**", "**the app**", "**we**", "**our**") collects, uses, stores, and discloses information about you ("**you**", "**user**") when you install and use the app on an Android or iOS device, when you use the browser client at `app.mobaide.com`, and when you use the supporting Mobaide central server hosted at `api.mobaide.com`.
 
@@ -111,7 +111,9 @@ In the **web application** the equivalents live in your browser's own storage fo
 
 Clearing site data for `app.mobaide.com` in your browser removes all of the above and ends the session in that browser; use **Sign out** if you also want the session revoked on our servers.
 
-The Mobaide website (`mobaide.com`) sets one further cookie, `portal_csrf`, on the account-deletion pages: a random anti-forgery token carrying no account or tracking information, discarded when you close the browser.
+The Mobaide website (`mobaide.com`) sets one cookie of its own, `portal_csrf`, on the account-deletion pages: a random anti-forgery token carrying no account or tracking information, discarded when you close the browser.
+
+The website's landing page additionally asks you — through a consent banner — whether we may enable **Google Ads conversion measurement**, which tells us when a Google ad brought a visitor to the site. **Nothing is loaded from Google, and no advertising cookie is set, unless you press "Accept"** on that banner. If you do accept, Google's `gtag.js` script loads and Google LLC sets its advertising cookies (such as `_gcl_au`) for `mobaide.com`; if you decline — or simply ignore the banner — no Google code runs at all. Your Accept/Decline choice itself is stored only in your browser's local storage for `mobaide.com` and is never sent to us. Withdrawing consent is as easy as giving it: choose **"Cookie settings"** in the website's footer to reopen the banner, and press **Decline** — this revokes the consent signal and immediately deletes Google's `_gcl_*` advertising cookies from your browser. Alternatively, clearing your browser's site data for `mobaide.com` has the same effect, and the banner will then ask again on your next visit. This applies to the `mobaide.com` landing page only — the mobile apps, the `app.mobaide.com` web application, and the privacy and account-deletion pages carry no advertising or analytics code.
 
 ### 3.6 In-app support requests
 
@@ -177,8 +179,9 @@ All three are optional: declining the camera leaves the device-code and manual p
 | Operational logs (connection events, error events) without payload content | Account ID, agent ID, timestamps, IP address of the requesting connection | Art. 6(1)(f) — legitimate interest in operating, debugging, and securing the service. |
 | Detect abuse / brute-force login attempts (rate limiting) | Email, IP address, timestamp | Art. 6(1)(f) — legitimate interest in security. |
 | Respond to your in-app support requests | App version, device model, device UUID, and — if you are signed in — your account email, together with the message you write | Art. 6(1)(f) — legitimate interest in providing user support and troubleshooting the app. |
+| Measure which Google Ads campaigns bring visitors to the website (the `mobaide.com` landing page only, and only after you accept its cookie banner) | Google Ads cookie identifiers and ad-click / conversion events, processed by Google (see Section 3.5) | Art. 6(1)(a) — consent. You are free to decline the banner, and you can withdraw consent at any time as described in Section 3.5. |
 
-We do **not** use your data for advertising, profiling, automated decision-making with legal effect, or training machine-learning models.
+We do **not** use your account or app data for advertising, profiling, automated decision-making with legal effect, or training machine-learning models. The one advertising-related processing anywhere in Mobaide is the consent-gated Google Ads conversion measurement on the website's landing page described in Section 3.5 — it runs only if you accept the banner there, and it never involves your Mobaide account data.
 
 ---
 
@@ -189,6 +192,7 @@ We do **not** sell, rent, or trade your personal data. Your information is share
 - **Hosting / infrastructure providers** for the central server (located in the EU/EEA). They process data only on our instructions and under a data-processing agreement.
 - **Google LLC** — only when you choose "Sign in with Google". Google verifies your Google ID token; we receive your email and your Google `sub` from Google's identity service. Google's processing is governed by [Google's Privacy Policy](https://policies.google.com/privacy).
 - **Google Play services** — for distributing the Android app, delivering in-app updates, and providing the GMS Code Scanner module used for QR pairing. Google Play's processing of installation telemetry is governed by [Google Play's terms](https://play.google.com/about/play-terms/).
+- **Google LLC (Google Ads)** — only if you accept the cookie banner on the `mobaide.com` landing page. Google then receives the ad-click and conversion events and the cookie identifiers described in Section 3.5, to measure which Google Ads campaigns bring visitors to the site. Google's processing is governed by [Google's Privacy Policy](https://policies.google.com/privacy). Decline the banner and nothing is shared with Google Ads at all.
 - **Apple Inc.** — in three distinct roles. (a) **Sign in with Apple**, only if you choose it, and available both in the iOS app and in the `app.mobaide.com` web application: Apple verifies your Apple identity token, and we receive your Apple `sub` and the email address you agreed to share, which may be one of Apple's private-relay addresses. The remaining two roles are iOS-only. (b) **Apple Push Notification service**, which carries the "a session is waiting for your input" alerts to your iPhone. Apple receives, and holds until delivery, the whole alert we send — which is a short headline plus one line naming the session, using the session's title where it has one (a coding CLI often sets that title to a few words about what it is currently doing) or otherwise your project's name, together with the session and agent identifiers. This is the one place where something derived from your session leaves our relay in stored form, and it is the price of an alert that is useful on a lock screen; the terminal traffic itself is still only relayed and discarded as described in Section 3.4. Switching notifications off in iOS Settings suppresses the alert on your screen but does not stop it being sent. Signing out from Settings asks us to delete the push address, but that request is best-effort — if it does not reach us, revoking the device or requesting account deletion is what reliably stops the alerts — the latter takes effect immediately, ahead of the 14-day grace window. (c) **App Store** distribution of the iOS app. Apple's processing is governed by [Apple's Privacy Policy](https://www.apple.com/legal/privacy/).
 - **Email-delivery providers** (SMTP transactional email) that send our verification, password-reset, and security-notification emails, and that carry the support emails you send us through the in-app "Email support" action. These providers process the recipient address and the email body strictly to deliver the message.
 - **Anthropic** — when you type a prompt that is routed through your own agent to Claude Code. The content you send to Claude is processed by Anthropic according to [Anthropic's Privacy Policy](https://www.anthropic.com/legal/privacy). Mobaide is not a party to your Anthropic relationship; we merely relay the bytes.
@@ -196,7 +200,7 @@ We do **not** sell, rent, or trade your personal data. Your information is share
 - **GitHub, Inc.** — when you tap "Ask the community", the app opens our public GitHub Discussions page in your browser. The app does not send GitHub any of your data; anything you choose to post there is provided by you and processed by GitHub under [GitHub's Privacy Statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
 - **Public authorities**, if compelled by a valid legal order and only to the extent legally required.
 
-We do **not** share your data with advertisers, data brokers, or analytics aggregators.
+Beyond the consent-gated Google Ads measurement on the website described in Sections 3.5 and 6, we do **not** share your data with advertisers, data brokers, or analytics aggregators.
 
 ---
 
@@ -219,6 +223,7 @@ Some of the third parties listed in Section 6 (in particular Google, Apple, Anth
 | Email-verification / password-reset OTP token hashes | Active code: up to its TTL (15 min for email verification, 30 min for password reset). Consumed code: at most 24 hours, then permanently deleted. |
 | Prompt templates | Until you delete them, or — if you delete your account — purged together with your account: immediately for *Immediate* deletion, or at the end of the 14-day grace window for *Scheduled* deletion. |
 | Operational logs (connection-event level, no payload) | Up to 90 days, then permanently deleted. |
+| Google Ads cookies on `mobaide.com` (set only after you accept the website's cookie banner — see Section 3.5) | Set by Google in your browser with lifetimes Google determines — typically up to 90 days for the `_gcl_*` cookies. You can remove them at any time — pressing **Decline** after reopening the banner via the website footer's "Cookie settings" deletes them immediately, as does clearing your browser's site data for `mobaide.com`; your Accept/Decline choice itself stays in your browser's local storage until you change or clear it. The ad-click and conversion events Google receives are retained by Google under [Google's Privacy Policy](https://policies.google.com/privacy) — we store none of that data on our servers. |
 | Deletion audit record (account identifier, timestamps, request source and outcome) | Retained indefinitely as a minimal proof-of-deletion record, in order to demonstrate compliance with GDPR Art. 17 ("right to erasure"). |
 | Support correspondence (the email you send to our support address and our replies) | Kept only as long as necessary to handle your request and for a reasonable period afterwards, then deleted. |
 | Server-side backups | Rolled over within 30 days. |

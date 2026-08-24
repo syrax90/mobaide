@@ -11,9 +11,12 @@ Two of these can only fail silently in a browser console, which is why they
 are pinned as exact strings rather than substring checks:
 
 - the ``SITE`` policy has to stay byte-identical to the one
-  ``marketing/router.py`` set per response before this middleware existed
-  (``test_marketing.EXPECTED_CSP``) — a global policy that quietly loosened it
-  would undo what already ships;
+  ``marketing/router.py`` set per response before this middleware existed —
+  a global policy that quietly loosened it would undo what already ships. The
+  one sanctioned widening is ``LANDING``, scoped to ``/`` alone for the
+  consent-gated Google Ads tag (byte-identical to
+  ``test_marketing.EXPECTED_CSP``); the crawler files and ``/privacy.html``
+  must keep the strict ``SITE`` string, which is what the matrix below pins;
 - every served template has to stay free of inline ``<script>``, ``on*=``,
   ``hx-on:`` and ``style=``, because ``script-src 'self'`` / ``style-src 'self'``
   drop them with no server-side symptom at all.
@@ -43,11 +46,32 @@ from central_server.config import CentralServerConfig
 from central_server.security_headers import SecurityHeadersMiddleware
 from central_server.templates_dir import resolve_templates_dir
 
-# Byte-identical to ``test_marketing.EXPECTED_CSP`` on purpose — see the module
-# docstring. Keep the two in sync by changing neither.
 SITE_CSP = (
     "default-src 'self'; base-uri 'none'; form-action 'none'; "
     "object-src 'none'; frame-ancestors 'none'"
+)
+
+# Byte-identical to ``security_headers._LANDING_CSP`` and to
+# ``test_marketing.EXPECTED_CSP`` on purpose — see the module docstring. Keep
+# the three in sync by changing none of them.
+LANDING_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' https://www.googletagmanager.com"
+    " https://www.googleadservices.com https://www.google.com"
+    " https://pagead2.googlesyndication.com"
+    " https://googleads.g.doubleclick.net; "
+    "img-src 'self' https://www.googletagmanager.com"
+    " https://googleads.g.doubleclick.net https://www.google.com"
+    " https://www.googleadservices.com"
+    " https://pagead2.googlesyndication.com; "
+    "connect-src 'self' https://pagead2.googlesyndication.com"
+    " https://www.googleadservices.com https://googleads.g.doubleclick.net"
+    " https://ad.doubleclick.net https://www.google.com; "
+    "frame-src https://www.googletagmanager.com; "
+    "base-uri 'none'; "
+    "form-action 'none'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'"
 )
 
 API_CSP = (
@@ -92,7 +116,7 @@ RETIRED_FEATURE_NAMES = ("interest-cohort", "browsing-topics")
 # ``/portal/login`` is gone; ``/portal/delete-account-info`` is the surviving
 # anonymous page and takes the same bucket.
 CSP_BY_PATH = (
-    ("/", SITE_CSP),
+    ("/", LANDING_CSP),
     ("/privacy.html", SITE_CSP),
     ("/robots.txt", SITE_CSP),
     ("/sitemap.xml", SITE_CSP),
@@ -410,14 +434,21 @@ class TestReportOnlyMode:
         assert response.headers["Content-Security-Policy-Report-Only"] == policy
         assert "Content-Security-Policy" not in response.headers
 
-    async def test_the_site_bucket_stays_enforced(self, client) -> None:
-        """SITE already shipped enforced in production, from
+    @pytest.mark.parametrize(
+        "path,policy", (("/", LANDING_CSP), ("/robots.txt", SITE_CSP))
+    )
+    async def test_the_proven_buckets_stay_enforced(
+        self, client, path, policy
+    ) -> None:
+        """These surfaces already shipped enforced in production, from
         ``marketing/router.py``, before this middleware existed. A soak is for
         a policy that has never been enforced, so the flag must not de-enforce
-        a live one for the length of a soak deploy — SITE keeps the enforcing
-        header even while PORTAL/DASHBOARD/API swap to report-only."""
-        response = await client.get("/")
-        assert response.headers["Content-Security-Policy"] == SITE_CSP
+        a live one for the length of a soak deploy — they keep the enforcing
+        header even while PORTAL/DASHBOARD/API swap to report-only. LANDING
+        needs no soak of its own either: it is a strict superset of the proven
+        SITE policy, so enforcing it can only unblock."""
+        response = await client.get(path)
+        assert response.headers["Content-Security-Policy"] == policy
         assert "Content-Security-Policy-Report-Only" not in response.headers
 
     async def test_the_flag_does_not_reach_the_other_two_headers(
