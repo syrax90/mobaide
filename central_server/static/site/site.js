@@ -342,10 +342,122 @@
     observer.observe(root);
   }
 
+
+  /* ---- Google Ads consent banner ---- */
+
+  // Public Ads tag id — the same value every visitor's DOM would show, so it
+  // ships in source rather than through template plumbing.
+  var ADS_TAG_ID = "AW-18403068615";
+  var ADS_CONSENT_KEY = "mobaide-ads-consent";
+
+  /* localStorage can throw on access (private windows, blocked site data), so
+   * both accessors degrade to "no stored choice": the tag stays unloaded and
+   * the banner simply asks again on the next visit.
+   */
+  function readAdsConsent() {
+    try {
+      return window.localStorage.getItem(ADS_CONSENT_KEY);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function storeAdsConsent(value) {
+    try {
+      window.localStorage.setItem(ADS_CONSENT_KEY, value);
+    } catch (err) {
+      // The choice still governs this visit; only the memory of it is lost.
+    }
+  }
+
+  var googleTagInjected = false;
+
+  /* Injects gtag.js exactly once (Google's one-tag-per-page rule). Runs only
+   * after an explicit Accept — nothing here may execute pre-consent, which is
+   * what keeps the EU/ePrivacy side of this honest. The Consent Mode v2
+   * default-denied → update-granted pair is queued ahead of the script so the
+   * tag boots already knowing consent state. Only the two measurement signals
+   * are granted: the banner promises measurement, not remarketing, so
+   * ad_personalization stays denied (analytics_storage too — this is an Ads
+   * conversion tag, not an analytics rollout). Denying personalization is
+   * also what keeps the tag off the per-country `www.google.<tld>`
+   * remarketing endpoints, which the landing page's static CSP cannot
+   * enumerate — granting it makes the browser log a CSP violation per visit
+   * for most EU geographies.
+   */
+  function loadGoogleTag() {
+    if (googleTagInjected) {
+      return;
+    }
+    googleTagInjected = true;
+
+    window.dataLayer = window.dataLayer || [];
+    function gtag() {
+      window.dataLayer.push(arguments);
+    }
+    gtag("consent", "default", {
+      ad_storage: "denied",
+      ad_user_data: "denied",
+      ad_personalization: "denied",
+      analytics_storage: "denied",
+    });
+    gtag("consent", "update", {
+      ad_storage: "granted",
+      ad_user_data: "granted",
+    });
+    gtag("js", new Date());
+    gtag("config", ADS_TAG_ID);
+
+    var script = document.createElement("script");
+    script.async = true;
+    script.src = "https://www.googletagmanager.com/gtag/js?id=" + ADS_TAG_ID;
+    document.head.appendChild(script);
+  }
+
+  /* The banner ships with the `hidden` attribute and is revealed only when no
+   * choice is stored — so a no-JS visitor, who can never load the tag, is
+   * never asked, and a returning visitor is not asked twice.
+   */
+  function setUpConsentBanner() {
+    var banner = document.querySelector("[data-consent-banner]");
+    if (!banner) {
+      return;
+    }
+
+    var choice = readAdsConsent();
+    if (choice === "granted") {
+      loadGoogleTag();
+      return;
+    }
+    if (choice === "denied") {
+      return;
+    }
+
+    var accept = banner.querySelector("[data-consent-accept]");
+    var decline = banner.querySelector("[data-consent-decline]");
+    if (!accept || !decline) {
+      return;
+    }
+
+    accept.addEventListener("click", function () {
+      storeAdsConsent("granted");
+      banner.hidden = true;
+      loadGoogleTag();
+    });
+    decline.addEventListener("click", function () {
+      storeAdsConsent("denied");
+      banner.hidden = true;
+    });
+
+    banner.hidden = false;
+  }
+
   function init() {
     // Ahead of the reduced-motion return below: copying is not motion, and a
     // visitor who asked for less of it still needs the button to work.
     setUpCopyButtons();
+    // Likewise not motion — and consent must not depend on animation settings.
+    setUpConsentBanner();
 
     if (reduceMotion) {
       // The `.js` class has already armed the hidden states, so hand the

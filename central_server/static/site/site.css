@@ -929,6 +929,61 @@ h1 {
   }
 }
 
+/* ---------- consent banner ---------- */
+
+/* Ships with the `hidden` attribute; site.js reveals it only when no stored
+   consent choice exists. The visible state's `display: flex` would outrank
+   the UA's `[hidden]` rule, so the guard below restores it explicitly.
+
+   This is NOT the hidden-by-default state the accessibility invariants
+   forbid: the reveal is a synchronous init() decision, not an animation. */
+.consent {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px 24px;
+  padding: 14px clamp(16px, 4vw, 40px);
+  background: var(--surface);
+  /* Decorative brand rail, not a control boundary — the buttons carry their
+     own affordances, so WCAG 1.4.11's 3:1 does not apply to this edge. */
+  box-shadow: inset 0 2px 0 0 var(--brand-2);
+}
+
+.consent[hidden] {
+  display: none;
+}
+
+.consent-text {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.875rem;
+  max-width: 62ch;
+}
+
+.consent-text a {
+  color: var(--accent);
+}
+
+.consent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+/* .btn / .btn-ghost were written for <a>; on a <button> the UA font, border
+   and cursor must be reset to match. */
+.consent-btn {
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 900px) {

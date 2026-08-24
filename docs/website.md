@@ -37,7 +37,7 @@ ships its own copy of the Departure Mono woff2 + OFL under `web/public/fonts/`
 | `central_server/static/site/portal.css` | Additions `site.css` lacks: forms, alerts, tables, choice fieldsets, legal-doc layout. Loaded **after** `site.css`. Declares no tokens and no `@font-face`. |
 | `central_server/templates/portal_base.html` | Shell for the static pages — loads both sheets, carries the shared chrome markup, and loads **no script at all**. |
 | `central_server/static/style.css` | **Admin dashboard only.** Light sheet (`--primary: #0d6efd`, `--radius: 6px`), not part of this design system. |
-| `central_server/static/site/site.js` | Reveal-on-scroll, hero typewriter, and the install-command copy buttons. Landing page only — `portal_base.html` deliberately does not load it. |
+| `central_server/static/site/site.js` | Reveal-on-scroll, hero typewriter, the install-command copy buttons, and the cookie-consent banner with its post-consent Google Ads gtag.js loader. Landing page only — `portal_base.html` deliberately does not load it. |
 | `central_server/static/site/img/`, `fonts/` | Assets — see *Regenerating assets*. |
 | `central_server/tests/test_marketing.py` | Route, header, and copy-accuracy tests. |
 | `central_server/tests/test_portal_assets.py` | Static-page asset stamping + the `portal.css` invariants. |
@@ -90,7 +90,8 @@ rationale as `/privacy.html`) and the two crawler/favicon TTLs.
 
 Everything else is set site-wide by
 `central_server/central_server/security_headers.py`, which serves this router's
-paths — `/`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico`, plus `/privacy.html`:
+paths. `/robots.txt`, `/sitemap.xml`, `/favicon.ico` and `/privacy.html` get the
+strict site policy:
 
 ```
 Content-Security-Policy: default-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'
@@ -101,25 +102,34 @@ Cross-Origin-Opener-Policy: same-origin-allow-popups
 Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), identity-credentials-get=()
 ```
 
-The first three are the policy the router used to attach per response. The last
-three the router never set — `X-Frame-Options` has only ever come from the
-middleware — so they are site-wide additions, and their values and per-surface
-variants live under "Security response headers" in
+The landing page (`/`) alone takes `_LANDING_CSP` instead: the same policy
+widened with `script-src`, `img-src`, `connect-src` and `frame-src` lists naming
+the origins [Google's CSP guide](https://developers.google.com/tag-platform/security/guides/csp)
+documents for Ads conversion tracking — see "The consent-gated Google Ads tag"
+below for why that widening exists and what keeps it honest.
+
+The first three headers are the policy the router used to attach per response.
+The last three the router never set — `X-Frame-Options` has only ever come from
+the middleware — so they are site-wide additions, and their values and
+per-surface variants live under "Security response headers" in
 [`docs/deployment.md`](deployment.md).
 
-**The CSP above must not be loosened**, and on the four marketing paths it is the
-one thing `CSP_REPORT_ONLY` cannot de-enforce — they already ran it enforced in
-production, so a soak has nothing to learn from them. (`/privacy.html` shares the
-policy but not that exemption: it carried no security header before the
-middleware, so it soaks like any other new surface.) It is the strictest of the
-four policies the middleware emits, and the landing page satisfies it with no
-relaxation at all:
-its CSS and JS are external same-origin files, its icons are inline `<svg>`
-markup rather than `data:` URIs, its font is same-origin, and the JSON-LD block
-is a data block CSP does not treat as executable script. The tests in
-`central_server/tests/test_marketing.py` pin the exact header values and scan the
-rendered page for inline `<script>` and `style=`; they are what stops a copy edit
-from quietly needing `'unsafe-inline'`.
+**Neither CSP may be loosened further**, and on the four marketing paths the
+policy is the one thing `CSP_REPORT_ONLY` cannot de-enforce — the three crawler
+files already ran theirs enforced in production, and the landing policy is a
+strict superset of one that did, so enforcing it can only unblock and a soak has
+nothing to learn from any of them. (`/privacy.html` shares the strict policy but
+not that exemption: it carried no security header before the middleware, so it
+soaks like any other new surface.) The rendered landing page still satisfies the
+strict site policy with no relaxation at all: its CSS and JS are external
+same-origin files, its icons are inline `<svg>` markup rather than `data:` URIs,
+its font is same-origin, and the JSON-LD block is a data block CSP does not
+treat as executable script. The Google origins exist only for what `site.js`
+injects after the visitor accepts the cookie banner — the HTML itself must never
+reference them, and `test_marketing.TestConsentBanner` fails the build if it
+does. The tests in `central_server/tests/test_marketing.py` pin the exact header
+values and scan the rendered page for inline `<script>` and `style=`; they are
+what stops a copy edit from quietly needing `'unsafe-inline'`.
 
 The `portal_base.html` pages and the dashboard get their own policy — see the
 per-surface table under "Security response headers" in
@@ -127,6 +137,45 @@ per-surface table under "Security response headers" in
 this repo contains an inline `<script>`, an `onclick=` or an `hx-on:` any more:
 the dashboard's behaviour lives in `static/dashboard.js`, and the three static
 pages need no behaviour at all.
+
+## The consent-gated Google Ads tag
+
+The landing page carries a Google Ads conversion tag (`AW-18403068615`), gated
+behind a cookie-consent banner because the site is EU-hosted and the privacy
+policy promises no un-consented tracking:
+
+- The banner is static markup at the bottom of `marketing_landing.html`,
+  shipped with the `hidden` attribute. `site.js` reveals it only when
+  `localStorage["mobaide-ads-consent"]` holds no choice, so a no-JS visitor —
+  who can never load the tag — is never asked, and a returning visitor is not
+  asked twice.
+- **Accept** stores `granted` and injects
+  `https://www.googletagmanager.com/gtag/js?id=AW-18403068615` with a Consent
+  Mode v2 default-denied → update-granted pair queued ahead of it. Only
+  `ad_storage` and `ad_user_data` are ever granted: the banner promises
+  measurement, so `ad_personalization` stays denied — which is also what keeps
+  gtag off the per-country `www.google.<tld>` remarketing endpoints no static
+  CSP can enumerate (verified live: granting it fires a CSP-blocked
+  `www.google.cz/pagead/1p-user-list` ping) — and `analytics_storage` stays
+  denied because it is an Ads tag, not an analytics rollout. **Decline**
+  stores `denied` and nothing ever loads. Google's "one tag per page" rule is
+  enforced by an injected-once flag.
+- Because the tag is injected at runtime, the served HTML stays same-origin
+  and inline-free — the two `test_marketing.py` self-containment guards still
+  hold unchanged, and `TestConsentBanner` adds the reverse guard: the HTML must
+  never reference `googletagmanager` itself, or the consent gate is bypassed.
+- The only server-side accommodation is `_LANDING_CSP` in
+  `security_headers.py`, scoped to `/` alone; `/privacy.html` and the crawler
+  files keep the strict policy (pinned by `test_security_headers.CSP_BY_PATH`).
+- The banner's disclosure lives in the privacy policy's Section 3.5 — the
+  banner links it, and `central_server/legal/privacy.md` must stay in sync
+  with what the tag actually does (cookies only after Accept, choice stored in
+  local storage, withdrawal by clearing site data).
+
+Changing the tag id means changing `ADS_TAG_ID` in `site.js` and nothing else.
+Removing the tag means removing the banner, the `site.js` module, the
+`_LANDING_CSP` bucket, and the privacy-policy passages together — each is
+load-bearing for the others.
 
 `/robots.txt` disallows only `/api/` and `/portal/`, with one carve-out: an
 `Allow: /portal/delete-account-info` line **emitted before the disallows**. That
@@ -241,9 +290,12 @@ are `loading="lazy"` below the fold. Measure by summing the HTML plus every
 same-origin URL it references; the four WebP screenshots dominate, so that is
 where to look first if the budget is at risk.
 
-**Headroom is now ~6 KB**, the 10.8 KB App Store badge having spent half of
-what was left. The next asset of any size needs the screenshots re-encoded
-first — they are ~100 KB of the total on their own.
+**Headroom is now ~1 KB**, the consent banner (markup + styles + the `site.js`
+consent module, ~5 KB across the three files) having spent most of what the
+10.8 KB App Store badge left. `gtag.js` itself is outside the budget by the
+measurement rule above — third-party, and loaded only after the visitor accepts
+the banner. The next asset of any size needs the screenshots re-encoded first —
+they are ~100 KB of the total on their own.
 
 The budget covers the **landing page only**. The `portal_base.html` pages ship
 none of the screenshots and no JavaScript whatsoever; they add only `portal.css`

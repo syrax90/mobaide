@@ -13,6 +13,9 @@ Covers the contract documented in ``docs/website.md``:
   honest. These are the tests a copy edit is most likely to trip.
 - **CSP self-containment.** No inline ``style=`` and no inline ``<script>``,
   because the response ships ``default-src 'self'`` without ``'unsafe-inline'``.
+  The Google origins in the landing policy exist for the consent-gated gtag.js
+  injection alone, so the served HTML itself must stay same-origin —
+  ``TestConsentBanner`` holds that line.
 - **The install one-liners and their copy buttons.** Each command is rendered
   exactly once, so the copied text cannot drift from the displayed text.
 - Social metadata: OG/Twitter tags and a parseable JSON-LD block, all pointing
@@ -39,9 +42,29 @@ from central_server.marketing.loader import (
     render_sitemap,
 )
 
+# Byte-identical to ``security_headers._LANDING_CSP`` and to
+# ``test_security_headers.LANDING_CSP`` on purpose — keep the three in sync by
+# changing none of them. The Google origins admit only the consent-gated
+# gtag.js load; ``TestConsentBanner`` pins that the served HTML never carries
+# it.
 EXPECTED_CSP = (
-    "default-src 'self'; base-uri 'none'; form-action 'none'; "
-    "object-src 'none'; frame-ancestors 'none'"
+    "default-src 'self'; "
+    "script-src 'self' https://www.googletagmanager.com"
+    " https://www.googleadservices.com https://www.google.com"
+    " https://pagead2.googlesyndication.com"
+    " https://googleads.g.doubleclick.net; "
+    "img-src 'self' https://www.googletagmanager.com"
+    " https://googleads.g.doubleclick.net https://www.google.com"
+    " https://www.googleadservices.com"
+    " https://pagead2.googlesyndication.com; "
+    "connect-src 'self' https://pagead2.googlesyndication.com"
+    " https://www.googleadservices.com https://googleads.g.doubleclick.net"
+    " https://ad.doubleclick.net https://www.google.com; "
+    "frame-src https://www.googletagmanager.com; "
+    "base-uri 'none'; "
+    "form-action 'none'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'"
 )
 
 HARDENING_HEADERS = (
@@ -254,10 +277,12 @@ class TestLandingCspSelfContainment:
         assert inline == []
 
     async def test_no_subresource_is_loaded_cross_origin(self, landing) -> None:
-        """Under ``default-src 'self'`` with no ``img-src``/``script-src``
-        relaxation, a remote stylesheet, script, or image is silently blocked in
-        the browser. Without this guard a copy edit that adds a CDN script or a
-        remote badge image would ship broken with every other test still green.
+        """A remote stylesheet, script, or image is silently blocked by the
+        policy unless its origin is one of the Google entries — and those exist
+        solely for the consent-gated runtime injection, never for markup.
+        Without this guard a copy edit that adds a CDN script or a remote badge
+        image would ship broken (or, on a Google origin, consent-bypassing)
+        with every other test still green.
 
         ``<link rel="canonical">`` is the one legitimate absolute URL here: it is
         metadata for crawlers, never a fetched subresource. OG/Twitter image URLs
@@ -271,6 +296,56 @@ class TestLandingCspSelfContainment:
             if url is not None and url.group(1).startswith(("http://", "https://")):
                 offenders.append(tag)
         assert offenders == []
+
+
+_CONSENT_BANNER_RE = re.compile(
+    r"<aside\b[^>]*\bdata-consent-banner\b[^>]*>(.*?)</aside>", re.DOTALL
+)
+_CONSENT_BUTTON_RE = re.compile(
+    r"<button\b[^>]*\bdata-consent-(accept|decline)\b[^>]*>"
+)
+
+
+class TestConsentBanner:
+    """The Google Ads tag is consent-gated: the served HTML carries only a
+    hidden banner, and ``site.js`` injects ``gtag.js`` after Accept. These pin
+    the server-rendered half of that contract."""
+
+    async def test_google_tag_is_never_server_rendered(self, landing) -> None:
+        """The CSP admits ``googletagmanager.com`` for the *post-consent* load
+        only. A server-rendered reference would run for every visitor and
+        bypass the consent gate — exactly the "paste the snippet into <head>"
+        edit Google's setup instructions invite."""
+        assert "googletagmanager" not in landing
+
+    async def test_banner_ships_hidden(self, landing) -> None:
+        """``site.js`` owns the reveal: with no stored choice it clears
+        ``hidden``, and with scripting off the tag can never load, so the
+        banner must never render visible on its own."""
+        match = _CONSENT_BANNER_RE.search(landing)
+        assert match is not None, "landing page has no consent banner"
+        opening_tag = match.group(0)[: match.group(0).index(">") + 1]
+        assert " hidden" in opening_tag
+
+    async def test_banner_carries_both_hooks_site_js_binds(
+        self, landing
+    ) -> None:
+        """``site.js`` refuses to reveal a banner missing either button, so a
+        renamed ``data-`` hook would fail silently as a banner that never
+        appears — and a consent flow nobody can complete."""
+        buttons = _CONSENT_BUTTON_RE.findall(landing)
+        assert sorted(buttons) == ["accept", "decline"]
+        assert all(
+            'type="button"' in tag
+            for tag in (m.group(0) for m in _CONSENT_BUTTON_RE.finditer(landing))
+        )
+
+    async def test_banner_links_the_privacy_policy(self, landing) -> None:
+        """Consent must be informed: the policy's Section 3.5 is where the
+        Google Ads cookie is actually described."""
+        match = _CONSENT_BANNER_RE.search(landing)
+        assert match is not None
+        assert 'href="/privacy.html"' in match.group(1)
 
 
 class TestLandingSocialMetadata:
