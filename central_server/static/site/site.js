@@ -419,6 +419,17 @@
    * never asked, and a returning visitor is not asked twice.
    */
   function setUpConsentBanner() {
+    // The static assets ship identically to every environment, but the Ads
+    // property is production-only: an Accept on localhost or a staging deploy
+    // would feed that environment's page and click signals into live tag
+    // diagnostics and campaign data. Gating the whole flow here — not just
+    // the injection — also spares those visitors a banner whose consent
+    // would gate nothing. For local verification, launch Chrome with
+    // --host-resolver-rules="MAP mobaide.com 127.0.0.1" and browse
+    // http://mobaide.com:<port>/ — location.hostname never carries the port.
+    if (window.location.hostname !== "mobaide.com") {
+      return;
+    }
     var banner = document.querySelector("[data-consent-banner]");
     if (!banner) {
       return;

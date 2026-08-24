@@ -149,6 +149,12 @@ policy promises no un-consented tracking:
   `localStorage["mobaide-ads-consent"]` holds no choice, so a no-JS visitor —
   who can never load the tag — is never asked, and a returning visitor is not
   asked twice.
+- The whole flow runs only when `location.hostname` is exactly `mobaide.com`:
+  the assets ship identically to every environment, and an Accept on
+  localhost or a staging deploy would otherwise feed that environment's
+  signals into the live Ads property. To verify locally, launch Chrome with
+  `--host-resolver-rules="MAP mobaide.com 127.0.0.1"` and browse
+  `http://mobaide.com:<port>/` (`location.hostname` never carries the port).
 - **Accept** stores `granted` and injects
   `https://www.googletagmanager.com/gtag/js?id=AW-18403068615` with a Consent
   Mode v2 default-denied → update-granted pair queued ahead of it. Only
