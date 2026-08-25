@@ -259,13 +259,14 @@ def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-# Sort keys the users listing accepts, mapped to the ORDER BY expression.
-# ``last_activity`` is the alias of the per-user ``MAX(agents.last_seen_at)``
-# computed inside the paging CTE in ``list_users_with_agents``; it resolves
-# both inside the CTE (as the alias) and outside (as the ``page`` column).
-# ``u.created_at`` must stay qualified because the outer query also joins
-# ``agents.created_at``.
+# ``last_activity`` resolves both inside the CTE (as the alias) and outside
+# (as the ``page`` column). ``u.created_at`` must stay qualified because the
+# outer query also joins ``agents.created_at``.
 _USERS_SORT_KEYS = {"registered": "u.created_at", "activity": "last_activity"}
+_USERS_ACTIVITY_COLUMN = (
+    ", (SELECT MAX(a.last_seen_at) FROM agents a "
+    "WHERE a.owner_user_id = u.id) AS last_activity"
+)
 
 
 def _users_filter(q: str, verified: bool | None) -> tuple[str, list]:
@@ -990,12 +991,13 @@ class Database:
 
         ``q`` / ``verified`` are the filters documented on
         ``_users_filter``. ``sort`` is ``"registered"`` (``users.created_at``)
-        or ``"activity"`` (``MAX(agents.last_seen_at)`` per user; ``NULL``
-        for users whose agents were never seen, which SQLite orders lowest —
-        first ascending, last descending). ``descending`` applies to the
-        sort key and to the ``created_at`` / ``id`` tiebreaks that make the
-        order total, so a page boundary can never split or repeat a user.
-        The defaults reproduce the pre-paging order, newest user first.
+        or ``"activity"`` (``MAX(agents.last_seen_at)`` per user, computed in
+        the CTE only for that sort; ``NULL`` for users whose agents were
+        never seen, which SQLite orders lowest — first ascending, last
+        descending). ``descending`` applies to the sort key and to the
+        ``created_at`` / ``id`` tiebreaks that make the order total, so a
+        page boundary can never split or repeat a user. The defaults
+        reproduce the pre-paging order, newest user first.
 
         ``limit`` / ``offset`` page *users*, not join rows: a CTE picks the
         page of user ids first and the agents are joined onto that page.
@@ -1022,10 +1024,12 @@ class Database:
         direction = "DESC" if descending else "ASC"
         order = f"{key} {direction}, u.created_at {direction}, u.id {direction}"
         where, params = _users_filter(q, verified)
+        # The correlated MAX is one index probe per matching user, paid
+        # before the LIMIT, so it is only added when the sort needs it.
+        activity = _USERS_ACTIVITY_COLUMN if sort == "activity" else ""
         cursor = await self.conn.execute(
             "WITH page AS ("
-            "SELECT u.id, (SELECT MAX(a.last_seen_at) FROM agents a "
-            "WHERE a.owner_user_id = u.id) AS last_activity "
+            f"SELECT u.id{activity} "
             f"FROM users u{where} ORDER BY {order} LIMIT ? OFFSET ?) "
             "SELECT u.id AS user_id, u.email, u.role, "
             "u.email_verified, u.verified_at, "
