@@ -451,6 +451,180 @@ class TestListUsersWithAgents:
         assert counts == {u1: 2, u2: 0, u3: 1}
 
 
+class TestListUsersFilterSortPage:
+    """The keyword filters, sort keys and paging of
+    ``list_users_with_agents`` plus the ``count_users`` that shares its
+    filter. Creates are spaced a millisecond apart so ``created_at``
+    orders strictly and the ``u.id`` tiebreak never decides a test.
+    """
+
+    async def _seed(self, db: Database, *emails: str, **kwargs) -> list[str]:
+        import asyncio
+
+        ids = []
+        for email in emails:
+            ids.append(
+                await db.create_user(email=email, password_hash="h", **kwargs)
+            )
+            await asyncio.sleep(0.001)
+        return ids
+
+    async def test_q_matches_email_substring_case_insensitively(
+        self, db: Database
+    ):
+        alice, _bob = await self._seed(db, "Alice@test.local", "bob@test.local")
+
+        for needle in ("ALI", "  ali "):
+            users = await db.list_users_with_agents(q=needle)
+            assert [u["id"] for u in users] == [alice]
+            assert await db.count_users(q=needle) == 1
+
+    async def test_q_treats_like_wildcards_as_literal_characters(
+        self, db: Database
+    ):
+        """``%`` and ``_`` must match themselves, not "anything" / "any
+        one character" — the needle goes through ``instr``, not ``LIKE``.
+        """
+        pct, _pct_x, under, _under_x = await self._seed(
+            db,
+            "pct%x@test.local", "pctax@test.local",
+            "u_1@test.local", "ux1@test.local",
+        )
+
+        assert [u["id"] for u in await db.list_users_with_agents(q="pct%")] == [
+            pct
+        ]
+        assert [u["id"] for u in await db.list_users_with_agents(q="u_1")] == [
+            under
+        ]
+        assert await db.count_users(q="pct%") == 1
+        assert await db.count_users(q="u_1") == 1
+
+    async def test_q_finds_a_non_ascii_address_by_its_exact_spelling(
+        self, db: Database
+    ):
+        """Both operands are folded by SQLite's ASCII-only ``lower()``.
+        Folding the needle in Python instead would turn ``Ü`` into ``ü``
+        on one side only and miss the stored address.
+        """
+        unal, _ascii = await self._seed(
+            db, "Ünal@test.local", "unal@test.local"
+        )
+
+        for needle in ("Ünal", "ÜNAL"):
+            users = await db.list_users_with_agents(q=needle)
+            assert [u["id"] for u in users] == [unal], needle
+            assert await db.count_users(q=needle) == 1, needle
+
+    async def test_verified_filter_tristate_and_count(self, db: Database):
+        (vouched,) = await self._seed(
+            db, "vouched@test.local", email_verified=True
+        )
+        (pending,) = await self._seed(db, "pending@test.local")
+
+        assert [u["id"] for u in await db.list_users_with_agents(verified=True)] == [
+            vouched
+        ]
+        assert [u["id"] for u in await db.list_users_with_agents(verified=False)] == [
+            pending
+        ]
+        assert len(await db.list_users_with_agents(verified=None)) == 2
+        assert await db.count_users(verified=True) == 1
+        assert await db.count_users(verified=False) == 1
+        assert await db.count_users() == 2
+
+    async def test_sort_registered_ascending_is_oldest_first(
+        self, db: Database
+    ):
+        first, middle, last = await self._seed(
+            db, "first@test.local", "middle@test.local", "last@test.local"
+        )
+
+        users = await db.list_users_with_agents(
+            sort="registered", descending=False
+        )
+        assert [u["id"] for u in users] == [first, middle, last]
+
+    async def test_sort_activity_keys_on_latest_agent_and_places_null_at_the_low_end(
+        self, db: Database
+    ):
+        """``activity`` orders by ``MAX(agents.last_seen_at)`` per user;
+        users whose agents were never seen and agentless users both have
+        a NULL key, which sorts last descending and first ascending.
+        NULL ties fall back to the ``created_at`` tiebreak in the same
+        direction.
+        """
+        busy, quiet, never, agentless = await self._seed(
+            db,
+            "busy@test.local", "quiet@test.local",
+            "never@test.local", "agentless@test.local",
+        )
+        busy_old, _ = await db.register_agent("busy-old", busy)
+        busy_new, _ = await db.register_agent("busy-new", busy)
+        quiet_agent, _ = await db.register_agent("quiet-a", quiet)
+        await db.register_agent("never-seen", never)
+        await db.touch_agent_last_seen(
+            busy_old, datetime(2024, 1, 1, tzinfo=timezone.utc)
+        )
+        await db.touch_agent_last_seen(
+            busy_new, datetime(2024, 3, 1, tzinfo=timezone.utc)
+        )
+        await db.touch_agent_last_seen(
+            quiet_agent, datetime(2024, 2, 1, tzinfo=timezone.utc)
+        )
+
+        newest_first = await db.list_users_with_agents(sort="activity")
+        assert [u["id"] for u in newest_first] == [busy, quiet, agentless, never]
+
+        stalest_first = await db.list_users_with_agents(
+            sort="activity", descending=False
+        )
+        assert [u["id"] for u in stalest_first] == [never, agentless, quiet, busy]
+
+    async def test_limit_offset_page_users_not_join_rows(self, db: Database):
+        """A page of two users must hold two *users* with every one of
+        their agents nested, not two LEFT JOIN rows."""
+        oldest, middle, newest = await self._seed(
+            db, "oldest@test.local", "middle@test.local", "newest@test.local"
+        )
+        for name in ("n1", "n2", "n3"):
+            await db.register_agent(name, newest)
+        await db.register_agent("m1", middle)
+
+        page_one = await db.list_users_with_agents(limit=2, offset=0)
+        assert [u["id"] for u in page_one] == [newest, middle]
+        assert {a["name"] for a in page_one[0]["agents"]} == {"n1", "n2", "n3"}
+        assert [a["name"] for a in page_one[1]["agents"]] == ["m1"]
+
+        page_two = await db.list_users_with_agents(limit=2, offset=2)
+        assert [u["id"] for u in page_two] == [oldest]
+        assert page_two[0]["agents"] == []
+
+        assert await db.list_users_with_agents(limit=2, offset=4) == []
+        assert len(await db.list_users_with_agents(limit=None)) == 3
+
+    async def test_paging_applies_after_filter_and_sort(self, db: Database):
+        a1, a2, a3, _b1 = await self._seed(
+            db, "alpha1@x.io", "alpha2@x.io", "alpha3@x.io", "beta1@x.io"
+        )
+
+        page = await db.list_users_with_agents(
+            q="alpha", descending=False, limit=2, offset=2
+        )
+        assert [u["id"] for u in page] == [a3]
+        assert await db.count_users(q="alpha") == 3
+        assert [
+            u["id"]
+            for u in await db.list_users_with_agents(
+                q="alpha", descending=False, limit=2
+            )
+        ] == [a1, a2]
+
+    async def test_unknown_sort_key_raises(self, db: Database):
+        with pytest.raises(ValueError, match="email"):
+            await db.list_users_with_agents(sort="email")
+
+
 class TestDeleteUser:
     """``Database.delete_user`` cascade — explicit per-table sequence that
     returns the deleted agent IDs so the router can tear down live WSs.

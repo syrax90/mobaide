@@ -11,12 +11,31 @@
    trigger makes htmx intercept Enter (preventDefault) instead of letting
    the browser do a full-page navigation. "from:find …" scopes the
    listeners to descendants; bare "from:input" would be document-wide.
-   Both controls live outside the swapped #users-table fragment so their
-   state survives swaps. #}
-<form class="search-bar" role="search"
+   Both controls live outside the swapped #users-panel so their state
+   survives swaps. hx-include pulls the panel's hidden sort/dir inputs and
+   its rows-per-page select into the request so a search keeps the current
+   sort; the panel carries no hidden page input, which is what sends every
+   search back to page 1.
+
+   This form is also the hx-sync element for every panel control (see
+   _users_table.html), because it is the one element the swaps never
+   replace: htmx keeps the in-flight request and the queue on the sync
+   element's internal data, and a swapped-out element has that data wiped,
+   so syncing on #users-panel would silently lose whatever was queued.
+   "queue last" here means a search typed while a sort/pager click is in
+   flight runs after it — re-serialised at that moment, so it picks up the
+   freshly rendered sort/dir — while the links' "replace" aborts a stale
+   in-flight search in favour of the click, which carries the live search
+   text via its own hx-include. One residual: a click made while a search
+   is *queued* (typed during another in-flight request) is itself queued
+   behind that search and discarded once the search swaps the panel out
+   from under the clicked link — the admin re-clicks. #}
+<form id="user-search" class="search-bar" role="search"
       hx-get="/dashboard/users"
-      hx-target="#users-table"
+      hx-target="#users-panel"
       hx-swap="outerHTML"
+      hx-include="#users-panel"
+      hx-sync="this:queue last"
       hx-trigger="keyup changed delay:300ms from:find input, search from:find input, change from:find select, submit">
     <input type="search"
            name="q"
@@ -31,11 +50,6 @@
 </form>
 
 {% include "_users_table.html" %}
-
-<div class="is-hidden"
-     hx-get="/dashboard/agents-status"
-     hx-trigger="every 10s"
-     hx-swap="none"></div>
 
 <div id="modal-root"></div>
 {% endblock %}
