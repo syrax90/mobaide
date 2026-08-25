@@ -596,6 +596,29 @@ class TestSearchAndPanelControlSync:
         assert _attr(body, "hx-sync", form) == "this:queue last"
         assert "#users-panel:replace" not in body
 
+    async def test_delete_refresher_queues_on_the_search_form_but_poller_does_not(
+        self, client, dashboard_headers
+    ):
+        """The post-delete panel refresher includes the live controls
+        and queues first on the form, so it can neither abort a click nor
+        evict a search the admin already queued; the
+        status poller stays unsynced and carries no include at all."""
+        resp = await client.get("/dashboard/users", headers=dashboard_headers)
+        assert resp.status_code == 200
+        body = resp.text
+
+        refresher = body.rfind(
+            "<div ", 0, body.index('hx-trigger="users-changed from:body"')
+        )
+        assert _control_sync(body, refresher) == (
+            "#user-search", "#user-search:queue first"
+        )
+
+        poller = body.rfind("<div ", 0, body.index('hx-trigger="every 10s"'))
+        poller_tag = body[poller:body.index(">", poller)]
+        assert "hx-sync=" not in poller_tag
+        assert "hx-include=" not in poller_tag
+
 
 class TestAgentStatusPollerScope:
     """``GET /dashboard/agents-status`` takes the panel's listing state and
