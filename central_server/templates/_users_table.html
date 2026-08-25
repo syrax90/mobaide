@@ -1,58 +1,135 @@
-<table id="users-table">
-    <thead>
-        <tr>
-            <th></th>
-            <th>Email</th>
-            <th>Role</th>
-            <th>Verified</th>
-            <th>Registered</th>
-            <th>Agents</th>
-            <th>Online</th>
-            <th>Last Activity</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for u in users %}
-        {# data-user-id is what the delegated toggle in static/dashboard.js keys
-           off; an onclick= would not run under the dashboard's script-src. #}
-        <tr id="user-row-{{ u.id }}"
-            class="user-row"
-            data-user-id="{{ u.id }}">
-            <td><span class="expand-arrow">&#9656;</span></td>
-            <td>{{ u.email }}</td>
-            <td>{{ u.role }}</td>
-            <td>
-                {% if u.email_verified %}
-                <span class="badge badge-verified"{% if u.verified_at %} title="Verified at {{ u.verified_at }}"{% endif %}>Verified</span>
-                {% else %}
-                <span class="badge badge-unverified" title="Email not verified yet">Unverified</span>
-                {% endif %}
-            </td>
-            <td>{{ u.created_at }}</td>
-            <td>{{ u.agent_count }}</td>
-            <td><span id="user-online-{{ u.id }}">{{ u.online_count }}</span></td>
-            <td><span id="user-last-activity-{{ u.id }}">{{ u.last_activity or "—" }}</span></td>
-            <td data-no-row-toggle>
-                <button type="button"
-                        class="btn btn-sm"
-                        hx-post="/dashboard/users/{{ u.id }}/disconnect"
-                        hx-swap="none"
-                        hx-confirm="Force-disconnect all of {{ u.email }}'s live sessions?">
-                    Disconnect
-                </button>
-                <button type="button"
-                        class="btn btn-sm btn-danger"
-                        hx-get="/dashboard/users/{{ u.id }}/delete-modal"
-                        hx-target="#modal-root"
-                        hx-swap="innerHTML">
-                    Unregister
-                </button>
-            </td>
-        </tr>
-        {% endfor %}
-        {% if not users %}
-        <tr><td colspan="9" class="empty">No {% if verified == "verified" %}verified {% elif verified == "unverified" %}unverified {% endif %}users{% if query %} matching &ldquo;{{ query }}&rdquo;{% endif %}.</td></tr>
+{# The users panel: one swap target holding the page state, the table, the
+   pager and the two hidden pollers. Every URL below is generated from the
+   same clamped `listing`, so what a control submits is exactly what the
+   server just rendered. The root deliberately carries no hx-* attribute —
+   descendants would inherit a target/swap pair.
+
+   Sort headers and pager numbers are boosted links rather than hx-get
+   fragments: htmx pushes their href (the full-page URL) into history,
+   leaves modifier-clicks to the browser so ⌘/Ctrl-click opens a real tab,
+   and hx-select lifts just the panel out of the page response. The search
+   form, the per-page select and the refresher use the fragment route,
+   whose HX-Replace-Url keeps the location bar in step without a history
+   entry per keystroke. #}
+{% macro panel_link_attrs(href) -%}
+href="{{ href }}" hx-boost="true" hx-select="#users-panel" hx-target="#users-panel" hx-swap="outerHTML" hx-sync="#users-panel:replace"
+{%- endmacro %}
+{% macro sort_header(listing, column, label) -%}
+{% set state = listing.aria_sort(column) %}
+{% set target = listing.sort_target(column) %}
+<th class="sortable{% if state != 'none' %} is-sorted{% endif %}" aria-sort="{{ state }}">
+    <a class="sort-link" {{ panel_link_attrs(target.page_url()) }}
+       title="Sort by {{ label|lower }}, {{ 'oldest' if target.direction == 'asc' else 'newest' }} first">{{ label }} <span class="sort-icon" aria-hidden="true">{% if state == 'descending' %}&#9662;{% elif state == 'ascending' %}&#9652;{% else %}&#8645;{% endif %}</span></a>
+</th>
+{%- endmacro %}
+{% macro pager_step(listing, page, label, aria_label) -%}
+{% if page %}<a class="pager-link" {{ panel_link_attrs(listing.page_url(page=page)) }} aria-label="{{ aria_label }}">{{ label }}</a>{% else %}<span class="pager-link is-disabled" aria-disabled="true">{{ label }}</span>{% endif %}
+{%- endmacro %}
+<section id="users-panel">
+    <input type="hidden" name="sort" value="{{ listing.sort }}">
+    <input type="hidden" name="dir" value="{{ listing.direction }}">
+    <div class="table-meta">
+        <p class="table-count">
+            {% if total %}Showing {{ listing.first_row(total) }}–{{ listing.last_row(total) }} of {{ total }} user{% if total != 1 %}s{% endif %}{% endif %}
+        </p>
+        <label class="per-page">Rows per page
+            <select id="per-page"
+                    name="per_page"
+                    hx-get="{{ listing.fragment_url(page=1, per_page=None) }}"
+                    hx-target="#users-panel"
+                    hx-swap="outerHTML"
+                    hx-sync="#users-panel:replace">
+                {% for size in listing.page_sizes %}
+                <option value="{{ size }}"{% if size == listing.per_page %} selected{% endif %}>{{ size }}</option>
+                {% endfor %}
+            </select>
+        </label>
+    </div>
+    <table id="users-table">
+        <thead>
+            <tr>
+                <th></th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Verified</th>
+                {{ sort_header(listing, "registered", "Registered") }}
+                <th>Agents</th>
+                <th>Online</th>
+                {{ sort_header(listing, "activity", "Last Activity") }}
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for u in users %}
+            {# data-user-id is what the delegated toggle in static/dashboard.js keys
+               off; an onclick= would not run under the dashboard's script-src. #}
+            <tr id="user-row-{{ u.id }}"
+                class="user-row"
+                data-user-id="{{ u.id }}">
+                <td><span class="expand-arrow">&#9656;</span></td>
+                <td>{{ u.email }}</td>
+                <td>{{ u.role }}</td>
+                <td>
+                    {% if u.email_verified %}
+                    <span class="badge badge-verified"{% if u.verified_at %} title="Verified at {{ u.verified_at }}"{% endif %}>Verified</span>
+                    {% else %}
+                    <span class="badge badge-unverified" title="Email not verified yet">Unverified</span>
+                    {% endif %}
+                </td>
+                <td>{{ u.created_at }}</td>
+                <td>{{ u.agent_count }}</td>
+                <td><span id="user-online-{{ u.id }}">{{ u.online_count }}</span></td>
+                <td><span id="user-last-activity-{{ u.id }}">{{ u.last_activity or "—" }}</span></td>
+                <td data-no-row-toggle>
+                    <button type="button"
+                            class="btn btn-sm"
+                            hx-post="/dashboard/users/{{ u.id }}/disconnect"
+                            hx-swap="none"
+                            hx-confirm="Force-disconnect all of {{ u.email }}'s live sessions?">
+                        Disconnect
+                    </button>
+                    <button type="button"
+                            class="btn btn-sm btn-danger"
+                            hx-get="/dashboard/users/{{ u.id }}/delete-modal"
+                            hx-target="#modal-root"
+                            hx-swap="innerHTML">
+                        Unregister
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+            {% if not users %}
+            <tr><td colspan="9" class="empty">No {% if verified == "verified" %}verified {% elif verified == "unverified" %}unverified {% endif %}users{% if query %} matching &ldquo;{{ query }}&rdquo;{% endif %}.</td></tr>
+            {% endif %}
+        </tbody>
+    </table>
+    {% set last_page = listing.page_count(total) %}
+    {% if last_page > 1 %}
+    <nav class="pager" aria-label="Pagination">
+        {{ pager_step(listing, listing.page - 1 if listing.page > 1 else none, "‹ Prev", "Previous page") }}
+        {% for number in listing.page_links(total) %}
+        {% if number is none %}
+        <span class="pager-gap" aria-hidden="true">&hellip;</span>
+        {% elif number == listing.page %}
+        <span class="pager-link is-current" aria-current="page">{{ number }}</span>
+        {% else %}
+        <a class="pager-link" {{ panel_link_attrs(listing.page_url(page=number)) }} aria-label="Page {{ number }}">{{ number }}</a>
         {% endif %}
-    </tbody>
-</table>
+        {% endfor %}
+        {{ pager_step(listing, listing.page + 1 if listing.page < last_page else none, "Next ›", "Next page") }}
+    </nav>
+    {% endif %}
+    {# Live-status poller, scoped to this page by its URL. No hx-sync on it
+       or on the refresher below: neither may ever abort a click. #}
+    <div class="is-hidden"
+         hx-get="{{ listing.status_url() }}"
+         hx-trigger="every 10s"
+         hx-swap="none"></div>
+    {# Re-fetches the panel when a delete response raises `users-changed`
+       (HX-Trigger header), so the count line and page boundaries follow. #}
+    <div class="is-hidden"
+         hx-get="{{ listing.fragment_url() }}"
+         hx-trigger="users-changed from:body"
+         hx-target="#users-panel"
+         hx-swap="outerHTML"></div>
+</section>

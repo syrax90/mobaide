@@ -4,10 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Central Server{% endblock %}</title>
-    {# See portal_base.html for what each of these three keys is protecting;
-       they matter more here, because /dashboard/* runs under the strictest
-       policy in the app — script-src 'self', style-src 'self', nothing else. #}
-    <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
+    {# See portal_base.html for what each of the first three keys is
+       protecting; they matter more here, because /dashboard/* runs under the
+       strictest policy in the app — script-src 'self', style-src 'self',
+       nothing else. The history pair is for the boosted sort/pager links on
+       the users page: with a cache size of 0 htmx never snapshots the admin
+       table's DOM into localStorage, and a Back/Forward miss becomes a plain
+       reload of the deep-linkable URL instead of a body swap that would
+       leave htmx and dashboard.js un-reinitialised. #}
+    <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"refreshOnHistoryMiss":true}'>
     <link rel="stylesheet" href="/static/style.css">
     {# The vendored bundle, not unpkg: a dashboard CSP is not worth having if it
        still has to trust a CDN with script execution on the admin surface. Same

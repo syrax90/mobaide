@@ -259,6 +259,38 @@ def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+# Sort keys the users listing accepts, mapped to the ORDER BY expression.
+# ``last_activity`` is the alias of the per-user ``MAX(agents.last_seen_at)``
+# computed inside the paging CTE in ``list_users_with_agents``; it resolves
+# both inside the CTE (as the alias) and outside (as the ``page`` column).
+# ``u.created_at`` must stay qualified because the outer query also joins
+# ``agents.created_at``.
+_USERS_SORT_KEYS = {"registered": "u.created_at", "activity": "last_activity"}
+
+
+def _users_filter(q: str, verified: bool | None) -> tuple[str, list]:
+    """Build the ``WHERE`` clause (with leading space, or empty) plus its
+    parameters for the ``users u`` filters shared by ``count_users`` and
+    ``list_users_with_agents``.
+
+    ``q`` is a case-insensitive email substring match. It goes through
+    ``instr`` rather than ``LIKE`` so ``%`` and ``_`` in the needle stay
+    literal without an ESCAPE dance. SQLite's ``lower()`` folds ASCII only,
+    which is what email addresses are in practice.
+    """
+    clauses: list[str] = []
+    params: list = []
+    needle = q.strip().lower()
+    if needle:
+        clauses.append("instr(lower(u.email), ?) > 0")
+        params.append(needle)
+    if verified is not None:
+        clauses.append("u.email_verified = ?")
+        params.append(1 if verified else 0)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
 # Sentinel timestamp used in `mobile_refresh_tokens.expires_at` when the caller
 # requests a non-expiring refresh token (expire_minutes == 0). ISO-8601 strings
 # sort lexically in SQLite, so any real `datetime.now(UTC)` compares strictly
@@ -924,13 +956,48 @@ class Database:
         )
         return [dict(row) async for row in cursor]
 
-    async def list_users_with_agents(self) -> list[dict]:
-        """List all users joined with their owned agents in a single query.
+    async def count_users(
+        self, *, q: str = "", verified: bool | None = None
+    ) -> int:
+        """Count users matching the same filters ``list_users_with_agents``
+        takes, so a paged listing can report its total."""
+        where, params = _users_filter(q, verified)
+        cursor = await self.conn.execute(
+            f"SELECT COUNT(*) FROM users u{where}", params
+        )
+        row = await cursor.fetchone()
+        return int(row[0])
+
+    async def list_users_with_agents(
+        self,
+        *,
+        q: str = "",
+        verified: bool | None = None,
+        sort: str = "registered",
+        descending: bool = True,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict]:
+        """List users joined with their owned agents in a single query,
+        optionally filtered, sorted and paged.
 
         Returns one dict per user with an ``agents`` key holding the list
-        of agent records (empty list if the user owns none). The list is
-        ordered newest-user-first, and each user's agents are
-        newest-agent-first. One SQL round-trip; grouping done in Python.
+        of agent records (empty list if the user owns none). Each user's
+        agents are newest-agent-first. One SQL round-trip; grouping done
+        in Python.
+
+        ``q`` / ``verified`` are the filters documented on
+        ``_users_filter``. ``sort`` is ``"registered"`` (``users.created_at``)
+        or ``"activity"`` (``MAX(agents.last_seen_at)`` per user; ``NULL``
+        for users whose agents were never seen, which SQLite orders lowest —
+        first ascending, last descending). ``descending`` applies to the
+        sort key and to the ``created_at`` / ``id`` tiebreaks that make the
+        order total, so a page boundary can never split or repeat a user.
+        The defaults reproduce the pre-paging order, newest user first.
+
+        ``limit`` / ``offset`` page *users*, not join rows: a CTE picks the
+        page of user ids first and the agents are joined onto that page.
+        ``limit=None`` returns every match (SQLite's ``LIMIT -1``).
 
         Shape::
 
@@ -946,15 +1013,28 @@ class Database:
                 }, ...],
             }, ...]
         """
+        try:
+            key = _USERS_SORT_KEYS[sort]
+        except KeyError:
+            raise ValueError(f"Unknown users sort key: {sort!r}") from None
+        direction = "DESC" if descending else "ASC"
+        order = f"{key} {direction}, u.created_at {direction}, u.id {direction}"
+        where, params = _users_filter(q, verified)
         cursor = await self.conn.execute(
+            "WITH page AS ("
+            "SELECT u.id, (SELECT MAX(a.last_seen_at) FROM agents a "
+            "WHERE a.owner_user_id = u.id) AS last_activity "
+            f"FROM users u{where} ORDER BY {order} LIMIT ? OFFSET ?) "
             "SELECT u.id AS user_id, u.email, u.role, "
             "u.email_verified, u.verified_at, "
             "u.created_at AS user_created_at, "
             "a.agent_id, a.name AS agent_name, "
             "a.created_at AS agent_created_at, a.last_seen_at, "
             "a.agent_version, a.agent_protocol_version "
-            "FROM users u LEFT JOIN agents a ON a.owner_user_id = u.id "
-            "ORDER BY u.created_at DESC, a.created_at DESC"
+            "FROM page JOIN users u ON u.id = page.id "
+            "LEFT JOIN agents a ON a.owner_user_id = u.id "
+            f"ORDER BY {order}, a.created_at DESC",
+            [*params, -1 if limit is None else limit, offset],
         )
         users: list[dict] = []
         by_id: dict[str, dict] = {}

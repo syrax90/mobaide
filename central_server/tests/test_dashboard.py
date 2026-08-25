@@ -296,6 +296,245 @@ class TestUserVerifiedBadgeAndFilter:
             assert self.UNVERIFIED_EMAIL in body
 
 
+async def _seed_users(app, count: int) -> list[str]:
+    """Create ``count`` unverified users, newer than every fixture user;
+    returns their ids oldest-first. Spaced a millisecond apart so
+    ``created_at`` orders them strictly."""
+    import asyncio
+
+    db = app.state.db
+    ids = []
+    for n in range(count):
+        ids.append(
+            await db.create_user(email=f"bulk{n:03d}@test.local", password_hash="h")
+        )
+        await asyncio.sleep(0.001)
+    return ids
+
+
+def _attr(body: str, attr: str, start: int) -> str:
+    """Value of the first ``attr="…"`` at or after ``start``; ``&amp;`` is
+    folded back so URL assertions read like the URLs the browser sees."""
+    begin = body.index(f'{attr}="', start) + len(attr) + 2
+    return body[begin:body.index('"', begin)].replace("&amp;", "&")
+
+
+def _row_ids(body: str) -> list[str]:
+    """User ids of the rendered ``<tr id="user-row-…">`` rows, in order.
+    Emails are unusable for ordering: the layout header prints the
+    signed-in admin's address above the table."""
+    ids = []
+    start = 0
+    while (found := body.find('id="user-row-', start)) != -1:
+        begin = found + len('id="user-row-')
+        ids.append(body[begin:body.index('"', begin)])
+        start = begin
+    return ids
+
+
+def _sort_header(body: str, label: str) -> tuple[str, str]:
+    """``(aria-sort, href)`` of the sortable header titled ``Sort by
+    <label>``."""
+    th = body.rfind("<th ", 0, body.index(f'title="Sort by {label}'))
+    return _attr(body, "aria-sort", th), _attr(body, "href", th)
+
+
+def _link_href(body: str, aria_label: str) -> str:
+    anchor = body.rfind("<a ", 0, body.index(f'aria-label="{aria_label}"'))
+    return _attr(body, "href", anchor)
+
+
+class TestUserSorting:
+    """The sortable Registered / Last Activity headers on ``GET /dashboard``."""
+
+    async def test_default_view_sorts_registered_descending(
+        self, client, dashboard_headers
+    ):
+        resp = await client.get("/dashboard", headers=dashboard_headers)
+        assert resp.status_code == 200
+        body = resp.text
+        assert _sort_header(body, "registered") == (
+            "descending", "/dashboard?dir=asc",
+        )
+        assert _sort_header(body, "last activity") == (
+            "none", "/dashboard?sort=activity",
+        )
+
+    async def test_activity_sort_orders_rows_and_header_flips(
+        self, client, app, dashboard_headers, viewer_user, registered_agent
+    ):
+        """Ascending puts the never-active admin before the viewer whose
+        agent has been seen; descending reverses it. The active header's
+        link is the opposite direction, the other header's link is the
+        default view."""
+        agent_id, _ = registered_agent
+        await app.state.db.touch_agent_last_seen(agent_id)
+        admin_id = (await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL))["id"]
+
+        resp = await client.get(
+            "/dashboard?sort=activity&dir=asc", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert _row_ids(body) == [admin_id, viewer_user["id"]]
+        assert _sort_header(body, "last activity") == (
+            "ascending", "/dashboard?sort=activity",
+        )
+        assert _sort_header(body, "registered") == ("none", "/dashboard")
+
+        resp = await client.get(
+            "/dashboard?sort=activity", headers=dashboard_headers
+        )
+        body = resp.text
+        assert _row_ids(body) == [viewer_user["id"], admin_id]
+        assert _sort_header(body, "last activity") == (
+            "descending", "/dashboard?sort=activity&dir=asc",
+        )
+
+    async def test_garbage_params_degrade_to_the_default_view(
+        self, client, dashboard_headers
+    ):
+        resp = await client.get(
+            "/dashboard?sort=email&dir=up&page=x&per_page=7",
+            headers=dashboard_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert _sort_header(body, "registered")[0] == "descending"
+        assert '<option value="25" selected>' in body
+
+
+class TestUserPagination:
+    """Paging of the users panel: row windows, the pager, clamping, and
+    the canonical ``HX-Replace-Url`` the fragment always answers with."""
+
+    async def test_single_page_hides_the_pager(self, client, dashboard_headers):
+        resp = await client.get("/dashboard", headers=dashboard_headers)
+        body = resp.text
+        assert "Showing 1–1 of 1 user" in body
+        assert "of 1 users" not in body
+        assert 'class="pager"' not in body
+
+    async def test_pages_window_users_newest_first(
+        self, client, app, dashboard_headers
+    ):
+        seeded = await _seed_users(app, 30)
+        admin_id = (await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL))["id"]
+        newest_first = list(reversed(seeded))
+
+        first = (await client.get("/dashboard", headers=dashboard_headers)).text
+        assert "Showing 1–25 of 31 users" in first
+        assert _row_ids(first) == newest_first[:25]
+        assert 'aria-current="page">1<' in first
+        assert _link_href(first, "Next page") == "/dashboard?page=2"
+        assert 'aria-disabled="true">‹ Prev' in first
+
+        second = (
+            await client.get("/dashboard?page=2", headers=dashboard_headers)
+        ).text
+        assert "Showing 26–31 of 31 users" in second
+        assert _row_ids(second) == newest_first[25:] + [admin_id]
+        assert 'aria-current="page">2<' in second
+        assert _link_href(second, "Previous page") == "/dashboard"
+        assert 'aria-disabled="true">Next ›' in second
+
+    async def test_page_past_the_end_clamps_to_the_last_page(
+        self, client, app, dashboard_headers
+    ):
+        await _seed_users(app, 30)
+
+        resp = await client.get(
+            "/dashboard/users?page=99", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        assert resp.headers["HX-Replace-Url"] == "/dashboard?page=2"
+        assert "Showing 26–31 of 31 users" in resp.text
+
+        resp = await client.get(
+            "/dashboard/users?page=99&per_page=50", headers=dashboard_headers
+        )
+        assert resp.headers["HX-Replace-Url"] == "/dashboard?per_page=50"
+        assert len(_row_ids(resp.text)) == 31
+        assert 'class="pager"' not in resp.text
+
+    async def test_fragment_replace_url_is_canonical(
+        self, client, dashboard_headers
+    ):
+        cases = [
+            ("", "/dashboard"),
+            ("?q=&verified=all&sort=registered&dir=desc&page=1&per_page=25",
+             "/dashboard"),
+            ("?sort=bogus&dir=up&page=x&per_page=7", "/dashboard"),
+            ("?q=view&sort=activity&dir=asc&per_page=50",
+             "/dashboard?q=view&sort=activity&dir=asc&per_page=50"),
+        ]
+        for query, expected in cases:
+            resp = await client.get(
+                f"/dashboard/users{query}", headers=dashboard_headers
+            )
+            assert resp.status_code == 200, query
+            assert resp.headers["HX-Replace-Url"] == expected, query
+
+    async def test_panel_controls_carry_the_rendered_state(
+        self, client, dashboard_headers
+    ):
+        """The hidden inputs, the per-page select's ``hx-get`` (which must
+        omit ``per_page`` — htmx appends the select's own value) and the
+        poller URL all describe the state the server just rendered."""
+        resp = await client.get(
+            "/dashboard/users?sort=activity&dir=asc&per_page=50",
+            headers=dashboard_headers,
+        )
+        body = resp.text
+        assert '<input type="hidden" name="sort" value="activity">' in body
+        assert '<input type="hidden" name="dir" value="asc">' in body
+        assert _attr(body, "hx-get", body.index('id="per-page"')) == (
+            "/dashboard/users?sort=activity&dir=asc"
+        )
+        assert '<option value="50" selected>' in body
+        poller = body.rfind("<div", 0, body.index('hx-trigger="every 10s"'))
+        assert _attr(body, "hx-get", poller) == (
+            "/dashboard/agents-status?sort=activity&dir=asc&per_page=50"
+        )
+
+
+class TestAgentStatusPollerScope:
+    """``GET /dashboard/agents-status`` takes the panel's listing state and
+    emits OOB spans only for the users on that page."""
+
+    async def test_poller_renders_only_the_visible_page(
+        self, client, app, dashboard_headers, viewer_user, registered_agent
+    ):
+        agent_id, _ = registered_agent
+        # 25 newer users fill page 1; admin and viewer fall onto page 2.
+        await _seed_users(app, 25)
+
+        page_one = await client.get(
+            "/dashboard/agents-status", headers=dashboard_headers
+        )
+        assert page_one.status_code == 200
+        assert page_one.text.count('id="user-online-') == 25
+        assert f'id="user-online-{viewer_user["id"]}"' not in page_one.text
+        assert f'id="agent-status-{agent_id}"' not in page_one.text
+
+        page_two = await client.get(
+            "/dashboard/agents-status?page=2", headers=dashboard_headers
+        )
+        assert page_two.text.count('id="user-online-') == 2
+        assert f'id="user-online-{viewer_user["id"]}"' in page_two.text
+        assert f'id="agent-status-{agent_id}"' in page_two.text
+
+    async def test_poller_honours_the_search_filter(
+        self, client, dashboard_headers, viewer_user
+    ):
+        resp = await client.get(
+            "/dashboard/agents-status?q=viewer", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        assert resp.text.count('id="user-online-') == 1
+        assert f'id="user-online-{viewer_user["id"]}"' in resp.text
+
+
 class TestUserDelete:
     """``DELETE /dashboard/users/{id}`` — cascade, guardrails, WS teardown."""
 
@@ -331,6 +570,21 @@ class TestUserDelete:
         assert f'id="user-row-{user_id}"' in resp.text
         assert f'id="user-detail-{user_id}"' in resp.text
         assert 'hx-swap-oob="delete"' in resp.text
+
+    async def test_delete_response_triggers_a_panel_refresh(
+        self, client, dashboard_headers, viewer_user
+    ):
+        """Besides the OOB delete markers, the response raises
+        ``users-changed`` so the panel re-fetches its page and the count
+        line / page boundaries follow the vanished row."""
+        user_id = viewer_user["id"]
+
+        resp = await client.delete(
+            f"/dashboard/users/{user_id}", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        assert resp.headers["HX-Trigger"] == "users-changed"
+        assert f'<div id="user-row-{user_id}" hx-swap-oob="delete"></div>' in resp.text
 
     async def test_delete_seed_admin_returns_400(self, client, app):
         """The seeded admin and the default dashboard-login admin happen

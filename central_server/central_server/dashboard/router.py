@@ -15,6 +15,12 @@ from ..relay.routing import (
     WS_CLOSE_ADMIN_REVOKED,
 )
 from ..templates_dir import resolve_templates_dir
+from .listing import (
+    DEFAULT_DIRECTION,
+    DEFAULT_PER_PAGE,
+    DEFAULT_SORT,
+    UsersListing,
+)
 
 _require_admin = require_role("admin")
 
@@ -104,55 +110,107 @@ def _enrich_users(users: list[dict], routing) -> None:
         user["last_activity"] = last_seen
 
 
-@router.get("", response_class=HTMLResponse)
-async def users_page(
-    request: Request, user: UserTokenPayload = Depends(_require_admin)
-):
+async def _listing_params(
+    q: str = "",
+    verified: str = "all",
+    sort: str = DEFAULT_SORT,
+    dir: str = DEFAULT_DIRECTION,
+    page: str = "1",
+    per_page: str = str(DEFAULT_PER_PAGE),
+) -> UsersListing:
+    """Dependency parsing the listing state off the query string.
+
+    Every parameter is typed ``str`` and parsed leniently by
+    ``UsersListing.from_params`` — a tampered URL degrades to the default
+    view rather than a 422 swapped into the table.
+    """
+    return UsersListing.from_params(
+        q=q, verified=verified, sort=sort, direction=dir,
+        page=page, per_page=per_page,
+    )
+
+
+async def _load_listing(
+    request: Request, listing: UsersListing
+) -> tuple[list[dict], int, UsersListing]:
+    """Fetch one page of enriched users for ``listing``.
+
+    Returns ``(users, total, listing)`` where ``listing`` has its page
+    clamped to the last one — the templates must render from *that*
+    instance so every link and the poller URL describe the page actually
+    shown.
+    """
     db = request.app.state.db
     routing = request.app.state.routing
-    users = await db.list_users_with_agents()
+    total = await db.count_users(q=listing.q, verified=listing.verified_filter)
+    listing = listing.clamp(total)
+    users = await db.list_users_with_agents(
+        q=listing.q,
+        verified=listing.verified_filter,
+        sort=listing.sort,
+        descending=listing.descending,
+        limit=listing.per_page,
+        offset=listing.offset,
+    )
     _enrich_users(users, routing)
+    return users, total, listing
+
+
+def _listing_context(
+    users: list[dict], total: int, listing: UsersListing
+) -> dict:
+    return {
+        "users": users,
+        "total": total,
+        "listing": listing,
+        "query": listing.q,
+        "verified": listing.verified,
+    }
+
+
+@router.get("", response_class=HTMLResponse)
+async def users_page(
+    request: Request,
+    listing: UsersListing = Depends(_listing_params),
+    user: UserTokenPayload = Depends(_require_admin),
+):
+    """The users page. Takes the same listing parameters as the fragment
+    so the URLs htmx pushes and replaces reload to the same view."""
+    users, total, listing = await _load_listing(request, listing)
     return templates.TemplateResponse(
         request,
         "users.html",
-        {"users": users, "username": user.email, "query": "", "verified": "all"},
+        {**_listing_context(users, total, listing), "username": user.email},
     )
 
 
 @router.get("/users", response_class=HTMLResponse)
 async def users_table_fragment(
     request: Request,
-    q: str = "",
-    verified: str = "all",
+    listing: UsersListing = Depends(_listing_params),
     user: UserTokenPayload = Depends(_require_admin),
 ):
-    """Return the users-table fragment, filtered by email and/or verification.
+    """Return the users panel: the filtered, sorted page plus its pager.
 
     The search ``<form>`` in ``users.html`` is the requesting element, so
     every trigger (typed search, filter-select change, Enter) serializes
-    both ``q`` and ``verified`` into the request. Both filters are applied
-    in Python on the already-loaded list (admin dashboards have small
-    populations): ``q`` is a case-insensitive email substring match;
-    ``verified`` accepts ``"verified"`` / ``"unverified"``, while ``"all"``
-    or any unknown value means no filter (lenient on purpose — a tampered
-    URL should degrade to the unfiltered table, not a 422 swapped into it).
+    ``q`` and ``verified``, and its ``hx-include`` of the panel adds the
+    hidden ``sort`` / ``dir`` inputs and the rows-per-page select. No
+    hidden ``page`` exists, so a search always lands on page 1. The
+    per-page select and the post-delete refresher hit this endpoint too;
+    the sort headers and pager are boosted links onto the page route.
+
+    The response carries ``HX-Replace-Url`` with the canonical page
+    address so the location bar tracks the state without a history entry
+    per keystroke.
     """
     del user  # Depends() enforces the role; the variable is otherwise unused.
-    db = request.app.state.db
-    routing = request.app.state.routing
-    users = await db.list_users_with_agents()
-    needle = q.strip().lower()
-    if needle:
-        users = [u for u in users if needle in u["email"].lower()]
-    if verified == "verified":
-        users = [u for u in users if u["email_verified"]]
-    elif verified == "unverified":
-        users = [u for u in users if not u["email_verified"]]
-    _enrich_users(users, routing)
+    users, total, listing = await _load_listing(request, listing)
     return templates.TemplateResponse(
         request,
         "_users_table.html",
-        {"users": users, "query": q, "verified": verified},
+        _listing_context(users, total, listing),
+        headers={"HX-Replace-Url": listing.page_url()},
     )
 
 
@@ -278,9 +336,13 @@ async def delete_user_htmx(
     # <div> works for a target rendered as <tr>; and a missing target
     # (collapsed row case) is a silent no-op. Using <div> also dodges
     # browser HTML parsing that strips <tr> outside a <table>.
+    # The HX-Trigger header then makes the panel re-fetch its page, so the
+    # "Showing X–Y of Z" line and the page boundaries stay right after the
+    # row has already vanished.
     return HTMLResponse(
         f'<div id="user-row-{user_id}" hx-swap-oob="delete"></div>'
-        f'<div id="user-detail-{user_id}" hx-swap-oob="delete"></div>'
+        f'<div id="user-detail-{user_id}" hx-swap-oob="delete"></div>',
+        headers={"HX-Trigger": "users-changed"},
     )
 
 
@@ -364,13 +426,19 @@ async def force_disconnect_agent(
 
 @router.get("/agents-status", response_class=HTMLResponse)
 async def agents_status_oob(
-    request: Request, user: UserTokenPayload = Depends(_require_admin)
+    request: Request,
+    listing: UsersListing = Depends(_listing_params),
+    user: UserTokenPayload = Depends(_require_admin),
 ):
     """Return OOB ``<span hx-swap-oob="true">`` fragments for live status.
 
-    Drives the 10 s status refresh from a single hidden poller in
-    ``users.html`` without churning the rest of the DOM (so expanded
-    detail rows are not collapsed). Emits three classes of span by id:
+    Drives the 10 s status refresh from a single hidden poller inside the
+    users panel without churning the rest of the DOM (so expanded detail
+    rows are not collapsed). The poller's URL carries the panel's listing
+    state, so only the users on the visible page are re-rendered; the
+    cells update in place and the rows are never reordered, even under a
+    last-activity sort — the order refreshes on the next interaction.
+    Emits three classes of span by id:
 
     * ``agent-status-{agent_id}`` — the online/offline badge.
     * ``user-online-{user_id}`` — count of currently-online agents.
@@ -381,10 +449,7 @@ async def agents_status_oob(
     the documented ``<tbody>`` OOB-swap quirk in htmx#1900.
     """
     del user
-    db = request.app.state.db
-    routing = request.app.state.routing
-    users = await db.list_users_with_agents()
-    _enrich_users(users, routing)
+    users, _total, _listing = await _load_listing(request, listing)
     return templates.TemplateResponse(
         request,
         "_agent_status_oob.html",
