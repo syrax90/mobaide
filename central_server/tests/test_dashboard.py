@@ -344,6 +344,11 @@ def _link_href(body: str, aria_label: str) -> str:
     return _attr(body, "href", anchor)
 
 
+def _control_sync(body: str, start: int) -> tuple[str, str]:
+    """``(hx-include, hx-sync)`` of the htmx control opening at ``start``."""
+    return _attr(body, "hx-include", start), _attr(body, "hx-sync", start)
+
+
 class TestUserSorting:
     """The sortable Registered / Last Activity headers on ``GET /dashboard``."""
 
@@ -496,6 +501,100 @@ class TestUserPagination:
         assert _attr(body, "hx-get", poller) == (
             "/dashboard/agents-status?sort=activity&dir=asc&per_page=50"
         )
+
+
+class TestSearchAndPanelControlSync:
+    """Every panel control includes the live search form and syncs on it,
+    so a click submits the text in the box *after* the ``q`` its href
+    was rendered with — which only works because the later duplicate
+    of a query parameter is the one the server applies."""
+
+    async def test_fragment_applies_the_last_duplicate_q(
+        self, client, dashboard_headers, viewer_user
+    ):
+        resp = await client.get(
+            "/dashboard/users?q=stale&q=viewer", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        assert resp.headers["HX-Replace-Url"] == "/dashboard?q=viewer"
+        body = resp.text
+        assert _row_ids(body) == [viewer_user["id"]]
+        assert _sort_header(body, "registered")[1].startswith(
+            "/dashboard?q=viewer"
+        )
+
+    async def test_page_applies_the_last_duplicate_q(
+        self, client, dashboard_headers, viewer_user
+    ):
+        resp = await client.get(
+            "/dashboard?q=stale&q=viewer", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert _row_ids(body) == [viewer_user["id"]]
+        assert _attr(body, "value", body.index('name="q"')) == "viewer"
+
+    async def test_page_pushes_the_canonical_url_only_for_htmx_requests(
+        self, client, dashboard_headers, viewer_user
+    ):
+        """A boosted click reaches the page route with the duplicate
+        ``q`` in its URL; ``HX-Push-Url`` hands htmx the canonical
+        address to push instead. A plain navigation gets no such header.
+        """
+        del viewer_user
+        boosted = await client.get(
+            "/dashboard?q=stale&q=viewer&verified=all",
+            headers={**dashboard_headers, "HX-Request": "true"},
+        )
+        assert boosted.status_code == 200
+        assert boosted.headers["HX-Push-Url"] == "/dashboard?q=viewer"
+
+        plain = await client.get(
+            "/dashboard?q=stale&q=viewer&verified=all", headers=dashboard_headers
+        )
+        assert plain.status_code == 200
+        assert "HX-Push-Url" not in plain.headers
+
+    async def test_panel_controls_include_and_sync_on_the_search_form(
+        self, client, app, dashboard_headers
+    ):
+        """Sort headers, pager links and the per-page select all pull
+        the live search form into the request and abort a stale
+        in-flight search; their own URLs still bake the rendered ``q``
+        so a modifier-click opens the filtered view."""
+        await _seed_users(app, 30)
+        resp = await client.get(
+            "/dashboard/users?q=bulk", headers=dashboard_headers
+        )
+        body = resp.text
+        controls = {
+            "registered": body.rfind(
+                "<a ", 0, body.index('title="Sort by registered')
+            ),
+            "activity": body.rfind(
+                "<a ", 0, body.index('title="Sort by last activity')
+            ),
+            "next": body.rfind("<a ", 0, body.index('aria-label="Next page"')),
+            "page 2": body.rfind("<a ", 0, body.index('aria-label="Page 2"')),
+            "per-page": body.index('id="per-page"'),
+        }
+        for name, start in controls.items():
+            assert _control_sync(body, start) == (
+                "#user-search", "#user-search:replace"
+            ), name
+        assert _link_href(body, "Next page") == "/dashboard?q=bulk&page=2"
+        assert _attr(body, "hx-get", controls["per-page"]) == (
+            "/dashboard/users?q=bulk"
+        )
+        assert "#users-panel:replace" not in body
+
+    async def test_search_form_queues_behind_the_in_flight_panel_request(
+        self, client, dashboard_headers
+    ):
+        body = (await client.get("/dashboard", headers=dashboard_headers)).text
+        form = body.rfind("<form ", 0, body.index('id="user-search"'))
+        assert _attr(body, "hx-sync", form) == "this:queue last"
+        assert "#users-panel:replace" not in body
 
 
 class TestAgentStatusPollerScope:

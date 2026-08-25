@@ -275,14 +275,16 @@ def _users_filter(q: str, verified: bool | None) -> tuple[str, list]:
 
     ``q`` is a case-insensitive email substring match. It goes through
     ``instr`` rather than ``LIKE`` so ``%`` and ``_`` in the needle stay
-    literal without an ESCAPE dance. SQLite's ``lower()`` folds ASCII only,
-    which is what email addresses are in practice.
+    literal without an ESCAPE dance. Both operands are folded by SQLite's
+    ``lower()`` — ASCII-only, but symmetric, so an address is always found
+    by its exact spelling; folding the needle in Python instead would
+    lower-case ``Ü`` on one side only and miss ``Ünal@…``.
     """
     clauses: list[str] = []
     params: list = []
-    needle = q.strip().lower()
+    needle = q.strip()
     if needle:
-        clauses.append("instr(lower(u.email), ?) > 0")
+        clauses.append("instr(lower(u.email), lower(?)) > 0")
         params.append(needle)
     if verified is not None:
         clauses.append("u.email_verified = ?")

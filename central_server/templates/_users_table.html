@@ -10,9 +10,17 @@
    and hx-select lifts just the panel out of the page response. The search
    form, the per-page select and the refresher use the fragment route,
    whose HX-Replace-Url keeps the location bar in step without a history
-   entry per keystroke. #}
+   entry per keystroke.
+
+   Every control below includes #user-search and syncs on it (never on the
+   panel — see the note in users.html). The href keeps the q/verified the
+   panel was rendered with, so ⌘-click and no-JS still open the filtered
+   view; htmx then appends the form's live values after the href's own
+   query, and FastAPI resolves a repeated scalar parameter to its LAST
+   value, so a click that lands while the admin is mid-typing applies the
+   text in the box rather than the text the page was rendered with. #}
 {% macro panel_link_attrs(href) -%}
-href="{{ href }}" hx-boost="true" hx-select="#users-panel" hx-target="#users-panel" hx-swap="outerHTML" hx-sync="#users-panel:replace"
+href="{{ href }}" hx-boost="true" hx-select="#users-panel" hx-target="#users-panel" hx-swap="outerHTML" hx-include="#user-search" hx-sync="#user-search:replace"
 {%- endmacro %}
 {% macro sort_header(listing, column, label) -%}
 {% set state = listing.aria_sort(column) %}
@@ -38,7 +46,8 @@ href="{{ href }}" hx-boost="true" hx-select="#users-panel" hx-target="#users-pan
                     hx-get="{{ listing.fragment_url(page=1, per_page=None) }}"
                     hx-target="#users-panel"
                     hx-swap="outerHTML"
-                    hx-sync="#users-panel:replace">
+                    hx-include="#user-search"
+                    hx-sync="#user-search:replace">
                 {% for size in listing.page_sizes %}
                 <option value="{{ size }}"{% if size == listing.per_page %} selected{% endif %}>{{ size }}</option>
                 {% endfor %}

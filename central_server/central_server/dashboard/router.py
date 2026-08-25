@@ -175,12 +175,21 @@ async def users_page(
     user: UserTokenPayload = Depends(_require_admin),
 ):
     """The users page. Takes the same listing parameters as the fragment
-    so the URLs htmx pushes and replaces reload to the same view."""
+    so the URLs htmx pushes and replaces reload to the same view.
+
+    The boosted sort/pager links append the live search controls after
+    their href's own query, so the request URL can carry a repeated ``q``;
+    ``HX-Push-Url`` hands htmx the canonical address to push instead.
+    """
     users, total, listing = await _load_listing(request, listing)
+    headers = {}
+    if request.headers.get("HX-Request") == "true":
+        headers["HX-Push-Url"] = listing.page_url()
     return templates.TemplateResponse(
         request,
         "users.html",
         {**_listing_context(users, total, listing), "username": user.email},
+        headers=headers,
     )
 
 

@@ -500,6 +500,22 @@ class TestListUsersFilterSortPage:
         assert await db.count_users(q="pct%") == 1
         assert await db.count_users(q="u_1") == 1
 
+    async def test_q_finds_a_non_ascii_address_by_its_exact_spelling(
+        self, db: Database
+    ):
+        """Both operands are folded by SQLite's ASCII-only ``lower()``.
+        Folding the needle in Python instead would turn ``Ü`` into ``ü``
+        on one side only and miss the stored address.
+        """
+        unal, _ascii = await self._seed(
+            db, "Ünal@test.local", "unal@test.local"
+        )
+
+        for needle in ("Ünal", "ÜNAL"):
+            users = await db.list_users_with_agents(q=needle)
+            assert [u["id"] for u in users] == [unal], needle
+            assert await db.count_users(q=needle) == 1, needle
+
     async def test_verified_filter_tristate_and_count(self, db: Database):
         (vouched,) = await self._seed(
             db, "vouched@test.local", email_verified=True
