@@ -1,6 +1,6 @@
 # Android Changelog
 
-## [3.7.0](https://github.com/syrax90/claude_mobile/compare/android-v3.6.0...android-v3.7.0) (2026-08-27)
+## [3.6.1](https://github.com/syrax90/claude_mobile/compare/android-v3.6.0...android-v3.6.1) (2026-08-27)
 
 
 ### Features
