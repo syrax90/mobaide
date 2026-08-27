@@ -131,6 +131,14 @@ discarded at merge time. Breaking changes use `!` in the title
 match. Anything else (`chore:`, `docs:`, `refactor:`) merges normally and
 produces no release.
 
+**Every automatic bump is a patch**, for the Android app permanently
+(`"versioning": "always-bump-patch"` on its release-please package — a
+breaking `feat(android)!` is a patch too) and for `mobaide_agent`,
+`central_server` and `web` only while they stay below `1.0.0`. An Android
+minor or major is cut by hand: add a `Release-As: X.Y.0` footer to the squash
+commit body at merge time. Details and the pre-1.0 caveat are in
+[docs/versioning-and-updates.md](docs/versioning-and-updates.md#cutting-a-release).
+
 After merge, release-please opens a release-PR per affected component;
 merging that release-PR pushes the matching tag below and fires the
 corresponding workflow:

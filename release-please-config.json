@@ -24,6 +24,7 @@
       "release-type": "simple",
       "component": "android",
       "changelog-path": "CHANGELOG.md",
+      "versioning": "always-bump-patch",
       "extra-files": [
         "app/build.gradle.kts"
       ]
