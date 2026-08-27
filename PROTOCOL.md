@@ -179,9 +179,10 @@ cadence; they do **not** gate compatibility.
     ``..`` or NUL); ``503 {"detail": {"code": "git_unavailable"}}`` when no
     ``git`` binary is on the agent's PATH; ``504 {"detail": {"code":
     "git_timeout"}}``; ``500 {"detail": {"code": "git_error", "message":
-    …}}`` for an unexpected git failure. Old agents answer ``404`` for both
-    routes → clients render an "update your agent" state; the capability key
-    lets them gate proactively.
+    …}}`` for an unexpected git failure — a repository path containing a
+    literal newline is unsupported and always answers this. Old agents
+    answer ``404`` for both routes → clients render an "update your agent"
+    state; the capability key lets them gate proactively.
   * ``GET /api/version`` gains ``capabilities.git = {"changes": true}``
     (emitted by both transports, next to ``capabilities.cli``).
   * ``git.changed`` (published after a successful branch/worktree delete)

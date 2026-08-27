@@ -115,6 +115,30 @@ class TestResolveRepo:
         assert probe.repo.toplevel == norm_path(trail)
         assert probe.repo.git_dir == norm_path(trail) + "/.git"
 
+    @requires_git
+    @posix_only
+    @pytest.mark.parametrize(
+        "name",
+        ["vt\x0bb", "nel\u0085b", "cr\rb", "ls\u2028b"],
+        ids=["vt", "nel", "cr", "ls"],
+    )
+    async def test_line_terminator_in_directory_name_is_kept(self, tmp_path, name):
+        odd = init_repo(str(tmp_path / name))
+
+        probe = await resolve_repo(odd)
+
+        assert probe.reason is None
+        assert probe.repo.toplevel == norm_path(odd)
+        assert probe.repo.git_dir == norm_path(odd) + "/.git"
+
+    @requires_git
+    @posix_only
+    async def test_newline_in_directory_name_fails_closed(self, tmp_path):
+        odd = init_repo(str(tmp_path / "nl\nb"))
+
+        with pytest.raises(GitCommandError, match="unexpected git rev-parse output"):
+            await resolve_repo(odd)
+
     async def test_old_git_is_git_too_old(self, tmp_path, monkeypatch):
         stub_git(monkeypatch, CmdResult(rc=0, stdout=b"", stderr=b""), version=(2, 14, 9))
 
@@ -214,6 +238,26 @@ class TestRepoState:
 
         assert await repo_state(norm_path(wt)) == "merging"
         assert await repo_state(norm_path(repo)) == "clean"
+
+    @posix_only
+    async def test_linked_worktree_under_cr_directory_is_merging(self, tmp_path):
+        odd = init_repo(str(tmp_path / "cr\rb"))
+        make_conflict_branches(odd)
+        wt = str(tmp_path / "wt")
+        run_git_sync(odd, "worktree", "add", wt, "other")
+        run_git_sync(wt, "merge", "main", check=False)
+
+        assert await repo_state(norm_path(wt)) == "merging"
+
+    async def test_extra_git_path_lines_raise(self, tmp_path, monkeypatch):
+        stub_git(monkeypatch, CmdResult(
+            rc=0, stderr=b"",
+            stdout=b".git/MERGE_HEAD\n.git/BISECT_LOG\n.git/rebase-merge\n"
+                   b"split\n.git/rebase-apply\n",
+        ))
+
+        with pytest.raises(GitCommandError, match="unexpected git rev-parse --git-path"):
+            await repo_state(str(tmp_path))
 
 
 @requires_git

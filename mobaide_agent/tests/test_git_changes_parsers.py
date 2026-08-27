@@ -1,5 +1,6 @@
-"""Pure-function tests for the session git Changes service: porcelain v2
-and unified-diff parsers, request validation and the HTTP error map."""
+"""Pure-function tests for the session git Changes service: git output line
+splitting, porcelain v2 and unified-diff parsers, request validation and the
+HTTP error map."""
 from __future__ import annotations
 
 import pytest
@@ -9,6 +10,7 @@ from mobaide.agent.git.changes_service import (
     GitBadRequestError,
     GitCommandError,
     GitTimeoutError,
+    _lines,
     clamp_context,
     http_error_for,
     parse_porcelain_v2,
@@ -31,6 +33,22 @@ def _entry_view(entries):
          e.orig_path, e.rename_score, e.submodule)
         for e in entries
     ]
+
+
+class TestLines:
+    @pytest.mark.parametrize(
+        ("data", "expected"),
+        [
+            (b"a\x0bb\nc\rd\n", ["a\x0bb", "c\rd"]),
+            ("nel\u0085b\nls\u2028b\n".encode("utf-8"), ["nel\u0085b", "ls\u2028b"]),
+            (b"", []),
+            (b"x", ["x"]),
+            (b"a\n\n", ["a", ""]),
+        ],
+        ids=["vt-and-cr", "nel-and-ls", "empty", "no-terminator", "one-blank-kept"],
+    )
+    def test_splits_on_newline_only(self, data, expected):
+        assert _lines(data) == expected
 
 
 class TestParsePorcelainV2:

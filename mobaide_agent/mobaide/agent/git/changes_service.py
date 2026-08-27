@@ -116,6 +116,15 @@ def _text(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def _lines(data: bytes) -> list[str]:
+    """Split git output on ``\\n`` only: ``str.splitlines`` would also break
+    on ``\\r``, ``\\x0b``, U+0085, U+2028 and friends, all legal path bytes."""
+    lines = _text(data).split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def _fs_path(base: str, raw: str) -> str:
     """Absolute, symlink-resolved path in the form git itself prints for
     ``--show-toplevel`` (forward slashes on Windows), so ``git_dir`` /
@@ -162,7 +171,7 @@ async def resolve_repo(cwd: str | None) -> RepoProbe:
     except GitCwdMissingError:
         return RepoProbe("cwd_missing", None)
     _check_result(result)
-    lines = _text(result.stdout).splitlines()
+    lines = _lines(result.stdout)
     stderr = _text(result.stderr)
     if result.rc != 0:
         if "dubious ownership" in stderr:
@@ -176,7 +185,8 @@ async def resolve_repo(cwd: str | None) -> RepoProbe:
         if len(lines) >= 2 and lines[1].strip() == "false":
             return RepoProbe("not_a_repo", None)
         raise _fail(result, "git rev-parse failed")
-    if len(lines) < 5:
+    if len(lines) != 5:
+        # a path containing a newline would shift the frame: fail closed
         raise GitCommandError("unexpected git rev-parse output")
     # only the two boolean lines are trimmed: a path line may legitimately end
     # in whitespace and must survive byte-for-byte
@@ -243,11 +253,11 @@ async def repo_state(toplevel: str) -> RepoState:
     _check_result(result)
     if result.rc != 0:
         raise _fail(result, "git rev-parse --git-path failed")
-    lines = _text(result.stdout).splitlines()
-    if len(lines) < 4:
+    lines = _lines(result.stdout)
+    if len(lines) != 4:
         raise GitCommandError("unexpected git rev-parse --git-path output")
     merge, bisect, rebase_merge, rebase_apply = (
-        os.path.exists(os.path.join(toplevel, p.strip())) for p in lines[:4]
+        os.path.exists(os.path.join(toplevel, p)) for p in lines
     )
     if rebase_merge or rebase_apply:
         return "rebasing"
@@ -692,7 +702,7 @@ async def _numstat(
     _check_result(result)
     if result.rc != 0:
         raise _fail(result, "git diff --numstat failed")
-    return [ln for ln in _text(result.stdout).splitlines() if ln.strip()]
+    return [ln for ln in _lines(result.stdout) if ln]
 
 
 async def _is_unmerged(toplevel: str, path: str) -> bool:
