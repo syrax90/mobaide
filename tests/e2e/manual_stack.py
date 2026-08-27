@@ -225,6 +225,23 @@ def ensure_no_proxy_env() -> None:
 # --------------------------------------------------------------------------
 
 
+def _default_client_state() -> dict:
+    """Per-client rollout bookkeeping.
+
+    ``baked_url`` is the URL the next build will bake (set at sync time, drives
+    the rebuild prompt); ``installed_url`` is the URL a build actually carried
+    onto a device (set only after a successful install), and only the latter can
+    say whether the installed app is stale.
+    """
+    return {
+        "previous_central_server_url": None,
+        "previous_line": None,
+        "managed_url": None,
+        "baked_url": None,
+        "installed_url": None,
+    }
+
+
 def default_state() -> dict:
     return {
         "version": STATE_VERSION,
@@ -236,16 +253,8 @@ def default_state() -> dict:
         "agent_token": None,
         "server_port": DEFAULT_PORT,
         "server_host": DEFAULT_HOST,
-        "android": {
-            "previous_central_server_url": None,
-            "managed_url": None,
-            "baked_url": None,
-        },
-        "ios": {
-            "previous_central_server_url": None,
-            "managed_url": None,
-            "baked_url": None,
-        },
+        "android": _default_client_state(),
+        "ios": _default_client_state(),
         "runtime": {},
         "updated_at": None,
     }
@@ -676,8 +685,14 @@ def _xcconfig_escape(url: str) -> str:
     return url.replace("//", "/$()/")
 
 
-def _xcconfig_unescape(value: str) -> str:
-    return value.replace("$()", "").strip()
+def _xcconfig_parse(raw: str) -> str:
+    """Value of an xcconfig assignment.
+
+    ``//`` opens a comment anywhere on the line, so an inline note must be cut
+    off the raw text BEFORE the ``/$()/`` escape is undone -- undoing it first
+    would turn the escape into a comment delimiter and swallow the URL.
+    """
+    return raw.split("//", 1)[0].replace("$()", "").strip()
 
 
 def _url_host(url: str) -> str:
@@ -727,10 +742,7 @@ class _ManagedUrlFile:
         return self._path()
 
     def own_state(self, state: dict) -> dict:
-        return state.setdefault(
-            self.state_key,
-            {"previous_central_server_url": None, "managed_url": None, "baked_url": None},
-        )
+        return state.setdefault(self.state_key, _default_client_state())
 
     def current_url(self, lines: list[str]) -> str | None:
         for line in lines:
@@ -748,7 +760,12 @@ class _ManagedUrlFile:
         if current != own.get("managed_url"):
             # First take-over, or someone else (profile swap / hand edit)
             # changed the value since our last write: remember it for --revert.
+            # The whole line is kept, not just the parsed URL -- re-rendering
+            # would drop an inline xcconfig comment (or a developer's spacing).
             own["previous_central_server_url"] = current
+            own["previous_line"] = next(
+                (line for line in lines if _CENTRAL_URL_RE.match(line)), None
+            )
 
         new_line = self.render(url)
         out: list[str] = []
@@ -790,7 +807,9 @@ class _ManagedUrlFile:
             return
 
         previous = own.get("previous_central_server_url")
-        pending = self.render(previous) if previous is not None else None
+        pending = own.get("previous_line")
+        if pending is None and previous is not None:
+            pending = self.render(previous)
         out: list[str] = []
         for line in lines:
             if _CENTRAL_URL_RE.match(line):
@@ -812,6 +831,7 @@ class _ManagedUrlFile:
                 log(f"{self.label}: CENTRAL_SERVER_URL line removed")
         own["managed_url"] = None
         own["previous_central_server_url"] = None
+        own["previous_line"] = None
 
 
 ANDROID_URL_FILE = _ManagedUrlFile(
@@ -827,7 +847,7 @@ IOS_URL_FILE = _ManagedUrlFile(
     label="ios/Config/Local.xcconfig",
     path=lambda: LOCAL_XCCONFIG_PATH,
     render=lambda url: f"CENTRAL_SERVER_URL = {_xcconfig_escape(url)}",
-    parse=_xcconfig_unescape,
+    parse=_xcconfig_parse,
     header=CREATED_XCCONFIG_HEADER,
     state_key="ios",
 )
@@ -1022,7 +1042,9 @@ def booted_simulator_udid() -> str | None:
     return None
 
 
-def run_xcode_install(state_dir: Path, *, clean_install: bool) -> bool:
+def run_xcode_install(
+    state: dict, state_dir: Path, url: str, save, *, reset_keychain: bool
+) -> bool:
     """Build the debug app and (re)install it on the booted simulator.
 
     Warn-only at every step, exactly like run_gradle_install: a missing Xcode or
@@ -1030,6 +1052,11 @@ def run_xcode_install(state_dir: Path, *, clean_install: bool) -> bool:
     deliberately NOT passed -- an unsigned app cannot reach the Keychain, so the
     login token would never persist and the app would look signed out on every
     launch (it stays fine for `xcodebuild test`).
+
+    The stale-install check reads ``installed_url``, which is written only after
+    an install succeeds -- ``baked_url`` moves at sync time, so a sync-now /
+    install-later run (the flow the READY banner prints) would otherwise think
+    the simulator already carried the new URL.
     """
     if sys.platform != "darwin":
         log("WARNING: the iOS app can only be built on macOS; skipping app install")
@@ -1075,13 +1102,29 @@ def run_xcode_install(state_dir: Path, *, clean_install: bool) -> bool:
     if not app.exists():
         log(f"WARNING: built app not found at {app}; skipping install")
         return False
-    if clean_install:
-        # The relay base URL is persisted in the Keychain at sign-in, so an
-        # upgrade install would keep pointing the agent sockets at the old
-        # stack while REST already followed the new baked URL.
-        log("URL changed: uninstalling the previous build so the Keychain-stored "
-            "relay URL cannot linger")
+
+    ios_state = IOS_URL_FILE.own_state(state)
+    if ios_state.get("installed_url") != url:
+        # TokenStore and ConnectionStore both persist a relay base URL in the
+        # keychain, and an upgrade install would keep opening agent sockets
+        # against the old stack while REST already followed the new baked URL.
+        # Measured on the simulator: `simctl uninstall` wipes the container but
+        # leaves those items intact, so only a keychain reset actually clears
+        # them -- and simctl scopes reset per device, never per app.
+        log("installed URL differs: uninstalling the previous build")
         subprocess.run(["xcrun", "simctl", "uninstall", udid, IOS_BUNDLE_ID])
+        if reset_keychain:
+            log(f"resetting the {udid[:8]}... simulator keychain (uninstall does "
+                "not clear the stored relay URL; this drops every keychain item "
+                "on that device, including `simctl keychain add-root-cert` "
+                "anchors -- skip it with --ios-keep-keychain)")
+            subprocess.run(["xcrun", "simctl", "keychain", udid, "reset"])
+        else:
+            log("WARNING: --ios-keep-keychain: the previous stack's relay URL "
+                "survives in the keychain. If the app still talks to the old "
+                "server, sign out in-app or reset the keychain by hand")
+        ios_state["installed_url"] = None
+        save()
     for cmd in (
         ["xcrun", "simctl", "install", udid, str(app)],
         ["xcrun", "simctl", "launch", udid, IOS_BUNDLE_ID],
@@ -1094,6 +1137,8 @@ def run_xcode_install(state_dir: Path, *, clean_install: bool) -> bool:
         if result.returncode != 0:
             log(f"WARNING: `{' '.join(cmd)}` failed")
             return False
+    ios_state["installed_url"] = url
+    save()
     log("debug app installed and launched on the simulator")
     return True
 
@@ -1165,9 +1210,9 @@ def print_ready_banner(
         lines.append(f"  iOS app URL:        {ios.url}  (baked at build time)")
         if ios.rebuild_needed:
             lines.append("      URL CHANGED -> rebuild + reinstall on the booted "
-                         "simulator (the old")
-            lines.append("      relay URL is kept in the Keychain, so it uninstalls "
-                         "first):")
+                         "simulator (uninstall alone")
+            lines.append("      leaves the old relay URL in the keychain, so this "
+                         "also resets it):")
         else:
             lines.append("      to (re)install the debug app on the booted simulator:")
         lines.append("      python tests/e2e/manual_stack.py ios --install-app")
@@ -1256,7 +1301,10 @@ def cmd_up(args: argparse.Namespace) -> int:
             ios.rebuild_needed = sync_ios_files(state, ios.url, save)
             ios.synced = True
             if args.install_app:
-                run_xcode_install(state_dir, clean_install=ios.rebuild_needed)
+                run_xcode_install(
+                    state, state_dir, ios.url, save,
+                    reset_keychain=not args.ios_keep_keychain,
+                )
         else:
             log("iOS sync skipped: not macOS (pass --ios to write "
                 "ios/Config/Local.xcconfig anyway)")
@@ -1423,7 +1471,10 @@ def cmd_ios(args: argparse.Namespace) -> int:
     if changed:
         log("URL changed: rebuild + reinstall the app so it bakes the new value")
     if args.install_app:
-        run_xcode_install(state_dir, clean_install=changed)
+        run_xcode_install(
+            state, state_dir, url, save,
+            reset_keychain=not args.ios_keep_keychain,
+        )
     return 0
 
 
@@ -1545,6 +1596,12 @@ def _add_ios_args(parser: argparse.ArgumentParser) -> None:
         metavar="MODE",
         help="URL baked into the iOS build: auto (loopback) | simulator | lan "
              "(needs a hand-added ATS exception) | an explicit http(s) URL",
+    )
+    parser.add_argument(
+        "--ios-keep-keychain",
+        action="store_true",
+        help="with --install-app, do not reset the simulator keychain when the "
+             "URL changed (leaves the previous stack's relay URL in place)",
     )
 
 

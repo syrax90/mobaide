@@ -115,7 +115,7 @@ def test_xcconfig_value_escapes_the_comment_slashes(monkeypatch, tmp_path):
     the ``/$()/`` escape and round-trip back to the plain URL.
     """
     assert ms._xcconfig_escape(LOOPBACK_URL) == "http:/$()/127.0.0.1:9000"
-    assert ms._xcconfig_unescape(ms._xcconfig_escape(LOOPBACK_URL)) == LOOPBACK_URL
+    assert ms._xcconfig_parse(ms._xcconfig_escape(LOOPBACK_URL)) == LOOPBACK_URL
 
     _point_client_files_at(monkeypatch, tmp_path)
     ms.sync_ios_files(ms.default_state(), LOOPBACK_URL, lambda: None)
@@ -193,3 +193,53 @@ def test_ios_auto_prefers_loopback_where_android_prefers_the_lan():
     # A specific-interface bind is the only reachable address; loopback is not.
     args.host, args.ios_url = "192.168.1.5", "auto"
     assert ms.resolve_ios_url(args, "10.0.0.1") == TEST_URL
+
+
+def test_ios_revert_restores_an_inline_comment_verbatim(monkeypatch, tmp_path):
+    """``//`` opens a comment anywhere in an xcconfig, so a developer may
+    annotate their own line. Re-rendering from the parsed URL would fold the
+    note into the value and escape its delimiter, writing back a broken
+    setting — the original line has to come back byte for byte.
+    """
+    _point_client_files_at(monkeypatch, tmp_path)
+    original = "CENTRAL_SERVER_URL = https:/$()/prod.example  // the real one"
+    ms.LOCAL_XCCONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ms.LOCAL_XCCONFIG_PATH.write_text(original + "\n", encoding="utf-8")
+    state = ms.default_state()
+    noop = lambda: None  # noqa: E731
+
+    ms.sync_ios_files(state, LOOPBACK_URL, noop)
+    # The comment must not leak into the remembered URL either.
+    assert state["ios"]["previous_central_server_url"] == "https://prod.example"
+
+    ms.revert_ios_files(state, noop)
+    assert ms.LOCAL_XCCONFIG_PATH.read_text(encoding="utf-8").splitlines() == [original]
+
+
+def test_ios_install_gate_tracks_the_installed_url_not_the_baked_one(monkeypatch, tmp_path):
+    """`up` bakes a URL, then the banner tells you to run `ios --install-app`.
+
+    That second run re-syncs the same URL, so the rebuild verdict is False —
+    but the simulator still carries the previous build. The stale-install
+    decision must therefore read ``installed_url``, which only a successful
+    install advances.
+    """
+    _point_client_files_at(monkeypatch, tmp_path)
+    state = ms.default_state()
+    noop = lambda: None  # noqa: E731
+    ios = ms.IOS_URL_FILE.own_state(state)
+
+    # `up` syncs a new URL: rebuild prompt fires, nothing is installed yet.
+    assert ms.sync_ios_files(state, LOOPBACK_URL, noop) is True
+    assert ios["baked_url"] == LOOPBACK_URL
+    assert ios["installed_url"] is None
+
+    # The documented follow-up re-syncs the same URL: no rebuild prompt...
+    assert ms.sync_ios_files(state, LOOPBACK_URL, noop) is False
+    # ...yet the install is still stale, so it must not be treated as current.
+    assert ios["installed_url"] != LOOPBACK_URL
+
+    # After an install lands, the same URL is no longer stale.
+    ios["installed_url"] = LOOPBACK_URL
+    assert ms.sync_ios_files(state, LOOPBACK_URL, noop) is False
+    assert ios["installed_url"] == LOOPBACK_URL

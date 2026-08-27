@@ -121,10 +121,16 @@ Two iOS-specific notes:
   truncated to `http:`. `$()` is an empty build-setting reference that Xcode
   expands away before the `Info.plist` substitution, so the app sees a plain
   URL.
-* iOS persists the relay base URL in the **Keychain** at sign-in, so an upgrade
-  install keeps pointing the agent sockets at the old stack even after the
-  rebuild. When the URL changes, uninstall first — `--install-app` does it for
-  you, or `xcrun simctl uninstall booted com.mobaide.app` by hand.
+* iOS persists the relay base URL in the **keychain** at sign-in (`TokenStore`
+  and `ConnectionStore` both do), so an upgrade install keeps opening agent
+  sockets against the old stack even after the rebuild. **`simctl uninstall`
+  does not clear those items** — measured on the simulator: an item written
+  before an uninstall reads back intact after reinstalling. Only
+  `xcrun simctl keychain <udid> reset` clears them, and simctl scopes that per
+  device, never per app. So when the baked URL changes, `--install-app`
+  uninstalls **and** resets that simulator's keychain — which also drops any
+  `simctl keychain add-root-cert` anchors on it. Use `--ios-keep-keychain` to
+  skip the reset and sign out in-app instead.
 
 **All are undone automatically when the stack stops** — the previous
 `CENTRAL_SERVER_URL` values are put back and the debug override removed, so the
@@ -185,6 +191,7 @@ release builds. Use the simulator over loopback instead.
 | `up --keep-android` / `--keep-ios` | on stop, leave the test URL in place (default: restore it) |
 | `up --no-android` / `--no-ios` | skip that client's file sync entirely |
 | `up --ios` | sync the iOS override off macOS too (default: macOS only) |
+| `--ios-keep-keychain` | with `--install-app`, skip the keychain reset on a URL change (leaves the old relay URL behind) |
 | `android` / `ios` | (re)sync that client's files without booting the stack |
 | `android --revert` / `ios --revert` | manually undo now (also runs automatically on every `up` stop) |
 | `status` | probe `/api/health`, show persisted identity |
@@ -206,7 +213,7 @@ session-create time with a `<cli>_cli_missing` marker.
 | App shows network/cleartext errors | The installed build predates the file sync or is a RELEASE build. Re-run `python tests/e2e/manual_stack.py android`, then rebuild + reinstall the **debug** app. |
 | iOS app still hits `api.mobaide.com` | No `ios/Config/Local.xcconfig`, or the build predates it. The URL is baked in at build time — re-run `ios`, then rebuild. Check the built app with `plutil -extract CentralServerURL raw <app>/Info.plist`. |
 | iOS: terminals work but sign-in fails | ATS is blocking cleartext REST to a non-loopback host (`-1022`). Use `--ios-url simulator`, or add an `NSAppTransportSecurity` exception to the tracked `Info.plist` by hand. |
-| iOS: agent offline / wrong server after a URL change | The relay URL is persisted in the Keychain at sign-in. `xcrun simctl uninstall booted com.mobaide.app`, then reinstall (`ios --install-app` does both). |
+| iOS: agent offline / wrong server after a URL change | The relay URL is persisted in the keychain at sign-in, and an uninstall does **not** clear it. `ios --install-app` handles it (uninstall + `simctl keychain reset`); by hand, sign out in-app or `xcrun simctl keychain <udid> reset`. |
 | `no booted iOS simulator` | `xcrun simctl boot 'iPhone 16'` (or open Simulator.app) and re-run `ios --install-app`. |
 | IP changed (new DHCP lease) | Re-run `up` (it re-syncs and warns), rebuild + reinstall the app. |
 | `could not log in ... state.json no longer match` | DB and state diverged (e.g. deleted one of them). `up --fresh`, or pass matching `--email/--password`. |
