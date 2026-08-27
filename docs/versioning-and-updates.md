@@ -34,11 +34,20 @@ The rule is one line: **the PR title is the release trigger.**
 
 | You want to release… | PR title prefix |
 |----------------------|-----------------|
-| `mobaide_agent` | `feat(agent): …` (minor) or `fix(agent): …` (patch) |
+| `mobaide_agent` | `feat(agent): …` or `fix(agent): …` |
 | `central_server` | `feat(server): …` or `fix(server): …` |
 | Android app | `feat(android): …` or `fix(android): …` |
 | Web client | `feat(web): …` or `fix(web): …` |
 | Anything else (CI, docs, refactor) | `chore: …`, `docs: …`, `refactor: …` — no release fires |
+
+**How far the version moves is not the same for every component.** Every
+automatic bump in this repo is currently a *patch*, but for two different
+reasons, and only one of them is permanent:
+
+| Component | `fix` | `feat` | `feat!` | Why |
+|-----------|-------|--------|---------|-----|
+| Android | patch | patch | patch | `"versioning": "always-bump-patch"` on the `android` package. release-please's `AlwaysBumpPatch` ignores the commit type entirely, breaking changes included. **Permanent** — minor and major are hand-cut, see [Cutting an Android minor or major](#cutting-an-android-minor-or-major). |
+| agent, server, web | patch | patch | minor | Root-level `bump-minor-pre-major` + `bump-patch-for-minor-pre-major`. release-please gates both on `version.isPreMajor`, so this holds **only while the version is below `1.0.0`**. The day one of these ships `1.0.0` those flags go inert and it silently reverts to plain semver — `feat` → minor, `!` → major — with no config change. |
 
 The repo enforces **squash-only merging** (merge commits and rebase merges
 are disabled at the GitHub repo level): the squash commit **title is the PR
@@ -47,7 +56,9 @@ becomes the *single* commit on `main` that release-please reads, and the
 feature branch's own commit messages are **discarded at merge time** — they
 never reach `main` and have no effect on the version bump or the changelog.
 Breaking changes are signalled with `!` in the PR title (e.g.
-`feat(agent)!: …`), which release-please bumps as a major.
+`feat(agent)!: …`). That always earns the commit a `### ⚠ BREAKING CHANGES`
+section in the changelog, but it does **not** force a major here — how far the
+version actually moves is the bump table above.
 
 This is enforced two ways: the repo merge settings (the source of truth is a
 `gh api -X PATCH repos/<owner>/<repo> -f squash_merge_commit_title=PR_TITLE
@@ -164,6 +175,49 @@ identifies the `versionName` line. `versionCode` is computed inside
 (`major*10000 + minor*100 + patch`), so Play Store's
 monotonic-versionCode requirement is satisfied without a second
 manual edit.
+
+#### Cutting an Android minor or major
+
+The `android` package carries `"versioning": "always-bump-patch"`, so **no
+PR title can move its minor or major**. Both are deliberate human acts.
+
+The supported way is a `Release-As:` footer. release-please resolves it in
+`strategies/base.ts#buildNewVersion` *before* it consults the versioning
+strategy, so it overrides `always-bump-patch`:
+
+1. Merge the Android PR as usual, but in GitHub's squash dialog **type a body**
+   under the title (the repo defaults that body to blank, so it is empty until
+   you fill it in):
+
+   ```
+   feat(android): whatever the PR title already says
+
+   Release-As: 3.7.0
+   ```
+
+2. release-please opens the android release-PR at exactly `3.7.0`, with the
+   normal changelog section and the usual `build.gradle.kts` / manifest
+   rewrite. Merging it tags `android-v3.7.0` and `release-android.yml` ships
+   the bundle as it always does.
+
+The footer is scoped by path like every other commit — it only reaches the
+`android` package if the commit touches `android/**`, so it cannot move the
+agent, server, or web versions by accident. If you have nothing to ship
+alongside the bump, land a `chore(android): …` PR touching an Android file and
+put the footer on that.
+
+Editing the open release-PR by hand before merging is the other supported path.
+Do **not** hand-edit the manifest and then wait for release-please to tag —
+that is the half-and-half mode the callout above warns about.
+
+**A breaking change still ships as a patch, and that is fine.**
+`release-android.yml` derives `inAppUpdatePriority` from the changelog section,
+not from the version delta: any `### ⚠ BREAKING CHANGES` heading yields
+priority 5 (immediate in-app update), a `### Bug Fixes` heading yields 3,
+otherwise 1. A breaking `3.6.x` release is therefore still pushed to users at
+full urgency. That grep reads release-please's *default* section headings, so
+never introduce a `changelog-sections` config for this package — it would
+silently drop the urgency to 1.
 
 **Caveat — tag-trigger chaining.** GitHub's default `GITHUB_TOKEN`
 cannot trigger downstream workflows from a tag it pushes. The
