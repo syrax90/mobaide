@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ProjectSummary } from '../../../api/projectRepository';
+import { CODEX_REASONING_EFFORTS } from '../../../protocol/dto/sessionCreate';
+import type { CliModelDetail } from '../../../protocol/dto/agentVersion';
 import {
   claudeEffortsFor,
+  codexEffortsFor,
   codexPreset,
   effectiveClaudeEffort,
   effectiveClaudeModel,
@@ -55,6 +58,19 @@ describe('selectors', () => {
     expect(effectiveClaudeEffort({ ...bucket, effort: 'low' })).toBe('low');
     // Fast mode promotes the model, which widens the range back out.
     expect(effectiveClaudeEffort({ ...bucket, fastMode: true })).toBe('max');
+  });
+
+  it('derives codex effort options from the selected model catalog', () => {
+    const details: CliModelDetail[] = [
+      { id: 'gpt-5.6-sol', efforts: ['low', 'high', 'ultra'], defaultEffort: 'low' },
+    ];
+
+    expect(codexEffortsFor(details, 'gpt-5.6-sol')).toEqual(['low', 'high', 'ultra']);
+    // An unknown model and the Default (null) model both take the static
+    // fallback — which model the agent resolves Default to is unknown here.
+    expect(codexEffortsFor(details, 'gpt-5.5')).toEqual(CODEX_REASONING_EFFORTS);
+    expect(codexEffortsFor(details, null)).toEqual(CODEX_REASONING_EFFORTS);
+    expect(codexEffortsFor(null, 'gpt-5.6-sol')).toEqual(CODEX_REASONING_EFFORTS);
   });
 
   it('reads the pressed Codex preset, full access first', () => {
@@ -188,6 +204,147 @@ describe('wizardReducer', () => {
       sandbox: 'read-only',
       approval: 'on-request',
     });
+  });
+
+  it('re-defaults a stranded codex effort to the model default on switch', () => {
+    const detail: CliModelDetail = {
+      id: 'gpt-5.6-sol',
+      efforts: ['low', 'medium', 'ultra'],
+      defaultEffort: 'low',
+    };
+    const state = reduce([{ type: 'setCodexReasoningEffort', effort: 'xhigh' }]);
+
+    expect(
+      reduce([{ type: 'setCodexModel', model: 'gpt-5.6-sol', detail }], state).codex,
+    ).toMatchObject({ model: 'gpt-5.6-sol', reasoningEffort: 'low' });
+    // Without a catalog default, 'high' wins when advertised, else the first entry.
+    expect(
+      reduce(
+        [{ type: 'setCodexModel', model: 'x', detail: { ...detail, id: 'x', defaultEffort: null } }],
+        state,
+      ).codex.reasoningEffort,
+    ).toBe('low');
+    expect(
+      reduce(
+        [
+          {
+            type: 'setCodexModel',
+            model: 'y',
+            detail: { id: 'y', efforts: ['medium', 'high'], defaultEffort: null },
+          },
+        ],
+        state,
+      ).codex.reasoningEffort,
+    ).toBe('high');
+  });
+
+  it('keeps a still-supported codex effort on switch', () => {
+    const detail: CliModelDetail = {
+      id: 'gpt-5.6-sol',
+      efforts: ['low', 'medium', 'high', 'ultra'],
+      defaultEffort: 'low',
+    };
+    const state = reduce([{ type: 'setCodexReasoningEffort', effort: 'ultra' }]);
+
+    expect(
+      reduce([{ type: 'setCodexModel', model: 'gpt-5.6-sol', detail }], state).codex
+        .reasoningEffort,
+    ).toBe('ultra');
+  });
+
+  it('keeps the effort when the new model has no catalog entry or is Default', () => {
+    const state = reduce([{ type: 'setCodexReasoningEffort', effort: 'xhigh' }]);
+
+    expect(reduce([{ type: 'setCodexModel', model: 'mystery' }], state).codex).toMatchObject({
+      model: 'mystery',
+      reasoningEffort: 'xhigh',
+    });
+    expect(
+      reduce([{ type: 'setCodexModel', model: null, detail: null }], state).codex.reasoningEffort,
+    ).toBe('xhigh');
+  });
+
+  it('reconciles a persisted catalog effort against an agent without model_details', () => {
+    // An agent advertising no per-model details may be a pre-catalog build
+    // whose wire schema still 422s efforts outside the static vocabulary, so
+    // a restored `ultra` drops to the default when the probe resolves empty.
+    const state = reduce([{ type: 'setCodexReasoningEffort', effort: 'ultra' }]);
+
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details: null }], state).codex.reasoningEffort,
+    ).toBe('high');
+    // Details advertised but no model selected: nothing to check against —
+    // the restored value stands (free-form era proven by the details).
+    expect(
+      reduce(
+        [
+          {
+            type: 'reconcileCodexEffort',
+            details: [{ id: 'gpt-5.6-sol', efforts: ['low'], defaultEffort: 'low' }],
+          },
+        ],
+        state,
+      ).codex.reasoningEffort,
+    ).toBe('ultra');
+    // In-vocabulary and null ("Agent default") values always stand.
+    const inVocab = reduce([{ type: 'setCodexReasoningEffort', effort: 'medium' }]);
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details: null }], inVocab).codex.reasoningEffort,
+    ).toBe('medium');
+    const agentDefault = reduce([{ type: 'setCodexReasoningEffort', effort: null }]);
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details: null }], agentDefault).codex
+        .reasoningEffort,
+    ).toBeNull();
+  });
+
+  it('reconciles a restored effort against the selected model catalog entry', () => {
+    // Same per-model re-default as setCodexModel, applied when the probe
+    // resolves after the restore: the catalog says the selected model cannot
+    // serve the effort, so keeping it would submit a value Codex rejects.
+    const restored = reduce([
+      { type: 'setCodexModel', model: 'gpt-5.6-luna' },
+      { type: 'setCodexReasoningEffort', effort: 'ultra' },
+    ]);
+    const details = [
+      { id: 'gpt-5.6-luna', efforts: ['low', 'medium', 'xhigh'], defaultEffort: 'medium' },
+      { id: 'gpt-5.4', efforts: ['low', 'high'], defaultEffort: null },
+    ];
+
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details }], restored).codex.reasoningEffort,
+    ).toBe('medium');
+    // No catalog default → 'high' when advertised, else the first entry.
+    const onOther = reduce([{ type: 'setCodexModel', model: 'gpt-5.4' }], restored);
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details }], onOther).codex.reasoningEffort,
+    ).toBe('high');
+    // A still-supported effort and an unknown model both stand.
+    const supported = reduce([{ type: 'setCodexReasoningEffort', effort: 'xhigh' }], restored);
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details }], supported).codex.reasoningEffort,
+    ).toBe('xhigh');
+    const unknownModel = reduce([{ type: 'setCodexModel', model: 'mystery' }], restored);
+    expect(
+      reduce([{ type: 'reconcileCodexEffort', details }], unknownModel).codex.reasoningEffort,
+    ).toBe('ultra');
+  });
+
+  it('keeps the Agent-default (null) effort on any model switch', () => {
+    const state = reduce([{ type: 'setCodexReasoningEffort', effort: null }]);
+
+    expect(
+      reduce(
+        [
+          {
+            type: 'setCodexModel',
+            model: 'gpt-5.6-sol',
+            detail: { id: 'gpt-5.6-sol', efforts: ['low'], defaultEffort: 'low' },
+          },
+        ],
+        state,
+      ).codex.reasoningEffort,
+    ).toBeNull();
   });
 
   it('seeds the Auto Scan prompt once per project', () => {

@@ -10,6 +10,7 @@ do not duplicate the platform-probing logic.
 """
 from __future__ import annotations
 
+import asyncio
 import glob
 import logging
 import os
@@ -340,16 +341,35 @@ def probe_cli_available(launcher: CliLauncher) -> bool:
 
 def build_cli_capabilities(
     launchers: Mapping[str, CliLauncher],
+    *,
+    models_pending: bool = False,
 ) -> dict[str, dict[str, object]]:
     """Map each registered CLI launcher to its capability entry.
 
     Every entry carries ``{"available": <bool>}``. Launchers whose model list
     has been enumerated (see :func:`warm_cli_model_caches`) additionally carry
-    ``{"models": [...]}``; the key is omitted — never emitted empty — when
-    enumeration is unsupported or produced nothing, so clients fall back to
-    their hardcoded lists on the same absent/empty signal for old and new
-    agents alike. Reads only in-memory caches: never spawns a subprocess, so
-    ``GET /api/version`` latency is unaffected.
+    ``{"models": [...]}``, and — when the CLI's catalog exposes per-model
+    reasoning levels — ``{"model_details": [{"id", "efforts", "default_effort"?},
+    ...]}``. Both keys are omitted — never emitted empty — when enumeration is
+    unsupported or produced nothing, so clients fall back to their hardcoded
+    lists on the same absent/empty signal for old and new agents alike. Reads
+    only in-memory caches: never spawns a subprocess, so ``GET /api/version``
+    latency is unaffected.
+
+    ``models_pending=True`` (the caller saw the startup warm task still
+    running after its bounded wait) additionally marks each enumeration-
+    capable launcher whose own cache is still cold with
+    ``{"models_pending": true}`` — omitted, never false, otherwise. The marker
+    tells clients the absence of ``models`` / ``model_details`` in that entry
+    is a cache still warming, NOT an agent without enumeration: they keep
+    persisted catalog selections instead of reconciling them away, and may
+    re-probe. The per-entry cold-cache condition matters because the warm task
+    probes launchers sequentially: a CLI that already memoized its result
+    (Codex always does, fallback included) must not read as pending — and
+    therefore un-reconciled — merely because a sibling's probe is still
+    running. Gating on the running task (not cache state alone) is what keeps
+    a CLI whose enumeration deliberately memoizes nothing on failure
+    (Antigravity) from ever being reported as eternally pending.
 
     Shared by both transports that answer ``GET /api/version`` — the FastAPI
     handler (direct) and the relay client's proxy branch (relay) — so they
@@ -364,8 +384,60 @@ def build_cli_capabilities(
         models = getattr(launcher, "cached_models", None)
         if models:
             entry["models"] = list(models)
+        details = getattr(launcher, "cached_model_details", None)
+        if details:
+            entry["model_details"] = [dict(detail) for detail in details]
+        if (
+            models_pending
+            and models is None
+            and callable(getattr(launcher, "list_models", None))
+        ):
+            entry["models_pending"] = True
         capabilities[cli_id] = entry
     return capabilities
+
+
+# Upper bound on how long a version handler waits for the startup warm task.
+# Generous vs the observed ~100ms enumeration, deliberately SHORTER than one
+# legitimate probe attempt (each subprocess gets 10s, and the old-CLI path may
+# take two): waiting out the full legitimate worst case (~30s across CLIs)
+# would run ``GET /api/version`` into the mobile clients' 30s read deadlines.
+# A warm task still running after this wait is not lied about — the response
+# carries ``models_pending`` so clients treat the cold shape as provisional.
+_MODEL_WARMUP_WAIT = 3.0
+
+
+async def await_model_cache_warmup(
+    warm_task: asyncio.Task | None, timeout: float = _MODEL_WARMUP_WAIT
+) -> None:
+    """Briefly await the startup model-cache warm task before answering
+    ``GET /api/version``.
+
+    A version probe that lands while the warm task is still running would see
+    cold caches and emit no ``models`` / ``model_details`` keys — on the wire
+    indistinguishable from an old agent without enumeration, which makes
+    clients reconcile a persisted catalog reasoning effort down to the static
+    default. Bounded and best-effort: a finished or absent task returns
+    immediately, a wedged one falls through after ``timeout`` to today's
+    absent-keys shape, and ``shield`` keeps the timeout from cancelling the
+    warm task itself. Shared by both ``/api/version`` transports (direct
+    FastAPI handler and relay proxy) so they stay in lockstep.
+    """
+    if warm_task is None or warm_task.done():
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(warm_task), timeout=timeout)
+    except TimeoutError:
+        pass
+    except asyncio.CancelledError:
+        # The warm task dying at shutdown must not error the handler; the
+        # handler's own cancellation still propagates.
+        if not warm_task.cancelled():
+            raise
+    except Exception:
+        # warm_cli_model_caches isolates per-CLI failures, so this is a bug
+        # guard: never let it break the version endpoint.
+        logger.warning("model warmup wait failed", exc_info=True)
 
 
 async def warm_cli_model_caches(launchers: Mapping[str, CliLauncher]) -> None:

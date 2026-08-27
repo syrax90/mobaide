@@ -116,6 +116,39 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-08-23, Codex model catalog): **additive
+  optional key + one relaxed field, no version bump.** Each
+  ``capabilities.cli.<cli>`` entry on ``GET /api/version`` (see the proto-v5
+  CLI-availability bullet for the base ``{"available": <bool>}`` shape) may also
+  carry ``models`` — the agent's startup enumeration of that CLI's launchable
+  models, in CLI-reported order — and ``model_details`` — an array of
+  ``{"id": <str>, "efforts": [<str>, …], "default_effort"?: <str>}`` for CLIs
+  whose catalog exposes per-model reasoning levels (today: Codex, via
+  ``codex debug models``). Both keys are omitted — never emitted empty or null —
+  when enumeration is unsupported or produced nothing; clients then fall back to
+  their hardcoded model/effort lists, so old and new agents degrade identically.
+  An entry may also carry ``"models_pending": true`` (omitted, never false):
+  the agent's startup enumeration was still running when this response was
+  built (the handler waits a short bound, but a single probe attempt may
+  legitimately take longer) and *this CLI's own* enumeration had not yet
+  produced a result — a CLI that already memoized its list is never marked
+  merely because a sibling's probe still runs. The absence of
+  ``models``/``model_details`` in a marked entry is provisional, not
+  authoritative: clients keep persisted catalog selections instead of
+  reconciling them away, and re-probe until an unmarked answer arrives. Its
+  presence also proves a catalog-era agent (pre-catalog agents never emit it).
+  Emitted by the shared ``build_cli_capabilities`` builder on both the direct
+  and relay transports. (``models`` itself had shipped earlier without a
+  PROTOCOL.md entry; this bullet is its documentation of record.)
+  * ``codex_options.reasoning_effort`` is relaxed from the proto-v5 enum
+    (``minimal`` | ``low`` | ``medium`` | ``high``) to a free-form string on the
+    agent, mirroring the ``model`` field's "free-form on the server; the client
+    curates the list" posture: the effort vocabulary is now enumerated per-model
+    at runtime, and a closed set would reject values the agent itself just
+    advertised (e.g. ``xhigh``/``max``/``ultra`` on the gpt-5.6 catalog). The
+    value is embedded after ``=`` inside the single exec'd argv element
+    ``-c model_reasoning_effort=<v>``, so no flag-smuggling path opens up. The
+    proto-v5 section below remains historically accurate for agents of that era.
 * Additive delta within proto-v7 (2026-08-11, Claude debug toggle): **additive
   optional field, no version bump.** ``claude_options`` gains ``debug`` — bool,
   default ``false`` — emitted by the agent as ``--debug``. Previously
@@ -369,7 +402,9 @@ cadence; they do **not** gate compatibility.
     old-agent / malformed value is treated as available (optimistic) — and the
     create-session ``503`` ``<cli>_cli_missing`` / ``409`` ``<cli>_auth_required``
     markers remain the authoritative backstop. Drives the mode-select screen's
-    per-CLI button enablement.
+    per-CLI button enablement. (Later extended — see the proto-v7 additive delta
+    of 2026-08-23 for the ``models`` / ``model_details`` keys an entry may also
+    carry.)
 * Out of scope (downstream issues): Android create-session UI for Codex
   (CLA-69, done), terminal control-key / approval affordances (CLA-70, done).
   The agent defaults Codex sessions to a non-interactive sandboxed preset

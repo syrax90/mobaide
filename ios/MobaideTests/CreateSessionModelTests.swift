@@ -171,6 +171,183 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertNil(request.claude_options)
     }
 
+    /// `refreshCliAvailability` against a stubbed agent advertising per-model
+    /// Codex effort sets (`capabilities.cli.codex.model_details`).
+    private func modelWithCodexDetails() async -> CreateSessionModel {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{
+           "available":true,
+           "models":["gpt-5.6-sol","gpt-5.4-mini"],
+           "model_details":[
+             {"id":"gpt-5.6-sol","efforts":["low","medium","ultra"],"default_effort":"low"},
+             {"id":"gpt-5.4-mini","efforts":["medium","high"]}
+           ]}}}}
+        """#)
+        let model = stubbedModel()
+        await model.refreshCliAvailability()
+        return model
+    }
+
+    func testRefreshReconcilesCatalogEffortAgainstDetailLessAgent() async {
+        // A persisted catalog effort (e.g. "ultra" from a newer agent) aimed at
+        // an agent advertising no model_details must drop to the default: that
+        // agent may be a pre-catalog build whose wire schema still 422s efforts
+        // outside the static vocabulary. In-vocabulary values stand.
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{"available":true}}}}
+        """#)
+        let model = stubbedModel()
+        model.codexReasoningEffort = "ultra"
+        await model.refreshCliAvailability()
+        XCTAssertEqual(model.codexReasoningEffort, "high")
+
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{"available":true}}}}
+        """#)
+        model.codexReasoningEffort = "medium"
+        await model.refreshCliAvailability()
+        XCTAssertEqual(model.codexReasoningEffort, "medium")
+    }
+
+    func testRefreshKeepsCatalogEffortWhenDetailsAreAdvertised() async {
+        // An agent advertising model_details provably accepts free-form
+        // efforts — a restored catalog effort stands even when unadvertised
+        // for the selected model (keep-selected).
+        let model = await modelWithCodexDetails()
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{
+           "available":true,
+           "model_details":[{"id":"gpt-5.6-sol","efforts":["low"],"default_effort":"low"}]}}}}
+        """#)
+        model.codexReasoningEffort = "ultra"
+        await model.refreshCliAvailability()
+        XCTAssertEqual(model.codexReasoningEffort, "ultra")
+    }
+
+    func testRefreshSkipsReconcileWhileModelsPending() async {
+        // A models_pending answer (agent warmup still running) is provisional:
+        // the marker itself proves a catalog-era agent, so a persisted catalog
+        // effort must survive it instead of being clamped on absent details.
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{"available":true,"models_pending":true}}}}
+        """#)
+        let model = stubbedModel()
+        model.codexReasoningEffort = "ultra"
+
+        await model.refreshCliAvailability()
+
+        XCTAssertEqual(model.codexReasoningEffort, "ultra")
+    }
+
+    func testRefreshClearsStaleDetailsWhenALaterProbeOmitsThem() async {
+        // Agent restarted on an older build between probes: the retained
+        // catalog would keep offering efforts (e.g. "ultra") the current
+        // agent may reject, so a detail-less probe must clear it.
+        let model = await modelWithCodexDetails()
+        XCTAssertEqual(model.codexEfforts(for: "gpt-5.6-sol"), ["low", "medium", "ultra"])
+
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{"available":true}}}}
+        """#)
+        await model.refreshCliAvailability()
+
+        XCTAssertEqual(model.codexEfforts(for: "gpt-5.6-sol"), CreateSessionModel.reasoningEfforts)
+    }
+
+    func testRefreshReconcilesEffortAgainstSelectedModelCatalogEntry() async {
+        // Details advertised AND the selected model's entry omits the current
+        // effort: the catalog says the model cannot serve it, so the probe
+        // applies the same re-default setCodexModel uses on a switch.
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 200, body: #"""
+        {"name":"agent","server_version":"1.0.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"cli":{"codex":{
+           "available":true,
+           "model_details":[{"id":"gpt-5.6-luna","efforts":["low","medium","xhigh"],"default_effort":"medium"}]}}}}
+        """#)
+        let model = stubbedModel()
+        model.codexModel = "gpt-5.6-luna"
+        model.codexReasoningEffort = "ultra"
+
+        await model.refreshCliAvailability()
+
+        XCTAssertEqual(model.codexReasoningEffort, "medium")
+    }
+
+    func testCodexModelOptionsKeepAnUnlistedRestoredSelection() {
+        // A model persisted before the fallback refresh (gpt-5.3-codex-spark)
+        // is no longer in the list; without the append the Picker renders no
+        // selection while buildRequest still submits the hidden value.
+        let model = makeModel()
+        XCTAssertEqual(model.codexModelOptions, CreateSessionModel.codexModelsFallback)
+
+        model.codexModel = "gpt-5.3-codex-spark"
+        XCTAssertEqual(
+            model.codexModelOptions,
+            CreateSessionModel.codexModelsFallback + ["gpt-5.3-codex-spark"]
+        )
+
+        // A listed selection appends nothing.
+        model.codexModel = CreateSessionModel.codexModelsFallback[0]
+        XCTAssertEqual(model.codexModelOptions, CreateSessionModel.codexModelsFallback)
+    }
+
+    func testCodexEffortsFallBackToStaticListWithoutDetails() {
+        let model = makeModel()
+        XCTAssertEqual(model.codexEfforts(for: "gpt-5.6-sol"), CreateSessionModel.reasoningEfforts)
+        XCTAssertEqual(model.codexEfforts(for: nil), CreateSessionModel.reasoningEfforts)
+    }
+
+    func testCodexEffortsUseAdvertisedCatalogForSelectedModel() async {
+        let model = await modelWithCodexDetails()
+        XCTAssertEqual(model.codexModels, ["gpt-5.6-sol", "gpt-5.4-mini"])
+        XCTAssertEqual(model.codexEfforts(for: "gpt-5.6-sol"), ["low", "medium", "ultra"])
+        // Unknown model and the Default (nil) model both take the fallback —
+        // their capabilities are unknown here.
+        XCTAssertEqual(model.codexEfforts(for: "mystery"), CreateSessionModel.reasoningEfforts)
+        XCTAssertEqual(model.codexEfforts(for: nil), CreateSessionModel.reasoningEfforts)
+    }
+
+    func testSetCodexModelResetsUnsupportedEffortToModelDefault() async {
+        let model = await modelWithCodexDetails()
+        model.codexReasoningEffort = "high"
+        model.setCodexModel("gpt-5.6-sol")
+        XCTAssertEqual(
+            model.codexReasoningEffort, "low",
+            "a stranded effort re-defaults to the catalog's per-model default"
+        )
+
+        // No catalog default → "high" wins when advertised.
+        model.codexReasoningEffort = "minimal"
+        model.setCodexModel("gpt-5.4-mini")
+        XCTAssertEqual(model.codexReasoningEffort, "high")
+    }
+
+    func testSetCodexModelKeepsSupportedEffortAndUnknownModels() async {
+        let model = await modelWithCodexDetails()
+        model.codexReasoningEffort = "ultra"
+        model.setCodexModel("gpt-5.6-sol")
+        XCTAssertEqual(model.codexReasoningEffort, "ultra", "a still-supported effort survives")
+
+        model.codexReasoningEffort = "minimal"
+        model.setCodexModel("mystery")
+        XCTAssertEqual(
+            model.codexReasoningEffort, "minimal",
+            "a model with no catalog entry keeps the effort — never downshift on a guess"
+        )
+        model.setCodexModel(nil)
+        XCTAssertEqual(model.codexReasoningEffort, "minimal", "the Default model keeps it too")
+    }
+
     func testAntigravityExclusivityAndAddDirs() throws {
         let model = makeModel()
         model.selection = .stored("a")

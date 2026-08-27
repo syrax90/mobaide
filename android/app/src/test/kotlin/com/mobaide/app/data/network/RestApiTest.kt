@@ -3,7 +3,10 @@ package com.mobaide.app.data.network
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
+import com.mobaide.app.data.network.dto.CliModelDetail
 import com.mobaide.app.data.network.dto.cliAvailable
+import com.mobaide.app.data.network.dto.cliModelDetails
+import com.mobaide.app.data.network.dto.cliModelsPending
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -617,6 +620,124 @@ class RestApiTest {
         val resp = api.getAgentVersion()
 
         assertNull(resp.cliAvailable("claude"))
+    }
+
+    @Test
+    fun getAgentVersion_modelDetails_parsesPerModelEfforts() = runTest {
+        // capabilities.cli.codex.model_details → cliModelDetails(): entries with
+        // a usable id + non-empty efforts parse; default_effort is optional
+        // (omitted on the wire when the catalog names none → null here).
+        val (api, client) = newApi()
+        stubCall(client) { req ->
+            responseFor(
+                req,
+                200,
+                bodyJson = """
+                  {
+                    "name":"mobaide_agent",
+                    "server_version":"0.3.10",
+                    "protocol_versions":[7],
+                    "min_client_version":7,
+                    "capabilities":{"cli":{"codex":{
+                      "available":true,
+                      "models":["gpt-5.6-sol","gpt-5.4-mini"],
+                      "model_details":[
+                        {"id":"gpt-5.6-sol","efforts":["low","high","ultra"],"default_effort":"low"},
+                        {"id":"gpt-5.4-mini","efforts":["low"]}
+                      ]
+                    }}},
+                    "latest_agent_version":null
+                  }
+                """.trimIndent(),
+            )
+        }
+
+        val resp = api.getAgentVersion()
+
+        assertEquals(
+            listOf(
+                CliModelDetail("gpt-5.6-sol", listOf("low", "high", "ultra"), "low"),
+                CliModelDetail("gpt-5.4-mini", listOf("low"), null),
+            ),
+            resp.cliModelDetails("codex"),
+        )
+        assertNull("no details advertised for claude", resp.cliModelDetails("claude"))
+    }
+
+    @Test
+    fun getAgentVersion_modelDetailsAbsentOrMalformed_returnsNull_withoutThrowing() = runTest {
+        // Unusable entries (no id, empty/missing efforts, wrong shapes) are
+        // dropped; when nothing survives — or the key is absent entirely — the
+        // walk must yield null so callers fall back to the static effort list,
+        // and it must never throw.
+        val (api, client) = newApi()
+        stubCall(client) { req ->
+            responseFor(
+                req,
+                200,
+                bodyJson = """
+                  {
+                    "name":"mobaide_agent",
+                    "server_version":"0.3.10",
+                    "protocol_versions":[7],
+                    "min_client_version":7,
+                    "capabilities":{"cli":{
+                      "codex":{"model_details":[
+                        "not-an-object",
+                        {"efforts":["low"]},
+                        {"id":"","efforts":["low"]},
+                        {"id":"no-efforts"},
+                        {"id":"empty-efforts","efforts":[]}
+                      ]},
+                      "antigravity":{"model_details":"not-an-array"},
+                      "claude":{"available":true}
+                    }},
+                    "latest_agent_version":null
+                  }
+                """.trimIndent(),
+            )
+        }
+
+        val resp = api.getAgentVersion()
+
+        assertNull("all-unusable entries must collapse to null", resp.cliModelDetails("codex"))
+        assertNull("non-array shape must not throw", resp.cliModelDetails("antigravity"))
+        assertNull("absent key must map to null", resp.cliModelDetails("claude"))
+    }
+
+    @Test
+    fun getAgentVersion_modelsPending_parsesMarker_tolerantly() = runTest {
+        // capabilities.cli.<id>.models_pending → cliModelsPending(): true only
+        // for a literal boolean true; absent keys (old agents / finished
+        // warmup) and unreadable shapes read as false, never throw.
+        val (api, client) = newApi()
+        stubCall(client) { req ->
+            responseFor(
+                req,
+                200,
+                bodyJson = """
+                  {
+                    "name":"mobaide_agent",
+                    "server_version":"0.3.10",
+                    "protocol_versions":[7],
+                    "min_client_version":7,
+                    "capabilities":{"cli":{
+                      "codex":{"available":true,"models_pending":true},
+                      "antigravity":{"available":true,"models_pending":"yes"},
+                      "claude":{"available":true}
+                    }},
+                    "latest_agent_version":null
+                  }
+                """.trimIndent(),
+            )
+        }
+
+        val resp = api.getAgentVersion()
+
+        assertEquals(true, resp.cliModelsPending("codex"))
+        assertEquals(false, resp.cliModelsPending("antigravity"))
+        assertEquals(false, resp.cliModelsPending("claude"))
+        assertEquals(false, resp.cliModelsPending("missing"))
     }
 
     // ---- ApiException mapping: 401 / 403 / 404 / 409 / 429 / 500 ------------

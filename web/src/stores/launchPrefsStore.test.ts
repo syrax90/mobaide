@@ -121,7 +121,14 @@ describe('hydration', () => {
     ).toBeNull();
     expect(await bad({ codex: { ...CODEX_BLOB, sandbox: 'yolo' } })).toBeNull();
     expect(await bad({ codex: { ...CODEX_BLOB, approval: 'maybe' } })).toBeNull();
-    expect(await bad({ codex: { ...CODEX_BLOB, reasoningEffort: 'ultra' } })).toBeNull();
+    // `reasoningEffort` is deliberately NOT vocabulary-checked: the effort set
+    // is agent-enumerated per model, so a persisted catalog effort like
+    // `ultra` must restore rather than void the bucket. A non-string still voids.
+    expect(await bad({ codex: { ...CODEX_BLOB, reasoningEffort: 'ultra' } })).toEqual({
+      ...CODEX_BLOB,
+      reasoningEffort: 'ultra',
+    });
+    expect(await bad({ codex: { ...CODEX_BLOB, reasoningEffort: 7 } })).toBeNull();
     // `null` is a real third state on web ("Agent default"), not a bad value.
     expect(await bad({ codex: { ...CODEX_BLOB, reasoningEffort: null } })).toEqual({
       ...CODEX_BLOB,

@@ -35,6 +35,17 @@
         "full_auto": false,
         "worktree": false
       }
+    },
+    {
+      "name": "catalog_effort_passes_free_form",
+      "wire": { "reasoning_effort": "ultra" },
+      "decoded_canonical": {
+        "sandbox": "workspace-write",
+        "approval": "never",
+        "reasoning_effort": "ultra",
+        "full_auto": false,
+        "worktree": false
+      }
     }
   ]
 }

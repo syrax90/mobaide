@@ -12,12 +12,9 @@
  * Mirrors `CreateSessionUiState` (Android) and `CreateSessionModel` (iOS).
  */
 import { isCustomSessionKind } from '../../../protocol/wireSchema';
-import type {
-  CLAUDE_EFFORTS,
-  CODEX_APPROVALS,
-  CODEX_REASONING_EFFORTS,
-  CODEX_SANDBOXES,
-} from '../../../protocol/dto/sessionCreate';
+import { CODEX_REASONING_EFFORTS } from '../../../protocol/dto/sessionCreate';
+import type { CLAUDE_EFFORTS, CODEX_APPROVALS, CODEX_SANDBOXES } from '../../../protocol/dto/sessionCreate';
+import type { CliModelDetail } from '../../../protocol/dto/agentVersion';
 import type { ProjectSummary } from '../../../api/projectRepository';
 
 export type WizardStep = 'project' | 'mode' | 'config';
@@ -45,7 +42,12 @@ export function isCustomMode(mode: WizardMode): boolean {
 export type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
 export type CodexSandbox = (typeof CODEX_SANDBOXES)[number];
 export type CodexApproval = (typeof CODEX_APPROVALS)[number];
-export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+/**
+ * Free-form, matching the wire schema: the effort vocabulary is agent-enumerated
+ * per model (`cliModelDetails`), so a closed union would strand advertised
+ * values like `ultra`. `CODEX_REASONING_EFFORTS` remains the fallback UI list.
+ */
+export type CodexReasoningEffort = string;
 export type CodexPreset = 'readOnly' | 'auto' | 'fullAccess';
 
 export type ProjectSelection =
@@ -154,10 +156,12 @@ export const INITIAL_WIZARD_STATE: WizardState = {
 
 export const CLAUDE_MODELS = ['opus', 'sonnet', 'haiku', 'fable'] as const;
 export const CODEX_MODELS = [
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
   'gpt-5.5',
   'gpt-5.4',
   'gpt-5.4-mini',
-  'gpt-5.3-codex-spark',
 ] as const;
 export const ANTIGRAVITY_MODELS = [
   'Gemini 3.5 Flash (Medium)',
@@ -204,6 +208,25 @@ export function effectiveClaudeModel(bucket: ClaudeBucket): string | null {
 export function effectiveClaudeEffort(bucket: ClaudeBucket): ClaudeEffort {
   const allowed = claudeEffortsFor(effectiveClaudeModel(bucket));
   return allowed.includes(bucket.effort) ? bucket.effort : 'high';
+}
+
+/**
+ * The effort options for the selected Codex model: the agent-advertised set
+ * when `model_details` knows the model, else the static fallback list.
+ *
+ * The Default (`null`) model always takes the fallback — which model the agent
+ * resolves it to is unknown here, so narrowing would be a guess. Mirrors
+ * `claudeEffortsFor`'s posture on the null model.
+ */
+export function codexEffortsFor(
+  details: readonly CliModelDetail[] | null,
+  model: string | null,
+): readonly string[] {
+  if (model !== null) {
+    const detail = details?.find((entry) => entry.id === model);
+    if (detail !== undefined) return detail.efforts;
+  }
+  return CODEX_REASONING_EFFORTS;
 }
 
 /**
@@ -275,7 +298,8 @@ export type WizardAction =
       value: string;
     }
   | { type: 'setCodexPreset'; preset: CodexPreset }
-  | { type: 'setCodexModel'; model: string | null }
+  | { type: 'setCodexModel'; model: string | null; detail?: CliModelDetail | null }
+  | { type: 'reconcileCodexEffort'; details: readonly CliModelDetail[] | null }
   | { type: 'setCodexReasoningEffort'; effort: CodexReasoningEffort | null }
   | { type: 'setCodexSandbox'; sandbox: CodexSandbox }
   | { type: 'setCodexApproval'; approval: CodexApproval }
@@ -399,11 +423,51 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
           return { ...state, codex: { ...state.codex, fullAuto: true } };
       }
 
-    case 'setCodexModel':
-      return { ...state, codex: { ...state.codex, model: action.model } };
+    case 'setCodexModel': {
+      const detail = action.detail ?? null;
+      let effort = state.codex.reasoningEffort;
+      // Switching to a model with a known effort set can strand an effort it
+      // does not support — re-default to the catalog's per-model default (the
+      // Claude clamp pattern with the target upgraded from hardcoded 'high').
+      // The null "Agent default" effort is always kept, as is everything when
+      // the new model's capabilities are unknown.
+      if (detail !== null && effort !== null && !detail.efforts.includes(effort)) {
+        effort =
+          detail.defaultEffort ??
+          (detail.efforts.includes('high') ? 'high' : (detail.efforts[0] ?? effort));
+      }
+      return { ...state, codex: { ...state.codex, model: action.model, reasoningEffort: effort } };
+    }
 
     case 'setCodexReasoningEffort':
       return { ...state, codex: { ...state.codex, reasoningEffort: action.effort } };
+
+    // Dispatched when the capabilities probe resolves, reconciling a restored
+    // effort against what this agent can actually accept. No `model_details`
+    // advertised → possibly a pre-catalog build whose wire schema still closes
+    // over the static vocabulary (submitting `ultra` would 422), so anything
+    // outside it drops to the default. Details advertised and the selected
+    // model's entry omits the effort → the catalog says the model cannot serve
+    // it, so the same per-model re-default `setCodexModel` applies on a switch
+    // runs here too. A model without a catalog entry (or the null Default
+    // model) keeps the effort — its capabilities are unknown. The null "Agent
+    // default" effort always stands.
+    case 'reconcileCodexEffort': {
+      const effort = state.codex.reasoningEffort;
+      if (effort === null) return state;
+      if (action.details === null) {
+        if ((CODEX_REASONING_EFFORTS as readonly string[]).includes(effort)) return state;
+        return { ...state, codex: { ...state.codex, reasoningEffort: 'high' } };
+      }
+      const model = state.codex.model;
+      const detail =
+        model !== null ? action.details.find((entry) => entry.id === model) : undefined;
+      if (detail === undefined || detail.efforts.includes(effort)) return state;
+      const next =
+        detail.defaultEffort ??
+        (detail.efforts.includes('high') ? 'high' : (detail.efforts[0] ?? effort));
+      return { ...state, codex: { ...state.codex, reasoningEffort: next } };
+    }
 
     case 'setCodexSandbox':
       return { ...state, codex: { ...state.codex, sandbox: action.sandbox } };

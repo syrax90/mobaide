@@ -12,10 +12,13 @@ import com.mobaide.app.data.network.dto.AntigravityOptionsModel
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
+import com.mobaide.app.data.network.dto.CliModelDetail
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.cliAvailable
+import com.mobaide.app.data.network.dto.cliModelDetails
 import com.mobaide.app.data.network.dto.cliModels
+import com.mobaide.app.data.network.dto.cliModelsPending
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.ProjectsRepository
@@ -25,6 +28,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -108,6 +112,10 @@ data class CreateSessionUiState(
     // companion constants.
     val codexModels: List<String>? = null,
     val antigravityModels: List<String>? = null,
+    // Per-model Codex reasoning-effort sets (capabilities.cli.codex
+    // .model_details). null = agent too old or catalog carried no levels →
+    // the effort control falls back to REASONING_EFFORTS.
+    val codexModelDetails: List<CliModelDetail>? = null,
     val noMemory: Boolean = false,
     val skipPermissions: Boolean = false,
     // Claude reasoning controls (replace the old boolean "Max effort"). model is
@@ -197,6 +205,17 @@ val CreateSessionUiState.codexPreset: CodexAutonomyPreset?
         codexSandbox == "workspace-write" && codexApproval == "on-request" -> CodexAutonomyPreset.Auto
         else -> null
     }
+
+/**
+ * Effort levels offered for a Codex [model]: the agent-advertised per-model set
+ * when `model_details` knows the model, else the static
+ * [CreateSessionViewModel.REASONING_EFFORTS] fallback. The Default (null) model
+ * always takes the fallback — which model the agent resolves it to is unknown
+ * here — mirroring [CreateSessionViewModel.claudeEffortsFor]'s null posture.
+ */
+fun CreateSessionUiState.codexEffortsFor(model: String?): List<String> =
+    model?.let { m -> codexModelDetails?.firstOrNull { it.id == m }?.efforts }
+        ?: CreateSessionViewModel.REASONING_EFFORTS
 
 /** Snapshot of the Claude reasoning controls for persistence / re-defaulting. */
 private fun CreateSessionUiState.toClaudeLaunchPrefs() = ClaudeLaunchPrefs(
@@ -338,7 +357,20 @@ class CreateSessionViewModel @Inject constructor(
                         codexSandbox = saved.sandbox,
                         codexApproval = saved.approval,
                         codexFullAuto = saved.fullAuto,
-                        codexReasoningEffort = saved.reasoningEffort,
+                        // The DataStore read races the ModePick capability
+                        // probe: when the probe already resolved, its
+                        // reconcile ran before this restore landed, so the
+                        // restored effort must pass through the same rule or
+                        // a stale catalog effort would stomp the clamp.
+                        codexReasoningEffort = if (cliProbeResolved) {
+                            reconciledCodexEffort(
+                                model = saved.model,
+                                effort = saved.reasoningEffort,
+                                details = it.codexModelDetails,
+                            )
+                        } else {
+                            saved.reasoningEffort
+                        },
                     )
                 }
             }
@@ -539,6 +571,48 @@ class CreateSessionViewModel @Inject constructor(
      * user-facing error (this is a passive probe, not a user action) — a missing
      * CLI that slips through still falls back to the create-time 503 handling.
      */
+    // Whether a capability probe has resolved this wizard session. Lets the
+    // async prefs restore tell "details unknown, probe still pending" (keep
+    // the saved effort — refresh reconciles later) apart from "probe resolved
+    // with no details" (reconcile now, or the restore stomps the clamp). A
+    // models_pending answer deliberately does NOT count as resolved. Both
+    // writers run on viewModelScope's main dispatcher, so no synchronization.
+    private var cliProbeResolved = false
+
+    // Remaining models_pending re-probes. A budget rather than a one-shot: a
+    // legitimately slow warmup (each agent-side probe attempt may take 10s,
+    // and the old-CLI path takes two) can outlive several client probes, and
+    // a terminal pending answer would strand the visit on fallback lists with
+    // no reconciliation. Refilled by any non-pending answer; exhausted, it
+    // stops — a truly wedged warmup must not become an endless poll loop.
+    private var warmupRetriesLeft = WARMUP_MAX_RETRIES
+
+    /**
+     * The reasoning effort actually submittable to the probed agent. No
+     * `model_details` advertised → possibly a pre-catalog agent whose wire
+     * schema still 422s efforts outside [REASONING_EFFORTS], so anything
+     * outside it drops to the default. Details advertised and the selected
+     * model's entry omits the effort → the catalog says the model cannot
+     * serve it, so the same re-default [setCodexModel] applies on a switch
+     * runs here. A model without a catalog entry (or the null Default model)
+     * keeps the effort — its capabilities are unknown, never downshift on a
+     * guess.
+     */
+    private fun reconciledCodexEffort(
+        model: String?,
+        effort: String,
+        details: List<CliModelDetail>?,
+    ): String {
+        if (details == null) {
+            return if (effort in REASONING_EFFORTS) effort else "high"
+        }
+        val detail = model?.let { m -> details.firstOrNull { it.id == m } } ?: return effort
+        if (effort in detail.efforts) return effort
+        return detail.defaultEffort
+            ?: "high".takeIf { it in detail.efforts }
+            ?: detail.efforts.first()
+    }
+
     fun refreshCliAvailability() {
         // In-flight dedup: set the flag before launch so the guard holds even
         // when the coroutine body is queued (StandardTestDispatcher) — same
@@ -548,6 +622,16 @@ class CreateSessionViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val version = sessionRepository.getAgentVersion()
+                val codexDetails = version.cliModelDetails("codex")
+                // models_pending: the agent's startup enumeration was still
+                // warming when it answered, so absent details are provisional
+                // — the probe does not count as resolved (no reconcile, and a
+                // late prefs restore stays untouched too) and one delayed
+                // re-probe fetches the warmed answer. The marker itself
+                // proves a catalog-era agent, so keeping a persisted catalog
+                // effort meanwhile is safe, not just optimistic.
+                val pending = version.cliModelsPending("codex")
+                if (!pending) cliProbeResolved = true
                 _uiState.update {
                     it.copy(
                         claudeAvailable = version.cliAvailable("claude"),
@@ -555,8 +639,27 @@ class CreateSessionViewModel @Inject constructor(
                         antigravityAvailable = version.cliAvailable("antigravity"),
                         codexModels = version.cliModels("codex"),
                         antigravityModels = version.cliModels("antigravity"),
+                        codexModelDetails = codexDetails,
+                        codexReasoningEffort = if (pending) {
+                            it.codexReasoningEffort
+                        } else {
+                            reconciledCodexEffort(
+                                model = it.codexModel,
+                                effort = it.codexReasoningEffort,
+                                details = codexDetails,
+                            )
+                        },
                         cliAvailabilityLoading = false,
                     )
+                }
+                if (!pending) {
+                    warmupRetriesLeft = WARMUP_MAX_RETRIES
+                } else if (warmupRetriesLeft > 0) {
+                    warmupRetriesLeft -= 1
+                    viewModelScope.launch {
+                        delay(WARMUP_RETRY_DELAY_MS)
+                        refreshCliAvailability()
+                    }
                 }
             } catch (_: Exception) {
                 _uiState.update { it.copy(cliAvailabilityLoading = false) }
@@ -794,7 +897,21 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
-    fun setCodexModel(v: String?) = _uiState.update { it.copy(codexModel = v) }
+    fun setCodexModel(v: String?) = _uiState.update { state ->
+        // Same clamp as setClaudeModel, with the target upgraded from a
+        // hardcoded "high" to the catalog's per-model default. A model without
+        // a catalog entry (or the null Default model) keeps the effort — its
+        // capabilities are unknown, so never downshift on a guess.
+        val detail = v?.let { m -> state.codexModelDetails?.firstOrNull { it.id == m } }
+        val effort = when {
+            detail == null || state.codexReasoningEffort in detail.efforts ->
+                state.codexReasoningEffort
+            else -> detail.defaultEffort
+                ?: "high".takeIf { it in detail.efforts }
+                ?: detail.efforts.first()
+        }
+        state.copy(codexModel = v, codexReasoningEffort = effort)
+    }
     fun setCodexReasoningEffort(v: String) = _uiState.update { it.copy(codexReasoningEffort = v) }
     fun setCodexSandbox(v: String) = _uiState.update { it.copy(codexSandbox = v) }
     fun setCodexApproval(v: String) = _uiState.update { it.copy(codexApproval = v) }
@@ -1306,17 +1423,37 @@ class CreateSessionViewModel @Inject constructor(
         const val MAX_TYPE_NAME_LENGTH = 60
         const val MAX_TYPE_COMMAND_LENGTH = 1000
 
+        // Delayed re-probes after a models_pending answer: the interval is
+        // long enough for the agent's warm task to finish its typical probe,
+        // short enough that the wizard usually has the warmed catalog before
+        // the user reaches the Codex config step. The budget covers the
+        // legitimate worst-case warmup (~30s: two 10s codex attempts + a 10s
+        // agy probe; each retry cycle spends the delay plus the agent's ~3s
+        // in-handler wait) with headroom, then stops.
+        const val WARMUP_RETRY_DELAY_MS = 2_500L
+        const val WARMUP_MAX_RETRIES = 8
+
         /**
          * Fallback Codex model quick-picks for the wizard dropdown, used when the
          * agent's dynamic `capabilities.cli.codex.models` list is absent/empty
          * (older agent). Matches the agent's own enumeration fallback. The
          * server's `model` field is free-form, so "Default" (a null model,
          * Codex's account default) is always offered alongside these. Current as
-         * of 2026-07.
+         * of 2026-08.
          */
-        val CODEX_MODELS = listOf("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark")
+        val CODEX_MODELS = listOf(
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+        )
 
-        /** Codex reasoning-effort levels, low→high; "high" is the wizard default. */
+        /** Codex reasoning-effort levels, low→high; "high" is the wizard default.
+         *  Fallback only — when the agent advertises per-model sets
+         *  (`capabilities.cli.codex.model_details`), [codexEffortsFor] serves the
+         *  selected model's own levels instead. */
         val REASONING_EFFORTS = listOf("minimal", "low", "medium", "high")
 
         /**

@@ -81,3 +81,61 @@ export function cliModels(
     .filter((model): model is string => model !== null && model !== '');
   return names.length > 0 ? names : null;
 }
+
+/**
+ * Whether the agent's startup model enumeration was still running when this
+ * response was built — the absence of `models`/`model_details` is then
+ * provisional, not authoritative: callers keep persisted catalog selections
+ * instead of reconciling them away, and may re-probe. Absent key (old agents,
+ * finished warmup) or any unreadable shape reads as `false`.
+ */
+export function cliModelsPending(info: AgentVersionInfo | undefined, cliId: string): boolean {
+  const entry = cliEntry(info, cliId);
+  if (typeof entry !== 'object' || entry === null) return false;
+  return (entry as { models_pending?: unknown }).models_pending === true;
+}
+
+export interface CliModelDetail {
+  readonly id: string;
+  readonly efforts: readonly string[];
+  readonly defaultEffort: string | null;
+}
+
+/**
+ * Per-model reasoning-effort capabilities the agent advertises for a CLI, or
+ * `null` to use the client's hardcoded effort list.
+ *
+ * Same posture as {@link cliModels}: entries that don't parse (blank id, no
+ * usable efforts) are dropped rather than failing the walk, and an empty
+ * result is `null` — nothing useful was advertised.
+ */
+export function cliModelDetails(
+  info: AgentVersionInfo | undefined,
+  cliId: string,
+): readonly CliModelDetail[] | null {
+  const entry = cliEntry(info, cliId);
+  if (typeof entry !== 'object' || entry === null) return null;
+  const details = (entry as { model_details?: unknown }).model_details;
+  if (!Array.isArray(details)) return null;
+  const parsed: CliModelDetail[] = [];
+  for (const detail of details) {
+    if (typeof detail !== 'object' || detail === null) continue;
+    const { id, efforts, default_effort } = detail as {
+      id?: unknown;
+      efforts?: unknown;
+      default_effort?: unknown;
+    };
+    if (typeof id !== 'string' || id === '') continue;
+    if (!Array.isArray(efforts)) continue;
+    const effortNames = efforts.filter(
+      (effort): effort is string => typeof effort === 'string' && effort !== '',
+    );
+    if (effortNames.length === 0) continue;
+    parsed.push({
+      id,
+      efforts: effortNames,
+      defaultEffort: typeof default_effort === 'string' && default_effort !== '' ? default_effort : null,
+    });
+  }
+  return parsed.length > 0 ? parsed : null;
+}

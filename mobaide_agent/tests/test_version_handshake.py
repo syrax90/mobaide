@@ -150,3 +150,104 @@ async def test_get_version_reports_models_for_warm_cache(app, client) -> None:
         "models": ["Gemini 3.1 Pro (Low)", "GPT-OSS 120B (Medium)"],
     }
     assert "models" not in cli["claude"]
+
+
+async def test_get_version_reports_model_details_for_warm_codex_cache(
+    app, client
+) -> None:
+    """A Codex launcher whose catalog enumeration captured per-model reasoning
+    levels carries ``model_details`` next to ``models``; ``default_effort`` is
+    omitted — never null — when unknown. Seeded directly for the same
+    no-lifespan reason as the ``models`` test above."""
+    from mobaide.core.codex_launcher import CodexModelInfo
+
+    app.state.codex_launcher._cached_models = ("gpt-5.6-sol", "gpt-5.4-mini")
+    app.state.codex_launcher._cached_model_details = (
+        CodexModelInfo(
+            id="gpt-5.6-sol", efforts=("low", "high", "ultra"), default_effort="low"
+        ),
+        CodexModelInfo(id="gpt-5.4-mini", efforts=("low",), default_effort=None),
+    )
+
+    response = await client.get("/api/version")
+    assert response.status_code == 200
+    cli = response.json()["capabilities"]["cli"]
+    assert cli["codex"] == {
+        "available": True,
+        "models": ["gpt-5.6-sol", "gpt-5.4-mini"],
+        "model_details": [
+            {
+                "id": "gpt-5.6-sol",
+                "efforts": ["low", "high", "ultra"],
+                "default_effort": "low",
+            },
+            {"id": "gpt-5.4-mini", "efforts": ["low"]},
+        ],
+    }
+    assert "model_details" not in cli["antigravity"]
+
+
+async def test_get_version_marks_models_pending_while_warmup_outlasts_the_wait(
+    app, client, monkeypatch
+) -> None:
+    """A warm task still running after the bounded wait (a legitimately slow
+    probe — each subprocess attempt may take 10s, more than the wait) must be
+    reported via ``models_pending`` on every enumeration-capable entry, so
+    clients treat the cold shape as provisional instead of reconciling
+    persisted catalog efforts away. The awaiter is stubbed out so the test
+    exercises the marker, not the (separately tested) wait."""
+    import asyncio
+
+    import mobaide.agent.app as app_module
+
+    async def _no_wait(*_a, **_kw) -> None:
+        return None
+
+    monkeypatch.setattr(app_module, "await_model_cache_warmup", _no_wait)
+    app.state.cli_models_warmup = asyncio.create_task(asyncio.sleep(60))
+    try:
+        response = await client.get("/api/version")
+
+        assert response.status_code == 200
+        cli = response.json()["capabilities"]["cli"]
+        assert cli["codex"]["models_pending"] is True
+        assert cli["antigravity"]["models_pending"] is True
+        # Claude never enumerates, so its entry must not read as "still warming".
+        assert "models_pending" not in cli["claude"]
+
+        # The warm task probes sequentially: once a CLI's own enumeration has
+        # memoized (Codex always does), its entry must stop reading as pending
+        # even while a sibling's probe keeps the task running — otherwise its
+        # final answer would sit un-reconciled behind an unrelated probe.
+        app.state.codex_launcher._cached_models = ("gpt-5.6-sol",)
+        response = await client.get("/api/version")
+        cli = response.json()["capabilities"]["cli"]
+        assert cli["codex"] == {"available": True, "models": ["gpt-5.6-sol"]}
+        assert cli["antigravity"]["models_pending"] is True
+    finally:
+        app.state.cli_models_warmup.cancel()
+
+
+async def test_get_version_waits_for_a_pending_model_warmup(app, client) -> None:
+    """A probe landing mid-warmup must see the warmed caches, not the cold
+    ones — a cold response is indistinguishable from an old agent without
+    enumeration and would make clients reconcile persisted catalog efforts
+    away. The warm task here only releases after the request is already in
+    flight, so a handler that did not wait would answer with no ``models``."""
+    import asyncio
+
+    release = asyncio.Event()
+
+    async def _warm() -> None:
+        await release.wait()
+        app.state.codex_launcher._cached_models = ("gpt-5.6-sol",)
+
+    app.state.cli_models_warmup = asyncio.create_task(_warm())
+    request = asyncio.create_task(client.get("/api/version"))
+    await asyncio.sleep(0.05)
+    release.set()
+
+    response = await request
+    assert response.status_code == 200
+    codex = response.json()["capabilities"]["cli"]["codex"]
+    assert codex["models"] == ["gpt-5.6-sol"]

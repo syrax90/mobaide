@@ -68,7 +68,10 @@ final class CreateSessionModel {
     }
 
     static let claudeModels = ["opus", "sonnet", "haiku", "fable"]
-    static let codexModelsFallback = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
+    static let codexModelsFallback = [
+        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+        "gpt-5.5", "gpt-5.4", "gpt-5.4-mini",
+    ]
     /// Mirror of Android `ANTIGRAVITY_MODELS` — used until the `agy` capability
     /// probe supplies a live list, so model selection still works when the probe
     /// is unavailable ("Auto"/nil is always offered alongside these).
@@ -114,6 +117,18 @@ final class CreateSessionModel {
     private(set) var antigravityAvailable: Bool?
     private(set) var codexModels: [String] = codexModelsFallback
     private(set) var antigravityModels: [String] = antigravityModelsFallback
+    /// Per-model Codex effort sets from `capabilities.cli.codex.model_details`;
+    /// nil until an agent advertises them, so `codexEfforts(for:)` falls back
+    /// to the static `reasoningEfforts` list.
+    private(set) var codexModelDetails: [CliModelDetail]?
+    /// Remaining `models_pending` re-probes. A budget rather than a one-shot:
+    /// a legitimately slow agent-side warmup (each probe attempt may take 10s,
+    /// and the old-CLI path takes two) can outlive several client probes, and
+    /// a terminal pending answer would strand the visit on fallback lists with
+    /// no reconciliation. Refilled by any non-pending answer; exhausted, it
+    /// stops — a truly wedged warmup must not become an endless poll loop.
+    private var warmupRetriesLeft = CreateSessionModel.warmupMaxRetries
+    static let warmupMaxRetries = 8
 
     // Claude / Standard
     var claudeModel: String?
@@ -313,6 +328,49 @@ final class CreateSessionModel {
             : ["low", "medium", "high"]
     }
 
+    /// The Codex model picker's options, with the keep-selected repair: a
+    /// restored model absent from the advertised/fallback list (e.g. a
+    /// pre-refresh `gpt-5.3-codex-spark` from persisted prefs) must stay in
+    /// the options, or the SwiftUI Picker — which renders selection by tag —
+    /// shows no selection while `buildRequest()` still submits the hidden
+    /// value. Mirrors the effort picker's append and web's `modelOptions`.
+    var codexModelOptions: [String] {
+        guard let selected = codexModel, !codexModels.contains(selected) else {
+            return codexModels
+        }
+        return codexModels + [selected]
+    }
+
+    /// The effort options for a Codex model: the agent-advertised per-model set
+    /// when `model_details` knows it, else the static `reasoningEfforts`
+    /// fallback. The Default (nil) model always takes the fallback — which
+    /// model the agent resolves it to is unknown here (`claudeEfforts(for:)`'s
+    /// nil posture).
+    func codexEfforts(for model: String?) -> [String] {
+        guard let model,
+              let detail = codexModelDetails?.first(where: { $0.id == model })
+        else { return CreateSessionModel.reasoningEfforts }
+        return detail.efforts
+    }
+
+    /// Model switches route through here (not a bare assignment) so a stranded
+    /// effort re-defaults: when the new model's advertised set lacks the current
+    /// effort, take the catalog default, else `high` when advertised, else the
+    /// set's first entry. A model without a catalog entry (or the nil Default
+    /// model) keeps the effort — its capabilities are unknown, never downshift
+    /// on a guess. Unlike Claude there is deliberately NO submit-time clamp:
+    /// combined with the picker's keep-selected repair it would silently send a
+    /// different effort than the field displays.
+    func setCodexModel(_ model: String?) {
+        codexModel = model
+        guard let model,
+              let detail = codexModelDetails?.first(where: { $0.id == model }),
+              !detail.efforts.contains(codexReasoningEffort)
+        else { return }
+        codexReasoningEffort = detail.defaultEffort
+            ?? (detail.efforts.contains("high") ? "high" : detail.efforts[0])
+    }
+
     var effectiveClaudeModel: String? { claudeFastMode ? "opus" : claudeModel }
 
     /// Ultracode always forces `xhigh` (Android parity). Otherwise the
@@ -419,6 +477,54 @@ final class CreateSessionModel {
         antigravityAvailable = version.cliAvailable("antigravity")
         if let models = version.cliModels("codex"), !models.isEmpty { codexModels = models }
         if let models = version.cliModels("antigravity"), !models.isEmpty { antigravityModels = models }
+        // Overwritten, never keep-last-known (unlike the model lists above): a
+        // stale catalog retained from a previous probe — the agent restarted
+        // on an older build, say — would keep offering efforts the current
+        // agent may reject.
+        let details = version.cliModelDetails("codex")
+        codexModelDetails = details
+        // models_pending: the agent's startup enumeration was still warming
+        // when it answered, so absent details are provisional — no reconcile
+        // (the marker itself proves a catalog-era agent, so a persisted
+        // catalog effort is safe to keep), and delayed re-probes continue
+        // until the warmed answer arrives, bounded by `warmupRetriesLeft`.
+        if version.cliModelsPending("codex") {
+            if warmupRetriesLeft > 0 {
+                warmupRetriesLeft -= 1
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 2_500_000_000)
+                    await self?.refreshCliAvailability()
+                }
+            }
+            return
+        }
+        warmupRetriesLeft = CreateSessionModel.warmupMaxRetries
+        codexReasoningEffort = reconciledCodexEffort(
+            model: codexModel, effort: codexReasoningEffort, details: details
+        )
+    }
+
+    /// The reasoning effort actually submittable to the probed agent. No
+    /// `model_details` advertised → possibly a pre-catalog agent whose wire
+    /// schema still 422s efforts outside the static vocabulary, so anything
+    /// outside it drops to the default. Details advertised and the selected
+    /// model's entry omits the effort → the catalog says the model cannot
+    /// serve it, so the same re-default `setCodexModel` applies on a switch
+    /// runs here. A model without a catalog entry (or the nil Default model)
+    /// keeps the effort — its capabilities are unknown, never downshift on a
+    /// guess.
+    private func reconciledCodexEffort(
+        model: String?, effort: String, details: [CliModelDetail]?
+    ) -> String {
+        guard let details else {
+            return CreateSessionModel.reasoningEfforts.contains(effort) ? effort : "high"
+        }
+        guard let model,
+              let detail = details.first(where: { $0.id == model }),
+              !detail.efforts.contains(effort)
+        else { return effort }
+        return detail.defaultEffort
+            ?? (detail.efforts.contains("high") ? "high" : detail.efforts[0])
     }
 
     /// Mirrors the repository's push-driven cache into the wizard. The loop

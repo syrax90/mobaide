@@ -3758,13 +3758,18 @@ class TestProxyVersionCapabilities:
     """
 
     def _launcher(
-        self, resolves: bool, cached_models: tuple[str, ...] | None = None,
+        self,
+        resolves: bool,
+        cached_models: tuple[str, ...] | None = None,
+        cached_model_details: tuple[dict, ...] | None = None,
     ):
         launcher = MagicMock(name="launcher")
-        # Explicit ``cached_models`` (default None): a bare MagicMock would
-        # auto-create a truthy attribute and make ``build_cli_capabilities``
-        # emit a spurious ``models`` key.
+        # Explicit ``cached_models`` / ``cached_model_details`` (default None):
+        # a bare MagicMock would auto-create truthy attributes and make
+        # ``build_cli_capabilities`` emit spurious ``models`` /
+        # ``model_details`` keys.
         launcher.cached_models = cached_models
+        launcher.cached_model_details = cached_model_details
         if resolves:
             launcher.resolve_binary.return_value = "/bin/cli"
         else:
@@ -3819,6 +3824,105 @@ class TestProxyVersionCapabilities:
                 "models": ["Gemini 3.1 Pro (Low)", "GPT-OSS 120B (Medium)"],
             },
         }
+
+    async def test_warm_detail_cache_adds_model_details_key(
+        self, client, mock_app_state,
+    ):
+        """A launcher whose per-model detail cache is warm carries
+        ``model_details`` in its capability entry on the relay path too — same
+        omitted-key contract as ``models``."""
+        mock_app_state.cli_launchers = {
+            "codex": self._launcher(
+                resolves=True,
+                cached_models=("gpt-5.6-sol",),
+                cached_model_details=(
+                    {
+                        "id": "gpt-5.6-sol",
+                        "efforts": ["low", "ultra"],
+                        "default_effort": "low",
+                    },
+                ),
+            ),
+        }
+        ws = AsyncMock()
+
+        result = await client._dispatch_proxy(
+            "GET", "/api/version", None, None, ws,
+        )
+
+        assert result["status"] == 200
+        assert result["body"]["capabilities"]["cli"] == {
+            "codex": {
+                "available": True,
+                "models": ["gpt-5.6-sol"],
+                "model_details": [
+                    {
+                        "id": "gpt-5.6-sol",
+                        "efforts": ["low", "ultra"],
+                        "default_effort": "low",
+                    }
+                ],
+            },
+        }
+
+    async def test_version_marks_models_pending_while_warmup_outlasts_the_wait(
+        self, client, mock_app_state, monkeypatch,
+    ):
+        """Relay mirror of the direct handler's ``models_pending`` marker: a
+        warm task still running after the bounded wait is reported as pending
+        on every enumeration-capable entry. Awaiter stubbed for speed."""
+        from mobaide.relay import client as client_module
+
+        async def _no_wait(*_a, **_kw):
+            return None
+
+        monkeypatch.setattr(client_module, "await_model_cache_warmup", _no_wait)
+        launcher = self._launcher(resolves=True)
+        launcher.list_models = AsyncMock()
+        mock_app_state.cli_launchers = {"codex": launcher}
+        mock_app_state.cli_models_warmup = asyncio.create_task(asyncio.sleep(60))
+        ws = AsyncMock()
+
+        try:
+            result = await client._dispatch_proxy(
+                "GET", "/api/version", None, None, ws,
+            )
+        finally:
+            mock_app_state.cli_models_warmup.cancel()
+
+        assert result["status"] == 200
+        assert result["body"]["capabilities"]["cli"] == {
+            "codex": {"available": True, "models_pending": True},
+        }
+
+    async def test_version_waits_for_a_pending_model_warmup(
+        self, client, mock_app_state,
+    ):
+        """Relay mirror of the direct handler's mid-warmup wait: the warm task
+        releases only after the proxy dispatch is already in flight, so a
+        branch that did not await it would answer with the cold cache."""
+        launcher = self._launcher(resolves=True)
+        mock_app_state.cli_launchers = {"codex": launcher}
+        release = asyncio.Event()
+
+        async def _warm() -> None:
+            await release.wait()
+            launcher.cached_models = ("gpt-5.6-sol",)
+
+        mock_app_state.cli_models_warmup = asyncio.create_task(_warm())
+        ws = AsyncMock()
+
+        request = asyncio.create_task(
+            client._dispatch_proxy("GET", "/api/version", None, None, ws),
+        )
+        await asyncio.sleep(0.05)
+        release.set()
+
+        result = await request
+        assert result["status"] == 200
+        assert result["body"]["capabilities"]["cli"]["codex"]["models"] == [
+            "gpt-5.6-sol",
+        ]
 
     async def test_capabilities_equal_shared_builder_locks_direct_relay_parity(
         self, client, mock_app_state,

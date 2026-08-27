@@ -258,6 +258,18 @@ describe('buildCreateRequest — placement', () => {
     expect(build(CUSTOM).cli).toBe(CUSTOM);
   });
 
+  it('passes a catalog effort (ultra) through untouched', () => {
+    // The wire schema is free-form on purpose: the effort vocabulary is
+    // agent-enumerated per model, so nothing between the picker and the wire
+    // may narrow it back to the static fallback list.
+    const request = build('codex', {
+      ...POPULATED,
+      codex: { ...POPULATED.codex, reasoningEffort: 'ultra' },
+    });
+
+    expect(request.codex_options?.reasoning_effort).toBe('ultra');
+  });
+
   it('sends a branch name even when no worktree is requested', () => {
     // Both mobile clients gate `branch_name` on git-eligibility alone.
     const request = build('codex', { ...POPULATED, git: { worktree: false, branchName: 'wip' } });

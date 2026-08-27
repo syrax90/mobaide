@@ -8,6 +8,7 @@ import com.mobaide.app.data.local.CodexLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
+import com.mobaide.app.data.network.dto.CliModelDetail
 import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
@@ -29,6 +30,7 @@ import io.mockk.slot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -2370,17 +2372,38 @@ class CreateSessionViewModelTest {
         antigravity: Boolean? = null,
         codexModels: List<String>? = null,
         antigravityModels: List<String>? = null,
+        codexModelDetails: List<CliModelDetail>? = null,
+        codexModelsPending: Boolean = false,
     ): VersionInfoResponse {
-        fun cliEntry(id: String, available: Boolean?, models: List<String>? = null): String? {
+        fun cliEntry(
+            id: String,
+            available: Boolean?,
+            models: List<String>? = null,
+            details: List<CliModelDetail>? = null,
+            pending: Boolean = false,
+        ): String? {
             val fields = buildList {
                 if (available != null) add("\"available\":$available")
                 if (models != null) add("\"models\":[${models.joinToString(",") { "\"$it\"" }}]")
+                if (details != null) {
+                    val entries = details.joinToString(",") { detail ->
+                        buildList {
+                            add("\"id\":\"${detail.id}\"")
+                            add("\"efforts\":[${detail.efforts.joinToString(",") { "\"$it\"" }}]")
+                            // Omitted — never null — on the wire when unknown.
+                            detail.defaultEffort?.let { add("\"default_effort\":\"$it\"") }
+                        }.joinToString(",", prefix = "{", postfix = "}")
+                    }
+                    add("\"model_details\":[$entries]")
+                }
+                // Omitted — never false — on the wire.
+                if (pending) add("\"models_pending\":true")
             }
             return if (fields.isEmpty()) null else "\"$id\":{${fields.joinToString(",")}}"
         }
         val entries = listOfNotNull(
             cliEntry("claude", claude),
-            cliEntry("codex", codex, codexModels),
+            cliEntry("codex", codex, codexModels, codexModelDetails, codexModelsPending),
             cliEntry("antigravity", antigravity, antigravityModels),
         )
         val capabilitiesJson =
@@ -2551,6 +2574,305 @@ class CreateSessionViewModelTest {
         val s = vm.uiState.value
         assertNull("absent codex models array must map to null", s.codexModels)
         assertNull("absent antigravity models array must map to null", s.antigravityModels)
+        assertNull("absent model_details array must map to null", s.codexModelDetails)
+    }
+
+    @Test
+    fun refreshCliAvailability_capturesCodexModelDetails() = runTest {
+        // The probe also captures the per-model reasoning-effort sets
+        // (capabilities.cli.codex.model_details) so the effort control can
+        // offer the selected model's own levels instead of the static list.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val details = listOf(
+            CliModelDetail("gpt-5.6-sol", listOf("low", "high", "ultra"), "low"),
+            CliModelDetail("gpt-5.4-mini", listOf("low"), null),
+        )
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModels = listOf("gpt-5.6-sol", "gpt-5.4-mini"),
+            codexModelDetails = details,
+        )
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        assertEquals(details, vm.uiState.value.codexModelDetails)
+    }
+
+    @Test
+    fun refreshCliAvailability_noModelDetails_reconcilesCatalogEffortToDefault() = runTest {
+        // A persisted catalog effort (e.g. "ultra" from a newer agent) aimed at
+        // an agent that advertises no model_details must drop to the default:
+        // that agent may be a pre-catalog build whose wire schema still 422s
+        // efforts outside the static vocabulary.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.setCodexReasoningEffort("ultra")
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(codex = true)
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        assertEquals("high", vm.uiState.value.codexReasoningEffort)
+    }
+
+    @Test
+    fun refreshCliAvailability_reconcileKeepsInVocabAndDetailAdvertisedEfforts() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        // In-vocabulary effort survives a detail-less agent untouched.
+        vm.setCodexReasoningEffort("medium")
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(codex = true)
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        assertEquals("medium", vm.uiState.value.codexReasoningEffort)
+
+        // An agent advertising details provably accepts free-form efforts —
+        // a catalog effort stands even when unadvertised (keep-selected).
+        vm.setCodexReasoningEffort("ultra")
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModelDetails = listOf(CliModelDetail("gpt-5.6-sol", listOf("low"), "low")),
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        assertEquals("ultra", vm.uiState.value.codexReasoningEffort)
+    }
+
+    @Test
+    fun refreshCliAvailability_modelsPending_keepsEffort_andRetriesUntilWarm() = runTest {
+        // A models_pending answer (agent warmup still running) is provisional:
+        // no clamp fires on it, and delayed re-probes continue past a SECOND
+        // pending answer (a slow-but-legitimate warmup can outlive several
+        // probes) until the warmed answer arrives, whose result IS
+        // authoritative.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.setCodexReasoningEffort("ultra")
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returnsMany listOf(
+            versionResponse(codex = true, codexModelsPending = true),
+            versionResponse(codex = true, codexModelsPending = true),
+            versionResponse(codex = true),
+        )
+        vm.refreshCliAvailability()
+        advanceTimeBy(1_000)
+
+        assertEquals(
+            "a provisional (pending) answer must not clamp",
+            "ultra",
+            vm.uiState.value.codexReasoningEffort,
+        )
+        coVerify(exactly = 1) { fx.sessionRepo.getAgentVersion() }
+
+        advanceUntilIdle()
+
+        coVerify(exactly = 3) { fx.sessionRepo.getAgentVersion() }
+        assertEquals(
+            "the warmed (non-pending, detail-less) answer clamps as usual",
+            "high",
+            vm.uiState.value.codexReasoningEffort,
+        )
+    }
+
+    @Test
+    fun refreshCliAvailability_modelsPendingForever_stopsAfterTheRetryBudget() = runTest {
+        // A truly wedged agent-side warmup must not become an endless poll
+        // loop: the initial probe plus WARMUP_MAX_RETRIES re-probes, then stop.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(codex = true, codexModelsPending = true)
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1 + CreateSessionViewModel.WARMUP_MAX_RETRIES) {
+            fx.sessionRepo.getAgentVersion()
+        }
+    }
+
+    @Test
+    fun refreshCliAvailability_selectedModelCatalogOmitsEffort_reconcilesToModelDefault() = runTest {
+        // Details advertised AND the selected model's entry omits the current
+        // effort: the catalog says the model cannot serve it, so the probe
+        // applies the same re-default setCodexModel uses on a switch.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.setCodexModel("gpt-5.6-luna")
+        vm.setCodexReasoningEffort("ultra")
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModelDetails = listOf(
+                CliModelDetail("gpt-5.6-luna", listOf("low", "medium", "xhigh"), "medium"),
+            ),
+        )
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        assertEquals("medium", vm.uiState.value.codexReasoningEffort)
+    }
+
+    @Test
+    fun prefsRestore_landingAfterProbe_reconcilesInsteadOfStompingTheClamp() = runTest {
+        // The DataStore reads race the ModePick probe: when the probe resolves
+        // first (no model_details -> pre-catalog agent), a late restore of a
+        // persisted catalog effort must pass through the same reconcile
+        // instead of writing "ultra" over the clamp and 422ing the create.
+        val fx = newFixture()
+        val gate = CompletableDeferred<CodexLaunchPrefs?>()
+        coEvery { fx.prefs.getLastUsedCodexOptions() } coAnswers { gate.await() }
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(codex = true)
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        gate.complete(
+            CodexLaunchPrefs(
+                model = null,
+                sandbox = "workspace-write",
+                approval = "on-request",
+                fullAuto = false,
+                reasoningEffort = "ultra",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals("high", vm.uiState.value.codexReasoningEffort)
+    }
+
+    @Test
+    fun prefsRestore_beforeProbe_keepsSavedEffortForRefreshToReconcile() = runTest {
+        // Probe not yet resolved at restore time: the saved value must be kept
+        // untouched (the agent may well advertise it) — the later probe owns
+        // the reconcile.
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedCodexOptions() } returns CodexLaunchPrefs(
+            model = null,
+            sandbox = "workspace-write",
+            approval = "on-request",
+            fullAuto = false,
+            reasoningEffort = "ultra",
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        assertEquals("ultra", vm.uiState.value.codexReasoningEffort)
+    }
+
+    @Test
+    fun codexEffortsFor_advertisedModel_overridesStaticList() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModelDetails = listOf(
+                CliModelDetail("gpt-5.6-sol", listOf("low", "medium", "high", "ultra"), "low"),
+            ),
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals(listOf("low", "medium", "high", "ultra"), s.codexEffortsFor("gpt-5.6-sol"))
+        // Unknown model and the Default (null) model both take the fallback —
+        // their capabilities are unknown here.
+        assertEquals(CreateSessionViewModel.REASONING_EFFORTS, s.codexEffortsFor("gpt-5.5"))
+        assertEquals(CreateSessionViewModel.REASONING_EFFORTS, s.codexEffortsFor(null))
+    }
+
+    @Test
+    fun setCodexModel_unsupportedEffort_resetsToModelDefaultEffort() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModelDetails = listOf(
+                CliModelDetail("gpt-5.6-sol", listOf("low", "medium", "ultra"), "low"),
+            ),
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.setCodexReasoningEffort("high")
+        vm.setCodexModel("gpt-5.6-sol")
+
+        val s = vm.uiState.value
+        assertEquals("gpt-5.6-sol", s.codexModel)
+        assertEquals("stranded effort must re-default to the catalog default", "low", s.codexReasoningEffort)
+    }
+
+    @Test
+    fun setCodexModel_missingDefaultEffort_fallsBackWithinAdvertisedSet() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModelDetails = listOf(
+                CliModelDetail("with-high", listOf("medium", "high"), null),
+                CliModelDetail("without-high", listOf("low", "medium"), null),
+            ),
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.setCodexReasoningEffort("minimal")
+        vm.setCodexModel("with-high")
+        assertEquals("'high' wins when advertised", "high", vm.uiState.value.codexReasoningEffort)
+
+        vm.setCodexReasoningEffort("minimal")
+        vm.setCodexModel("without-high")
+        assertEquals("else the first advertised entry", "low", vm.uiState.value.codexReasoningEffort)
+    }
+
+    @Test
+    fun setCodexModel_supportedEffort_andUnknownModel_keepEffort() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            codex = true,
+            codexModelDetails = listOf(
+                CliModelDetail("gpt-5.6-sol", listOf("low", "medium", "ultra"), "low"),
+            ),
+        )
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.setCodexReasoningEffort("ultra")
+        vm.setCodexModel("gpt-5.6-sol")
+        assertEquals("a still-supported effort survives the switch", "ultra", vm.uiState.value.codexReasoningEffort)
+
+        vm.setCodexReasoningEffort("minimal")
+        vm.setCodexModel("mystery-model")
+        assertEquals(
+            "a model with no catalog entry keeps the effort — never downshift on a guess",
+            "minimal",
+            vm.uiState.value.codexReasoningEffort,
+        )
+
+        vm.setCodexModel(null)
+        assertEquals("the Default model keeps the effort too", "minimal", vm.uiState.value.codexReasoningEffort)
     }
 
     @Test

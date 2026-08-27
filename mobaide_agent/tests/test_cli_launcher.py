@@ -15,6 +15,7 @@ import pytest
 
 from mobaide.core.cli_launcher import (
     CliBinaryNotFoundError,
+    await_model_cache_warmup,
     build_cli_capabilities,
     probe_cli_available,
     shim_safe_argv,
@@ -28,17 +29,19 @@ class _MissingError(CliBinaryNotFoundError):
     _INSTALL_HINT = "fake CLI not found."
 
 
-def _launcher(resolves_to: str | None, models=None):
+def _launcher(resolves_to: str | None, models=None, model_details=None):
     """A minimal ``CliLauncher`` stand-in.
 
     ``resolves_to=None`` makes ``resolve_binary`` raise ``CliBinaryNotFoundError``
-    (the binary-missing case); a string makes it return that path. ``models``
-    seeds ``cached_models``; the ``None`` default mirrors a launcher whose model
-    cache is cold (or that never enumerates) — pinned explicitly because a bare
-    ``MagicMock`` attribute would read as truthy.
+    (the binary-missing case); a string makes it return that path. ``models`` /
+    ``model_details`` seed ``cached_models`` / ``cached_model_details``; the
+    ``None`` defaults mirror a launcher whose model cache is cold (or that never
+    enumerates) — pinned explicitly because a bare ``MagicMock`` attribute would
+    read as truthy.
     """
     launcher = MagicMock(name="launcher")
     launcher.cached_models = models
+    launcher.cached_model_details = model_details
     if resolves_to is None:
         launcher.resolve_binary.side_effect = _MissingError(["PATH:fake"])
     else:
@@ -141,8 +144,92 @@ class TestBuildCliCapabilities:
         at all (e.g. Claude's) is reported with availability only."""
         launcher = _launcher("/bin/claude")
         del launcher.cached_models  # getattr now raises AttributeError
+        del launcher.cached_model_details
         caps = build_cli_capabilities({"claude": launcher})
         assert caps == {"claude": {"available": True}}
+
+    def test_model_details_key_added_when_cached_details_truthy(self):
+        """A launcher with warm per-model details additionally carries
+        ``model_details`` — as fresh dict copies, so a caller mutating the
+        capability payload can never corrupt the launcher's cache."""
+        detail = {"id": "gpt-5.6-sol", "efforts": ["low", "ultra"]}
+        launcher = _launcher(
+            "/bin/codex", models=["gpt-5.6-sol"], model_details=(detail,)
+        )
+
+        caps = build_cli_capabilities({"codex": launcher})
+
+        assert caps == {
+            "codex": {
+                "available": True,
+                "models": ["gpt-5.6-sol"],
+                "model_details": [{"id": "gpt-5.6-sol", "efforts": ["low", "ultra"]}],
+            }
+        }
+        emitted = caps["codex"]["model_details"]
+        assert isinstance(emitted, list)
+        assert emitted[0] is not detail
+
+    def test_model_details_key_omitted_when_none_or_empty(self):
+        """Details follow the same omitted-never-empty contract as ``models`` —
+        a cold or empty cache yields no ``model_details`` key at all."""
+        caps = build_cli_capabilities(
+            {
+                "codex": _launcher("/bin/codex", models=["gpt-x"], model_details=None),
+                "agy": _launcher("/bin/agy", models=["m"], model_details=()),
+            }
+        )
+        assert caps == {
+            "codex": {"available": True, "models": ["gpt-x"]},
+            "agy": {"available": True, "models": ["m"]},
+        }
+
+    def test_model_details_key_omitted_when_launcher_lacks_attribute(self):
+        """A launcher exposing ``cached_models`` but not ``cached_model_details``
+        (e.g. Antigravity's) still gets its ``models`` key with no details."""
+        launcher = _launcher("/bin/agy", models=["Gemini 3.1 Flash"])
+        del launcher.cached_model_details
+        caps = build_cli_capabilities({"antigravity": launcher})
+        assert caps == {
+            "antigravity": {"available": True, "models": ["Gemini 3.1 Flash"]}
+        }
+
+    def test_models_pending_marks_only_cold_enumeration_capable_launchers(self):
+        """``models_pending=True`` (warm task still running) marks a launcher
+        that duck-types ``list_models`` and whose own cache is still cold —
+        telling clients the absent ``models``/``model_details`` are a cache
+        still warming, not an agent without enumeration. It must never mark a
+        launcher that cannot enumerate, NOR one whose own enumeration already
+        memoized a result: the warm task probes sequentially, and a finished
+        CLI must not read as pending (and stay un-reconciled) merely because a
+        sibling's probe is still running."""
+        cold = _launcher("/bin/codex")
+        cold.list_models = AsyncMock()
+        warm = _launcher("/bin/agy", models=["Gemini 3.1 Flash"])
+        warm.list_models = AsyncMock()
+        claude = _launcher("/bin/claude")
+        del claude.list_models  # getattr now raises AttributeError
+
+        caps = build_cli_capabilities(
+            {"codex": cold, "antigravity": warm, "claude": claude},
+            models_pending=True,
+        )
+
+        assert caps == {
+            "codex": {"available": True, "models_pending": True},
+            "antigravity": {"available": True, "models": ["Gemini 3.1 Flash"]},
+            "claude": {"available": True},
+        }
+
+    def test_models_pending_omitted_never_false_by_default(self):
+        """The marker follows the omitted-never-false convention: a finished
+        (or absent) warm task emits no key at all."""
+        codex = _launcher("/bin/codex", models=["gpt-5.6-sol"])
+        codex.list_models = AsyncMock()
+
+        caps = build_cli_capabilities({"codex": codex})
+
+        assert caps == {"codex": {"available": True, "models": ["gpt-5.6-sol"]}}
 
 
 class TestWarmCliModelCaches:
@@ -192,6 +279,56 @@ class TestWarmCliModelCaches:
         carry no registry; the warm task must no-op rather than raise."""
         await warm_cli_model_caches(None)  # type: ignore[arg-type]
         await warm_cli_model_caches({})
+
+
+class TestAwaitModelCacheWarmup:
+    """``await_model_cache_warmup`` is the bounded mid-warmup wait both
+    ``/api/version`` transports run: a probe landing right after agent start
+    must not advertise a cold cache (indistinguishable from an old agent
+    without enumeration), but a wedged warm task must not stall the endpoint
+    either.
+    """
+
+    async def test_none_and_done_tasks_return_immediately(self):
+        import asyncio
+
+        await await_model_cache_warmup(None)
+        done = asyncio.create_task(asyncio.sleep(0))
+        await done
+        await await_model_cache_warmup(done)
+
+    async def test_waits_for_a_pending_task(self):
+        import asyncio
+
+        ran = []
+
+        async def _warm():
+            await asyncio.sleep(0)
+            ran.append(True)
+
+        await await_model_cache_warmup(asyncio.create_task(_warm()), timeout=5)
+        assert ran == [True]
+
+    async def test_wedged_task_times_out_without_being_cancelled(self):
+        import asyncio
+
+        wedged = asyncio.create_task(asyncio.sleep(60))
+        await await_model_cache_warmup(wedged, timeout=0.01)
+        # ``shield`` must keep the timeout from killing the warm task itself —
+        # a later probe may still profit from it finishing.
+        assert not wedged.cancelled()
+        wedged.cancel()
+
+    async def test_warm_task_cancellation_does_not_error_the_handler(self):
+        import asyncio
+
+        warm = asyncio.create_task(asyncio.sleep(60))
+        waiter = asyncio.create_task(await_model_cache_warmup(warm, timeout=5))
+        await asyncio.sleep(0)
+        warm.cancel()
+        # The warm task dying (agent shutdown) degrades to the cold-cache
+        # shape; the version handler awaiting it must not error.
+        await waiter
 
 
 class TestShimSafeArgv:

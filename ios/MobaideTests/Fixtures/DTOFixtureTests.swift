@@ -68,9 +68,27 @@ final class DTOFixtureTests: XCTestCase {
         XCTAssertEqual(version.cliModels("claude"), ["opus", "sonnet"])
         XCTAssertEqual(version.cliModels("codex"), [])
         XCTAssertNil(version.cliModels("missing"))
+        XCTAssertEqual(
+            version.cliModelDetails("codex"),
+            [
+                CliModelDetail(
+                    id: "gpt-5.6-sol",
+                    efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+                    defaultEffort: "low"
+                ),
+                CliModelDetail(id: "gpt-5.4-mini", efforts: ["low"], defaultEffort: nil),
+            ]
+        )
+        XCTAssertNil(version.cliModelDetails("claude"))
+        XCTAssertNil(version.cliModelDetails("missing"))
+        XCTAssertTrue(version.cliModelsPending("antigravity"))
+        XCTAssertFalse(version.cliModelsPending("codex"))
+        XCTAssertFalse(version.cliModelsPending("missing"))
 
         let empty = VersionInfoResponse(name: "x", server_version: "1", protocol_versions: [6], min_client_version: 6)
         XCTAssertNil(empty.cliAvailable("claude"))
         XCTAssertNil(empty.cliModels("claude"))
+        XCTAssertNil(empty.cliModelDetails("codex"))
+        XCTAssertFalse(empty.cliModelsPending("codex"))
     }
 }
