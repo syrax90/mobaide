@@ -25,6 +25,7 @@ from mobaide.linear.worktree import (
 )
 
 from ..logging import audit_event, get_logger
+from .changes_service import resolve_repo_dirs
 from .models import (
     BusyHolder,
     GitDeleteItem,
@@ -323,11 +324,24 @@ async def _delete_one(
     return _result(kind=item.kind, target="", ok=False, error="invalid"), False
 
 
-def _publish_git_changed(event_bus: Any | None, project_name: str) -> None:
+def _publish_git_changed(
+    event_bus: Any | None,
+    project_name: str,
+    *,
+    toplevel: str | None = None,
+    common_dir: str | None = None,
+) -> None:
     if event_bus is None:
         return
     try:
-        event_bus.publish("git.changed", {"project_name": project_name})
+        event_bus.publish(
+            "git.changed",
+            {
+                "project_name": project_name,
+                "toplevel": toplevel,
+                "common_dir": common_dir,
+            },
+        )
     except Exception:
         logger.exception("git.publish_failed")
 
@@ -373,6 +387,9 @@ async def delete_git_items(
         any_change = any_change or did_change
 
     if any_change:
-        _publish_git_changed(event_bus, project_name)
+        toplevel, common_dir = await resolve_repo_dirs(project_root)
+        _publish_git_changed(
+            event_bus, project_name, toplevel=toplevel, common_dir=common_dir
+        )
 
     return GitDeleteResponse(results=results)

@@ -3946,7 +3946,10 @@ class TestProxyVersionCapabilities:
         )
 
         expected = build_cli_capabilities(mock_app_state.cli_launchers)
-        assert result["body"]["capabilities"] == {"cli": expected}
+        assert result["body"]["capabilities"] == {
+            "cli": expected,
+            "git": {"changes": True},
+        }
 
     async def test_missing_cli_launchers_attr_degrades_to_empty_cli(
         self, client, mock_app_state,
@@ -3963,7 +3966,10 @@ class TestProxyVersionCapabilities:
         )
 
         assert result["status"] == 200
-        assert result["body"]["capabilities"] == {"cli": {}}
+        assert result["body"]["capabilities"] == {
+            "cli": {},
+            "git": {"changes": True},
+        }
 
     async def test_version_body_keeps_core_fields(self, client, mock_app_state):
         """The added ``capabilities`` work must not drop the existing version

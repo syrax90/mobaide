@@ -338,13 +338,17 @@ range is rejected up front.
           { "id": "gpt-5.6-sol", "efforts": ["low", "high", "ultra"], "default_effort": "low" }
         ]
       }
-    }
+    },
+    "git": { "changes": true }
   },
   "latest_agent_version": "0.1.0"
 }
 ```
 
-(`capabilities.cli` carries one `{ "available": <bool> }` entry per managed CLI
+(`capabilities.git.changes` — additive, no bump — advertises the session-scoped
+read-only git status/diff routes behind the in-session Changes viewer; an agent
+without the key answers those routes with 404 and clients render an
+"update your agent" state. `capabilities.cli` carries one `{ "available": <bool> }` entry per managed CLI
 the agent registers — additive, no `protocol_version` bump — and the Android
 mode-select screen disables a per-CLI button when its binary is absent. The
 client parses it tolerantly: an absent / old-agent / malformed value is treated

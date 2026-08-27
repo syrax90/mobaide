@@ -1,0 +1,591 @@
+{
+  "type": "GitStatusResponse",
+  "cases": [
+    {
+      "name": "linked_worktree_full",
+      "wire": {
+        "session_id": "s1",
+        "cwd": "/home/user/proj/.wt/feature-x",
+        "etag": "3f0d4c1e9a7b2c5d6e8f9a0b1c2d3e4f5a6b7c8d",
+        "unchanged": false,
+        "unavailable_reason": null,
+        "repo": {
+          "toplevel": "/home/user/proj/.wt/feature-x",
+          "git_dir": "/home/user/proj/.git/worktrees/feature-x",
+          "common_dir": "/home/user/proj/.git",
+          "is_linked_worktree": true,
+          "head": {
+            "oid": "0123456789abcdef0123456789abcdef01234567",
+            "short_oid": "0123456",
+            "branch": "feature/x",
+            "detached": false,
+            "initial": false
+          },
+          "upstream": {
+            "ref": "origin/feature/x",
+            "ahead": 2,
+            "behind": 0
+          },
+          "state": "merging"
+        },
+        "entries": [
+          {
+            "group": "conflicts",
+            "path": "src/conflict.py",
+            "orig_path": null,
+            "code": "UU",
+            "index_status": "U",
+            "worktree_status": "U",
+            "rename_score": null,
+            "submodule": false
+          },
+          {
+            "group": "staged",
+            "path": "src/both.py",
+            "orig_path": null,
+            "code": "M",
+            "index_status": "M",
+            "worktree_status": "M",
+            "rename_score": null,
+            "submodule": false
+          },
+          {
+            "group": "staged",
+            "path": "src/new name.py",
+            "orig_path": "src/old.py",
+            "code": "R",
+            "index_status": "R",
+            "worktree_status": ".",
+            "rename_score": 90,
+            "submodule": false
+          },
+          {
+            "group": "staged",
+            "path": "vendor/lib",
+            "orig_path": null,
+            "code": "M",
+            "index_status": "M",
+            "worktree_status": ".",
+            "rename_score": null,
+            "submodule": true
+          },
+          {
+            "group": "unstaged",
+            "path": "src/both.py",
+            "orig_path": null,
+            "code": "M",
+            "index_status": "M",
+            "worktree_status": "M",
+            "rename_score": null,
+            "submodule": false
+          },
+          {
+            "group": "untracked",
+            "path": "notes/тест.md",
+            "orig_path": null,
+            "code": "?",
+            "index_status": "?",
+            "worktree_status": "?",
+            "rename_score": null,
+            "submodule": false
+          }
+        ],
+        "counts": {
+          "conflicts": 1,
+          "staged": 3,
+          "unstaged": 1,
+          "untracked": 1,
+          "total": 6
+        },
+        "truncated": false,
+        "entry_limit": 5000
+      },
+      "decoded_canonical": {
+        "session_id": "s1",
+        "cwd": "/home/user/proj/.wt/feature-x",
+        "etag": "3f0d4c1e9a7b2c5d6e8f9a0b1c2d3e4f5a6b7c8d",
+        "unchanged": false,
+        "repo": {
+          "toplevel": "/home/user/proj/.wt/feature-x",
+          "git_dir": "/home/user/proj/.git/worktrees/feature-x",
+          "common_dir": "/home/user/proj/.git",
+          "is_linked_worktree": true,
+          "head": {
+            "oid": "0123456789abcdef0123456789abcdef01234567",
+            "short_oid": "0123456",
+            "branch": "feature/x",
+            "detached": false,
+            "initial": false
+          },
+          "upstream": {
+            "ref": "origin/feature/x",
+            "ahead": 2,
+            "behind": 0
+          },
+          "state": "merging"
+        },
+        "entries": [
+          {
+            "group": "conflicts",
+            "path": "src/conflict.py",
+            "code": "UU",
+            "index_status": "U",
+            "worktree_status": "U",
+            "submodule": false
+          },
+          {
+            "group": "staged",
+            "path": "src/both.py",
+            "code": "M",
+            "index_status": "M",
+            "worktree_status": "M",
+            "submodule": false
+          },
+          {
+            "group": "staged",
+            "path": "src/new name.py",
+            "orig_path": "src/old.py",
+            "code": "R",
+            "index_status": "R",
+            "worktree_status": ".",
+            "rename_score": 90,
+            "submodule": false
+          },
+          {
+            "group": "staged",
+            "path": "vendor/lib",
+            "code": "M",
+            "index_status": "M",
+            "worktree_status": ".",
+            "submodule": true
+          },
+          {
+            "group": "unstaged",
+            "path": "src/both.py",
+            "code": "M",
+            "index_status": "M",
+            "worktree_status": "M",
+            "submodule": false
+          },
+          {
+            "group": "untracked",
+            "path": "notes/тест.md",
+            "code": "?",
+            "index_status": "?",
+            "worktree_status": "?",
+            "submodule": false
+          }
+        ],
+        "counts": {
+          "conflicts": 1,
+          "staged": 3,
+          "unstaged": 1,
+          "untracked": 1,
+          "total": 6
+        },
+        "truncated": false,
+        "entry_limit": 5000
+      }
+    },
+    {
+      "name": "detached_head",
+      "wire": {
+        "session_id": "s2",
+        "cwd": "/home/user/proj",
+        "etag": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+        "unchanged": false,
+        "unavailable_reason": null,
+        "repo": {
+          "toplevel": "/home/user/proj",
+          "git_dir": "/home/user/proj/.git",
+          "common_dir": "/home/user/proj/.git",
+          "is_linked_worktree": false,
+          "head": {
+            "oid": "0123456789abcdef0123456789abcdef01234567",
+            "short_oid": "0123456",
+            "branch": null,
+            "detached": true,
+            "initial": false
+          },
+          "upstream": null,
+          "state": "clean"
+        },
+        "entries": [],
+        "counts": {
+          "conflicts": 0,
+          "staged": 0,
+          "unstaged": 0,
+          "untracked": 0,
+          "total": 0
+        },
+        "truncated": false,
+        "entry_limit": 5000
+      },
+      "decoded_canonical": {
+        "session_id": "s2",
+        "cwd": "/home/user/proj",
+        "etag": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+        "unchanged": false,
+        "repo": {
+          "toplevel": "/home/user/proj",
+          "git_dir": "/home/user/proj/.git",
+          "common_dir": "/home/user/proj/.git",
+          "is_linked_worktree": false,
+          "head": {
+            "oid": "0123456789abcdef0123456789abcdef01234567",
+            "short_oid": "0123456",
+            "detached": true,
+            "initial": false
+          },
+          "state": "clean"
+        },
+        "entries": [],
+        "counts": {
+          "conflicts": 0,
+          "staged": 0,
+          "unstaged": 0,
+          "untracked": 0,
+          "total": 0
+        },
+        "truncated": false,
+        "entry_limit": 5000
+      }
+    },
+    {
+      "name": "initial_repo_no_upstream",
+      "wire": {
+        "session_id": "s3",
+        "cwd": "/home/user/fresh",
+        "etag": "b2c3d4e5f60718293a4b5c6d7e8f90123456789a",
+        "unchanged": false,
+        "unavailable_reason": null,
+        "repo": {
+          "toplevel": "/home/user/fresh",
+          "git_dir": "/home/user/fresh/.git",
+          "common_dir": "/home/user/fresh/.git",
+          "is_linked_worktree": false,
+          "head": {
+            "oid": null,
+            "short_oid": null,
+            "branch": "main",
+            "detached": false,
+            "initial": true
+          },
+          "upstream": null,
+          "state": "clean"
+        },
+        "entries": [
+          {
+            "group": "untracked",
+            "path": "README.md",
+            "orig_path": null,
+            "code": "?",
+            "index_status": "?",
+            "worktree_status": "?",
+            "rename_score": null,
+            "submodule": false
+          }
+        ],
+        "counts": {
+          "conflicts": 0,
+          "staged": 0,
+          "unstaged": 0,
+          "untracked": 1,
+          "total": 1
+        },
+        "truncated": false,
+        "entry_limit": 5000
+      },
+      "decoded_canonical": {
+        "session_id": "s3",
+        "cwd": "/home/user/fresh",
+        "etag": "b2c3d4e5f60718293a4b5c6d7e8f90123456789a",
+        "unchanged": false,
+        "repo": {
+          "toplevel": "/home/user/fresh",
+          "git_dir": "/home/user/fresh/.git",
+          "common_dir": "/home/user/fresh/.git",
+          "is_linked_worktree": false,
+          "head": {
+            "branch": "main",
+            "detached": false,
+            "initial": true
+          },
+          "state": "clean"
+        },
+        "entries": [
+          {
+            "group": "untracked",
+            "path": "README.md",
+            "code": "?",
+            "index_status": "?",
+            "worktree_status": "?",
+            "submodule": false
+          }
+        ],
+        "counts": {
+          "conflicts": 0,
+          "staged": 0,
+          "unstaged": 0,
+          "untracked": 1,
+          "total": 1
+        },
+        "truncated": false,
+        "entry_limit": 5000
+      }
+    },
+    {
+      "name": "upstream_gone",
+      "wire": {
+        "session_id": "s4",
+        "cwd": "/home/user/proj",
+        "etag": "c3d4e5f60718293a4b5c6d7e8f90123456789ab0",
+        "unchanged": false,
+        "unavailable_reason": null,
+        "repo": {
+          "toplevel": "/home/user/proj",
+          "git_dir": "/home/user/proj/.git",
+          "common_dir": "/home/user/proj/.git",
+          "is_linked_worktree": false,
+          "head": {
+            "oid": "0123456789abcdef0123456789abcdef01234567",
+            "short_oid": "0123456",
+            "branch": "topic",
+            "detached": false,
+            "initial": false
+          },
+          "upstream": {
+            "ref": "origin/topic",
+            "ahead": null,
+            "behind": null
+          },
+          "state": "rebasing"
+        },
+        "entries": [
+          {
+            "group": "unstaged",
+            "path": "src/gone.py",
+            "orig_path": null,
+            "code": "D",
+            "index_status": ".",
+            "worktree_status": "D",
+            "rename_score": null,
+            "submodule": false
+          }
+        ],
+        "counts": {
+          "conflicts": 0,
+          "staged": 0,
+          "unstaged": 1,
+          "untracked": 0,
+          "total": 1
+        },
+        "truncated": false,
+        "entry_limit": 5000
+      },
+      "decoded_canonical": {
+        "session_id": "s4",
+        "cwd": "/home/user/proj",
+        "etag": "c3d4e5f60718293a4b5c6d7e8f90123456789ab0",
+        "unchanged": false,
+        "repo": {
+          "toplevel": "/home/user/proj",
+          "git_dir": "/home/user/proj/.git",
+          "common_dir": "/home/user/proj/.git",
+          "is_linked_worktree": false,
+          "head": {
+            "oid": "0123456789abcdef0123456789abcdef01234567",
+            "short_oid": "0123456",
+            "branch": "topic",
+            "detached": false,
+            "initial": false
+          },
+          "upstream": {
+            "ref": "origin/topic"
+          },
+          "state": "rebasing"
+        },
+        "entries": [
+          {
+            "group": "unstaged",
+            "path": "src/gone.py",
+            "code": "D",
+            "index_status": ".",
+            "worktree_status": "D",
+            "submodule": false
+          }
+        ],
+        "counts": {
+          "conflicts": 0,
+          "staged": 0,
+          "unstaged": 1,
+          "untracked": 0,
+          "total": 1
+        },
+        "truncated": false,
+        "entry_limit": 5000
+      }
+    },
+    {
+      "name": "unchanged",
+      "wire": {
+        "session_id": "s1",
+        "cwd": "/home/user/proj",
+        "etag": "3f0d4c1e9a7b2c5d6e8f9a0b1c2d3e4f5a6b7c8d",
+        "unchanged": true,
+        "unavailable_reason": null,
+        "repo": null,
+        "entries": [],
+        "counts": null,
+        "truncated": false,
+        "entry_limit": 5000
+      },
+      "decoded_canonical": {
+        "session_id": "s1",
+        "cwd": "/home/user/proj",
+        "etag": "3f0d4c1e9a7b2c5d6e8f9a0b1c2d3e4f5a6b7c8d",
+        "unchanged": true,
+        "entries": [],
+        "truncated": false,
+        "entry_limit": 5000
+      }
+    },
+    {
+      "name": "not_a_repo",
+      "wire": {
+        "session_id": "s5",
+        "cwd": "/home/user/plain",
+        "etag": "d4e5f60718293a4b5c6d7e8f90123456789ab0c1",
+        "unchanged": false,
+        "unavailable_reason": "not_a_repo",
+        "repo": null,
+        "entries": [],
+        "counts": null,
+        "truncated": false,
+        "entry_limit": 5000
+      },
+      "decoded_canonical": {
+        "session_id": "s5",
+        "cwd": "/home/user/plain",
+        "etag": "d4e5f60718293a4b5c6d7e8f90123456789ab0c1",
+        "unchanged": false,
+        "unavailable_reason": "not_a_repo",
+        "entries": [],
+        "truncated": false,
+        "entry_limit": 5000
+      }
+    },
+    {
+      "name": "truncated_windows",
+      "wire": {
+        "session_id": "s6",
+        "cwd": "C:/Users/dev/proj",
+        "etag": "e5f60718293a4b5c6d7e8f90123456789ab0c1d2",
+        "unchanged": false,
+        "unavailable_reason": null,
+        "repo": {
+          "toplevel": "C:/Users/dev/proj",
+          "git_dir": "C:/Users/dev/proj/.git",
+          "common_dir": "C:/Users/dev/proj/.git",
+          "is_linked_worktree": false,
+          "head": {
+            "oid": "0123456789abcdef0123456789abcdef01234567",
+            "short_oid": "0123456",
+            "branch": "main",
+            "detached": false,
+            "initial": false
+          },
+          "upstream": {
+            "ref": "origin/main",
+            "ahead": 0,
+            "behind": 3
+          },
+          "state": "clean"
+        },
+        "entries": [
+          {
+            "group": "untracked",
+            "path": "build/a.o",
+            "orig_path": null,
+            "code": "?",
+            "index_status": "?",
+            "worktree_status": "?",
+            "rename_score": null,
+            "submodule": false
+          },
+          {
+            "group": "untracked",
+            "path": "build/b.o",
+            "orig_path": null,
+            "code": "?",
+            "index_status": "?",
+            "worktree_status": "?",
+            "rename_score": null,
+            "submodule": false
+          }
+        ],
+        "counts": {
+          "conflicts": 0,
+          "staged": 0,
+          "unstaged": 0,
+          "untracked": 6001,
+          "total": 6001
+        },
+        "truncated": true,
+        "entry_limit": 5000
+      },
+      "decoded_canonical": {
+        "session_id": "s6",
+        "cwd": "C:/Users/dev/proj",
+        "etag": "e5f60718293a4b5c6d7e8f90123456789ab0c1d2",
+        "unchanged": false,
+        "repo": {
+          "toplevel": "C:/Users/dev/proj",
+          "git_dir": "C:/Users/dev/proj/.git",
+          "common_dir": "C:/Users/dev/proj/.git",
+          "is_linked_worktree": false,
+          "head": {
+            "oid": "0123456789abcdef0123456789abcdef01234567",
+            "short_oid": "0123456",
+            "branch": "main",
+            "detached": false,
+            "initial": false
+          },
+          "upstream": {
+            "ref": "origin/main",
+            "ahead": 0,
+            "behind": 3
+          },
+          "state": "clean"
+        },
+        "entries": [
+          {
+            "group": "untracked",
+            "path": "build/a.o",
+            "code": "?",
+            "index_status": "?",
+            "worktree_status": "?",
+            "submodule": false
+          },
+          {
+            "group": "untracked",
+            "path": "build/b.o",
+            "code": "?",
+            "index_status": "?",
+            "worktree_status": "?",
+            "submodule": false
+          }
+        ],
+        "counts": {
+          "conflicts": 0,
+          "staged": 0,
+          "unstaged": 0,
+          "untracked": 6001,
+          "total": 6001
+        },
+        "truncated": true,
+        "entry_limit": 5000
+      }
+    }
+  ]
+}

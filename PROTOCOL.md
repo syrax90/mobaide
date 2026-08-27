@@ -116,6 +116,98 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-08-27, in-session git Changes API):
+  **two additive read-only REST routes + one additive capability key + two
+  additive event keys, no version bump.** The agent now answers, for the
+  directory a session was spawned in (project root or linked worktree —
+  clients never send a path to run in):
+  * ``GET /api/sessions/{session_id}/git/status?etag=<opaque>`` →
+    ``GitStatusResponse``: ``session_id``, ``cwd`` (nullable), ``etag``,
+    ``unchanged``, ``unavailable_reason`` (``null`` | ``not_a_repo`` |
+    ``bare_repository`` | ``cwd_missing`` | ``unsafe_directory`` |
+    ``git_too_old``), ``repo`` (``toplevel``/``git_dir``/``common_dir`` as
+    absolute forward-slash paths on every OS, ``is_linked_worktree``, ``head``
+    ``{oid, short_oid, branch, detached, initial}`` with nullable oid/branch,
+    ``upstream`` ``{ref, ahead, behind} | null`` — ``ahead``/``behind`` are
+    ``null`` when the upstream ref is gone — and ``state`` ``clean`` |
+    ``merging`` | ``rebasing`` | ``cherry_picking`` | ``reverting`` |
+    ``bisecting``), ``entries[]`` (``group`` ``conflicts`` | ``staged`` |
+    ``unstaged`` | ``untracked``, ``path``, ``orig_path``, ``code`` — one
+    letter, or two for conflicts such as ``UU`` — ``index_status``,
+    ``worktree_status``, ``rename_score``, ``submodule``; a file that is both
+    staged and modified yields one entry per group, like VS Code), ``counts``
+    ``{conflicts, staged, unstaged, untracked, total}``, ``truncated`` and
+    ``entry_limit`` (5 000; ``counts`` come from the full parse). **Every key
+    is always present**; ``unchanged: true`` (the supplied ``etag`` still
+    matches) carries ``repo: null``, ``entries: []``, ``counts: null`` and
+    means "keep your cached body". Repo *conditions* are ``200`` with
+    ``unavailable_reason`` and ``repo: null``, never HTTP errors. The etag
+    covers the porcelain output, the resolved repo and the state, so a commit
+    or a finished merge moves it; an untracked file's *content* change does
+    not (porcelain carries no hash for it).
+  * ``GET /api/sessions/{session_id}/git/diff?path=&scope=staged|unstaged|untracked&context=3&orig_path=``
+    → ``GitDiffResponse``: ``path``, ``orig_path``, ``scope``, ``kind``
+    (``text`` | ``binary`` | ``submodule`` | ``too_large`` | ``missing``),
+    ``change`` (``modified`` | ``added`` | ``deleted`` | ``renamed`` |
+    ``copied`` | ``type_changed``; ``null`` only for ``missing``),
+    ``old_mode``/``new_mode`` (nullable), ``additions``, ``deletions``,
+    ``hunks[] {old_start, old_lines, new_start, new_lines, heading, lines[]
+    {t: ctx|add|del, old, new, text, no_newline}}``, ``truncated``,
+    ``total_lines`` (body lines seen — a lower bound when the byte cap killed
+    git), ``line_limit`` (5 000) and ``byte_limit`` (1 MiB). The **agent
+    parses** the unified diff so the three clients are dumb renderers with
+    one tested parser; ``\r`` is preserved verbatim in ``text``. ``path`` and
+    the optional ``orig_path`` are repo-relative as returned by ``status``;
+    pass the entry's ``orig_path`` for a rename, because a pathspec-limited
+    ``git diff -M`` cannot see the rename's source otherwise. Conflicted
+    files (group ``conflicts``) are requested with ``scope=unstaged`` and are
+    diffed against ``HEAD`` (conflict markers appear as ``+`` lines);
+    ``scope=staged`` on an unmerged path is ``kind: missing``. Untracked
+    diffs are synthesised by the agent (no ``/dev/null`` — broken on Git for
+    Windows); a symlink diffs as its target text with mode ``120000``.
+    ``context`` is clamped to 0–50.
+  * Errors, identical on the direct and relay transports: ``404
+    {"detail": "Session '<id>' not found"}``; ``400 {"detail": {"code":
+    "bad_scope" | "bad_path" | "<unavailable_reason>"}}`` (``path`` must
+    normalise to a repo-relative POSIX path — no absolute, drive-letter,
+    ``..`` or NUL); ``503 {"detail": {"code": "git_unavailable"}}`` when no
+    ``git`` binary is on the agent's PATH; ``504 {"detail": {"code":
+    "git_timeout"}}``; ``500 {"detail": {"code": "git_error", "message":
+    …}}`` for an unexpected git failure. Old agents answer ``404`` for both
+    routes → clients render an "update your agent" state; the capability key
+    lets them gate proactively.
+  * ``GET /api/version`` gains ``capabilities.git = {"changes": true}``
+    (emitted by both transports, next to ``capabilities.cli``).
+  * ``git.changed`` (published after a successful branch/worktree delete)
+    gains ``toplevel`` and ``common_dir`` — the project's resolved repository
+    root and common git dir, ``null`` when the project is no longer a repo —
+    so a session whose ``repo.common_dir`` (linked worktree) or
+    ``repo.toplevel`` matches can invalidate its Changes cache even when it
+    has no ``project_name``. Payload: ``{"project_name", "toplevel",
+    "common_dir"}``. All three clients read the payload by key and ignore
+    unknown ones.
+  * Bounds and safety: every git call goes through a dedicated runner
+    (``mobaide/core/git_exec.py``) — bytes mode, two reader threads,
+    ``timeout`` + ``max_bytes`` enforced by killing the whole process tree
+    (``taskkill /T`` on Windows, where PATH usually resolves to the
+    ``cmd\git.exe`` wrapper), a scrubbed environment (``GIT_DIR``,
+    ``GIT_WORK_TREE``, ``GIT_INDEX_FILE``, ``GIT_NAMESPACE``,
+    ``GIT_EXTERNAL_DIFF``, ``GIT_PAGER``, ``GIT_CONFIG_PARAMETERS`` removed;
+    ``LC_ALL=C``, ``GIT_TERMINAL_PROMPT=0``, ``GIT_OPTIONAL_LOCKS=0`` set),
+    ``--no-optional-locks --literal-pathspecs -c core.quotePath=false``, and
+    ``--no-ext-diff --no-textconv`` on every diff so a repository's
+    ``.gitattributes`` diff drivers can never execute. Git ≥ 2.15 is required
+    (older → ``git_too_old``). The relay's 4 MB tunnel frame is why the caps
+    are server-side (5 000 entries; 1 MiB / 5 000 lines per diff). For very
+    large trees the user-side accelerators are ``git update-index
+    --untracked-cache`` (run ``--test-untracked-cache`` first) and
+    ``core.fsmonitor``; the agent never watches files.
+  * Golden fixtures ``tests/protocol_fixtures/dto/agent/{GitStatusResponse,GitDiffResponse}.json``
+    pin both shapes on the iOS registry, the web coverage manifest and a new
+    Python arm (``mobaide_agent/tests/test_git_fixtures.py``) that validates
+    every case against the pydantic models and checks that each
+    ``decoded_canonical`` equals its ``wire`` with null-valued keys removed —
+    the Swift ``Codable`` nil-dropping rule the other arms rely on.
 * Additive delta within proto-v7 (2026-08-23, Codex model catalog): **additive
   optional key + one relaxed field, no version bump.** Each
   ``capabilities.cli.<cli>`` entry on ``GET /api/version`` (see the proto-v5

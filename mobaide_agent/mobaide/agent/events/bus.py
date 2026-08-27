@@ -18,6 +18,10 @@ class AgentEvent:
         - ``session.attention`` — payload: {"session": {...}} (one-shot: the
           session needs the user; reason in the session's ``attention`` field)
         - ``projects.changed``  — payload: {"projects": [...]}
+        - ``git.changed``       — payload: {"project_name": ..., "toplevel":
+          <abs path|null>, "common_dir": <abs path|null>} (pointer, not a
+          snapshot; ``toplevel``/``common_dir`` let a session whose cwd is a
+          linked worktree match the event)
         - ``autoscan.status``   — payload: <full AutoScanInstance.to_dto()>
         - ``autoscan.event``    — payload: {"project_name": ..., "event": {...}}
         - ``autoscan.list.changed`` — payload: <full AutoScanSessionManager.list_response()>

@@ -28,6 +28,7 @@ from mobaide.agent.git.models import (
     GitDeleteRequest,
     GitItemRead,
 )
+from mobaide.agent.git.changes_service import resolve_repo_dirs
 from mobaide.agent.git.service import (
     GitItemBusyError,
     _build_items,
@@ -498,8 +499,14 @@ class TestDeleteGitItems:
         assert len(response.results) == 1
         assert response.results[0].ok is True
         assert response.results[0].kind == "branch_only"
-        # git.changed must fire after a successful delete.
-        assert bus.published == [("git.changed", {"project_name": "alpha"})]
+        # git.changed must fire after a successful delete. ``tmp_path`` is
+        # not a git repo, so the resolved toplevel/common_dir come back None.
+        assert bus.published == [
+            (
+                "git.changed",
+                {"project_name": "alpha", "toplevel": None, "common_dir": None},
+            ),
+        ]
 
     async def test_branch_only_unmerged_returns_force_required(self, tmp_path):
         manager = _FakeManager()
@@ -558,7 +565,13 @@ class TestDeleteGitItems:
         assert manager.remove_worktree_calls == [(str(tmp_path), wt_path, False)]
         assert manager.delete_branch_calls == [(str(tmp_path), "feature/x", False)]
         assert response.results[0].ok is True
-        assert bus.published == [("git.changed", {"project_name": "alpha"})]
+        # ``tmp_path`` is not a git repo, so toplevel/common_dir resolve None.
+        assert bus.published == [
+            (
+                "git.changed",
+                {"project_name": "alpha", "toplevel": None, "common_dir": None},
+            ),
+        ]
 
     async def test_orphan_worktree_lock_error_maps_to_locked(self, tmp_path):
         manager = _FakeManager()
@@ -635,7 +648,13 @@ class TestDeleteGitItems:
         )
         assert manager.remove_worktree_calls == [(str(tmp_path), "/repo/wt/x", True)]
         assert response.results[0].ok is True
-        assert bus.published == [("git.changed", {"project_name": "alpha"})]
+        # ``tmp_path`` is not a git repo, so toplevel/common_dir resolve None.
+        assert bus.published == [
+            (
+                "git.changed",
+                {"project_name": "alpha", "toplevel": None, "common_dir": None},
+            ),
+        ]
 
     async def test_invalid_branch_only_payload_returns_invalid(self, tmp_path):
         manager = _FakeManager()
@@ -698,8 +717,14 @@ class TestDeleteGitItems:
         assert results[0].ok is True
         assert results[1].ok is False
         assert results[1].error == "force_required"
-        # Exactly one publish, since at least one delete succeeded.
-        assert bus.published == [("git.changed", {"project_name": "alpha"})]
+        # Exactly one publish, since at least one delete succeeded. ``tmp_path``
+        # is not a git repo, so toplevel/common_dir resolve None.
+        assert bus.published == [
+            (
+                "git.changed",
+                {"project_name": "alpha", "toplevel": None, "common_dir": None},
+            ),
+        ]
 
 
 @requires_git
@@ -778,7 +803,7 @@ class TestGitRouterEndpoints:
         assert "stale" not in branches
 
     async def test_post_items_delete_publishes_git_changed_event(
-        self, client_git, auth_headers_g, app_with_git,
+        self, client_git, auth_headers_g, app_with_git, real_repo,
     ):
         # Subscribe to the event bus before the delete so we can capture the
         # publish without racing the handler.
@@ -797,7 +822,17 @@ class TestGitRouterEndpoints:
             # so the queue must have the event by now.
             event = await asyncio.wait_for(queue.get(), timeout=2.0)
             assert event.type == "git.changed"
-            assert event.payload == {"project_name": "alpha"}
+            # "alpha" is registered against ``real_repo``, a real repo, so
+            # toplevel/common_dir resolve to its actual realpath — computed
+            # via the same helper the production code calls.
+            toplevel, common_dir = await resolve_repo_dirs(real_repo)
+            assert event.payload == {
+                "project_name": "alpha",
+                "toplevel": toplevel,
+                "common_dir": common_dir,
+            }
+            assert toplevel is not None
+            assert common_dir is not None
         finally:
             bus.unsubscribe(queue)
 
