@@ -171,10 +171,17 @@ async def resolve_repo(cwd: str | None) -> RepoProbe:
             return RepoProbe("bare_repository", None)
         if "not a git repository" in stderr:
             return RepoProbe("not_a_repo", None)
+        # inside ``.git`` itself: rev-parse prints ``false`` for the work-tree
+        # probe and then fails on ``--show-toplevel``
+        if len(lines) >= 2 and lines[1].strip() == "false":
+            return RepoProbe("not_a_repo", None)
         raise _fail(result, "git rev-parse failed")
     if len(lines) < 5:
         raise GitCommandError("unexpected git rev-parse output")
-    bare, inside, toplevel, git_dir, common_dir = (s.strip() for s in lines[:5])
+    # only the two boolean lines are trimmed: a path line may legitimately end
+    # in whitespace and must survive byte-for-byte
+    bare, inside = lines[0].strip(), lines[1].strip()
+    toplevel, git_dir, common_dir = lines[2:5]
     if bare == "true":
         return RepoProbe("bare_repository", None)
     if inside != "true":

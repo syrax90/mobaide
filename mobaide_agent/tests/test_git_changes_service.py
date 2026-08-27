@@ -103,6 +103,18 @@ class TestResolveRepo:
         assert probe.repo.git_dir.startswith(probe.repo.common_dir + "/worktrees/")
         assert probe.repo.is_linked_worktree is True
 
+    @requires_git
+    @posix_only
+    async def test_trailing_whitespace_in_directory_name_is_kept(self, tmp_path):
+        trail = init_repo(str(tmp_path / "trail "))
+
+        probe = await resolve_repo(trail)
+
+        assert probe.reason is None
+        assert probe.repo.toplevel.endswith("trail ")
+        assert probe.repo.toplevel == norm_path(trail)
+        assert probe.repo.git_dir == norm_path(trail) + "/.git"
+
     async def test_old_git_is_git_too_old(self, tmp_path, monkeypatch):
         stub_git(monkeypatch, CmdResult(rc=0, stdout=b"", stderr=b""), version=(2, 14, 9))
 
@@ -349,6 +361,14 @@ class TestSessionGitStatus:
         assert resp.unavailable_reason is None
         assert resp.repo.toplevel.endswith("foo\\bar")
         assert resp.repo.head.branch == "main"
+
+    async def test_cwd_inside_git_dir_is_not_a_repo(self, repo):
+        inside = os.path.join(repo, ".git", "objects")
+
+        resp = await get_session_git_status(session_id="s1", cwd=inside, etag=None)
+
+        assert resp.unavailable_reason == "not_a_repo"
+        assert resp.repo is None
 
     async def test_submodule_and_linked_worktree_flags(self, repo, tmp_path):
         add_submodule(repo, str(tmp_path))
