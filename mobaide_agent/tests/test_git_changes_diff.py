@@ -183,6 +183,15 @@ class TestTrackedDiff:
         assert _lines(resp) == [
             ("add", None, 1, "one"), ("add", None, 2, "OTHER"), ("add", None, 3, "three")]
 
+    async def test_delete_modify_conflict_with_worktree_file_removed_is_missing(self, repo):
+        make_modify_delete_branches(repo, ours_deletes=True)
+        run_git_sync(repo, "merge", "other", check=False)
+        os.remove(os.path.join(repo, "keep.txt"))
+
+        resp = await _diff(repo, "keep.txt", "unstaged")
+
+        assert resp.kind == "missing"
+
     async def test_binary_file(self, repo):
         write_file(repo, "blob.bin", b"\x00\x01\x02\xff")
         run_git_sync(repo, "add", "blob.bin")

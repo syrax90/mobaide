@@ -599,6 +599,7 @@ def parse_unified_diff(data: bytes, *, truncated: bool = False) -> ParsedDiff:
     parsed = ParsedDiff(truncated=truncated)
     hunk: GitDiffHunk | None = None
     old_no = new_no = 0
+    last_kept = False
     for raw in lines:
         if raw.startswith(b"diff --cc ") or raw.startswith(b"diff --combined "):
             raise GitCommandError("combined diff is not supported")
@@ -635,7 +636,9 @@ def parse_unified_diff(data: bytes, *, truncated: bool = False) -> ParsedDiff:
             hunk, old_no, new_no = _start_hunk(raw, parsed)
             continue
         if raw.startswith(b"\\ "):
-            if hunk.lines:
+            # the marker belongs to the line just before it, which may have
+            # been dropped by LINE_LIMIT
+            if last_kept and hunk.lines:
                 hunk.lines[-1].no_newline = True
             continue
         marker = raw[:1]
@@ -652,7 +655,9 @@ def parse_unified_diff(data: bytes, *, truncated: bool = False) -> ParsedDiff:
         parsed.total_lines += 1
         if parsed.total_lines > LINE_LIMIT:
             parsed.truncated = True
+            last_kept = False
             continue
+        last_kept = True
         if kind == "ctx":
             line = GitDiffLine(t="ctx", old=old_no, new=new_no, text=_text(text))
             old_no += 1
@@ -763,7 +768,9 @@ async def get_session_git_diff(
         if not numstat:
             # modify/delete conflict: the working-tree file *is* HEAD's
             # version, so the conflict has no textual diff — still a real
-            # entry, not a missing one.
+            # entry unless the file is gone from the worktree too
+            if not os.path.lexists(os.path.join(toplevel, *rel.split("/"))):
+                return _missing(rel, orig, scope)
             return GitDiffResponse(
                 path=rel, orig_path=orig, scope=scope, kind="text", change="modified"
             )

@@ -217,6 +217,31 @@ class TestParseUnifiedDiff:
         assert parsed.total_lines == LINE_LIMIT + 2
         assert len(parsed.hunks[0].lines) == LINE_LIMIT
 
+    def test_no_newline_marker_after_dropped_line_is_ignored(self):
+        body = b"".join(b"+line %d\n" % i for i in range(LINE_LIMIT + 1))
+        parsed = parse_unified_diff(
+            b"diff --git a/f b/f\n--- a/f\n+++ b/f\n"
+            b"@@ -0,0 +1,%d @@\n" % (LINE_LIMIT + 1) + body
+            + b"\\ No newline at end of file\n"
+        )
+
+        assert parsed.truncated is True
+        assert parsed.total_lines == LINE_LIMIT + 1
+        assert len(parsed.hunks[0].lines) == LINE_LIMIT
+        assert parsed.hunks[0].lines[-1].no_newline is False
+
+    def test_no_newline_marker_after_last_retained_line_still_flags(self):
+        body = b"".join(b"+line %d\n" % i for i in range(LINE_LIMIT))
+        parsed = parse_unified_diff(
+            b"diff --git a/f b/f\n--- a/f\n+++ b/f\n"
+            b"@@ -0,0 +1,%d @@\n" % LINE_LIMIT + body
+            + b"\\ No newline at end of file\n"
+        )
+
+        assert parsed.truncated is False
+        assert len(parsed.hunks[0].lines) == LINE_LIMIT
+        assert parsed.hunks[0].lines[-1].no_newline is True
+
     def test_truncated_input_drops_partial_last_line(self):
         parsed = parse_unified_diff(
             b"diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n one\n+tw",
