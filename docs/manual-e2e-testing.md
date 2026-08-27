@@ -1,9 +1,10 @@
-# Manual E2E testing (real phone / emulator against a local stack)
+# Manual E2E testing (real phone / emulator / simulator against a local stack)
 
 `tests/e2e/manual_stack.py` boots the **real** central_server + **real** mobaide
-agent on your PC and wires the **real Android app** to them, so a human tester
-can exercise the full mobile ↔ server ↔ agent path hands-on: registration,
-login, agent list, SHELL terminals and managed claude/codex/antigravity sessions.
+agent on your PC and wires the **real Android app** — and, on macOS, the **real
+iOS app** on the simulator — to them, so a human tester can exercise the full
+mobile ↔ server ↔ agent path hands-on: registration, login, agent list, SHELL
+terminals and managed claude/codex/antigravity sessions.
 It is the manual-testing counterpart of the automated pytest harness documented
 in [e2e-harness.md](e2e-harness.md) and reuses the same recipe
 (`tests/e2e/conftest.py` + `tests/e2e/mock_mobile_client.py`) outside pytest.
@@ -25,21 +26,26 @@ On the first run the script pip-installs `mobaide_agent[dev]` and
 When the READY banner appears:
 
 ```
-# 3. build + install the DEBUG app on a connected device
+# 3a. Android: build + install the DEBUG app on a connected device
 cd android
 .\gradlew.bat :app:installDebug        # Windows
 ./gradlew :app:installDebug            # macOS / Linux
+
+# 3b. iOS (macOS): boot a simulator, then let the script build + install
+xcrun simctl boot 'iPhone 16'
+python tests/e2e/manual_stack.py ios --install-app
 ```
 
-Then open the app on the phone, **register or log in** with the credentials
-from the banner (email `dev@test.local`, password `Qwe>123` — both fixed,
+Then open the app on the phone or simulator, **register or log in** with the
+credentials from the banner (email `dev@test.local`, password `Qwe>123` — both fixed,
 easy dev-testing defaults; override with `--email`/`--password`), pick the
 `manual-e2e-agent`, and start testing.
-`Ctrl+C` stops the stack and **restores `android/local.properties`** to its
-previous `CENTRAL_SERVER_URL` (e.g. `https://mobaide.com`), so the checkout is
-left as it was found; state persists, so the next `up` reuses the same account,
-agent, and database — the phone stays logged in. Pass `--keep-android` to leave
-the test URL in place across restarts instead.
+`Ctrl+C` stops the stack and **restores `android/local.properties` and
+`ios/Config/Local.xcconfig`** to their previous `CENTRAL_SERVER_URL` (e.g.
+`https://mobaide.com`), so the checkout is left as it was found; state persists,
+so the next `up` reuses the same account, agent, and database — the phone stays
+logged in. Pass `--keep-android` / `--keep-ios` to leave the test URL in place
+across restarts instead.
 
 ## What the script does
 
@@ -61,11 +67,13 @@ the test URL in place across restarts instead.
    login) whose token the script uses to poll them — `status` (the CLI
    subcommand) does the same, falling back to bare status if that login
    fails (e.g. against a server not started by this script).
-6. Syncs the two **gitignored** Android files (next section) and prints the
+6. Syncs the **gitignored** client overrides (next section) and prints the
    READY banner, then streams `[server]` / `[agent]` logs until `Ctrl+C`
-   (logs are also written under the state dir).
-7. On stop, restores `local.properties` to its previous `CENTRAL_SERVER_URL`
-   and removes the debug override (skip with `--keep-android`).
+   (logs are also written under the state dir). iOS is synced only on macOS,
+   where the app can actually be built; `--ios` forces it elsewhere.
+7. On stop, restores both `CENTRAL_SERVER_URL` values to what they were and
+   removes the generated Android debug override (skip with `--keep-android` /
+   `--keep-ios`).
 
 State lives in `<system-temp>/mobaide-manual-e2e` by default (`--state-dir` to
 move it): `state.json` (JWT secret, account, agent id + token, last-used port),
@@ -89,44 +97,87 @@ any real install's `.env`, stores, and state.
 
 ## What the script writes into your checkout
 
-Only two files, **both gitignored** — `git status` stays clean and there is
+Only three files, **all gitignored** — `git status` stays clean and there is
 nothing to revert before committing:
 
 | File | Content | Why it is safe |
 |---|---|---|
 | `android/local.properties` | `CENTRAL_SERVER_URL=http://<your-ip>:9000` merged in; every other line (e.g. `sdk.dir`) is preserved | gitignored; read only on developer machines (release CI passes the env var instead) |
 | `android/app/src/debug/res/xml/network_security_config.xml` | generated debug-only override permitting cleartext HTTP | gitignored; the **debug source set is never merged into release builds**, and the tracked main config (cleartext disabled) is untouched |
+| `ios/Config/Local.xcconfig` | `CENTRAL_SERVER_URL = http:/$()/127.0.0.1:9000` merged in; your `GOOGLE_*` overrides are preserved | gitignored; `#include?`-d by the tracked `Protocol.xcconfig`, which is never written (`protocol-integrity.yml` parses it) |
 
-The server URL is **baked into the APK at build time**
-(`android/app/build.gradle.kts`), and Android blocks cleartext HTTP unless the
-network security config allows it — these two files are exactly what makes a
-DEBUG build reach `http://<your-PC>:9000`. After any URL change (new Wi-Fi
-lease, different `--port`), **rebuild + reinstall the app**; the banner warns
-when that is needed.
+The server URL is **baked into the app at build time** on both platforms —
+`android/app/build.gradle.kts` for the APK, and the xcconfig →
+`$(CENTRAL_SERVER_URL)` → `Info.plist` `CentralServerURL` chain that
+`AppConfig.swift` reads on iOS. Android additionally blocks cleartext HTTP
+unless the network security config allows it, which is what the second file is
+for. After any URL change (new Wi-Fi lease, different `--port`), **rebuild +
+reinstall the app**; the banner warns when that is needed.
 
-**Both are undone automatically when the stack stops** — the previous
-`CENTRAL_SERVER_URL` is put back and the debug override removed, so the checkout
-returns to its pre-test state with nothing to revert by hand. The rebuild
-prompt still tracks the URL the app was last built with, so restoring on stop
-does **not** make the next `up` nag for a rebuild the installed app does not
-need. Pass `--keep-android` to `up` to leave the test URL in place across
-restarts. To undo manually at any other time (e.g. after `--keep-android` or a
-hard kill that skipped teardown):
+Two iOS-specific notes:
+
+* The `/$()/` in the xcconfig value is **required**, not a typo. xcconfig treats
+  `//` as a comment even inside a value, so a raw `http://host` would be
+  truncated to `http:`. `$()` is an empty build-setting reference that Xcode
+  expands away before the `Info.plist` substitution, so the app sees a plain
+  URL.
+* iOS persists the relay base URL in the **keychain** at sign-in (`TokenStore`
+  and `ConnectionStore` both do), so an upgrade install keeps opening agent
+  sockets against the old stack even after the rebuild. **`simctl uninstall`
+  does not clear those items** — measured on the simulator: an item written
+  before an uninstall reads back intact after reinstalling. Only
+  `xcrun simctl keychain <udid> reset` clears them, and simctl scopes that per
+  device, never per app. So `--install-app` uninstalls **and** resets that
+  simulator's keychain — which also drops any `simctl keychain add-root-cert`
+  anchors on it. Use `--ios-keep-keychain` to skip the reset and sign out
+  in-app instead. The "what is installed where" record is kept **per simulator
+  UDID**, so booting a different device runs the cleanup again on that one, and
+  a failed reset leaves the device marked stale so the next run retries.
+
+**All are undone automatically when the stack stops** — the previous
+`CENTRAL_SERVER_URL` values are put back and the debug override removed, so the
+checkout returns to its pre-test state with nothing to revert by hand. A file
+the script *created* is deleted whole; one it merged into keeps every other
+line. A `CENTRAL_SERVER_URL` the script did not write (configuration profile,
+hand edit) is never touched. The rebuild prompt still tracks the URL the app was
+last built with, so restoring on stop does **not** make the next `up` nag for a
+rebuild the installed app does not need. Pass `--keep-android` / `--keep-ios` to
+`up` to leave the test URL in place across restarts. To undo manually at any
+other time (e.g. after `--keep-*` or a hard kill that skipped teardown):
 
 ```
 python tests/e2e/manual_stack.py android --revert
+python tests/e2e/manual_stack.py ios --revert
 ```
 
 ## Connectivity modes
 
 | Mode | Command | App URL | Notes |
 |---|---|---|---|
-| **LAN (default)** | `up` | `http://<PC-LAN-IP>:9000` | Phone and PC on the same Wi-Fi/subnet; allow the Windows firewall prompt (Private networks) |
-| **Emulator** | `up --android-url emulator` | `http://10.0.2.2:9000` | `10.0.2.2` is the emulator's alias for the host; add `--host 127.0.0.1` for a loopback-only run with no firewall prompt |
-| **USB / adb reverse** | `up --android-url reverse`, then `adb reverse tcp:9000 tcp:9000` | `http://127.0.0.1:9000` | No LAN or firewall involvement; re-run `adb reverse` after replugging |
+| **Android LAN (default)** | `up` | `http://<PC-LAN-IP>:9000` | Phone and PC on the same Wi-Fi/subnet; allow the Windows firewall prompt (Private networks) |
+| **Android emulator** | `up --android-url emulator` | `http://10.0.2.2:9000` | `10.0.2.2` is the emulator's alias for the host; add `--host 127.0.0.1` for a loopback-only run with no firewall prompt |
+| **Android USB / adb reverse** | `up --android-url reverse`, then `adb reverse tcp:9000 tcp:9000` | `http://127.0.0.1:9000` | No LAN or firewall involvement; re-run `adb reverse` after replugging |
+| **iOS simulator (default)** | `up` | `http://127.0.0.1:9000` | The simulator shares the Mac's network stack, so loopback just works — and it is the only cleartext host iOS allows without an ATS exception |
+| **iOS, other host** | `up --ios-url lan` or `--ios-url http://…` | as given | Accepted, but see the ATS warning below |
 
 `--advertise-ip <ip>` overrides LAN-IP auto-detection (useful with VPN/Hyper-V/
 WSL adapters); the banner lists all candidate IPs to try.
+
+### Why iOS defaults to loopback and a real iPhone does not work
+
+`--ios-url auto` resolves to `127.0.0.1` whenever the server is reachable on
+loopback, where Android's `auto` prefers the LAN IP. That is deliberate: the
+tracked `ios/Mobaide/Support/Info.plist` carries **no `NSAppTransportSecurity`
+exception in any configuration**, and App Transport Security blocks cleartext
+`http://` to anything but loopback.
+
+The failure is asymmetric and confusing, which is why the script warns loudly
+about it: REST goes through `URLSession` and fails with `-1022`, so sign-in
+breaks — while WebSockets go through Network.framework, which ATS does not
+police, so terminals look perfectly healthy. **Testing against a real iPhone
+over Wi-Fi therefore needs an ATS exception added to that tracked plist by
+hand**; the script deliberately does not add one, because it would ship in
+release builds. Use the simulator over loopback instead.
 
 ## Day-2 commands
 
@@ -135,13 +186,18 @@ WSL adapters); the banner lists all candidate IPs to try.
 | `up` | boot; reuses persisted account/agent/DB (phone stays logged in) |
 | `up --fresh` | wipe state first: new secret, account, agent, empty DB |
 | `up --fake-pty [--smoke]` | echo-backend infra check (no shells/CLIs needed) |
-| `up --install-app` / `android --install-app` | also run `gradlew :app:installDebug` |
+| `up --install-app` | build + install the app for every client that was synced |
+| `android --install-app` | also run `gradlew :app:installDebug` |
+| `ios --install-app` | also run `xcodebuild` + `xcrun simctl install`/`launch` against the **booted** simulator (uninstalling first when the URL changed) |
 | `up --projects <paths>` | seed the agent's project list with real directories |
-| `up --keep-android` | on stop, leave the test URL in `local.properties` (default: restore it) |
-| `android` | (re)sync the two Android files without booting the stack |
-| `android --revert` | manually undo now (also runs automatically on every `up` stop) |
+| `up --keep-android` / `--keep-ios` | on stop, leave the test URL in place (default: restore it) |
+| `up --no-android` / `--no-ios` | skip that client's file sync entirely |
+| `up --ios` | sync the iOS override off macOS too (default: macOS only) |
+| `--ios-keep-keychain` | with `--install-app`, skip the keychain reset on a URL change (leaves the old relay URL behind) |
+| `android` / `ios` | (re)sync that client's files without booting the stack |
+| `android --revert` / `ios --revert` | manually undo now (also runs automatically on every `up` stop) |
 | `status` | probe `/api/health`, show persisted identity |
-| `clean` | kill stale processes, revert Android files, delete the state dir |
+| `clean` | kill stale processes, revert both clients' files, delete the state dir |
 
 CLI sessions: SHELL sessions need nothing extra. claude / codex / antigravity
 sessions need that CLI installed on the PC (on `PATH`, or via
@@ -157,6 +213,10 @@ session-create time with a `<cli>_cli_missing` marker.
 | Firewall prompt denied / never appeared | Windows Settings → Firewall → Allow an app → allow Python on **Private** networks; or avoid the firewall entirely with the emulator or adb-reverse mode. |
 | Phone cannot connect | Open `http://<PC-IP>:9000/api/health` in the phone's browser. If it fails: same Wi-Fi? AP/client isolation on the router? VPN on either end? Windows network profile set to Public? Wrong NIC picked → `--advertise-ip`. |
 | App shows network/cleartext errors | The installed build predates the file sync or is a RELEASE build. Re-run `python tests/e2e/manual_stack.py android`, then rebuild + reinstall the **debug** app. |
+| iOS app still hits `api.mobaide.com` | No `ios/Config/Local.xcconfig`, or the build predates it. The URL is baked in at build time — re-run `ios`, then rebuild. Check the built app with `plutil -extract CentralServerURL raw <app>/Info.plist`. |
+| iOS: terminals work but sign-in fails | ATS is blocking cleartext REST to a non-loopback host (`-1022`). Use `--ios-url simulator`, or add an `NSAppTransportSecurity` exception to the tracked `Info.plist` by hand. |
+| iOS: agent offline / wrong server after a URL change | The relay URL is persisted in the keychain at sign-in, and an uninstall does **not** clear it. `ios --install-app` handles it (uninstall + `simctl keychain reset`); by hand, sign out in-app or `xcrun simctl keychain <udid> reset`. |
+| `no booted iOS simulator` | `xcrun simctl boot 'iPhone 16'` (or open Simulator.app) and re-run `ios --install-app`. |
 | IP changed (new DHCP lease) | Re-run `up` (it re-syncs and warns), rebuild + reinstall the app. |
 | `could not log in ... state.json no longer match` | DB and state diverged (e.g. deleted one of them). `up --fresh`, or pass matching `--email/--password`. |
 | Agent listed but offline in the app | Check `[agent]` log lines in the console or `<state>/logs/agent.log`. |
@@ -177,6 +237,13 @@ session-create time with a `<cli>_cli_missing` marker.
   mostly closed; it can still linger with `--keep-android` or after a hard kill
   that skipped teardown, so if you build a **local release APK** then, unset the
   line first / run `android --revert`.
+- iOS has **no equivalent of the `src/debug` isolation**: `Protocol.xcconfig` is
+  the base configuration for *both* Debug and Release, so a lingering
+  `Local.xcconfig` would repoint a local Release archive too. Same mitigation —
+  it is restored on stop; after `--keep-ios` or a hard kill, run `ios --revert`
+  before archiving. The script never writes `Protocol.xcconfig` itself (release
+  CI builds with no `Local.xcconfig` at all, and `protocol-integrity.yml` parses
+  the tracked file for the protocol constants).
 - The test server/agent state is fully isolated under the state dir; a
   co-installed production agent's `.env`, stores, and updater are never touched.
   Crash recovery kills only processes whose recorded pid **and** create time

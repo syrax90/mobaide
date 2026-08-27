@@ -685,6 +685,14 @@ com.apple.CoreSimulator.SimDeviceType.iPhone-16`. If the first run fails with
 "Application failed preflight checks", pre-boot: `xcrun simctl boot <udid> &&
 xcrun simctl bootstatus <udid> -b` and retry.
 
+To run the app against a local relay instead of production, use the manual
+E2E stack — `python tests/e2e/manual_stack.py up` writes (and reverts) the
+`CENTRAL_SERVER_URL` line in `Config/Local.xcconfig` for you, and
+`… ios --install-app` builds and installs onto the booted simulator. It defaults
+to loopback because the Info.plist ships no ATS exception, so a real device over
+Wi-Fi would fail every REST call while its WebSockets kept working; see
+[manual-e2e-testing.md](manual-e2e-testing.md).
+
 APNs sandbox testing (iOS-10): the simulator has no real APNs, but the
 notification-handling path (banner, collapse-by-session, tap deep link) can be
 exercised with a payload file — `xcrun simctl push <udid> com.mobaide.app
@@ -725,7 +733,10 @@ Apple needs no client-side config beyond the entitlement.
   `GOOGLE_IOS_CLIENT_ID`, `GOOGLE_SERVER_CLIENT_ID`,
   `GOOGLE_REVERSED_CLIENT_ID` (the URL scheme for the sign-in round trip).
   `GOOGLE_SERVER_CLIENT_ID` must equal the server's `GOOGLE_CLIENT_ID` — it
-  becomes the ID token's `aud`.
+  becomes the ID token's `aud`. Every URL value needs the `/$()/` slash escape
+  (xcconfig reads `//` as a comment even inside a value);
+  `tests/e2e/manual_stack.py ios` merges `CENTRAL_SERVER_URL` in and out of
+  this file without disturbing the Google ids.
 - **Apple, server side**: set `APPLE_CLIENT_ID` (the iOS bundle id,
   `com.mobaide.app`) on `central_server` to enable `POST /api/auth/apple`.
   The endpoint verifies the identity token against Apple's JWKS (PyJWT,

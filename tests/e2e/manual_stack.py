@@ -1,5 +1,5 @@
 """Manual E2E stack: boot the real central_server + mobaide agent for hands-on
-testing from a real Android phone or emulator.
+testing from a real Android phone or emulator, or the iOS simulator.
 
 Cross-platform (Windows / macOS / Linux). Reuses the automated harness recipe
 (tests/e2e/conftest.py + mock_mobile_client.py) outside pytest:
@@ -10,9 +10,11 @@ Cross-platform (Windows / macOS / Linux). Reuses the automated harness recipe
   all state isolated under a throwaway MOBAIDE_AGENT_PREFIX;
 * a persisted account + agent (state.json) so the phone stays logged in across
   restarts;
-* Android side: syncs ONLY gitignored files (local.properties CENTRAL_SERVER_URL
-  merge + a generated debug-source-set network_security_config.xml override) --
-  no tracked file is ever modified, release builds are unaffected.
+* client side: syncs ONLY gitignored files -- Android's local.properties
+  CENTRAL_SERVER_URL merge plus a generated debug-source-set
+  network_security_config.xml override, and (on macOS) the iOS simulator's
+  ios/Config/Local.xcconfig CENTRAL_SERVER_URL merge -- so no tracked file is
+  ever modified and release builds are unaffected.
 
 Quickstart (from the repo root, inside your Python 3.12+ env):
 
@@ -37,6 +39,7 @@ import tempfile
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -88,6 +91,16 @@ DEBUG_NSC_CONTENT = """<?xml version="1.0" encoding="utf-8"?>
     </base-config>
 </network-security-config>
 """
+
+IOS_DIR = REPO_ROOT / "ios"
+# Gitignored, and #include?-d by the tracked ios/Config/Protocol.xcconfig, so
+# creating it is the whole iOS wiring mechanism -- the tracked Info.plist that
+# substitutes $(CENTRAL_SERVER_URL) into its CentralServerURL key is untouched.
+LOCAL_XCCONFIG_PATH = IOS_DIR / "Config" / "Local.xcconfig"
+IOS_XCODEPROJ_PATH = IOS_DIR / "Mobaide.xcodeproj"
+IOS_SCHEME = "Mobaide"
+IOS_BUNDLE_ID = "com.mobaide.app"
+IOS_DEFAULT_SIM = "iPhone 16"
 
 # Vars a shell may still export from the old copy-paste recipe (or a dev .env
 # may define). Children get them popped, then the script's explicit values --
@@ -212,6 +225,23 @@ def ensure_no_proxy_env() -> None:
 # --------------------------------------------------------------------------
 
 
+def _default_client_state() -> dict:
+    """Per-client rollout bookkeeping.
+
+    ``baked_url`` is the URL the next build will bake (set at sync time, drives
+    the rebuild prompt); ``installed_urls`` maps a device id to the URL a build
+    actually carried onto it (set only after a successful install), and only
+    that can say whether a given device's app is stale.
+    """
+    return {
+        "previous_central_server_url": None,
+        "previous_line": None,
+        "managed_url": None,
+        "baked_url": None,
+        "installed_urls": {},
+    }
+
+
 def default_state() -> dict:
     return {
         "version": STATE_VERSION,
@@ -223,11 +253,8 @@ def default_state() -> dict:
         "agent_token": None,
         "server_port": DEFAULT_PORT,
         "server_host": DEFAULT_HOST,
-        "android": {
-            "previous_central_server_url": None,
-            "managed_url": None,
-            "baked_url": None,
-        },
+        "android": _default_client_state(),
+        "ios": _default_client_state(),
         "runtime": {},
         "updated_at": None,
     }
@@ -614,15 +641,216 @@ def run_smoke(deps, client, state: dict) -> None:
 
 
 # --------------------------------------------------------------------------
-# Android file sync (gitignored files only)
+# Client file sync (gitignored files only)
 # --------------------------------------------------------------------------
 
 _CENTRAL_URL_RE = re.compile(r"^\s*CENTRAL_SERVER_URL\s*=(.*)$")
+# A conditional xcconfig assignment (CENTRAL_SERVER_URL[config=Debug] = ...)
+# outranks the unconditional line written here, so it is reported, not rewritten.
+_XCCONFIG_CONDITIONAL_URL_RE = re.compile(r"^\s*CENTRAL_SERVER_URL\s*\[[^\]]*\]\s*=")
 
 CREATED_PROPERTIES_HEADER = [
     "# Created by tests/e2e/manual_stack.py (gitignored). Android",
     "# Studio will add sdk.dir here on first project open.",
 ]
+
+CREATED_XCCONFIG_HEADER = [
+    "// Created by tests/e2e/manual_stack.py (gitignored). Only",
+    "// CENTRAL_SERVER_URL is managed here; add your own GOOGLE_* overrides",
+    "// alongside it and they will be preserved (see Local.xcconfig.example).",
+]
+
+
+def _read_config_lines(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    return path.read_text(encoding="utf-8-sig").splitlines()
+
+
+def _write_config_lines(path: Path, lines: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # UTF-8 without BOM + \n, matching config/use-profile.ps1's merge writer.
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def _xcconfig_escape(url: str) -> str:
+    """Escape a URL for an xcconfig value.
+
+    xcconfig treats ``//`` as a comment even inside a value, so a raw
+    ``http://host`` would be truncated to ``http:``. ``$()`` is an empty
+    build-setting reference that Xcode expands away before the Info.plist
+    substitution runs, so the app still sees a plain URL (the escape the
+    tracked ios/Config/Local.xcconfig.example documents).
+    """
+    return url.replace("//", "/$()/")
+
+
+def _xcconfig_parse(raw: str) -> str:
+    """Value of an xcconfig assignment.
+
+    ``//`` opens a comment anywhere on the line, so an inline note must be cut
+    off the raw text BEFORE the ``/$()/`` escape is undone -- undoing it first
+    would turn the escape into a comment delimiter and swallow the URL.
+    """
+    return raw.split("//", 1)[0].replace("$()", "").strip()
+
+
+def _url_host(url: str) -> str:
+    return url.split("://", 1)[-1].split("/", 1)[0].rsplit(":", 1)[0]
+
+
+def _is_loopback_url(url: str) -> bool:
+    host = _url_host(url).strip("[]")
+    return host in ("localhost", "::1") or host.startswith("127.")
+
+
+class _ManagedUrlFile:
+    """A gitignored per-developer config file whose CENTRAL_SERVER_URL this
+    script owns.
+
+    The ownership rule both clients share: the line is restored on revert only
+    while the on-disk value still equals the one this script wrote
+    (``managed_url``) -- a profile swap or hand edit in between makes it foreign
+    and untouchable. The rebuild verdict is measured against ``baked_url`` (the
+    URL this script last wrote for a build), not the live file, so restoring on
+    shutdown does not make every later ``up`` nag for a rebuild the installed
+    app does not actually need.
+
+    ``path`` is a callable so the module-level constant is resolved per call
+    (tests redirect the checkout paths into a throwaway tree).
+    """
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        path: Callable[[], Path],
+        render: Callable[[str], str],
+        parse: Callable[[str], str],
+        header: list[str],
+        state_key: str,
+    ):
+        self.label = label
+        self._path = path
+        self.render = render
+        self.parse = parse
+        self.header = header
+        self.state_key = state_key
+
+    @property
+    def path(self) -> Path:
+        return self._path()
+
+    def own_state(self, state: dict) -> dict:
+        return state.setdefault(self.state_key, _default_client_state())
+
+    def current_url(self, lines: list[str]) -> str | None:
+        for line in lines:
+            match = _CENTRAL_URL_RE.match(line)
+            if match:
+                return self.parse(match.group(1))
+        return None
+
+    def sync(self, state: dict, url: str) -> bool:
+        """Merge the URL in; returns True when the app must be rebuilt."""
+        own = self.own_state(state)
+        prior_baked = own.get("baked_url")
+        lines = _read_config_lines(self.path)
+        current = self.current_url(lines)
+        if current != own.get("managed_url"):
+            # First take-over, or someone else (profile swap / hand edit)
+            # changed the value since our last write: remember it for --revert.
+            # The whole line is kept, not just the parsed URL -- re-rendering
+            # would drop an inline xcconfig comment (or a developer's spacing).
+            own["previous_central_server_url"] = current
+            own["previous_line"] = next(
+                (line for line in lines if _CENTRAL_URL_RE.match(line)), None
+            )
+
+        new_line = self.render(url)
+        out: list[str] = []
+        replaced = False
+        for line in lines:
+            if _CENTRAL_URL_RE.match(line):
+                if not replaced:
+                    out.append(new_line)
+                    replaced = True
+                continue  # drop duplicate CENTRAL_SERVER_URL lines
+            out.append(line)
+        if not replaced:
+            if not out:
+                out.extend(self.header)
+            out.append(new_line)
+
+        if out != lines:
+            _write_config_lines(self.path, out)
+            log(f"{self.label}: CENTRAL_SERVER_URL={url}")
+        else:
+            log(f"{self.label}: unchanged (CENTRAL_SERVER_URL={url})")
+        own["managed_url"] = url
+        own["baked_url"] = url
+        return prior_baked != url
+
+    def revert(self, state: dict) -> None:
+        own = state.get(self.state_key) or {}
+        managed = own.get("managed_url")
+        lines = _read_config_lines(self.path)
+        current = self.current_url(lines)
+        if current is None:
+            log(f"{self.label}: no CENTRAL_SERVER_URL line; nothing to revert")
+            return
+        if managed is None or current != managed:
+            log(
+                f"{self.label}: CENTRAL_SERVER_URL was set by something else "
+                "(configuration profile or hand edit); leaving it alone"
+            )
+            return
+
+        previous = own.get("previous_central_server_url")
+        pending = own.get("previous_line")
+        if pending is None and previous is not None:
+            pending = self.render(previous)
+        out: list[str] = []
+        for line in lines:
+            if _CENTRAL_URL_RE.match(line):
+                if pending is not None:
+                    out.append(pending)
+                    pending = None  # restore once, drop duplicates
+                continue
+            out.append(line)
+        leftovers = [ln for ln in out if ln.strip() and ln not in self.header]
+        if not leftovers:
+            # The file only ever held our own header + URL line: remove it whole.
+            self.path.unlink(missing_ok=True)
+            log(f"{self.label}: removed (was created by this script)")
+        else:
+            _write_config_lines(self.path, out)
+            if previous is not None:
+                log(f"{self.label}: CENTRAL_SERVER_URL restored to {previous}")
+            else:
+                log(f"{self.label}: CENTRAL_SERVER_URL line removed")
+        own["managed_url"] = None
+        own["previous_central_server_url"] = None
+        own["previous_line"] = None
+
+
+ANDROID_URL_FILE = _ManagedUrlFile(
+    label="android/local.properties",
+    path=lambda: LOCAL_PROPERTIES_PATH,
+    render=lambda url: f"CENTRAL_SERVER_URL={url}",
+    parse=lambda raw: raw,
+    header=CREATED_PROPERTIES_HEADER,
+    state_key="android",
+)
+
+IOS_URL_FILE = _ManagedUrlFile(
+    label="ios/Config/Local.xcconfig",
+    path=lambda: LOCAL_XCCONFIG_PATH,
+    render=lambda url: f"CENTRAL_SERVER_URL = {_xcconfig_escape(url)}",
+    parse=_xcconfig_parse,
+    header=CREATED_XCCONFIG_HEADER,
+    state_key="ios",
+)
 
 
 def resolve_android_url(args: argparse.Namespace, lan_ip: str) -> str:
@@ -647,71 +875,48 @@ def resolve_android_url(args: argparse.Namespace, lan_ip: str) -> str:
     die(f"--android-url must be auto|emulator|reverse or an explicit http(s) URL, got: {mode}")
 
 
-def _read_local_properties_lines() -> list[str]:
-    if not LOCAL_PROPERTIES_PATH.exists():
-        return []
-    return LOCAL_PROPERTIES_PATH.read_text(encoding="utf-8-sig").splitlines()
+def resolve_ios_url(args: argparse.Namespace, lan_ip: str) -> str:
+    """URL for the iOS build. Unlike Android, ``auto`` prefers loopback.
+
+    The simulator shares the Mac's network stack, and loopback is the only
+    cleartext host iOS permits out of the box: the app's Info.plist carries no
+    NSAppTransportSecurity exception, so http:// to a LAN address fails every
+    URLSession REST call with -1022 while ws:// keeps working (Network.framework
+    is not policed by ATS) -- a half-broken state worth steering away from.
+    """
+    mode = args.ios_url
+    if mode == "auto":
+        if args.host in ("0.0.0.0", "::", "", None, "127.0.0.1", "localhost"):
+            return f"http://127.0.0.1:{args.port}"
+        # Bound to one specific interface: loopback would miss the listener.
+        return f"http://{args.host}:{args.port}"
+    if mode == "simulator":
+        return f"http://127.0.0.1:{args.port}"
+    if mode == "lan":
+        return f"http://{lan_ip}:{args.port}"
+    if mode.startswith(("http://", "https://")):
+        return mode
+    die(f"--ios-url must be auto|simulator|lan or an explicit http(s) URL, got: {mode}")
 
 
-def _current_central_url(lines: list[str]) -> str | None:
-    for line in lines:
-        match = _CENTRAL_URL_RE.match(line)
-        if match:
-            return match.group(1)
-    return None
-
-
-def _write_local_properties_lines(lines: list[str]) -> None:
-    LOCAL_PROPERTIES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    # UTF-8 without BOM + \n, matching config/use-profile.ps1's merge writer.
-    LOCAL_PROPERTIES_PATH.write_text(
-        "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
+def warn_if_ats_blocked(url: str) -> None:
+    if not url.startswith("http://") or _is_loopback_url(url):
+        return
+    log(
+        "WARNING: iOS App Transport Security blocks cleartext http:// to "
+        f"{_url_host(url)}. Sign-in and every other REST call will fail with "
+        "-1022 while terminals still connect (WebSockets bypass ATS), unless "
+        "you add an NSAppTransportSecurity exception to "
+        "ios/Mobaide/Support/Info.plist by hand. Use the simulator over "
+        "loopback (--ios-url simulator) to avoid this entirely."
     )
 
 
 def sync_android_files(state: dict, url: str, save) -> bool:
-    """Write both gitignored artifacts; returns True when the app must be
-    rebuilt + reinstalled because the URL baked into the last build changed.
-
-    The rebuild verdict is measured against ``baked_url`` (the URL this script
-    last wrote for a build), not the live ``local.properties`` — so restoring
-    the file on shutdown does not make every later `up` nag for a rebuild the
-    installed app does not actually need.
+    """Write both gitignored Android artifacts; returns True when the app must
+    be rebuilt + reinstalled because the URL baked into the last build changed.
     """
-    android_state = state.setdefault(
-        "android",
-        {"previous_central_server_url": None, "managed_url": None, "baked_url": None},
-    )
-    prior_baked = android_state.get("baked_url")
-    lines = _read_local_properties_lines()
-    current = _current_central_url(lines)
-    if current != android_state.get("managed_url"):
-        # First take-over, or someone else (profile swap / hand edit) changed
-        # the value since our last write: remember it for `android --revert`.
-        android_state["previous_central_server_url"] = current
-
-    new_line = f"CENTRAL_SERVER_URL={url}"
-    out: list[str] = []
-    replaced = False
-    for line in lines:
-        if _CENTRAL_URL_RE.match(line):
-            if not replaced:
-                out.append(new_line)
-                replaced = True
-            continue  # drop duplicate CENTRAL_SERVER_URL lines
-        out.append(line)
-    if not replaced:
-        if not out:
-            out.extend(CREATED_PROPERTIES_HEADER)
-        out.append(new_line)
-
-    if out != lines:
-        _write_local_properties_lines(out)
-        log(f"android/local.properties: CENTRAL_SERVER_URL={url}")
-    else:
-        log(f"android/local.properties: unchanged (CENTRAL_SERVER_URL={url})")
-    android_state["managed_url"] = url
-    android_state["baked_url"] = url
+    rebuild_needed = ANDROID_URL_FILE.sync(state, url)
 
     nsc_rel = DEBUG_NSC_PATH.relative_to(REPO_ROOT)
     existing_nsc = (
@@ -732,46 +937,11 @@ def sync_android_files(state: dict, url: str, save) -> bool:
         log(f"{nsc_rel}: written (debug builds only)")
 
     save()
-    return prior_baked != url
+    return rebuild_needed
 
 
 def revert_android_files(state: dict, save) -> None:
-    android_state = state.get("android") or {}
-    managed = android_state.get("managed_url")
-
-    lines = _read_local_properties_lines()
-    current = _current_central_url(lines)
-    if current is None:
-        log("android/local.properties: no CENTRAL_SERVER_URL line; nothing to revert")
-    elif managed is not None and current == managed:
-        previous = android_state.get("previous_central_server_url")
-        out: list[str] = []
-        for line in lines:
-            if _CENTRAL_URL_RE.match(line):
-                if previous is not None:
-                    out.append(f"CENTRAL_SERVER_URL={previous}")
-                    previous = None  # restore once, drop duplicates
-                continue
-            out.append(line)
-        leftovers = [ln for ln in out if ln.strip() and ln not in CREATED_PROPERTIES_HEADER]
-        if not leftovers:
-            # The file only ever held our own header + URL line: remove it whole.
-            LOCAL_PROPERTIES_PATH.unlink(missing_ok=True)
-            log("android/local.properties: removed (was created by this script)")
-        else:
-            _write_local_properties_lines(out)
-            restored = android_state.get("previous_central_server_url")
-            if restored is not None:
-                log(f"android/local.properties: CENTRAL_SERVER_URL restored to {restored}")
-            else:
-                log("android/local.properties: CENTRAL_SERVER_URL line removed")
-        android_state["managed_url"] = None
-        android_state["previous_central_server_url"] = None
-    else:
-        log(
-            "android/local.properties: CENTRAL_SERVER_URL was set by something else "
-            "(configuration profile or hand edit); leaving it alone"
-        )
+    ANDROID_URL_FILE.revert(state)
 
     if DEBUG_NSC_PATH.exists():
         content = DEBUG_NSC_PATH.read_text(encoding="utf-8")
@@ -795,6 +965,32 @@ def revert_android_files(state: dict, save) -> None:
             )
     else:
         log(f"{DEBUG_NSC_PATH.relative_to(REPO_ROOT)}: absent; nothing to revert")
+    save()
+
+
+def sync_ios_files(state: dict, url: str, save) -> bool:
+    """Merge CENTRAL_SERVER_URL into the gitignored Local.xcconfig; returns True
+    when the app must be rebuilt + reinstalled (same ``baked_url`` rule as
+    Android). Unlike Android there is no second file: loopback needs no ATS
+    override, and the one the LAN case would need lives in a tracked plist.
+    """
+    if any(
+        _XCCONFIG_CONDITIONAL_URL_RE.match(line)
+        for line in _read_config_lines(LOCAL_XCCONFIG_PATH)
+    ):
+        log(
+            "WARNING: ios/Config/Local.xcconfig already assigns "
+            "CENTRAL_SERVER_URL for a specific configuration; that conditional "
+            "line outranks the unconditional one written here"
+        )
+    rebuild_needed = IOS_URL_FILE.sync(state, url)
+    warn_if_ats_blocked(url)
+    save()
+    return rebuild_needed
+
+
+def revert_ios_files(state: dict, save) -> None:
+    IOS_URL_FILE.revert(state)
     save()
 
 
@@ -825,9 +1021,150 @@ def run_gradle_install() -> bool:
     return True
 
 
+def booted_simulator_udid() -> str | None:
+    try:
+        result = subprocess.run(
+            ["xcrun", "simctl", "list", "devices", "booted", "-j"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        runtimes = json.loads(result.stdout).get("devices", {})
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        log(f"WARNING: could not list booted simulators ({exc})")
+        return None
+    for runtime, devices in runtimes.items():
+        if "iOS" not in runtime:
+            continue
+        for device in devices:
+            if device.get("state") == "Booted" and device.get("udid"):
+                return device["udid"]
+    return None
+
+
+def run_xcode_install(
+    state: dict, state_dir: Path, url: str, save, *, reset_keychain: bool
+) -> bool:
+    """Build the debug app and (re)install it on the booted simulator.
+
+    Warn-only at every step, exactly like run_gradle_install: a missing Xcode or
+    simulator must never take the stack down. CODE_SIGNING_ALLOWED=NO is
+    deliberately NOT passed -- an unsigned app cannot reach the Keychain, so the
+    login token would never persist and the app would look signed out on every
+    launch (it stays fine for `xcodebuild test`).
+
+    The stale-install check reads ``installed_url``, which is written only after
+    an install succeeds -- ``baked_url`` moves at sync time, so a sync-now /
+    install-later run (the flow the READY banner prints) would otherwise think
+    the simulator already carried the new URL.
+    """
+    if sys.platform != "darwin":
+        log("WARNING: the iOS app can only be built on macOS; skipping app install")
+        return False
+    if not IOS_XCODEPROJ_PATH.exists():
+        log(f"WARNING: {IOS_XCODEPROJ_PATH} not found; skipping iOS app install")
+        return False
+    udid = booted_simulator_udid()
+    if udid is None:
+        log(
+            "WARNING: no booted iOS simulator (start one with "
+            f"`xcrun simctl boot '{IOS_DEFAULT_SIM}'` or open Simulator.app); "
+            "skipping iOS app install"
+        )
+        return False
+
+    derived = state_dir / "ios-build"
+    log(f"building + installing the debug app (xcodebuild -scheme {IOS_SCHEME}) ...")
+    try:
+        result = subprocess.run(
+            [
+                "xcodebuild",
+                "-project", str(IOS_XCODEPROJ_PATH),
+                "-scheme", IOS_SCHEME,
+                "-configuration", "Debug",
+                "-destination", f"platform=iOS Simulator,id={udid}",
+                "-derivedDataPath", str(derived),
+                "build",
+            ],
+            cwd=str(REPO_ROOT),
+        )
+    except OSError as exc:
+        log(f"WARNING: could not run xcodebuild ({exc}); install the app manually")
+        return False
+    if result.returncode != 0:
+        log(
+            "WARNING: xcodebuild failed (needs Xcode and an iOS simulator "
+            "runtime); the stack itself is unaffected"
+        )
+        return False
+
+    app = derived / "Build" / "Products" / "Debug-iphonesimulator" / f"{IOS_SCHEME}.app"
+    if not app.exists():
+        log(f"WARNING: built app not found at {app}; skipping install")
+        return False
+
+    # Keyed by UDID: every simulator carries its own container AND its own
+    # keychain, so an install on one says nothing about the state of another.
+    installed = IOS_URL_FILE.own_state(state).setdefault("installed_urls", {})
+    cleaned = True
+    if installed.get(udid) != url:
+        # TokenStore and ConnectionStore both persist a relay base URL in the
+        # keychain, and an upgrade install would keep opening agent sockets
+        # against the old stack while REST already followed the new baked URL.
+        # Measured on the simulator: `simctl uninstall` wipes the container but
+        # leaves those items intact, so only a keychain reset actually clears
+        # them -- and simctl scopes reset per device, never per app.
+        log("installed URL differs on this simulator: uninstalling the previous build")
+        subprocess.run(["xcrun", "simctl", "uninstall", udid, IOS_BUNDLE_ID])
+        installed.pop(udid, None)
+        save()
+        if reset_keychain:
+            log(f"resetting the {udid[:8]}... simulator keychain (uninstall does "
+                "not clear the stored relay URL; this drops every keychain item "
+                "on that device, including `simctl keychain add-root-cert` "
+                "anchors -- skip it with --ios-keep-keychain)")
+            try:
+                cleaned = subprocess.run(
+                    ["xcrun", "simctl", "keychain", udid, "reset"]
+                ).returncode == 0
+            except OSError as exc:
+                log(f"WARNING: could not run `simctl keychain reset` ({exc})")
+                cleaned = False
+            if not cleaned:
+                log("WARNING: the keychain reset failed, so the previous stack's "
+                    "relay URL may still be there; leaving this simulator marked "
+                    "stale so the next --install-app retries the cleanup")
+        else:
+            log("WARNING: --ios-keep-keychain: the previous stack's relay URL "
+                "survives in the keychain. If the app still talks to the old "
+                "server, sign out in-app or reset the keychain by hand")
+    for cmd in (
+        ["xcrun", "simctl", "install", udid, str(app)],
+        ["xcrun", "simctl", "launch", udid, IOS_BUNDLE_ID],
+    ):
+        try:
+            result = subprocess.run(cmd)
+        except OSError as exc:
+            log(f"WARNING: `{' '.join(cmd)}` could not run ({exc})")
+            return False
+        if result.returncode != 0:
+            log(f"WARNING: `{' '.join(cmd)}` failed")
+            return False
+    if cleaned and installed.get(udid) != url:
+        installed[udid] = url
+        save()
+    log("debug app installed and launched on the simulator")
+    return True
+
+
 # --------------------------------------------------------------------------
 # Banner
 # --------------------------------------------------------------------------
+
+
+def client_sync_state() -> SimpleNamespace:
+    """Per-client rollout outcome shared by the banner and the teardown path."""
+    return SimpleNamespace(synced=False, url=None, rebuild_needed=False)
 
 
 def print_ready_banner(
@@ -835,9 +1172,8 @@ def print_ready_banner(
     state: dict,
     lan_ip: str,
     all_ips: list[str],
-    android_synced: bool,
-    android_url: str | None,
-    rebuild_needed: bool,
+    android: SimpleNamespace,
+    ios: SimpleNamespace,
 ) -> None:
     port = args.port
     gradle_cmd = (
@@ -849,7 +1185,7 @@ def print_ready_banner(
     lines = [bar, "  Mobaide manual E2E stack -- READY", bar]
     if args.host in ("127.0.0.1", "localhost"):
         lines.append(f"  Server bind:        {args.host}:{port}  (loopback only -- "
-                     "phones on the LAN can NOT reach it)")
+                     "the iOS simulator and adb reverse reach it, LAN phones do NOT)")
     else:
         lines.append(f"  Phone (same Wi-Fi): http://{lan_ip}:{port}")
         others = [ip for ip in all_ips if ip != lan_ip]
@@ -869,9 +1205,9 @@ def print_ready_banner(
         lines.append("  Sessions:           real PTY -- shell + claude/codex/antigravity "
                      "(CLIs resolve from PATH or MOBAIDE_*_BIN)")
     lines.append(f"  State dir:          {args.state_dir}")
-    if android_synced:
-        lines.append(f"  Android app URL:    {android_url}  (baked at build time)")
-        if rebuild_needed:
+    if android.synced:
+        lines.append(f"  Android app URL:    {android.url}  (baked at build time)")
+        if android.rebuild_needed:
             lines.append("      URL CHANGED -> rebuild + reinstall the app:")
         else:
             lines.append("      to (re)install the debug app:")
@@ -884,6 +1220,24 @@ def print_ready_banner(
     else:
         lines.append("  Android files:      NOT synced (--no-android); run "
                      "`python tests/e2e/manual_stack.py android` when needed")
+    if ios.synced:
+        lines.append(f"  iOS app URL:        {ios.url}  (baked at build time)")
+        if ios.rebuild_needed:
+            lines.append("      URL CHANGED -> rebuild + reinstall on the booted "
+                         "simulator (uninstall alone")
+            lines.append("      leaves the old relay URL in the keychain, so this "
+                         "also resets it):")
+        else:
+            lines.append("      to (re)install the debug app on the booted simulator:")
+        lines.append("      python tests/e2e/manual_stack.py ios --install-app")
+        restore_note = (
+            "kept on stop (--keep-ios)" if args.keep_ios
+            else "restored to its previous value on stop"
+        )
+        lines.append(f"      ios/Config/Local.xcconfig {restore_note}")
+    elif sys.platform == "darwin":
+        lines.append("  iOS files:          NOT synced (--no-ios); run "
+                     "`python tests/e2e/manual_stack.py ios` when needed")
     if os.name == "nt" and args.host not in ("127.0.0.1", "localhost"):
         lines.append("  Windows firewall:   if a Defender prompt appeared, allow "
                      "Python on PRIVATE networks")
@@ -900,15 +1254,36 @@ def print_ready_banner(
 # --------------------------------------------------------------------------
 
 
+def merge_external_install_state(state_dir: Path, state: dict) -> None:
+    """Fold in install bookkeeping a concurrent client subcommand wrote.
+
+    The READY banner tells the operator to run ``ios --install-app`` from
+    another shell while ``up`` keeps streaming logs. That process records its
+    install in state.json, but ``up`` still holds the pre-install dictionary and
+    its shutdown save would put the old one back -- costing the next install a
+    needless device-wide keychain reset. Disk wins for these keys: ``up`` only
+    ever installs during startup, so anything on disk is at least as fresh.
+    """
+    try:
+        on_disk = json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    for key in ("android", "ios"):
+        external = (on_disk.get(key) or {}).get("installed_urls")
+        if isinstance(external, dict) and external:
+            client = state.setdefault(key, _default_client_state())
+            client.setdefault("installed_urls", {}).update(external)
+
+
 def cmd_up(args: argparse.Namespace) -> int:
     deps = load_deps(auto_install=True, reinstall=args.reinstall)
 
     state_dir = args.state_dir
-    preserved_android = None
+    preserved_clients: dict[str, dict] = {}
     if args.fresh and (state_dir / "state.json").exists():
         # Consume the old state BEFORE deleting it: reap any crashed run's
-        # children (their pids live only here) and carry the Android ownership
-        # metadata over, or a later `android --revert` would mistake our own
+        # children (their pids live only here) and carry the per-client
+        # ownership metadata over, or a later `--revert` would mistake our own
         # generated CENTRAL_SERVER_URL for the user's original value.
         try:
             old_state = json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
@@ -916,7 +1291,11 @@ def cmd_up(args: argparse.Namespace) -> int:
             old_state = None
         if old_state:
             kill_stale_processes(old_state, deps.psutil)
-            preserved_android = old_state.get("android")
+            preserved_clients = {
+                key: old_state[key]
+                for key in ("android", "ios")
+                if old_state.get(key)
+            }
     if args.fresh and state_dir.exists():
         log(f"--fresh: wiping state dir {state_dir}")
         shutil.rmtree(state_dir, ignore_errors=True)
@@ -928,8 +1307,7 @@ def cmd_up(args: argparse.Namespace) -> int:
         d.mkdir(parents=True, exist_ok=True)
 
     state = load_or_create_state(state_dir, args)
-    if preserved_android:
-        state["android"] = preserved_android
+    state.update(preserved_clients)
     save = lambda: save_state(state_dir, state)  # noqa: E731
     save()
 
@@ -943,15 +1321,28 @@ def cmd_up(args: argparse.Namespace) -> int:
     elif args.host not in ("0.0.0.0", "::", "127.0.0.1", "localhost"):
         lan_ip = args.host  # bound to one interface: that IS the reachable IP
 
-    android_synced = False
-    android_url = None
-    rebuild_needed = False
+    android = client_sync_state()
     if not args.no_android:
-        android_url = resolve_android_url(args, lan_ip)
-        rebuild_needed = sync_android_files(state, android_url, save)
-        android_synced = True
+        android.url = resolve_android_url(args, lan_ip)
+        android.rebuild_needed = sync_android_files(state, android.url, save)
+        android.synced = True
         if args.install_app:
             run_gradle_install()
+
+    ios = client_sync_state()
+    if not args.no_ios:
+        if sys.platform == "darwin" or args.ios:
+            ios.url = resolve_ios_url(args, lan_ip)
+            ios.rebuild_needed = sync_ios_files(state, ios.url, save)
+            ios.synced = True
+            if args.install_app:
+                run_xcode_install(
+                    state, state_dir, ios.url, save,
+                    reset_keychain=not args.ios_keep_keychain,
+                )
+        else:
+            log("iOS sync skipped: not macOS (pass --ios to write "
+                "ios/Config/Local.xcconfig anyway)")
 
     if os.name == "nt" and args.host not in ("127.0.0.1", "localhost"):
         log(
@@ -1017,9 +1408,7 @@ def cmd_up(args: argparse.Namespace) -> int:
             else:
                 log("--smoke needs --fake-pty (deterministic echo backend); skipping")
 
-        print_ready_banner(
-            args, state, lan_ip, all_ips, android_synced, android_url, rebuild_needed
-        )
+        print_ready_banner(args, state, lan_ip, all_ips, android, ios)
 
         while True:
             time.sleep(1)
@@ -1041,28 +1430,50 @@ def cmd_up(args: argparse.Namespace) -> int:
             client.close()
         state["runtime"] = {}
         state_exists = (state_dir / "state.json").exists()
+        if state_exists:
+            merge_external_install_state(state_dir, state)
         # Restore the checkout to its pre-test state so a normal or release
         # build is not left pointing at the throwaway stack. The installed debug
         # app keeps its baked-in URL, so this neither disconnects the phone nor
         # triggers a spurious rebuild prompt on the next `up` (see baked_url).
         # Skipped when state.json is gone (a concurrent `clean` already reverted,
         # and revert_android_files would re-create the deleted state dir).
-        android_restored = False
-        if android_synced and not args.keep_android and state_exists:
+        restored = []
+        if android.synced and not args.keep_android and state_exists:
             try:
                 revert_android_files(state, save)
-                android_restored = True
+                restored.append("android/local.properties")
             except OSError as exc:
                 log(f"could not restore android/local.properties on stop ({exc}); "
                     "run `python tests/e2e/manual_stack.py android --revert` manually")
+        if ios.synced and not args.keep_ios and state_exists:
+            try:
+                revert_ios_files(state, save)
+                restored.append("ios/Config/Local.xcconfig")
+            except OSError as exc:
+                log(f"could not restore ios/Config/Local.xcconfig on stop ({exc}); "
+                    "run `python tests/e2e/manual_stack.py ios --revert` manually")
         if state_exists:
             # Skip the save when `clean` removed the state dir mid-run --
             # rewriting it here would resurrect a directory the user deleted.
             save()
         stop_msg = f"stack stopped; state kept in {state_dir} (next `up` reuses it)"
-        if android_restored:
-            stop_msg += "; android/local.properties restored"
+        if restored:
+            stop_msg += f"; {' + '.join(restored)} restored"
         log(stop_msg)
+
+
+def advertised_lan_ip(args: argparse.Namespace) -> str:
+    """LAN IP for a client subcommand run outside `up` (psutil optional)."""
+    if args.advertise_ip:
+        return args.advertise_ip
+    psutil_mod = None
+    try:
+        import psutil as psutil_mod  # type: ignore[no-redef]
+    except ImportError:
+        pass  # candidates list degrades gracefully; primary detection is stdlib
+    lan_ip, _ = detect_lan_ips(psutil_mod)
+    return lan_ip
 
 
 def cmd_android(args: argparse.Namespace) -> int:
@@ -1074,20 +1485,33 @@ def cmd_android(args: argparse.Namespace) -> int:
         revert_android_files(state, save)
         return 0
 
-    psutil_mod = None
-    try:
-        import psutil as psutil_mod  # type: ignore[no-redef]
-    except ImportError:
-        pass  # candidates list degrades gracefully; primary detection is stdlib
-    lan_ip, _ = detect_lan_ips(psutil_mod)
-    if args.advertise_ip:
-        lan_ip = args.advertise_ip
-    url = resolve_android_url(args, lan_ip)
+    url = resolve_android_url(args, advertised_lan_ip(args))
     changed = sync_android_files(state, url, save)
     if changed:
         log("URL changed: rebuild + reinstall the debug app so it bakes the new value")
     if args.install_app:
         run_gradle_install()
+    return 0
+
+
+def cmd_ios(args: argparse.Namespace) -> int:
+    state_dir = args.state_dir
+    state = load_or_create_state(state_dir, args)
+    save = lambda: save_state(state_dir, state)  # noqa: E731
+
+    if args.revert:
+        revert_ios_files(state, save)
+        return 0
+
+    url = resolve_ios_url(args, advertised_lan_ip(args))
+    changed = sync_ios_files(state, url, save)
+    if changed:
+        log("URL changed: rebuild + reinstall the app so it bakes the new value")
+    if args.install_app:
+        run_xcode_install(
+            state, state_dir, url, save,
+            reset_keychain=not args.ios_keep_keychain,
+        )
     return 0
 
 
@@ -1153,6 +1577,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
         except ImportError:
             log("psutil not installed; skipping stale-process reaping")
         revert_android_files(state, lambda: None)
+        revert_ios_files(state, lambda: None)
 
     if state_dir.exists():
         if state_path.exists() or not any(state_dir.iterdir()):
@@ -1182,11 +1607,16 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_android_args(parser: argparse.ArgumentParser) -> None:
+def _add_client_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--port", type=int, default=None,
                         help=f"central_server port (default: last used, then {DEFAULT_PORT})")
     parser.add_argument("--advertise-ip", default=None,
                         help="LAN IP to advertise instead of auto-detection")
+    parser.add_argument("--install-app", action="store_true",
+                        help="build + install the debug app(s) after the file sync")
+
+
+def _add_android_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--android-url",
         default="auto",
@@ -1194,8 +1624,22 @@ def _add_android_args(parser: argparse.ArgumentParser) -> None:
         help="URL baked into the app: auto | emulator (10.0.2.2) | reverse "
              "(127.0.0.1 via adb reverse) | an explicit http(s) URL",
     )
-    parser.add_argument("--install-app", action="store_true",
-                        help="run `gradlew :app:installDebug` after the file sync")
+
+
+def _add_ios_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--ios-url",
+        default="auto",
+        metavar="MODE",
+        help="URL baked into the iOS build: auto (loopback) | simulator | lan "
+             "(needs a hand-added ATS exception) | an explicit http(s) URL",
+    )
+    parser.add_argument(
+        "--ios-keep-keychain",
+        action="store_true",
+        help="with --install-app, do not reset the simulator keychain when the "
+             "URL changed (leaves the previous stack's relay URL in place)",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1206,10 +1650,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    up = sub.add_parser("up", help="boot server + agent, sync android files, "
+    up = sub.add_parser("up", help="boot server + agent, sync the client files, "
                                    "stream logs until Ctrl+C (default command)")
     _add_common_args(up)
+    _add_client_args(up)
     _add_android_args(up)
+    _add_ios_args(up)
     up.add_argument("--host", default=None,
                     help=f"server bind address (default: last used, then {DEFAULT_HOST}; "
                          "use 127.0.0.1 for an emulator-only, no-firewall-prompt run)")
@@ -1220,6 +1666,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="on stop, leave the test CENTRAL_SERVER_URL in "
                          "android/local.properties instead of restoring the "
                          "previous value (e.g. https://mobaide.com)")
+    up.add_argument("--no-ios", action="store_true",
+                    help="do not touch ios/Config/Local.xcconfig")
+    up.add_argument("--ios", action="store_true",
+                    help="sync the iOS override even off macOS (default: only "
+                         "where the app can actually be built)")
+    up.add_argument("--keep-ios", action="store_true",
+                    help="on stop, leave the test CENTRAL_SERVER_URL in "
+                         "ios/Config/Local.xcconfig instead of restoring the "
+                         "previous value")
     up.add_argument("--fake-pty", action="store_true",
                     help="run the agent in MOBAIDE_ENV=test: fake echo PTY, no "
                          "real shells/CLIs (infra check mode)")
@@ -1243,12 +1698,24 @@ def build_parser() -> argparse.ArgumentParser:
     android = sub.add_parser("android", help="sync (or revert) the two gitignored "
                                              "Android files without booting the stack")
     _add_common_args(android)
+    _add_client_args(android)
     _add_android_args(android)
     android.add_argument("--host", default=None, help=argparse.SUPPRESS)
     android.add_argument("--revert", action="store_true",
                          help="remove the generated debug override and restore/"
                               "remove the CENTRAL_SERVER_URL line")
     android.set_defaults(func=cmd_android)
+
+    ios = sub.add_parser("ios", help="sync (or revert) the gitignored "
+                                     "ios/Config/Local.xcconfig without booting "
+                                     "the stack")
+    _add_common_args(ios)
+    _add_client_args(ios)
+    _add_ios_args(ios)
+    ios.add_argument("--host", default=None, help=argparse.SUPPRESS)
+    ios.add_argument("--revert", action="store_true",
+                     help="restore/remove the CENTRAL_SERVER_URL line")
+    ios.set_defaults(func=cmd_ios)
 
     status = sub.add_parser("status", help="probe /api/health and show the "
                                            "persisted stack identity")
@@ -1257,8 +1724,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="server port (default: last used, then 9000)")
     status.set_defaults(func=cmd_status)
 
-    clean = sub.add_parser("clean", help="kill stale processes, revert android "
-                                         "files, delete the state dir")
+    clean = sub.add_parser("clean", help="kill stale processes, revert both "
+                                         "clients' files, delete the state dir")
     _add_common_args(clean)
     clean.set_defaults(func=cmd_clean)
 
@@ -1275,7 +1742,7 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
 
     argv = list(sys.argv[1:] if argv is None else argv)
-    known = {"up", "android", "status", "clean"}
+    known = {"up", "android", "ios", "status", "clean"}
     if not argv:
         argv = ["up"]
     elif argv[0] not in known and argv[0] not in ("-h", "--help"):
