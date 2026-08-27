@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.1.4](https://github.com/syrax90/claude_mobile/compare/web-v0.1.3...web-v0.1.4) (2026-08-27)
+
+
+### Features
+
+* advertise models_pending while the agent's model warmup outlasts the version wait ([e6170d7](https://github.com/syrax90/claude_mobile/commit/e6170d7e83641876c8ef900523e56d63801d8b94))
+* **clients:** hide non-actionable account/version details from users ([0986c7b](https://github.com/syrax90/claude_mobile/commit/0986c7b433e2b58f2558930b88fe05b003965d81))
+* **clients:** warn that externally started sessions won't appear ([f2a41f8](https://github.com/syrax90/claude_mobile/commit/f2a41f8e3d0a6b62f5dbb55fdb0557e6c116d790))
+* **web,central_server:** retire portal auth, point Sign in at the web app ([c8183c5](https://github.com/syrax90/claude_mobile/commit/c8183c59154ea089d78f59655db5f79e049d67da))
+* **web:** advance the create wizard as soon as a project is picked ([fab7cf3](https://github.com/syrax90/claude_mobile/commit/fab7cf31c0f021877c03529b4db1df9ce78f74c0))
+* **web:** remove the terminal selection toolbar ([cf7df24](https://github.com/syrax90/claude_mobile/commit/cf7df24c00e933f12c29be3787826756f2165a9a))
+
+
+### Bug Fixes
+
+* **android,ios,web:** reconcile persisted catalog efforts against detail-less agents ([df2393f](https://github.com/syrax90/claude_mobile/commit/df2393f6056a75207e48a5987b9512abaf513f41))
+* **android,ios,web:** warn that externally started sessions won't appear ([034f677](https://github.com/syrax90/claude_mobile/commit/034f677d281bfda47e3175794e23b760bf61889d))
+* **clients:** hide non-actionable account/version details from users ([bd35511](https://github.com/syrax90/claude_mobile/commit/bd35511ea381ad5b7739eda42f44f33c99d3b890))
+* Codex model picker missed current models (gpt-5.6-*) — enumerate without --json, advertise per-model efforts ([7dad428](https://github.com/syrax90/claude_mobile/commit/7dad4285374b5b567fbb56cb7830805d3b41e529))
+* harden the codex effort reconcile against races, stale catalogs, and cold caches ([8fd8452](https://github.com/syrax90/claude_mobile/commit/8fd8452cc1f83878d7ad93760592da193aeb210a))
+* **mobaide_agent,android,ios,web:** enumerate Codex models without --json, advertise per-model efforts ([bde0c30](https://github.com/syrax90/claude_mobile/commit/bde0c3032fec462ece892c1b94bc4f458499cca1))
+* name the session by its label in stop and busy dialogs ([5edb148](https://github.com/syrax90/claude_mobile/commit/5edb1486a35165267e959806fe00b7d8d5253ff4))
+* name the session by its label in stop and busy dialogs ([65684b3](https://github.com/syrax90/claude_mobile/commit/65684b37debd5878d5b6cf888f9d0b163a0a2d71))
+* **web,central_server:** retire portal auth, point Sign in at the web app ([3608e64](https://github.com/syrax90/claude_mobile/commit/3608e649833ae1e793449e4f0fa9f6ea7a9e71c6))
+* **web,ios:** scope the capability cache to the visit, keep a restored codex model renderable ([6c05cd2](https://github.com/syrax90/claude_mobile/commit/6c05cd2db4d40974cb55bf63e889e0e0161bec71))
+* **web:** advance the create wizard as soon as a project is picked ([be8759d](https://github.com/syrax90/claude_mobile/commit/be8759d184934606bf1d09e6282fa36d82f0df87))
+* **web:** clip the opaque frame around the Google sign-in button ([e275630](https://github.com/syrax90/claude_mobile/commit/e275630a8395f313c1a9239c2a00a55187935195))
+* **web:** clip the opaque frame around the Google sign-in button ([b863154](https://github.com/syrax90/claude_mobile/commit/b863154038e6b42796743d59e605bb4361bd195d))
+* **web:** copy picked template to system clipboard ([ef8aa28](https://github.com/syrax90/claude_mobile/commit/ef8aa281affa15d81f3041afe4d940bf04edd32b))
+* **web:** guard the browser's own copy on an unsettled screen ([4413a31](https://github.com/syrax90/claude_mobile/commit/4413a31ece3db0fc517579b3fdf579c12301ca4b))
+* **web:** hide the branch name field until a worktree is requested ([4f3cfff](https://github.com/syrax90/claude_mobile/commit/4f3cfffa314e0c67cc69b91414ec77f022489ab4))
+* **web:** hide the branch name field until a worktree is requested ([2d2979b](https://github.com/syrax90/claude_mobile/commit/2d2979b1f7d81da43001768c87ddb4f721d9dca6))
+* **web:** keep the browser signed in after the last tab closes ([faabf10](https://github.com/syrax90/claude_mobile/commit/faabf103df5ba2b7241e221e430d9a08edf9a77c))
+* **web:** match app icon and header mark to the marketing site ([d58b71a](https://github.com/syrax90/claude_mobile/commit/d58b71a100e90e5162d691b3ef46ceb2a35e2105))
+* **web:** re-arm the deletion notice after the login screen reads it ([f26fd01](https://github.com/syrax90/claude_mobile/commit/f26fd0149edc39ce5109a0c0645dea2291a190a7))
+* **web:** relay the deletion notice to peer tabs ([fcc0dcb](https://github.com/syrax90/claude_mobile/commit/fcc0dcb9931b25eb84d1c4ec46fd913e1bbd9592))
+* **web:** remove the terminal selection toolbar ([eb6d530](https://github.com/syrax90/claude_mobile/commit/eb6d5301d16c5305bd41fe8f78b2100d7c76ca46))
+* **web:** replace the theme toggle with a direct three-way picker ([6ddc901](https://github.com/syrax90/claude_mobile/commit/6ddc90148829813260a8f0d1641d47c523ada5e3))
+* **web:** replace the theme toggle with a direct three-way picker ([73e3ada](https://github.com/syrax90/claude_mobile/commit/73e3ada46a3cbac80412ca1babf12c9894b6116f))
+* **web:** revoke the session cookie on rejected admin login and rescue a transient boot ([a4a41f0](https://github.com/syrax90/claude_mobile/commit/a4a41f078d99888abf43ddf9f69653af78cdb03d))
+* **web:** scope the deletion correction to the account it belongs to ([1697050](https://github.com/syrax90/claude_mobile/commit/1697050179b18b57e0b2f2243880cf536807fc86))
+
 ## [0.1.3](https://github.com/syrax90/claude_mobile/compare/web-v0.1.2...web-v0.1.3) (2026-08-13)
 
 
