@@ -1,5 +1,36 @@
 # central_server Changelog
 
+## [0.2.13](https://github.com/syrax90/claude_mobile/compare/server-v0.2.12...server-v0.2.13) (2026-08-27)
+
+
+### Features
+
+* **server:** add consent-gated Google Ads tag to the landing page ([dae3b8a](https://github.com/syrax90/claude_mobile/commit/dae3b8ae8a9815b458bbb0e0a3ab5e8d1ede6964))
+* **server:** address Codex review on the consent-gated Ads tag ([9815e8b](https://github.com/syrax90/claude_mobile/commit/9815e8b4349bb67028de41d1ae964f3c811339f1))
+* **server:** consent-gated Google Ads tag on the landing page ([9272387](https://github.com/syrax90/claude_mobile/commit/9272387fe983dadaa0471f719dce8a64fc3dfa6f))
+* **server:** one-click consent withdrawal for the Ads tag ([d5ef0eb](https://github.com/syrax90/claude_mobile/commit/d5ef0eb0eebf7adf6c4a87eca0e145d7cb1b1ffd))
+* **server:** paginate and sort the admin dashboard users table ([398c220](https://github.com/syrax90/claude_mobile/commit/398c2208ab65f99004df1fc1896ddaf3cd03ea01))
+* **web,central_server:** retire portal auth, point Sign in at the web app ([c8183c5](https://github.com/syrax90/claude_mobile/commit/c8183c59154ea089d78f59655db5f79e049d67da))
+* **website:** add copy buttons to the install one-liners ([2a26162](https://github.com/syrax90/claude_mobile/commit/2a26162adf441f5a9a37de27422205dc30fc0b9f))
+
+
+### Bug Fixes
+
+* **server:** close the dashboard search/sort race and fold the email search symmetrically ([340dd94](https://github.com/syrax90/claude_mobile/commit/340dd949125154006ea79bd89839f29b46e0be14))
+* **server:** serialise the dashboard delete refresh behind in-flight panel requests ([6046cb0](https://github.com/syrax90/claude_mobile/commit/6046cb0fffbb2e0e78022c94c1685213ed21dac1))
+* **web,central_server:** retire portal auth, point Sign in at the web app ([3608e64](https://github.com/syrax90/claude_mobile/commit/3608e649833ae1e793449e4f0fa9f6ea7a9e71c6))
+* **web:** keep the browser signed in after the last tab closes ([faabf10](https://github.com/syrax90/claude_mobile/commit/faabf103df5ba2b7241e221e430d9a08edf9a77c))
+* **website:** add copy buttons to the install one-liners ([db460f7](https://github.com/syrax90/claude_mobile/commit/db460f799267a92e95c064fb783d192aa1cd3ac3))
+* **website:** drop the direct/LAN mode claims from the landing page ([9246e47](https://github.com/syrax90/claude_mobile/commit/9246e47e67edf76c7189977f153d454afb1979e3))
+* **website:** drop the direct/LAN mode claims from the landing page ([323be3c](https://github.com/syrax90/claude_mobile/commit/323be3cf43672ab8f4be5a8d6e34bc19bf6bcf12))
+* **website:** harden the copy button against a stale-write race ([591f056](https://github.com/syrax90/claude_mobile/commit/591f056c3d562bc039eb80806837039fc4c8812d))
+* **website:** keep the "by default" qualifier on the agent bind address ([7a7c61d](https://github.com/syrax90/claude_mobile/commit/7a7c61da8c37fc567532a7c2ec752c61d813da32))
+
+
+### Performance Improvements
+
+* **server:** compute the dashboard last-activity sort key only for that sort ([54e3e47](https://github.com/syrax90/claude_mobile/commit/54e3e4713947a2305d0b0949a15eb1dbab023e78))
+
 ## [0.2.12](https://github.com/syrax90/claude_mobile/compare/server-v0.2.11...server-v0.2.12) (2026-08-13)
 
 

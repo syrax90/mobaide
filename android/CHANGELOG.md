@@ -1,5 +1,27 @@
 # Android Changelog
 
+## [3.7.0](https://github.com/syrax90/claude_mobile/compare/android-v3.6.0...android-v3.7.0) (2026-08-27)
+
+
+### Features
+
+* advertise models_pending while the agent's model warmup outlasts the version wait ([e6170d7](https://github.com/syrax90/claude_mobile/commit/e6170d7e83641876c8ef900523e56d63801d8b94))
+* **clients:** hide non-actionable account/version details from users ([0986c7b](https://github.com/syrax90/claude_mobile/commit/0986c7b433e2b58f2558930b88fe05b003965d81))
+* **clients:** warn that externally started sessions won't appear ([f2a41f8](https://github.com/syrax90/claude_mobile/commit/f2a41f8e3d0a6b62f5dbb55fdb0557e6c116d790))
+
+
+### Bug Fixes
+
+* **android,ios,web:** reconcile persisted catalog efforts against detail-less agents ([df2393f](https://github.com/syrax90/claude_mobile/commit/df2393f6056a75207e48a5987b9512abaf513f41))
+* **android,ios,web:** warn that externally started sessions won't appear ([034f677](https://github.com/syrax90/claude_mobile/commit/034f677d281bfda47e3175794e23b760bf61889d))
+* **clients:** hide non-actionable account/version details from users ([bd35511](https://github.com/syrax90/claude_mobile/commit/bd35511ea381ad5b7739eda42f44f33c99d3b890))
+* Codex model picker missed current models (gpt-5.6-*) — enumerate without --json, advertise per-model efforts ([7dad428](https://github.com/syrax90/claude_mobile/commit/7dad4285374b5b567fbb56cb7830805d3b41e529))
+* harden the codex effort reconcile against races, stale catalogs, and cold caches ([8fd8452](https://github.com/syrax90/claude_mobile/commit/8fd8452cc1f83878d7ad93760592da193aeb210a))
+* **mobaide_agent,android,ios,web:** enumerate Codex models without --json, advertise per-model efforts ([bde0c30](https://github.com/syrax90/claude_mobile/commit/bde0c3032fec462ece892c1b94bc4f458499cca1))
+* name the session by its label in stop and busy dialogs ([5edb148](https://github.com/syrax90/claude_mobile/commit/5edb1486a35165267e959806fe00b7d8d5253ff4))
+* name the session by its label in stop and busy dialogs ([65684b3](https://github.com/syrax90/claude_mobile/commit/65684b37debd5878d5b6cf888f9d0b163a0a2d71))
+* scope models_pending to each CLI's own cold cache, retry mobile re-probes on a budget ([bb57197](https://github.com/syrax90/claude_mobile/commit/bb57197116ebbbe3dc7fcbe10f900ea3182b1d3f))
+
 ## [3.6.0](https://github.com/syrax90/claude_mobile/compare/android-v3.5.0...android-v3.6.0) (2026-08-13)
 
 
