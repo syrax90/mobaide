@@ -229,16 +229,16 @@ def _default_client_state() -> dict:
     """Per-client rollout bookkeeping.
 
     ``baked_url`` is the URL the next build will bake (set at sync time, drives
-    the rebuild prompt); ``installed_url`` is the URL a build actually carried
-    onto a device (set only after a successful install), and only the latter can
-    say whether the installed app is stale.
+    the rebuild prompt); ``installed_urls`` maps a device id to the URL a build
+    actually carried onto it (set only after a successful install), and only
+    that can say whether a given device's app is stale.
     """
     return {
         "previous_central_server_url": None,
         "previous_line": None,
         "managed_url": None,
         "baked_url": None,
-        "installed_url": None,
+        "installed_urls": {},
     }
 
 
@@ -1103,28 +1103,41 @@ def run_xcode_install(
         log(f"WARNING: built app not found at {app}; skipping install")
         return False
 
-    ios_state = IOS_URL_FILE.own_state(state)
-    if ios_state.get("installed_url") != url:
+    # Keyed by UDID: every simulator carries its own container AND its own
+    # keychain, so an install on one says nothing about the state of another.
+    installed = IOS_URL_FILE.own_state(state).setdefault("installed_urls", {})
+    cleaned = True
+    if installed.get(udid) != url:
         # TokenStore and ConnectionStore both persist a relay base URL in the
         # keychain, and an upgrade install would keep opening agent sockets
         # against the old stack while REST already followed the new baked URL.
         # Measured on the simulator: `simctl uninstall` wipes the container but
         # leaves those items intact, so only a keychain reset actually clears
         # them -- and simctl scopes reset per device, never per app.
-        log("installed URL differs: uninstalling the previous build")
+        log("installed URL differs on this simulator: uninstalling the previous build")
         subprocess.run(["xcrun", "simctl", "uninstall", udid, IOS_BUNDLE_ID])
+        installed.pop(udid, None)
+        save()
         if reset_keychain:
             log(f"resetting the {udid[:8]}... simulator keychain (uninstall does "
                 "not clear the stored relay URL; this drops every keychain item "
                 "on that device, including `simctl keychain add-root-cert` "
                 "anchors -- skip it with --ios-keep-keychain)")
-            subprocess.run(["xcrun", "simctl", "keychain", udid, "reset"])
+            try:
+                cleaned = subprocess.run(
+                    ["xcrun", "simctl", "keychain", udid, "reset"]
+                ).returncode == 0
+            except OSError as exc:
+                log(f"WARNING: could not run `simctl keychain reset` ({exc})")
+                cleaned = False
+            if not cleaned:
+                log("WARNING: the keychain reset failed, so the previous stack's "
+                    "relay URL may still be there; leaving this simulator marked "
+                    "stale so the next --install-app retries the cleanup")
         else:
             log("WARNING: --ios-keep-keychain: the previous stack's relay URL "
                 "survives in the keychain. If the app still talks to the old "
                 "server, sign out in-app or reset the keychain by hand")
-        ios_state["installed_url"] = None
-        save()
     for cmd in (
         ["xcrun", "simctl", "install", udid, str(app)],
         ["xcrun", "simctl", "launch", udid, IOS_BUNDLE_ID],
@@ -1137,8 +1150,9 @@ def run_xcode_install(
         if result.returncode != 0:
             log(f"WARNING: `{' '.join(cmd)}` failed")
             return False
-    ios_state["installed_url"] = url
-    save()
+    if cleaned and installed.get(udid) != url:
+        installed[udid] = url
+        save()
     log("debug app installed and launched on the simulator")
     return True
 
@@ -1238,6 +1252,27 @@ def print_ready_banner(
 # --------------------------------------------------------------------------
 # Commands
 # --------------------------------------------------------------------------
+
+
+def merge_external_install_state(state_dir: Path, state: dict) -> None:
+    """Fold in install bookkeeping a concurrent client subcommand wrote.
+
+    The READY banner tells the operator to run ``ios --install-app`` from
+    another shell while ``up`` keeps streaming logs. That process records its
+    install in state.json, but ``up`` still holds the pre-install dictionary and
+    its shutdown save would put the old one back -- costing the next install a
+    needless device-wide keychain reset. Disk wins for these keys: ``up`` only
+    ever installs during startup, so anything on disk is at least as fresh.
+    """
+    try:
+        on_disk = json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    for key in ("android", "ios"):
+        external = (on_disk.get(key) or {}).get("installed_urls")
+        if isinstance(external, dict) and external:
+            client = state.setdefault(key, _default_client_state())
+            client.setdefault("installed_urls", {}).update(external)
 
 
 def cmd_up(args: argparse.Namespace) -> int:
@@ -1395,6 +1430,8 @@ def cmd_up(args: argparse.Namespace) -> int:
             client.close()
         state["runtime"] = {}
         state_exists = (state_dir / "state.json").exists()
+        if state_exists:
+            merge_external_install_state(state_dir, state)
         # Restore the checkout to its pre-test state so a normal or release
         # build is not left pointing at the throwaway stack. The installed debug
         # app keeps its baked-in URL, so this neither disconnects the phone nor

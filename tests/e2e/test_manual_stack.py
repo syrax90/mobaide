@@ -9,6 +9,7 @@ subprocesses. Run just this file with::
 from __future__ import annotations
 
 import argparse
+import json
 import xml.dom.minidom as minidom
 from pathlib import Path
 
@@ -18,6 +19,8 @@ PROD_URL = "https://mobaide.com"
 TEST_URL = "http://192.168.1.5:9000"
 LOOPBACK_URL = "http://127.0.0.1:9000"
 GOOGLE_LINE = "GOOGLE_IOS_CLIENT_ID = 1234-abc.apps.googleusercontent.com"
+SIM_A = "F0036AE7-EF09-4999-A3F0-B7220D960A8F"
+SIM_B = "1A486351-84A4-403F-BF9E-F1ED12366F59"
 
 
 def test_debug_nsc_content_is_valid_xml():
@@ -221,7 +224,7 @@ def test_ios_install_gate_tracks_the_installed_url_not_the_baked_one(monkeypatch
 
     That second run re-syncs the same URL, so the rebuild verdict is False —
     but the simulator still carries the previous build. The stale-install
-    decision must therefore read ``installed_url``, which only a successful
+    decision must therefore read ``installed_urls``, which only a successful
     install advances.
     """
     _point_client_files_at(monkeypatch, tmp_path)
@@ -232,14 +235,38 @@ def test_ios_install_gate_tracks_the_installed_url_not_the_baked_one(monkeypatch
     # `up` syncs a new URL: rebuild prompt fires, nothing is installed yet.
     assert ms.sync_ios_files(state, LOOPBACK_URL, noop) is True
     assert ios["baked_url"] == LOOPBACK_URL
-    assert ios["installed_url"] is None
+    assert ios["installed_urls"] == {}
 
     # The documented follow-up re-syncs the same URL: no rebuild prompt...
     assert ms.sync_ios_files(state, LOOPBACK_URL, noop) is False
     # ...yet the install is still stale, so it must not be treated as current.
-    assert ios["installed_url"] != LOOPBACK_URL
+    assert ios["installed_urls"].get(SIM_A) != LOOPBACK_URL
 
-    # After an install lands, the same URL is no longer stale.
-    ios["installed_url"] = LOOPBACK_URL
-    assert ms.sync_ios_files(state, LOOPBACK_URL, noop) is False
-    assert ios["installed_url"] == LOOPBACK_URL
+    # After an install lands, the same URL is no longer stale on THAT device —
+    # but a second simulator has its own container and keychain, so it is.
+    ios["installed_urls"][SIM_A] = LOOPBACK_URL
+    assert ios["installed_urls"].get(SIM_A) == LOOPBACK_URL
+    assert ios["installed_urls"].get(SIM_B) != LOOPBACK_URL
+
+
+def test_shutdown_save_keeps_a_concurrent_installers_record(tmp_path):
+    """The banner tells the operator to run `ios --install-app` from another
+    shell while `up` is still streaming logs. `up` holds the pre-install state
+    in memory, so its shutdown save must not put that back — doing so costs the
+    next install a needless device-wide keychain reset.
+    """
+    # What the concurrent `ios --install-app` process wrote.
+    on_disk = ms.default_state()
+    on_disk["ios"]["installed_urls"] = {SIM_A: LOOPBACK_URL}
+    ms.save_state(tmp_path, on_disk)
+
+    # What `up` still holds: it synced the URL but never installed anything.
+    live = ms.default_state()
+    live["ios"]["baked_url"] = LOOPBACK_URL
+
+    ms.merge_external_install_state(tmp_path, live)
+    ms.save_state(tmp_path, live)
+
+    reloaded = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    assert reloaded["ios"]["installed_urls"] == {SIM_A: LOOPBACK_URL}
+    assert reloaded["ios"]["baked_url"] == LOOPBACK_URL  # up's own writes survive

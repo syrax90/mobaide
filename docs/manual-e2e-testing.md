@@ -127,10 +127,12 @@ Two iOS-specific notes:
   does not clear those items** — measured on the simulator: an item written
   before an uninstall reads back intact after reinstalling. Only
   `xcrun simctl keychain <udid> reset` clears them, and simctl scopes that per
-  device, never per app. So when the baked URL changes, `--install-app`
-  uninstalls **and** resets that simulator's keychain — which also drops any
-  `simctl keychain add-root-cert` anchors on it. Use `--ios-keep-keychain` to
-  skip the reset and sign out in-app instead.
+  device, never per app. So `--install-app` uninstalls **and** resets that
+  simulator's keychain — which also drops any `simctl keychain add-root-cert`
+  anchors on it. Use `--ios-keep-keychain` to skip the reset and sign out
+  in-app instead. The "what is installed where" record is kept **per simulator
+  UDID**, so booting a different device runs the cleanup again on that one, and
+  a failed reset leaves the device marked stale so the next run retries.
 
 **All are undone automatically when the stack stops** — the previous
 `CENTRAL_SERVER_URL` values are put back and the debug override removed, so the
