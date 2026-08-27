@@ -12,8 +12,8 @@ the Changes viewer relies on, so it is bounded on every axis:
   tree — on Windows ``shutil.which("git")`` usually resolves to the
   ``cmd\\git.exe`` wrapper, which spawns the real ``git.exe`` and waits, so
   ``Popen.kill()`` alone would orphan a child that keeps the pipes open;
-* the environment is copied from the agent with repo-redirecting and
-  program-executing ``GIT_*`` variables removed.
+* the environment is copied from the agent with every inherited ``GIT_*``
+  variable removed.
 
 ``asyncio.create_subprocess_exec`` is never used: it raises under the
 ``WindowsSelectorEventLoop`` the agent runs on.
@@ -42,17 +42,12 @@ _CHUNK = 65536
 _STDERR_CAP = 64 * 1024
 _REAP_TIMEOUT = 10.0
 
-_SCRUBBED_ENV_KEYS = frozenset(
-    {
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_NAMESPACE",
-        "GIT_EXTERNAL_DIFF",
-        "GIT_PAGER",
-        "GIT_CONFIG_PARAMETERS",
-    }
-)
+# Every inherited ``GIT_*`` variable is dropped: ``GIT_DIR``/``GIT_WORK_TREE``/
+# ``GIT_COMMON_DIR``/``GIT_OBJECT_DIRECTORY`` redirect the repository,
+# ``GIT_CONFIG_PARAMETERS`` and ``GIT_CONFIG_COUNT``/``KEY_n``/``VALUE_n`` inject
+# config, ``GIT_EXTERNAL_DIFF``/``GIT_PAGER`` run programs and ``GIT_TRACE*``
+# write files. Local read-only status/diff needs none of them.
+_SCRUBBED_ENV_PREFIX = "GIT_"
 _FORCED_ENV = {
     "LC_ALL": "C",
     "GIT_TERMINAL_PROMPT": "0",
@@ -88,7 +83,9 @@ class CmdResult:
 
 
 def git_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if k not in _SCRUBBED_ENV_KEYS}
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(_SCRUBBED_ENV_PREFIX)
+    }
     env.update(_FORCED_ENV)
     if extra:
         env.update(extra)

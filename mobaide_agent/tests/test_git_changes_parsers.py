@@ -15,7 +15,7 @@ from mobaide.agent.git.changes_service import (
     parse_unified_diff,
     validate_repo_path,
 )
-from mobaide.core.git_exec import GitUnavailableError
+from mobaide.core.git_exec import GitCwdMissingError, GitUnavailableError
 
 _OID = "42a400abc7d33cc7694fddc94fcd5a8f9a120be3"
 _HASHES = "100644 100644 100644 " + "a" * 40 + " " + "b" * 40
@@ -248,6 +248,8 @@ class TestHttpErrorFor:
     def test_maps_each_service_error(self):
         assert http_error_for(GitUnavailableError("x")) == (
             503, {"detail": {"code": "git_unavailable"}})
+        assert http_error_for(GitCwdMissingError("/gone")) == (
+            400, {"detail": {"code": "cwd_missing"}})
         assert http_error_for(GitTimeoutError()) == (
             504, {"detail": {"code": "git_timeout"}})
         assert http_error_for(GitBadRequestError("bad_scope")) == (

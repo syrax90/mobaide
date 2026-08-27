@@ -126,7 +126,8 @@ cadence; they do **not** gate compatibility.
     ``unchanged``, ``unavailable_reason`` (``null`` | ``not_a_repo`` |
     ``bare_repository`` | ``cwd_missing`` | ``unsafe_directory`` |
     ``git_too_old``), ``repo`` (``toplevel``/``git_dir``/``common_dir`` as
-    absolute forward-slash paths on every OS, ``is_linked_worktree``, ``head``
+    absolute paths with forward-slash separators (backslash bytes in a
+    POSIX filename are kept verbatim), ``is_linked_worktree``, ``head``
     ``{oid, short_oid, branch, detached, initial}`` with nullable oid/branch,
     ``upstream`` ``{ref, ahead, behind} | null`` — ``ahead``/``behind`` are
     ``null`` when the upstream ref is gone — and ``state`` ``clean`` |
@@ -161,10 +162,15 @@ cadence; they do **not** gate compatibility.
     pass the entry's ``orig_path`` for a rename, because a pathspec-limited
     ``git diff -M`` cannot see the rename's source otherwise. Conflicted
     files (group ``conflicts``) are requested with ``scope=unstaged`` and are
-    diffed against ``HEAD`` (conflict markers appear as ``+`` lines);
-    ``scope=staged`` on an unmerged path is ``kind: missing``. Untracked
+    diffed against ``HEAD`` (conflict markers appear as ``+`` lines; a
+    modify/delete conflict whose working-tree file equals ``HEAD`` answers
+    ``kind: text`` with no hunks); ``scope=staged`` on an unmerged path is
+    ``kind: missing``. Untracked
     diffs are synthesised by the agent (no ``/dev/null`` — broken on Git for
-    Windows); a symlink diffs as its target text with mode ``120000``.
+    Windows) and only for paths git itself lists as untracked and not
+    ignored (``ls-files --others --exclude-standard``; ``.git/`` and
+    gitignored files answer ``kind: missing``); a symlink diffs as its
+    target text with mode ``120000``.
     ``context`` is clamped to 0–50.
   * Errors, identical on the direct and relay transports: ``404
     {"detail": "Session '<id>' not found"}``; ``400 {"detail": {"code":
@@ -190,14 +196,17 @@ cadence; they do **not** gate compatibility.
     (``mobaide/core/git_exec.py``) — bytes mode, two reader threads,
     ``timeout`` + ``max_bytes`` enforced by killing the whole process tree
     (``taskkill /T`` on Windows, where PATH usually resolves to the
-    ``cmd\git.exe`` wrapper), a scrubbed environment (``GIT_DIR``,
-    ``GIT_WORK_TREE``, ``GIT_INDEX_FILE``, ``GIT_NAMESPACE``,
-    ``GIT_EXTERNAL_DIFF``, ``GIT_PAGER``, ``GIT_CONFIG_PARAMETERS`` removed;
-    ``LC_ALL=C``, ``GIT_TERMINAL_PROMPT=0``, ``GIT_OPTIONAL_LOCKS=0`` set),
+    ``cmd\git.exe`` wrapper), a scrubbed environment (every inherited
+    ``GIT_*`` variable removed — repository redirection, config injection,
+    external programs and trace files alike; ``LC_ALL=C``,
+    ``GIT_TERMINAL_PROMPT=0``, ``GIT_OPTIONAL_LOCKS=0`` set),
     ``--no-optional-locks --literal-pathspecs -c core.quotePath=false``, and
-    ``--no-ext-diff --no-textconv`` on every diff so a repository's
-    ``.gitattributes`` diff drivers can never execute. Git ≥ 2.15 is required
-    (older → ``git_too_old``). The relay's 4 MB tunnel frame is why the caps
+    ``--no-ext-diff --no-textconv`` on every diff call (numstat and patch
+    alike) so a repository's ``.gitattributes`` diff drivers can never
+    execute; the patch call alone also sets ``--submodule=short`` so a
+    user's ``diff.submodule`` setting cannot change the parsed format.
+    Git ≥ 2.15 is required (older → ``git_too_old``). The relay's 4 MB
+    tunnel frame is why the caps
     are server-side (5 000 entries; 1 MiB / 5 000 lines per diff). For very
     large trees the user-side accelerators are ``git update-index
     --untracked-cache`` (run ``--test-untracked-cache`` first) and

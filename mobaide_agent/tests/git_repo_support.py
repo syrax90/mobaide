@@ -80,6 +80,24 @@ def make_conflict_branches(repo: str) -> None:
     commit_all(repo, "main side")
 
 
+def make_modify_delete_branches(repo: str, *, ours_deletes: bool) -> None:
+    """``main`` and ``other`` disagree on ``keep.txt``: one side deletes it,
+    the other rewrites line 2, so merging ``other`` into ``main`` stops with a
+    ``DU`` (``ours_deletes``) or ``UD`` conflict instead of a ``UU`` one."""
+    run_git_sync(repo, "checkout", "-b", "other")
+    if ours_deletes:
+        write_file(repo, "keep.txt", b"one\nOTHER\nthree\n")
+    else:
+        os.remove(os.path.join(repo, "keep.txt"))
+    commit_all(repo, "other side")
+    run_git_sync(repo, "checkout", "main")
+    if ours_deletes:
+        os.remove(os.path.join(repo, "keep.txt"))
+    else:
+        write_file(repo, "keep.txt", b"one\nMAIN\nthree\n")
+    commit_all(repo, "main side")
+
+
 def add_submodule(repo: str, tmp_root: str, name: str = "sub") -> str:
     """Stage a submodule at ``<repo>/<name>`` sourced from a sibling repo."""
     source = init_repo(os.path.join(tmp_root, f"{name}-src"))
@@ -90,8 +108,11 @@ def add_submodule(repo: str, tmp_root: str, name: str = "sub") -> str:
 
 
 def norm_path(path: str) -> str:
-    """The form ``resolve_repo`` reports: realpath with forward slashes."""
-    return os.path.realpath(path).replace("\\", "/")
+    """The form ``resolve_repo`` reports: realpath, forward slashes on Windows only."""
+    resolved = os.path.realpath(path)
+    if sys.platform == "win32":
+        resolved = resolved.replace("\\", "/")
+    return resolved
 
 
 def stub_git(monkeypatch, result: CmdResult, version=(2, 50, 0)) -> None:

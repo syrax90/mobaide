@@ -3,6 +3,7 @@ relay ``_dispatch_session_git`` dispatcher, asserting both transports answer
 byte-identically for every status code the contract defines."""
 from __future__ import annotations
 
+import shutil
 import types
 
 import pytest
@@ -10,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 from mobaide.agent.app import create_app
 from mobaide.agent.config import AgentConfig
+from mobaide.agent.git import changes_service
 from mobaide.core import git_exec
 from mobaide.core.git_exec import CmdResult, reset_caches
 from mobaide.relay.client import RelayClient
@@ -248,6 +250,27 @@ class TestErrorMapping:
 
         assert resp.status_code == 504
         assert resp.json() == {"detail": {"code": "git_timeout"}}
+
+    @requires_git
+    async def test_cwd_vanishing_mid_diff_is_400(
+        self, http, headers, relay, session_at, repo, monkeypatch
+    ):
+        session_at(repo)
+        real_run_git = changes_service.run_git
+
+        async def rmtree_after_resolve(args, **kwargs):
+            if args[:2] != ["rev-parse", "--is-bare-repository"]:
+                shutil.rmtree(repo, ignore_errors=True)
+            return await real_run_git(args, **kwargs)
+
+        monkeypatch.setattr(changes_service, "run_git", rmtree_after_resolve)
+
+        resp = await _assert_parity(
+            http, headers, relay, _diff_url(), {"scope": "unstaged", "path": "keep.txt"}
+        )
+
+        assert resp.status_code == 400
+        assert resp.json() == {"detail": {"code": "cwd_missing"}}
 
     async def test_unexpected_git_failure_is_500(
         self, http, headers, relay, session_at, tmp_path, monkeypatch

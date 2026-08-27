@@ -3,6 +3,7 @@ of the session git Changes service, against real temp repositories."""
 from __future__ import annotations
 
 import os
+import shutil
 
 import pytest
 
@@ -28,7 +29,9 @@ from .git_repo_support import (
     commit_all,
     init_repo,
     make_conflict_branches,
+    make_modify_delete_branches,
     norm_path,
+    posix_only,
     repo,  # noqa: F401 - pytest fixture
     requires_git,
     run_git_sync,
@@ -304,6 +307,48 @@ class TestSessionGitStatus:
         assert [(e.group, e.path, e.code, e.index_status, e.worktree_status) for e in resp.entries] == [
             ("conflicts", "keep.txt", "UU", "U", "U")]
         assert resp.counts.conflicts == 1 and resp.counts.total == 1
+
+    @pytest.mark.parametrize(("ours_deletes", "code"), [(False, "UD"), (True, "DU")])
+    async def test_modify_delete_conflict_is_a_conflict_entry(
+        self, repo, ours_deletes, code
+    ):
+        make_modify_delete_branches(repo, ours_deletes=ours_deletes)
+        run_git_sync(repo, "merge", "other", check=False)
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert resp.repo.state == "merging"
+        assert [(e.group, e.path, e.code, e.index_status, e.worktree_status) for e in resp.entries] == [
+            ("conflicts", "keep.txt", code, code[0], code[1])]
+        assert resp.counts.conflicts == 1 and resp.counts.total == 1
+
+    async def test_cwd_vanishing_after_resolve_is_cwd_missing(self, repo, monkeypatch):
+        real_run_git = changes_service.run_git
+
+        async def rmtree_after_resolve(args, **kwargs):
+            if args[:2] != ["rev-parse", "--is-bare-repository"]:
+                shutil.rmtree(repo, ignore_errors=True)
+            return await real_run_git(args, **kwargs)
+
+        monkeypatch.setattr(changes_service, "run_git", rmtree_after_resolve)
+
+        first = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+        cached = await get_session_git_status(session_id="s1", cwd=repo, etag=first.etag)
+
+        assert (first.unavailable_reason, first.repo, first.entries, first.counts) == (
+            "cwd_missing", None, [], None)
+        assert first.unchanged is False and len(first.etag) == 40
+        assert cached.unchanged is True and cached.etag == first.etag
+
+    @posix_only
+    async def test_backslash_in_directory_name_is_kept(self, tmp_path):
+        odd = init_repo(str(tmp_path / "foo\\bar"))
+
+        resp = await get_session_git_status(session_id="s1", cwd=odd, etag=None)
+
+        assert resp.unavailable_reason is None
+        assert resp.repo.toplevel.endswith("foo\\bar")
+        assert resp.repo.head.branch == "main"
 
     async def test_submodule_and_linked_worktree_flags(self, repo, tmp_path):
         add_submodule(repo, str(tmp_path))

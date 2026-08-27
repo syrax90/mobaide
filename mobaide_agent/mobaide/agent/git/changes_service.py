@@ -15,6 +15,7 @@ import os
 import posixpath
 import re
 import stat as statmod
+import sys
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -86,6 +87,8 @@ def http_error_for(exc: BaseException) -> tuple[int, dict[str, Any]] | None:
     """Map a service exception to ``(status, body)``; ``None`` if unrelated."""
     if isinstance(exc, GitUnavailableError):
         return 503, {"detail": {"code": "git_unavailable"}}
+    if isinstance(exc, GitCwdMissingError):
+        return 400, {"detail": {"code": "cwd_missing"}}
     if isinstance(exc, GitTimeoutError):
         return 504, {"detail": {"code": "git_timeout"}}
     if isinstance(exc, GitBadRequestError):
@@ -114,10 +117,14 @@ def _text(data: bytes) -> str:
 
 
 def _fs_path(base: str, raw: str) -> str:
-    """Absolute, symlink-resolved, forward-slash path — the form git itself
-    prints for ``--show-toplevel``, so ``git_dir``/``common_dir`` (which git
-    may print relative to the cwd) compare equal to it."""
-    return os.path.realpath(os.path.join(base, raw)).replace("\\", "/")
+    """Absolute, symlink-resolved path in the form git itself prints for
+    ``--show-toplevel`` (forward slashes on Windows), so ``git_dir`` /
+    ``common_dir`` — which git may print relative to the cwd — compare equal
+    to it. On POSIX a backslash is an ordinary filename byte and is kept."""
+    resolved = os.path.realpath(os.path.join(base, raw))
+    if sys.platform == "win32":
+        resolved = resolved.replace("\\", "/")
+    return resolved
 
 
 def _check_result(result: CmdResult) -> None:
@@ -406,6 +413,20 @@ def _unchanged(session_id: str, cwd: str | None, etag: str) -> GitStatusResponse
     return GitStatusResponse(session_id=session_id, cwd=cwd, etag=etag, unchanged=True)
 
 
+def _unavailable(
+    session_id: str,
+    cwd: str | None,
+    reason: UnavailableReason,
+    etag: str | None,
+) -> GitStatusResponse:
+    tag = _etag("unavailable", reason, cwd or "")
+    if etag and etag == tag:
+        return _unchanged(session_id, cwd, tag)
+    return GitStatusResponse(
+        session_id=session_id, cwd=cwd, etag=tag, unavailable_reason=reason
+    )
+
+
 async def get_session_git_status(
     *,
     session_id: str,
@@ -414,22 +435,19 @@ async def get_session_git_status(
 ) -> GitStatusResponse:
     probe = await resolve_repo(cwd)
     if probe.repo is None:
-        reason = probe.reason or "not_a_repo"
-        tag = _etag("unavailable", reason, cwd or "")
-        if etag and etag == tag:
-            return _unchanged(session_id, cwd, tag)
-        return GitStatusResponse(
-            session_id=session_id, cwd=cwd, etag=tag, unavailable_reason=reason
-        )
+        return _unavailable(session_id, cwd, probe.reason or "not_a_repo", etag)
 
     repo = probe.repo
-    state = await repo_state(repo.toplevel)
-    result = await run_git(
-        ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"],
-        cwd=repo.toplevel,
-        timeout=_STATUS_TIMEOUT,
-        max_bytes=_STATUS_MAX_BYTES,
-    )
+    try:
+        state = await repo_state(repo.toplevel)
+        result = await run_git(
+            ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"],
+            cwd=repo.toplevel,
+            timeout=_STATUS_TIMEOUT,
+            max_bytes=_STATUS_MAX_BYTES,
+        )
+    except GitCwdMissingError:
+        return _unavailable(session_id, cwd, "cwd_missing", etag)
     _check_result(result)
     if result.rc != 0 and not result.truncated:
         raise _fail(result, "git status failed")
@@ -659,7 +677,7 @@ async def _numstat(
     base: list[str], pathspec: list[str], toplevel: str
 ) -> list[str]:
     result = await run_git(
-        [*base, "--numstat", "-M", *pathspec],
+        [*base, "--numstat", "--no-ext-diff", "--no-textconv", "-M", *pathspec],
         cwd=toplevel,
         timeout=_QUICK_TIMEOUT,
         max_bytes=_SMALL_OUTPUT,
@@ -720,13 +738,18 @@ async def get_session_git_diff(
     numstat = await _numstat(base, pathspec, toplevel)
     if not numstat:
         return _missing(rel, orig, scope)
-    if len(numstat) >= 2 and await _is_unmerged(toplevel, rel):
+    if await _is_unmerged(toplevel, rel):
         if scope == "staged":
             return _missing(rel, orig, scope)
         base = ["diff", "HEAD"]
         numstat = await _numstat(base, pathspec, toplevel)
         if not numstat:
-            return _missing(rel, orig, scope)
+            # modify/delete conflict: the working-tree file *is* HEAD's
+            # version, so the conflict has no textual diff — still a real
+            # entry, not a missing one.
+            return GitDiffResponse(
+                path=rel, orig_path=orig, scope=scope, kind="text", change="modified"
+            )
     additions, deletions, numstat_binary = _counts_from_numstat(numstat[0])
 
     patch = await run_git(
@@ -735,6 +758,7 @@ async def get_session_git_diff(
             "--no-color",
             "--no-ext-diff",
             "--no-textconv",
+            "--submodule=short",
             f"--unified={ctx}",
             "-M",
             *pathspec,
@@ -778,18 +802,18 @@ def _contained(toplevel: str, full: str) -> bool:
 
 
 async def _untracked_diff(toplevel: str, rel: str) -> GitDiffResponse:
-    """``git diff --no-index -- /dev/null <file>`` is broken on Git for
-    Windows (only ``nul`` is special-cased), so the add-everything diff is
-    built here. The leaf is never followed: a symlink diffs as its target
-    text with mode ``120000``, exactly as git would show it."""
-    tracked = await run_git(
-        ["ls-files", "--error-unmatch", "--", rel],
+    """``git diff --no-index -- /dev/null <file>`` is broken on Git for Windows,
+    so the add-everything diff is built here. Only a path git itself lists as
+    untracked-and-not-ignored is served; the leaf is never followed — a
+    symlink diffs as its target text with mode ``120000``, as git shows it."""
+    listed = await run_git(
+        ["ls-files", "--others", "--exclude-standard", "-z", "--", rel],
         cwd=toplevel,
         timeout=_QUICK_TIMEOUT,
         max_bytes=_SMALL_OUTPUT,
     )
-    _check_result(tracked)
-    if tracked.rc == 0:
+    _check_result(listed)
+    if listed.rc != 0 or listed.stdout.rstrip(b"\0") != os.fsencode(rel):
         return _missing(rel, None, "untracked")
 
     full = os.path.join(toplevel, *rel.split("/"))
@@ -797,27 +821,26 @@ async def _untracked_diff(toplevel: str, rel: str) -> GitDiffResponse:
         raise GitBadRequestError("bad_path")
     try:
         st = os.lstat(full)
+        if statmod.S_ISLNK(st.st_mode):
+            content = os.fsencode(os.readlink(full))
+            mode = "120000"
+        elif statmod.S_ISREG(st.st_mode):
+            if st.st_size > BYTE_LIMIT:
+                return GitDiffResponse(
+                    path=rel, scope="untracked", kind="too_large", change="added",
+                    new_mode="100644",
+                )
+            with open(full, "rb") as fh:
+                content = fh.read(BYTE_LIMIT + 1)
+            if len(content) > BYTE_LIMIT:
+                return GitDiffResponse(
+                    path=rel, scope="untracked", kind="too_large", change="added",
+                    new_mode="100644",
+                )
+            mode = "100755" if st.st_mode & 0o111 else "100644"
+        else:
+            return _missing(rel, None, "untracked")
     except OSError:
-        return _missing(rel, None, "untracked")
-
-    if statmod.S_ISLNK(st.st_mode):
-        content = os.fsencode(os.readlink(full))
-        mode = "120000"
-    elif statmod.S_ISREG(st.st_mode):
-        if st.st_size > BYTE_LIMIT:
-            return GitDiffResponse(
-                path=rel, scope="untracked", kind="too_large", change="added",
-                new_mode="100644",
-            )
-        with open(full, "rb") as fh:
-            content = fh.read(BYTE_LIMIT + 1)
-        if len(content) > BYTE_LIMIT:
-            return GitDiffResponse(
-                path=rel, scope="untracked", kind="too_large", change="added",
-                new_mode="100644",
-            )
-        mode = "100755" if st.st_mode & 0o111 else "100644"
-    else:
         return _missing(rel, None, "untracked")
 
     if b"\0" in content[:_BINARY_SNIFF]:

@@ -20,6 +20,7 @@ from .git_repo_support import (
     add_submodule,
     commit_all,
     make_conflict_branches,
+    make_modify_delete_branches,
     posix_only,
     repo,  # noqa: F401 - pytest fixture
     requires_git,
@@ -159,6 +160,29 @@ class TestTrackedDiff:
         assert any(l.text.startswith("<<<<<<<") for l in unstaged.hunks[0].lines)
         assert staged.kind == "missing"
 
+    async def test_modify_delete_conflict_has_no_textual_diff(self, repo):
+        make_modify_delete_branches(repo, ours_deletes=False)
+        run_git_sync(repo, "merge", "other", check=False)
+
+        unstaged = await _diff(repo, "keep.txt", "unstaged")
+        staged = await _diff(repo, "keep.txt", "staged")
+
+        assert (unstaged.kind, unstaged.change, unstaged.hunks) == ("text", "modified", [])
+        assert (unstaged.additions, unstaged.deletions) == (0, 0)
+        assert staged.kind == "missing"
+
+    async def test_delete_modify_conflict_diffs_as_added(self, repo):
+        make_modify_delete_branches(repo, ours_deletes=True)
+        run_git_sync(repo, "merge", "other", check=False)
+
+        resp = await _diff(repo, "keep.txt", "unstaged")
+
+        assert (resp.kind, resp.change, resp.old_mode, resp.new_mode) == (
+            "text", "added", None, "100644")
+        assert (resp.additions, resp.deletions) == (3, 0)
+        assert _lines(resp) == [
+            ("add", None, 1, "one"), ("add", None, 2, "OTHER"), ("add", None, 3, "three")]
+
     async def test_binary_file(self, repo):
         write_file(repo, "blob.bin", b"\x00\x01\x02\xff")
         run_git_sync(repo, "add", "blob.bin")
@@ -169,6 +193,16 @@ class TestTrackedDiff:
 
     async def test_submodule(self, repo, tmp_path):
         add_submodule(repo, str(tmp_path))
+
+        resp = await _diff(repo, "sub", "staged")
+
+        assert (resp.kind, resp.change, resp.new_mode) == ("submodule", "added", "160000")
+        [(kind, _old, _new, text)] = _lines(resp)
+        assert kind == "add" and text.startswith("Subproject commit ")
+
+    async def test_submodule_ignores_repo_diff_submodule_log(self, repo, tmp_path):
+        add_submodule(repo, str(tmp_path))
+        run_git_sync(repo, "config", "diff.submodule", "log")
 
         resp = await _diff(repo, "sub", "staged")
 
@@ -266,6 +300,32 @@ class TestUntrackedDiff:
 
         assert (tracked.kind, absent.kind, directory.kind) == ("missing",) * 3
 
+    async def test_git_internals_and_ignored_paths_are_missing(self, repo):
+        write_file(repo, ".gitignore", b".env\n")
+        commit_all(repo, "ignore env")
+        write_file(repo, ".env", b"SECRET=1\n")
+
+        config = await _diff(repo, ".git/config", "untracked")
+        head = await _diff(repo, ".git/HEAD", "untracked")
+        ignored = await _diff(repo, ".env", "untracked")
+
+        assert (config.kind, head.kind, ignored.kind) == ("missing",) * 3
+        assert (config.hunks, head.hunks, ignored.hunks) == ([], [], [])
+
+    @posix_only
+    async def test_unreadable_file_is_missing(self, repo):
+        if os.geteuid() == 0:
+            pytest.skip("root reads mode-0 files")
+        locked = write_file(repo, "locked.txt", b"secret\n")
+        os.chmod(locked, 0)
+
+        try:
+            resp = await _diff(repo, "locked.txt", "untracked")
+        finally:
+            os.chmod(locked, 0o644)
+
+        assert (resp.kind, resp.change, resp.hunks) == ("missing", None, [])
+
     @posix_only
     async def test_symlink_and_executable_modes(self, repo):
         os.symlink("../outside", os.path.join(repo, "link"))
@@ -280,13 +340,12 @@ class TestUntrackedDiff:
         assert exe.new_mode == "100755"
 
     @posix_only
-    async def test_symlinked_directory_escape_is_bad_path(self, repo, tmp_path):
+    async def test_symlinked_directory_escape_is_missing(self, repo, tmp_path):
         outside = tmp_path / "outside"
         outside.mkdir()
         (outside / "secret.txt").write_bytes(b"secret\n")
         os.symlink(str(outside), os.path.join(repo, "portal"))
 
-        with pytest.raises(GitBadRequestError) as info:
-            await _diff(repo, "portal/secret.txt", "untracked")
+        resp = await _diff(repo, "portal/secret.txt", "untracked")
 
-        assert info.value.code == "bad_path"
+        assert (resp.kind, resp.change, resp.hunks) == ("missing", None, [])

@@ -150,6 +150,23 @@ class TestGitEnv:
         assert env["KEEP_ME"] == "yes"
         assert env["EXTRA"] == "1"
 
+    def test_scrubs_every_git_prefixed_key_but_keeps_the_rest(self, monkeypatch):
+        injected = (
+            "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_TRACE", "GIT_CONFIG_GLOBAL",
+        )
+        for key in injected:
+            monkeypatch.setenv(key, "set")
+        monkeypatch.setenv("HOME", "/home/keep")
+        monkeypatch.setenv("PATH", "/usr/bin")
+
+        env = git_env()
+
+        assert not any(key in env for key in injected)
+        assert {k for k in env if k.startswith("GIT_")} == {
+            "GIT_TERMINAL_PROMPT", "GIT_OPTIONAL_LOCKS"}
+        assert (env["HOME"], env["PATH"], env["LC_ALL"]) == ("/home/keep", "/usr/bin", "C")
+
 
 class TestGitBinary:
     def test_hit_is_cached_but_miss_is_retried(self, monkeypatch):
