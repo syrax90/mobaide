@@ -9,19 +9,22 @@ struct InstallCommandsSheet: View {
     private static let linuxMacOS = "curl -fsSL https://get.mobaide.com/install.sh | bash"
     private static let windows = "irm https://get.mobaide.com/install.ps1 | iex"
 
+    @Environment(\.mobaideColors) private var colors
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Run one of these on the machine that should host the agent, then pair it here.")
                         .font(MobaideTypography.bodyLarge)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(colors.textMuted)
 
                     InstallCommandCard(title: "Linux / macOS", command: Self.linuxMacOS)
                     InstallCommandCard(title: "Windows (PowerShell)", command: Self.windows)
                 }
                 .padding()
             }
+            .pixelScreenBackground()
             .navigationTitle("Install commands")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -30,6 +33,7 @@ struct InstallCommandsSheet: View {
                 }
             }
         }
+        .pixelSheet()
     }
 }
 
@@ -42,12 +46,12 @@ private struct InstallCommandCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(MobaideTypography.labelSmall)
-                .foregroundStyle(colors.onSurfaceVariant)
+                .sectionHeading()
             HStack(alignment: .center, spacing: 8) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     Text(command)
                         .font(MobaideTypography.code)
+                        .foregroundStyle(colors.text)
                         .lineLimit(1)
                         .textSelection(.enabled)
                 }
@@ -55,11 +59,13 @@ private struct InstallCommandCard: View {
                 ShareLink(item: command) {
                     Image(systemName: "square.and.arrow.up")
                         .font(.system(size: 16))
+                        .foregroundStyle(colors.accent)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Share \(title) install command")
             }
         }
-        .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-        .background(colors.surfaceVariant, in: RoundedRectangle(cornerRadius: 12))
+        .pixelCodePlate(insets: EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 0))
     }
 }

@@ -40,92 +40,99 @@ private struct RegisterContent: View {
     var body: some View {
         @Bindable var model = model
         ScrollView {
-            VStack(spacing: 16) {
-                Text("Mobaide")
-                    .font(.largeTitle.weight(.semibold))
-                Text("Create your account")
-                    .font(MobaideTypography.bodyLarge)
-                    .foregroundStyle(colors.onSurfaceVariant)
+            VStack(spacing: 20) {
+                PixelWordmark(width: 152)
 
-                TextField("you@example.com", text: $model.email)
-                    .keyboardType(.emailAddress)
-                    .textContentType(.username)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.next)
-                    .focused($focusedField, equals: .email)
-                    .onSubmit { focusedField = .password }
-                    .padding(12)
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(colors.outline, lineWidth: 1))
-
-                // Both fields carry .newPassword — a .password/.newPassword
-                // mix breaks iOS AutoFill's strong-password suggestion.
-                SecretTextField(text: $model.password, label: "Password", revealed: $passwordRevealed)
-                    .textContentType(.newPassword)
-                    .submitLabel(.next)
-                    .focused($focusedField, equals: .password)
-                    .onSubmit { focusedField = .confirm }
-
-                SecretTextField(text: $model.confirmPassword, label: "Confirm password", revealed: $confirmRevealed)
-                    .textContentType(.newPassword)
-                    .submitLabel(.done)
-                    .focused($focusedField, equals: .confirm)
-                    .onSubmit { Task { await model.register() } }
-
-                if let error = model.error {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundStyle(colors.error)
+                VStack(spacing: 16) {
+                    Text("Create your account")
+                        .font(MobaideTypography.bodyLarge)
+                        .foregroundStyle(colors.textMuted)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                }
 
-                Button {
-                    Task { await model.register() }
-                } label: {
-                    if model.isLoading {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                    } else {
-                        Text("Create Account")
-                            .frame(maxWidth: .infinity)
+                    PixelLabeledField(label: "Email") {
+                        TextField(text: $model.email, prompt: Text(verbatim: "you@example.com").foregroundStyle(colors.gray)) { Text("Email") }
+                            .keyboardType(.emailAddress)
+                            .textContentType(.username)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.next)
+                            .focused($focusedField, equals: .email)
+                            .onSubmit { focusedField = .password }
+                            .pixelField(isFocused: focusedField == .email)
                     }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.isLoading)
 
-                orDivider
+                    // Both fields carry .newPassword — a .password/.newPassword
+                    // mix breaks iOS AutoFill's strong-password suggestion.
+                    PixelLabeledField(label: "Password") {
+                        SecretTextField(text: $model.password, label: "Password", revealed: $passwordRevealed)
+                            .textContentType(.newPassword)
+                            .submitLabel(.next)
+                            .focused($focusedField, equals: .password)
+                            .onSubmit { focusedField = .confirm }
+                    }
 
-                GoogleSignInButtonView(label: .signUp) {
-                    Task { await model.signInWithGoogle() }
-                }
-                .disabled(model.isLoading)
+                    PixelLabeledField(label: "Confirm password") {
+                        SecretTextField(text: $model.confirmPassword, label: "Confirm password", revealed: $confirmRevealed)
+                            .textContentType(.newPassword)
+                            .submitLabel(.done)
+                            .focused($focusedField, equals: .confirm)
+                            .onSubmit { Task { await model.register() } }
+                    }
 
-                SignInWithAppleButton(.signUp) { request in
-                    model.prepareAppleRequest(request)
-                } onCompletion: { result in
-                    Task { await model.completeApple(result) }
-                }
-                .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-                .providerButtonFrame()
-                .disabled(model.isLoading)
+                    if let error = model.error {
+                        PixelErrorBanner(error)
+                    }
 
-                VStack(spacing: 4) {
-                    Text("By creating an account, you agree to our")
-                        .font(.footnote)
-                        .foregroundStyle(colors.onSurfaceVariant)
-                    if let privacyURL = URL(string: AppConfig.privacyPolicyURL) {
-                        Link("Privacy policy", destination: privacyURL)
+                    Button {
+                        Task { await model.register() }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text("Create Account")
+                            if model.isLoading {
+                                PixelLoadingBlock(width: 7, height: 13)
+                            }
+                        }
+                    }
+                    .buttonStyle(.pixelPrimaryBlock)
+                    .disabled(model.isLoading)
+
+                    orDivider
+
+                    GoogleSignInButtonView(label: .signUp) {
+                        Task { await model.signInWithGoogle() }
+                    }
+                    .disabled(model.isLoading)
+
+                    SignInWithAppleButton(.signUp) { request in
+                        model.prepareAppleRequest(request)
+                    } onCompletion: { result in
+                        Task { await model.completeApple(result) }
+                    }
+                    .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+                    .providerButtonFrame()
+                    .disabled(model.isLoading)
+
+                    VStack(spacing: 4) {
+                        Text("By creating an account, you agree to our")
                             .font(.footnote)
+                            .foregroundStyle(colors.textMuted)
+                        if let privacyURL = URL(string: AppConfig.privacyPolicyURL) {
+                            Link("Privacy policy", destination: privacyURL)
+                                .font(.footnote)
+                        }
                     }
-                }
 
-                Button("Already have an account? Sign in") {
-                    router.popToRoot()
+                    Button("Already have an account? Sign in") {
+                        router.popToRoot()
+                    }
+                    .font(.footnote)
+                    .disabled(model.isLoading)
                 }
-                .disabled(model.isLoading)
+                .pixelPanel()
             }
             .padding(24)
         }
+        .pixelScreenBackground()
         .toast($toast)
         .task {
             for await event in model.navEvents() {
@@ -146,11 +153,11 @@ private struct RegisterContent: View {
 
     private var orDivider: some View {
         HStack(spacing: 12) {
-            Rectangle().fill(colors.outlineVariant).frame(height: 1)
+            PixelDivider()
             Text("or")
-                .font(.footnote)
-                .foregroundStyle(colors.onSurfaceVariant)
-            Rectangle().fill(colors.outlineVariant).frame(height: 1)
+                .chromeText()
+                .foregroundStyle(colors.gray)
+            PixelDivider()
         }
     }
 }

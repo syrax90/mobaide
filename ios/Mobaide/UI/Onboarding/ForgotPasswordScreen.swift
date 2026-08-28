@@ -18,6 +18,8 @@ private struct ForgotPasswordContent: View {
     @State private var model: ForgotPasswordModel
     @State private var toast: ToastMessage?
 
+    @FocusState private var emailFocused: Bool
+
     @Environment(Router.self) private var router
     @Environment(\.mobaideColors) private var colors
 
@@ -30,53 +32,58 @@ private struct ForgotPasswordContent: View {
     var body: some View {
         @Bindable var model = model
         ScrollView {
-            VStack(spacing: 16) {
-                Text("Reset your password")
-                    .font(MobaideTypography.titleLarge)
-                Text("Enter your email address and we'll send you a 6-digit code.")
-                    .font(MobaideTypography.bodyLarge)
-                    .foregroundStyle(colors.onSurfaceVariant)
-                    .multilineTextAlignment(.center)
+            VStack(spacing: 20) {
+                PixelWordmark(width: 152)
 
-                TextField("you@example.com", text: $model.email)
-                    .keyboardType(.emailAddress)
-                    .textContentType(.username)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.done)
-                    .onSubmit { Task { await model.submit() } }
-                    .padding(12)
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(colors.outline, lineWidth: 1))
-
-                if let error = model.error {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundStyle(colors.error)
+                VStack(spacing: 16) {
+                    Text("Reset your password")
+                        .pageTitle()
                         .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                    Text("Enter your email address and we'll send you a 6-digit code.")
+                        .font(MobaideTypography.bodyLarge)
+                        .foregroundStyle(colors.textMuted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                Button {
-                    Task { await model.submit() }
-                } label: {
-                    if model.isSending {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                    } else {
-                        Text(sendLabel)
-                            .frame(maxWidth: .infinity)
+                    PixelLabeledField(label: "Email") {
+                        TextField(text: $model.email, prompt: Text(verbatim: "you@example.com").foregroundStyle(colors.gray)) { Text("Email") }
+                            .keyboardType(.emailAddress)
+                            .textContentType(.username)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.done)
+                            .focused($emailFocused)
+                            .onSubmit { Task { await model.submit() } }
+                            .pixelField(isFocused: emailFocused)
                     }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.isSending || model.cooldownSeconds > 0)
 
-                Button("Back to sign in") {
-                    router.pop()
+                    if let error = model.error {
+                        PixelErrorBanner(error)
+                    }
+
+                    Button {
+                        Task { await model.submit() }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text(sendLabel)
+                            if model.isSending {
+                                PixelLoadingBlock(width: 7, height: 13)
+                            }
+                        }
+                    }
+                    .buttonStyle(.pixelPrimaryBlock)
+                    .disabled(model.isSending || model.cooldownSeconds > 0)
+
+                    Button("Back to sign in") {
+                        router.pop()
+                    }
+                    .font(.footnote)
+                    .disabled(model.isSending)
                 }
-                .font(.footnote)
-                .disabled(model.isSending)
+                .pixelPanel()
             }
             .padding(24)
         }
+        .pixelScreenBackground()
         .toast($toast)
         .task {
             for await email in model.codeSentEvents() {

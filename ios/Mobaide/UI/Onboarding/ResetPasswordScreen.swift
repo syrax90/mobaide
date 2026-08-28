@@ -39,69 +39,76 @@ private struct ResetPasswordContent: View {
     var body: some View {
         @Bindable var model = model
         ScrollView {
-            VStack(spacing: 16) {
-                Text("Choose a new password")
-                    .font(MobaideTypography.titleLarge)
-                Text("We sent a 6-digit code to \(EmailFormatting.maskEmail(model.email)).")
-                    .font(MobaideTypography.bodyLarge)
-                    .foregroundStyle(colors.onSurfaceVariant)
-                    .multilineTextAlignment(.center)
+            VStack(spacing: 20) {
+                PixelWordmark(width: 152)
 
-                CodeInputField(
-                    code: $model.code,
-                    enabled: !model.isLoading,
-                    isError: model.error != nil,
-                    accessibilityLabelText: "Reset code",
-                    onSubmit: { focusedField = .newPassword }
-                )
-
-                SecretTextField(text: $model.newPassword, label: "New password", revealed: $passwordRevealed)
-                    .textContentType(.newPassword)
-                    .submitLabel(.next)
-                    .focused($focusedField, equals: .newPassword)
-                    .onSubmit { focusedField = .confirm }
-
-                SecretTextField(text: $model.confirmPassword, label: "Confirm password", revealed: $confirmRevealed)
-                    .textContentType(.newPassword)
-                    .submitLabel(.done)
-                    .focused($focusedField, equals: .confirm)
-                    .onSubmit { Task { await model.submit() } }
-
-                if let error = model.error {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundStyle(colors.error)
+                VStack(spacing: 16) {
+                    Text("Choose a new password")
+                        .pageTitle()
                         .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                    Text("We sent a 6-digit code to \(EmailFormatting.maskEmail(model.email)).")
+                        .font(MobaideTypography.bodyLarge)
+                        .foregroundStyle(colors.textMuted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                Button {
-                    Task { await model.submit() }
-                } label: {
-                    if model.isLoading {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                    } else {
-                        Text("Reset password")
-                            .frame(maxWidth: .infinity)
+                    CodeInputField(
+                        code: $model.code,
+                        enabled: !model.isLoading,
+                        isError: model.error != nil,
+                        accessibilityLabelText: "Reset code",
+                        onSubmit: { focusedField = .newPassword }
+                    )
+
+                    PixelLabeledField(label: "New password") {
+                        SecretTextField(text: $model.newPassword, label: "New password", revealed: $passwordRevealed)
+                            .textContentType(.newPassword)
+                            .submitLabel(.next)
+                            .focused($focusedField, equals: .newPassword)
+                            .onSubmit { focusedField = .confirm }
                     }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.isLoading)
 
-                Button(resendLabel) {
-                    Task { await model.resend() }
-                }
-                .font(.footnote)
-                .disabled(model.isResending || model.cooldownSeconds > 0)
+                    PixelLabeledField(label: "Confirm password") {
+                        SecretTextField(text: $model.confirmPassword, label: "Confirm password", revealed: $confirmRevealed)
+                            .textContentType(.newPassword)
+                            .submitLabel(.done)
+                            .focused($focusedField, equals: .confirm)
+                            .onSubmit { Task { await model.submit() } }
+                    }
 
-                Button("Back to sign in") {
-                    router.popToRoot()
+                    if let error = model.error {
+                        PixelErrorBanner(error)
+                    }
+
+                    Button {
+                        Task { await model.submit() }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text("Reset password")
+                            if model.isLoading {
+                                PixelLoadingBlock(width: 7, height: 13)
+                            }
+                        }
+                    }
+                    .buttonStyle(.pixelPrimaryBlock)
+                    .disabled(model.isLoading)
+
+                    Button(resendLabel) {
+                        Task { await model.resend() }
+                    }
+                    .font(.footnote)
+                    .disabled(model.isResending || model.cooldownSeconds > 0)
+
+                    Button("Back to sign in") {
+                        router.popToRoot()
+                    }
+                    .font(.footnote)
+                    .disabled(model.isLoading)
                 }
-                .font(.footnote)
-                .disabled(model.isLoading)
+                .pixelPanel()
             }
             .padding(24)
         }
+        .pixelScreenBackground()
         .toast($toast)
         .task {
             for await _ in model.successEvents() {

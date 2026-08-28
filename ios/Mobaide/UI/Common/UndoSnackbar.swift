@@ -25,6 +25,7 @@ extension View {
     }
 }
 
+/// Web `.undo-bar`: the toast plate with a ghost action.
 private struct UndoToastModifier: ViewModifier {
     @Binding var toast: UndoToast?
     let actionLabel: String
@@ -39,22 +40,20 @@ private struct UndoToastModifier: ViewModifier {
                     HStack(spacing: 12) {
                         Text(toast.message)
                             .font(.footnote)
-                            .foregroundStyle(colors.onSurfaceVariant)
+                            .foregroundStyle(colors.text)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Button(actionLabel, action: onAction)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(colors.primary)
-                            .buttonStyle(.plain)
+                            .buttonStyle(.pixelSmall)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(colors.surfaceVariant, in: RoundedRectangle(cornerRadius: 8))
+                    .padding(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 10))
+                    .background(colors.bg2)
+                    .pixelRing(colors.surface2)
+                    .pixelShadow(MobaideColorScheme.modalShadow)
                     .padding(.horizontal, 24)
                     .padding(.bottom, 16)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
                     .accessibilityAddTraits(.updatesFrequently)
                 }
             }
-            .animation(.easeInOut(duration: 0.2), value: toast)
+            .transaction { $0.animation = nil }
     }
 }

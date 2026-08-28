@@ -9,6 +9,8 @@ struct AgentCredentialsSheet: View {
 
     @State private var os: AgentHostOS = .linux
 
+    @Environment(\.mobaideColors) private var colors
+
     private var envSnippet: String {
         "RELAY_AGENT_ID=\(credentials.agentId)\nRELAY_AGENT_TOKEN=\(credentials.token)"
     }
@@ -19,28 +21,26 @@ struct AgentCredentialsSheet: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Save these credentials on your agent host — the token is shown only once.")
                         .font(MobaideTypography.bodyLarge)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(colors.textMuted)
 
                     CopyableCodeBlock(label: "Agent ID", code: credentials.agentId)
                     CopyableCodeBlock(label: "Token (shown once)", code: credentials.token, isSensitive: true)
                     CopyableCodeBlock(label: ".env", code: envSnippet, isSensitive: true, singleLine: false)
 
-                    Picker("Host OS", selection: $os) {
-                        ForEach(AgentHostOS.allCases) { host in
-                            Text(host.label).tag(host)
-                        }
+                    PixelLabeledField(label: "Host OS") {
+                        PixelSegmented(AgentHostOS.allCases.map { ($0, $0.label) }, selection: $os)
                     }
-                    .pickerStyle(.segmented)
 
                     CopyableCodeBlock(label: ".env location", code: os.envPath)
                     CopyableCodeBlock(label: "Restart the agent", code: os.restartCommand, singleLine: false)
 
                     Text("Tip: prefer QR pairing (Scan) — it delivers credentials to the agent without exposing a token.")
-                        .font(MobaideTypography.labelSmall)
-                        .foregroundStyle(.secondary)
+                        .font(.footnote)
+                        .foregroundStyle(colors.textMuted)
                 }
                 .padding()
             }
+            .pixelScreenBackground()
             .navigationTitle(credentials.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -50,6 +50,7 @@ struct AgentCredentialsSheet: View {
             }
             .interactiveDismissDisabled()
         }
+        .pixelSheet()
     }
 }
 

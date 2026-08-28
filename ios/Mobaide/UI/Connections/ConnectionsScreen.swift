@@ -32,19 +32,22 @@ private struct ConnectionsContent: View {
     var body: some View {
         Group {
             if model.profiles.isEmpty {
-                Text("No saved connections")
-                    .font(MobaideTypography.bodyLarge)
-                    .foregroundStyle(colors.onSurfaceVariant)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                PixelEmptyState("No saved connections", systemImage: "rectangle.2.swap")
+                    .padding(16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .pixelScreenBackground()
             } else {
                 List {
                     ForEach(model.profiles, id: \.id) { profile in
                         profileRow(profile)
+                            .pixelListRow()
                     }
                 }
+                .pixelList()
             }
         }
         .navigationTitle("Connections")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 // Android parity: "add connection" routes to the login
@@ -64,19 +67,19 @@ private struct ConnectionsContent: View {
         let isActive = profile.id == model.activeProfileId
         return HStack(spacing: 12) {
             Image(systemName: profile.mode == "relay" ? "cloud" : "network")
-                .foregroundStyle(colors.onSurfaceVariant)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+                .foregroundStyle(colors.textMuted)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
                     Text(profile.label)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(colors.text)
                     if isActive {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(colors.primary)
-                            .accessibilityLabel("Active")
+                        PixelChip("Active", .filled)
                     }
                 }
                 Text(subtitle(for: profile))
                     .font(.footnote)
-                    .foregroundStyle(colors.onSurfaceVariant)
+                    .foregroundStyle(colors.textMuted)
             }
             Spacer()
             if !isActive {
@@ -84,12 +87,15 @@ private struct ConnectionsContent: View {
                     model.removeProfile(id: profile.id)
                 } label: {
                     Image(systemName: "trash")
-                        .foregroundStyle(colors.error)
+                        .foregroundStyle(colors.danger)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
                 .accessibilityLabel("Delete \(profile.label)")
             }
         }
+        .pixelCard(selected: isActive)
         .contentShape(Rectangle())
         .onTapGesture {
             guard !isActive else { return }

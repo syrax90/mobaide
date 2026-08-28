@@ -6,10 +6,14 @@ import SwiftUI
 struct ToastMessage: Equatable {
     let id: UUID
     let text: String
+    /// Web `.toast-success` / `.toast-error`: recolours text and ring. `nil`
+    /// is the informational default.
+    let tone: PixelTone?
 
-    init(text: String) {
+    init(text: String, tone: PixelTone? = nil) {
         self.id = UUID()
         self.text = text
+        self.tone = tone
     }
 }
 
@@ -19,6 +23,8 @@ extension View {
     }
 }
 
+/// Web `.toast`: a `surface` plate on a hard black shadow that pops in with no
+/// easing (the web's `steps(2)` entry is two frames long).
 private struct ToastModifier: ViewModifier {
     @Binding var message: ToastMessage?
 
@@ -30,17 +36,18 @@ private struct ToastModifier: ViewModifier {
                 if let message {
                     Text(message.text)
                         .font(.footnote)
-                        .foregroundStyle(colors.onSurfaceVariant)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(colors.surfaceVariant, in: RoundedRectangle(cornerRadius: 8))
+                        .foregroundStyle(message.tone.map(colors.color) ?? colors.text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
+                        .background(colors.surface)
+                        .pixelRing(message.tone.map(colors.ring) ?? colors.rule)
+                        .pixelShadow(MobaideColorScheme.modalShadow)
                         .padding(.horizontal, 24)
                         .padding(.bottom, 16)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
                         .accessibilityAddTraits(.updatesFrequently)
                 }
             }
-            .animation(.easeInOut(duration: 0.2), value: message)
+            .transaction { $0.animation = nil }
             .task(id: message?.id) {
                 guard message != nil else { return }
                 try? await Task.sleep(for: .seconds(3))

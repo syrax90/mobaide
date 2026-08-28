@@ -33,56 +33,59 @@ private struct VerifyEmailContent: View {
     var body: some View {
         @Bindable var model = model
         ScrollView {
-            VStack(spacing: 16) {
-                Text("Check your email")
-                    .font(MobaideTypography.titleLarge)
-                Text("We sent a 6-digit code to \(EmailFormatting.maskEmail(model.email)).")
-                    .font(MobaideTypography.bodyLarge)
-                    .foregroundStyle(colors.onSurfaceVariant)
-                    .multilineTextAlignment(.center)
+            VStack(spacing: 20) {
+                PixelWordmark(width: 152)
 
-                CodeInputField(
-                    code: $model.code,
-                    enabled: !model.isLoading,
-                    isError: model.error != nil,
-                    onSubmit: { Task { await model.submit() } }
-                )
-
-                if let error = model.error {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundStyle(colors.error)
+                VStack(spacing: 16) {
+                    Text("Check your email")
+                        .pageTitle()
                         .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                    Text("We sent a 6-digit code to \(EmailFormatting.maskEmail(model.email)).")
+                        .font(MobaideTypography.bodyLarge)
+                        .foregroundStyle(colors.textMuted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                Button {
-                    Task { await model.submit() }
-                } label: {
-                    if model.isLoading {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                    } else {
-                        Text("Verify")
-                            .frame(maxWidth: .infinity)
+                    CodeInputField(
+                        code: $model.code,
+                        enabled: !model.isLoading,
+                        isError: model.error != nil,
+                        onSubmit: { Task { await model.submit() } }
+                    )
+
+                    if let error = model.error {
+                        PixelErrorBanner(error)
                     }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.isLoading || model.code.count != VerifyEmailModel.codeLength)
 
-                Button(resendLabel) {
-                    Task { await model.resend() }
-                }
-                .font(.footnote)
-                .disabled(model.isResending || model.cooldownSeconds > 0)
+                    Button {
+                        Task { await model.submit() }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text("Verify")
+                            if model.isLoading {
+                                PixelLoadingBlock(width: 7, height: 13)
+                            }
+                        }
+                    }
+                    .buttonStyle(.pixelPrimaryBlock)
+                    .disabled(model.isLoading || model.code.count != VerifyEmailModel.codeLength)
 
-                Button("Use a different email") {
-                    router.pop()
+                    Button(resendLabel) {
+                        Task { await model.resend() }
+                    }
+                    .font(.footnote)
+                    .disabled(model.isResending || model.cooldownSeconds > 0)
+
+                    Button("Use a different email") {
+                        router.pop()
+                    }
+                    .font(.footnote)
+                    .disabled(model.isLoading)
                 }
-                .font(.footnote)
-                .disabled(model.isLoading)
+                .pixelPanel()
             }
             .padding(24)
         }
+        .pixelScreenBackground()
         .toast($toast)
         .task {
             for await _ in model.successEvents() {

@@ -19,30 +19,30 @@ struct GraceBannerSection: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Account scheduled for deletion", systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(colors.danger)
                 Text("Final purge on \(scheduledFor). Cancel any time before then to keep your account.")
                     .font(.footnote)
+                    .foregroundStyle(colors.text)
                 if let errorMessage = model.errorMessage {
                     Text(errorMessage)
                         .font(.footnote)
-                        .foregroundStyle(colors.error)
+                        .foregroundStyle(colors.danger)
                 }
                 Button {
                     model.showConfirm = true
                 } label: {
-                    if model.cancelling {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
+                    HStack(spacing: 8) {
                         Text("Cancel scheduled deletion")
+                        if model.cancelling {
+                            PixelLoadingBlock(width: 6, height: 11)
+                        }
                     }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.pixelSmall)
                 .disabled(model.cancelling)
             }
-            .foregroundStyle(colors.onErrorContainer)
-            .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(colors.errorContainer, in: RoundedRectangle(cornerRadius: 8))
+            .pixelDangerPanel()
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .alert("Keep your account active?", isPresented: $model.showConfirm) {
