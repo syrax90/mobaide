@@ -33,6 +33,7 @@ struct DeleteAccountSheet: View {
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .pixelScreenBackground()
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -42,6 +43,7 @@ struct DeleteAccountSheet: View {
                 }
             }
         }
+        .pixelSheet()
         .interactiveDismissDisabled(isSubmitting)
     }
 
@@ -51,49 +53,55 @@ struct DeleteAccountSheet: View {
     private func explain(_ mode: DeletionMode) -> some View {
         Text("This permanently removes your Mobaide account, your paired agents, templates, and devices. This can't be undone.")
             .font(.callout)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(colors.textMuted)
 
-        Picker("Deletion timing", selection: modeBinding) {
-            Text("Schedule (14 days)").tag(DeletionMode.scheduled)
-            Text("Immediate").tag(DeletionMode.immediate)
+        PixelLabeledField(label: "Deletion timing") {
+            PixelSegmented(
+                [(DeletionMode.scheduled, "Schedule (14 days)"), (DeletionMode.immediate, "Immediate")],
+                selection: modeBinding
+            )
         }
-        .pickerStyle(.segmented)
 
         Text(mode == .scheduled
             ? "Your account is disabled now and permanently deleted after 14 days. Sign in any time before then to cancel."
             : "Your account and all data are deleted right away. There is no grace period.")
             .font(.footnote)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(colors.textMuted)
 
         Text("Re-authenticate to continue")
-            .font(.headline)
+            .sectionHeading()
             .padding(.top, 8)
         Button { model.chooseMethod(.password) } label: {
-            Label("Use my password", systemImage: "key").frame(maxWidth: .infinity)
+            Label("Use my password", systemImage: "key")
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.pixelBlock)
         Button { model.chooseMethod(.google) } label: {
-            Label("Continue with Google", systemImage: "g.circle").frame(maxWidth: .infinity)
+            Label("Continue with Google", systemImage: "g.circle")
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.pixelBlock)
         Button { model.chooseMethod(.apple) } label: {
-            Label("Continue with Apple", systemImage: "apple.logo").frame(maxWidth: .infinity)
+            Label("Continue with Apple", systemImage: "apple.logo")
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.pixelBlock)
     }
 
     @ViewBuilder
     private func reAuthPassword(error: String?, submitting: Bool) -> some View {
         Text("Enter your current password to confirm it's you.")
             .font(.callout)
-            .foregroundStyle(.secondary)
-        SecretTextField(text: passwordBinding, label: "Password", revealed: $passwordRevealed)
+            .foregroundStyle(colors.textMuted)
+        SecretTextField(text: passwordBinding, label: "Password", revealed: $passwordRevealed, isInvalid: error != nil)
             .textContentType(.password)
         errorLabel(error)
         Button { model.confirmPasswordReauth() } label: {
-            Text("Continue").frame(maxWidth: .infinity)
+            HStack(spacing: 10) {
+                Text("Continue")
+                if submitting {
+                    PixelLoadingBlock(width: 7, height: 13)
+                }
+            }
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.pixelPrimaryBlock)
         .disabled(submitting)
     }
 
@@ -101,9 +109,9 @@ struct DeleteAccountSheet: View {
     private func reAuthGoogle(error: String?, submitting: Bool) -> some View {
         Text("Sign in with Google again to confirm it's you.")
             .font(.callout)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(colors.textMuted)
         if submitting {
-            ProgressView().frame(maxWidth: .infinity).padding(.vertical, 8)
+            PixelLoadingBlock().frame(maxWidth: .infinity).padding(.vertical, 8)
         } else {
             GoogleSignInButtonView(label: .continue) {
                 Task { await model.startGoogleReauth() }
@@ -116,9 +124,9 @@ struct DeleteAccountSheet: View {
     private func reAuthApple(error: String?, submitting: Bool) -> some View {
         Text("Sign in with Apple again to confirm it's you.")
             .font(.callout)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(colors.textMuted)
         if submitting {
-            ProgressView().frame(maxWidth: .infinity).padding(.vertical, 8)
+            PixelLoadingBlock().frame(maxWidth: .infinity).padding(.vertical, 8)
         } else {
             SignInWithAppleButton(.continue) { request in
                 model.prepareAppleRequest(request)
@@ -135,30 +143,29 @@ struct DeleteAccountSheet: View {
     private func confirmEmail(mode: DeletionMode, error: String?, submitting: Bool) -> some View {
         Text("Type your email address exactly to confirm:")
             .font(.callout)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(colors.textMuted)
         Text(model.email)
             .font(MobaideTypography.code)
-            .foregroundStyle(.secondary)
-        TextField("you@example.com", text: typedEmailBinding)
+            .foregroundStyle(colors.text)
+            .pixelCodePlate()
+        TextField(text: typedEmailBinding, prompt: Text(verbatim: "you@example.com").foregroundStyle(colors.gray)) { Text("Email") }
             .keyboardType(.emailAddress)
             .textContentType(.username)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
-            .padding(12)
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(colors.outline, lineWidth: 1))
+            .pixelField(isInvalid: error != nil)
         errorLabel(error)
         Button(role: .destructive) {
             Task { await model.submit() }
         } label: {
-            if submitting {
-                ProgressView().frame(maxWidth: .infinity)
-            } else {
+            HStack(spacing: 10) {
                 Text(mode == .immediate ? "Delete immediately" : "Schedule deletion")
-                    .frame(maxWidth: .infinity)
+                if submitting {
+                    PixelLoadingBlock(width: 7, height: 13)
+                }
             }
         }
-        .buttonStyle(.borderedProminent)
-        .tint(colors.error)
+        .buttonStyle(.pixelDangerBlock)
         .disabled(submitting || !typedEmailMatches)
     }
 
@@ -167,10 +174,7 @@ struct DeleteAccountSheet: View {
     @ViewBuilder
     private func errorLabel(_ message: String?) -> some View {
         if let message {
-            Text(message)
-                .font(.footnote)
-                .foregroundStyle(colors.error)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            PixelErrorBanner(message)
         }
     }
 
