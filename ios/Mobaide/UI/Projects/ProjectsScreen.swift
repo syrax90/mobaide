@@ -34,6 +34,7 @@ private struct ProjectsContent: View {
     var body: some View {
         content
             .navigationTitle("Projects")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if !model.projects.isEmpty { EditButton() }
@@ -66,21 +67,27 @@ private struct ProjectsContent: View {
     private var content: some View {
         if model.projects.isEmpty {
             if model.isReconnecting {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                LoadingIndicator()
+                    .pixelScreenBackground()
             } else {
-                ContentUnavailableView("No projects", systemImage: "folder")
+                ScrollView {
+                    PixelEmptyState("No projects", systemImage: "folder")
+                        .padding(16)
+                }
+                .pixelScreenBackground()
             }
         } else {
             List {
                 ForEach(model.projects, id: \.name) { project in
                     projectRow(project)
+                        .pixelCard()
+                        .pixelListRow()
                 }
                 .onMove { source, destination in
                     model.move(from: source, to: destination)
                 }
             }
-            .listStyle(.plain)
+            .pixelList()
         }
     }
 

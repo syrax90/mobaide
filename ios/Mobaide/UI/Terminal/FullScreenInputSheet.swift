@@ -8,6 +8,7 @@ struct FullScreenInputSheet: View {
     @Bindable var model: TerminalSessionModel
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.mobaideColors) private var colors
     @FocusState private var editorFocused: Bool
 
     var body: some View {
@@ -38,6 +39,7 @@ struct FullScreenInputSheet: View {
                     }
                 }
         }
+        .pixelSheet()
         .task {
             // Same yield-before-focus ordering as the inline composer: the
             // field must be mounted before `@FocusState` takes, or the request
@@ -53,17 +55,20 @@ struct FullScreenInputSheet: View {
         // command tokens.
         TextEditor(text: $model.inputText)
             .font(MobaideTypography.code)
+            .foregroundStyle(colors.text)
+            .scrollContentBackground(.hidden)
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
             .focused($editorFocused)
             .disabled(!model.isComposerActive)
             .padding(.horizontal, 12)
+            .background(colors.bg)
             .overlay(alignment: .topLeading) {
                 // `TextEditor` has no placeholder slot.
                 if model.inputText.isEmpty {
                     Text("Compose your prompt…")
                         .font(MobaideTypography.code)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(colors.gray)
                         .padding(.horizontal, 17)
                         .padding(.top, 8)
                         .allowsHitTesting(false)

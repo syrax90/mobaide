@@ -40,6 +40,7 @@ private struct TerminalScreenContent: View {
     private let sessionId: String
 
     @Environment(Router.self) private var router
+    @Environment(\.mobaideColors) private var colors
 
     init(container: AppContainer, sessionId: String) {
         let session = container.sessionRepository.currentSessions.first { $0.session_id == sessionId }
@@ -146,9 +147,7 @@ private struct TerminalScreenContent: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Circle()
-                    .fill(SessionDisplay.stateColor(model.sessionStatus ?? ""))
-                    .frame(width: 10, height: 10)
+                PixelStatusSquare(tone: SessionDisplay.stateTone(model.sessionStatus ?? ""), size: 10)
                     .accessibilityLabel(model.sessionStatus ?? "unknown")
             }
         }
@@ -230,27 +229,29 @@ private struct TerminalScreenContent: View {
         case .live:
             EmptyView()
         case .reconnecting:
-            overlayPill("Reconnecting…", background: MobaideColors.terminalOverlayReconnecting)
+            overlayChip("Reconnecting…")
         case .replayingBuffer:
-            overlayPill("Replaying buffer…", background: MobaideColors.terminalOverlayReplaying)
+            overlayChip("Replaying buffer…", emphasised: true)
         case .closed:
-            overlayPill("Session ended", background: MobaideColors.terminalOverlayReconnecting)
+            overlayChip("Session ended")
         case .suspended:
             // Rarely on screen: coming back to the terminal resumes the stream
             // in the same pass that renders this. It exists so the state stays
             // honest for the frame in between, and so the send gates read a
             // suspend as "not live" rather than as a dropped connection.
-            overlayPill("Paused", background: MobaideColors.terminalOverlayReconnecting)
+            overlayChip("Paused")
         }
     }
 
-    private func overlayPill(_ text: String, background: Color) -> some View {
+    /// Web `.terminal-overlay`: a ringed `surface` chip over the grid; the
+    /// replay state takes the pending (`brand2` / `accent`) tone.
+    private func overlayChip(_ text: String, emphasised: Bool = false) -> some View {
         Text(text)
-            .font(.footnote)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(Capsule().fill(background.opacity(0.85)))
+            .chromeText()
+            .foregroundStyle(emphasised ? colors.accent : colors.text)
+            .padding(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
+            .background(colors.surface.opacity(0.92))
+            .pixelRing(emphasised ? MobaideColorScheme.brand2 : colors.rule)
             .padding(.top, 8)
     }
 
@@ -272,10 +273,15 @@ private struct TerminalScreenContent: View {
                     Button {
                         model.jumpToBottom()
                     } label: {
-                        Image(systemName: "arrow.down.circle.fill")
-                            .font(.system(size: 34))
-                            .symbolRenderingMode(.hierarchical)
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(colors.text)
+                            .frame(width: 40, height: 40)
+                            .background(colors.bg2)
+                            .pixelRing(colors.surface2)
+                            .pixelShadow(MobaideColorScheme.btnShadow)
                     }
+                    .buttonStyle(.plain)
                     .accessibilityLabel("Jump to bottom")
                     .padding(16)
                     .overlay(alignment: .topTrailing) {
@@ -291,12 +297,7 @@ private struct TerminalScreenContent: View {
     /// Rows missed while paused (Android `JumpToBottomFab`'s badge). The label
     /// saturates well below the model's own cap so the pill keeps its size.
     private func unreadBadge(_ rows: Int) -> some View {
-        Text(rows > 999 ? "999+" : "\(rows)")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.black)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(Capsule().fill(MobaideColors.warningYellow))
+        PixelChip(rows > 999 ? "999+" : "\(rows)", .filled)
             .accessibilityLabel("\(rows) unread rows")
     }
 }

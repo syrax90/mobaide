@@ -24,6 +24,7 @@ private struct TemplatesContent: View {
     var body: some View {
         content
             .navigationTitle("Prompt templates")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { model.startCreate() } label: { Image(systemName: "plus") }
@@ -61,28 +62,29 @@ private struct TemplatesContent: View {
     private var content: some View {
         if model.isEmpty {
             if model.isLoading {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                LoadingIndicator()
+                    .pixelScreenBackground()
             } else {
-                ContentUnavailableView(
-                    "No templates yet",
-                    systemImage: "doc.plaintext",
-                    description: Text("Tap + to create one.")
-                )
+                ScrollView {
+                    PixelEmptyState("No templates yet", systemImage: "doc.plaintext", description: "Tap + to create one.")
+                        .padding(16)
+                }
+                .pixelScreenBackground()
             }
         } else {
             List {
                 if !model.favorites.isEmpty {
-                    Section("Favorites") {
+                    Section(header: PixelSectionHeader("Favorites")) {
                         ForEach(model.favorites, id: \.template_id) { row($0) }
                     }
                 }
                 if !model.others.isEmpty {
-                    Section("All") {
+                    Section(header: PixelSectionHeader("All")) {
                         ForEach(model.others, id: \.template_id) { row($0) }
                     }
                 }
             }
-            .listStyle(.insetGrouped)
+            .pixelList()
         }
     }
 
@@ -93,6 +95,8 @@ private struct TemplatesContent: View {
             onEdit: { model.startEdit(template) },
             onDelete: { model.deleteTarget = template }
         )
+        .pixelCard()
+        .pixelListRow()
     }
 }
 
@@ -102,19 +106,26 @@ private struct TemplateRow: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
 
+    @Environment(\.mobaideColors) private var colors
+
     var body: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(template.name).font(.headline).lineLimit(1)
+                Text(template.name)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(colors.text)
+                    .lineLimit(1)
                 Text(template.body)
                     .font(MobaideTypography.code)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(colors.textMuted)
                     .lineLimit(2)
             }
             Spacer(minLength: 0)
             Button(action: onToggleFavorite) {
                 Image(systemName: template.is_favorite ? "star.fill" : "star")
-                    .foregroundStyle(template.is_favorite ? Color.yellow : Color.secondary)
+                    .foregroundStyle(template.is_favorite ? colors.warning : colors.textMuted)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(template.is_favorite ? "Unfavorite" : "Favorite")
@@ -123,10 +134,10 @@ private struct TemplateRow: View {
                 Button(role: .destructive) { onDelete() } label: { Label("Delete", systemImage: "trash") }
             } label: {
                 Image(systemName: "ellipsis")
-                    .padding(8)
+                    .foregroundStyle(colors.accent)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
         }
-        .padding(.vertical, 4)
     }
 }

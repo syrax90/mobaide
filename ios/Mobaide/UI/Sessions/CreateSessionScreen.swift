@@ -42,13 +42,17 @@ private struct CreateSessionContent: View {
 
     var body: some View {
         @Bindable var model = model
-        Form {
-            switch model.step {
-            case .projectSelect: projectSelectStep
-            case .modePick: modePickStep
-            case .config: configStep
+        List {
+            Group {
+                switch model.step {
+                case .projectSelect: projectSelectStep
+                case .modePick: modePickStep
+                case .config: configStep
+                }
             }
+            .pixelFormSection()
         }
+        .pixelForm()
         .navigationTitle("New Session")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(model.step != .projectSelect)
@@ -134,7 +138,7 @@ private struct CreateSessionContent: View {
 
     @ViewBuilder
     private var projectSelectStep: some View {
-        Section("Project") {
+        Section(header: PixelSectionHeader("Project")) {
             ForEach(model.projects, id: \.name) { project in
                 selectableRow(project.name, selected: isStoredSelected(project.name)) {
                     model.selectStoredProject(project.name)
@@ -155,24 +159,25 @@ private struct CreateSessionContent: View {
         }
 
         if isCustomPathSelected {
-            Section("Directory") {
+            Section(header: PixelSectionHeader("Directory")) {
                 TextField("/absolute/path", text: Binding(
                     get: { model.customPathDraft },
                     set: { model.setCustomPath($0) }
                 ))
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+                .pixelField(isInvalid: model.customPathError != nil)
                 if let error = model.customPathError {
-                    Text(error).font(.footnote).foregroundStyle(colors.error)
+                    Text(error).font(.footnote).foregroundStyle(colors.danger)
                 } else {
                     Text(#"e.g. /home/user/code or D:\projects\demo"#)
                         .font(.footnote)
-                        .foregroundStyle(colors.onSurfaceVariant)
+                        .foregroundStyle(colors.textMuted)
                 }
             }
 
             if !model.recentCustomPaths.isEmpty {
-                Section("Recent paths") {
+                Section(header: PixelSectionHeader("Recent paths")) {
                     ForEach(model.recentCustomPaths, id: \.self) { path in
                         recentPathRow(path)
                     }
@@ -184,9 +189,9 @@ private struct CreateSessionContent: View {
             Button {
                 model.continueFromProject()
             } label: {
-                Text("Continue").frame(maxWidth: .infinity)
+                Text("Continue")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.pixelPrimaryBlock)
             .disabled(!model.canContinueProject)
         }
     }
@@ -195,16 +200,16 @@ private struct CreateSessionContent: View {
 
     @ViewBuilder
     private var modePickStep: some View {
-        Section("Mode") {
+        Section(header: PixelSectionHeader("Mode")) {
             ForEach(CreateSessionModel.Mode.builtIn, id: \.self) { mode in
                 Button { model.selectMode(mode) } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(model.modeTitle(mode))
-                                .foregroundStyle(model.isEnabled(mode) ? colors.primary : .secondary)
+                                .foregroundStyle(model.isEnabled(mode) ? colors.text : colors.gray)
                             Text(model.reason(for: mode))
                                 .font(.caption)
-                                .foregroundStyle(model.isEnabled(mode) ? Color.secondary : MobaideColors.warningYellow)
+                                .foregroundStyle(model.isEnabled(mode) ? colors.textMuted : colors.warning)
                         }
                         Spacer()
                         modeChevron
@@ -223,10 +228,10 @@ private struct CreateSessionContent: View {
             } label: {
                 VStack(alignment: .leading, spacing: 3) {
                     Label("Add custom agent…", systemImage: "plus")
-                        .foregroundStyle(colors.primary)
+                        .foregroundStyle(colors.accent)
                     Text("Name + launch command, synced to your account")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(colors.textMuted)
                 }
             }
         }
@@ -238,7 +243,7 @@ private struct CreateSessionContent: View {
     private var modeChevron: some View {
         Image(systemName: "chevron.right")
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(colors.gray)
     }
 
     /// Mode card for one account-scoped custom agent type. Tap selects the
@@ -253,10 +258,10 @@ private struct CreateSessionContent: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(type.name)
-                        .foregroundStyle(colors.primary)
+                        .foregroundStyle(colors.text)
                     Text(type.command)
                         .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(colors.textMuted)
                         .lineLimit(1)
                 }
                 Spacer()
@@ -299,14 +304,14 @@ private struct CreateSessionContent: View {
                 Button {
                     Task { await model.create() }
                 } label: {
-                    if model.submitting {
-                        ProgressView().frame(maxWidth: .infinity)
-                    } else {
+                    HStack(spacing: 10) {
                         Text(model.mode == .shell ? "Start Terminal" : "Create Session")
-                            .frame(maxWidth: .infinity)
+                        if model.submitting {
+                            PixelLoadingBlock(width: 7, height: 13)
+                        }
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.pixelPrimaryBlock)
                 .disabled(!model.canCreate)
             }
         }
@@ -315,7 +320,7 @@ private struct CreateSessionContent: View {
     @ViewBuilder
     private var autoScanConfig: some View {
         @Bindable var model = model
-        Section("Claude") {
+        Section(header: PixelSectionHeader("Claude")) {
             claudeModelAndEffortPickers(
                 claudeModel: $model.autoScanClaudeModel,
                 effort: $model.autoScanClaudeEffort,
@@ -338,36 +343,38 @@ private struct CreateSessionContent: View {
             // start with no explanation at all.
             Text("When off, the scan pauses at permission prompts — you'll get a notification and can open the session to approve.")
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(colors.textMuted)
             Toggle("No memory", isOn: $model.autoScanNoMemory)
         } header: {
-            Text("Auto Scan")
+            PixelSectionHeader("Auto Scan")
         } footer: {
-            Text("Each matching issue runs in its own git worktree, so its changes stay isolated from your working copy. Non-git projects run in the project directory.")
+            PixelSectionFooter("Each matching issue runs in its own git worktree, so its changes stay isolated from your working copy. Non-git projects run in the project directory.")
         }
 
-        Section("Initial prompt") {
+        Section(header: PixelSectionHeader("Initial prompt")) {
             TextField("Sent to each spawned session", text: $model.autoScanInitialPrompt, axis: .vertical)
                 .lineLimit(3...8)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+                .pixelField()
         }
 
         Section {
             Button {
                 Task { await model.startAutoScan() }
             } label: {
-                if model.autoScanStarting {
-                    ProgressView().frame(maxWidth: .infinity)
-                } else {
-                    Text("Start Auto Scan").frame(maxWidth: .infinity)
+                HStack(spacing: 10) {
+                    Text("Start Auto Scan")
+                    if model.autoScanStarting {
+                        PixelLoadingBlock(width: 7, height: 13)
+                    }
                 }
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.pixelPrimaryBlock)
             .disabled(!model.canStartAutoScan)
         } footer: {
             if !model.claudeEnabled {
-                Text(model.reason(for: .autoScan)).foregroundStyle(MobaideColors.warningYellow)
+                PixelSectionFooter(model.reason(for: .autoScan), tone: .warning)
             }
         }
     }
@@ -375,7 +382,7 @@ private struct CreateSessionContent: View {
     @ViewBuilder
     private var claudeConfig: some View {
         @Bindable var model = model
-        Section("Claude") {
+        Section(header: PixelSectionHeader("Claude")) {
             claudeModelAndEffortPickers(
                 claudeModel: $model.claudeModel,
                 effort: $model.claudeEffort,
@@ -431,22 +438,23 @@ private struct CreateSessionContent: View {
         Toggle("Debug logging", isOn: debug)
         Text("Claude Code prints verbose diagnostics into the terminal.")
             .font(.footnote)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(colors.textMuted)
         TextField("Append system prompt", text: appendSystemPrompt, axis: .vertical)
             .lineLimit(1...4)
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
+            .pixelField()
     }
 
     @ViewBuilder
     private var codexConfig: some View {
         @Bindable var model = model
-        Section("Autonomy") {
+        Section(header: PixelSectionHeader("Autonomy")) {
             Button("Read only") { applyCodexPreset(sandbox: "read-only", approval: "on-request", fullAuto: false) }
             Button("Auto") { applyCodexPreset(sandbox: "workspace-write", approval: "on-request", fullAuto: false) }
             Button("Full access") { applyCodexPreset(sandbox: "danger-full-access", approval: "never", fullAuto: true) }
         }
-        Section("Codex") {
+        Section(header: PixelSectionHeader("Codex")) {
             // Routed through setCodexModel (not a bare binding) so a stranded
             // effort re-defaults when the new model's advertised set lacks it —
             // the setAntigravitySkipPermissions Binding precedent.
@@ -483,7 +491,7 @@ private struct CreateSessionContent: View {
     @ViewBuilder
     private var antigravityConfig: some View {
         @Bindable var model = model
-        Section("Antigravity") {
+        Section(header: PixelSectionHeader("Antigravity")) {
             Picker("Model", selection: $model.antigravityModel) {
                 Text("Auto").tag(String?.none)
                 ForEach(model.antigravityModels, id: \.self) { Text($0).tag(String?.some($0)) }
@@ -500,15 +508,16 @@ private struct CreateSessionContent: View {
                 .lineLimit(1...4)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+                .pixelField()
         }
     }
 
     @ViewBuilder
     private var shellConfig: some View {
-        Section("Terminal") {
+        Section(header: PixelSectionHeader("Terminal")) {
             Text("Bash / cmd in the chosen directory")
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(colors.textMuted)
         }
     }
 
@@ -518,10 +527,10 @@ private struct CreateSessionContent: View {
     /// the launch then surfaces the relay's 404).
     @ViewBuilder
     private func customConfig(_ id: String) -> some View {
-        Section(model.modeTitle(.custom(id))) {
+        Section(header: PixelSectionHeader(model.modeTitle(.custom(id)))) {
             Text(model.customType(id: id)?.command ?? "Bash / cmd in the chosen directory")
                 .font(.footnote.monospaced())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(colors.textMuted)
                 .lineLimit(3)
         }
     }
@@ -530,12 +539,13 @@ private struct CreateSessionContent: View {
     private var gitOptionsSection: some View {
         if model.showsGitOptions {
             @Bindable var model = model
-            Section("Worktree") {
+            Section(header: PixelSectionHeader("Worktree")) {
                 Toggle("Create worktree", isOn: $model.worktree)
                 if model.worktree {
                     TextField("Branch name (optional)", text: $model.branchName)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
+                        .pixelField()
                 }
             }
         }
@@ -558,17 +568,15 @@ private struct CreateSessionContent: View {
         Button(action: action) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(title).foregroundStyle(colors.primary)
+                    Text(title).foregroundStyle(colors.text)
                     if let subtitle {
                         Text(subtitle)
                             .font(.caption)
-                            .foregroundStyle(colors.onSurfaceVariant)
+                            .foregroundStyle(colors.textMuted)
                     }
                 }
                 Spacer()
-                if selected {
-                    Image(systemName: "checkmark").foregroundStyle(colors.primary)
-                }
+                PixelRadio(isSelected: selected)
             }
         }
     }
@@ -587,7 +595,7 @@ private struct CreateSessionContent: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             } icon: {
                 Image(systemName: "folder")
-                    .foregroundStyle(colors.onSurfaceVariant)
+                    .foregroundStyle(colors.textMuted)
             }
         }
         .buttonStyle(.plain)

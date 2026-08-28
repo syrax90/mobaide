@@ -37,10 +37,13 @@ private struct SupportContent: View {
                     Label("Email support", systemImage: "envelope")
                 }
             } footer: {
-                Text("Community threads are public and need a free GitHub account. Email support is private and best for account-specific issues.")
+                PixelSectionFooter("Community threads are public and need a free GitHub account. Email support is private and best for account-specific issues.")
             }
+            .pixelFormSection()
         }
+        .pixelForm()
         .navigationTitle("Help & Support")
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: safariPresented) {
             if let url = model.safariURL { SafariView(url: url) }
         }

@@ -34,11 +34,13 @@ struct CustomAgentTypeEditorSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Name") {
+            List {
+                Section(header: PixelSectionHeader("Name")) {
                     TextField("Name", text: $name)
+                        .pixelField()
                 }
-                Section("Launch command") {
+                .pixelFormSection()
+                Section(header: PixelSectionHeader("Launch command")) {
                     TextField("e.g. aider --model sonnet", text: $command, axis: .vertical)
                         .font(MobaideTypography.code)
                         .lineLimit(3...8)
@@ -52,16 +54,20 @@ struct CustomAgentTypeEditorSheet: View {
                             let sanitized = CreateSessionModel.sanitizeCommandPunctuation(newValue)
                             if sanitized != newValue { command = sanitized }
                         }
+                        .pixelField()
                     Text("Runs in your login shell inside the session directory")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(colors.textMuted)
                 }
+                .pixelFormSection()
                 if let error = model.typeEditorError {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundStyle(colors.error)
+                    Section {
+                        PixelErrorBanner(error)
+                    }
+                    .listRowBackground(Color.clear)
                 }
             }
+            .pixelForm()
             .navigationTitle(target == nil ? "New custom agent" : "Edit custom agent")
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(model.isSavingType)
@@ -82,5 +88,6 @@ struct CustomAgentTypeEditorSheet: View {
                 }
             }
         }
+        .pixelSheet()
     }
 }

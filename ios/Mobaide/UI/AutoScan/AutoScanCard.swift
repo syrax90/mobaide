@@ -8,35 +8,38 @@ struct AutoScanCard: View {
     let onTap: () -> Void
     let onStop: () -> Void
 
+    @Environment(\.mobaideColors) private var colors
+
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    Image(systemName: "dot.radiowaves.left.and.right")
-                        .foregroundStyle(AutoScanDisplay.statusColor(scan.status))
+                    PixelStatusSquare(tone: AutoScanDisplay.statusTone(scan.status))
                     Text(scan.project_name)
-                        .font(.body)
-                        .fontWeight(.medium)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(colors.text)
                     Spacer()
                     AutoScanStatusChip(status: scan.status)
                     Button(action: onStop) {
-                        Image(systemName: "stop.circle")
-                            .foregroundStyle(.red)
+                        Image(systemName: "stop.fill")
+                            .foregroundStyle(colors.danger)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Stop scan")
                 }
                 HStack {
                     Text("Processed: \(scan.processed_count)")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(colors.textMuted)
                     Spacer()
                     Text(AutoScanDisplay.relativeTime(scan.last_activity_at))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(colors.textMuted)
                 }
                 CountdownView(nextScanAt: scan.next_scan_at)
             }
-            .padding(.vertical, 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -47,25 +50,20 @@ struct AutoScanStatusChip: View {
     let status: String
 
     var body: some View {
-        Text(AutoScanDisplay.statusLabel(status))
-            .font(.caption2)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(AutoScanDisplay.statusColor(status).opacity(0.2)))
-            .foregroundStyle(AutoScanDisplay.statusColor(status))
+        PixelChip(AutoScanDisplay.statusLabel(status), .status(AutoScanDisplay.statusTone(status)))
     }
 }
 
-/// Status → label / color helpers shared by the card and detail screen
-/// (Android `AutoScanCard.statusColor` / `StatusChip` / `phaseColor`).
+/// Status → label / tone helpers shared by the card and detail screen
+/// (Android `AutoScanCard.statusColor` / `StatusChip` / `phaseColor`, resolved
+/// through the scheme here so the tones follow the theme).
 enum AutoScanDisplay {
-    static func statusColor(_ status: String) -> Color {
+    static func statusTone(_ status: String) -> PixelTone {
         switch status {
-        case "scanning", "running", "connected": return MobaideColors.stateRunning
-        case "idle", "starting", "connecting", "replaying": return MobaideColors.stateStarting
-        case "error", "failed", "disconnected": return MobaideColors.stateCrashed
-        case "stopped": return MobaideColors.stateStopped
-        default: return MobaideColors.stateStopped
+        case "scanning", "running", "connected": return .ok
+        case "idle", "starting", "connecting", "replaying": return .accent
+        case "error", "failed", "disconnected": return .danger
+        default: return .muted
         }
     }
 
@@ -92,22 +90,21 @@ enum AutoScanDisplay {
         }
     }
 
-    static func phaseColor(_ status: String) -> Color {
+    static func phaseTone(_ status: String) -> PixelTone {
         switch status {
-        case "active": return MobaideColors.stateStarting
-        case "ok": return MobaideColors.stateRunning
-        case "failed": return MobaideColors.stateCrashed
-        case "skipped": return MobaideColors.stateStopped
-        default: return MobaideColors.stateStopped
+        case "active": return .accent
+        case "ok": return .ok
+        case "failed": return .danger
+        default: return .muted
         }
     }
 
-    static func issueColor(_ status: String) -> Color {
+    static func issueTone(_ status: String) -> PixelTone {
         switch status {
-        case "started": return MobaideColors.stateStarting
-        case "ok": return MobaideColors.stateRunning
-        case "failed": return MobaideColors.stateCrashed
-        default: return MobaideColors.stateStopped
+        case "started": return .accent
+        case "ok": return .ok
+        case "failed": return .danger
+        default: return .muted
         }
     }
 }
