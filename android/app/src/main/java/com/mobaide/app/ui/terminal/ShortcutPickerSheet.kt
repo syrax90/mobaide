@@ -53,7 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -260,7 +260,7 @@ internal fun ShortcutPickerContent(
                     Text(
                         text = chord.display(),
                         style = MaterialTheme.typography.titleSmall.copy(
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = ChromeFontFamily,
                         ),
                     )
                     Text(
@@ -417,7 +417,7 @@ private fun SavedShortcutChip(
             Text(
                 text = shortcut.label,
                 style = MaterialTheme.typography.labelMedium.copy(
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = ChromeFontFamily,
                 ),
                 color = labelBase.copy(alpha = if (enabled) 1f else 0.38f),
             )
@@ -458,7 +458,7 @@ private fun ChipLabel(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.labelMedium.copy(
-            fontFamily = FontFamily.Monospace,
+            fontFamily = ChromeFontFamily,
         ),
     )
 }

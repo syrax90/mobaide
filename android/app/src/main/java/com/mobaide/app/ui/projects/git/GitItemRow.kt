@@ -10,16 +10,18 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Checkbox
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.MaterialTheme
+import com.mobaide.app.ui.common.pixel.PixelCheckbox
+import com.mobaide.app.ui.theme.chromeCaps
+import com.mobaide.app.ui.theme.pixel
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.data.network.dto.GitItem
@@ -41,12 +43,14 @@ fun GitItemRow(
                 onClick = onTap,
                 onLongClick = onLongPress,
             ),
-        tonalElevation = if (selected) 2.dp else 0.dp,
-        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(
+            2.dp,
+            if (selected) MaterialTheme.pixel.brand2 else MaterialTheme.pixel.surface2,
+        ),
         color = if (selected) {
-            MaterialTheme.colorScheme.primaryContainer
+            MaterialTheme.colorScheme.surfaceContainerHighest
         } else {
-            MaterialTheme.colorScheme.surface
+            MaterialTheme.colorScheme.surfaceContainerLow
         },
     ) {
         Row(
@@ -56,7 +60,7 @@ fun GitItemRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (inSelectionMode && item.isDeletable) {
-                Checkbox(checked = selected, onCheckedChange = { onTap() })
+                PixelCheckbox(checked = selected, onCheckedChange = { onTap() })
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -68,7 +72,7 @@ fun GitItemRow(
                     Text(
                         text = secondary,
                         style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = ChromeFontFamily,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -89,12 +93,12 @@ private fun ChipRow(chips: List<Chip>) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         chips.forEach { chip ->
             Surface(
-                shape = RoundedCornerShape(6.dp),
-                color = chip.color,
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                border = BorderStroke(2.dp, chip.ring),
                 modifier = Modifier.padding(vertical = 2.dp),
             ) {
                 Text(
-                    text = chip.text,
+                    text = chip.text.chromeCaps(),
                     style = MaterialTheme.typography.labelSmall,
                     color = chip.contentColor,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -104,7 +108,7 @@ private fun ChipRow(chips: List<Chip>) {
     }
 }
 
-private data class Chip(val text: String, val color: Color, val contentColor: Color)
+private data class Chip(val text: String, val ring: Color, val contentColor: Color)
 
 private fun primaryLabel(item: GitItem): String = when (item.kind) {
     GitItem.KIND_BRANCH_WITH_WORKTREE, GitItem.KIND_BRANCH_ONLY ->
@@ -123,32 +127,33 @@ private fun secondaryLabel(item: GitItem): String? = when (item.kind) {
 @Composable
 private fun chipsFor(item: GitItem): List<Chip> {
     val cs = MaterialTheme.colorScheme
+    val px = MaterialTheme.pixel
     val out = mutableListOf<Chip>()
     if (item.is_current) {
-        out.add(Chip("current", cs.tertiaryContainer, cs.onTertiaryContainer))
+        out.add(Chip("current", px.brand2, cs.primary))
     }
     if (item.gone) {
-        out.add(Chip("gone", cs.errorContainer, cs.onErrorContainer))
+        out.add(Chip("gone", cs.error, cs.error))
     }
     if (item.ahead > 0 || item.behind > 0) {
         out.add(
             Chip(
                 "ahead ${item.ahead} / behind ${item.behind}",
-                cs.secondaryContainer,
-                cs.onSecondaryContainer,
+                cs.outline,
+                cs.onSurface,
             )
         )
     }
     if (item.locked) {
         val text = item.locked_reason?.takeIf { it.isNotBlank() }
             ?.let { "locked: $it" } ?: "locked"
-        out.add(Chip(text, cs.errorContainer, cs.onErrorContainer))
+        out.add(Chip(text, cs.error, cs.error))
     }
     if (item.kind == GitItem.KIND_ORPHAN_WORKTREE) {
-        out.add(Chip("orphan", cs.errorContainer, cs.onErrorContainer))
+        out.add(Chip("orphan", cs.error, cs.error))
     }
     if (item.prunable) {
-        out.add(Chip("prunable", cs.surfaceVariant, cs.onSurfaceVariant))
+        out.add(Chip("prunable", px.rule, cs.onSurfaceVariant))
     }
     return out
 }

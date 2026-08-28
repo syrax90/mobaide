@@ -41,6 +41,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import com.mobaide.app.ui.common.pixel.pixelFrame
+import com.mobaide.app.ui.theme.pixel
 import com.mobaide.app.ui.common.pixel.PixelScaffold
 import com.mobaide.app.ui.common.pixel.PixelTextButton
 import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
@@ -57,7 +59,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,8 +67,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.ui.common.CopyableCodeBlock
 import com.mobaide.app.ui.common.GraceBannerSection
-import com.mobaide.app.ui.theme.StateRunning
-import com.mobaide.app.ui.theme.StateStopped
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -296,10 +296,8 @@ internal fun EmptyAgentsState(
             Box(
                 modifier = Modifier
                     .size(96.dp)
-                    .background(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = CircleShape,
-                    ),
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                    .pixelFrame(MaterialTheme.pixel.rule),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -633,7 +631,7 @@ private fun AgentCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val statusColor = if (agent.online) StateRunning else StateStopped
+            val statusColor = if (agent.online) MaterialTheme.pixel.statusRunning else MaterialTheme.pixel.statusStopped
             Canvas(modifier = Modifier.size(12.dp)) {
                 drawCircle(color = statusColor)
             }
@@ -650,7 +648,7 @@ private fun AgentCard(
                 Text(
                     text = agent.agent_id,
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = ChromeFontFamily,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -658,7 +656,7 @@ private fun AgentCard(
                 Text(
                     text = if (agent.online) "Online" else "Offline",
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (agent.online) StateRunning else StateStopped,
+                    color = if (agent.online) MaterialTheme.pixel.statusRunning else MaterialTheme.pixel.statusStopped,
                 )
             }
 
@@ -666,7 +664,7 @@ private fun AgentCard(
                 Icon(
                     Icons.Default.CheckCircle,
                     contentDescription = "Connected",
-                    tint = StateRunning,
+                    tint = MaterialTheme.pixel.statusRunning,
                     modifier = Modifier.size(24.dp),
                 )
                 Spacer(modifier = Modifier.width(4.dp))

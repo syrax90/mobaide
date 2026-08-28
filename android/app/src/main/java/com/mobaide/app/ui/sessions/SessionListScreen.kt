@@ -26,7 +26,10 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.MaterialTheme
+import com.mobaide.app.ui.common.pixel.PixelStatusDot
+import com.mobaide.app.ui.theme.pixel
 import com.mobaide.app.ui.common.pixel.PixelScaffold
 import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -39,7 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -47,12 +50,7 @@ import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.ui.autoscan.AutoScanCard
 import com.mobaide.app.ui.common.ExternalSessionsNotice
-import com.mobaide.app.ui.theme.StateCrashed
 import com.mobaide.app.ui.update.AgentOutdatedBanner
-import com.mobaide.app.ui.theme.StateRunning
-import com.mobaide.app.ui.theme.StateStarting
-import com.mobaide.app.ui.theme.StateStopped
-import com.mobaide.app.ui.theme.StateStopping
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -211,19 +209,20 @@ private fun SessionCard(
     onStop: () -> Unit,
 ) {
     val stateColor = when (session.state) {
-        "running" -> StateRunning
-        "starting" -> StateStarting
-        "stopping" -> StateStopping
-        "stopped" -> StateStopped
-        "crashed" -> StateCrashed
-        else -> StateStopped
+        "running" -> MaterialTheme.pixel.statusRunning
+        "starting" -> MaterialTheme.pixel.statusStarting
+        "stopping" -> MaterialTheme.pixel.statusStopping
+        "stopped" -> MaterialTheme.pixel.statusStopped
+        "crashed" -> MaterialTheme.pixel.statusCrashed
+        else -> MaterialTheme.pixel.statusStopped
     }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(2.dp, MaterialTheme.pixel.surface2),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Row(
             modifier = Modifier
@@ -231,9 +230,7 @@ private fun SessionCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            androidx.compose.foundation.Canvas(modifier = Modifier.size(12.dp)) {
-                drawCircle(color = stateColor)
-            }
+            PixelStatusDot(color = stateColor)
 
             Spacer(modifier = Modifier.width(12.dp))
 
@@ -242,7 +239,7 @@ private fun SessionCard(
                     text = session.title
                         ?: "$kindLabel · ${session.project_name ?: session.session_id.take(8)}",
                     style = MaterialTheme.typography.titleSmall,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = ChromeFontFamily,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

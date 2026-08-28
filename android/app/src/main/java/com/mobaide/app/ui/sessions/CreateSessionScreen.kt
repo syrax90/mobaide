@@ -56,6 +56,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemColors
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import com.mobaide.app.ui.theme.pixel
 import androidx.compose.material3.OutlinedTextField
 import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.SegmentedButton
@@ -83,7 +84,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -93,7 +94,6 @@ import com.mobaide.app.ui.common.SecretTextField
 import com.mobaide.app.ui.projects.ProjectFormSheet
 import com.mobaide.app.ui.projects.ProjectsUiEvent
 import com.mobaide.app.ui.projects.ProjectsViewModel
-import com.mobaide.app.ui.theme.WarningYellow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -712,7 +712,7 @@ private fun ModePickerSection(
     val disabledReasonList = ListItemDefaults.colors(
         containerColor = Color.Transparent,
         headlineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-        supportingColor = WarningYellow,
+        supportingColor = MaterialTheme.pixel.warning,
         leadingIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
         trailingIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
     )
@@ -941,7 +941,7 @@ private fun CustomAgentTypeCard(
                 supportingContent = {
                     Text(
                         text = type.command,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = ChromeFontFamily,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )

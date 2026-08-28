@@ -19,6 +19,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import com.mobaide.app.ui.common.pixel.pixelFrame
+import com.mobaide.app.ui.theme.chromeCaps
+import com.mobaide.app.ui.theme.pixel
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -26,10 +29,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
-import com.mobaide.app.ui.theme.StateCrashed
-import com.mobaide.app.ui.theme.StateRunning
-import com.mobaide.app.ui.theme.StateStarting
-import com.mobaide.app.ui.theme.StateStopped
 
 @Composable
 fun AutoScanCard(
@@ -104,23 +103,25 @@ private fun StatusChip(status: String) {
     }
     Row(
         modifier = Modifier
-            .background(color.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .pixelFrame(color)
             .padding(horizontal = 8.dp, vertical = 2.dp),
     ) {
         Text(
-            text = label,
+            text = label.chromeCaps(),
             style = MaterialTheme.typography.labelSmall,
             color = color,
         )
     }
 }
 
+@Composable
 private fun statusColor(status: String): Color = when (status.lowercase()) {
-    "scanning", "running" -> StateRunning
-    "idle" -> StateStarting
-    "error" -> StateCrashed
-    "stopped" -> StateStopped
-    else -> StateStopped
+    "scanning", "running" -> MaterialTheme.pixel.statusRunning
+    "idle" -> MaterialTheme.pixel.statusStarting
+    "error" -> MaterialTheme.pixel.statusCrashed
+    "stopped" -> MaterialTheme.pixel.statusStopped
+    else -> MaterialTheme.pixel.statusStopped
 }
 
 private fun relativeTime(epochSeconds: Double): String {

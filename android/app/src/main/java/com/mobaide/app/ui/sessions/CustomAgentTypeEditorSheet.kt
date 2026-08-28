@@ -29,7 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
@@ -116,7 +116,7 @@ fun CustomAgentTypeEditorSheet(
                 onValueChange = { command = it },
                 label = { Text("Launch command") },
                 placeholder = { Text("e.g. aider --model sonnet") },
-                textStyle = TextStyle(fontFamily = FontFamily.Monospace),
+                textStyle = TextStyle(fontFamily = ChromeFontFamily),
                 minLines = 3,
                 enabled = !saving,
                 keyboardOptions = KeyboardOptions(

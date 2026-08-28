@@ -74,13 +74,3 @@ val PxLightDanger = Color(0xFF8C1D18)
 val PxLightOk = Color(0xFF116A2E)
 val PxLightWarning = Color(0xFF8A6100)
 val PxLightScrim = Color(0x80000000)
-
-// Session state colors
-val StateRunning = Color(0xFF4CAF50)
-val StateStopped = Color(0xFF9E9E9E)
-val StateCrashed = Color(0xFFF44336)
-val StateStarting = Color(0xFFFFC107)
-val StateStopping = Color(0xFFFF9800)
-
-// Warning colors
-val WarningYellow = Color(0xFFF9A825)

@@ -18,6 +18,7 @@ import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import com.mobaide.app.ui.common.pixel.pixelFrame
 import androidx.compose.material3.Text
 import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
@@ -130,8 +131,8 @@ fun GraceBannerSection(
         modifier = Modifier
             .fillMaxWidth()
             .padding(contentPadding)
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.errorContainer)
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .pixelFrame(MaterialTheme.colorScheme.error)
             .padding(12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

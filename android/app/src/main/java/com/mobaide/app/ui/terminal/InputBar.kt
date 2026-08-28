@@ -66,7 +66,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
@@ -345,7 +345,7 @@ fun InputBar(
                                 Text(
                                     key.label,
                                     style = MaterialTheme.typography.labelMedium.copy(
-                                        fontFamily = FontFamily.Monospace,
+                                        fontFamily = ChromeFontFamily,
                                     ),
                                 )
                             }
@@ -531,7 +531,7 @@ private fun InputField(
         maxLines = 10,
         enabled = enabled,
         textStyle = MaterialTheme.typography.bodyMedium.copy(
-            fontFamily = FontFamily.Monospace,
+            fontFamily = ChromeFontFamily,
         ),
         // Verbatim input: this text is written straight to the PTY. Capitalization
         // is spelled out rather than left to Compose's default so the intent
@@ -669,7 +669,7 @@ private fun SavedShortcutKeyButton(
                 Text(
                     shortcut.label,
                     style = MaterialTheme.typography.labelMedium.copy(
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = ChromeFontFamily,
                     ),
                     color = labelColor.copy(alpha = if (enabled) 1f else 0.38f),
                 )

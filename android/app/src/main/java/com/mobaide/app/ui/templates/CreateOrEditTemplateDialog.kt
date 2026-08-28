@@ -16,7 +16,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.data.network.dto.TemplateDto
@@ -51,7 +51,7 @@ fun CreateOrEditTemplateDialog(
                         .padding(top = 8.dp),
                     placeholder = { Text("Prompt body") },
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = ChromeFontFamily,
                     ),
                     // Saved bodies are replayed into the terminal composer and
                     // sent to the PTY unchanged, so they get the same

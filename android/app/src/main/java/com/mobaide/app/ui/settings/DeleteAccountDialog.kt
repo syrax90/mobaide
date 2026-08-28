@@ -12,12 +12,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
+import com.mobaide.app.ui.common.pixel.PixelRadio
 import com.mobaide.app.ui.common.pixel.PixelButton
 import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.ButtonDefaults
-import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import com.mobaide.app.ui.theme.pixel
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
@@ -226,13 +227,20 @@ private fun ModeOption(
 ) {
     val accent = if (danger) MaterialTheme.colorScheme.error
         else MaterialTheme.colorScheme.primary
-    val borderColor = if (selected) accent else MaterialTheme.colorScheme.outlineVariant
+    val borderColor = when {
+        selected && danger -> MaterialTheme.colorScheme.error
+        selected -> MaterialTheme.pixel.brand2
+        else -> MaterialTheme.colorScheme.outlineVariant
+    }
     val textColor = if (selected && danger) accent
         else MaterialTheme.colorScheme.onSurface
     Surface(
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(if (selected) 2.dp else 1.dp, borderColor),
-        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(2.dp, borderColor),
+        color = if (selected) {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        },
         modifier = Modifier
             .fillMaxWidth()
             .selectable(
@@ -245,10 +253,9 @@ private fun ModeOption(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            RadioButton(
+            PixelRadio(
                 selected = selected,
                 onClick = null,
-                colors = RadioButtonDefaults.colors(selectedColor = accent),
             )
             Column(modifier = Modifier.padding(start = 8.dp)) {
                 Text(

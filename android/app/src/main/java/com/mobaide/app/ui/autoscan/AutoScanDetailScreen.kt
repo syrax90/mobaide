@@ -29,6 +29,10 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import com.mobaide.app.ui.common.pixel.PixelStatusDot
+import com.mobaide.app.ui.theme.TerminalBackground
+import com.mobaide.app.ui.theme.TerminalForeground
+import com.mobaide.app.ui.theme.pixel
 import com.mobaide.app.ui.common.pixel.PixelScaffold
 import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -46,14 +50,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-import com.mobaide.app.ui.theme.StateCrashed
-import com.mobaide.app.ui.theme.StateRunning
-import com.mobaide.app.ui.theme.StateStarting
-import com.mobaide.app.ui.theme.StateStopped
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -163,17 +163,13 @@ private fun HeaderCard(
 @Composable
 private fun StatusDot(status: String) {
     val color = when (status.lowercase()) {
-        "scanning", "running", "connected" -> StateRunning
-        "idle", "connecting", "replaying" -> StateStarting
-        "error", "failed", "disconnected" -> StateCrashed
-        "stopped" -> StateStopped
-        else -> StateStopped
+        "scanning", "running", "connected" -> MaterialTheme.pixel.statusRunning
+        "idle", "connecting", "replaying" -> MaterialTheme.pixel.statusStarting
+        "error", "failed", "disconnected" -> MaterialTheme.pixel.statusCrashed
+        "stopped" -> MaterialTheme.pixel.statusStopped
+        else -> MaterialTheme.pixel.statusStopped
     }
-    Box(
-        modifier = Modifier
-            .size(10.dp)
-            .background(color, RoundedCornerShape(50)),
-    )
+    PixelStatusDot(color = color)
 }
 
 @Composable
@@ -229,12 +225,13 @@ private fun PhaseTimeline(
     }
 }
 
+@Composable
 private fun phaseColor(status: String): Color = when (status) {
-    "active" -> StateStarting
-    "ok" -> StateRunning
-    "failed" -> StateCrashed
-    "skipped" -> StateStopped
-    else -> StateStopped
+    "active" -> MaterialTheme.pixel.statusStarting
+    "ok" -> MaterialTheme.pixel.statusRunning
+    "failed" -> MaterialTheme.pixel.statusCrashed
+    "skipped" -> MaterialTheme.pixel.statusStopped
+    else -> MaterialTheme.pixel.statusStopped
 }
 
 @Composable
@@ -267,7 +264,7 @@ private fun LogPane(
 
     Box(modifier = modifier) {
         Surface(
-            color = Color(0xFF111111),
+            color = TerminalBackground,
             modifier = Modifier.fillMaxSize(),
         ) {
             LazyColumn(
@@ -278,8 +275,8 @@ private fun LogPane(
                 items(lines, key = { it.id }) { line ->
                     Text(
                         text = line.text,
-                        color = Color(0xFFE0E0E0),
-                        fontFamily = FontFamily.Monospace,
+                        color = TerminalForeground,
+                        fontFamily = ChromeFontFamily,
                         fontSize = 12.sp,
                         modifier = Modifier.fillMaxWidth(),
                     )
