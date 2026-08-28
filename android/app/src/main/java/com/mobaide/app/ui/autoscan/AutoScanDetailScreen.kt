@@ -20,7 +20,8 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -28,13 +29,18 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.FloatingActionButtonDefaults
+import com.mobaide.app.ui.common.pixel.PixelStatusDot
+import com.mobaide.app.ui.common.pixel.hardShadow
+import com.mobaide.app.ui.theme.TerminalBackground
+import com.mobaide.app.ui.theme.TerminalForeground
+import com.mobaide.app.ui.theme.pixel
+import com.mobaide.app.ui.common.pixel.PixelScaffold
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -46,14 +52,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-import com.mobaide.app.ui.theme.StateCrashed
-import com.mobaide.app.ui.theme.StateRunning
-import com.mobaide.app.ui.theme.StateStarting
-import com.mobaide.app.ui.theme.StateStopped
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,10 +73,10 @@ fun AutoScanDetailScreen(
         }
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+    PixelScaffold(
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = { Text(projectName) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -147,11 +149,11 @@ private fun HeaderCard(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Button(onClick = onRunNow) {
+                PixelButton(onClick = onRunNow, style = PixelButtonStyle.Primary) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Text("Run Now", modifier = Modifier.padding(start = 4.dp))
                 }
-                OutlinedButton(onClick = onStop) {
+                PixelButton(onClick = onStop) {
                     Icon(Icons.Default.Stop, contentDescription = null)
                     Text("Stop", modifier = Modifier.padding(start = 4.dp))
                 }
@@ -163,17 +165,13 @@ private fun HeaderCard(
 @Composable
 private fun StatusDot(status: String) {
     val color = when (status.lowercase()) {
-        "scanning", "running", "connected" -> StateRunning
-        "idle", "connecting", "replaying" -> StateStarting
-        "error", "failed", "disconnected" -> StateCrashed
-        "stopped" -> StateStopped
-        else -> StateStopped
+        "scanning", "running", "connected" -> MaterialTheme.pixel.statusRunning
+        "idle", "connecting", "replaying" -> MaterialTheme.pixel.statusStarting
+        "error", "failed", "disconnected" -> MaterialTheme.pixel.statusCrashed
+        "stopped" -> MaterialTheme.pixel.statusStopped
+        else -> MaterialTheme.pixel.statusStopped
     }
-    Box(
-        modifier = Modifier
-            .size(10.dp)
-            .background(color, RoundedCornerShape(50)),
-    )
+    PixelStatusDot(color = color)
 }
 
 @Composable
@@ -229,12 +227,13 @@ private fun PhaseTimeline(
     }
 }
 
+@Composable
 private fun phaseColor(status: String): Color = when (status) {
-    "active" -> StateStarting
-    "ok" -> StateRunning
-    "failed" -> StateCrashed
-    "skipped" -> StateStopped
-    else -> StateStopped
+    "active" -> MaterialTheme.pixel.statusStarting
+    "ok" -> MaterialTheme.pixel.statusRunning
+    "failed" -> MaterialTheme.pixel.statusCrashed
+    "skipped" -> MaterialTheme.pixel.statusStopped
+    else -> MaterialTheme.pixel.statusStopped
 }
 
 @Composable
@@ -267,7 +266,7 @@ private fun LogPane(
 
     Box(modifier = modifier) {
         Surface(
-            color = Color(0xFF111111),
+            color = TerminalBackground,
             modifier = Modifier.fillMaxSize(),
         ) {
             LazyColumn(
@@ -278,8 +277,8 @@ private fun LogPane(
                 items(lines, key = { it.id }) { line ->
                     Text(
                         text = line.text,
-                        color = Color(0xFFE0E0E0),
-                        fontFamily = FontFamily.Monospace,
+                        color = TerminalForeground,
+                        fontFamily = ChromeFontFamily,
                         fontSize = 12.sp,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -291,7 +290,9 @@ private fun LogPane(
                 onClick = onResume,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(16.dp),
+                    .padding(16.dp)
+                    .hardShadow(MaterialTheme.pixel.btnShadow),
+                elevation = FloatingActionButtonDefaults.elevation(0.dp, 0.dp, 0.dp, 0.dp),
             ) {
                 Text("▼ $newLineCount new")
             }

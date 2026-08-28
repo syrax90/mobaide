@@ -20,9 +20,11 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import com.mobaide.app.ui.common.pixel.PixelButton
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Switch
+import com.mobaide.app.ui.common.pixel.pixelSwitchColors
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -68,7 +70,7 @@ fun FlagsEditor(
                 onRemove = { onRemove(index) },
             )
         }
-        OutlinedButton(
+        PixelButton(
             onClick = onAdd,
             modifier = Modifier.fillMaxWidth(),
         ) {
@@ -98,6 +100,7 @@ private fun FlagRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = entry.key,
                 onValueChange = { onUpdate(entry.copy(key = it)) },
                 label = { Text("Key") },
@@ -143,12 +146,14 @@ private fun FlagRow(
                         onCheckedChange = { checked ->
                             onUpdate(entry.copy(textValue = if (checked) "true" else "false"))
                         },
+                        colors = pixelSwitchColors(),
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(if (entry.textValue == "true") "true" else "false")
                 }
             }
             FlagType.NUMBER -> OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = entry.textValue,
                 onValueChange = { onUpdate(entry.copy(textValue = it)) },
                 label = { Text("Value (number)") },
@@ -159,6 +164,7 @@ private fun FlagRow(
                 modifier = Modifier.fillMaxWidth(),
             )
             FlagType.STRING -> OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = entry.textValue,
                 onValueChange = { onUpdate(entry.copy(textValue = it)) },
                 label = { Text("Value") },
@@ -192,6 +198,7 @@ private fun TypeDropdown(
         modifier = modifier,
     ) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = type.label,
             onValueChange = {},
             readOnly = true,

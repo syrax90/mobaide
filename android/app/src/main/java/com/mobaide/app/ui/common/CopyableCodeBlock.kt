@@ -19,6 +19,8 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import com.mobaide.app.ui.common.pixel.pixelFrame
+import com.mobaide.app.ui.theme.chromeCaps
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -26,7 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -53,17 +55,14 @@ fun CopyableCodeBlock(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                shape = RoundedCornerShape(12.dp),
-            )
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .pixelFrame(MaterialTheme.colorScheme.outlineVariant)
             .padding(start = 12.dp, top = 8.dp, end = 4.dp, bottom = 8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
-            text = label,
+            text = label.chromeCaps(),
             style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(
@@ -74,7 +73,7 @@ fun CopyableCodeBlock(
                 Text(
                     text = code,
                     style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = ChromeFontFamily,
                     maxLines = if (singleLine) 1 else Int.MAX_VALUE,
                     modifier = if (singleLine) {
                         Modifier.horizontalScroll(rememberScrollState())
@@ -110,7 +109,7 @@ fun CopyableCodeBlock(
 )
 @Composable
 private fun CopyableCodeBlockPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),

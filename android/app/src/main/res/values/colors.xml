@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#FBFBFB</color>
+    <!-- Modern-pixel page grounds (the web "bg" tokens); keep in sync with
+         ui/theme/Color.kt PxLightBg / PxDarkBg. -->
+    <color name="pixel_bg_light">#F4F4F4</color>
+    <color name="pixel_bg_dark">#121212</color>
 </resources>

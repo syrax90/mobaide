@@ -15,8 +15,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import com.mobaide.app.ui.common.pixel.pixelFrame
+import com.mobaide.app.ui.theme.pixel
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,8 +47,8 @@ fun ExternalSessionsNotice(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .pixelFrame(MaterialTheme.pixel.rule)
             .padding(12.dp)
             .testTag(EXTERNAL_SESSIONS_NOTICE_TAG),
     ) {
@@ -77,7 +79,7 @@ fun ExternalSessionsNotice(
             horizontalArrangement = Arrangement.End,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            TextButton(
+            PixelTextButton(
                 onClick = onDismiss,
                 modifier = Modifier.testTag(EXTERNAL_SESSIONS_NOTICE_DISMISS_TAG),
             ) {
@@ -95,7 +97,7 @@ fun ExternalSessionsNotice(
 )
 @Composable
 private fun ExternalSessionsNoticePreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         ExternalSessionsNotice(onDismiss = {})
     }
 }

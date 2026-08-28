@@ -20,13 +20,15 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import com.mobaide.app.ui.common.pixel.PixelBottomSheet
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.ui.graphics.RectangleShape
+import com.mobaide.app.ui.common.pixel.pixelSegmentedButtonColors
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -93,7 +95,7 @@ fun AgentCredentialsSheet(
         skipPartiallyExpanded = true,
         confirmValueChange = { it != SheetValue.Hidden },
     )
-    ModalBottomSheet(
+    PixelBottomSheet(
         onDismissRequest = {},
         sheetState = sheetState,
         modifier = modifier,
@@ -153,7 +155,7 @@ internal fun AgentCredentialsContent(
             modifier = Modifier.testTag("cred_token"),
         )
 
-        HorizontalDivider()
+        HorizontalDivider(thickness = 2.dp)
 
         Text(
             text = "Apply on the agent host",
@@ -176,7 +178,8 @@ internal fun AgentCredentialsContent(
                 SegmentedButton(
                     selected = selectedOs == os,
                     onClick = { selectedOs = os },
-                    shape = SegmentedButtonDefaults.itemShape(index, AgentHostOs.entries.size),
+                    shape = RectangleShape,
+                    colors = pixelSegmentedButtonColors(),
                     modifier = Modifier.testTag("os_${os.name}"),
                 ) {
                     Text(os.label)
@@ -210,7 +213,7 @@ internal fun AgentCredentialsContent(
             )
         }
 
-        TextButton(
+        PixelTextButton(
             onClick = onDone,
             modifier = Modifier
                 .align(Alignment.End)
@@ -243,7 +246,7 @@ private fun StepRow(number: Int, text: String, modifier: Modifier = Modifier) {
 )
 @Composable
 private fun AgentCredentialsContentPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         AgentCredentialsContent(
             title = "Agent Created",
             agentId = "a1b2c3d4e5f6",

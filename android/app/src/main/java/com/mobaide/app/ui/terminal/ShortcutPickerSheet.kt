@@ -22,26 +22,25 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.BookmarkBorder
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import com.mobaide.app.ui.common.pixel.PixelIconButton
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.InputChipDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelBottomSheet
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -54,7 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -83,7 +82,7 @@ fun ShortcutPickerSheet(
     onRemoveSavedShortcut: (SavedShortcutUi) -> Unit = {},
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
-    ModalBottomSheet(
+    PixelBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
@@ -112,7 +111,7 @@ fun ShortcutPickerSheet(
                 onRenameSavedShortcut = onRenameSavedShortcut,
                 onRemoveSavedShortcut = onRemoveSavedShortcut,
             )
-            SnackbarHost(
+            PixelSnackbarHost(
                 hostState = snackbarHostState,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -173,9 +172,7 @@ internal fun ShortcutPickerContent(
                 text = "Keyboard shortcut",
                 style = MaterialTheme.typography.titleMedium,
             )
-            IconButton(onClick = onClose) {
-                Icon(Icons.Default.Close, contentDescription = "Close")
-            }
+            PixelIconButton(Icons.Default.Close, "Close", onClick = onClose)
         }
         Column(
             // Weighted with fill=false so the footer (preview + Send) is measured
@@ -246,7 +243,7 @@ internal fun ShortcutPickerContent(
                 selectedKey = it
             }
         }
-        HorizontalDivider()
+        HorizontalDivider(thickness = 2.dp)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -261,7 +258,7 @@ internal fun ShortcutPickerContent(
                     Text(
                         text = chord.display(),
                         style = MaterialTheme.typography.titleSmall.copy(
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = ChromeFontFamily,
                         ),
                     )
                     Text(
@@ -323,7 +320,7 @@ internal fun ShortcutPickerContent(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(
+                PixelTextButton(
                     onClick = { onRenameSavedShortcut(pinned) },
                     modifier = Modifier.testTag("shortcut_rename_button"),
                 ) {
@@ -336,7 +333,8 @@ internal fun ShortcutPickerContent(
                 .fillMaxWidth()
                 .padding(bottom = 16.dp),
         ) {
-            Button(
+            PixelButton(
+                style = PixelButtonStyle.Primary,
                 onClick = { chord?.let(onSendChord) },
                 enabled = enabled && chord != null,
                 modifier = Modifier
@@ -372,11 +370,11 @@ private fun SaveToggleButton(
 ) {
     val modifier = Modifier.testTag("shortcut_save_button")
     if (saved) {
-        FilledTonalButton(onClick = onClick, enabled = enabled, modifier = modifier) {
+        PixelButton(onClick = onClick, enabled = enabled, modifier = modifier) {
             SaveToggleLabel(Icons.Default.Bookmark, "Saved")
         }
     } else {
-        OutlinedButton(onClick = onClick, enabled = enabled, modifier = modifier) {
+        PixelButton(onClick = onClick, enabled = enabled, modifier = modifier) {
             SaveToggleLabel(Icons.Outlined.BookmarkBorder, "Save")
         }
     }
@@ -417,7 +415,7 @@ private fun SavedShortcutChip(
             Text(
                 text = shortcut.label,
                 style = MaterialTheme.typography.labelMedium.copy(
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = ChromeFontFamily,
                 ),
                 color = labelBase.copy(alpha = if (enabled) 1f else 0.38f),
             )
@@ -458,7 +456,7 @@ private fun ChipLabel(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.labelMedium.copy(
-            fontFamily = FontFamily.Monospace,
+            fontFamily = ChromeFontFamily,
         ),
     )
 }
@@ -533,7 +531,7 @@ private val previewSavedShortcuts = listOf(
 )
 @Composable
 private fun ShortcutPickerContentPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         Surface {
             ShortcutPickerContent(
                 recents = previewRecents,
@@ -556,7 +554,7 @@ private fun ShortcutPickerContentPreview() {
 )
 @Composable
 private fun SaveToggleButtonPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         Surface {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -573,7 +571,7 @@ private fun SaveToggleButtonPreview() {
 @Preview(name = "ShortcutPicker empty recents", showBackground = true)
 @Composable
 private fun ShortcutPickerContentEmptyRecentsPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         Surface {
             ShortcutPickerContent(
                 recents = emptyList(),

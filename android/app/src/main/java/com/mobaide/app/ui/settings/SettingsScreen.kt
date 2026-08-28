@@ -17,25 +17,36 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.zIndex
+import com.mobaide.app.data.local.ThemeMode
+import com.mobaide.app.ui.common.pixel.pixelFrame
+import com.mobaide.app.ui.theme.chromeCaps
+import com.mobaide.app.ui.theme.pixel
+import com.mobaide.app.ui.common.pixel.PixelRadio
+import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.BuildConfig
@@ -59,9 +70,9 @@ fun SettingsScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    Scaffold(
+    PixelScaffold(
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = { Text("Settings") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -84,11 +95,11 @@ fun SettingsScreen(
                 headlineContent = { Text("Logged in as") },
                 supportingContent = { Text(uiState.userEmail) },
             )
-            HorizontalDivider()
+            HorizontalDivider(thickness = 2.dp)
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Button(
+            PixelButton(
                 onClick = onManageConnections,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -99,7 +110,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Button(
+            PixelButton(
                 onClick = onManageTemplates,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -110,7 +121,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Button(
+            PixelButton(
                 onClick = onManageDevices,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -121,7 +132,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            OutlinedButton(
+            PixelButton(
                 onClick = onOpenSupport,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -132,7 +143,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            OutlinedButton(
+            PixelButton(
                 onClick = { openUrlInCustomTab(context, BuildConfig.PRIVACY_POLICY_URL) },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -143,7 +154,12 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            HorizontalDivider()
+            AppearanceSection(
+                mode = uiState.themeMode,
+                onModeChange = viewModel::setThemeMode,
+            )
+
+            HorizontalDivider(thickness = 2.dp)
 
             TerminalDisplaySection(
                 mode = uiState.terminalDisplayMode,
@@ -152,11 +168,12 @@ fun SettingsScreen(
                 onColumnsChange = viewModel::setTerminalStaticColumns,
             )
 
-            HorizontalDivider()
+            HorizontalDivider(thickness = 2.dp)
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Button(
+            PixelButton(
+                style = PixelButtonStyle.Danger,
                 onClick = {
                     viewModel.logout()
                     onLogout()
@@ -164,16 +181,13 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                ),
             ) {
                 Text("Logout")
             }
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            HorizontalDivider()
+            HorizontalDivider(thickness = 2.dp)
             DangerZoneSection(onDeleteAccount = viewModel::startDeleteAccount)
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -197,6 +211,68 @@ fun SettingsScreen(
     }
 }
 
+/**
+ * The web Appearance card: a square Auto | Light | Dark segmented control.
+ * Adjacent segments overlap by the 2dp ring width so they share one divider,
+ * and the selected segment z-lifts so its brand-2 ring wins the overlap.
+ */
+@Composable
+private fun AppearanceSection(
+    mode: ThemeMode,
+    onModeChange: (ThemeMode) -> Unit,
+) {
+    Column(modifier = Modifier.padding(16.dp)) {
+        Text(
+            text = "Appearance".chromeCaps(),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(modifier = Modifier.selectableGroup()) {
+            ThemeMode.entries.forEachIndexed { index, candidate ->
+                val selected = candidate == mode
+                Box(
+                    modifier = Modifier
+                        .offset(x = (-2 * index).dp)
+                        .zIndex(if (selected) 1f else 0f)
+                        .background(
+                            if (selected) MaterialTheme.colorScheme.surfaceContainerHighest
+                            else Color.Transparent,
+                        )
+                        .pixelFrame(
+                            if (selected) MaterialTheme.pixel.brand2
+                            else MaterialTheme.colorScheme.outline,
+                        )
+                        .selectable(
+                            selected = selected,
+                            role = Role.RadioButton,
+                            onClick = { onModeChange(candidate) },
+                        )
+                        .defaultMinSize(minWidth = 72.dp, minHeight = 48.dp)
+                        .testTag("theme_mode_${candidate.name}"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = candidate.name.chromeCaps(),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Auto follows the system theme.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 @Composable
 private fun DangerZoneSection(onDeleteAccount: () -> Unit) {
     Column(modifier = Modifier.padding(16.dp)) {
@@ -212,13 +288,10 @@ private fun DangerZoneSection(onDeleteAccount: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(12.dp))
-        OutlinedButton(
+        PixelButton(
             onClick = onDeleteAccount,
+            style = PixelButtonStyle.Danger,
             modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = MaterialTheme.colorScheme.error,
-            ),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
         ) {
             Text("Delete account")
         }
@@ -285,7 +358,7 @@ private fun DisplayModeRow(
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RadioButton(selected = selected, onClick = null)
+        PixelRadio(selected = selected, onClick = null)
         Spacer(modifier = Modifier.width(8.dp))
         Text(text = label, style = MaterialTheme.typography.bodyMedium)
     }

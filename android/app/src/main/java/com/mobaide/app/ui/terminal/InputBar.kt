@@ -12,10 +12,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -33,16 +35,23 @@ import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.MoreHoriz
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledTonalButton
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelIconButton
+import com.mobaide.app.ui.theme.chromeCaps
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ripple
+import com.mobaide.app.ui.common.pixel.hardShadow
+import com.mobaide.app.ui.common.pixel.pixelFrame
+import com.mobaide.app.ui.common.pixel.pressTravel
+import com.mobaide.app.ui.theme.pixel
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -54,6 +63,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -66,7 +76,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
@@ -298,16 +308,14 @@ fun InputBar(
                     ) {
                         // With the composer hidden the terminal is the input field: this
                         // re-raises the IME on the terminal surface after the user dismissed it.
-                        IconButton(
+                        PixelIconButton(
+                            imageVector = Icons.Outlined.Keyboard,
+                            contentDescription = "Show keyboard",
                             onClick = onRaiseTerminalKeyboard,
                             enabled = enabled,
+                            compact = true,
                             modifier = Modifier.testTag("raise_terminal_keyboard_button"),
-                        ) {
-                            Icon(
-                                Icons.Outlined.Keyboard,
-                                contentDescription = "Show keyboard",
-                            )
-                        }
+                        )
                         RevealComposerChip(
                             onClick = {
                                 panelExpanded = true
@@ -324,15 +332,13 @@ fun InputBar(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     controlKeys.forEach { key ->
-                        FilledTonalButton(
+                        PixelButton(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 onSendBytes(key.bytes)
                             },
                             enabled = enabled,
-                            contentPadding = PaddingValues(
-                                horizontal = 10.dp, vertical = 4.dp,
-                            ),
+                            compact = true,
                         ) {
                             val icon = key.icon
                             if (icon != null) {
@@ -345,7 +351,7 @@ fun InputBar(
                                 Text(
                                     key.label,
                                     style = MaterialTheme.typography.labelMedium.copy(
-                                        fontFamily = FontFamily.Monospace,
+                                        fontFamily = ChromeFontFamily,
                                     ),
                                 )
                             }
@@ -355,15 +361,13 @@ fun InputBar(
                     // last. Not a ControlKey: it opens the shortcut sheet instead
                     // of sending bytes, so it stays out of CONTROL_KEY_ORDER and
                     // the per-kind membership lists.
-                    FilledTonalButton(
+                    PixelButton(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             onOpenShortcuts()
                         },
                         enabled = enabled,
-                        contentPadding = PaddingValues(
-                            horizontal = 10.dp, vertical = 4.dp,
-                        ),
+                        compact = true,
                         modifier = Modifier.testTag("custom_shortcut_button"),
                     ) {
                         Icon(
@@ -485,18 +489,19 @@ private fun RevealComposerChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    AssistChip(
+    PixelButton(
         onClick = onClick,
-        label = { Text("Command field") },
-        leadingIcon = {
-            Icon(
-                Icons.Outlined.Keyboard,
-                contentDescription = null,
-                modifier = Modifier.size(AssistChipDefaults.IconSize),
-            )
-        },
+        compact = true,
         modifier = modifier.testTag("reveal_composer_chip"),
-    )
+    ) {
+        Icon(
+            Icons.Outlined.Keyboard,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Command field".chromeCaps())
+    }
 }
 
 @Composable
@@ -510,6 +515,7 @@ private fun InputField(
     modifier: Modifier = Modifier,
 ) {
     OutlinedTextField(
+        colors = PixelTextFieldDefaults.colors(),
         value = text,
         onValueChange = { onTextChange(it) },
         modifier = modifier
@@ -531,7 +537,7 @@ private fun InputField(
         maxLines = 10,
         enabled = enabled,
         textStyle = MaterialTheme.typography.bodyMedium.copy(
-            fontFamily = FontFamily.Monospace,
+            fontFamily = ChromeFontFamily,
         ),
         // Verbatim input: this text is written straight to the PTY. Capitalization
         // is spelled out rather than left to Compose's default so the intent
@@ -556,57 +562,48 @@ private fun ActionButtons(
     onSend: () -> Unit,
     onHideComposer: () -> Unit,
 ) {
-    IconButton(
+    PixelIconButton(
+        imageVector = Icons.Filled.KeyboardHide,
+        contentDescription = "Hide command field",
         onClick = onHideComposer,
+        compact = true,
         modifier = Modifier.testTag("hide_composer_button"),
-    ) {
-        Icon(
-            Icons.Filled.KeyboardHide,
-            contentDescription = "Hide command field",
-        )
-    }
-    IconButton(onClick = onOpenTemplates) {
-        Icon(
-            Icons.AutoMirrored.Filled.LibraryBooks,
-            contentDescription = "Templates",
-        )
-    }
-    IconButton(
+    )
+    PixelIconButton(
+        imageVector = Icons.AutoMirrored.Filled.LibraryBooks,
+        contentDescription = "Templates",
+        onClick = onOpenTemplates,
+        compact = true,
+    )
+    PixelIconButton(
+        imageVector = Icons.Default.BookmarkAdd,
+        contentDescription = "Save as template",
         onClick = onSaveAsTemplate,
         enabled = canSend,
-    ) {
-        Icon(
-            Icons.Default.BookmarkAdd,
-            contentDescription = "Save as template",
-        )
-    }
-    IconButton(
+        compact = true,
+    )
+    PixelIconButton(
+        imageVector = Icons.Outlined.Keyboard,
+        contentDescription = if (panelExpanded) "Hide keys" else "Show keys",
         onClick = onTogglePanel,
         enabled = enabled,
-    ) {
-        Icon(
-            Icons.Outlined.Keyboard,
-            contentDescription = if (panelExpanded) "Hide keys" else "Show keys",
-        )
-    }
-    IconButton(
+        selected = panelExpanded,
+        compact = true,
+    )
+    PixelIconButton(
+        imageVector = Icons.Default.OpenInFull,
+        contentDescription = "Expand editor",
         onClick = onExpand,
         enabled = enabled,
-    ) {
-        Icon(
-            Icons.Default.OpenInFull,
-            contentDescription = "Expand editor",
-        )
-    }
-    IconButton(
+        compact = true,
+    )
+    PixelIconButton(
+        imageVector = Icons.AutoMirrored.Filled.Send,
+        contentDescription = "Send",
         onClick = onSend,
         enabled = enabled && canSend,
-    ) {
-        Icon(
-            Icons.AutoMirrored.Filled.Send,
-            contentDescription = "Send",
-        )
-    }
+        compact = true,
+    )
 }
 
 /**
@@ -629,19 +626,25 @@ private fun SavedShortcutKeyButton(
 ) {
     val haptic = LocalHapticFeedback.current
     var menuExpanded by remember { mutableStateOf(false) }
+    val pressSource = remember { MutableInteractionSource() }
+    val pressed by pressSource.collectIsPressedAsState()
     Box(modifier = modifier) {
         Surface(
-            shape = ButtonDefaults.filledTonalShape,
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.primary,
             modifier = Modifier
                 .testTag("saved_shortcut_button")
-                .semantics { contentDescription = "Saved shortcut ${shortcut.label}" },
+                .semantics { contentDescription = "Saved shortcut ${shortcut.label}" }
+                .hardShadow(MaterialTheme.pixel.btnShadow, visible = enabled && !pressed)
+                .pressTravel(enabled && pressed)
+                .pixelFrame(MaterialTheme.pixel.brand2),
         ) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .combinedClickable(
+                        interactionSource = pressSource,
+                        indication = ripple(),
                         onClick = {
                             if (enabled) {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -653,23 +656,20 @@ private fun SavedShortcutKeyButton(
                             menuExpanded = true
                         },
                     )
-                    .defaultMinSize(
-                        minWidth = ButtonDefaults.MinWidth,
-                        minHeight = ButtonDefaults.MinHeight,
-                    )
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                    .defaultMinSize(minWidth = 32.dp, minHeight = 32.dp)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
             ) {
                 // The existing "risky" marking (CSI-u chords) carries over to
-                // saved buttons as the tertiary label color.
+                // saved buttons as the warning label color.
                 val labelColor = if (shortcut.risky) {
-                    MaterialTheme.colorScheme.tertiary
+                    MaterialTheme.pixel.warning
                 } else {
-                    MaterialTheme.colorScheme.onSecondaryContainer
+                    MaterialTheme.colorScheme.primary
                 }
                 Text(
                     shortcut.label,
                     style = MaterialTheme.typography.labelMedium.copy(
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = ChromeFontFamily,
                     ),
                     color = labelColor.copy(alpha = if (enabled) 1f else 0.38f),
                 )
@@ -707,7 +707,7 @@ private fun SavedShortcutKeyButton(
 )
 @Composable
 private fun InputBarPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         InputBar(
             text = TextFieldValue(""),
             onTextChange = {},
@@ -739,7 +739,7 @@ private fun InputBarPreview() {
 )
 @Composable
 private fun InputBarComposerHiddenPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         InputBar(
             text = TextFieldValue(""),
             onTextChange = {},

@@ -1,5 +1,6 @@
 package com.mobaide.app.ui.common
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -15,7 +16,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,7 +39,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -155,7 +156,7 @@ fun CodeInputField(
             // Sits directly below the field, so it would otherwise swallow the
             // reset screen's IME Next (`moveFocus(Down)`) on its way to the
             // password field. Still clickable — only skipped by traversal.
-            TextButton(
+            PixelTextButton(
                 onClick = { context.readClipboardText()?.let(onValueChange) },
                 modifier = Modifier.focusProperties { canFocus = false },
             ) {
@@ -177,18 +178,14 @@ private fun CodeCell(
     val borderColor = when {
         isError -> colors.error
         isActive -> colors.primary
-        char != null -> colors.outline
-        else -> colors.outlineVariant
+        char != null -> colors.primary
+        else -> colors.outline
     }
     Box(
         modifier = modifier
             .aspectRatio(0.8f)
-            .clip(RoundedCornerShape(8.dp))
-            .border(
-                width = if (isActive) 2.dp else 1.dp,
-                color = borderColor,
-                shape = RoundedCornerShape(8.dp),
-            )
+            .background(colors.surfaceContainerHighest)
+            .border(width = 2.dp, color = borderColor)
             .testTag("codeCell"),
         contentAlignment = Alignment.Center,
     ) {
@@ -196,8 +193,8 @@ private fun CodeCell(
             text = char?.toString().orEmpty(),
             style = TextStyle(
                 fontSize = 24.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium,
+                fontFamily = ChromeFontFamily,
+                fontWeight = FontWeight.Normal,
                 textAlign = TextAlign.Center,
                 color = if (enabled) colors.onSurface else colors.onSurfaceVariant,
             ),

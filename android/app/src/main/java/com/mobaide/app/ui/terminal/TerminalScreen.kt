@@ -31,12 +31,20 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import com.mobaide.app.ui.theme.pixel
+import com.mobaide.app.ui.theme.PxDarkRule
+import com.mobaide.app.ui.theme.PxDarkSurface
+import com.mobaide.app.ui.theme.PxDarkText
+import com.mobaide.app.ui.theme.chromeCaps
+import com.mobaide.app.ui.common.pixel.PixelFab
+import com.mobaide.app.ui.common.pixel.PixelStatusDot
+import com.mobaide.app.ui.common.pixel.pixelFrame
+import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.SmallFloatingActionButton
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -47,21 +55,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.mobaide.app.ui.theme.StateCrashed
-import com.mobaide.app.ui.theme.StateRunning
-import com.mobaide.app.ui.theme.StateStarting
-import com.mobaide.app.ui.theme.StateStopped
-import com.mobaide.app.ui.theme.StateStopping
 import com.mobaide.app.ui.theme.TerminalBackground
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -157,18 +162,18 @@ fun TerminalScreen(
     }
 
     val stateColor = when (sessionState) {
-        "running" -> StateRunning
-        "starting" -> StateStarting
-        "stopping" -> StateStopping
-        "stopped" -> StateStopped
-        "crashed" -> StateCrashed
-        else -> StateStopped
+        "running" -> MaterialTheme.pixel.statusRunning
+        "starting" -> MaterialTheme.pixel.statusStarting
+        "stopping" -> MaterialTheme.pixel.statusStopping
+        "stopped" -> MaterialTheme.pixel.statusStopped
+        "crashed" -> MaterialTheme.pixel.statusCrashed
+        else -> MaterialTheme.pixel.statusStopped
     }
 
-    Scaffold(
+    PixelScaffold(
         contentWindowInsets = WindowInsets.systemBars,
         snackbarHost = {
-            SnackbarHost(
+            PixelSnackbarHost(
                 snackbarHostState,
                 // Scaffold already insets this slot by systemBars; add only the part
                 // of the keyboard that exceeds them so snackbars float above the IME.
@@ -177,20 +182,18 @@ fun TerminalScreen(
             )
         },
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.Circle,
-                            contentDescription = sessionState,
-                            tint = if (isConnected) stateColor else StateStopped,
-                            modifier = Modifier.size(10.dp),
+                        PixelStatusDot(
+                            color = if (isConnected) stateColor else MaterialTheme.pixel.statusStopped,
+                            modifier = Modifier.semantics { contentDescription = sessionState },
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = headerLabel,
                             style = MaterialTheme.typography.titleMedium.copy(
-                                fontFamily = FontFamily.Monospace,
+                                fontFamily = ChromeFontFamily,
                             ),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -412,11 +415,16 @@ private fun JumpToBottomFab(
         BadgedBox(
             badge = {
                 if (unreadRows > 0) {
-                    Badge { Text(text = if (unreadRows > 999) "999+" else unreadRows.toString()) }
+                    Badge(
+                        containerColor = MaterialTheme.pixel.brand,
+                        contentColor = Color.White,
+                    ) {
+                        Text(text = if (unreadRows > 999) "999+" else unreadRows.toString())
+                    }
                 }
             },
         ) {
-            SmallFloatingActionButton(onClick = onClick) {
+            PixelFab(onClick = onClick, modifier = Modifier.size(40.dp)) {
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = "Jump to bottom",
@@ -429,14 +437,14 @@ private fun JumpToBottomFab(
 @Composable
 private fun ConnectionOverlay(state: ConnectionState) {
     if (state == ConnectionState.Live) return
-    val (label, bg) = when (state) {
-        ConnectionState.Reconnecting -> "Reconnecting\u2026" to Color(0xCC202020)
-        ConnectionState.ReplayingBuffer -> "Replaying buffer\u2026" to Color(0xCC2A4D6E)
+    val label = when (state) {
+        ConnectionState.Reconnecting -> "Reconnecting\u2026"
+        ConnectionState.ReplayingBuffer -> "Replaying buffer\u2026"
         // Rarely on screen: returning to the terminal resumes the stream in the
         // same pass that recomposes this. It exists so the state is honest for
         // the frame in between, and so the input gates read a suspend as "not
         // live" rather than as a dropped connection.
-        ConnectionState.Suspended -> "Paused" to Color(0xCC202020)
+        ConnectionState.Suspended -> "Paused"
         ConnectionState.Live -> return
     }
     Box(
@@ -445,18 +453,18 @@ private fun ConnectionOverlay(state: ConnectionState) {
             .padding(12.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
+        // Floats over the always-dark terminal grid, so it hardcodes the dark
+        // tokens instead of following the app theme.
         Box(
             modifier = Modifier
-                .clip(RoundedCornerShape(50))
-                .background(bg)
+                .background(PxDarkSurface)
+                .pixelFrame(PxDarkRule)
                 .padding(horizontal = 16.dp, vertical = 6.dp),
         ) {
             Text(
-                text = label,
-                color = Color.White,
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                ),
+                text = label.chromeCaps(),
+                color = PxDarkText,
+                style = MaterialTheme.typography.labelMedium,
             )
         }
     }

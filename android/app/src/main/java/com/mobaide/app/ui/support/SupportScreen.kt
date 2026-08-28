@@ -10,15 +10,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
+import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -65,9 +65,9 @@ internal fun SupportContent(
     onEmailSupport: () -> Unit,
     onBack: () -> Unit,
 ) {
-    Scaffold(
+    PixelScaffold(
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = { Text("Help & Support") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -99,7 +99,7 @@ internal fun SupportContent(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            OutlinedButton(
+            PixelButton(
                 onClick = onAskCommunity,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -110,7 +110,8 @@ internal fun SupportContent(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Button(
+            PixelButton(
+                style = PixelButtonStyle.Primary,
                 onClick = onEmailSupport,
                 modifier = Modifier
                     .fillMaxWidth()

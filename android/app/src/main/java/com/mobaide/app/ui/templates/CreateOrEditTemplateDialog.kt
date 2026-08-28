@@ -5,18 +5,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.data.network.dto.TemplateDto
@@ -30,12 +31,13 @@ fun CreateOrEditTemplateDialog(
     var name by remember(target?.template_id) { mutableStateOf(target?.name ?: "") }
     var body by remember(target?.template_id) { mutableStateOf(target?.body ?: "") }
 
-    AlertDialog(
+    PixelAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (target == null) "New template" else "Edit template") },
         text = {
             Column {
                 OutlinedTextField(
+                    colors = PixelTextFieldDefaults.colors(),
                     value = name,
                     onValueChange = { name = it },
                     modifier = Modifier.fillMaxWidth(),
@@ -43,6 +45,7 @@ fun CreateOrEditTemplateDialog(
                     singleLine = true,
                 )
                 OutlinedTextField(
+                    colors = PixelTextFieldDefaults.colors(),
                     value = body,
                     onValueChange = { body = it },
                     modifier = Modifier
@@ -51,7 +54,7 @@ fun CreateOrEditTemplateDialog(
                         .padding(top = 8.dp),
                     placeholder = { Text("Prompt body") },
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = ChromeFontFamily,
                     ),
                     // Saved bodies are replayed into the terminal composer and
                     // sent to the PTY unchanged, so they get the same
@@ -65,13 +68,13 @@ fun CreateOrEditTemplateDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            PixelTextButton(
                 onClick = { onSave(name.trim(), body) },
                 enabled = name.trim().isNotEmpty() && body.isNotEmpty(),
             ) { Text("Save") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            PixelTextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
 }
