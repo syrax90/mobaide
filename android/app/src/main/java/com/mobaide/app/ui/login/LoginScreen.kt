@@ -42,10 +42,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.res.painterResource
+import com.mobaide.app.ui.common.pixel.PixelBrandMark
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -100,12 +98,7 @@ fun LoginScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Image(
-                bitmap = ImageBitmap.imageResource(R.mipmap.ic_launcher),
-                contentDescription = "Mobaide",
-                modifier = Modifier.size(96.dp),
-                filterQuality = FilterQuality.None,
-            )
+            PixelBrandMark()
 
             Spacer(modifier = Modifier.height(8.dp))
 

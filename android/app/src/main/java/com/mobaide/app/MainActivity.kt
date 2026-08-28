@@ -1,6 +1,7 @@
 package com.mobaide.app
 
 import android.Manifest
+import android.app.UiModeManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -12,6 +13,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -126,6 +128,10 @@ class MainActivity : ComponentActivity() {
                 ThemeMode.Light -> false
                 ThemeMode.Dark -> true
             }
+            // Android 12+ paints the cold-start splash from the system-qualified
+            // theme before this process exists; registering the override with
+            // the OS is the only way that starting window can follow it.
+            LaunchedEffect(themeMode) { syncApplicationNightMode(themeMode) }
             // Re-assert bar icon contrast whenever the in-app override diverges
             // from the system theme (enableEdgeToEdge alone follows the system).
             DisposableEffect(darkTheme) {
@@ -179,6 +185,25 @@ class MainActivity : ComponentActivity() {
             // Clear so a config-change / re-create doesn't re-navigate.
             intent.removeExtra(EXTRA_SESSION_ID)
         }
+    }
+
+    /**
+     * Persists the in-app theme as the app's per-package night mode. The
+     * system applies it to this app's resource configuration (so `values-night`
+     * and the splash resources resolve by the saved choice, not the device
+     * setting); `Auto` clears the override. No-op below API 31, where the
+     * theme is composed in-process and no system splash exists.
+     */
+    private fun syncApplicationNightMode(mode: ThemeMode) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val uiModeManager = getSystemService(UiModeManager::class.java) ?: return
+        uiModeManager.setApplicationNightMode(
+            when (mode) {
+                ThemeMode.Auto -> UiModeManager.MODE_NIGHT_AUTO
+                ThemeMode.Light -> UiModeManager.MODE_NIGHT_NO
+                ThemeMode.Dark -> UiModeManager.MODE_NIGHT_YES
+            },
+        )
     }
 
     private fun maybeRequestNotificationPermission() {
