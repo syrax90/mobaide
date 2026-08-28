@@ -11,12 +11,16 @@ struct PixelSegmented<Value: Hashable>: View {
     }
 
     let segments: [Segment]
+    /// Names the control for assistive technologies; the visual label lives in
+    /// a section header or `PixelLabeledField` the representation cannot see.
+    let accessibilityLabel: String
     @Binding var selection: Value
 
     @Environment(\.mobaideColors) private var colors
 
-    init(_ segments: [(Value, String)], selection: Binding<Value>) {
+    init(_ segments: [(Value, String)], selection: Binding<Value>, accessibilityLabel: String) {
         self.segments = segments.map { Segment(value: $0.0, label: $0.1) }
+        self.accessibilityLabel = accessibilityLabel
         _selection = selection
     }
 
@@ -43,7 +47,7 @@ struct PixelSegmented<Value: Hashable>: View {
         }
         .transaction { $0.animation = nil }
         .accessibilityRepresentation {
-            Picker("", selection: $selection) {
+            Picker(accessibilityLabel, selection: $selection) {
                 ForEach(segments) { segment in
                     Text(segment.label).tag(segment.value)
                 }

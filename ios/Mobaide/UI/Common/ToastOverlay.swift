@@ -45,9 +45,12 @@ private struct ToastModifier: ViewModifier {
                         .padding(.horizontal, 24)
                         .padding(.bottom, 16)
                         .accessibilityAddTraits(.updatesFrequently)
+                        // Scoped to the toast: on `content` it would silence
+                        // every animation in the screen underneath.
+                        .transition(.identity)
+                        .transaction { $0.animation = nil }
                 }
             }
-            .transaction { $0.animation = nil }
             .task(id: message?.id) {
                 guard message != nil else { return }
                 try? await Task.sleep(for: .seconds(3))

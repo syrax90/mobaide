@@ -55,7 +55,8 @@ private struct SettingsContent: View {
             Section {
                 PixelSegmented(
                     ThemePreference.allCases.map { ($0, $0.label) },
-                    selection: themeBinding
+                    selection: themeBinding,
+                    accessibilityLabel: "Appearance"
                 )
                 .padding(.vertical, 4)
             } header: {
@@ -67,7 +68,8 @@ private struct SettingsContent: View {
             Section {
                 PixelSegmented(
                     [(TerminalDisplayMode.full, "Full Screen"), (TerminalDisplayMode.static, "Static")],
-                    selection: displayModeBinding
+                    selection: displayModeBinding,
+                    accessibilityLabel: "Terminal display mode"
                 )
                 .padding(.vertical, 4)
                 Stepper(

@@ -58,7 +58,8 @@ struct DeleteAccountSheet: View {
         PixelLabeledField(label: "Deletion timing") {
             PixelSegmented(
                 [(DeletionMode.scheduled, "Schedule (14 days)"), (DeletionMode.immediate, "Immediate")],
-                selection: modeBinding
+                selection: modeBinding,
+                accessibilityLabel: "Deletion timing"
             )
         }
 

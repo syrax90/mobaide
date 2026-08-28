@@ -28,7 +28,11 @@ struct AgentCredentialsSheet: View {
                     CopyableCodeBlock(label: ".env", code: envSnippet, isSensitive: true, singleLine: false)
 
                     PixelLabeledField(label: "Host OS") {
-                        PixelSegmented(AgentHostOS.allCases.map { ($0, $0.label) }, selection: $os)
+                        PixelSegmented(
+                            AgentHostOS.allCases.map { ($0, $0.label) },
+                            selection: $os,
+                            accessibilityLabel: "Host OS"
+                        )
                     }
 
                     CopyableCodeBlock(label: ".env location", code: os.envPath)
