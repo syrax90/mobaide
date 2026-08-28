@@ -352,6 +352,7 @@ internal fun EmptyAgentsState(
                 text = "2. Scan the pairing QR shown after install",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
             PixelButton(
                 onClick = onScanClick,
