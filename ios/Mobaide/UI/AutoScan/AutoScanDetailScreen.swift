@@ -18,6 +18,7 @@ private struct AutoScanDetailContent: View {
     @State private var model: AutoScanDetailModel
     @State private var toast: ToastMessage?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.mobaideColors) private var colors
 
     init(container: AppContainer, projectName: String) {
         _model = State(initialValue: AutoScanDetailModel(projectName: projectName, repository: container.autoScanRepository))
@@ -32,6 +33,7 @@ private struct AutoScanDetailContent: View {
             .padding()
             logPane
         }
+        .pixelScreenBackground()
         .navigationTitle(model.projectName)
         .navigationBarTitleDisplayMode(.inline)
         .toast($toast)
@@ -62,30 +64,27 @@ private struct AutoScanDetailContent: View {
     private var headerCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Circle()
-                    .fill(AutoScanDisplay.statusColor(model.statusText))
-                    .frame(width: 10, height: 10)
+                PixelStatusSquare(tone: AutoScanDisplay.statusTone(model.statusText))
                 Text(model.statusText.capitalized)
                     .font(.headline)
+                    .foregroundStyle(colors.text)
                 if model.cycleNumber > 0 {
                     Text("· cycle #\(model.cycleNumber)")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(colors.textMuted)
                 }
                 Spacer()
             }
             CountdownView(nextScanAt: model.nextScanAt)
-            HStack {
+            HStack(spacing: 12) {
                 Button("Run Now") { Task { await model.runNow() } }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.pixelPrimary)
                 Button("Stop") { Task { await model.stopScan() } }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
+                    .buttonStyle(.pixelDanger)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
+        .pixelCard()
     }
 
     private var phaseTimeline: some View {
@@ -93,24 +92,24 @@ private struct AutoScanDetailContent: View {
             ForEach(model.orderedPhases, id: \.name) { phase in
                 HStack(spacing: 8) {
                     Image(systemName: phaseIcon(phase.state.status))
-                        .foregroundStyle(AutoScanDisplay.phaseColor(phase.state.status))
+                        .foregroundStyle(colors.color(AutoScanDisplay.phaseTone(phase.state.status)))
                     Text(phase.name.capitalized)
                         .font(phase.name == model.activePhase ? .body.bold() : .body)
+                        .foregroundStyle(colors.text)
                     Text(phase.state.status)
-                        .font(.caption)
-                        .foregroundStyle(AutoScanDisplay.phaseColor(phase.state.status))
+                        .chromeText()
+                        .foregroundStyle(colors.color(AutoScanDisplay.phaseTone(phase.state.status)))
                     Spacer()
                 }
             }
             if !model.recentIssues.isEmpty {
-                Text("Recent issues:")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text("Recent issues")
+                    .sectionHeading()
                     .padding(.top, 4)
                 ForEach(Array(model.recentIssues.suffix(5).enumerated()), id: \.offset) { _, issue in
                     Text("\(issue.identifier): \(issue.title) (\(issue.step)/\(issue.status))")
                         .font(.caption)
-                        .foregroundStyle(AutoScanDisplay.issueColor(issue.status))
+                        .foregroundStyle(colors.color(AutoScanDisplay.issueTone(issue.status)))
                         .lineLimit(1)
                 }
             }
@@ -124,9 +123,9 @@ private struct AutoScanDetailContent: View {
                 ForEach(model.logLines) { line in
                     Text(line.text)
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(Color(white: 0.88))
+                        .foregroundStyle(MobaideColors.logForeground)
                         .textSelection(.enabled)
-                        .listRowBackground(Color.black)
+                        .listRowBackground(MobaideColors.logBackground)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 1, leading: 12, bottom: 1, trailing: 12))
                         .id(line.id)
@@ -134,7 +133,10 @@ private struct AutoScanDetailContent: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .background(Color.black)
+            // The log pane stays dark in both themes, like the terminal grid:
+            // the ANSI palette is a matched set with its background.
+            .background(MobaideColors.logBackground)
+            .pixelRing(MobaideColors.logFrame)
             .simultaneousGesture(
                 DragGesture().onChanged { _ in
                     if !model.isPausedAutoscroll { model.setPaused(true) }
@@ -153,12 +155,8 @@ private struct AutoScanDetailContent: View {
                         }
                     } label: {
                         Label("\(model.newLineCount) new", systemImage: "arrow.down")
-                            .font(.caption)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(Capsule().fill(MobaideColors.stateRunning))
-                            .foregroundStyle(.white)
                     }
+                    .buttonStyle(.pixelSmallPrimary)
                     .padding()
                 }
             }
@@ -167,11 +165,11 @@ private struct AutoScanDetailContent: View {
 
     private func phaseIcon(_ status: String) -> String {
         switch status {
-        case "ok": return "checkmark.circle.fill"
+        case "ok": return "checkmark.square.fill"
         case "active": return "arrow.triangle.2.circlepath"
-        case "failed": return "xmark.circle.fill"
-        case "skipped": return "minus.circle"
-        default: return "circle"
+        case "failed": return "xmark.square.fill"
+        case "skipped": return "minus.square"
+        default: return "square"
         }
     }
 }

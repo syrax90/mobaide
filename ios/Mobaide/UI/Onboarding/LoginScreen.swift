@@ -50,92 +50,103 @@ private struct LoginContent: View {
     var body: some View {
         @Bindable var model = model
         ScrollView {
-            VStack(spacing: 16) {
-                Text("Mobaide")
-                    .font(.largeTitle.weight(.semibold))
-                Text("Sign in to your account")
-                    .font(MobaideTypography.bodyLarge)
-                    .foregroundStyle(colors.onSurfaceVariant)
+            VStack(spacing: 20) {
+                PixelWordmark(width: 152)
 
-                TextField("you@example.com", text: $model.email)
-                    .keyboardType(.emailAddress)
-                    .textContentType(.username)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.next)
-                    .focused($focusedField, equals: .email)
-                    .onSubmit { focusedField = .password }
-                    .padding(12)
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(colors.outline, lineWidth: 1))
-
-                SecretTextField(text: $model.password, label: "Password", revealed: $passwordRevealed)
-                    .textContentType(.password)
-                    .submitLabel(.done)
-                    .focused($focusedField, equals: .password)
-                    .onSubmit { Task { await model.loginWithPassword() } }
-
-                if let error = model.error {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundStyle(colors.error)
+                VStack(spacing: 16) {
+                    Text("Sign in to your account")
+                        .font(MobaideTypography.bodyLarge)
+                        .foregroundStyle(colors.textMuted)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                }
 
-                Button("Forgot password?") {
-                    router.navigate(to: .forgotPassword)
-                }
-                .font(.footnote)
-                .disabled(model.isLoading)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                    PixelLabeledField(label: "Email") {
+                        TextField(text: $model.email, prompt: Text(verbatim: "you@example.com").foregroundStyle(colors.gray)) { Text("Email") }
+                            .keyboardType(.emailAddress)
+                            .textContentType(.username)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.next)
+                            .focused($focusedField, equals: .email)
+                            .onSubmit { focusedField = .password }
+                            .pixelField(isFocused: focusedField == .email)
+                    }
 
-                Button {
-                    Task { await model.loginWithPassword() }
-                } label: {
-                    if model.isLoading {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                    } else {
-                        Text("Sign In")
-                            .frame(maxWidth: .infinity)
+                    PixelLabeledField(label: "Password") {
+                        SecretTextField(
+                            text: $model.password,
+                            label: "Password",
+                            revealed: $passwordRevealed,
+                            isFocused: focusedField == .password
+                        )
+                            .textContentType(.password)
+                            .submitLabel(.done)
+                            .focused($focusedField, equals: .password)
+                            .onSubmit { Task { await model.loginWithPassword() } }
+                    }
+
+                    if let error = model.error {
+                        PixelErrorBanner(error)
+                    }
+
+                    Button("Forgot password?") {
+                        router.navigate(to: .forgotPassword)
+                    }
+                    .font(.footnote)
+                    .disabled(model.isLoading)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+
+                    Button {
+                        Task { await model.loginWithPassword() }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text("Sign In")
+                            if model.isLoading {
+                                PixelLoadingBlock(width: 7, height: 13)
+                            }
+                        }
+                    }
+                    .buttonStyle(.pixelPrimaryBlock)
+                    .disabled(model.isLoading)
+
+                    orDivider
+
+                    GoogleSignInButtonView(label: .signIn) {
+                        Task { await model.signInWithGoogle() }
+                    }
+                    .disabled(model.isLoading)
+
+                    SignInWithAppleButton(.signIn) { request in
+                        model.prepareAppleRequest(request)
+                    } onCompletion: { result in
+                        Task { await model.completeApple(result) }
+                    }
+                    .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+                    .providerButtonFrame()
+                    .disabled(model.isLoading)
+
+                    Button("Don't have an account? Create one") {
+                        router.navigate(to: .register)
+                    }
+                    .font(.footnote)
+                    .disabled(model.isLoading)
+                }
+                .pixelPanel()
+
+                HStack(spacing: 22) {
+                    Button("Help & Support") {
+                        router.navigate(to: .support)
+                    }
+                    .disabled(model.isLoading)
+                    if let privacyURL = URL(string: AppConfig.privacyPolicyURL) {
+                        Link("Privacy policy", destination: privacyURL)
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.isLoading)
-
-                orDivider
-
-                GoogleSignInButtonView(label: .signIn) {
-                    Task { await model.signInWithGoogle() }
-                }
-                .disabled(model.isLoading)
-
-                SignInWithAppleButton(.signIn) { request in
-                    model.prepareAppleRequest(request)
-                } onCompletion: { result in
-                    Task { await model.completeApple(result) }
-                }
-                .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-                .providerButtonFrame()
-                .disabled(model.isLoading)
-
-                Button("Don't have an account? Create one") {
-                    router.navigate(to: .register)
-                }
-                .disabled(model.isLoading)
-
-                Button("Help & Support") {
-                    router.navigate(to: .support)
-                }
-                .font(.footnote)
-                .disabled(model.isLoading)
-
-                if let privacyURL = URL(string: AppConfig.privacyPolicyURL) {
-                    Link("Privacy policy", destination: privacyURL)
-                        .font(.footnote)
-                }
+                .chromeText()
+                .foregroundStyle(colors.textMuted)
             }
             .padding(24)
         }
+        .pixelScreenBackground()
         .toast($toast)
         .task {
             for await event in model.navEvents() {
@@ -159,11 +170,11 @@ private struct LoginContent: View {
 
     private var orDivider: some View {
         HStack(spacing: 12) {
-            Rectangle().fill(colors.outlineVariant).frame(height: 1)
+            PixelDivider()
             Text("or")
-                .font(.footnote)
-                .foregroundStyle(colors.onSurfaceVariant)
-            Rectangle().fill(colors.outlineVariant).frame(height: 1)
+                .chromeText()
+                .foregroundStyle(colors.gray)
+            PixelDivider()
         }
     }
 }

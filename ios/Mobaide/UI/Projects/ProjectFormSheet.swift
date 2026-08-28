@@ -39,7 +39,7 @@ private struct ProjectFormContent: View {
     var body: some View {
         @Bindable var model = model
         NavigationStack {
-            Form {
+            List {
                 detailsSection(model)
                 flagsSection(model)
                 if model.showsFilterSection {
@@ -53,13 +53,16 @@ private struct ProjectFormContent: View {
                             Label("Manage Git worktrees", systemImage: "arrow.triangle.branch")
                         }
                     }
+                    .pixelFormSection()
                 }
                 if let submitError = model.submitError {
                     Section {
-                        Text(submitError).foregroundStyle(colors.error)
+                        PixelErrorBanner(submitError)
                     }
+                    .listRowBackground(Color.clear)
                 }
             }
+            .pixelForm()
             .navigationTitle(model.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -91,6 +94,7 @@ private struct ProjectFormContent: View {
                 if model.nameServerError != nil { model.nameServerError = nil }
             }
         }
+        .pixelSheet()
         .presentationDetents([.medium, .large])
     }
 
@@ -104,19 +108,23 @@ private struct ProjectFormContent: View {
                 TextField("Name", text: $model.name)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .pixelField(isInvalid: model.submitAttempted && model.nameError != nil)
             }
             fieldWithError(error: model.submitAttempted ? model.pathError : nil) {
                 TextField("Path", text: $model.path)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .pixelField(isInvalid: model.submitAttempted && model.pathError != nil)
             }
             TextField("Conda env (optional)", text: $model.condaEnv)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .pixelField()
             linearKeyField(model)
         } header: {
-            Text("Project")
+            PixelSectionHeader("Project")
         }
+        .pixelFormSection()
     }
 
     @ViewBuilder
@@ -168,8 +176,9 @@ private struct ProjectFormContent: View {
                 Label("Add flag", systemImage: "plus")
             }
         } header: {
-            Text("Default flags")
+            PixelSectionHeader("Default flags")
         }
+        .pixelFormSection()
     }
 
     @ViewBuilder
@@ -177,14 +186,14 @@ private struct ProjectFormContent: View {
         @Bindable var model = model
         Section {
             if model.metadataLoading {
-                ProgressView()
+                PixelLoadingBlock()
             }
             if let error = model.metadataError {
                 HStack {
-                    Text(error).font(.caption).foregroundStyle(colors.error)
+                    Text(error).font(.caption).foregroundStyle(colors.danger)
                     Spacer()
                     Button("Retry") { Task { await model.refreshMetadata() } }
-                        .font(.caption)
+                        .buttonStyle(.pixelSmall)
                 }
             }
 
@@ -212,15 +221,17 @@ private struct ProjectFormContent: View {
             singleSelect("Removal label", selection: $model.removalLabel, options: model.labelOptions)
         } header: {
             HStack {
-                Text("Auto-scan filter")
+                PixelSectionHeader("Auto-scan filter")
                 Spacer()
                 Button {
                     Task { await model.refreshMetadata() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
+                        .foregroundStyle(colors.accent)
                 }
             }
         }
+        .pixelFormSection()
     }
 
     // MARK: - Helpers
@@ -238,7 +249,7 @@ private struct ProjectFormContent: View {
         VStack(alignment: .leading, spacing: 4) {
             content()
             if let error {
-                Text(error).font(.caption).foregroundStyle(colors.error)
+                Text(error).font(.caption).foregroundStyle(colors.danger)
             }
         }
     }
@@ -246,12 +257,12 @@ private struct ProjectFormContent: View {
     @ViewBuilder
     private func chipGroup(title: String, error: String?, @ViewBuilder chips: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title).sectionHeading()
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) { chips() }
             }
             if let error {
-                Text(error).font(.caption).foregroundStyle(colors.error)
+                Text(error).font(.caption).foregroundStyle(colors.danger)
             }
         }
     }
@@ -289,12 +300,15 @@ private struct FlagRow: View {
     let valueError: String?
     let onRemove: () -> Void
 
+    @Environment(\.mobaideColors) private var colors
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 TextField("Key", text: $flag.key)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .pixelField(isInvalid: keyError != nil)
                 Picker("", selection: $flag.kind) {
                     ForEach(FlagEntry.Kind.allCases) { kind in
                         Text(kind.label).tag(kind)
@@ -302,16 +316,20 @@ private struct FlagRow: View {
                 }
                 .labelsHidden()
                 Button(role: .destructive, action: onRemove) {
-                    Image(systemName: "xmark.circle.fill")
+                    Image(systemName: "xmark.square.fill")
+                        .foregroundStyle(colors.danger)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove flag")
             }
             valueInput
             if let keyError {
-                Text(keyError).font(.caption2).foregroundStyle(.red)
+                Text(keyError).font(.caption2).foregroundStyle(colors.danger)
             }
             if let valueError {
-                Text(valueError).font(.caption2).foregroundStyle(.red)
+                Text(valueError).font(.caption2).foregroundStyle(colors.danger)
             }
         }
     }
@@ -327,10 +345,12 @@ private struct FlagRow: View {
         case .number:
             TextField("Value", text: $flag.textValue)
                 .keyboardType(.numbersAndPunctuation)
+                .pixelField(isInvalid: valueError != nil)
         case .string:
             TextField("Value", text: $flag.textValue)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .pixelField(isInvalid: valueError != nil)
         }
     }
 }
@@ -345,18 +365,11 @@ private struct SelectableChip: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 4) {
-                if let glyph {
-                    Text(glyph)
-                }
-                Text(text)
-            }
-            .font(.caption)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .foregroundStyle(isSelected ? colors.primary : colors.onSurfaceVariant)
-            .background(isSelected ? colors.primary.opacity(0.18) : colors.surfaceVariant, in: Capsule())
+            PixelChip(glyph.map { "\($0) \(text)" } ?? text, .verbatim(checked: isSelected))
+                .padding(.bottom, 2)
         }
         .buttonStyle(.plain)
+        .transaction { $0.animation = nil }
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 }

@@ -42,11 +42,12 @@ struct ShortcutPickerSheet: View {
                     keySection("Function & special", keys: KeyChordKeys.functionKeys + KeyChordKeys.specials)
                 }
             }
-            Divider()
+            PixelDivider()
             footer(chord: chord, encoding: encoding, savedMatch: savedMatch)
         }
         .padding(.horizontal, 16)
         .padding(.top, 16)
+        .pixelSheet()
         // The sheet is its own presentation layer: the terminal screen's toast
         // overlay renders behind it, so failures triggered from here must
         // surface on the sheet itself.
@@ -59,13 +60,18 @@ struct ShortcutPickerSheet: View {
     private var header: some View {
         HStack {
             Text("Keyboard shortcut")
-                .font(.headline)
+                .font(MobaideTypography.dialogTitle)
+                .foregroundStyle(colors.accent)
             Spacer()
             Button {
                 dismiss()
             } label: {
                 Image(systemName: "xmark")
+                    .foregroundStyle(colors.accent)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .accessibilityLabel("Close")
         }
     }
@@ -82,7 +88,7 @@ struct ShortcutPickerSheet: View {
                     } label: {
                         chipLabel(recent.display)
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.pixelSmall)
                     .disabled(!model.canSendTerminalBytes)
                 }
             }
@@ -156,14 +162,15 @@ struct ShortcutPickerSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 if let chord, let encoding {
                     Text(chord.display)
-                        .font(.subheadline.monospaced())
+                        .font(MobaideTypography.chromeBody)
+                        .foregroundStyle(colors.text)
                     Text(ShortcutPickerLogic.encodingCaption(encoding))
                         .font(.caption)
-                        .foregroundStyle(colors.onSurfaceVariant)
+                        .foregroundStyle(colors.textMuted)
                 } else {
                     Text("Pick a key")
                         .font(.caption)
-                        .foregroundStyle(colors.onSurfaceVariant)
+                        .foregroundStyle(colors.textMuted)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -172,7 +179,7 @@ struct ShortcutPickerSheet: View {
         if encoding?.usesCsiU == true {
             Text("CSI-u sequence — may not work in every CLI")
                 .font(.caption)
-                .foregroundStyle(colors.tertiary)
+                .foregroundStyle(colors.warning)
         }
         if let savedMatch {
             // Doubles as the save confirmation and the already-pinned marker:
@@ -181,10 +188,10 @@ struct ShortcutPickerSheet: View {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark")
                     .font(.caption)
-                    .foregroundStyle(colors.onSurfaceVariant)
+                    .foregroundStyle(colors.textMuted)
                 Text("Saved as \"\(savedMatch.label)\"")
                     .font(.caption)
-                    .foregroundStyle(colors.onSurfaceVariant)
+                    .foregroundStyle(colors.textMuted)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Button(savedMatch.name == nil ? "Name" : "Rename") {
@@ -200,9 +207,8 @@ struct ShortcutPickerSheet: View {
             }
         } label: {
             Text("Send")
-                .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.pixelPrimaryBlock)
         .disabled(!ShortcutPickerLogic.sendEnabled(gate: model.canSendTerminalBytes, hasChord: chord != nil))
         .padding(.bottom, 16)
     }
@@ -215,7 +221,7 @@ struct ShortcutPickerSheet: View {
     /// dropped, repeat deletes absorbed).
     private func saveToggle(chord: KeyChord?, savedMatch: SavedShortcutUi?) -> some View {
         let saved = savedMatch != nil
-        return Button {
+        let button = Button {
             if let savedMatch {
                 model.removeShortcut(id: savedMatch.id)
             } else if let chord {
@@ -224,20 +230,23 @@ struct ShortcutPickerSheet: View {
         } label: {
             Label(saved ? "Saved" : "Save", systemImage: saved ? "bookmark.fill" : "bookmark")
         }
-        .buttonStyle(.bordered)
-        .tint(saved ? colors.primary : nil)
         .disabled(chord == nil)
+        return Group {
+            if saved {
+                button.buttonStyle(.pixelSmallPrimary)
+            } else {
+                button.buttonStyle(.pixelSmall)
+            }
+        }
     }
 
     private func sectionHeader(_ label: String) -> some View {
         Text(label)
-            .font(.caption)
-            .foregroundStyle(colors.onSurfaceVariant)
+            .sectionHeading()
     }
 
     private func chipLabel(_ text: String) -> some View {
         Text(text)
-            .font(.footnote.monospaced())
             .lineLimit(1)
     }
 
@@ -255,9 +264,9 @@ struct ShortcutPickerSheet: View {
         }
         .disabled(!enabled)
         if selected {
-            button.buttonStyle(.borderedProminent)
+            button.buttonStyle(.pixelSmallPrimary)
         } else {
-            button.buttonStyle(.bordered)
+            button.buttonStyle(.pixelSmall)
         }
     }
 }
@@ -282,16 +291,16 @@ private struct SavedShortcutChip: View {
                 onSend()
             } label: {
                 Text(shortcut.label)
-                    .font(.footnote.monospaced())
+                    .font(MobaideTypography.chromeBody)
                     .lineLimit(1)
-                    .foregroundStyle(shortcut.risky ? colors.tertiary : colors.onSurfaceVariant)
+                    .foregroundStyle(shortcut.risky ? colors.warning : colors.text)
                     .opacity(enabled ? 1 : 0.38)
             }
             .buttonStyle(.plain)
             Button(action: onRemove) {
                 Image(systemName: "xmark")
                     .font(.caption2)
-                    .foregroundStyle(colors.onSurfaceVariant)
+                    .foregroundStyle(colors.textMuted)
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
@@ -300,10 +309,8 @@ private struct SavedShortcutChip: View {
         }
         .padding(.leading, 10)
         .padding(.vertical, 2)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(colors.outline, lineWidth: 1)
-        )
+        .background(colors.bg2)
+        .pixelRing(colors.rule)
     }
 }
 

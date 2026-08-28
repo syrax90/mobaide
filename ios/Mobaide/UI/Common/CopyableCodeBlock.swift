@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Mirror of Android `CopyableCodeBlock`: labeled monospace value on a
-/// surface-variant card with a trailing copy button.
+/// Mirror of Android `CopyableCodeBlock`: chrome label over a monospace value
+/// on the web `.code-block-value` plate, with a trailing copy button.
 struct CopyableCodeBlock: View {
     let label: String
     let code: String
@@ -14,9 +14,9 @@ struct CopyableCodeBlock: View {
         HStack(alignment: .center, spacing: 4) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
-                    .font(MobaideTypography.labelSmall)
-                    .foregroundStyle(colors.onSurfaceVariant)
+                    .sectionHeading()
                 codeText
+                    .foregroundStyle(colors.text)
             }
             Spacer(minLength: 0)
             Button {
@@ -25,11 +25,14 @@ struct CopyableCodeBlock: View {
             } label: {
                 Image(systemName: "doc.on.doc")
                     .font(.system(size: 16))
+                    .foregroundStyle(colors.accent)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .accessibilityLabel("Copy \(label)")
         }
-        .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 4))
-        .background(colors.surfaceVariant, in: RoundedRectangle(cornerRadius: 12))
+        .pixelCodePlate(insets: EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 0))
     }
 
     @ViewBuilder

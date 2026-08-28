@@ -65,6 +65,7 @@ final class MobaideTerminalView: TerminalView {
         nativeBackgroundColor = UIColor(MobaideColors.terminalBackground)
         nativeForegroundColor = UIColor(MobaideColors.terminalForeground)
         backgroundColor = UIColor(MobaideColors.terminalBackground)
+        caretColor = UIColor(MobaideColors.terminalCursor)
         font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         // Drop SwiftTerm's `TerminalAccessory` (sticky-Ctrl bar) installed by
         // its `setup()`. The property is settable-public (not overridable), and

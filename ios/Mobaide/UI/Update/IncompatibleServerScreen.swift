@@ -11,28 +11,39 @@ import SwiftUI
 struct IncompatibleServerScreen: View {
     let info: AuthState.IncompatibleServer
 
+    @Environment(\.mobaideColors) private var colors
+
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 48))
-                .foregroundStyle(MobaideColors.warningYellow)
-            Text("Update required")
-                .font(MobaideTypography.titleLarge)
-            // Set membership, not a floor: the gate also fires when the app is
-            // newer than the relay, so the copy must not name a direction.
-            Text("This app version can no longer connect to the server. Check for an update to continue.")
-                .font(MobaideTypography.bodyLarge)
-                .multilineTextAlignment(.center)
-            if let storeURL {
-                Link("Update from the App Store", destination: storeURL)
-                    .buttonStyle(.borderedProminent)
+        ScrollView {
+            VStack(spacing: 20) {
+                PixelWordmark(width: 152)
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 44))
+                        .foregroundStyle(colors.warning)
+                    Text("Update required")
+                        .pageTitle()
+                    // Set membership, not a floor: the gate also fires when the app is
+                    // newer than the relay, so the copy must not name a direction.
+                    Text("This app version can no longer connect to the server. Check for an update to continue.")
+                        .font(MobaideTypography.bodyLarge)
+                        .foregroundStyle(colors.text)
+                        .multilineTextAlignment(.center)
+                    if let storeURL {
+                        Link("Update from the App Store", destination: storeURL)
+                            .buttonStyle(.pixelPrimary)
+                    }
+                    if let changesURL = URL(string: AppConfig.whatsChangedURL) {
+                        Link("What changed", destination: changesURL)
+                            .font(.footnote)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .pixelPanel()
             }
-            if let changesURL = URL(string: AppConfig.whatsChangedURL) {
-                Link("What changed", destination: changesURL)
-                    .font(.footnote)
-            }
+            .padding(24)
         }
-        .padding(24)
+        .pixelScreenBackground()
     }
 
     /// Prefer the deep link; fall back to the web listing when it is empty.

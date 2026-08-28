@@ -12,6 +12,7 @@ struct CreateOrEditTemplateSheet: View {
     let target: TemplateDto?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.mobaideColors) private var colors
     @State private var name: String
     @State private var bodyText: String
 
@@ -34,21 +35,28 @@ struct CreateOrEditTemplateSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Name") {
+            List {
+                Section(header: PixelSectionHeader("Name")) {
                     TextField("Name", text: $name)
+                        .pixelField()
                 }
-                Section("Prompt body") {
+                .pixelFormSection()
+                Section(header: PixelSectionHeader("Prompt body")) {
                     // Same verbatim-input rule as the terminal composer: a saved
                     // body is sent to the PTY unchanged, so `ls -la` must not be
                     // stored as `Ls -la`.
                     TextEditor(text: $bodyText)
                         .font(MobaideTypography.code)
+                        .foregroundStyle(colors.text)
+                        .scrollContentBackground(.hidden)
                         .frame(minHeight: 160)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
+                        .pixelField()
                 }
+                .pixelFormSection()
             }
+            .pixelForm()
             .navigationTitle(target == nil ? "New template" : "Edit template")
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(model.isSavingTemplate)
@@ -72,5 +80,6 @@ struct CreateOrEditTemplateSheet: View {
                 }
             }
         }
+        .pixelSheet()
     }
 }

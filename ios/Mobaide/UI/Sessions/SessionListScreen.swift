@@ -33,6 +33,7 @@ private struct SessionListContent: View {
     var body: some View {
         content
             .navigationTitle("Sessions")
+            .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .top, spacing: 0) {
                 if model.showExternalSessionsNotice {
                     ExternalSessionsNotice { model.dismissExternalSessionsNotice() }
@@ -94,21 +95,27 @@ private struct SessionListContent: View {
     private var content: some View {
         if model.sessions.isEmpty, model.activeScans.isEmpty {
             if model.isReconnecting {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                LoadingIndicator()
+                    .pixelScreenBackground()
             } else {
-                ContentUnavailableView("No active sessions", systemImage: "terminal")
+                ScrollView {
+                    PixelEmptyState("No active sessions", systemImage: "terminal")
+                        .padding(16)
+                }
+                .pixelScreenBackground()
             }
         } else {
             List {
                 if !model.activeScans.isEmpty {
-                    Section("Active Auto Scans") {
+                    Section(header: PixelSectionHeader("Active Auto Scans")) {
                         ForEach(model.activeScans, id: \.project_name) { scan in
                             AutoScanCard(
                                 scan: scan,
                                 onTap: { router.navigate(to: .autoScanDetail(projectName: scan.project_name)) },
                                 onStop: { Task { await model.stopScan(scan.project_name) } }
                             )
+                            .pixelCard()
+                            .pixelListRow()
                         }
                     }
                 }
@@ -123,14 +130,16 @@ private struct SessionListContent: View {
                             ) { pendingKill = session }
                         }
                         .buttonStyle(.plain)
+                        .pixelCard()
+                        .pixelListRow()
                     }
                 } header: {
                     if !model.activeScans.isEmpty, !model.sessions.isEmpty {
-                        Text("Sessions")
+                        PixelSectionHeader("Sessions")
                     }
                 }
             }
-            .listStyle(.plain)
+            .pixelList()
         }
     }
 
@@ -142,27 +151,30 @@ private struct SessionListContent: View {
     }
 }
 
+/// Web `.session-card`: status square, title / kind / cwd, attention chip,
+/// and a stop control that is a sibling of the row's tap target.
 private struct SessionCardRow: View {
     let session: SessionResponse
     let kindLabel: String
     let onStop: () -> Void
 
+    @Environment(\.mobaideColors) private var colors
+
     var body: some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(SessionDisplay.stateColor(session.state))
-                .frame(width: 10, height: 10)
+            PixelStatusSquare(tone: SessionDisplay.stateTone(session.state))
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(session.title ?? kindLabel)
-                    .font(.body)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(colors.text)
                 Text(kindLabel)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(colors.textMuted)
                 if let cwd = session.cwd {
                     Text(cwd)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(colors.textMuted)
                         .lineLimit(1)
                         .truncationMode(.head)
                 }
@@ -171,23 +183,20 @@ private struct SessionCardRow: View {
             Spacer()
 
             if let attention = SessionDisplay.attention(session.attention) {
-                Text(attention.text)
-                    .font(.caption2)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(attention.color.opacity(0.25)))
-                    .foregroundStyle(attention.color)
+                PixelChip(attention.text, .status(attention.tone))
             }
 
             if SessionDisplay.canStop(session.state) {
                 Button(action: onStop) {
-                    Image(systemName: "stop.circle")
-                        .foregroundStyle(.red)
+                    Image(systemName: "stop.fill")
+                        .foregroundStyle(colors.danger)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Stop session")
             }
         }
-        .padding(.vertical, 4)
         .contentShape(Rectangle())
     }
 }

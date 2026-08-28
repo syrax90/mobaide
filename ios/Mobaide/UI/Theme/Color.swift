@@ -1,32 +1,27 @@
 import SwiftUI
 
 extension Color {
-    init(hex: UInt32) {
+    init(hex: UInt32, opacity: Double = 1) {
         self.init(
             red: Double((hex >> 16) & 0xFF) / 255.0,
             green: Double((hex >> 8) & 0xFF) / 255.0,
-            blue: Double(hex & 0xFF) / 255.0
+            blue: Double(hex & 0xFF) / 255.0,
+            opacity: opacity
         )
     }
 }
 
-/// Mirror of Android `ui/theme/Color.kt` — every hex value verbatim.
+/// Colours that stay fixed in both themes: the terminal grid and the
+/// auto-scan log pane are always dark on every client, because an ANSI
+/// palette is a matched set with its background (`web/src/terminal/terminalTheme.ts`).
 enum MobaideColors {
-    // Material seed colors.
-    static let purple80 = Color(hex: 0xD0BCFF)
-    static let purpleGrey80 = Color(hex: 0xCCC2DC)
-    static let pink80 = Color(hex: 0xEFB8C8)
-    static let purple40 = Color(hex: 0x6650A4)
-    static let purpleGrey40 = Color(hex: 0x625B71)
-    static let pink40 = Color(hex: 0x7D5260)
+    static let terminalBackground = Color(hex: 0x12141A)
+    static let terminalForeground = Color(hex: 0xE6E8EE)
+    static let terminalCursor = Color(hex: 0x4DA3FF)
 
-    // Terminal base.
-    static let terminalBackground = Color(hex: 0x1E1E1E)
-    static let terminalForeground = Color(hex: 0xD4D4D4)
-
-    // Terminal connection-overlay pills.
-    static let terminalOverlayReconnecting = Color(hex: 0x202020)
-    static let terminalOverlayReplaying = Color(hex: 0x2A4D6E)
+    static let logBackground = Color(hex: 0x1E1E1E)
+    static let logForeground = Color(hex: 0xD4D4D4)
+    static let logFrame = Color(hex: 0x232323)
 
     // Terminal text selection. The highlight is composited *over* the glyphs
     // (it is a subview, while SwiftTerm draws the text into the view's own
@@ -35,7 +30,8 @@ enum MobaideColors {
     static let terminalSelectionHandle = Color(hex: 0x4A9EFF)
     static let terminalSelectionHighlightOpacity = 0.32
 
-    /// The 16 standard ANSI palette entries (indices 0-15).
+    /// The 16 standard ANSI palette entries (indices 0-15). Shared with
+    /// Android and the web client; pinned by `tests/protocol_fixtures/ansi/`.
     static let ansiColors: [Color] = [
         Color(hex: 0x000000), // black
         Color(hex: 0xCD3131), // red
@@ -54,13 +50,4 @@ enum MobaideColors {
         Color(hex: 0x29B8DB), // bright cyan
         Color(hex: 0xFFFFFF), // bright white
     ]
-
-    // Session-state colors.
-    static let stateRunning = Color(hex: 0x4CAF50)
-    static let stateStopped = Color(hex: 0x9E9E9E)
-    static let stateCrashed = Color(hex: 0xF44336)
-    static let stateStarting = Color(hex: 0xFFC107)
-    static let stateStopping = Color(hex: 0xFF9800)
-
-    static let warningYellow = Color(hex: 0xF9A825)
 }

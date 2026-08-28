@@ -67,6 +67,7 @@ struct TemplatesPickerSheet: View {
     @State private var isLoading = true
     @State private var query = ""
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.mobaideColors) private var colors
 
     var body: some View {
         // Bound once per pass, not a computed property: `body` reads it four
@@ -76,15 +77,21 @@ struct TemplatesPickerSheet: View {
         NavigationStack {
             Group {
                 if isLoading {
-                    ProgressView()
+                    LoadingIndicator()
+                        .pixelScreenBackground()
                 } else if templates.isEmpty {
-                    ContentUnavailableView("No templates", systemImage: "doc.text")
+                    ScrollView {
+                        PixelEmptyState("No templates", systemImage: "doc.text")
+                            .padding(16)
+                    }
+                    .pixelScreenBackground()
                 } else {
                     List {
                         section("Recents", grouped.recents)
                         section("Favorites", grouped.favorites)
                         section("All", grouped.others)
                     }
+                    .pixelList()
                     .searchable(
                         text: $query,
                         placement: .navigationBarDrawer(displayMode: .always),
@@ -107,6 +114,7 @@ struct TemplatesPickerSheet: View {
                 }
             }
         }
+        .pixelSheet()
         .task {
             templates = await model.loadTemplates()
             isLoading = false
@@ -116,26 +124,32 @@ struct TemplatesPickerSheet: View {
     @ViewBuilder
     private func section(_ title: String, _ items: [TemplateDto]) -> some View {
         if !items.isEmpty {
-            Section(title) {
+            Section(header: PixelSectionHeader(title)) {
                 ForEach(items, id: \.template_id) { template in
                     Button {
                         model.applyTemplate(template)
                         dismiss()
                     } label: {
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: 3) {
                             HStack {
-                                Text(template.name).font(.body)
+                                Text(template.name)
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(colors.text)
                                 if template.is_favorite {
-                                    Image(systemName: "star.fill").foregroundStyle(.yellow).font(.caption)
+                                    Image(systemName: "star.fill").foregroundStyle(colors.warning).font(.caption)
                                 }
                             }
                             Text(template.body)
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(colors.textMuted)
                                 .lineLimit(2)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .pixelCard()
+                    .pixelListRow()
                 }
             }
         }

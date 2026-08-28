@@ -106,18 +106,24 @@ private struct GitContent: View {
     private var content: some View {
         if model.visibleItems.isEmpty {
             if model.isLoading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                LoadingIndicator()
+                    .pixelScreenBackground()
             } else {
-                ContentUnavailableView("No branches or worktrees", systemImage: "arrow.triangle.branch")
+                ScrollView {
+                    PixelEmptyState("No branches or worktrees", systemImage: "arrow.triangle.branch")
+                        .padding(16)
+                }
+                .pixelScreenBackground()
             }
         } else {
             List(selection: $model.selected) {
                 ForEach(model.visibleItems, id: \.id) { item in
                     row(item)
+                        .pixelCard(selected: editMode.isEditing && model.selected.contains(item.id))
+                        .pixelListRow()
                 }
             }
-            .listStyle(.plain)
+            .pixelList()
         }
     }
 

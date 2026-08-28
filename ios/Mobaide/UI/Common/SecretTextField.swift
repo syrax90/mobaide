@@ -8,6 +8,11 @@ struct SecretTextField: View {
     @Binding var revealed: Bool
     var placeholder: String = ""
     var enabled: Bool = true
+    var isInvalid: Bool = false
+    /// Drives the accent ring. Supplied by the caller from its own
+    /// `@FocusState` — a second focus binding inside the component would
+    /// compete with the caller's `.focused(_:equals:)` for the one focusable.
+    var isFocused: Bool = false
 
     @Environment(\.mobaideColors) private var colors
 
@@ -26,15 +31,12 @@ struct SecretTextField: View {
                 revealed.toggle()
             } label: {
                 Image(systemName: revealed ? "eye.slash" : "eye")
-                    .foregroundStyle(colors.onSurfaceVariant)
+                    .foregroundStyle(colors.textMuted)
             }
+            .buttonStyle(.plain)
             .accessibilityLabel(revealed ? "Hide \(label)" : "Show \(label)")
         }
-        .padding(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(colors.outline, lineWidth: 1)
-        )
+        .pixelField(isInvalid: isInvalid, isFocused: isFocused)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.5)
         .accessibilityIdentifier("secret-field")

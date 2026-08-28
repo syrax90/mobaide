@@ -8,9 +8,16 @@ struct MobaideApp: App {
     @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        // Before the first NavigationStack exists: the appearance proxy only
+        // reaches bars created after it is set.
+        PixelNavigationBarAppearance.install()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
+                .modifier(ThemePreferenceModifier(themeStore: container.themeStore))
                 .environment(container.router)
                 .environment(container.authStateModel)
                 .environment(container.deepLinkCoordinator)

@@ -50,11 +50,9 @@ struct TerminalSelectionToolbar: View {
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(colors.surfaceVariant)
-                    .shadow(radius: 6, y: 2)
-            )
+            .background(colors.surface)
+            .pixelRing(colors.rule)
+            .pixelShadow(MobaideColorScheme.modalShadow)
             .onGeometryChange(for: CGSize.self) { $0.size } action: { measured = $0 }
             .position(x: position.x, y: position.y)
             .accessibilityIdentifier("terminal.selectionToolbar")
@@ -63,16 +61,20 @@ struct TerminalSelectionToolbar: View {
 
     private var divider: some View {
         Rectangle()
-            .fill(colors.onSurfaceVariant.opacity(0.25))
-            .frame(width: 1, height: 20)
+            .fill(colors.surface2)
+            .frame(width: PixelMetrics.ring, height: 20)
     }
 
     private func action(_ title: String, run: @escaping () -> Void) -> some View {
-        Button(title, action: run)
-            .font(.footnote)
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 8)
+        Button(action: run) {
+            Text(title)
+                .chromeText()
+                .foregroundStyle(colors.accent)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// Centres the toolbar just above the selection, flipping below it when

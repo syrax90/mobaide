@@ -29,6 +29,10 @@
 			</array>
 		</dict>
 	</array>
+	<key>UIAppFonts</key>
+	<array>
+		<string>DepartureMono-Regular.otf</string>
+	</array>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>mailto</string>

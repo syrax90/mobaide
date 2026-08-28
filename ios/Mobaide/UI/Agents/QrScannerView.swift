@@ -13,6 +13,8 @@ struct QrScannerView: View {
 
     @State private var status = AVCaptureDevice.authorizationStatus(for: .video)
 
+    @Environment(\.mobaideColors) private var colors
+
     var body: some View {
         NavigationStack {
             content
@@ -53,12 +55,13 @@ struct QrScannerView: View {
         VStack(spacing: 20) {
             Image(systemName: "qrcode.viewfinder")
                 .font(.system(size: 56))
-                .foregroundStyle(.tint)
+                .foregroundStyle(colors.accent)
             Text("Camera access needed")
-                .font(.title3.bold())
+                .font(MobaideTypography.dialogTitle)
+                .foregroundStyle(colors.accent)
             Text("Mobaide uses the camera only to read the pairing QR rendered on your agent host. The code is never uploaded.")
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(colors.textMuted)
             Button("Continue") {
                 AVCaptureDevice.requestAccess(for: .video) { granted in
                     Task { @MainActor in
@@ -66,27 +69,32 @@ struct QrScannerView: View {
                     }
                 }
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.pixelPrimary)
         }
         .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .pixelScreenBackground()
     }
 
     private var denied: some View {
         VStack(spacing: 20) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 48))
-                .foregroundStyle(MobaideColors.warningYellow)
+                .foregroundStyle(colors.warning)
             Text("Camera access is off")
-                .font(.title3.bold())
+                .font(MobaideTypography.dialogTitle)
+                .foregroundStyle(colors.accent)
             Text("Enable camera access for Mobaide in Settings to scan a pairing QR.")
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(colors.textMuted)
             if let url = URL(string: UIApplication.openSettingsURLString) {
                 Link("Open Settings", destination: url)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.pixelPrimary)
             }
         }
         .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .pixelScreenBackground()
     }
 }
 
