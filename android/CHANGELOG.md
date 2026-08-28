@@ -1,5 +1,30 @@
 # Android Changelog
 
+## [3.6.2](https://github.com/syrax90/claude_mobile/compare/android-v3.6.1...android-v3.6.2) (2026-08-28)
+
+
+### Features
+
+* **android:** add Auto/Light/Dark theme picker and pixel window chrome ([0d09ff8](https://github.com/syrax90/claude_mobile/commit/0d09ff8bfeeae25f6ad2c71b0bea4c8de7eaa071))
+* **android:** add modern-pixel theme foundation and component kit ([7df371c](https://github.com/syrax90/claude_mobile/commit/7df371cc29aac25f1439a5820f3a7269e6dba0d6))
+* **android:** adopt the modern-pixel design system from the web app ([2b36f59](https://github.com/syrax90/claude_mobile/commit/2b36f59e6028b1add407b01c76459640f203c1dd))
+* **android:** apply pixel treatment to status dots, chips, cards, banners ([7b07338](https://github.com/syrax90/claude_mobile/commit/7b07338a89a0f8f5ea2b0956a7d8b30d228d77a0))
+* **android:** migrate screens to pixel scaffold, bars, dialogs, buttons ([8fd943c](https://github.com/syrax90/claude_mobile/commit/8fd943c665934e3ab89fb9acca6030a832e4d17e))
+* **android:** pixel mode cards, segments, switches, fields, key bar ([21cfa28](https://github.com/syrax90/claude_mobile/commit/21cfa28b8108a72207fc3a0808761d9575ebbd4a))
+
+
+### Bug Fixes
+
+* **android:** center the "Scan the pairing QR" empty-state label ([fbac152](https://github.com/syrax90/claude_mobile/commit/fbac152e0bf3ad368da1d1d2c024041e53f5f5b0))
+* **android:** center the "Scan the pairing QR" empty-state label ([bcb0a4a](https://github.com/syrax90/claude_mobile/commit/bcb0a4ac900f56433f1b0d849a55dcc5a0f08eb9))
+* **android:** CSS-faithful hard shadows, pixel FABs, radios, 2dp rules ([57e6c99](https://github.com/syrax90/claude_mobile/commit/57e6c9909ffd5426a6a2d4bdec173161c0980d8f))
+* **android:** give PixelBlinkCursor indeterminate progress semantics ([8e6cc57](https://github.com/syrax90/claude_mobile/commit/8e6cc578679ac51fafda71c0115199c4c599af21))
+* **android:** hard-bound the pre-frame theme read with a 500ms timeout ([a4d92b2](https://github.com/syrax90/claude_mobile/commit/a4d92b21603d890d9a17962c76cb5bc5ef30b680))
+* **android:** load saved theme before first frame; document error-container reuse ([30f6d10](https://github.com/syrax90/claude_mobile/commit/30f6d104f39b79295a7793949d684e9b44053298))
+* **android:** pixel icon buttons, login app icon, single dropdown labels ([9e7f4ac](https://github.com/syrax90/claude_mobile/commit/9e7f4aceb5099cd2a13d0622484324d5b31dcaee))
+* **android:** raster brand mark on sign-in; splash follows the saved theme ([b2993bd](https://github.com/syrax90/claude_mobile/commit/b2993bdf8418b9e75bbd4169d10c47a1b81418e3))
+* **android:** resolve saved theme synchronously before the first frame ([5d0d473](https://github.com/syrax90/claude_mobile/commit/5d0d473006eb2200ea5d7e5651b1619f25ba5c76))
+
 ## [3.6.1](https://github.com/syrax90/claude_mobile/compare/android-v3.6.0...android-v3.6.1) (2026-08-27)
 
 
