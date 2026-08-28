@@ -41,6 +41,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.FloatingActionButtonDefaults
+import com.mobaide.app.ui.common.pixel.PixelStatusDot
+import com.mobaide.app.ui.common.pixel.hardShadow
+import com.mobaide.app.ui.common.pixel.pressTravel
 import com.mobaide.app.ui.common.pixel.pixelFrame
 import com.mobaide.app.ui.theme.pixel
 import com.mobaide.app.ui.common.pixel.PixelScaffold
@@ -217,10 +224,17 @@ fun AgentListScreen(
 /** `internal` (vs the screen file's usual `private`) so `AgentListScreenTest` can compose it directly. */
 @Composable
 internal fun ScanQrFab(onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
     ExtendedFloatingActionButton(
         onClick = onClick,
         icon = { Icon(Icons.Default.QrCodeScanner, contentDescription = null) },
         text = { Text("Scan to add") },
+        modifier = Modifier
+            .hardShadow(MaterialTheme.pixel.btnShadow, visible = !pressed)
+            .pressTravel(pressed),
+        elevation = FloatingActionButtonDefaults.elevation(0.dp, 0.dp, 0.dp, 0.dp),
+        interactionSource = source,
     )
 }
 
@@ -623,7 +637,8 @@ private fun AgentCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = !isConnecting) { onClick() },
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(2.dp, MaterialTheme.pixel.surface2),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Row(
             modifier = Modifier
@@ -632,9 +647,7 @@ private fun AgentCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val statusColor = if (agent.online) MaterialTheme.pixel.statusRunning else MaterialTheme.pixel.statusStopped
-            Canvas(modifier = Modifier.size(12.dp)) {
-                drawCircle(color = statusColor)
-            }
+            PixelStatusDot(color = statusColor)
 
             Spacer(modifier = Modifier.width(12.dp))
 

@@ -207,7 +207,7 @@ private fun DeviceCard(
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
-            HorizontalDivider()
+            HorizontalDivider(thickness = 2.dp)
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "Device id",

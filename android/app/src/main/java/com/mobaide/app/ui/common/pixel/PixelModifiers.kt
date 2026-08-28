@@ -6,9 +6,11 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.PointMode
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -30,7 +32,11 @@ fun Modifier.hardShadow(color: Color, offset: Dp = 4.dp, visible: Boolean = true
     drawBehind {
         if (visible) {
             val px = offset.toPx()
-            drawRect(color = color, topLeft = Offset(px, px), size = size)
+            // Like CSS box-shadow, never paint beneath the element itself —
+            // a transparent (ghost) fill must not reveal the shadow.
+            clipRect(0f, 0f, size.width, size.height, ClipOp.Difference) {
+                drawRect(color = color, topLeft = Offset(px, px), size = size)
+            }
         }
     }
 

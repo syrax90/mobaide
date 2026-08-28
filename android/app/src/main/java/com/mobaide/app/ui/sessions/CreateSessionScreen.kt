@@ -498,7 +498,7 @@ private fun ProjectSelectSection(
                 )
             }
             if (state.projects.isNotEmpty()) {
-                HorizontalDivider()
+                HorizontalDivider(thickness = 2.dp)
             }
             DropdownMenuItem(
                 text = {

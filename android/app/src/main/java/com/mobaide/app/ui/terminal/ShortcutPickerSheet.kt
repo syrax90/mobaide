@@ -245,7 +245,7 @@ internal fun ShortcutPickerContent(
                 selectedKey = it
             }
         }
-        HorizontalDivider()
+        HorizontalDivider(thickness = 2.dp)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),

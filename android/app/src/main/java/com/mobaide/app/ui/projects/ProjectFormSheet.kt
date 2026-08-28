@@ -180,7 +180,7 @@ fun ProjectFormSheet(
             )
 
             if (state.showAutoScanFilterSection) {
-                HorizontalDivider()
+                HorizontalDivider(thickness = 2.dp)
                 AutoScanFilterSection(
                     state = state,
                     onToggleTriggerLabel = onToggleTriggerLabel,

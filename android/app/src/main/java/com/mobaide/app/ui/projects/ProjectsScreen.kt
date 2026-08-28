@@ -15,7 +15,7 @@ import androidx.compose.material.icons.filled.Add
 import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import com.mobaide.app.ui.common.pixel.PixelFab
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -101,7 +101,7 @@ fun ProjectsScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = viewModel::openCreateSheet) {
+            PixelFab(onClick = viewModel::openCreateSheet) {
                 Icon(Icons.Default.Add, contentDescription = "New project")
             }
         },

@@ -39,7 +39,7 @@ import com.mobaide.app.data.local.ThemeMode
 import com.mobaide.app.ui.common.pixel.pixelFrame
 import com.mobaide.app.ui.theme.chromeCaps
 import com.mobaide.app.ui.theme.pixel
-import androidx.compose.material3.RadioButton
+import com.mobaide.app.ui.common.pixel.PixelRadio
 import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.Text
 import com.mobaide.app.ui.common.pixel.PixelTopBar
@@ -95,7 +95,7 @@ fun SettingsScreen(
                 headlineContent = { Text("Logged in as") },
                 supportingContent = { Text(uiState.userEmail) },
             )
-            HorizontalDivider()
+            HorizontalDivider(thickness = 2.dp)
 
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -159,7 +159,7 @@ fun SettingsScreen(
                 onModeChange = viewModel::setThemeMode,
             )
 
-            HorizontalDivider()
+            HorizontalDivider(thickness = 2.dp)
 
             TerminalDisplaySection(
                 mode = uiState.terminalDisplayMode,
@@ -168,7 +168,7 @@ fun SettingsScreen(
                 onColumnsChange = viewModel::setTerminalStaticColumns,
             )
 
-            HorizontalDivider()
+            HorizontalDivider(thickness = 2.dp)
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -187,7 +187,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            HorizontalDivider()
+            HorizontalDivider(thickness = 2.dp)
             DangerZoneSection(onDeleteAccount = viewModel::startDeleteAccount)
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -358,7 +358,7 @@ private fun DisplayModeRow(
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RadioButton(selected = selected, onClick = null)
+        PixelRadio(selected = selected, onClick = null)
         Spacer(modifier = Modifier.width(8.dp))
         Text(text = label, style = MaterialTheme.typography.bodyMedium)
     }

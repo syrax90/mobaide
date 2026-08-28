@@ -20,7 +20,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import com.mobaide.app.ui.common.pixel.PixelFab
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -58,7 +58,7 @@ fun ConnectionsScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = onAddConnection) {
+            PixelFab(onClick = onAddConnection) {
                 Icon(Icons.Default.Add, contentDescription = "Add connection")
             }
         },
@@ -91,7 +91,7 @@ fun ConnectionsScreen(
                         onClick = { viewModel.switchProfile(profile.id) },
                         onDelete = { viewModel.removeProfile(profile.id) },
                     )
-                    HorizontalDivider()
+                    HorizontalDivider(thickness = 2.dp)
                 }
             }
         }

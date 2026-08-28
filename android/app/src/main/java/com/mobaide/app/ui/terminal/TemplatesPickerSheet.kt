@@ -200,7 +200,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.sectionItems(
             onToggleFavorite = { onToggleFavorite(template) },
             onLongPress = { onLongPressDelete(template) },
         )
-        HorizontalDivider()
+        HorizontalDivider(thickness = 2.dp)
     }
 }
 

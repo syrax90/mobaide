@@ -155,7 +155,7 @@ internal fun AgentCredentialsContent(
             modifier = Modifier.testTag("cred_token"),
         )
 
-        HorizontalDivider()
+        HorizontalDivider(thickness = 2.dp)
 
         Text(
             text = "Apply on the agent host",

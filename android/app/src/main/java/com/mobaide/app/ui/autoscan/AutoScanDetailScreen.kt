@@ -29,7 +29,9 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FloatingActionButtonDefaults
 import com.mobaide.app.ui.common.pixel.PixelStatusDot
+import com.mobaide.app.ui.common.pixel.hardShadow
 import com.mobaide.app.ui.theme.TerminalBackground
 import com.mobaide.app.ui.theme.TerminalForeground
 import com.mobaide.app.ui.theme.pixel
@@ -288,7 +290,9 @@ private fun LogPane(
                 onClick = onResume,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(16.dp),
+                    .padding(16.dp)
+                    .hardShadow(MaterialTheme.pixel.btnShadow),
+                elevation = FloatingActionButtonDefaults.elevation(0.dp, 0.dp, 0.dp, 0.dp),
             ) {
                 Text("▼ $newLineCount new")
             }
