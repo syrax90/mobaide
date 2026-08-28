@@ -76,6 +76,8 @@ private val LightColorScheme = lightColorScheme(
     inverseOnSurface = PxDarkText,
     error = PxLightDanger,
     onError = Color.White,
+    // Cross-palette reuse: PxDarkDanger is the dark THEME's danger tone but
+    // its value is a light pink (#F2B8B5) — on it, #4A0F0C text is ~9:1.
     errorContainer = PxDarkDanger,
     onErrorContainer = PxDangerFillShadow,
     outline = PxLightGray,

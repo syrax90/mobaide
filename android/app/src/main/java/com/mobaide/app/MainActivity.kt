@@ -101,8 +101,13 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             val themeMode by preferencesStore.themeMode
-                .collectAsStateWithLifecycle(initialValue = ThemeMode.Auto)
-            val darkTheme = when (themeMode) {
+                .collectAsStateWithLifecycle<ThemeMode?>(initialValue = null)
+            // Hold the first frame until the saved preference loads: seeding
+            // with Auto would flash the system theme (and the wrong bar icon
+            // style) on every recreation for users who picked the opposite
+            // mode. The themed windowBackground covers the wait.
+            val mode = themeMode ?: return@setContent
+            val darkTheme = when (mode) {
                 ThemeMode.Auto -> isSystemInDarkTheme()
                 ThemeMode.Light -> false
                 ThemeMode.Dark -> true
