@@ -18,7 +18,12 @@ sheet (`static/style.css`) and is deliberately not part of this system.
 see the Theming bullet in [`docs/web-client.md`](web-client.md)). Its dark theme
 copies this sheet's `:root` values verbatim — **a token change in `site.css`
 must be mirrored there** — and its light theme is a derived variant that exists
-only in the SPA. Two invariants restate per-theme on that side: the brand
+only in the SPA. **A fourth is the iOS app** (`ios/Mobaide/UI/Theme/Theme.swift`,
+see *Theme / design system* in [`docs/ios-client.md`](ios-client.md)): its
+`MobaideColorScheme.dark` / `.light` copy both of the SPA's blocks hex for hex,
+so a token change here or in `theme.css` must be mirrored there too. It ships
+Departure Mono as the upstream OTF (iOS cannot register a woff2) with the same
+OFL, and a byte copy of the wordmark at 1x. Two invariants restate per-theme on that side: the brand
 purples stay fill/border-only **on dark surfaces**, while on the SPA's light
 theme `#6008ac` doubles as the accent *text* colour (8.97:1 on `#f4f4f4`); and
 the light `--danger`/`--ok` are `#8c1d18`/`#116a2e`, because this sheet's

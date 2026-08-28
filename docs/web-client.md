@@ -1479,7 +1479,9 @@ restart, `--rollback` repoints at the previously-live release. Runbook: the
   tokens **verbatim** (`site.css` stays the source of truth — a token
   change there must be mirrored here), the light block is a derived
   variant that exists only in `theme.css`, and token names follow
-  `site.css` (`--bg`, `--surface`, `--accent`, …). Purple + grey stay the
+  `site.css` (`--bg`, `--surface`, `--accent`, …). The iOS app mirrors
+  **both** blocks in `ios/Mobaide/UI/Theme/Theme.swift` (docs/ios-client.md),
+  so a change to either must be carried there as well. Purple + grey stay the
   identity in both themes: `--brand`/`--brand-2` are theme-invariant
   fills, and the accent is `#d0bcff` on dark / `#6008ac` on light (the
   "brand is never text" rule is a dark-surface contrast rationale;
