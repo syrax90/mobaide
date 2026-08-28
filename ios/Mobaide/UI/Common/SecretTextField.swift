@@ -9,10 +9,12 @@ struct SecretTextField: View {
     var placeholder: String = ""
     var enabled: Bool = true
     var isInvalid: Bool = false
+    /// Drives the accent ring. Supplied by the caller from its own
+    /// `@FocusState` — a second focus binding inside the component would
+    /// compete with the caller's `.focused(_:equals:)` for the one focusable.
+    var isFocused: Bool = false
 
     @Environment(\.mobaideColors) private var colors
-    /// Ring-only focus tracking; callers keep their own `.focused(_:equals:)`.
-    @FocusState private var focused: Bool
 
     var body: some View {
         HStack {
@@ -25,7 +27,6 @@ struct SecretTextField: View {
             }
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
-            .focused($focused)
             Button {
                 revealed.toggle()
             } label: {
@@ -35,7 +36,7 @@ struct SecretTextField: View {
             .buttonStyle(.plain)
             .accessibilityLabel(revealed ? "Hide \(label)" : "Show \(label)")
         }
-        .pixelField(isInvalid: isInvalid, isFocused: focused)
+        .pixelField(isInvalid: isInvalid, isFocused: isFocused)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.5)
         .accessibilityIdentifier("secret-field")

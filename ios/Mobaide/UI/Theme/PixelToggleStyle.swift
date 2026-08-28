@@ -20,7 +20,10 @@ struct PixelCheckboxToggleStyle: ToggleStyle {
         .opacity(isEnabled ? 1 : 0.55)
         .transaction { $0.animation = nil }
         .accessibilityRepresentation {
+            // The system style is explicit: the representation would otherwise
+            // inherit the app-wide `.pixelCheckbox` and re-enter this body.
             Toggle(isOn: configuration.$isOn) { configuration.label }
+                .toggleStyle(.switch)
         }
     }
 }

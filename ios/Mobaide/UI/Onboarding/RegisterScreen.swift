@@ -64,7 +64,12 @@ private struct RegisterContent: View {
                     // Both fields carry .newPassword — a .password/.newPassword
                     // mix breaks iOS AutoFill's strong-password suggestion.
                     PixelLabeledField(label: "Password") {
-                        SecretTextField(text: $model.password, label: "Password", revealed: $passwordRevealed)
+                        SecretTextField(
+                            text: $model.password,
+                            label: "Password",
+                            revealed: $passwordRevealed,
+                            isFocused: focusedField == .password
+                        )
                             .textContentType(.newPassword)
                             .submitLabel(.next)
                             .focused($focusedField, equals: .password)
@@ -72,7 +77,12 @@ private struct RegisterContent: View {
                     }
 
                     PixelLabeledField(label: "Confirm password") {
-                        SecretTextField(text: $model.confirmPassword, label: "Confirm password", revealed: $confirmRevealed)
+                        SecretTextField(
+                            text: $model.confirmPassword,
+                            label: "Confirm password",
+                            revealed: $confirmRevealed,
+                            isFocused: focusedField == .confirm
+                        )
                             .textContentType(.newPassword)
                             .submitLabel(.done)
                             .focused($focusedField, equals: .confirm)

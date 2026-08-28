@@ -60,7 +60,12 @@ private struct ResetPasswordContent: View {
                     )
 
                     PixelLabeledField(label: "New password") {
-                        SecretTextField(text: $model.newPassword, label: "New password", revealed: $passwordRevealed)
+                        SecretTextField(
+                            text: $model.newPassword,
+                            label: "New password",
+                            revealed: $passwordRevealed,
+                            isFocused: focusedField == .newPassword
+                        )
                             .textContentType(.newPassword)
                             .submitLabel(.next)
                             .focused($focusedField, equals: .newPassword)
@@ -68,7 +73,12 @@ private struct ResetPasswordContent: View {
                     }
 
                     PixelLabeledField(label: "Confirm password") {
-                        SecretTextField(text: $model.confirmPassword, label: "Confirm password", revealed: $confirmRevealed)
+                        SecretTextField(
+                            text: $model.confirmPassword,
+                            label: "Confirm password",
+                            revealed: $confirmRevealed,
+                            isFocused: focusedField == .confirm
+                        )
                             .textContentType(.newPassword)
                             .submitLabel(.done)
                             .focused($focusedField, equals: .confirm)

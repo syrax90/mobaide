@@ -72,7 +72,12 @@ private struct LoginContent: View {
                     }
 
                     PixelLabeledField(label: "Password") {
-                        SecretTextField(text: $model.password, label: "Password", revealed: $passwordRevealed)
+                        SecretTextField(
+                            text: $model.password,
+                            label: "Password",
+                            revealed: $passwordRevealed,
+                            isFocused: focusedField == .password
+                        )
                             .textContentType(.password)
                             .submitLabel(.done)
                             .focused($focusedField, equals: .password)
