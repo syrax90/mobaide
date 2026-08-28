@@ -15,6 +15,8 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyTerminalDisplayMode = "terminal_display_mode"
     static let keyTerminalStaticColumns = "terminal_static_columns"
     static let keyExternalSessionsNoticeDismissed = "external_sessions_notice_dismissed"
+    /// Same key as the web client's `localStorage` entry.
+    static let keyThemePreference = "mobaide-theme"
 
     static let attentionSeenPrefix = "attention_seen::"
     static let recentCustomPathsPrefix = "recent_custom_paths::"
@@ -103,6 +105,14 @@ struct PreferencesStore: @unchecked Sendable {
 
     func setTerminalStaticColumns(_ columns: Int) {
         defaults.set(TerminalDisplayDefaults.clampColumns(columns), forKey: Self.keyTerminalStaticColumns)
+    }
+
+    func getThemePreference() -> ThemePreference {
+        ThemePreference(storage: defaults.string(forKey: Self.keyThemePreference))
+    }
+
+    func setThemePreference(_ preference: ThemePreference) {
+        defaults.set(preference.rawValue, forKey: Self.keyThemePreference)
     }
 
     /// Absent means "not dismissed": `bool(forKey:)` returns false for a
