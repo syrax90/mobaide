@@ -15,7 +15,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
@@ -49,7 +51,10 @@ fun PixelBlinkCursor(
     )
     Box(
         modifier = modifier
-            .semantics { contentDescription = "Loading" }
+            .semantics {
+                contentDescription = "Loading"
+                progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate
+            }
             .width(height * 0.6f)
             .height(height)
             .graphicsLayer { this.alpha = alpha }
