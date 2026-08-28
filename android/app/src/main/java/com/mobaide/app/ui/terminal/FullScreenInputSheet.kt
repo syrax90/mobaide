@@ -17,6 +17,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.mobaide.app.ui.common.pixel.PixelBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -78,6 +79,7 @@ fun FullScreenInputSheet(
                 }
             }
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = text,
                 onValueChange = onTextChange,
                 modifier = Modifier

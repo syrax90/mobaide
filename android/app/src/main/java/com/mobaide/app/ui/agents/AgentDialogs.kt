@@ -9,6 +9,7 @@ import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Text
 import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
@@ -55,6 +56,7 @@ fun AddAgentDialog(
                 title = { Text("Add Agent") },
                 text = {
                     OutlinedTextField(
+                        colors = PixelTextFieldDefaults.colors(),
                         value = name,
                         onValueChange = { name = it },
                         label = { Text("Agent Name") },

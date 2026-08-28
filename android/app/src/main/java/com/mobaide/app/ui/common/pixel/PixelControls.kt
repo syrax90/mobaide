@@ -197,3 +197,22 @@ private fun PixelControlsPreviewContent() {
         PixelFab(onClick = {}) { PixelStatusDot(Color.White) }
     }
 }
+
+/** Web `.theme-seg`: square segments, selected = surface fill + brand-2 ring. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun pixelSegmentedButtonColors(): androidx.compose.material3.SegmentedButtonColors =
+    androidx.compose.material3.SegmentedButtonDefaults.colors(
+        activeContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+        activeContentColor = MaterialTheme.colorScheme.primary,
+        activeBorderColor = MaterialTheme.pixel.brand2,
+        inactiveContainerColor = Color.Transparent,
+        inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        inactiveBorderColor = MaterialTheme.colorScheme.outline,
+        disabledActiveContainerColor = MaterialTheme.pixel.surface2,
+        disabledActiveContentColor = MaterialTheme.pixel.gray,
+        disabledActiveBorderColor = MaterialTheme.pixel.rule,
+        disabledInactiveContainerColor = Color.Transparent,
+        disabledInactiveContentColor = MaterialTheme.pixel.gray,
+        disabledInactiveBorderColor = MaterialTheme.pixel.rule,
+    )

@@ -35,6 +35,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import com.mobaide.app.ui.common.pixel.PixelBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import com.mobaide.app.ui.common.pixel.PixelTextButton
@@ -97,6 +98,7 @@ fun ProjectFormSheet(
             )
 
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = state.name,
                 onValueChange = {
                     onNameChange(it)
@@ -120,6 +122,7 @@ fun ProjectFormSheet(
             )
 
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = state.path,
                 onValueChange = {
                     onPathChange(it)
@@ -139,6 +142,7 @@ fun ProjectFormSheet(
             )
 
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = state.condaEnv,
                 onValueChange = {
                     onCondaChange(it)
@@ -246,6 +250,7 @@ private fun LinearKeyField(
     }
     Column(modifier = Modifier.fillMaxWidth()) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = value,
             onValueChange = onChange,
             label = { Text("Linear API key (optional)") },
@@ -497,6 +502,7 @@ private fun SingleSelectDropdown(
             onExpandedChange = { if (options.isNotEmpty()) expanded = !expanded },
         ) {
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = value,
                 onValueChange = { /* read-only — selection-only field */ },
                 readOnly = true,

@@ -27,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import com.mobaide.app.ui.common.pixel.PixelScaffold
 import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -125,6 +126,7 @@ fun ResetPasswordScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = uiState.newPassword,
                 onValueChange = viewModel::updateNewPassword,
                 label = { Text("New password") },
@@ -150,6 +152,7 @@ fun ResetPasswordScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = uiState.confirmPassword,
                 onValueChange = viewModel::updateConfirmPassword,
                 label = { Text("Confirm new password") },

@@ -25,6 +25,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.mobaide.app.ui.common.pixel.PixelBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -114,6 +115,7 @@ fun TemplatesPickerSheet(
                 }
             }
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = query,
                 onValueChange = { query = it },
                 modifier = Modifier.fillMaxWidth(),

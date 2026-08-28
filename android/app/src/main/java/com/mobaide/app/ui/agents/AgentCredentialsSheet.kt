@@ -23,6 +23,8 @@ import androidx.compose.material3.MaterialTheme
 import com.mobaide.app.ui.common.pixel.PixelBottomSheet
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.ui.graphics.RectangleShape
+import com.mobaide.app.ui.common.pixel.pixelSegmentedButtonColors
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
@@ -176,7 +178,8 @@ internal fun AgentCredentialsContent(
                 SegmentedButton(
                     selected = selectedOs == os,
                     onClick = { selectedOs = os },
-                    shape = SegmentedButtonDefaults.itemShape(index, AgentHostOs.entries.size),
+                    shape = RectangleShape,
+                    colors = pixelSegmentedButtonColors(),
                     modifier = Modifier.testTag("os_${os.name}"),
                 ) {
                     Text(os.label)

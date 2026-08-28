@@ -20,6 +20,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import com.mobaide.app.ui.theme.pixel
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Surface
@@ -284,6 +285,7 @@ private fun ReAuthPasswordBody(
         Text("Enter your current password to confirm:")
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = state.password,
             onValueChange = onPasswordChange,
             label = { Text("Password") },
@@ -347,6 +349,7 @@ private fun ConfirmEmailBody(
         )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = state.typedEmail,
             onValueChange = onTypedEmailChange,
             label = { Text("Email") },

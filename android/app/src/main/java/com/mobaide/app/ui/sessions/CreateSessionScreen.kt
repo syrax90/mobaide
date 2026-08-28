@@ -38,6 +38,8 @@ import androidx.compose.material.icons.filled.Terminal
 import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import com.mobaide.app.ui.common.pixel.PixelButton
 import com.mobaide.app.ui.common.pixel.PixelButtonStyle
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material3.Card
 import androidx.compose.material3.CardColors
 import androidx.compose.material3.CardDefaults
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
@@ -58,9 +60,13 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import com.mobaide.app.ui.theme.pixel
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.ui.graphics.RectangleShape
+import com.mobaide.app.ui.common.pixel.pixelSegmentedButtonColors
+import com.mobaide.app.ui.common.pixel.pixelSwitchColors
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -470,6 +476,7 @@ private fun ProjectSelectSection(
         onExpandedChange = { dropdownExpanded = !dropdownExpanded },
     ) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = displayValue,
             onValueChange = {},
             readOnly = true,
@@ -595,6 +602,7 @@ internal fun CustomPathPanel(
     onRemoveRecent: (String) -> Unit,
 ) {
     OutlinedTextField(
+        colors = PixelTextFieldDefaults.colors(),
         value = state.customPathDraft,
         onValueChange = onDraftChange,
         label = { Text("Absolute path on the agent") },
@@ -693,8 +701,8 @@ private fun ModePickerSection(
         )
     }
 
-    val selectedColors = CardDefaults.elevatedCardColors(
-        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+    val selectedColors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
     )
     // Transparent container so the ElevatedCard (incl. its dimmed disabled
     // colour) shows through; the disabled variant also fades the text to the
@@ -726,10 +734,15 @@ private fun ModePickerSection(
         }
     }
 
-    ElevatedCard(
+    Card(
         onClick = { onChooseMode(CreateSessionMode.Standard) },
         enabled = claudeEnabled && !submitting,
-        colors = if (selectedMode == CreateSessionMode.Standard) selectedColors else CardDefaults.elevatedCardColors(),
+        colors = if (selectedMode == CreateSessionMode.Standard) selectedColors else CardDefaults.cardColors(),
+        border = BorderStroke(
+            2.dp,
+            if (selectedMode == CreateSessionMode.Standard) MaterialTheme.pixel.brand2
+            else MaterialTheme.pixel.surface2,
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("mode_card_standard"),
@@ -747,10 +760,15 @@ private fun ModePickerSection(
         )
     }
 
-    ElevatedCard(
+    Card(
         onClick = { onChooseMode(CreateSessionMode.Codex) },
         enabled = codexEnabled && !submitting,
-        colors = if (selectedMode == CreateSessionMode.Codex) selectedColors else CardDefaults.elevatedCardColors(),
+        colors = if (selectedMode == CreateSessionMode.Codex) selectedColors else CardDefaults.cardColors(),
+        border = BorderStroke(
+            2.dp,
+            if (selectedMode == CreateSessionMode.Codex) MaterialTheme.pixel.brand2
+            else MaterialTheme.pixel.surface2,
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("mode_card_codex"),
@@ -768,10 +786,15 @@ private fun ModePickerSection(
         )
     }
 
-    ElevatedCard(
+    Card(
         onClick = { onChooseMode(CreateSessionMode.Antigravity) },
         enabled = antigravityEnabled && !submitting,
-        colors = if (selectedMode == CreateSessionMode.Antigravity) selectedColors else CardDefaults.elevatedCardColors(),
+        colors = if (selectedMode == CreateSessionMode.Antigravity) selectedColors else CardDefaults.cardColors(),
+        border = BorderStroke(
+            2.dp,
+            if (selectedMode == CreateSessionMode.Antigravity) MaterialTheme.pixel.brand2
+            else MaterialTheme.pixel.surface2,
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("mode_card_antigravity"),
@@ -789,10 +812,15 @@ private fun ModePickerSection(
         )
     }
 
-    ElevatedCard(
+    Card(
         onClick = { onChooseMode(CreateSessionMode.AutoScan) },
         enabled = autoScanEnabled && !submitting,
-        colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.elevatedCardColors(),
+        colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.cardColors(),
+        border = BorderStroke(
+            2.dp,
+            if (selectedMode == CreateSessionMode.AutoScan) MaterialTheme.pixel.brand2
+            else MaterialTheme.pixel.surface2,
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("mode_card_autoscan"),
@@ -813,10 +841,15 @@ private fun ModePickerSection(
         )
     }
 
-    ElevatedCard(
+    Card(
         onClick = { onChooseMode(CreateSessionMode.CustomShell) },
         enabled = !submitting,
-        colors = if (selectedMode == CreateSessionMode.CustomShell) selectedColors else CardDefaults.elevatedCardColors(),
+        colors = if (selectedMode == CreateSessionMode.CustomShell) selectedColors else CardDefaults.cardColors(),
+        border = BorderStroke(
+            2.dp,
+            if (selectedMode == CreateSessionMode.CustomShell) MaterialTheme.pixel.brand2
+            else MaterialTheme.pixel.surface2,
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("mode_card_terminal"),
@@ -851,9 +884,10 @@ private fun ModePickerSection(
 
     // Always enabled — the 20-type cap is not gated client-side (the cached
     // list can be stale); the editor surfaces the server's 409 inline instead.
-    ElevatedCard(
+    Card(
         onClick = onAddCustomType,
         enabled = !submitting,
+        border = BorderStroke(2.dp, MaterialTheme.pixel.surface2),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("add_custom_type_card"),
@@ -925,8 +959,12 @@ private fun CustomAgentTypeCard(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box(modifier = Modifier.fillMaxWidth()) {
-        ElevatedCard(
-            colors = if (selected) selectedColors else CardDefaults.elevatedCardColors(),
+        Card(
+            colors = if (selected) selectedColors else CardDefaults.cardColors(),
+            border = BorderStroke(
+                2.dp,
+                if (selected) MaterialTheme.pixel.brand2 else MaterialTheme.pixel.surface2,
+            ),
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("custom_type_card_${type.id}")
@@ -1014,6 +1052,7 @@ private fun StandardConfigSection(
 
         if (state.worktree) {
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = state.branchName,
                 onValueChange = viewModel::setBranchName,
                 label = { Text("Branch name (optional)") },
@@ -1057,7 +1096,8 @@ private fun CodexConfigSection(
             SegmentedButton(
                 selected = preset == value,
                 onClick = { viewModel.selectCodexPreset(value) },
-                shape = SegmentedButtonDefaults.itemShape(index = index, count = presets.size),
+                shape = RectangleShape,
+                colors = pixelSegmentedButtonColors(),
                 icon = {},
             ) { Text(label) }
         }
@@ -1116,7 +1156,8 @@ private fun CodexConfigSection(
                     selected = state.codexSandbox == value,
                     onClick = { viewModel.setCodexSandbox(value) },
                     enabled = !fullAuto,
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = sandboxes.size),
+                    shape = RectangleShape,
+                    colors = pixelSegmentedButtonColors(),
                     icon = {},
                 ) { Text(label) }
             }
@@ -1133,7 +1174,8 @@ private fun CodexConfigSection(
                     selected = state.codexApproval == value,
                     onClick = { viewModel.setCodexApproval(value) },
                     enabled = !fullAuto,
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = approvals.size),
+                    shape = RectangleShape,
+                    colors = pixelSegmentedButtonColors(),
                     icon = {},
                 ) { Text(label) }
             }
@@ -1152,6 +1194,7 @@ private fun CodexConfigSection(
 
         if (state.worktree) {
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = state.branchName,
                 onValueChange = viewModel::setBranchName,
                 label = { Text("Branch name (optional)") },
@@ -1195,6 +1238,7 @@ private fun CliModelDropdown(
         onExpandedChange = { expanded = !expanded },
     ) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = selected ?: defaultLabel,
             onValueChange = {},
             readOnly = true,
@@ -1270,6 +1314,7 @@ private fun AntigravityConfigSection(
     )
 
     OutlinedTextField(
+        colors = PixelTextFieldDefaults.colors(),
         value = state.antigravityAddDirsDraft,
         onValueChange = viewModel::setAntigravityAddDirsDraft,
         label = { Text("Additional directories (one per line, optional)") },
@@ -1286,6 +1331,7 @@ private fun AntigravityConfigSection(
 
         if (state.worktree) {
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = state.branchName,
                 onValueChange = viewModel::setBranchName,
                 label = { Text("Branch name (optional)") },
@@ -1380,6 +1426,7 @@ private fun ClaudeOptionControls(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = appendSystemPrompt,
             onValueChange = onAppendSystemPromptChange,
             label = { Text("Append system prompt (optional)") },
@@ -1407,6 +1454,7 @@ private fun ClaudeModelDropdown(
         onExpandedChange = { if (enabled) expanded = !expanded },
     ) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = selected ?: "Default",
             onValueChange = {},
             readOnly = true,
@@ -1454,6 +1502,7 @@ private fun ClaudeEffortDropdown(
         onExpandedChange = { if (enabled) expanded = !expanded },
     ) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = selected.replaceFirstChar { it.uppercase() },
             onValueChange = {},
             readOnly = true,
@@ -1497,6 +1546,7 @@ private fun CodexEffortDropdown(
         onExpandedChange = { expanded = !expanded },
     ) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = state.codexReasoningEffort.replaceFirstChar { it.uppercase() },
             onValueChange = {},
             readOnly = true,
@@ -1530,6 +1580,7 @@ private fun TerminalConfigSection(
 
     if (state.worktree) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = state.branchName,
             onValueChange = viewModel::setBranchName,
             label = { Text("Branch name (optional)") },
@@ -1586,6 +1637,7 @@ private fun AutoScanConfigSection(
     ToggleRow("No memory", state.autoScanNoMemory, viewModel::toggleAutoScanNoMemory)
 
     OutlinedTextField(
+        colors = PixelTextFieldDefaults.colors(),
         value = state.initialPrompt,
         onValueChange = viewModel::setInitialPrompt,
         label = { Text("Initial prompt (optional)") },
@@ -1625,6 +1677,11 @@ private fun ToggleRow(
             else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
             modifier = Modifier.weight(1f),
         )
-        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
+        Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            enabled = enabled,
+            colors = pixelSwitchColors(),
+        )
     }
 }

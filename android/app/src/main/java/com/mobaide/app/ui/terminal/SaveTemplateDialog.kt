@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Text
 import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
@@ -37,6 +38,7 @@ fun SaveTemplateDialog(
         text = {
             Column {
                 OutlinedTextField(
+                    colors = PixelTextFieldDefaults.colors(),
                     value = name,
                     onValueChange = { name = it },
                     modifier = Modifier

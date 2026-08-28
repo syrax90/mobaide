@@ -8,6 +8,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Text
 import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
@@ -36,6 +37,7 @@ fun CreateOrEditTemplateDialog(
         text = {
             Column {
                 OutlinedTextField(
+                    colors = PixelTextFieldDefaults.colors(),
                     value = name,
                     onValueChange = { name = it },
                     modifier = Modifier.fillMaxWidth(),
@@ -43,6 +45,7 @@ fun CreateOrEditTemplateDialog(
                     singleLine = true,
                 )
                 OutlinedTextField(
+                    colors = PixelTextFieldDefaults.colors(),
                     value = body,
                     onValueChange = { body = it },
                     modifier = Modifier

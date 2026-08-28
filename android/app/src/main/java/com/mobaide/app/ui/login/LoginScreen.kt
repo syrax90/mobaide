@@ -26,6 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import com.mobaide.app.ui.common.pixel.PixelScaffold
 import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -112,6 +113,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(32.dp))
 
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = uiState.email,
                 onValueChange = viewModel::updateEmail,
                 label = { Text("Email") },
@@ -127,6 +129,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = uiState.password,
                 onValueChange = viewModel::updatePassword,
                 label = { Text("Password") },

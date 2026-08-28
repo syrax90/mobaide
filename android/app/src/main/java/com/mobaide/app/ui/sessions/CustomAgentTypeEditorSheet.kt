@@ -16,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import com.mobaide.app.ui.common.pixel.PixelBottomSheet
 import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import com.mobaide.app.ui.common.pixel.PixelTextButton
@@ -99,6 +100,7 @@ fun CustomAgentTypeEditorSheet(
             )
 
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = name,
                 onValueChange = { name = it },
                 label = { Text("Name") },
@@ -112,6 +114,7 @@ fun CustomAgentTypeEditorSheet(
             // Keyboard options are hints only — the ViewModel still trims and
             // validates on save, and the server enforces the real limits.
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = command,
                 onValueChange = { command = it },
                 label = { Text("Launch command") },

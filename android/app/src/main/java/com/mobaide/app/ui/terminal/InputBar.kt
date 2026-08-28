@@ -41,8 +41,16 @@ import androidx.compose.material3.DropdownMenuItem
 import com.mobaide.app.ui.common.pixel.PixelButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ripple
+import com.mobaide.app.ui.common.pixel.hardShadow
+import com.mobaide.app.ui.common.pixel.pixelFrame
+import com.mobaide.app.ui.common.pixel.pressTravel
+import com.mobaide.app.ui.theme.pixel
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -54,6 +62,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -330,9 +339,7 @@ fun InputBar(
                                 onSendBytes(key.bytes)
                             },
                             enabled = enabled,
-                            contentPadding = PaddingValues(
-                                horizontal = 10.dp, vertical = 4.dp,
-                            ),
+                            compact = true,
                         ) {
                             val icon = key.icon
                             if (icon != null) {
@@ -361,9 +368,7 @@ fun InputBar(
                             onOpenShortcuts()
                         },
                         enabled = enabled,
-                        contentPadding = PaddingValues(
-                            horizontal = 10.dp, vertical = 4.dp,
-                        ),
+                        compact = true,
                         modifier = Modifier.testTag("custom_shortcut_button"),
                     ) {
                         Icon(
@@ -510,6 +515,7 @@ private fun InputField(
     modifier: Modifier = Modifier,
 ) {
     OutlinedTextField(
+        colors = PixelTextFieldDefaults.colors(),
         value = text,
         onValueChange = { onTextChange(it) },
         modifier = modifier
@@ -629,19 +635,25 @@ private fun SavedShortcutKeyButton(
 ) {
     val haptic = LocalHapticFeedback.current
     var menuExpanded by remember { mutableStateOf(false) }
+    val pressSource = remember { MutableInteractionSource() }
+    val pressed by pressSource.collectIsPressedAsState()
     Box(modifier = modifier) {
         Surface(
-            shape = ButtonDefaults.filledTonalShape,
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.primary,
             modifier = Modifier
                 .testTag("saved_shortcut_button")
-                .semantics { contentDescription = "Saved shortcut ${shortcut.label}" },
+                .semantics { contentDescription = "Saved shortcut ${shortcut.label}" }
+                .hardShadow(MaterialTheme.pixel.btnShadow, visible = enabled && !pressed)
+                .pressTravel(enabled && pressed)
+                .pixelFrame(MaterialTheme.pixel.brand2),
         ) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .combinedClickable(
+                        interactionSource = pressSource,
+                        indication = ripple(),
                         onClick = {
                             if (enabled) {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -653,18 +665,15 @@ private fun SavedShortcutKeyButton(
                             menuExpanded = true
                         },
                     )
-                    .defaultMinSize(
-                        minWidth = ButtonDefaults.MinWidth,
-                        minHeight = ButtonDefaults.MinHeight,
-                    )
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                    .defaultMinSize(minWidth = 32.dp, minHeight = 32.dp)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
             ) {
                 // The existing "risky" marking (CSI-u chords) carries over to
-                // saved buttons as the tertiary label color.
+                // saved buttons as the warning label color.
                 val labelColor = if (shortcut.risky) {
-                    MaterialTheme.colorScheme.tertiary
+                    MaterialTheme.pixel.warning
                 } else {
-                    MaterialTheme.colorScheme.onSecondaryContainer
+                    MaterialTheme.colorScheme.primary
                 }
                 Text(
                     shortcut.label,

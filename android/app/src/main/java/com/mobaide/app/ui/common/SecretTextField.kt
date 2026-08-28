@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,6 +44,7 @@ fun SecretTextField(
     enabled: Boolean = true,
 ) {
     OutlinedTextField(
+        colors = PixelTextFieldDefaults.colors(),
         value = value,
         onValueChange = onValueChange,
         label = { Text(label) },
