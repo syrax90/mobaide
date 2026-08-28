@@ -15,7 +15,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -155,7 +155,7 @@ fun CodeInputField(
             // Sits directly below the field, so it would otherwise swallow the
             // reset screen's IME Next (`moveFocus(Down)`) on its way to the
             // password field. Still clickable — only skipped by traversal.
-            TextButton(
+            PixelTextButton(
                 onClick = { context.readClipboardText()?.let(onValueChange) },
                 modifier = Modifier.focusProperties { canFocus = false },
             ) {

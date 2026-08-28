@@ -5,12 +5,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,7 +50,7 @@ fun AddAgentDialog(
         is AddAgentDialogState.Hidden -> {}
         is AddAgentDialogState.Input -> {
             var name by rememberSaveable { mutableStateOf("") }
-            AlertDialog(
+            PixelAlertDialog(
                 onDismissRequest = onDismiss,
                 title = { Text("Add Agent") },
                 text = {
@@ -63,7 +63,7 @@ fun AddAgentDialog(
                     )
                 },
                 confirmButton = {
-                    TextButton(
+                    PixelTextButton(
                         onClick = { onCreateAgent(name.trim()) },
                         enabled = name.isNotBlank(),
                     ) {
@@ -71,17 +71,17 @@ fun AddAgentDialog(
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    PixelTextButton(onClick = onDismiss) { Text("Cancel") }
                 },
             )
         }
         is AddAgentDialogState.Loading -> {
-            AlertDialog(
+            PixelAlertDialog(
                 onDismissRequest = {},
                 title = { Text("Creating Agent...") },
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        PixelBlinkCursor(height = 24.dp)
                         Spacer(modifier = Modifier.width(16.dp))
                         Text("Please wait")
                     }
@@ -109,7 +109,7 @@ fun ReRegisterDialog(
     when (state) {
         is ReRegisterDialogState.Hidden -> {}
         is ReRegisterDialogState.Confirming -> {
-            AlertDialog(
+            PixelAlertDialog(
                 onDismissRequest = onDismiss,
                 title = { Text("Re-register Agent") },
                 text = {
@@ -119,22 +119,22 @@ fun ReRegisterDialog(
                     )
                 },
                 confirmButton = {
-                    TextButton(onClick = { onConfirm(state.agentId) }) {
+                    PixelTextButton(onClick = { onConfirm(state.agentId) }) {
                         Text("Re-register")
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    PixelTextButton(onClick = onDismiss) { Text("Cancel") }
                 },
             )
         }
         is ReRegisterDialogState.Loading -> {
-            AlertDialog(
+            PixelAlertDialog(
                 onDismissRequest = {},
                 title = { Text("Re-registering...") },
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        PixelBlinkCursor(height = 24.dp)
                         Spacer(modifier = Modifier.width(16.dp))
                         Text("Please wait")
                     }
@@ -159,7 +159,7 @@ fun DeleteAgentDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    PixelAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Delete Agent") },
         text = {
@@ -169,12 +169,12 @@ fun DeleteAgentDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            PixelTextButton(onClick = onConfirm) {
                 Text("Delete", color = MaterialTheme.colorScheme.error)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            PixelTextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
 }

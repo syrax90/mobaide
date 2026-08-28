@@ -24,7 +24,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import com.mobaide.app.ui.common.pixel.PixelBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -56,7 +56,7 @@ internal const val INSTALL_COMMAND_WINDOWS =
 @Composable
 internal fun InstallCommandsSheet(onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
+    PixelBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
     ) {

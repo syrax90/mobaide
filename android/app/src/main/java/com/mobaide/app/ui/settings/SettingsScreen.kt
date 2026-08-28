@@ -17,7 +17,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -25,11 +26,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
+import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -59,9 +59,9 @@ fun SettingsScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    Scaffold(
+    PixelScaffold(
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = { Text("Settings") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -88,7 +88,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Button(
+            PixelButton(
                 onClick = onManageConnections,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -99,7 +99,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Button(
+            PixelButton(
                 onClick = onManageTemplates,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -110,7 +110,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Button(
+            PixelButton(
                 onClick = onManageDevices,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -121,7 +121,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            OutlinedButton(
+            PixelButton(
                 onClick = onOpenSupport,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -132,7 +132,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            OutlinedButton(
+            PixelButton(
                 onClick = { openUrlInCustomTab(context, BuildConfig.PRIVACY_POLICY_URL) },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -156,7 +156,8 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Button(
+            PixelButton(
+                style = PixelButtonStyle.Danger,
                 onClick = {
                     viewModel.logout()
                     onLogout()
@@ -164,9 +165,6 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                ),
             ) {
                 Text("Logout")
             }
@@ -212,13 +210,10 @@ private fun DangerZoneSection(onDeleteAccount: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(12.dp))
-        OutlinedButton(
+        PixelButton(
             onClick = onDeleteAccount,
+            style = PixelButtonStyle.Danger,
             modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = MaterialTheme.colorScheme.error,
-            ),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
         ) {
             Text("Delete account")
         }

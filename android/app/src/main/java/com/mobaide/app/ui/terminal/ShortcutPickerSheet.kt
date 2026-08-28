@@ -22,10 +22,10 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.BookmarkBorder
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -34,14 +34,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.InputChipDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelBottomSheet
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -83,7 +82,7 @@ fun ShortcutPickerSheet(
     onRemoveSavedShortcut: (SavedShortcutUi) -> Unit = {},
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
-    ModalBottomSheet(
+    PixelBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
@@ -112,7 +111,7 @@ fun ShortcutPickerSheet(
                 onRenameSavedShortcut = onRenameSavedShortcut,
                 onRemoveSavedShortcut = onRemoveSavedShortcut,
             )
-            SnackbarHost(
+            PixelSnackbarHost(
                 hostState = snackbarHostState,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -323,7 +322,7 @@ internal fun ShortcutPickerContent(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(
+                PixelTextButton(
                     onClick = { onRenameSavedShortcut(pinned) },
                     modifier = Modifier.testTag("shortcut_rename_button"),
                 ) {
@@ -336,7 +335,8 @@ internal fun ShortcutPickerContent(
                 .fillMaxWidth()
                 .padding(bottom = 16.dp),
         ) {
-            Button(
+            PixelButton(
+                style = PixelButtonStyle.Primary,
                 onClick = { chord?.let(onSendChord) },
                 enabled = enabled && chord != null,
                 modifier = Modifier
@@ -372,11 +372,11 @@ private fun SaveToggleButton(
 ) {
     val modifier = Modifier.testTag("shortcut_save_button")
     if (saved) {
-        FilledTonalButton(onClick = onClick, enabled = enabled, modifier = modifier) {
+        PixelButton(onClick = onClick, enabled = enabled, modifier = modifier) {
             SaveToggleLabel(Icons.Default.Bookmark, "Saved")
         }
     } else {
-        OutlinedButton(onClick = onClick, enabled = enabled, modifier = modifier) {
+        PixelButton(onClick = onClick, enabled = enabled, modifier = modifier) {
             SaveToggleLabel(Icons.Outlined.BookmarkBorder, "Save")
         }
     }

@@ -20,7 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -32,11 +33,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import com.mobaide.app.ui.common.pixel.PixelBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
@@ -77,7 +78,7 @@ fun ProjectFormSheet(
     onOpenGit: (String) -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
+    PixelBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
     ) {
@@ -210,12 +211,13 @@ fun ProjectFormSheet(
             ) {
                 val gitProject = state.editing
                 if (gitProject?.is_git == true) {
-                    TextButton(onClick = { onOpenGit(gitProject.name) }) { Text("Git") }
+                    PixelTextButton(onClick = { onOpenGit(gitProject.name) }) { Text("Git") }
                     Spacer(Modifier.width(8.dp))
                 }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                PixelTextButton(onClick = onDismiss) { Text("Cancel") }
                 Spacer(Modifier.width(8.dp))
-                Button(
+                PixelButton(
+                    style = PixelButtonStyle.Primary,
                     onClick = onSave,
                     enabled = !state.submitting,
                 ) {
@@ -267,7 +269,7 @@ private fun LinearKeyField(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
             ) {
-                TextButton(onClick = onClearRequested, enabled = !clearRequested) {
+                PixelTextButton(onClick = onClearRequested, enabled = !clearRequested) {
                     Text(if (clearRequested) "Will clear" else "Clear key")
                 }
             }
@@ -362,7 +364,7 @@ private fun AutoScanFilterSection(
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.weight(1f),
                     )
-                    TextButton(onClick = onRefresh) { Text("Retry") }
+                    PixelTextButton(onClick = onRefresh) { Text("Retry") }
                 }
             }
         }

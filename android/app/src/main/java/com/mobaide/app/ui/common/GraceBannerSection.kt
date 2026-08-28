@@ -12,14 +12,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -164,14 +164,13 @@ fun GraceBannerSection(
         }
         Spacer(modifier = Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(
+            PixelButton(
                 onClick = viewModel::requestCancel,
                 enabled = !state.cancelling,
             ) {
                 if (state.cancelling) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.height(16.dp),
-                        strokeWidth = 2.dp,
+                    PixelBlinkCursor(
+                        height = 16.dp,
                     )
                 } else {
                     Text("Cancel scheduled deletion")
@@ -181,7 +180,7 @@ fun GraceBannerSection(
     }
 
     if (state.showConfirm) {
-        AlertDialog(
+        PixelAlertDialog(
             onDismissRequest = viewModel::dismissConfirm,
             title = {
                 Text(
@@ -198,12 +197,12 @@ fun GraceBannerSection(
                 )
             },
             confirmButton = {
-                Button(onClick = viewModel::confirmCancel) {
+                PixelButton(onClick = viewModel::confirmCancel, style = PixelButtonStyle.Primary) {
                     Text("Keep account active")
                 }
             },
             dismissButton = {
-                TextButton(onClick = viewModel::dismissConfirm) { Text("Dismiss") }
+                PixelTextButton(onClick = viewModel::dismissConfirm) { Text("Dismiss") }
             },
         )
     }

@@ -5,11 +5,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,7 +30,7 @@ fun CreateOrEditTemplateDialog(
     var name by remember(target?.template_id) { mutableStateOf(target?.name ?: "") }
     var body by remember(target?.template_id) { mutableStateOf(target?.body ?: "") }
 
-    AlertDialog(
+    PixelAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (target == null) "New template" else "Edit template") },
         text = {
@@ -65,13 +65,13 @@ fun CreateOrEditTemplateDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            PixelTextButton(
                 onClick = { onSave(name.trim(), body) },
                 enabled = name.trim().isNotEmpty() && body.isNotEmpty(),
             ) { Text("Save") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            PixelTextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
 }

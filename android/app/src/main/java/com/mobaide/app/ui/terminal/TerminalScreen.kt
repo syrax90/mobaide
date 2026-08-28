@@ -31,12 +31,12 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.SmallFloatingActionButton
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -165,10 +165,10 @@ fun TerminalScreen(
         else -> StateStopped
     }
 
-    Scaffold(
+    PixelScaffold(
         contentWindowInsets = WindowInsets.systemBars,
         snackbarHost = {
-            SnackbarHost(
+            PixelSnackbarHost(
                 snackbarHostState,
                 // Scaffold already insets this slot by systemBars; add only the part
                 // of the keyboard that exceeds them so snackbars float above the IME.
@@ -177,7 +177,7 @@ fun TerminalScreen(
             )
         },
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(

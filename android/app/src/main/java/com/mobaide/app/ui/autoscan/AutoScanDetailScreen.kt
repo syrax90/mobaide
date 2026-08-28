@@ -20,7 +20,8 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -28,13 +29,12 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelScaffold
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -71,10 +71,10 @@ fun AutoScanDetailScreen(
         }
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+    PixelScaffold(
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = { Text(projectName) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -147,11 +147,11 @@ private fun HeaderCard(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Button(onClick = onRunNow) {
+                PixelButton(onClick = onRunNow, style = PixelButtonStyle.Primary) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Text("Run Now", modifier = Modifier.padding(start = 4.dp))
                 }
-                OutlinedButton(onClick = onStop) {
+                PixelButton(onClick = onStop) {
                     Icon(Icons.Default.Stop, contentDescription = null)
                     Text("Stop", modifier = Modifier.padding(start = 4.dp))
                 }

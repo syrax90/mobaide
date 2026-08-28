@@ -26,9 +26,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -46,9 +46,9 @@ fun ConnectionsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    Scaffold(
+    PixelScaffold(
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = { Text("Connections") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {

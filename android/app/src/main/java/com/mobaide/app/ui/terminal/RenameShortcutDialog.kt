@@ -3,11 +3,11 @@ package com.mobaide.app.ui.terminal
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,7 +45,7 @@ fun RenameShortcutDialog(
         }
     }
 
-    AlertDialog(
+    PixelAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Rename shortcut") },
         text = {
@@ -73,10 +73,10 @@ fun RenameShortcutDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onRename(name) }) { Text("Rename") }
+            PixelTextButton(onClick = { onRename(name) }) { Text("Rename") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            PixelTextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
 }

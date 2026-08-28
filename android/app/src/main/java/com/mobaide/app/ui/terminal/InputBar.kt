@@ -38,7 +38,7 @@ import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledTonalButton
+import com.mobaide.app.ui.common.pixel.PixelButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -324,7 +324,7 @@ fun InputBar(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     controlKeys.forEach { key ->
-                        FilledTonalButton(
+                        PixelButton(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 onSendBytes(key.bytes)
@@ -355,7 +355,7 @@ fun InputBar(
                     // last. Not a ControlKey: it opens the shortcut sheet instead
                     // of sending bytes, so it stays out of CONTROL_KEY_ORDER and
                     // the per-kind membership lists.
-                    FilledTonalButton(
+                    PixelButton(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             onOpenShortcuts()

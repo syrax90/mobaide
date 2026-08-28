@@ -17,13 +17,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarOutline
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import com.mobaide.app.ui.common.pixel.PixelBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -89,7 +89,7 @@ fun TemplatesPickerSheet(
     var pendingDelete by remember { mutableStateOf<TemplateDto?>(null) }
     val grouped = remember(templates, query) { groupTemplates(templates, query) }
 
-    ModalBottomSheet(
+    PixelBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
@@ -127,7 +127,7 @@ fun TemplatesPickerSheet(
                         .padding(vertical = 24.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator()
+                    PixelBlinkCursor()
                 }
             } else if (templates.isEmpty()) {
                 Text(

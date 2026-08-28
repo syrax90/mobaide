@@ -4,11 +4,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -31,7 +31,7 @@ fun SaveTemplateDialog(
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
-    AlertDialog(
+    PixelAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Save as template") },
         text = {
@@ -64,13 +64,13 @@ fun SaveTemplateDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            PixelTextButton(
                 onClick = { onSave(name) },
                 enabled = name.trim().isNotEmpty() && bodyPreview.isNotEmpty(),
             ) { Text("Save") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            PixelTextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
 }

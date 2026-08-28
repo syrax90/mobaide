@@ -12,23 +12,23 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTextButton
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -86,9 +86,9 @@ fun ProjectsScreen(
         }
     }
 
-    Scaffold(
+    PixelScaffold(
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = { Text("Projects") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -105,7 +105,7 @@ fun ProjectsScreen(
                 Icon(Icons.Default.Add, contentDescription = "New project")
             }
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
     ) { padding ->
         Box(
             modifier = Modifier
@@ -113,10 +113,9 @@ fun ProjectsScreen(
                 .padding(padding),
         ) {
             if (state.isLoading && state.projects.isEmpty()) {
-                CircularProgressIndicator(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .align(Alignment.Center),
+                PixelBlinkCursor(
+                    modifier = Modifier.align(Alignment.Center),
+                    height = 24.dp,
                 )
             } else if (state.projects.isEmpty()) {
                 Text(
@@ -168,7 +167,7 @@ fun ProjectsScreen(
 
     val pending = state.pendingDelete
     if (pending != null) {
-        AlertDialog(
+        PixelAlertDialog(
             onDismissRequest = viewModel::dismissBusyDelete,
             title = { Text("Project is in use") },
             text = {
@@ -178,10 +177,10 @@ fun ProjectsScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = viewModel::confirmBusyDelete) { Text("Continue") }
+                PixelTextButton(onClick = viewModel::confirmBusyDelete) { Text("Continue") }
             },
             dismissButton = {
-                TextButton(onClick = viewModel::dismissBusyDelete) { Text("Cancel") }
+                PixelTextButton(onClick = viewModel::dismissBusyDelete) { Text("Cancel") }
             },
         )
     }

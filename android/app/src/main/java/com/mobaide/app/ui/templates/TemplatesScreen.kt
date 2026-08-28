@@ -27,11 +27,11 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelScaffold
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -65,9 +65,9 @@ fun TemplatesScreen(
 
     val sections = remember(uiState.templates) { groupForManagement(uiState.templates) }
 
-    Scaffold(
+    PixelScaffold(
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = { Text("Prompt templates") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -84,7 +84,7 @@ fun TemplatesScreen(
                 Icon(Icons.Default.Add, contentDescription = "New template")
             }
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
     ) { padding ->
         PullToRefreshBox(
             isRefreshing = uiState.isLoading,

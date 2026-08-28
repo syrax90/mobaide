@@ -27,11 +27,11 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelScaffold
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -88,9 +88,9 @@ fun SessionListScreen(
         }
     }
 
-    Scaffold(
+    PixelScaffold(
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = { Text("Sessions") },
                 navigationIcon = {
                     if (onBack != null) {
@@ -117,7 +117,7 @@ fun SessionListScreen(
                 Icon(Icons.Default.Add, contentDescription = "New Session")
             }
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(
             modifier = Modifier

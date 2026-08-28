@@ -20,7 +20,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import com.mobaide.app.ui.common.pixel.PixelButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -68,7 +68,7 @@ fun FlagsEditor(
                 onRemove = { onRemove(index) },
             )
         }
-        OutlinedButton(
+        PixelButton(
             onClick = onAdd,
             modifier = Modifier.fillMaxWidth(),
         ) {

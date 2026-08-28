@@ -9,15 +9,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelScaffold
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -51,8 +53,8 @@ fun ForgotPasswordScreen(
         viewModel.errorEvents.collect { snackbarHostState.showSnackbar(it) }
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+    PixelScaffold(
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -98,16 +100,16 @@ fun ForgotPasswordScreen(
                 uiState.cooldownSeconds > 0 -> "Send reset code (${uiState.cooldownSeconds}s)"
                 else -> "Send reset code"
             }
-            Button(
+            PixelButton(
+                style = PixelButtonStyle.Primary,
                 onClick = viewModel::submit,
                 enabled = !uiState.isSending && uiState.cooldownSeconds == 0,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (uiState.isSending) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.height(20.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        strokeWidth = 2.dp,
+                    PixelBlinkCursor(
+                        height = 20.dp,
+                        color = LocalContentColor.current,
                     )
                 } else {
                     Text(buttonLabel)
@@ -116,7 +118,7 @@ fun ForgotPasswordScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            TextButton(onClick = onBack) {
+            PixelTextButton(onClick = onBack) {
                 Text("Back to sign in")
             }
         }

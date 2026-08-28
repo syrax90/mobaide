@@ -9,15 +9,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import com.mobaide.app.ui.common.pixel.PixelBottomSheet
 import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -77,7 +78,7 @@ fun CustomAgentTypeEditorSheet(
         },
     )
 
-    ModalBottomSheet(
+    PixelBottomSheet(
         onDismissRequest = { if (!savingState.value) onDismiss() },
         sheetState = sheetState,
         properties = ModalBottomSheetProperties(shouldDismissOnBackPress = !saving),
@@ -140,7 +141,8 @@ fun CustomAgentTypeEditorSheet(
                 )
             }
 
-            Button(
+            PixelButton(
+                style = PixelButtonStyle.Primary,
                 onClick = { onSave(name.trim(), command.trim()) },
                 enabled = !saving && name.isNotBlank() && command.isNotBlank(),
                 modifier = Modifier
@@ -150,7 +152,7 @@ fun CustomAgentTypeEditorSheet(
                 Text(if (saving) "Saving…" else "Save")
             }
 
-            TextButton(
+            PixelTextButton(
                 onClick = onDismiss,
                 enabled = !saving,
                 modifier = Modifier.fillMaxWidth(),

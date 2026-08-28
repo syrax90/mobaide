@@ -35,11 +35,12 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.CardColors
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
@@ -56,16 +57,16 @@ import androidx.compose.material3.ListItemColors
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
+import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTextButton
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -157,9 +158,9 @@ fun CreateSessionScreen(
         if (state.step == CreateSessionStep.ProjectSelect) onBack() else viewModel.goBack()
     }
 
-    Scaffold(
+    PixelScaffold(
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = {
                     Text(
                         when (state.step) {
@@ -188,7 +189,7 @@ fun CreateSessionScreen(
                 },
             )
         },
-        snackbarHost = { SnackbarHost(snackbar) },
+        snackbarHost = { PixelSnackbarHost(snackbar) },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -349,7 +350,7 @@ private fun DeleteCustomAgentTypeDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    PixelAlertDialog(
         // Ignore back-press / outside-tap while the delete is in flight,
         // matching the disabled Cancel button.
         onDismissRequest = { if (!deleting) onDismiss() },
@@ -361,7 +362,7 @@ private fun DeleteCustomAgentTypeDialog(
             )
         },
         confirmButton = {
-            TextButton(
+            PixelTextButton(
                 onClick = onConfirm,
                 enabled = !deleting,
                 modifier = Modifier.testTag("delete_custom_type_confirm"),
@@ -373,7 +374,7 @@ private fun DeleteCustomAgentTypeDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !deleting) { Text("Cancel") }
+            PixelTextButton(onClick = onDismiss, enabled = !deleting) { Text("Cancel") }
         },
     )
 }
@@ -395,7 +396,7 @@ private fun CodexLoginDialog(
     onSubmit: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    PixelAlertDialog(
         // Ignore back-press / outside-tap while a login is in flight, matching
         // the disabled Cancel button — otherwise dismissing mid-login leaves the
         // coroutine running and it would still retry the session create on success.
@@ -427,12 +428,16 @@ private fun CodexLoginDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onSubmit, enabled = apiKey.isNotBlank() && !submitting) {
+            PixelButton(
+                onClick = onSubmit,
+                style = PixelButtonStyle.Primary,
+                enabled = apiKey.isNotBlank() && !submitting,
+            ) {
                 Text(if (submitting) "Signing in…" else "Sign in")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !submitting) {
+            PixelTextButton(onClick = onDismiss, enabled = !submitting) {
                 Text("Cancel")
             }
         },
@@ -569,7 +574,8 @@ private fun ProjectSelectSection(
             state.customPathDraft.isNotBlank() && state.customPathError == null
         ProjectSelection.None -> false
     }
-    Button(
+    PixelButton(
+        style = PixelButtonStyle.Primary,
         onClick = onContinue,
         enabled = canContinue,
         modifier = Modifier.fillMaxWidth(),
@@ -876,9 +882,8 @@ private fun ModePickerSection(
             horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(20.dp),
-                strokeWidth = 2.dp,
+            PixelBlinkCursor(
+                height = 20.dp,
             )
             Text(
                 text = "Creating session…",
@@ -1022,7 +1027,8 @@ private fun StandardConfigSection(
         }
     }
 
-    Button(
+    PixelButton(
+        style = PixelButtonStyle.Primary,
         onClick = viewModel::submit,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
@@ -1086,7 +1092,7 @@ private fun CodexConfigSection(
     )
 
     var advancedExpanded by remember { mutableStateOf(false) }
-    TextButton(
+    PixelTextButton(
         onClick = { advancedExpanded = !advancedExpanded },
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -1159,7 +1165,8 @@ private fun CodexConfigSection(
         }
     }
 
-    Button(
+    PixelButton(
+        style = PixelButtonStyle.Primary,
         onClick = viewModel::submitCodex,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
@@ -1292,7 +1299,8 @@ private fun AntigravityConfigSection(
         }
     }
 
-    Button(
+    PixelButton(
+        style = PixelButtonStyle.Primary,
         onClick = viewModel::submitAntigravity,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
@@ -1352,7 +1360,7 @@ private fun ClaudeOptionControls(
     }
 
     var advancedExpanded by remember { mutableStateOf(false) }
-    TextButton(
+    PixelTextButton(
         onClick = { advancedExpanded = !advancedExpanded },
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -1534,7 +1542,8 @@ private fun TerminalConfigSection(
         )
     }
 
-    Button(
+    PixelButton(
+        style = PixelButtonStyle.Primary,
         onClick = viewModel::submitFromTerminalConfig,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
@@ -1589,7 +1598,8 @@ private fun AutoScanConfigSection(
         ),
     )
 
-    Button(
+    PixelButton(
+        style = PixelButtonStyle.Primary,
         onClick = viewModel::submitAutoScan,
         enabled = state.selectedProjectName != null && !state.autoScanStarting,
         modifier = Modifier.fillMaxWidth(),

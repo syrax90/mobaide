@@ -15,22 +15,22 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelScaffold
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTextButton
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -60,9 +60,9 @@ fun DevicesScreen(
         }
     }
 
-    Scaffold(
+    PixelScaffold(
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = { Text("My devices") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -79,7 +79,7 @@ fun DevicesScreen(
                 },
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
     ) { padding ->
         DevicesContent(
             padding = padding,
@@ -93,7 +93,7 @@ fun DevicesScreen(
 
     uiState.revokeTarget?.let { target ->
         val isCurrent = target.device_id == uiState.currentDeviceId
-        AlertDialog(
+        PixelAlertDialog(
             onDismissRequest = viewModel::dismissRevokeConfirm,
             title = { Text("Revoke device?") },
             text = {
@@ -110,12 +110,12 @@ fun DevicesScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { viewModel.confirmRevoke(target) }) {
+                PixelTextButton(onClick = { viewModel.confirmRevoke(target) }) {
                     Text("Revoke")
                 }
             },
             dismissButton = {
-                TextButton(onClick = viewModel::dismissRevokeConfirm) {
+                PixelTextButton(onClick = viewModel::dismissRevokeConfirm) {
                     Text("Cancel")
                 }
             },
@@ -141,7 +141,7 @@ private fun DevicesContent(
         when {
             isLoading && devices.isEmpty() -> {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    CircularProgressIndicator(
+                    PixelBlinkCursor(
                         modifier = Modifier.align(Alignment.Center),
                     )
                 }
@@ -202,7 +202,7 @@ private fun DeviceCard(
                         )
                     }
                 }
-                OutlinedButton(onClick = onRevokeClick) {
+                PixelButton(onClick = onRevokeClick) {
                     Text("Revoke")
                 }
             }

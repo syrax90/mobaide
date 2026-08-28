@@ -13,6 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -29,6 +30,7 @@ import com.mobaide.app.ui.theme.MobaideTheme
 fun PixelBlinkCursor(
     modifier: Modifier = Modifier,
     height: Dp = 18.dp,
+    color: Color = MaterialTheme.colorScheme.primary,
 ) {
     val transition = rememberInfiniteTransition(label = "px-blink")
     val alpha by transition.animateFloat(
@@ -45,7 +47,6 @@ fun PixelBlinkCursor(
         ),
         label = "px-blink-alpha",
     )
-    val color = MaterialTheme.colorScheme.primary
     Box(
         modifier = modifier
             .semantics { contentDescription = "Loading" }

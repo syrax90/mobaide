@@ -20,13 +20,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import com.mobaide.app.ui.common.pixel.PixelBottomSheet
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -93,7 +93,7 @@ fun AgentCredentialsSheet(
         skipPartiallyExpanded = true,
         confirmValueChange = { it != SheetValue.Hidden },
     )
-    ModalBottomSheet(
+    PixelBottomSheet(
         onDismissRequest = {},
         sheetState = sheetState,
         modifier = modifier,
@@ -210,7 +210,7 @@ internal fun AgentCredentialsContent(
             )
         }
 
-        TextButton(
+        PixelTextButton(
             onClick = onDone,
             modifier = Modifier
                 .align(Alignment.End)

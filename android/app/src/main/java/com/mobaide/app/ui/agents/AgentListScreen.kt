@@ -26,12 +26,13 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,13 +41,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelScaffold
+import com.mobaide.app.ui.common.pixel.PixelTextButton
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -102,9 +102,9 @@ fun AgentListScreen(
         }
     }
 
-    Scaffold(
+    PixelScaffold(
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = { Text("My Agents") },
                 actions = {
                     AgentListOverflowMenu(
@@ -121,7 +121,7 @@ fun AgentListScreen(
         floatingActionButton = {
             ScanQrFab(onClick = viewModel::onScanQrClicked)
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -172,7 +172,7 @@ fun AgentListScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
-                CircularProgressIndicator()
+                PixelBlinkCursor()
             }
         }
     }
@@ -326,7 +326,8 @@ internal fun EmptyAgentsState(
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(
+            PixelButton(
+                style = PixelButtonStyle.Primary,
                 onClick = onShowInstallClick,
                 contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
             ) {
@@ -343,7 +344,7 @@ internal fun EmptyAgentsState(
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            OutlinedButton(
+            PixelButton(
                 onClick = onScanClick,
                 contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
             ) {
@@ -355,7 +356,7 @@ internal fun EmptyAgentsState(
                 Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
                 Text("Scan QR code")
             }
-            TextButton(onClick = onAddManuallyClick) {
+            PixelTextButton(onClick = onAddManuallyClick) {
                 Text("Add manually instead")
             }
         }
@@ -376,7 +377,7 @@ internal fun DeviceCodePairingDialogs(
 ) {
     when (state) {
         DeviceCodePairingState.Idle -> Unit
-        DeviceCodePairingState.Minting -> AlertDialog(
+        DeviceCodePairingState.Minting -> PixelAlertDialog(
             onDismissRequest = {},
             title = { Text("Getting a code…") },
             text = {
@@ -384,12 +385,12 @@ internal fun DeviceCodePairingDialogs(
                     modifier = Modifier.fillMaxWidth(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator()
+                    PixelBlinkCursor()
                 }
             },
             confirmButton = {},
         )
-        is DeviceCodePairingState.WaitingForHost -> AlertDialog(
+        is DeviceCodePairingState.WaitingForHost -> PixelAlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Add an agent") },
             text = {
@@ -415,7 +416,7 @@ internal fun DeviceCodePairingDialogs(
                         modifier = Modifier.fillMaxWidth(),
                         contentAlignment = Alignment.Center,
                     ) {
-                        CircularProgressIndicator()
+                        PixelBlinkCursor()
                     }
                     Spacer(modifier = Modifier.size(8.dp))
                     Text(
@@ -427,10 +428,10 @@ internal fun DeviceCodePairingDialogs(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                PixelTextButton(onClick = onDismiss) { Text("Cancel") }
             },
         )
-        is DeviceCodePairingState.Confirming -> AlertDialog(
+        is DeviceCodePairingState.Confirming -> PixelAlertDialog(
             onDismissRequest = onDismiss,
             title = {
                 Text(
@@ -479,16 +480,16 @@ internal fun DeviceCodePairingDialogs(
                 }
             },
             confirmButton = {
-                TextButton(
+                PixelTextButton(
                     onClick = onConfirm,
                     enabled = state.blockedReason == null,
                 ) { Text("Pair this machine") }
             },
             dismissButton = {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                PixelTextButton(onClick = onDismiss) { Text("Cancel") }
             },
         )
-        is DeviceCodePairingState.Claiming -> AlertDialog(
+        is DeviceCodePairingState.Claiming -> PixelAlertDialog(
             onDismissRequest = {},
             title = { Text("Pairing…") },
             text = {
@@ -496,17 +497,17 @@ internal fun DeviceCodePairingDialogs(
                     modifier = Modifier.fillMaxWidth(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator()
+                    PixelBlinkCursor()
                 }
             },
             confirmButton = {},
         )
-        is DeviceCodePairingState.Error -> AlertDialog(
+        is DeviceCodePairingState.Error -> PixelAlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Pairing failed") },
             text = { Text(state.message) },
             confirmButton = {
-                OutlinedButton(onClick = onDismiss) { Text("Close") }
+                PixelButton(onClick = onDismiss) { Text("Close") }
             },
         )
     }
@@ -520,7 +521,7 @@ private fun QrPairingDialogs(
 ) {
     when (state) {
         QrPairingState.Idle -> Unit
-        is QrPairingState.Confirming -> AlertDialog(
+        is QrPairingState.Confirming -> PixelAlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Pair this agent?") },
             text = {
@@ -531,13 +532,13 @@ private fun QrPairingDialogs(
                 )
             },
             confirmButton = {
-                TextButton(onClick = onConfirm) { Text("Pair") }
+                PixelTextButton(onClick = onConfirm) { Text("Pair") }
             },
             dismissButton = {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                PixelTextButton(onClick = onDismiss) { Text("Cancel") }
             },
         )
-        is QrPairingState.Claiming -> AlertDialog(
+        is QrPairingState.Claiming -> PixelAlertDialog(
             onDismissRequest = {},
             title = { Text("Pairing…") },
             text = {
@@ -545,12 +546,12 @@ private fun QrPairingDialogs(
                     modifier = Modifier.fillMaxWidth(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator()
+                    PixelBlinkCursor()
                 }
             },
             confirmButton = {},
         )
-        is QrPairingState.WaitingForOnline -> AlertDialog(
+        is QrPairingState.WaitingForOnline -> PixelAlertDialog(
             // The watcher coroutine owns the timeout — letting the user
             // dismiss only abandons the wait, it does not cancel the
             // server-side claim (which has already succeeded). The dismiss
@@ -569,7 +570,7 @@ private fun QrPairingDialogs(
                         modifier = Modifier.fillMaxWidth(),
                         contentAlignment = Alignment.Center,
                     ) {
-                        CircularProgressIndicator()
+                        PixelBlinkCursor()
                     }
                     Spacer(modifier = Modifier.size(12.dp))
                     Text(
@@ -582,10 +583,10 @@ private fun QrPairingDialogs(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = onDismiss) { Text("Stop waiting") }
+                PixelTextButton(onClick = onDismiss) { Text("Stop waiting") }
             },
         )
-        is QrPairingState.Success -> AlertDialog(
+        is QrPairingState.Success -> PixelAlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Paired") },
             text = {
@@ -595,15 +596,15 @@ private fun QrPairingDialogs(
                 )
             },
             confirmButton = {
-                TextButton(onClick = onDismiss) { Text("OK") }
+                PixelTextButton(onClick = onDismiss) { Text("OK") }
             },
         )
-        is QrPairingState.Error -> AlertDialog(
+        is QrPairingState.Error -> PixelAlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Pairing failed") },
             text = { Text(state.message) },
             confirmButton = {
-                OutlinedButton(onClick = onDismiss) { Text("Close") }
+                PixelButton(onClick = onDismiss) { Text("Close") }
             },
         )
     }

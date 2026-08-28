@@ -13,22 +13,22 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTextButton
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -77,10 +77,10 @@ fun GitScreen(
 
     BackHandler(enabled = state.inSelectionMode) { viewModel.exitSelection() }
 
-    Scaffold(
+    PixelScaffold(
         topBar = {
             if (state.inSelectionMode) {
-                TopAppBar(
+                PixelTopBar(
                     title = { Text("${state.selected.size} selected") },
                     navigationIcon = {
                         IconButton(onClick = viewModel::exitSelection) {
@@ -97,7 +97,7 @@ fun GitScreen(
                     },
                 )
             } else {
-                TopAppBar(
+                PixelTopBar(
                     title = { Text("Git: $projectName") },
                     navigationIcon = {
                         IconButton(onClick = onBack) {
@@ -117,7 +117,7 @@ fun GitScreen(
                 )
             }
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
     ) { padding ->
         Box(
             modifier = Modifier
@@ -127,7 +127,7 @@ fun GitScreen(
             val visibleItems = state.visibleItems
             when {
                 state.isLoading && visibleItems.isEmpty() -> {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    PixelBlinkCursor(modifier = Modifier.align(Alignment.Center))
                 }
                 state.errorMessage != null && visibleItems.isEmpty() -> {
                     Text(
@@ -200,7 +200,7 @@ fun GitScreen(
 
     val forcePrompt = state.forceDeletePrompt
     if (forcePrompt != null) {
-        AlertDialog(
+        PixelAlertDialog(
             onDismissRequest = viewModel::dismissForceDeletePrompt,
             title = { Text("Force delete?") },
             text = {
@@ -211,10 +211,10 @@ fun GitScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = viewModel::confirmForceDelete) { Text("Force delete") }
+                PixelTextButton(onClick = viewModel::confirmForceDelete) { Text("Force delete") }
             },
             dismissButton = {
-                TextButton(onClick = viewModel::dismissForceDeletePrompt) { Text("Cancel") }
+                PixelTextButton(onClick = viewModel::dismissForceDeletePrompt) { Text("Cancel") }
             },
         )
     }
@@ -225,7 +225,7 @@ private fun BusyConflictDialog(
     holders: List<BusyHolder>,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    PixelAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Item is in use") },
         text = {
@@ -239,7 +239,7 @@ private fun BusyConflictDialog(
             Text("Stop the holder, then try again.\n\n" + lines.joinToString("\n"))
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("OK") }
+            PixelTextButton(onClick = onDismiss) { Text("OK") }
         },
     )
 }
