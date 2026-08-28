@@ -147,6 +147,7 @@ fun AgentListScreen(
                     EmptyAgentsState(
                         onShowInstallClick = viewModel::showInstallSheet,
                         onScanClick = viewModel::onScanQrClicked,
+                        onPairWithCodeClick = viewModel::startDeviceCodePairing,
                         onAddManuallyClick = viewModel::showAddDialog,
                     )
                 } else {
@@ -293,6 +294,7 @@ internal fun AgentListOverflowMenu(
 internal fun EmptyAgentsState(
     onShowInstallClick: () -> Unit,
     onScanClick: () -> Unit,
+    onPairWithCodeClick: () -> Unit,
     onAddManuallyClick: () -> Unit,
 ) {
     Box(
@@ -365,6 +367,11 @@ internal fun EmptyAgentsState(
                 )
                 Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
                 Text("Scan QR code")
+            }
+            // The path that works when the host's screen is not somewhere a
+            // camera can see it — an SSH session, a VM console, another room.
+            PixelTextButton(onClick = onPairWithCodeClick) {
+                Text("Pair with a code instead")
             }
             PixelTextButton(onClick = onAddManuallyClick) {
                 Text("Add manually instead")
