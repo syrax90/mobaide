@@ -12,10 +12,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -33,14 +35,13 @@ import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.MoreHoriz
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelIconButton
+import com.mobaide.app.ui.theme.chromeCaps
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.MaterialTheme
@@ -307,16 +308,14 @@ fun InputBar(
                     ) {
                         // With the composer hidden the terminal is the input field: this
                         // re-raises the IME on the terminal surface after the user dismissed it.
-                        IconButton(
+                        PixelIconButton(
+                            imageVector = Icons.Outlined.Keyboard,
+                            contentDescription = "Show keyboard",
                             onClick = onRaiseTerminalKeyboard,
                             enabled = enabled,
+                            compact = true,
                             modifier = Modifier.testTag("raise_terminal_keyboard_button"),
-                        ) {
-                            Icon(
-                                Icons.Outlined.Keyboard,
-                                contentDescription = "Show keyboard",
-                            )
-                        }
+                        )
                         RevealComposerChip(
                             onClick = {
                                 panelExpanded = true
@@ -490,18 +489,19 @@ private fun RevealComposerChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    AssistChip(
+    PixelButton(
         onClick = onClick,
-        label = { Text("Command field") },
-        leadingIcon = {
-            Icon(
-                Icons.Outlined.Keyboard,
-                contentDescription = null,
-                modifier = Modifier.size(AssistChipDefaults.IconSize),
-            )
-        },
+        compact = true,
         modifier = modifier.testTag("reveal_composer_chip"),
-    )
+    ) {
+        Icon(
+            Icons.Outlined.Keyboard,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Command field".chromeCaps())
+    }
 }
 
 @Composable
@@ -562,57 +562,48 @@ private fun ActionButtons(
     onSend: () -> Unit,
     onHideComposer: () -> Unit,
 ) {
-    IconButton(
+    PixelIconButton(
+        imageVector = Icons.Filled.KeyboardHide,
+        contentDescription = "Hide command field",
         onClick = onHideComposer,
+        compact = true,
         modifier = Modifier.testTag("hide_composer_button"),
-    ) {
-        Icon(
-            Icons.Filled.KeyboardHide,
-            contentDescription = "Hide command field",
-        )
-    }
-    IconButton(onClick = onOpenTemplates) {
-        Icon(
-            Icons.AutoMirrored.Filled.LibraryBooks,
-            contentDescription = "Templates",
-        )
-    }
-    IconButton(
+    )
+    PixelIconButton(
+        imageVector = Icons.AutoMirrored.Filled.LibraryBooks,
+        contentDescription = "Templates",
+        onClick = onOpenTemplates,
+        compact = true,
+    )
+    PixelIconButton(
+        imageVector = Icons.Default.BookmarkAdd,
+        contentDescription = "Save as template",
         onClick = onSaveAsTemplate,
         enabled = canSend,
-    ) {
-        Icon(
-            Icons.Default.BookmarkAdd,
-            contentDescription = "Save as template",
-        )
-    }
-    IconButton(
+        compact = true,
+    )
+    PixelIconButton(
+        imageVector = Icons.Outlined.Keyboard,
+        contentDescription = if (panelExpanded) "Hide keys" else "Show keys",
         onClick = onTogglePanel,
         enabled = enabled,
-    ) {
-        Icon(
-            Icons.Outlined.Keyboard,
-            contentDescription = if (panelExpanded) "Hide keys" else "Show keys",
-        )
-    }
-    IconButton(
+        selected = panelExpanded,
+        compact = true,
+    )
+    PixelIconButton(
+        imageVector = Icons.Default.OpenInFull,
+        contentDescription = "Expand editor",
         onClick = onExpand,
         enabled = enabled,
-    ) {
-        Icon(
-            Icons.Default.OpenInFull,
-            contentDescription = "Expand editor",
-        )
-    }
-    IconButton(
+        compact = true,
+    )
+    PixelIconButton(
+        imageVector = Icons.AutoMirrored.Filled.Send,
+        contentDescription = "Send",
         onClick = onSend,
         enabled = enabled && canSend,
-    ) {
-        Icon(
-            Icons.AutoMirrored.Filled.Send,
-            contentDescription = "Send",
-        )
-    }
+        compact = true,
+    )
 }
 
 /**

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Terminal
 import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import com.mobaide.app.ui.common.pixel.PixelButton
 import com.mobaide.app.ui.common.pixel.PixelButtonStyle
+import com.mobaide.app.ui.common.pixel.PixelIconButton
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -119,9 +120,7 @@ fun AgentListScreen(
                         onAddManually = viewModel::showAddDialog,
                         onPairWithCode = viewModel::startDeviceCodePairing,
                     )
-                    IconButton(onClick = onSettingsClick) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
+                    PixelIconButton(Icons.Default.Settings, "Settings", onClick = onSettingsClick)
                 },
             )
         },
@@ -247,9 +246,7 @@ internal fun AgentListOverflowMenu(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { menuExpanded = true }) {
-            Icon(Icons.Default.MoreVert, contentDescription = "More options")
-        }
+        PixelIconButton(Icons.Default.MoreVert, "More options", onClick = { menuExpanded = true })
         DropdownMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },

@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
+import com.mobaide.app.ui.common.pixel.PixelIconButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -88,12 +89,12 @@ fun GitScreen(
                         }
                     },
                     actions = {
-                        IconButton(
+                        PixelIconButton(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete selected",
                             onClick = viewModel::requestDelete,
                             enabled = state.selected.isNotEmpty() && !state.deleting,
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete selected")
-                        }
+                        )
                     },
                 )
             } else {
@@ -109,9 +110,11 @@ fun GitScreen(
                     },
                     actions = {
                         if (state.hasDeletableItems) {
-                            IconButton(onClick = viewModel::enterSelectionMode) {
-                                Icon(Icons.Default.Checklist, contentDescription = "Select items")
-                            }
+                            PixelIconButton(
+                                imageVector = Icons.Default.Checklist,
+                                contentDescription = "Select items",
+                                onClick = viewModel::enterSelectionMode,
+                            )
                         }
                     },
                 )

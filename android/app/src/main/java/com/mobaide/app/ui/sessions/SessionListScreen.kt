@@ -24,6 +24,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import com.mobaide.app.ui.common.pixel.PixelFab
+import com.mobaide.app.ui.common.pixel.PixelIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.foundation.BorderStroke
@@ -101,12 +102,8 @@ fun SessionListScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onProjectsClick) {
-                        Icon(Icons.Default.Folder, contentDescription = "Projects")
-                    }
-                    IconButton(onClick = onSettingsClick) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
+                    PixelIconButton(Icons.Default.Folder, "Projects", onClick = onProjectsClick)
+                    PixelIconButton(Icons.Default.Settings, "Settings", onClick = onSettingsClick)
                 },
             )
         },

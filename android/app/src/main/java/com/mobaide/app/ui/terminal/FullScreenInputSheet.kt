@@ -12,10 +12,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.mobaide.app.ui.common.pixel.PixelBottomSheet
+import com.mobaide.app.ui.common.pixel.PixelIconButton
 import androidx.compose.material3.OutlinedTextField
 import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Text
@@ -59,24 +58,20 @@ fun FullScreenInputSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onDismiss) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = "Collapse editor",
-                    )
-                }
-                IconButton(
+                PixelIconButton(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Collapse editor",
+                    onClick = onDismiss,
+                )
+                PixelIconButton(
+                    imageVector = Icons.AutoMirrored.Filled.Send,
+                    contentDescription = "Send",
                     onClick = {
                         val trimmed = text.text.trimEnd('\n', '\r')
                         if (trimmed.isNotEmpty()) onSend(trimmed)
                     },
                     enabled = enabled && text.text.isNotEmpty(),
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send",
-                    )
-                }
+                )
             }
             OutlinedTextField(
                 colors = PixelTextFieldDefaults.colors(),

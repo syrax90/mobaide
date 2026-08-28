@@ -1113,7 +1113,6 @@ private fun CodexConfigSection(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
-    Text("Model", style = MaterialTheme.typography.labelLarge)
     CliModelDropdown(
         models = state.codexModels?.takeIf { it.isNotEmpty() }
             ?: CreateSessionViewModel.CODEX_MODELS,
@@ -1122,7 +1121,6 @@ private fun CodexConfigSection(
         onSelect = viewModel::setCodexModel,
     )
 
-    Text("Reasoning effort", style = MaterialTheme.typography.labelLarge)
     // A dropdown, not the old 4-button segmented row: the agent-advertised
     // per-model sets run to 6 levels (low…ultra), which segments would truncate
     // on phone width.
@@ -1277,7 +1275,6 @@ private fun AntigravityConfigSection(
     showWorktreeToggle: Boolean,
     viewModel: CreateSessionViewModel,
 ) {
-    Text("Model", style = MaterialTheme.typography.labelLarge)
     CliModelDropdown(
         models = state.antigravityModels?.takeIf { it.isNotEmpty() }
             ?: CreateSessionViewModel.ANTIGRAVITY_MODELS,
@@ -1376,7 +1373,6 @@ private fun ClaudeOptionControls(
     onDebugToggle: (Boolean) -> Unit,
     onAppendSystemPromptChange: (String) -> Unit,
 ) {
-    Text("Model", style = MaterialTheme.typography.labelLarge)
     ClaudeModelDropdown(
         selected = model,
         enabled = !fastMode,
@@ -1390,7 +1386,6 @@ private fun ClaudeOptionControls(
         )
     }
 
-    Text("Effort", style = MaterialTheme.typography.labelLarge)
     ClaudeEffortDropdown(
         selected = effort,
         model = model,
@@ -1550,7 +1545,7 @@ private fun CodexEffortDropdown(
             value = state.codexReasoningEffort.replaceFirstChar { it.uppercase() },
             onValueChange = {},
             readOnly = true,
-            label = { Text("Effort") },
+            label = { Text("Reasoning effort") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier.menuAnchor().fillMaxWidth(),
         )

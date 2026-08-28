@@ -19,6 +19,7 @@ import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
+import com.mobaide.app.ui.common.pixel.PixelIconButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -73,9 +74,7 @@ fun DevicesScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.refresh() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                    }
+                    PixelIconButton(Icons.Default.Refresh, "Refresh", onClick = { viewModel.refresh() })
                 },
             )
         },

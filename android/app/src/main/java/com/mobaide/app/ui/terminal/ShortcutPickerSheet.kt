@@ -30,7 +30,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import com.mobaide.app.ui.common.pixel.PixelIconButton
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.InputChipDefaults
 import androidx.compose.material3.MaterialTheme
@@ -172,9 +172,7 @@ internal fun ShortcutPickerContent(
                 text = "Keyboard shortcut",
                 style = MaterialTheme.typography.titleMedium,
             )
-            IconButton(onClick = onClose) {
-                Icon(Icons.Default.Close, contentDescription = "Close")
-            }
+            PixelIconButton(Icons.Default.Close, "Close", onClick = onClose)
         }
         Column(
             // Weighted with fill=false so the footer (preview + Send) is measured

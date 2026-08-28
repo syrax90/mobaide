@@ -24,6 +24,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.mobaide.app.ui.common.pixel.PixelBottomSheet
+import com.mobaide.app.ui.common.pixel.PixelIconButton
 import androidx.compose.material3.OutlinedTextField
 import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Text
@@ -110,9 +111,7 @@ fun TemplatesPickerSheet(
                     text = "Prompt templates",
                     style = MaterialTheme.typography.titleMedium,
                 )
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, contentDescription = "Close")
-                }
+                PixelIconButton(Icons.Default.Close, "Close", onClick = onDismiss)
             }
             OutlinedTextField(
                 colors = PixelTextFieldDefaults.colors(),
