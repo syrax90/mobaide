@@ -6,16 +6,23 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.events.UserEventBus
+import com.mobaide.app.data.local.PreferencesStore
+import com.mobaide.app.data.local.ThemeMode
 import com.mobaide.app.data.repository.ServerCompatibility
 import com.mobaide.app.data.repository.VersionGateRepository
 import com.mobaide.app.notifications.SessionEventService
@@ -44,6 +51,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var inAppUpdateManager: InAppUpdateManager
+
+    @Inject
+    lateinit var preferencesStore: PreferencesStore
 
     /** Session id from a tapped notification; consumed by [AppNavigation]. */
     private val deepLinkSessionId = MutableStateFlow<String?>(null)
@@ -90,7 +100,32 @@ class MainActivity : ComponentActivity() {
             }
         }
         setContent {
-            MobaideTheme {
+            val themeMode by preferencesStore.themeMode
+                .collectAsStateWithLifecycle(initialValue = ThemeMode.Auto)
+            val darkTheme = when (themeMode) {
+                ThemeMode.Auto -> isSystemInDarkTheme()
+                ThemeMode.Light -> false
+                ThemeMode.Dark -> true
+            }
+            // Re-assert bar icon contrast whenever the in-app override diverges
+            // from the system theme (enableEdgeToEdge alone follows the system).
+            DisposableEffect(darkTheme) {
+                val transparent = android.graphics.Color.TRANSPARENT
+                enableEdgeToEdge(
+                    statusBarStyle = if (darkTheme) {
+                        SystemBarStyle.dark(transparent)
+                    } else {
+                        SystemBarStyle.light(transparent, transparent)
+                    },
+                    navigationBarStyle = if (darkTheme) {
+                        SystemBarStyle.dark(transparent)
+                    } else {
+                        SystemBarStyle.light(transparent, transparent)
+                    },
+                )
+                onDispose {}
+            }
+            MobaideTheme(darkTheme = darkTheme) {
                 AppNavigation(
                     sessionManager = sessionManager,
                     deepLinkSessionId = deepLinkSessionId,

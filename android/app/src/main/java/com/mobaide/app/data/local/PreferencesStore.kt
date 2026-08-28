@@ -26,6 +26,7 @@ class PreferencesStore(private val context: Context) {
     private val keyLastAntigravityOptions = stringPreferencesKey("last_used_antigravity_options")
     private val keyLastAutoScanOptions = stringPreferencesKey("last_used_auto_scan_options")
     private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
+    private val keyThemeMode = stringPreferencesKey("theme_mode")
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
     private val keyExternalSessionsNoticeDismissed =
         booleanPreferencesKey("external_sessions_notice_dismissed")
@@ -60,6 +61,13 @@ class PreferencesStore(private val context: Context) {
             prefs[keyTerminalDisplayMode]?.let { stored ->
                 runCatching { TerminalDisplayMode.valueOf(stored) }.getOrNull()
             } ?: TerminalDisplayMode.Static
+        }
+
+    val themeMode: Flow<ThemeMode> =
+        context.dataStore.data.map { prefs ->
+            prefs[keyThemeMode]?.let { stored ->
+                runCatching { ThemeMode.valueOf(stored) }.getOrNull()
+            } ?: ThemeMode.Auto
         }
 
     val externalSessionsNoticeDismissed: Flow<Boolean> =
@@ -141,6 +149,12 @@ class PreferencesStore(private val context: Context) {
     suspend fun setLastUsedAntigravityOptions(prefs: AntigravityLaunchPrefs) {
         val payload = cacheJson.encodeToString(AntigravityLaunchPrefs.serializer(), prefs)
         context.dataStore.edit { it[keyLastAntigravityOptions] = payload }
+    }
+
+    suspend fun setThemeMode(mode: ThemeMode) {
+        context.dataStore.edit { prefs ->
+            prefs[keyThemeMode] = mode.name
+        }
     }
 
     suspend fun setTerminalDisplayMode(mode: TerminalDisplayMode) {

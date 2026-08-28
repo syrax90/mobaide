@@ -25,17 +25,28 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.zIndex
+import com.mobaide.app.data.local.ThemeMode
+import com.mobaide.app.ui.common.pixel.pixelFrame
+import com.mobaide.app.ui.theme.chromeCaps
+import com.mobaide.app.ui.theme.pixel
 import androidx.compose.material3.RadioButton
 import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.Text
 import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.BuildConfig
@@ -143,6 +154,11 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            AppearanceSection(
+                mode = uiState.themeMode,
+                onModeChange = viewModel::setThemeMode,
+            )
+
             HorizontalDivider()
 
             TerminalDisplaySection(
@@ -192,6 +208,68 @@ fun SettingsScreen(
                 onSubmitted = { _ -> onLogout() },
             )
         }
+    }
+}
+
+/**
+ * The web Appearance card: a square Auto | Light | Dark segmented control.
+ * Adjacent segments overlap by the 2dp ring width so they share one divider,
+ * and the selected segment z-lifts so its brand-2 ring wins the overlap.
+ */
+@Composable
+private fun AppearanceSection(
+    mode: ThemeMode,
+    onModeChange: (ThemeMode) -> Unit,
+) {
+    Column(modifier = Modifier.padding(16.dp)) {
+        Text(
+            text = "Appearance".chromeCaps(),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(modifier = Modifier.selectableGroup()) {
+            ThemeMode.entries.forEachIndexed { index, candidate ->
+                val selected = candidate == mode
+                Box(
+                    modifier = Modifier
+                        .offset(x = (-2 * index).dp)
+                        .zIndex(if (selected) 1f else 0f)
+                        .background(
+                            if (selected) MaterialTheme.colorScheme.surfaceContainerHighest
+                            else Color.Transparent,
+                        )
+                        .pixelFrame(
+                            if (selected) MaterialTheme.pixel.brand2
+                            else MaterialTheme.colorScheme.outline,
+                        )
+                        .selectable(
+                            selected = selected,
+                            role = Role.RadioButton,
+                            onClick = { onModeChange(candidate) },
+                        )
+                        .defaultMinSize(minWidth = 72.dp, minHeight = 48.dp)
+                        .testTag("theme_mode_${candidate.name}"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = candidate.name.chromeCaps(),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Auto follows the system theme.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
