@@ -31,7 +31,9 @@ import com.mobaide.app.ui.theme.MobaideTheme
 import com.mobaide.app.ui.update.InAppUpdateManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -99,15 +101,21 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+        // The saved theme must be known before the first frame: an async load
+        // would flash the wrong theme on every recreation for users who chose
+        // the opposite of the system mode (the window background resources can
+        // only follow the system), and gating composition on the flow would
+        // blank the app if the prefs file were unreadable. A bounded blocking
+        // read of the tiny local DataStore file is the same tradeoff the web
+        // client makes with its pre-paint theme script; failures degrade to
+        // Auto both here and inside the flow itself.
+        val initialThemeMode = runBlocking {
+            runCatching { preferencesStore.themeMode.first() }.getOrDefault(ThemeMode.Auto)
+        }
         setContent {
             val themeMode by preferencesStore.themeMode
-                .collectAsStateWithLifecycle<ThemeMode?>(initialValue = null)
-            // Hold the first frame until the saved preference loads: seeding
-            // with Auto would flash the system theme (and the wrong bar icon
-            // style) on every recreation for users who picked the opposite
-            // mode. The themed windowBackground covers the wait.
-            val mode = themeMode ?: return@setContent
-            val darkTheme = when (mode) {
+                .collectAsStateWithLifecycle(initialValue = initialThemeMode)
+            val darkTheme = when (themeMode) {
                 ThemeMode.Auto -> isSystemInDarkTheme()
                 ThemeMode.Light -> false
                 ThemeMode.Dark -> true
