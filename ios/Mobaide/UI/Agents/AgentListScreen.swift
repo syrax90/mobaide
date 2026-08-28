@@ -151,20 +151,15 @@ private struct AgentListContent: View {
     private var content: some View {
         if model.agents.isEmpty {
             ScrollView {
-                PixelEmptyState(
-                    "No agents yet",
-                    systemImage: "server.rack",
-                    description: "Scan the pairing QR shown on your agent host, or add one manually."
-                ) {
-                    VStack(spacing: 12) {
-                        Button("Scan pairing QR") { model.startScan() }
-                            .buttonStyle(.pixelPrimary)
-                        Button("Show install commands") { model.showInstallSheet = true }
-                            .buttonStyle(.pixel)
-                    }
-                    .padding(.top, 8)
-                }
+                EmptyAgentsState(
+                    onShowInstall: { model.showInstallSheet = true },
+                    onScan: { model.startScan() },
+                    onPairWithCode: { model.startDeviceCodePairing() },
+                    onAddManually: { model.startAdd() }
+                )
                 .padding(16)
+                // Clears the 56pt scan FAB so the last row stays tappable.
+                .padding(.bottom, 88)
             }
             .pixelScreenBackground()
         } else {
@@ -228,6 +223,101 @@ private struct AgentListContent: View {
             get: { model[keyPath: keyPath] != nil },
             set: { if !$0 { model[keyPath: keyPath] = nil } }
         )
+    }
+}
+
+// MARK: - Empty state (Android `EmptyAgentsState`)
+
+/// Nothing is scannable until `mobaide-agent` runs on a host, so the two
+/// actions are an ordered pair — install, then pair — rather than the flat
+/// button row this screen used to show, which led with the scan.
+private struct EmptyAgentsState: View {
+    let onShowInstall: () -> Void
+    let onScan: () -> Void
+    let onPairWithCode: () -> Void
+    let onAddManually: () -> Void
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        PixelEmptyState(
+            "No agents yet",
+            systemImage: "qrcode.viewfinder",
+            description: "Install mobaide-agent on a host machine. The agent will display "
+                + "a pairing QR after install — scan it here to finish setup."
+        ) {
+            VStack(alignment: .leading, spacing: 20) {
+                step(1, "Install on your host") {
+                    Button(action: onShowInstall) {
+                        Label("Show install commands", systemImage: "terminal")
+                    }
+                    .buttonStyle(.pixelPrimaryBlock)
+                }
+                step(2, "Scan the pairing QR shown after install") {
+                    Button(action: onScan) {
+                        Label("Scan QR code", systemImage: "qrcode.viewfinder")
+                    }
+                    .buttonStyle(.pixelBlock)
+                }
+                VStack(spacing: 0) {
+                    fallback("Pair with a code instead", action: onPairWithCode)
+                    fallback("Add manually instead", action: onAddManually)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .padding(.top, 8)
+        }
+    }
+
+    private func step<Content: View>(
+        _ number: Int,
+        _ title: String,
+        @ViewBuilder button: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            PixelNumberedStep(number: number, title: title)
+            button()
+        }
+    }
+
+    /// The two escape hatches stay plain text: a third and fourth ringed pixel
+    /// button would read as peers of the numbered steps.
+    private func fallback(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.footnote)
+            .foregroundStyle(colors.accent)
+            // Padding, not a fixed minHeight: it is a 44pt target at the
+            // default size and keeps the two links apart as the text grows.
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+    }
+}
+
+/// The ordinal as a filled `brand` square — the pixel kit has no circles.
+private struct PixelNumberedStep: View {
+    let number: Int
+    let title: String
+
+    /// Scaled, not fixed: the ordinal is Dynamic Type text, and a 20pt box
+    /// clips it outright at the accessibility sizes.
+    @ScaledMetric(relativeTo: .caption) private var side: CGFloat = 20
+
+    var body: some View {
+        // Baseline, not center: step 2's label wraps, and centering would
+        // float the square between its two lines.
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("\(number)")
+                .font(MobaideTypography.chromeSmall)
+                .foregroundStyle(.white)
+                .frame(minWidth: side, minHeight: side)
+                .background(MobaideColorScheme.brand)
+            Text(title)
+                .sectionHeading()
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
