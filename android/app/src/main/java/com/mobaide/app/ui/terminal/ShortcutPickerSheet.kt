@@ -533,7 +533,7 @@ private val previewSavedShortcuts = listOf(
 )
 @Composable
 private fun ShortcutPickerContentPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         Surface {
             ShortcutPickerContent(
                 recents = previewRecents,
@@ -556,7 +556,7 @@ private fun ShortcutPickerContentPreview() {
 )
 @Composable
 private fun SaveToggleButtonPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         Surface {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -573,7 +573,7 @@ private fun SaveToggleButtonPreview() {
 @Preview(name = "ShortcutPicker empty recents", showBackground = true)
 @Composable
 private fun ShortcutPickerContentEmptyRecentsPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         Surface {
             ShortcutPickerContent(
                 recents = emptyList(),

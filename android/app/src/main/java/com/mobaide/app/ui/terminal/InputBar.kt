@@ -707,7 +707,7 @@ private fun SavedShortcutKeyButton(
 )
 @Composable
 private fun InputBarPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         InputBar(
             text = TextFieldValue(""),
             onTextChange = {},
@@ -739,7 +739,7 @@ private fun InputBarPreview() {
 )
 @Composable
 private fun InputBarComposerHiddenPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         InputBar(
             text = TextFieldValue(""),
             onTextChange = {},

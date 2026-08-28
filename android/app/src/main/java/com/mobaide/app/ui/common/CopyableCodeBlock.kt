@@ -110,7 +110,7 @@ fun CopyableCodeBlock(
 )
 @Composable
 private fun CopyableCodeBlockPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),

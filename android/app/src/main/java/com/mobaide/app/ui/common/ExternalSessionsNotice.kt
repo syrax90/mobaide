@@ -95,7 +95,7 @@ fun ExternalSessionsNotice(
 )
 @Composable
 private fun ExternalSessionsNoticePreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         ExternalSessionsNotice(onDismiss = {})
     }
 }

@@ -243,7 +243,7 @@ private fun StepRow(number: Int, text: String, modifier: Modifier = Modifier) {
 )
 @Composable
 private fun AgentCredentialsContentPreview() {
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         AgentCredentialsContent(
             title = "Agent Created",
             agentId = "a1b2c3d4e5f6",

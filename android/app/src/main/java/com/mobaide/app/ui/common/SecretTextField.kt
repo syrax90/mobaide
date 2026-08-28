@@ -75,7 +75,7 @@ fun SecretTextField(
 private fun SecretTextFieldPreview() {
     var value by remember { mutableStateOf("sk-demo-1234567890") }
     var revealed by remember { mutableStateOf(false) }
-    MobaideTheme(dynamicColor = false) {
+    MobaideTheme {
         SecretTextField(
             value = value,
             onValueChange = { value = it },
