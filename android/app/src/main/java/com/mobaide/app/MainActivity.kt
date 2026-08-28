@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -105,13 +106,18 @@ class MainActivity : ComponentActivity() {
         // would flash the wrong theme on every recreation for users who chose
         // the opposite of the system mode (the window background resources can
         // only follow the system), and gating composition on the flow would
-        // blank the app if the prefs file were unreadable. A bounded blocking
-        // read of the tiny local DataStore file is the same tradeoff the web
-        // client makes with its pre-paint theme script; failures degrade to
-        // Auto both here and inside the flow itself.
+        // blank the app if the prefs file were unreadable. Blocking on the
+        // tiny local DataStore file is the same tradeoff the web client makes
+        // with its pre-paint theme script — but with a hard timeout well under
+        // the ANR threshold, so a stalled read (slow storage, lock contention)
+        // degrades to Auto for the first frame instead of freezing startup;
+        // the composed collector below then corrects the theme when the value
+        // eventually arrives.
         val initialThemeMode = runBlocking {
-            runCatching { preferencesStore.themeMode.first() }.getOrDefault(ThemeMode.Auto)
-        }
+            runCatching {
+                withTimeoutOrNull(THEME_LOAD_TIMEOUT_MS) { preferencesStore.themeMode.first() }
+            }.getOrNull()
+        } ?: ThemeMode.Auto
         setContent {
             val themeMode by preferencesStore.themeMode
                 .collectAsStateWithLifecycle(initialValue = initialThemeMode)
@@ -188,5 +194,8 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_SESSION_ID = "com.mobaide.app.EXTRA_SESSION_ID"
+
+        /** Normal reads finish in single-digit ms; far below the ~5s ANR bar. */
+        private const val THEME_LOAD_TIMEOUT_MS = 500L
     }
 }
