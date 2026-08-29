@@ -162,7 +162,14 @@ policy promises no un-consented tracking:
   `http://mobaide.com:<port>/` (`location.hostname` never carries the port).
 - **Accept** stores `granted` and injects
   `https://www.googletagmanager.com/gtag/js?id=AW-18403068615` with a Consent
-  Mode v2 default-denied → update-granted pair queued ahead of it. Only
+  Mode v2 default-denied → update-granted pair queued ahead of it, followed by
+  `config` and the `conversion` event that counts the "Page view" conversion
+  action (`send_to: AW-18403068615/<label>`, `ADS_PAGE_VIEW_LABEL` in
+  `site.js`). The label is what makes the base tag measure anything: `config`
+  on its own pings the tag but counts no labelled action, and Google Ads
+  reports that action as "never received a tag ping" until the event lands.
+  The event must stay queued *after* `config` — gtag resolves `send_to`
+  against the configured tag. Only
   `ad_storage` and `ad_user_data` are ever granted: the banner promises
   measurement, so `ad_personalization` stays denied — which is also what keeps
   gtag off the per-country `www.google.<tld>` remarketing endpoints no static
@@ -189,7 +196,9 @@ policy promises no un-consented tracking:
   with what the tag actually does (cookies only after Accept, choice stored in
   local storage, withdrawal by clearing site data).
 
-Changing the tag id means changing `ADS_TAG_ID` in `site.js` and nothing else.
+Changing the tag id means changing `ADS_TAG_ID` in `site.js`; a new or renamed
+conversion action also means a new `ADS_PAGE_VIEW_LABEL`, pinned by
+`test_marketing.TestConsentBanner.test_site_js_fires_the_page_view_conversion`.
 Removing the tag means removing the banner, the `site.js` module, the
 `_LANDING_CSP` bucket, and the privacy-policy passages together — each is
 load-bearing for the others.
