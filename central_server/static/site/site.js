@@ -348,6 +348,11 @@
   // Public Ads tag id — the same value every visitor's DOM would show, so it
   // ships in source rather than through template plumbing.
   var ADS_TAG_ID = "AW-18403068615";
+  // Conversion label of the "Page view" conversion action, minted by Google
+  // Ads next to the tag id. `config` alone pings the tag but counts no
+  // *labelled* action, which Google Ads reports against that action as "never
+  // received a tag ping" for as long as the event below is missing.
+  var ADS_PAGE_VIEW_LABEL = "-6EGCOnoq-ccEMeVosdE";
   var ADS_CONSENT_KEY = "mobaide-ads-consent";
 
   /* localStorage can throw on access (private windows, blocked site data), so
@@ -382,7 +387,8 @@
     window.dataLayer.push(arguments);
   }
 
-  /* Injects gtag.js exactly once (Google's one-tag-per-page rule). Runs only
+  /* Injects gtag.js exactly once (Google's one-tag-per-page rule) and fires
+   * the page-view conversion behind it. Runs only
    * after an explicit Accept — nothing here may execute pre-consent, which is
    * what keeps the EU/ePrivacy side of this honest. The Consent Mode v2
    * default-denied → update-granted pair is queued ahead of the script so the
@@ -413,6 +419,14 @@
     });
     gtagPush("js", new Date());
     gtagPush("config", ADS_TAG_ID);
+    // Queued after `config`, which gtag requires to have run before it can
+    // resolve `send_to`. Value and currency restate the conversion action's
+    // own setting in Google Ads; change them in both places or not at all.
+    gtagPush("event", "conversion", {
+      send_to: ADS_TAG_ID + "/" + ADS_PAGE_VIEW_LABEL,
+      value: 1.0,
+      currency: "CZK",
+    });
 
     var script = document.createElement("script");
     script.async = true;

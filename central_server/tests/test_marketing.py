@@ -41,6 +41,7 @@ from central_server.marketing.loader import (
     render_robots,
     render_sitemap,
 )
+from central_server.static_files import resolve_static_dir
 
 # Byte-identical to ``security_headers._LANDING_CSP`` and to
 # ``test_security_headers.LANDING_CSP`` on purpose — keep the three in sync by
@@ -346,6 +347,19 @@ class TestConsentBanner:
         match = _CONSENT_BANNER_RE.search(landing)
         assert match is not None
         assert 'href="/privacy.html"' in match.group(1)
+
+    async def test_site_js_fires_the_page_view_conversion(self) -> None:
+        """The tag id alone measures nothing. A Google Ads conversion action
+        carries its own label, and only a ``conversion`` event naming it in
+        ``send_to`` counts against it — without this the action reports "never
+        received a tag ping" however healthy the base tag is. Queued after
+        ``config``, which gtag needs in order to resolve ``send_to`` at all."""
+        source = (resolve_static_dir() / "site" / "site.js").read_text()
+        assert 'ADS_PAGE_VIEW_LABEL = "-6EGCOnoq-ccEMeVosdE"' in source
+        assert 'send_to: ADS_TAG_ID + "/" + ADS_PAGE_VIEW_LABEL' in source
+        assert source.index('gtagPush("config", ADS_TAG_ID)') < source.index(
+            "send_to: ADS_TAG_ID"
+        )
 
     async def test_footer_carries_the_withdrawal_control(self, landing) -> None:
         """GDPR Art. 7(3): withdrawing must be as easy as the one-click
