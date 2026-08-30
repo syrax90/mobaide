@@ -9,14 +9,10 @@ import { queryKeys } from '../../lib/queryKeys';
 import { decodePairingFragment, type ParsedPairingPayload } from '../../protocol/pairingPayload';
 import { useSelectedAgentStore } from '../../stores/selectedAgentStore';
 import { checkTrustPin, pinTrustKey } from '../../stores/trustPinStore';
-import {
-  WAIT_FOR_ONLINE_TIMEOUT_SECONDS,
-  claimErrorMessage,
-  expiresInMessage,
-  waitTimeoutMessage,
-} from './pairCopy';
+import { WAIT_FOR_ONLINE_TIMEOUT_SECONDS, claimErrorMessage, expiresInMessage } from './pairCopy';
 import { evaluatePairingInput, type PairState } from './pairMachine';
 import { useWaitForOnline } from './useWaitForOnline';
+import { WaitTimedOutPanel } from './WaitTimedOutPanel';
 
 /**
  * Where a deep-linked payload waits out the trip through sign-in.
@@ -131,6 +127,7 @@ export function Pair() {
         agentId: result.agentId,
         friendlyName: result.agentFriendlyName,
         wsDelivered: result.wsDelivered,
+        attempt: 0,
       });
     },
     onError: (error: unknown) => {
@@ -138,7 +135,10 @@ export function Pair() {
     },
   });
 
-  const wait = useWaitForOnline(state.kind === 'waitingForOnline' ? state.agentId : null);
+  const wait = useWaitForOnline(
+    state.kind === 'waitingForOnline' ? state.agentId : null,
+    state.kind === 'waitingForOnline' ? state.attempt : 0,
+  );
 
   useEffect(() => {
     if (state.kind !== 'waitingForOnline') return;
@@ -155,8 +155,11 @@ export function Pair() {
     }
     if (wait.timedOut) {
       setState({
-        kind: 'error',
-        message: waitTimeoutMessage(state.friendlyName, state.wsDelivered),
+        kind: 'waitTimedOut',
+        agentId: state.agentId,
+        friendlyName: state.friendlyName,
+        wsDelivered: state.wsDelivered,
+        attempt: state.attempt,
       });
     }
   }, [state, wait.online, wait.timedOut]);
@@ -287,6 +290,22 @@ export function Pair() {
             </button>
           </div>
         </div>
+      )}
+
+      {state.kind === 'waitTimedOut' && (
+        <WaitTimedOutPanel
+          friendlyName={state.friendlyName}
+          wsDelivered={state.wsDelivered}
+          onKeepWaiting={() => {
+            setState({
+              kind: 'waitingForOnline',
+              agentId: state.agentId,
+              friendlyName: state.friendlyName,
+              wsDelivered: state.wsDelivered,
+              attempt: state.attempt + 1,
+            });
+          }}
+        />
       )}
 
       {state.kind === 'success' && (

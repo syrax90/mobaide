@@ -32,6 +32,27 @@ final class AgentListModelTests: XCTestCase {
         return false
     }
 
+    private func isWaitTimedOut(_ state: QrPairingState) -> Bool {
+        if case .waitTimedOut = state { return true }
+        return false
+    }
+
+    /// `GET /api/agents` calls recorded so far: the claim's own refresh, the
+    /// watcher's pre-loop refresh and every defensive poll.
+    private var agentListFetches: Int {
+        StubURLProtocol.requests.filter { $0.httpMethod == "GET" && $0.url?.path == "/api/agents" }.count
+    }
+
+    /// Advance the parked watcher by `count` 1 s ticks. Each waits for the
+    /// loop to reach its next `sleep` first — a `tick()` fired before the
+    /// loop parks resumes nothing and is silently lost.
+    private func tick(_ sleeper: ManualSleeper, times count: Int) async {
+        for _ in 0..<count {
+            await waitUntil { sleeper.isWaiting }
+            sleeper.tick()
+        }
+    }
+
     // MARK: - Scan → expiry → TOFU
 
     func testScanValidGoesToConfirming() {
@@ -130,7 +151,91 @@ final class AgentListModelTests: XCTestCase {
         XCTAssertTrue(isSuccess(model.qrPairing))
     }
 
-    func testTimeoutGoesToError() async {
+    func testTimeoutGoesToWaitTimedOutNotError() async {
+        // The claim landed and the agent stays paired; running out the budget
+        // is "not online yet", never `.error`. The 5 s polls read the empty
+        // stub (`{}`), fail to decode and are swallowed — the agent stays offline.
+        let sleeper = ManualSleeper()
+        let model = AgentHarness().makeAgentListModel(sleeper: sleeper, now: { Self.fixedNow })
+        model.onScanResult(payload(exp: 5000))
+        StubURLProtocol.enqueue(status: 200, body: claimResponse(id: "a1", wsDelivered: false))
+        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: false))  // claim refresh
+        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: false))  // pre-loop refresh
+        model.confirmClaim()
+        await waitUntil { sleeper.durations.count >= 1 }
+        sleeper.release()  // all 60 ticks run; never online
+        await waitUntil { self.isWaitTimedOut(model.qrPairing) || self.isError(model.qrPairing) }
+        XCTAssertEqual(
+            model.qrPairing,
+            .waitTimedOut(agentId: "a1", friendlyName: "Agent a1", wsDeliveredAtClaim: false)
+        )
+    }
+
+    func testWaitTimeoutMessageIsPlatformNeutral() {
+        let staged = AgentListModel.waitTimeoutMessage(friendlyName: "lab-host", wsDeliveredAtClaim: false)
+        let delivered = AgentListModel.waitTimeoutMessage(friendlyName: "lab-host", wsDeliveredAtClaim: true)
+        let unknown = AgentListModel.waitTimeoutMessage(friendlyName: "lab-host", wsDeliveredAtClaim: nil)
+
+        XCTAssertTrue(staged.contains("‘lab-host’ was paired to your account"), staged)
+        XCTAssertTrue(staged.contains("60 s"), staged)
+        XCTAssertTrue(staged.contains("`mobaide-agent show-qr`"), staged)
+        XCTAssertFalse(staged.contains("did not come online"), staged)
+        XCTAssertFalse(staged.contains("Get-ScheduledTask"), staged)
+        // Tri-state hint: `nil` (older relay) claims nothing about the push.
+        XCTAssertTrue(staged.contains("staged"), staged)
+        XCTAssertFalse(staged.contains("tunnel"), staged)
+        XCTAssertTrue(delivered.contains("tunnel"), delivered)
+        XCTAssertFalse(delivered.contains("staged"), delivered)
+        XCTAssertFalse(unknown.contains("tunnel"), unknown)
+        XCTAssertFalse(unknown.contains("staged"), unknown)
+    }
+
+    func testDefensivePollRecoversWhenPushNeverArrives() async {
+        let sleeper = ManualSleeper()
+        let model = AgentHarness().makeAgentListModel(sleeper: sleeper, now: { Self.fixedNow })
+        model.onScanResult(payload(exp: 5000))
+        StubURLProtocol.enqueue(status: 200, body: claimResponse(id: "a1", wsDelivered: true))
+        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: false))  // claim refresh
+        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: false))  // pre-loop refresh
+        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: true))   // 5 s poll
+        model.confirmClaim()
+
+        await tick(sleeper, times: 4)
+        await waitUntil { sleeper.isWaiting }  // tick 4 judged offline and parked again
+        XCTAssertEqual(agentListFetches, 2, "no poll before the 5 s mark")
+        guard case .waitingForOnline(_, _, let elapsed, _) = model.qrPairing else {
+            return XCTFail("expected waitingForOnline, got \(model.qrPairing)")
+        }
+        XCTAssertEqual(elapsed, 4)
+
+        await tick(sleeper, times: 1)
+        await waitUntil { self.isSuccess(model.qrPairing) }
+
+        XCTAssertEqual(model.qrPairing, .success(agentId: "a1", friendlyName: "Agent a1"))
+        XCTAssertEqual(agentListFetches, 3, "exactly one poll, at the 5 s mark")
+    }
+
+    func testFinalRefetchAtDeadlineWins() async {
+        let sleeper = ManualSleeper()
+        let model = AgentHarness().makeAgentListModel(sleeper: sleeper, now: { Self.fixedNow })
+        model.onScanResult(payload(exp: 5000))
+        StubURLProtocol.enqueue(status: 200, body: claimResponse(id: "a1", wsDelivered: false))
+        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: false))  // claim refresh
+        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: false))  // pre-loop refresh
+        for _ in 0..<11 {  // polls at 5 s … 55 s
+            StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: false))
+        }
+        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: true))  // the 60 s deadline poll
+        model.confirmClaim()
+        await waitUntil { sleeper.durations.count >= 1 }
+        sleeper.release()
+        await waitUntil { self.isSuccess(model.qrPairing) || self.isWaitTimedOut(model.qrPairing) }
+
+        XCTAssertEqual(model.qrPairing, .success(agentId: "a1", friendlyName: "Agent a1"))
+        XCTAssertEqual(agentListFetches, 14)
+    }
+
+    func testKeepWaitingRestartsWatcher() async {
         let sleeper = ManualSleeper()
         let model = AgentHarness().makeAgentListModel(sleeper: sleeper, now: { Self.fixedNow })
         model.onScanResult(payload(exp: 5000))
@@ -139,12 +244,34 @@ final class AgentListModelTests: XCTestCase {
         StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: false))
         model.confirmClaim()
         await waitUntil { sleeper.durations.count >= 1 }
-        sleeper.release()  // all 60 ticks run; never online
-        await waitUntil { self.isError(model.qrPairing) }
-        guard case .error(let message) = model.qrPairing else {
-            return XCTFail("expected error")
-        }
-        XCTAssertTrue(message.contains("did not come online"))
+        sleeper.release()
+        await waitUntil { self.isWaitTimedOut(model.qrPairing) }
+        let fetchesBeforeRestart = agentListFetches
+
+        // The released sleeper resolves every later sleep instantly, so the
+        // restarted loop reaches its first check as soon as its own pre-loop
+        // refresh — which now reads the agent online — lands.
+        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: true))
+        model.keepWaiting()
+
+        XCTAssertEqual(
+            model.qrPairing,
+            .waitingForOnline(agentId: "a1", friendlyName: "Agent a1", elapsedSeconds: 0, wsDeliveredAtClaim: false)
+        )
+        XCTAssertNotNil(model.watcherTask, "keepWaiting re-arms the watcher")
+        await waitUntil { self.isSuccess(model.qrPairing) }
+        XCTAssertEqual(model.qrPairing, .success(agentId: "a1", friendlyName: "Agent a1"))
+        XCTAssertEqual(agentListFetches, fetchesBeforeRestart + 1, "one fresh pre-loop refresh")
+    }
+
+    func testKeepWaitingOutsideTimedOutIsNoOp() {
+        let model = AgentHarness().makeAgentListModel(now: { Self.fixedNow })
+
+        model.keepWaiting()
+
+        XCTAssertEqual(model.qrPairing, .idle)
+        XCTAssertNil(model.watcherTask)
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
     }
 
     func testWatcherCancelsCleanlyOnDismiss() async {

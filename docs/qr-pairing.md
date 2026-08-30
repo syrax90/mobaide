@@ -51,7 +51,7 @@ agent (mobaide-agent)        central_server                 mobile (Mobaide app)
         │                          │ sign payload (Ed25519)          │
         │                          │ ── 200 {agent_id, name,  ───────►│
         │                          │        ws_delivered?}            │ ← "Waiting for agent…"
-        │ ◄── {agent_id, agent_token, relay_url, signature_b64}      │   (polls agent.online)
+        │ ◄── {agent_id, agent_token, relay_url, signature_b64}      │   (push + bounded resync)
         │ verify Ed25519 signature                                   │
         │ atomic .env write        │                                 │
         │ close WS                 │ clear claimed_token_raw         │
@@ -190,8 +190,9 @@ server dispatched the credential push directly to the agent's open pairing
 WebSocket; when `false` the push was staged in the recovery slot for the
 agent's next WS reconnect to consume.
 
-The mobile uses this only to refine the 60-second timeout-error copy in the
-"Waiting for agent…" phase — it is **not** treated as confirmation that
+All three clients use this only to refine the copy shown if the 60-second
+wait times out — a "not online yet" state, not an error, since the claim
+already succeeded — it is **not** treated as confirmation that
 pairing succeeded. The authoritative "paired" signal remains the
 `agent.status_changed` event carrying `online=true` delivered via the
 `UserEventBus`. The field is forward-compatible: older mobile clients that
@@ -651,7 +652,7 @@ it, so the user sees "waiting for the agent" until the timeout. Mitigations:
 | `pair <code>` returns 429 | Redeem rate limit tripped (per-IP or the global circuit breaker) | Wait for the `Retry-After` interval. Behind a proxy, check `FORWARDED_ALLOW_IPS` — without it every redeem is attributed to the proxy and shares one bucket |
 | Client shows "This relay's signing key is not the one this account first paired with" (409 `trust_key_pin_mismatch`) | The relay's `MANIFEST_SIGNING_*` keypair was rotated after this account pinned it | Compare fingerprints with `mobaide-agent show-trust-fp` on an already-paired host. If the rotation was intentional, follow the trust-key rotation runbook above; otherwise treat as a security incident |
 | Browser sits on "waiting for a machine to enter the code" until the code expires | Nothing redeemed the code, the operator has not answered the agent's `y/N` prompt yet (an expected intermediate state — the request stays `pending` until it is answered), or the relay runs multiple workers and the confirm landed on a worker without the agent's WS | Check the command actually ran on the agent host; confirm the relay is single-worker (see "Multi-worker deployments"). All three clients now bound this screen with the deadline the relay reported, so it ends in an expiry message rather than waiting forever even if the poll that would have reported it fails |
-| QR scan succeeded but mobile shows "Waiting for agent…" then times out with an error after 60 s | Agent relay client did not come online within the timeout. Possible causes: agent process crashed after writing `.env`, Windows service stdout silenced (pre-v0.1.9), Windows service log file encoded as cp1252/cp437 causing `UnicodeEncodeError` in QR render and aborting the WS before `wait_for_claim` (pre-v0.1.11), or `relay_url` scheme mismatch caused the agent to discard its own credentials. | On the agent host run: `mobaide-agent show-qr` (re-render QR and restart pairing), `Get-Service MobaideAgent` (check service state on Windows), `Get-Content "$env:ProgramFiles\MobaideAgent\logs\agent.err.log" -Tail 50` (Windows error log). Upgrade to v0.1.11+ if on Windows service builds below that version. |
+| QR scan succeeded but the client shows "Waiting for agent…" then, after 60 s, "Agent not online yet" (not an error — the claim already succeeded; "Keep waiting" restarts the wait) | Agent relay client did not come online within the timeout. Possible causes: agent process crashed after writing `.env`, Windows service stdout silenced (pre-v0.1.9), Windows service log file encoded as cp1252/cp437 causing `UnicodeEncodeError` in QR render and aborting the WS before `wait_for_claim` (pre-v0.1.11), or `relay_url` scheme mismatch caused the agent to discard its own credentials. | Check that the agent service is running on that host, or run `mobaide-agent show-qr` there to restart pairing (the same platform-neutral copy all three clients show). Upgrade to v0.1.11+ if on Windows service builds below that version. |
 | QR scan succeeded (mobile shows "Paired") but agent stays offline / `pairing_pending: true` persists | Pre-v0.1.5 agent: post-pairing restart used `sudo -n systemctl restart`, which silently no-op'd when the install user lacked NOPASSWD. v0.1.5–v0.1.6 used `sys.exit(75)` + supervisor restart, which failed when credentials were not flushed before the process exited. v0.1.7–v0.1.8 on Windows service builds: the service host redirected stdout to DEVNULL, silently dropping every structlog line (the issue is visible only after checking `<prefix>\logs\agent.out.log`, which v0.1.9+ captures); a fast mobile scan could also hit the WS-recovery path and receive a push with a `relay_url` scheme that mismatched the initiate-time value (https vs http behind a proxy) — agent strict-equality check discarded its own credentials. | Upgrade to v0.1.9+. The agent now (a) captures stdout to `<prefix>\logs\agent.out.log`, (b) writes `pending_pairing.json` only after the WS is open, and (c) uses `pairing_tokens.relay_url` as the single source of truth for both the dispatch and recovery paths. On older installs: for Linux/macOS, manually run `sudo systemctl restart mobaide-agent` or `launchctl unload … && launchctl load …` once after the initial pairing scan. |
 
 ## Security tests

@@ -193,10 +193,12 @@ export function claimErrorMessage(error: unknown): string {
 /**
  * iOS's shape, not Android's.
  *
- * Android's version enumerates `Get-ScheduledTask MobaideAgent` and
- * `agent.err.log` under `$env:ProgramFiles` — Windows-specific by design,
- * because its user is holding a phone next to a desktop. A browser user's host
- * is as likely to be Linux, so the short form travels better.
+ * Not a failure message: the claim landed and the agent stays paired, so the
+ * copy says so and points at the list that will flip it Online on its own.
+ * Shared word-for-word with Android (`buildWaitTimeoutMessage`) and iOS
+ * (`AgentListModel.waitTimeoutMessage`), and neutral about the agent host —
+ * none of the three clients can tell whether it runs a Windows task, a
+ * systemd unit, or a launchd job.
  *
  * `wsDelivered` is tri-state and `null` (an older relay that omits the field)
  * appends nothing rather than claiming the push was staged.
@@ -206,7 +208,7 @@ export function waitTimeoutMessage(
   wsDelivered: boolean | null,
 ): string {
   const parts = [
-    `‘${friendlyName}’ did not come online within ${String(WAIT_FOR_ONLINE_TIMEOUT_SECONDS)} s.`,
+    `‘${friendlyName}’ was paired to your account but hasn't connected within ${String(WAIT_FOR_ONLINE_TIMEOUT_SECONDS)} s. It will show as Online in your agents list as soon as its relay client connects.`,
   ];
   if (wsDelivered === true) {
     parts.push("The relay delivered credentials to the agent, but its tunnel hasn't connected yet.");
@@ -214,7 +216,10 @@ export function waitTimeoutMessage(
     parts.push("Credentials were staged for the agent's next reconnect.");
   }
   parts.push(
-    'On the agent host, run `mobaide-agent show-qr` to re-render the QR and restart pairing.',
+    'Check that the agent service is running on that host, or run `mobaide-agent show-qr` there to restart pairing.',
   );
   return parts.join(' ');
 }
+
+/** Heading over `waitTimeoutMessage`; deliberately not "Pairing failed". */
+export const WAIT_TIMEOUT_TITLE = 'Agent not online yet';

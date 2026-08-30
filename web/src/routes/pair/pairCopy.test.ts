@@ -3,6 +3,7 @@ import { ApiError } from '../../api/errors';
 import {
   TRUST_PIN_MISMATCH_CODE,
   WAIT_FOR_ONLINE_TIMEOUT_SECONDS,
+  WAIT_TIMEOUT_TITLE,
   claimErrorMessage,
   deviceCodeErrorMessage,
   expiredMessage,
@@ -203,14 +204,26 @@ describe('waitTimeoutMessage', () => {
     expect(message).not.toContain('tunnel');
   });
 
-  it('keeps the browser-neutral short form, not Android Windows-only steps', () => {
-    // Android's version enumerates `Get-ScheduledTask MobaideAgent` and
-    // `agent.err.log` under `$env:ProgramFiles`, which is right for a phone
-    // held next to a desktop and wrong for a browser whose host is as likely
-    // to be Linux.
+  it('keeps the host-neutral short form, not Windows-only steps', () => {
+    // None of the three clients can tell whether the agent host runs a
+    // Windows task, a systemd unit or a launchd job — the copy is shared
+    // word-for-word with Android and iOS and names no service manager.
     const message = waitTimeoutMessage('Workstation', true);
 
     expect(message).not.toContain('Get-ScheduledTask');
     expect(message).not.toContain('ProgramFiles');
+  });
+
+  it('says the agent is paired and never that pairing failed', () => {
+    // The claim landed; the only open question is when the relay client
+    // connects. Reading like a failure sends the user back to re-pair an
+    // agent that is already theirs.
+    const message = waitTimeoutMessage('Workstation', null);
+
+    expect(message).toContain('‘Workstation’ was paired to your account');
+    expect(message).toContain('show as Online in your agents list');
+    expect(message).not.toContain('Pairing failed');
+    expect(message).not.toContain('did not come online');
+    expect(WAIT_TIMEOUT_TITLE).toBe('Agent not online yet');
   });
 });

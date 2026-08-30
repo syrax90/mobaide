@@ -146,6 +146,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   client.clear();
   localStorage.clear();
 });
@@ -275,6 +276,56 @@ describe('PairHost confirmation', () => {
     await screen.findByRole('dialog');
 
     fireEvent.click(screen.getByRole('button', { name: 'Pair this machine' }));
+
+    expect(await screen.findByText(/paired and online/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(useSelectedAgentStore.getState().selectedAgentId).toBe('agent-1');
+    });
+  });
+
+  it('reports "not online yet" after the timeout instead of a pairing failure', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.status = redeemed();
+    api.agents = [agent('agent-1', false)];
+    api.confirmResult = { ...api.confirmResult, wsDelivered: true };
+    renderPairHost();
+    getCode();
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: 'Pair this machine' }));
+    await screen.findByText(/Waiting for/);
+
+    await vi.advanceTimersByTimeAsync(61_000);
+
+    const heading = await screen.findByRole('heading', { name: 'Agent not online yet' });
+    const panel = heading.closest('[role="status"]');
+    expect(panel).not.toBeNull();
+    // ws_delivered=true: the relay pushed credentials, the tunnel is what
+    // has not connected — and still a status, never an alert.
+    expect(panel).toHaveTextContent('tunnel');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/Pairing failed/)).toBeNull();
+    expect(useSelectedAgentStore.getState().selectedAgentId).toBeNull();
+  });
+
+  it('returns to the wait on "Keep waiting" and can still succeed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.status = redeemed();
+    api.agents = [agent('agent-1', false)];
+    renderPairHost();
+    getCode();
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: 'Pair this machine' }));
+    await screen.findByText(/Waiting for/);
+    await vi.advanceTimersByTimeAsync(61_000);
+    await screen.findByRole('heading', { name: 'Agent not online yet' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep waiting' }));
+
+    expect(await screen.findByText(/Waiting for/)).toBeInTheDocument();
+    expect(screen.getByText(/Elapsed 0s/)).toBeInTheDocument();
+
+    api.agents = [agent('agent-1', true)];
+    await client.invalidateQueries({ queryKey: ['agents'] });
 
     expect(await screen.findByText(/paired and online/)).toBeInTheDocument();
     await waitFor(() => {

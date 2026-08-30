@@ -211,6 +211,7 @@ fun AgentListScreen(
     QrPairingDialogs(
         state = uiState.qrPairing,
         onConfirm = viewModel::confirmQrClaim,
+        onKeepWaiting = viewModel::keepWaiting,
         onDismiss = viewModel::dismissQrPairing,
     )
 
@@ -545,6 +546,7 @@ internal fun DeviceCodePairingDialogs(
 private fun QrPairingDialogs(
     state: QrPairingState,
     onConfirm: () -> Unit,
+    onKeepWaiting: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     when (state) {
@@ -612,6 +614,24 @@ private fun QrPairingDialogs(
             confirmButton = {},
             dismissButton = {
                 PixelTextButton(onClick = onDismiss) { Text("Stop waiting") }
+            },
+        )
+        is QrPairingState.WaitTimedOut -> PixelAlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Agent not online yet") },
+            text = {
+                Text(
+                    buildWaitTimeoutMessage(
+                        friendlyName = state.friendlyName,
+                        wsDeliveredAtClaim = state.wsDeliveredAtClaim,
+                    ),
+                )
+            },
+            confirmButton = {
+                PixelButton(onClick = onKeepWaiting) { Text("Keep waiting") }
+            },
+            dismissButton = {
+                PixelTextButton(onClick = onDismiss) { Text("Close") }
             },
         )
         is QrPairingState.Success -> PixelAlertDialog(

@@ -16,6 +16,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.fail
 import org.junit.Test
+import java.io.IOException
 
 /**
  * Unit tests for [AgentRepository.claimAgentByPairing].
@@ -165,5 +166,27 @@ class AgentRepositoryClaimTest {
 
         // Exactly one listAgents call (the pre-warm) — no second refresh.
         coVerify(exactly = 1) { api.listAgents("tok-user-123") }
+    }
+
+    @Test
+    fun claimAgentByPairing_survivesRefreshFailure_afterSuccessfulClaim() = runTest {
+        // The claim has already landed server-side; a transient failure of
+        // the follow-up list fetch must not turn a successful pairing into
+        // "Pairing failed" (iOS and confirmDeviceCode parity).
+        val (repo, api) = newFixture()
+        val response = PairingClaimResponse(
+            agent_id = "a-new", agent_friendly_name = "lab-host", ws_delivered = true,
+        )
+        coEvery { api.claimAgentByPairing("tok-user-123", any()) } returns response
+        coEvery { api.listAgents(any()) } throws IOException("relay unreachable")
+
+        val out = repo.claimAgentByPairing(
+            nonce = "n", trustKeyFp = "fp", mobileDeviceId = "dev",
+            mobileDeviceName = null, hostnameHint = null, friendlyName = null,
+        )
+
+        assertSame(response, out)
+        coVerify(exactly = 1) { api.listAgents("tok-user-123") }
+        assertEquals(emptyList<AgentSummaryResponse>(), repo.observeAgents().value)
     }
 }
