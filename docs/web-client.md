@@ -620,7 +620,14 @@ before they got back to the browser. `setupCopy.test.ts` reads
 holds the quoted labels and the subcommand to what the agent actually ships —
 nothing else fails when those drift, the guide just stops describing reality.
 The example payload carries `<placeholder>` fields that `parseMoba1` rejects,
-so it can never be mistaken for a live code. While the guide is up the flat
+so it can never be mistaken for a live code. The link's origin is
+`window.location.origin`, never a hard-coded `app.mobaide.com`: the agent's
+`MOBAIDE_AGENT_PAIR_WEB_ORIGIN` means "origin of the web client the printed
+link points at", which is *this* client, so a self-hosted deployment that
+configured its agent prints the origin the reader is already browsing — and a
+hard-coded default would tell them to look for a line their agent never wrote.
+The relay URL inside the payload stays literal, because that one is the agent's
+own `PUBLIC_BASE_URL` and is not derivable from the browser. While the guide is up the flat
 four-button row is suppressed: every one of its actions appears in the guide in
 an order, and a flat row beside it would undo the ordering. The sessions and
 projects "No agents yet" lines now point at `/agents` rather than `/pair`, for
@@ -638,6 +645,21 @@ than `encodeURIComponent` so the fragment is `[A-Za-z0-9_-]` only and no layer
 in between can re-encode it into something the decoder reads back differently.
 That reuses the deep-link path verbatim, including its scrub, so the nonce
 still never survives in history.
+
+Routing a second flow through that path exposed a latent hole in it, now
+closed: the capture effect scrubs the fragment whether or not the
+`sessionStorage` write landed, so in a context that denies storage — a private
+window, a partitioned context — the payload was destroyed outright and the
+visitor was left on an empty paste box with a single-use nonce they could no
+longer produce. `Pair` now also holds it in a `handoffRef` and prefers that on
+read. A ref rather than module state because capture and consume are two
+effects on one mounted component, which is exactly the lifetime this needs;
+`sessionStorage` stays the arm that survives the sign-out bounce, which
+unmounts the component. Note for anyone testing this: `vi.spyOn(Storage
+.prototype, …)` silently intercepts nothing under Node >= 22, whose
+experimental `Storage` global shadows jsdom's — spy on
+`Object.getPrototypeOf(sessionStorage)` instead, or the test passes against
+unfixed code.
 
 Removing an agent calls `clearAgentToken(agentId)`, never
 `sessionStore.agentDisconnect()`, which clears *every* agent's tokens; it also

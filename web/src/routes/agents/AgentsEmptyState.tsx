@@ -5,7 +5,11 @@ import { TextAreaField } from '../../components/form/TextAreaField';
 import { encodePairingFragment, readPairingInput } from '../../protocol/pairingPayload';
 import { MALFORMED_PAYLOAD_MESSAGE } from '../pair/pairCopy';
 import { INSTALL_COMMANDS } from './hostOs';
-import { PAIRING_HINT_EXAMPLE, SHOW_QR_COMMAND } from './setupCopy';
+import {
+  pairingHintExample,
+  pairingLinkPrefix,
+  SHOW_QR_COMMAND,
+} from './setupCopy';
 
 interface AgentsEmptyStateProps {
   /** Opens the parent's `AddAgentDialog` — the last-resort token path. */
@@ -27,6 +31,12 @@ interface AgentsEmptyStateProps {
  * and the command is the only thing a first-run user can act on at all.
  */
 export function AgentsEmptyState({ onAddManually }: AgentsEmptyStateProps) {
+  // The agent's `MOBAIDE_AGENT_PAIR_WEB_ORIGIN` names the web client its
+  // printed link points at, which is this one — so a correctly configured
+  // deployment prints exactly this origin, and a self-hoster is not told to
+  // look for an `app.mobaide.com` line their agent never wrote.
+  const webOrigin = window.location.origin;
+
   return (
     <section className="setup-guide" aria-labelledby="agents-setup-title">
       <h2 id="agents-setup-title" className="setup-title">
@@ -55,13 +65,13 @@ export function AgentsEmptyState({ onAddManually }: AgentsEmptyStateProps) {
           */}
           <figure className="terminal-sample" data-testid="setup-example-output">
             <figcaption className="terminal-sample-label">Example output</figcaption>
-            <pre className="terminal-sample-body">{PAIRING_HINT_EXAMPLE}</pre>
+            <pre className="terminal-sample-body">{pairingHintExample(webOrigin)}</pre>
           </figure>
         </SetupStep>
 
         <SetupStep number={2} title="Open the link">
           <p className="setup-step-body">
-            Copy the <code>https://app.mobaide.com/pair#…</code> line and open it in a
+            Copy the <code>{pairingLinkPrefix(webOrigin)}…</code> line and open it in a
             browser. It goes straight to the pairing confirmation.
           </p>
         </SetupStep>

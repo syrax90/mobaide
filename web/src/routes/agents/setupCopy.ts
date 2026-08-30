@@ -22,23 +22,45 @@ export const PAIRING_HINT_CODE_LABEL = '[mobaide-agent] Pairing code (copy this 
 export const PAIRING_HINT_LINK_LABEL = '[mobaide-agent] Or open this link in a browser:';
 
 /**
- * A stand-in for the payload and link, shaped like the real ones.
+ * A stand-in for the payload, shaped like the real one.
  *
  * The nonce, fingerprint and expiry are spelled out as placeholders rather than
  * faked with plausible-looking values: a user comparing this against their
  * terminal must never be able to mistake the example for something copyable.
  * The relay host is the production one, because that part *is* what they will
- * see.
+ * see — unlike the link's origin below, the relay URL is the agent's own
+ * `PUBLIC_BASE_URL` and is not derivable from this browser.
  */
 export const PAIRING_HINT_EXAMPLE_PAYLOAD =
   'MOBA1|https://api.mobaide.com|<nonce>|<fingerprint>|<expires>';
 
-export const PAIRING_HINT_EXAMPLE_LINK = 'https://app.mobaide.com/pair#<encoded-payload>';
+/**
+ * The link the agent prints, for a browser served from `webOrigin`.
+ *
+ * Takes the origin rather than hard-coding `app.mobaide.com`, because the agent
+ * does the same: `pairing_qr.pairing_web_origin()` is
+ * `MOBAIDE_AGENT_PAIR_WEB_ORIGIN` when set, and that variable means "origin of
+ * the web client the printed link points at" — which is *this* client. So a
+ * deployment that configured its agent correctly prints the origin the reader
+ * is already browsing, and a self-hoster is no longer told to look for a
+ * mobaide.com line that never appears in their output. `window.location.origin`
+ * carries no trailing slash and the agent `rstrip("/")`s its own, so the two
+ * agree without normalising here.
+ */
+export function pairingLinkPrefix(webOrigin: string): string {
+  return `${webOrigin}/pair#`;
+}
+
+export function pairingHintExampleLink(webOrigin: string): string {
+  return `${pairingLinkPrefix(webOrigin)}<encoded-payload>`;
+}
 
 /** The four lines as one block, in the order the agent writes them. */
-export const PAIRING_HINT_EXAMPLE = [
-  PAIRING_HINT_CODE_LABEL,
-  PAIRING_HINT_EXAMPLE_PAYLOAD,
-  PAIRING_HINT_LINK_LABEL,
-  PAIRING_HINT_EXAMPLE_LINK,
-].join('\n');
+export function pairingHintExample(webOrigin: string): string {
+  return [
+    PAIRING_HINT_CODE_LABEL,
+    PAIRING_HINT_EXAMPLE_PAYLOAD,
+    PAIRING_HINT_LINK_LABEL,
+    pairingHintExampleLink(webOrigin),
+  ].join('\n');
+}

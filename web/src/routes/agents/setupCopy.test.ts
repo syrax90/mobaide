@@ -15,12 +15,16 @@ import { describe, expect, it } from 'vitest';
 import { parseMoba1 } from '../../protocol/pairingPayload';
 import {
   PAIRING_HINT_CODE_LABEL,
-  PAIRING_HINT_EXAMPLE,
-  PAIRING_HINT_EXAMPLE_LINK,
   PAIRING_HINT_EXAMPLE_PAYLOAD,
   PAIRING_HINT_LINK_LABEL,
   SHOW_QR_COMMAND,
+  pairingHintExample,
+  pairingHintExampleLink,
+  pairingLinkPrefix,
 } from './setupCopy';
+
+/** A self-hosted deployment, i.e. not the origin the agent falls back to. */
+const SELF_HOSTED = 'https://mobaide.internal.example';
 
 /** `web/src/routes/agents/` → repo root. */
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -53,12 +57,30 @@ describe('pairing hint example', () => {
   });
 
   it('keeps the agent’s order: label, payload, label, link', () => {
-    expect(PAIRING_HINT_EXAMPLE.split('\n')).toEqual([
+    expect(pairingHintExample(SELF_HOSTED).split('\n')).toEqual([
       PAIRING_HINT_CODE_LABEL,
       PAIRING_HINT_EXAMPLE_PAYLOAD,
       PAIRING_HINT_LINK_LABEL,
-      PAIRING_HINT_EXAMPLE_LINK,
+      pairingHintExampleLink(SELF_HOSTED),
     ]);
+  });
+
+  it('quotes the reader’s own origin, never the agent’s hard-coded default', () => {
+    // `MOBAIDE_AGENT_PAIR_WEB_ORIGIN` means "origin of the web client the
+    // printed link points at", so a self-hoster that set it sees their own
+    // origin in their scrollback — and would find no `app.mobaide.com` line
+    // to match against a guide that hard-coded one.
+    expect(pairingLinkPrefix(SELF_HOSTED)).toBe(`${SELF_HOSTED}/pair#`);
+    expect(pairingHintExample(SELF_HOSTED)).not.toContain('app.mobaide.com');
+  });
+
+  it('builds the same link shape as the agent’s format_pairing_link', () => {
+    // `f"{pairing_web_origin()}/pair#{fragment}"`, and the origin is
+    // `rstrip("/")`-ed there exactly as `window.location.origin` arrives here.
+    expect(PAIRING_QR_SOURCE).toContain('f"{pairing_web_origin()}/pair#{fragment}"');
+    expect(pairingLinkPrefix('https://app.mobaide.com')).toBe(
+      'https://app.mobaide.com/pair#',
+    );
   });
 
   it('is inert as pairing input, so a copied example can never be mistaken for one', () => {
