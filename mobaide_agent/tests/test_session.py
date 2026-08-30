@@ -715,6 +715,87 @@ def _on_alt_screen(session: TerminalSession) -> TerminalSession:
     return session
 
 
+class _BlockingReadBackend:
+    """A backend whose ``read()`` parks until fed — where an idle PTY sits."""
+
+    def __init__(self) -> None:
+        self._ready = threading.Event()
+        self._chunk = b""
+        self._closed = False
+
+    def feed(self, data: bytes) -> None:
+        self._chunk = data
+        self._ready.set()
+
+    def release(self) -> None:
+        self._closed = True
+        self._ready.set()
+
+    def read(self, _size: int) -> bytes:
+        self._ready.wait()
+        self._ready.clear()
+        return b"" if self._closed else self._chunk
+
+    def resize(self, rows: int, cols: int) -> None:
+        self.size = (rows, cols)
+
+    def write(self, data: bytes) -> None:
+        pass
+
+    @property
+    def is_alive(self) -> bool:
+        return not self._closed
+
+    def get_pid(self) -> int:
+        return 4321
+
+
+async def _until(predicate, timeout: float = 2.0) -> None:
+    """Wait for the reader task to make ``predicate`` true."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("reader loop did not reach the expected state")
+        await asyncio.sleep(0.01)
+
+
+def _issue_read(session: TerminalSession, *, returned: bool = False) -> int:
+    """The reader loop bumping its counter and starting a read.
+
+    ``returned`` models the executor having already handed the chunk back
+    before the resize interleaved — the rare case; the default is the common
+    one, a read still parked in ``read()`` whose chunk will be the repaint.
+    """
+    session._read_seq += 1
+    session._read_fut = _ReturnedRead() if returned else _ParkedRead()
+    return session._read_seq
+
+
+def _deliver(session: TerminalSession, seq: int, data: bytes) -> None:
+    """The reader loop resuming with that read's chunk, in its own order."""
+    session._track_modes(data)
+    session._append_ring(data, read_seq=seq)
+
+
+def _read(session: TerminalSession, data: bytes) -> None:
+    """One whole reader-loop iteration."""
+    _deliver(session, _issue_read(session), data)
+
+
+class _ParkedRead:
+    """A read still blocked in the executor."""
+
+    def done(self) -> bool:
+        return False
+
+
+class _ReturnedRead:
+    """A read the executor has already completed."""
+
+    def done(self) -> bool:
+        return True
+
+
 def _replay(session: TerminalSession) -> bytes:
     return b"".join(session.iter_ring_chunks(chunk_size=64))
 
@@ -1035,14 +1116,28 @@ class TestRingWidthMark:
         # the bytes it returns are old-grid output. Landing the cut on it would
         # start the span grid-mixed — exactly what the cut exists to prevent.
         session = _on_alt_screen(_width_session(cols=80))
-        session._read_seq = 5
-        session._append_ring(b"history", read_seq=5)
+        _read(session, b"history")
 
+        stale = _issue_read(session, returned=True)
         await session.resize(24, 55)
-        session._append_ring(b"stale old-grid tail", read_seq=5)
-        session._append_ring(b"fresh repaint", read_seq=6)
+        _deliver(session, stale, b"stale old-grid tail")
+        _read(session, b"fresh repaint")
 
         assert _replay_body(session) == b"fresh repaint"
+
+    async def test_a_read_still_parked_delivers_the_repaint_and_lands(self) -> None:
+        # The common case, and the one the sequence number alone gets wrong: on
+        # an idle session the reader is parked in `read()`, so the chunk that
+        # read returns *is* the SIGWINCH repaint the cut exists to promote.
+        session = _on_alt_screen(_width_session(cols=80))
+        _read(session, b"eighty-column paint")
+
+        parked = _issue_read(session)
+        await session.resize(24, 120)
+        _deliver(session, parked, b"one-twenty repaint")
+
+        assert session._pending_cut is None
+        assert _replay_body(session) == b"one-twenty repaint"
 
     async def test_a_partial_span_on_the_primary_screen_says_so(self) -> None:
         # A client's emulator is retained across reconnects and the replay wipe
@@ -1056,7 +1151,10 @@ class TestRingWidthMark:
         session._append_ring(b"\x1b[?1049l" + b"B" * 18, read_seq=2)
 
         assert not session._span.alt_screen
-        assert _replay(session).startswith(b"\x1b[?1049l")
+        replay = _replay(session)
+        # Ordering is the contract, not position: the buffer is selected, then
+        # the clear lands on the buffer that was selected.
+        assert replay.index(b"\x1b[?1049l") < replay.index(b"\x1b[H\x1b[2J\x1b[3J")
 
     async def test_a_pristine_span_carries_no_synthesised_bytes(self) -> None:
         # A span that still starts at the child's first byte establishes every
@@ -1117,6 +1215,36 @@ class TestRingWidthMark:
         session._append_ring(b"repaint", read_seq=2)
 
         assert b"\x1b[?7l" in session._span.restore_prefix()
+
+    async def test_the_real_reader_loop_lands_a_cut_on_the_repaint(self) -> None:
+        """Drive `_reader_loop` itself, resizing while its read is parked.
+
+        Every other test in this class models the loop; this one runs it. The
+        arm/land contract is a timing relationship between the loop and
+        `resize()`, so a model of the loop cannot prove it — and a defect that
+        deferred the cut past the repaint on every idle session survived
+        several reviews precisely because nothing exercised the real thing.
+        """
+        backend = _BlockingReadBackend()
+        session = TerminalSession(
+            _width_config(cols=80), backend=cast(PtyBackend, backend),
+        )
+        session._state = SessionState.RUNNING
+        reader = asyncio.create_task(session._reader_loop())
+        try:
+            backend.feed(b"\x1b[?1049heighty-column paint")
+            await _until(lambda: session._alt_screen)
+
+            # The reader is parked in read(); the client resizes, the child
+            # gets SIGWINCH, and the repaint arrives on that parked read.
+            await session.resize(40, 120)
+            backend.feed(b"one-twenty repaint")
+            await _until(lambda: session._pending_cut is None)
+
+            assert _replay_body(session) == b"one-twenty repaint"
+        finally:
+            reader.cancel()
+            backend.release()
 
     async def test_head_trim_clamps_the_mark_at_zero(self) -> None:
         # An overflow larger than the mark would drive it negative, and a

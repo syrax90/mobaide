@@ -87,8 +87,18 @@ _RESTORED_MODES = (
     7,     # DECAWM — autowrap; off, drawing the last column must not scroll
     25,    # cursor visibility
     2004,  # bracketed paste
-    1000, 1002, 1003, 1006, 1015,  # mouse reporting
 )
+
+# Mouse reporting is one selection, not a set of flags — the same shape as the
+# screen aliases. Emulators hold a single active protocol: setting any of these
+# replaces the previous one, and resetting *any* of them turns reporting off
+# entirely. Tracked as flags, the restore prefix would emit them in numeric
+# order and the highest number would win rather than the child's last action —
+# putting a client back into any-event reporting after the child asked for
+# drag, or back on after the child turned it off.
+_MOUSE_PROTOCOL_MODES = (9, 1000, 1001, 1002, 1003)
+_MOUSE_ENCODING_MODES = (1005, 1006, 1015)
+_DEFAULT_MOUSE_PROTOCOL = 1000
 
 # Home, erase display, erase scrollback — the same wipe every client feeds
 # before a replay, re-issued after the prefix selects a buffer so the one that
@@ -109,12 +119,17 @@ class _TerminalModes:
 
     alt_screen: bool = False
     alt_screen_mode: int = _DEFAULT_ALT_SCREEN_MODE
+    # The protocol/encoding in force, or None when reporting is off.
+    mouse_protocol: int | None = None
+    mouse_encoding: int | None = None
     modes: dict[int, bool] = field(default_factory=dict)
 
     def copy(self) -> "_TerminalModes":
         return _TerminalModes(
             alt_screen=self.alt_screen,
             alt_screen_mode=self.alt_screen_mode,
+            mouse_protocol=self.mouse_protocol,
+            mouse_encoding=self.mouse_encoding,
             modes=dict(self.modes),
         )
 
@@ -129,6 +144,14 @@ class _TerminalModes:
         # clears the display, not the selected buffer — so a span that starts
         # on the primary screen has to say so, or an emulator left on the
         # alternate buffer parses primary-screen history there.
+        # One sequence per selection, reproducing the child's last action
+        # rather than the numeric order of every mode it ever touched.
+        if self.mouse_protocol is not None:
+            parts.append(b"\x1b[?%dh" % self.mouse_protocol)
+        else:
+            parts.append(b"\x1b[?%dl" % _DEFAULT_MOUSE_PROTOCOL)
+        if self.mouse_encoding is not None:
+            parts.append(b"\x1b[?%dh" % self.mouse_encoding)
         parts.append(
             b"\x1b[?%d%s" % (self.alt_screen_mode, b"h" if self.alt_screen else b"l")
         )
@@ -262,15 +285,20 @@ class TerminalSession:
         self._span = _TerminalModes()
         self._mode_tail = b""
         # A grid change waits for the output that replaces the old span: the
-        # ring offset to cut at, the grid the span will then be at, the modes
-        # in force when it was armed, and the read it must not land on.
+        # ring offset to cut at, the modes in force when it was armed, and the
+        # last read that must not land it.
         # Applied on a later append, so a child that dies before repainting
         # keeps the screen it died showing.
-        self._pending_cut: tuple[int, int, int, _TerminalModes, int] | None = None
-        # Bumped as each PTY read is issued. A chunk the executor had already
-        # returned when the resize arrived carries pre-resize output, so it
-        # cannot be the replacement the cut is waiting for.
+        self._pending_cut: tuple[int, _TerminalModes, int] | None = None
+        # Bumped as each PTY read is issued, alongside the future it is waiting
+        # on. A chunk the executor had *already returned* when the resize
+        # arrived carries pre-resize output and cannot be the replacement the
+        # cut waits for — but a read still parked in `read()` will return the
+        # repaint, and on an idle session that is where the reader always is.
+        # `Future.done()` is what separates the two; the sequence number alone
+        # cannot, since it is bumped before the await.
         self._read_seq = 0
+        self._read_fut: asyncio.Future[bytes] | None = None
         # True once the span stops being self-establishing — a cut landed, or
         # the head trimmed. Only then does it need a state prefix: a span that
         # still starts at the child's first byte carries every transition it
@@ -379,9 +407,10 @@ class TerminalSession:
             try:
                 self._read_seq += 1
                 read_seq = self._read_seq
-                data: bytes = await loop.run_in_executor(
+                self._read_fut = loop.run_in_executor(
                     None, self._backend.read, 4096,
                 )
+                data: bytes = await self._read_fut
                 if not data:
                     break
                 # Intercept terminal capability/color queries before they hit
@@ -584,7 +613,13 @@ class TerminalSession:
                     mode = int(raw)
                 except ValueError:  # pragma: no cover — regex admits digits only
                     continue
-                if mode in _ALT_SCREEN_MODES:
+                if mode in _MOUSE_PROTOCOL_MODES:
+                    # Any reset clears reporting; a set replaces whatever was
+                    # selected before.
+                    state.mouse_protocol = mode if enabled else None
+                elif mode in _MOUSE_ENCODING_MODES:
+                    state.mouse_encoding = mode if enabled else None
+                elif mode in _ALT_SCREEN_MODES:
                     # One state, whichever alias set it: a program can enter
                     # with 1049 and leave with 47, and they select the same
                     # buffer. The alias is remembered so the restore prefix
@@ -598,6 +633,19 @@ class TerminalSession:
     def _alt_screen(self) -> bool:
         return self._live.alt_screen
 
+    def _cut_offset(self, *, extra: int = 0) -> int:
+        """Where to cut, rolled back over any half-written mode sequence.
+
+        The cut falls on a read boundary, which is exactly where a private-mode
+        sequence can be split — its head already in the ring, its terminator
+        still to come. Cutting between them would drop the mode from the span's
+        state (the terminator has not reached `_live` yet) and leave the span
+        opening on an orphaned fragment. The carried tail is the ring's trailing
+        bytes verbatim, since an unterminated `ESC[?…` matches no scrub
+        alternative, so rolling back by its length is exact.
+        """
+        return max(0, len(self._ring) + extra - len(self._mode_tail))
+
     def _append_ring(self, data: bytes, *, read_seq: int | None = None) -> None:
         # Scrub terminal query/response bytes in-line so the ring is always
         # clean. Replay senders rely on this — without the per-write strip
@@ -608,7 +656,7 @@ class TerminalSession:
         if not cleaned:
             return
         if self._pending_cut is not None:
-            offset, rows, cols, modes, armed_after = self._pending_cut
+            offset, modes, armed_after = self._pending_cut
             # A chunk whose read was already in flight when the resize arrived
             # holds output the child produced at the old grid, so landing on it
             # would start the span grid-mixed — the very thing the cut exists to
@@ -620,7 +668,13 @@ class TerminalSession:
                 # span's bytes were produced under the state that preceded it.
                 self._ring_width_start = min(offset, len(self._ring))
                 self._span = modes
-                self._alt_rows, self._alt_cols = rows, cols
+                # The PTY's grid as it stands now, not the target recorded when
+                # the cut was armed: a resize made off the alternate screen
+                # neither re-arms nor cancels, so that target can be stale, and
+                # writing it here would leave `_alt_*` describing a grid nothing
+                # was painted at — after which every same-grid re-assert arms a
+                # cut and the next output truncates the replay.
+                self._alt_rows, self._alt_cols = self._pty_rows, self._pty_cols
                 self._span_partial = True
                 self._pending_cut = None
             else:
@@ -628,9 +682,7 @@ class TerminalSession:
                 # this chunk's own mode changes, which is exactly the state the
                 # span would start in were it to begin after it.
                 self._pending_cut = (
-                    len(self._ring) + len(cleaned),
-                    rows,
-                    cols,
+                    self._cut_offset(extra=len(cleaned)),
                     self._live.copy(),
                     armed_after,
                 )
@@ -881,8 +933,14 @@ class TerminalSession:
             # cutting would discard history for nothing.
             self._pending_cut = None
         elif self._alt_screen and self._state == SessionState.RUNNING:
+            # A read still blocked will deliver the repaint, so the cut must
+            # land on it; one already returned holds old-grid output and must
+            # be stepped over.
+            in_flight = self._read_fut is not None and not self._read_fut.done()
             self._pending_cut = (
-                len(self._ring), rows, cols, self._live.copy(), self._read_seq,
+                self._cut_offset(),
+                self._live.copy(),
+                self._read_seq - 1 if in_flight else self._read_seq,
             )
 
     def get_scrollback(self) -> list[str]:
