@@ -1077,6 +1077,47 @@ class TestRingWidthMark:
 
         assert session._span.alt_screen
 
+    async def test_a_primary_screen_resize_does_not_hide_a_later_change(self) -> None:
+        # Resizing while the child is on the primary screen makes no cut, so
+        # the span's own grid says nothing about the grid the alternate-screen
+        # paint inside it used. Comparing against the span would cancel a cut
+        # the alternate content genuinely needs.
+        session = _width_session(cols=80)
+        await session.resize(24, 120)
+
+        session._track_modes(b"\x1b[?1049h")
+        session._append_ring(b"one-twenty alt paint", read_seq=1)
+        await session.resize(24, 80)
+
+        assert session._pending_cut is not None
+        session._append_ring(b"eighty repaint", read_seq=2)
+        assert _replay_body(session) == b"eighty repaint"
+
+    async def test_the_prefix_clears_the_buffer_it_selects(self) -> None:
+        # The client's wipe runs before this prefix, against whichever buffer
+        # its emulator was left on. Switching afterwards lands on a buffer
+        # nothing cleared, so a partial span would paint over stale content.
+        session = _width_session(cols=80, ring_buffer_bytes=24)
+        session._track_modes(b"\x1b[?1049h")
+        session._append_ring(b"A" * 20, read_seq=1)
+        session._track_modes(b"\x1b[?1049l")
+        session._append_ring(b"\x1b[?1049l" + b"B" * 18, read_seq=2)
+
+        replay = _replay(session)
+        assert replay.index(b"\x1b[H\x1b[2J\x1b[3J") > replay.index(b"\x1b[?1049l")
+
+    async def test_autowrap_off_is_restored(self) -> None:
+        # A TUI that turned autowrap off needs it off for its repaint too:
+        # with the default back on, drawing the last column wraps and scrolls.
+        session = _on_alt_screen(_width_session(cols=80))
+        session._track_modes(b"\x1b[?7l")
+        session._append_ring(b"paint", read_seq=1)
+
+        await session.resize(24, 55)
+        session._append_ring(b"repaint", read_seq=2)
+
+        assert b"\x1b[?7l" in session._span.restore_prefix()
+
     async def test_head_trim_clamps_the_mark_at_zero(self) -> None:
         # An overflow larger than the mark would drive it negative, and a
         # negative slice start silently reads from the *tail* — the replay would

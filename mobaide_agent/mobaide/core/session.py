@@ -84,10 +84,17 @@ _DEFAULT_ALT_SCREEN_MODE = 1049
 # changes how the retained bytes render or how the user's input is encoded.
 _RESTORED_MODES = (
     1,     # DECCKM — application cursor keys (arrows as SS3, not CSI)
+    7,     # DECAWM — autowrap; off, drawing the last column must not scroll
     25,    # cursor visibility
     2004,  # bracketed paste
     1000, 1002, 1003, 1006, 1015,  # mouse reporting
 )
+
+# Home, erase display, erase scrollback — the same wipe every client feeds
+# before a replay, re-issued after the prefix selects a buffer so the one that
+# is actually about to be painted is the one that gets cleared.
+_CLEAR_SELECTED_BUFFER = b"\x1b[H\x1b[2J\x1b[3J"
+
 
 @dataclass
 class _TerminalModes:
@@ -125,6 +132,10 @@ class _TerminalModes:
         parts.append(
             b"\x1b[?%d%s" % (self.alt_screen_mode, b"h" if self.alt_screen else b"l")
         )
+        # And the buffer this just selected is not the one the client wiped:
+        # its clear ran before this prefix, against whichever buffer it happened
+        # to be on. Without this, a partial span paints over stale content.
+        parts.append(_CLEAR_SELECTED_BUFFER)
         return b"".join(parts)
 
 
@@ -233,11 +244,17 @@ class TerminalSession:
         # is never asked to repaint. So track where the current width began and
         # replay only from there. Rows are excluded deliberately — they do not
         # affect wrapping.
-        # The grid the current replay span's bytes were produced at. Compared
-        # against on resize — not the PTY's latest grid, so a transient
-        # excursion that returns to it needs no cut at all.
-        self._span_cols = config.cols
-        self._span_rows = config.rows
+        # The PTY's current grid.
+        self._pty_cols = config.cols
+        self._pty_rows = config.rows
+        # The grid the alternate screen's current content was painted at: set
+        # when the child enters that screen, and again whenever a cut lands.
+        # This is what a resize is compared against — not the PTY's latest
+        # grid, so an excursion that returns needs no cut; and not the span's
+        # start, which for a span covering a primary-screen stretch says
+        # nothing about the grid the alternate-screen paint inside it used.
+        self._alt_cols = config.cols
+        self._alt_rows = config.rows
         self._ring_width_start = 0
         # Private-mode state: one copy following the child, one pinned to the
         # start of the replay span (see `_track_modes` and `_span`).
@@ -508,8 +525,15 @@ class TerminalSession:
         Stateful across reads, like the DA and OSC processors on the same
         bytes: a `?1049h` split across two 4 KiB reads still counts.
         """
+        was_alt = self._live.alt_screen
         window = self._mode_tail + data
         self._apply_modes(window, self._live)
+        if self._live.alt_screen and not was_alt:
+            # Everything the child paints from here is laid out at the PTY's
+            # grid as it stands now — which is not the grid the span started
+            # at if the PTY was resized while the child was on the primary
+            # screen, where no cut is ever made.
+            self._alt_rows, self._alt_cols = self._pty_rows, self._pty_cols
         self._mode_tail = self._unfinished_mode_tail(window)
 
     @staticmethod
@@ -596,7 +620,7 @@ class TerminalSession:
                 # span's bytes were produced under the state that preceded it.
                 self._ring_width_start = min(offset, len(self._ring))
                 self._span = modes
-                self._span_rows, self._span_cols = rows, cols
+                self._alt_rows, self._alt_cols = rows, cols
                 self._span_partial = True
                 self._pending_cut = None
             else:
@@ -850,7 +874,8 @@ class TerminalSession:
         because the chunk that lands it may itself change them.
         """
         self._backend.resize(rows, cols)
-        if (rows, cols) == (self._span_rows, self._span_cols):
+        self._pty_rows, self._pty_cols = rows, cols
+        if (rows, cols) == (self._alt_rows, self._alt_cols):
             # Back to the grid the span was produced at — whatever excursion
             # armed a cut, the span is homogeneous with the PTY again and
             # cutting would discard history for nothing.

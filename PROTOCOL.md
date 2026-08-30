@@ -539,11 +539,12 @@ cadence; they do **not** gate compatibility.
     dies before repainting still replays the screen it died showing.
     A span that no longer starts at the child's first byte — cut at a grid
     change, or with its head trimmed as the ring rolled — is prefixed with the
-    private modes in force at its start: the selected screen buffer (stated
+    private modes in force at its start: the selected screen buffer — stated
     either way, since a client's emulator is retained across reconnects and the
-    replay wipe clears the display rather than the buffer selection),
-    application cursor keys, cursor visibility, bracketed paste and mouse
-    reporting. The sequences that established them sit behind the span's start,
+    replay wipe clears the display rather than the buffer selection, and
+    followed by a clear so the buffer the prefix selects is the one that gets
+    wiped — plus application cursor keys, autowrap, cursor visibility,
+    bracketed paste and mouse reporting. The sequences that established them sit behind the span's start,
     and without the prefix the span is parsed on the wrong buffer or with the
     wrong input encoding. A span that still starts at the first byte
     establishes its own state and is sent verbatim. Clients need no change for any of this: the frame
