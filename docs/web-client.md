@@ -722,7 +722,9 @@ case-insensitively — deliberately not the picker's recents-first grouping,
 because a management list must show every template exactly once. The editor
 keeps its draft on a failed save (iOS's guard; Android has none), and the body
 is sent verbatim while the name is trimmed, since a body reaches the PTY
-unchanged.
+unchanged. `TemplateEditorDialog` is shared with the terminal's picker, which
+creates mid-session through its optional `initialBody` (see *Terminal screen*
+below); `/templates` stays the only place one is edited or deleted.
 
 Fixture coverage: `ProjectInfo`, `BusyByResponse` and `BusyHolder` moved into
 `COVERED_FIXTURES` with Zod mirrors — the first because it crosses a socket
@@ -1045,8 +1047,52 @@ sits below the top layer; the clipboard-outcome toast below is outside that
 rule because it fires after the dialog has closed. Loading, load failure
 (with Retry), an empty account and a filter with no matches are each their
 own state, and rows disable with an explanation while the session refuses
-input. It is read-only here (list, Recents/Favorites/All grouping, filter,
-insert, favourite toggle); creating and deleting templates is WEB-09.
+input. It lists, groups Recents/Favorites/All, filters, inserts and toggles a
+favourite; editing and deleting a template still belong to `/templates`.
+
+**Creating one without leaving the session.** A **New template** button sits
+beside Close in the picker's head and opens the same `TemplateEditorDialog`
+`/templates` uses, seeded through its optional `initialBody`. Three decisions
+hold it up.
+
+*The two dialogs are never co-mounted.* `TerminalView` keeps a single
+`TemplatePanel` union (`none` / `picker` / `editor`) rather than two booleans,
+so opening the editor unmounts the picker. The picker hangs its key handler on
+the ancestor of everything it renders, and an element on the top layer still
+propagates events through its DOM parent — paint order is what the top layer
+changes, not propagation — so an editor nested inside would lose ArrowUp and
+ArrowDown in its textarea to the row walk, and its draft to the Escape that
+dismisses the picker. The union also collapses the focus-restore condition to
+`panel.kind !== 'none'`, which is what keeps the picker-to-editor hop from
+reading as a dismissal and yanking focus out of the field it just opened.
+
+*The body is the terminal selection, snapshotted when the picker opens.* WEB-06
+removed the composer, so the selection is the only in-session text source web
+has. It is read in the Templates button's own handler rather than when the
+editor mounts: blur is not the risk — xterm holds the selection in its own
+model, not the document's — but PTY output keeps arriving behind the modal, and
+`SelectionService` clears on user input, on a row-count change, on an
+alternate-screen switch and on a mouse-protocol change, as does the replay
+wipe. There is no staleness to trade against, because the grid is inert while
+the dialog is up.
+
+*The pre-fill declines `screenIsSettled()`*, which every other selection read in
+`sessionModel` carries. That guard exists because a copy puts text the user may
+never have seen onto the system clipboard, silently and irreversibly; this text
+lands in an editable field they have to name and save, so the review is the
+guard. It also toasts on refusal, and that toast would be raised over an open
+`<dialog>`, where nothing can be read.
+
+The success toast is the one message here exempt from the inline rule above —
+the editor closes first, in the same commit, so the viewport is clear by the
+time it paints. A failed save stays inline and keeps the draft.
+
+**Mobile's shape differs, deliberately.** Android and iOS put a *Save as
+template* button in the composer's action row (`SaveTemplateDialog.kt`,
+`TerminalScreen.swift`): the body is the composer text, rendered as a read-only
+preview, and the dialog dismisses optimistically. Web has no composer, so the
+body is the selection and stays editable, and — as with the management editor
+below — the dialog survives a failed save.
 
 ## Desktop keyboard & shortcuts (WEB-06)
 

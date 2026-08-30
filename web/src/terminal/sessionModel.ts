@@ -1092,6 +1092,23 @@ export class TerminalSessionModel {
     return this.screenIsSettled();
   }
 
+  /**
+   * The current terminal selection, or `''` when there is none.
+   *
+   * Deliberately not behind {@link screenIsSettled}, which every other
+   * selection read here carries. That guard exists because a copy puts text the
+   * user may never have seen onto the system clipboard, silently and
+   * irreversibly; this text lands in an editable field they have to name and
+   * save before anything leaves the browser, so the review is the guard. The
+   * guard also toasts on refusal, and its toast would be raised over an open
+   * `<dialog>`, where `.toast-viewport` sits below the top layer and cannot be
+   * seen.
+   */
+  selectionText(): string {
+    if (this.disposed) return '';
+    return this.term.getSelection();
+  }
+
   async copySelection(): Promise<void> {
     if (!this.screenIsSettled()) return;
     const text = this.term.getSelection();

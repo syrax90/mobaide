@@ -597,6 +597,18 @@ describe('TerminalSessionModel synchronized output guard', () => {
     expect(toastKinds()).toEqual(['info']);
   });
 
+  it('hands back the selection for a template while the frame is still being painted', async () => {
+    // The deliberate asymmetry with the copy above. That guard exists because a
+    // copy puts unseen text onto the system clipboard silently; this text lands
+    // in an editable field the user has to name and save, so the review is the
+    // guard. And the guard's own toast would be raised over an open `<dialog>`,
+    // below `.toast-viewport`, where nobody could read it.
+    const { model } = await selecting(ARM_SYNC);
+
+    expect(model.selectionText()).toBe('selected text');
+    expect(toastKinds()).toEqual([]);
+  });
+
   it('refuses the browser context menu copy while the frame is still being painted', async () => {
     // xterm stages the selection into its helper textarea on `contextmenu` and
     // answers the `copy` event from the buffer, never calling `copySelection` —

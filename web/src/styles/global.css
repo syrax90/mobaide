@@ -1515,8 +1515,15 @@ input[type='radio']:checked {
   font-size: 0.85rem;
 }
 
+/* The heading plus a `.button-row` holding New template and Close — two
+   children, so `space-between` still splits the head rather than pushing the
+   buttons apart from each other. `wrap` is the narrow-viewport escape: at 360px
+   the head's content just overflows, and `.button` neither nowraps nor refuses
+   to shrink, so without it the labels break inside the buttons. Unlike
+   `.terminal-bar`, a taller head here costs the grid no rows. */
 .template-picker-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
