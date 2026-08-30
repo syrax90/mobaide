@@ -7,6 +7,13 @@ import type { PromptTemplate } from '../../api/templateRepository';
 interface TemplateEditorDialogProps {
   /** `null` for a new template. */
   editing: PromptTemplate | null;
+  /**
+   * Seeds the body of a *new* template; ignored when `editing` is set, which
+   * carries its own. The terminal's picker fills this from the xterm selection.
+   * A synthetic `editing` row would seed the same field and wrongly flip the
+   * title to "Edit template".
+   */
+  initialBody?: string;
   busy: boolean;
   error: string | null;
   onSave: (name: string, body: string) => void;
@@ -19,16 +26,21 @@ interface TemplateEditorDialogProps {
  * The draft is held here and the dialog closes only on success, so a failed save
  * never discards a body the user was part-way through writing. iOS guards this;
  * Android does not, and the draft is the expensive thing to lose.
+ *
+ * Two callers: `/templates` manages the whole list, and the terminal's
+ * `TemplatesPicker` creates one mid-session with `initialBody` pre-filled from
+ * the selection.
  */
 export function TemplateEditorDialog({
   editing,
+  initialBody,
   busy,
   error,
   onSave,
   onCancel,
 }: TemplateEditorDialogProps) {
   const [name, setName] = useState(editing?.name ?? '');
-  const [body, setBody] = useState(editing?.body ?? '');
+  const [body, setBody] = useState(editing?.body ?? initialBody ?? '');
 
   // The name is trimmed before the emptiness check; the body is checked and sent
   // verbatim, because a saved body reaches the PTY unchanged and trailing

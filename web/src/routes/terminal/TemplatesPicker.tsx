@@ -24,6 +24,18 @@ interface TemplatesPickerProps {
   canSend: boolean;
   /** Returns whether the body actually landed — a refused insert is not picked. */
   onPick: (template: PromptTemplate) => boolean;
+  /**
+   * Open the create-template editor. The owner swaps this picker out for it
+   * rather than nesting one dialog inside the other: `handleKeyDown` below sits
+   * on the element every descendant event bubbles through — the top layer
+   * reorders paint, not propagation — so an editor rendered inside would lose
+   * ArrowUp/ArrowDown in its textarea to the row walk, and its draft to the
+   * Escape that dismisses this dialog.
+   *
+   * Required rather than optional, so a caller cannot silently drop the
+   * affordance.
+   */
+  onNewTemplate: () => void;
   onClose: () => void;
 }
 
@@ -95,8 +107,9 @@ function Section({
 }
 
 /**
- * Read-only prompt-template picker. Creating, editing and deleting templates
- * live on `/templates`; this is the terminal's entry point into the list.
+ * The terminal's prompt-template picker: list, filter, insert and favourite,
+ * plus a New template button that hands creation back to the owner. Editing and
+ * deleting still live on `/templates`.
  *
  * A `Modal`, not a floating panel: as a plain `position: fixed` div it was
  * inert, because `addon-webgl` appends a full-grid link canvas at `z-index: 2`
@@ -113,7 +126,12 @@ function Section({
  * query is `staleTime: Infinity` (the user-events bridge invalidates it), so
  * without a deliberate fetch a cache warmed an hour ago would render as truth.
  */
-export function TemplatesPicker({ canSend, onPick, onClose }: TemplatesPickerProps) {
+export function TemplatesPicker({
+  canSend,
+  onPick,
+  onNewTemplate,
+  onClose,
+}: TemplatesPickerProps) {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
@@ -292,9 +310,29 @@ export function TemplatesPicker({ canSend, onPick, onClose }: TemplatesPickerPro
       <div className="template-picker-inner" ref={containerRef} onKeyDown={handleKeyDown}>
         <header className="template-picker-head">
           <h2 id={titleId}>Templates</h2>
-          <button type="button" className="button" onClick={onClose}>
-            Close
-          </button>
+          {/* Wrapped, so `space-between` on the head still sees exactly two
+              children — with three it would push the buttons apart from each
+              other. Close stays rightmost, where it already was. */}
+          <div className="button-row">
+            <button
+              type="button"
+              className="button"
+              // Not gated on `canSend`: creating a template is a central-server
+              // call that owes nothing to the PTY — the same reason the
+              // favourite star stays live while the send gate is shut.
+              //
+              // Deliberately does not also call `onClose`. The owner's handler
+              // moves one panel union from `picker` to `editor`; a second
+              // setter in the same tick would land it on `none` and the editor
+              // would never open.
+              onClick={onNewTemplate}
+            >
+              New template
+            </button>
+            <button type="button" className="button" onClick={onClose}>
+              Close
+            </button>
+          </div>
         </header>
 
         <input

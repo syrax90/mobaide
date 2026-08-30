@@ -78,6 +78,19 @@ afterEach(() => {
 });
 
 describe('TemplatesScreen editor', () => {
+  it('still opens a new template with an empty body', async () => {
+    // `TemplateEditorDialog` grew an `initialBody` for the terminal's picker,
+    // which pre-fills it from the xterm selection. This caller passes none, so
+    // the `??` chain must still fall through to the empty draft.
+    renderScreen();
+    await screen.findByRole('button', { name: 'New template' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'New template' }));
+
+    expect(screen.getByRole('heading', { name: 'New template' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Prompt body')).toHaveValue('');
+  });
+
   it('trims the name but sends the body exactly as typed', async () => {
     renderScreen();
     await screen.findByRole('button', { name: 'New template' });

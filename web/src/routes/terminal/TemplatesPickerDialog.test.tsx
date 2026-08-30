@@ -74,6 +74,7 @@ const flush = async (): Promise<void> => {
 };
 
 const onPick = vi.fn<(template: PromptTemplate) => boolean>(() => true);
+const onNewTemplate = vi.fn<() => void>();
 const onClose = vi.fn<() => void>();
 
 let client: QueryClient;
@@ -82,7 +83,12 @@ let client: QueryClient;
 const picker = (canSend: boolean): ReactElement => (
   <QueryClientProvider client={client}>
     <MemoryRouter>
-      <TemplatesPicker canSend={canSend} onPick={onPick} onClose={onClose} />
+      <TemplatesPicker
+      canSend={canSend}
+      onPick={onPick}
+      onNewTemplate={onNewTemplate}
+      onClose={onClose}
+    />
     </MemoryRouter>
   </QueryClientProvider>
 );
@@ -107,6 +113,7 @@ beforeEach(() => {
   onPick.mockClear();
   onPick.mockImplementation(() => true);
   onClose.mockClear();
+  onNewTemplate.mockClear();
 });
 
 afterEach(() => {
@@ -428,5 +435,66 @@ describe('TemplatesPicker states', () => {
     view.rerender(picker(true));
 
     expect(screen.queryByRole('status')).toBeNull();
+  });
+});
+
+describe('TemplatesPicker create affordance', () => {
+  const newTemplate = (): HTMLElement =>
+    screen.getByRole('button', { name: 'New template' });
+
+  it('hands creation to the owner without dismissing itself', async () => {
+    // The swap contract: the owner moves one panel union from `picker` to
+    // `editor`. If this button also closed the picker, that second setter would
+    // land the union on `none` in the same tick and the editor would never
+    // open — so the picker must ask, and only ask.
+    await renderListed(template('alpha'));
+
+    fireEvent.click(newTemplate());
+
+    expect(onNewTemplate).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('sits in the head beside Close', async () => {
+    const view = await renderListed(template('alpha'));
+    const head = view.container.querySelector('.template-picker-head');
+
+    expect(head).toContainElement(newTemplate());
+    expect(head).toContainElement(screen.getByRole('button', { name: 'Close' }));
+  });
+
+  it('leaves Enter on it to the browser', async () => {
+    // The Enter special-case is scoped to the search field, where it picks the
+    // first match. Reaching this button it must stay a plain activation, or the
+    // key that opened the editor would also paste a row nobody chose.
+    await renderListed(template('alpha'));
+
+    const event = press(newTemplate(), { key: 'Enter' });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it('enters the list on ArrowDown, like every other head control', async () => {
+    // Guards against anyone marking it `data-template-row`: the walk reads rows
+    // out of the DOM, and a create button inside that set would be one arrow
+    // key away from being treated as a template.
+    await renderListed(template('alpha'), template('beta'));
+
+    newTemplate().focus();
+    fireEvent.keyDown(newTemplate(), { key: 'ArrowDown' });
+
+    expect(pickRow('alpha')).toHaveFocus();
+  });
+
+  it('stays live while the session refuses input', async () => {
+    // Creating a template is a central-server call: it owes nothing to the PTY,
+    // so the send gate has no say in it. Same rule as the favourite star.
+    repo.templates = [template('alpha')];
+    renderPicker(false);
+    await screen.findByRole('heading', { name: 'All' });
+
+    expect(newTemplate()).toBeEnabled();
+    expect(pickRow('alpha')).toBeDisabled();
   });
 });

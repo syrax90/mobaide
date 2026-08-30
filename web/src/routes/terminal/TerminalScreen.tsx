@@ -1,6 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { createTemplate } from '../../api/templateRepository';
+import { isApiError } from '../../api/errors';
 import { writeClipboardText } from '../../lib/clipboard';
+import { queryKeys } from '../../lib/queryKeys';
 import { sessionChannelName } from '../../realtime/channels';
 import { useKeyboardLock } from '../../keyboard/useKeyboardLock';
 import { useReloadGuard } from '../../keyboard/useReloadGuard';
@@ -17,6 +21,7 @@ import { useToastStore } from '../../stores/toastStore';
 import { useVisibleSessionStore } from '../../stores/visibleSessionStore';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { stripControls } from '../../terminal/terminalPaste';
+import { TemplateEditorDialog } from '../templates/TemplateEditorDialog';
 import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
 import { JumpToBottom } from './JumpToBottom';
 import { TemplatesPicker } from './TemplatesPicker';
@@ -94,6 +99,30 @@ function TerminalRoute({ agentId, sessionId }: TerminalRouteProps) {
   return <TerminalView model={model} headerLabel={headerLabel} />;
 }
 
+/**
+ * Which template dialog is up, if any.
+ *
+ * A union rather than two booleans, because the picker and the editor must
+ * never be mounted at once: `TemplatesPicker` hangs its key handler on the
+ * ancestor of everything it renders, and a `<dialog>` on the top layer still
+ * propagates events through its DOM parent — so an editor nested inside would
+ * lose its textarea's arrow keys to the row walk and its draft to the picker's
+ * Escape.
+ */
+type TemplatePanel =
+  | { kind: 'none' }
+  /**
+   * `selection` is the terminal selection as it stood when the picker opened,
+   * snapshotted there rather than read when the editor opens. Blur is not the
+   * risk — xterm keeps the selection in its own model, not the document's — but
+   * PTY output keeps arriving behind the modal, and a mouse-protocol change,
+   * an alternate-screen switch, a row-count change and the replay wipe each
+   * clear it. Nothing is traded away for the snapshot: the grid is inert while
+   * the dialog is up, so the user cannot change the selection after it.
+   */
+  | { kind: 'picker'; selection: string }
+  | { kind: 'editor'; initialBody: string };
+
 interface TerminalViewProps {
   model: TerminalSessionModel;
   headerLabel: string;
@@ -103,7 +132,9 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
   const view = model.state();
   const passCtrlV = useTerminalPrefsStore((state) => state.passCtrlVToTerminal);
   const setPassCtrlV = useTerminalPrefsStore((state) => state.setPassCtrlVToTerminal);
-  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const [panel, setPanel] = useState<TemplatePanel>({ kind: 'none' });
+  const [saveError, setSaveError] = useState<string | null>(null);
   const immersive = useKeyboardLock();
   // Shared with the scrollbar, whose `role="scrollbar"` has to name what it
   // controls.
@@ -129,11 +160,44 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
   // layout-effect cleanup, and the native close algorithm hands focus to the
   // element that opened it — so a `focus()` called while dismissing is
   // overwritten a moment later. A passive effect runs after that cleanup.
-  const templatesWereOpen = useRef(false);
+  //
+  // Keyed on whether *any* panel is open rather than on the picker alone, so
+  // the picker-to-editor hop is not mistaken for a dismissal and does not pull
+  // focus out of the editor it just opened.
+  const panelOpen = panel.kind !== 'none';
+  const panelWasOpen = useRef(false);
   useEffect(() => {
-    if (templatesWereOpen.current && !templatesOpen) model.focus();
-    templatesWereOpen.current = templatesOpen;
-  }, [templatesOpen, model]);
+    if (panelWasOpen.current && !panelOpen) model.focus();
+    panelWasOpen.current = panelOpen;
+  }, [panelOpen, model]);
+
+  const save = useMutation({
+    mutationFn: ({ name, body }: { name: string; body: string }) =>
+      createTemplate(name, body),
+    onSuccess: async (_data, variables) => {
+      // Closed first, then announced: `.toast-viewport` paints below the top
+      // layer, so a toast raised with the editor still open cannot be seen.
+      // Both land in one commit, so there is no frame showing neither.
+      //
+      // Deliberately without the `mounted` guard the clipboard toast below
+      // carries. That one reports a local side effect belonging to a screen the
+      // user has left; this one reports durable account state that stays true
+      // wherever they went.
+      setPanel({ kind: 'none' });
+      setSaveError(null);
+      useToastStore.getState().show(`Saved template "${variables.name}"`, 'success');
+      await queryClient.invalidateQueries({ queryKey: queryKeys.templates() });
+    },
+    // Inline, never a toast: this renders while the editor is still up, which
+    // is exactly where a toast would be invisible.
+    onError: (error: unknown) => {
+      setSaveError(
+        isApiError(error)
+          ? `Failed to save template: ${error.message}`
+          : 'Failed to save template',
+      );
+    },
+  });
 
   // A clipboard permission prompt can hold the write promise open long enough
   // for the user to navigate away, and its continuation would then toast onto
@@ -183,7 +247,9 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
           className="button"
           title="Insert a prompt template at the cursor"
           onClick={() => {
-            setTemplatesOpen(true);
+            // Read here, before any dialog exists, so a busy PTY cannot clear
+            // the selection out from under the editor — see `TemplatePanel`.
+            setPanel({ kind: 'picker', selection: model.selectionText() });
           }}
         >
           Templates
@@ -233,11 +299,15 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
         )}
       </div>
 
-      {templatesOpen && (
+      {panel.kind === 'picker' && (
         <TemplatesPicker
           canSend={canSend}
           onClose={() => {
-            setTemplatesOpen(false);
+            setPanel({ kind: 'none' });
+          }}
+          onNewTemplate={() => {
+            setSaveError(null);
+            setPanel({ kind: 'editor', initialBody: panel.selection });
           }}
           onPick={(template) => {
             // A refused insert keeps the picker open: the body stays on
@@ -250,7 +320,7 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
             // input line for review, mirroring the mobile clients' insert-
             // into-composer semantics.
             if (!model.pasteText(template.body)) return false;
-            setTemplatesOpen(false);
+            setPanel({ kind: 'none' });
             // The paste bypasses xterm's user-input scroll, so an insert made
             // while scrolled up would otherwise land off-screen.
             model.jumpToBottom();
@@ -296,6 +366,27 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
                 );
             });
             return true;
+          }}
+        />
+      )}
+
+      {/* No `key`: the panel passes through `none` on every exit, so each open
+          is already a fresh mount with a fresh draft. */}
+      {panel.kind === 'editor' && (
+        <TemplateEditorDialog
+          editing={null}
+          initialBody={panel.initialBody}
+          busy={save.isPending}
+          error={saveError}
+          onSave={(name, body) => {
+            save.mutate({ name, body });
+          }}
+          // Back to the terminal rather than to the picker. A save has to close
+          // everything for its toast to be visible, and two exits that land in
+          // different places would be the surprising half of the pair.
+          onCancel={() => {
+            setPanel({ kind: 'none' });
+            setSaveError(null);
           }}
         />
       )}
