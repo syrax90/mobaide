@@ -762,12 +762,12 @@ async def _until(predicate, timeout: float = 2.0) -> None:
 def _issue_read(session: TerminalSession, *, returned: bool = False) -> int:
     """The reader loop bumping its counter and starting a read.
 
-    ``returned`` models the executor having already handed the chunk back
-    before the resize interleaved — the rare case; the default is the common
-    one, a read still parked in ``read()`` whose chunk will be the repaint.
+    ``returned`` models the worker having already handed the chunk back before
+    the resize interleaved — the rare case; the default is the common one, a
+    read still parked in ``read()`` whose chunk will be the repaint.
     """
     session._read_seq += 1
-    session._read_fut = _ReturnedRead() if returned else _ParkedRead()
+    session._read_returned = returned
     return session._read_seq
 
 
@@ -780,20 +780,6 @@ def _deliver(session: TerminalSession, seq: int, data: bytes) -> None:
 def _read(session: TerminalSession, data: bytes) -> None:
     """One whole reader-loop iteration."""
     _deliver(session, _issue_read(session), data)
-
-
-class _ParkedRead:
-    """A read still blocked in the executor."""
-
-    def done(self) -> bool:
-        return False
-
-
-class _ReturnedRead:
-    """A read the executor has already completed."""
-
-    def done(self) -> bool:
-        return True
 
 
 def _replay(session: TerminalSession) -> bytes:
@@ -1245,6 +1231,56 @@ class TestRingWidthMark:
         finally:
             reader.cancel()
             backend.release()
+
+    async def test_the_prefix_selects_the_buffer_before_its_modes(self) -> None:
+        # Selecting a buffer can restore that buffer's own saved flags — the
+        # termux emulator restores autowrap on `?1049l` — so modes emitted
+        # ahead of the selection can be overwritten by it.
+        session = _width_session(cols=80)
+        session._track_modes(b"\x1b[?7l\x1b[?1049h")
+
+        prefix = session._live.restore_prefix()
+        assert prefix.index(b"\x1b[?1049h") < prefix.index(b"\x1b[?7l")
+        assert prefix.index(b"\x1b[?7l") < prefix.index(b"\x1b[H\x1b[2J\x1b[3J")
+
+    async def test_a_terminal_reset_returns_the_tracked_modes_to_defaults(self) -> None:
+        # RIS and DECSTR both reset these in every client emulator, so a
+        # scanner that only follows DECSET/DECRST would keep re-asserting modes
+        # the child believes it cleared.
+        for reset in (b"\x1bc", b"\x1b[!p"):
+            session = _width_session(cols=80)
+            session._track_modes(b"\x1b[?2004h\x1b[?7l\x1b[?1002h\x1b[?1049h")
+
+            session._track_modes(reset)
+
+            assert not session._live.alt_screen, reset
+            assert session._live.mouse_protocol is None, reset
+            assert session._live.modes[7] is True, reset
+            # Stated rather than dropped: a client behind the span's start
+            # never saw the reset and still holds the old modes.
+            assert b"\x1b[?2004l" in session._live.restore_prefix(), reset
+
+    async def test_reporting_off_resets_every_mouse_alias(self) -> None:
+        # xterm.js holds one active protocol; the termux fork holds independent
+        # flags, where resetting only the canonical alias leaves the emulator
+        # still reporting under whichever other one was live.
+        session = _width_session(cols=80)
+        session._track_modes(b"\x1b[?1002h\x1b[?1002l")
+
+        prefix = session._live.restore_prefix()
+        for alias in (9, 1000, 1001, 1002, 1003):
+            assert b"\x1b[?%dl" % alias in prefix, alias
+
+    async def test_the_orphaned_half_of_a_bisected_sequence_is_dropped(self) -> None:
+        # Its opening bytes are gone, so it can never parse again — it would
+        # replay as literal text at the head of the span — and the state it
+        # carried is already folded into the span.
+        session = _width_session(cols=80, ring_buffer_bytes=24)
+        session._append_ring(b"A" * 20 + b"\x1b[?104", read_seq=1)
+        session._append_ring(b"9h" + b"B" * 18, read_seq=2)
+
+        assert session._span.alt_screen
+        assert _replay_body(session).startswith(b"B")
 
     async def test_head_trim_clamps_the_mark_at_zero(self) -> None:
         # An overflow larger than the mark would drive it negative, and a

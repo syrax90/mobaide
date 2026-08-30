@@ -2072,23 +2072,26 @@ class RelayClient:
         within a UI frame on append.
         """
         try:
-            # Materialised before the first send, not consumed lazily across
-            # them. Unlike the direct-WS path — which finishes the handshake
-            # before it starts reading — this one races the client's own
-            # resize, handed to a separate task by `_enqueue_session_input`.
-            # Both clients assert their cached size the moment the socket
-            # opens, so a lazy generator would let that resize move the ring's
-            # width mark between two of these awaits, and whether the client
-            # got its scrollback or a cleared screen would come down to task
-            # scheduling. Peak memory is unchanged: the generator already
-            # snapshots the whole span on its first step.
-            chunks = list(session.iter_ring_chunks())
-
             status = _STATE_MAP.get(session.state, "running")
             state = _state_frame(status, session.pid)
             await ws.send(encode(CH_SESSION_IO, session_id, state))
 
             await ws.send(encode(CH_SESSION_IO, session_id, FRAME_REPLAY))
+
+            # Snapshotted here — after the marker, before the chunks. After,
+            # because the marker tells the client to wipe: live output the
+            # output pump interleaves ahead of it is discarded by that wipe, so
+            # it has to still be inside the snapshot taken afterwards or it is
+            # lost outright. Before the chunks, because unlike the direct-WS
+            # path — which finishes the handshake before it starts reading —
+            # this one races the client's own resize, handed to a separate task
+            # by `_enqueue_session_input`, and both clients assert their cached
+            # size the moment the socket opens; a lazy generator would let that
+            # resize move the ring's width mark between two of these awaits.
+            # Live output interleaving *after* this point still lands out of
+            # order inside the span — the pump and this handshake share one
+            # socket with no serialisation, which is GH #700.
+            chunks = list(session.iter_ring_chunks())
 
             emitted_any = False
             for chunk in chunks:

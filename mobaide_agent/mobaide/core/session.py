@@ -57,6 +57,12 @@ logger = logging.getLogger(__name__)
 # into one sequence (`ESC[?1049;25h`), so matching a single number followed by
 # `h`/`l` would miss the very transitions this tracks.
 _PRIVATE_MODE_RE = re.compile(rb"\x1b\[\?([\d;]*)([hl])")
+# Both kinds of event in one pass, so a reset and a DECSET in the same read are
+# applied in the order the child emitted them.
+_MODE_EVENT_RE = re.compile(
+    rb"\x1b\[\?(?P<params>[\d;]*)(?P<action>[hl])"
+    rb"|(?P<reset>\x1bc|\x1b\[!p)",
+)
 # Upper bound on the unfinished sequence carried between reads. A batched
 # DECSET naming every mode this tracks is well under this; anything longer is
 # not a private-mode sequence, and the cap is what stops a stream of `ESC[?`
@@ -98,7 +104,19 @@ _RESTORED_MODES = (
 # drag, or back on after the child turned it off.
 _MOUSE_PROTOCOL_MODES = (9, 1000, 1001, 1002, 1003)
 _MOUSE_ENCODING_MODES = (1005, 1006, 1015)
-_DEFAULT_MOUSE_PROTOCOL = 1000
+
+# The power-on values of the tracked modes, adopted on RIS/DECSTR.
+_MODE_DEFAULTS = {
+    1: False,     # DECCKM — normal cursor keys
+    7: True,      # DECAWM — autowrap on
+    25: True,     # cursor visible
+    2004: False,  # bracketed paste off
+}
+
+# A full reset (RIS) or a soft one (DECSTR). Both return every mode tracked
+# here to its power-on value, so a scanner that only follows DECSET/DECRST
+# would keep re-asserting modes the child believes it cleared.
+_TERMINAL_RESET_RE = re.compile(rb"\x1bc|\x1b\[!p")
 
 # Home, erase display, erase scrollback — the same wipe every client feeds
 # before a replay, re-issued after the prefix selects a buffer so the one that
@@ -134,32 +152,53 @@ class _TerminalModes:
         )
 
     def restore_prefix(self) -> bytes:
-        """DECSET/DECRST sequences re-establishing this state."""
+        """DECSET/DECRST sequences re-establishing this state.
+
+        Ordered buffer, then modes, then clear. The buffer first because
+        selecting one can restore that buffer's own saved flags — Android's
+        emulator restores autowrap out of the saved state on `?1049l` — which
+        would overwrite modes emitted ahead of it. The clear last because it is
+        the selected buffer that has to be wiped: the client's own wipe ran
+        before this prefix, against whichever buffer its retained emulator
+        happened to be on.
+        """
+        # Stated either way: a client's emulator survives a reconnect and its
+        # wipe clears the display, not the buffer selection, so a span starting
+        # on the primary screen has to say so or it is parsed on the alternate.
         parts = [
+            b"\x1b[?%d%s" % (self.alt_screen_mode, b"h" if self.alt_screen else b"l")
+        ]
+        parts.extend(
             b"\x1b[?%dh" % mode if enabled else b"\x1b[?%dl" % mode
             for mode, enabled in sorted(self.modes.items())
-        ]
-        # Stated either way, and last so no alias ordering can undo it. A
-        # client's emulator is retained across reconnects and its replay wipe
-        # clears the display, not the selected buffer — so a span that starts
-        # on the primary screen has to say so, or an emulator left on the
-        # alternate buffer parses primary-screen history there.
-        # One sequence per selection, reproducing the child's last action
-        # rather than the numeric order of every mode it ever touched.
+        )
+        # Mouse reporting is one selection to xterm.js and a set of independent
+        # flags to the termux fork, so every alias but the wanted one is reset
+        # explicitly. Resetting only the canonical alias would leave a termux
+        # emulator still reporting under whichever other one was live.
+        for alias in _MOUSE_PROTOCOL_MODES:
+            if alias != self.mouse_protocol:
+                parts.append(b"\x1b[?%dl" % alias)
         if self.mouse_protocol is not None:
             parts.append(b"\x1b[?%dh" % self.mouse_protocol)
-        else:
-            parts.append(b"\x1b[?%dl" % _DEFAULT_MOUSE_PROTOCOL)
         if self.mouse_encoding is not None:
             parts.append(b"\x1b[?%dh" % self.mouse_encoding)
-        parts.append(
-            b"\x1b[?%d%s" % (self.alt_screen_mode, b"h" if self.alt_screen else b"l")
-        )
-        # And the buffer this just selected is not the one the client wiped:
-        # its clear ran before this prefix, against whichever buffer it happened
-        # to be on. Without this, a partial span paints over stale content.
         parts.append(_CLEAR_SELECTED_BUFFER)
         return b"".join(parts)
+
+    def reset_to_defaults(self) -> None:
+        """Adopt the power-on state a RIS or DECSTR puts the terminal in.
+
+        Recorded explicitly rather than by clearing the dict: a client that did
+        not see the reset — because it sits behind the span's start — still has
+        the old modes, so the prefix has to state the defaults rather than stay
+        silent about them.
+        """
+        self.alt_screen = False
+        self.alt_screen_mode = _DEFAULT_ALT_SCREEN_MODE
+        self.mouse_protocol = None
+        self.mouse_encoding = None
+        self.modes = dict(_MODE_DEFAULTS)
 
 
 _RING_SCRUB_RE = re.compile(
@@ -298,7 +337,13 @@ class TerminalSession:
         # `Future.done()` is what separates the two; the sequence number alone
         # cannot, since it is bumped before the await.
         self._read_seq = 0
-        self._read_fut: asyncio.Future[bytes] | None = None
+        # Set by the worker thread as it returns, cleared on the loop before
+        # each read. Not `Future.done()`: the worker hands its result back
+        # through `call_soon_threadsafe`, so the future stays undone until the
+        # loop runs that callback — a window in which a resize would read
+        # "still parked" for a chunk that already exists. A bool the worker
+        # sets before returning has no such gap.
+        self._read_returned = False
         # True once the span stops being self-establishing — a cut landed, or
         # the head trimmed. Only then does it need a state prefix: a span that
         # still starts at the child's first byte carries every transition it
@@ -400,6 +445,19 @@ class TerminalSession:
             )
         logger.info("Session %s started (pid=%s)", self.session_id, self.pid)
 
+    def _read_chunk(self, size: int) -> bytes:
+        """Read from the backend, flagging the moment the bytes exist.
+
+        Runs on an executor thread. The flag is set before returning so a
+        resize on the event loop can tell a chunk that is already in hand from
+        one whose read is still parked — the difference between stepping the
+        replay cut over stale output and landing it on the repaint.
+        """
+        try:
+            return self._backend.read(size)
+        finally:
+            self._read_returned = True
+
     async def _reader_loop(self) -> None:
         """Read PTY output in a thread executor and feed the event queue."""
         loop = asyncio.get_running_loop()
@@ -407,10 +465,10 @@ class TerminalSession:
             try:
                 self._read_seq += 1
                 read_seq = self._read_seq
-                self._read_fut = loop.run_in_executor(
-                    None, self._backend.read, 4096,
+                self._read_returned = False
+                data: bytes = await loop.run_in_executor(
+                    None, self._read_chunk, 4096,
                 )
-                data: bytes = await self._read_fut
                 if not data:
                     break
                 # Intercept terminal capability/color queries before they hit
@@ -601,10 +659,13 @@ class TerminalSession:
         a caller can append lookahead bytes purely to complete a sequence that
         straddles the end of the region it cares about.
         """
-        for match in _PRIVATE_MODE_RE.finditer(data):
+        for match in _MODE_EVENT_RE.finditer(data):
             if starts_before is not None and match.start() >= starts_before:
                 break
-            params, action = match.group(1), match.group(2)
+            if match.group("reset") is not None:
+                state.reset_to_defaults()
+                continue
+            params, action = match.group("params"), match.group("action")
             enabled = action == b"h"
             for raw in params.split(b";"):
                 if not raw:
@@ -632,6 +693,18 @@ class TerminalSession:
     @property
     def _alt_screen(self) -> bool:
         return self._live.alt_screen
+
+    @staticmethod
+    def _orphan_length(window: bytes, split: int) -> int:
+        """Bytes of a bisected sequence left on the retained side of ``split``.
+
+        Zero unless a sequence begins before the split and ends after it, which
+        is the only way the retained ring can start mid-sequence.
+        """
+        for match in _MODE_EVENT_RE.finditer(window):
+            if match.start() < split < match.end():
+                return match.end() - split
+        return 0
 
     def _cut_offset(self, *, extra: int = 0) -> int:
         """Where to cut, rolled back over any half-written mode sequence.
@@ -705,11 +778,18 @@ class TerminalSession:
                 # where the match starts so the retained bytes' own sequences
                 # are left to the replay.
                 span_start = len(eaten)
-                self._apply_modes(
-                    eaten + bytes(self._ring[:_PRIVATE_MODE_TAIL_MAX]),
-                    self._span,
-                    starts_before=span_start,
-                )
+                window = eaten + bytes(self._ring[:_PRIVATE_MODE_TAIL_MAX])
+                self._apply_modes(window, self._span, starts_before=span_start)
+                # Then drop the half that survived. Its opening bytes are gone,
+                # so it can never parse again — it would replay as literal text
+                # at the head of the span — and its meaning is already carried
+                # by the state just folded in.
+                orphan = self._orphan_length(window, span_start)
+                if orphan:
+                    del self._ring[:orphan]
+                    self._ring_width_start = max(
+                        0, self._ring_width_start - orphan
+                    )
             self._ring_width_start = max(0, self._ring_width_start - overflow)
 
     def get_ring(self) -> bytes:
@@ -936,7 +1016,7 @@ class TerminalSession:
             # A read still blocked will deliver the repaint, so the cut must
             # land on it; one already returned holds old-grid output and must
             # be stepped over.
-            in_flight = self._read_fut is not None and not self._read_fut.done()
+            in_flight = not self._read_returned
             self._pending_cut = (
                 self._cut_offset(),
                 self._live.copy(),
