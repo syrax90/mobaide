@@ -66,6 +66,11 @@ class SessionEventFanout:
             while True:
                 event = await self._session.event_queue.get()
                 for sub in list(self._subscribers):
+                    if sub.overflowed.is_set():
+                        # Flagged already: the consumer needs event-loop turns
+                        # to unsubscribe, and a slot freed meanwhile must not
+                        # carry a post-hole event to it.
+                        continue
                     try:
                         sub.queue.put_nowait(event)
                     except asyncio.QueueFull:

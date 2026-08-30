@@ -492,6 +492,13 @@ def _try_enqueue(
     the socket, whose reconnect replays the ring. Unordered channels carry JSON
     state the client reconciles from a snapshot on connect, so they keep dropping.
     """
+    if ordered and client.desynced.is_set():
+        # Already holed. `desynced.set()` only schedules the endpoint's waiter,
+        # so it needs event-loop turns before it unregisters this client — and
+        # if the transport unparks meanwhile, a freed slot would let a
+        # post-hole frame through, which is the render this exists to prevent.
+        record_send_queue_drop("agent_to_mobile")
+        return
     try:
         if binary:
             client.send_queue.put_nowait(payload)

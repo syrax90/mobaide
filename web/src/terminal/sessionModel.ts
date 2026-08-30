@@ -588,6 +588,12 @@ export class TerminalSessionModel {
         }
         if (mountedTerminal() !== this.key) return;
         if (this.replay.connection === 'live') return;
+        // `connect()` first, as `forceReconnectAllEvents()` does one line
+        // earlier in this same sweep: `forceReconnect` returns early once
+        // `shouldReconnect` is false, and an agent-axis channel reaches that
+        // on recoverable paths — a cleared agent token awaiting a re-mint, or
+        // the null-URL attempt bound a laptop waking still offline will hit.
+        this.io.channel.connect();
         this.io.channel.forceReconnect();
       }),
     );
