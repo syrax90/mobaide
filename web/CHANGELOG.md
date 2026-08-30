@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.5](https://github.com/syrax90/claude_mobile/compare/web-v0.1.4...web-v0.1.5) (2026-08-30)
+
+
+### Bug Fixes
+
+* **android,ios,web:** never report a paired, online agent as a failed pairing ([efabb00](https://github.com/syrax90/claude_mobile/commit/efabb00ef2ab51219253b1ee17b71e0d80bbfef2))
+* **android,ios,web:** never report a paired, online agent as a failed pairing ([8e83bfd](https://github.com/syrax90/claude_mobile/commit/8e83bfd82c03fd1cf4594e997afb50c68bc48389))
+
 ## [0.1.4](https://github.com/syrax90/claude_mobile/compare/web-v0.1.3...web-v0.1.4) (2026-08-27)
 
 

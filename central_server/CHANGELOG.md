@@ -1,5 +1,13 @@
 # central_server Changelog
 
+## [0.2.14](https://github.com/syrax90/claude_mobile/compare/server-v0.2.13...server-v0.2.14) (2026-08-30)
+
+
+### Bug Fixes
+
+* **server:** fire the Page view conversion event on the landing page ([13aa709](https://github.com/syrax90/claude_mobile/commit/13aa709b1868fc9b02d895ffe72e768abf0d942b))
+* **server:** fire the Page view conversion event on the landing page ([f10672e](https://github.com/syrax90/claude_mobile/commit/f10672e9db00df1aab082fa5b93b9baf879e8fe8))
+
 ## [0.2.13](https://github.com/syrax90/claude_mobile/compare/server-v0.2.12...server-v0.2.13) (2026-08-27)
 
 

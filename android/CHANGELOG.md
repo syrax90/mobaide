@@ -1,5 +1,15 @@
 # Android Changelog
 
+## [3.6.3](https://github.com/syrax90/claude_mobile/compare/android-v3.6.2...android-v3.6.3) (2026-08-30)
+
+
+### Bug Fixes
+
+* **android,ios,web:** never report a paired, online agent as a failed pairing ([efabb00](https://github.com/syrax90/claude_mobile/commit/efabb00ef2ab51219253b1ee17b71e0d80bbfef2))
+* **android,ios,web:** never report a paired, online agent as a failed pairing ([8e83bfd](https://github.com/syrax90/claude_mobile/commit/8e83bfd82c03fd1cf4594e997afb50c68bc48389))
+* **android:** let the "No agents yet" state scroll when it overflows ([7f09308](https://github.com/syrax90/claude_mobile/commit/7f093082fd056d4b1664748480b0f9a02233ebfa))
+* **ios,android:** show the "No agents yet" actions as ordered steps ([9b49a42](https://github.com/syrax90/claude_mobile/commit/9b49a425e68b14f6a74cb8c2dcc25110c73d3c5f))
+
 ## [3.6.2](https://github.com/syrax90/claude_mobile/compare/android-v3.6.1...android-v3.6.2) (2026-08-28)
 
 
