@@ -961,12 +961,33 @@ final class CreateSessionModel {
     /// estimate — the screen's chrome is not known here — but they neither
     /// affect wrapping nor survive into the ring, and the first real layout
     /// corrects them within a frame.
+    /// The space the terminal will actually get.
+    ///
+    /// The active window minus its horizontal safe-area insets, not the
+    /// physical screen: `TerminalHostView` is laid out inside the safe content
+    /// region, so on a notched iPhone in landscape the screen overstates the
+    /// width by roughly 15 columns — enough to paint the opening frames at a
+    /// width the terminal never has. The window (rather than `UIScreen`) is
+    /// also what iPad Split View and Stage Manager resize.
+    private static func terminalViewport() -> CGSize {
+        let window = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }
+        guard let window else { return UIScreen.main.bounds.size }
+        let insets = window.safeAreaInsets
+        return CGSize(
+            width: max(0, window.bounds.width - insets.left - insets.right),
+            height: max(0, window.bounds.height - insets.top - insets.bottom)
+        )
+    }
+
     private func spawnGrid() -> (rows: Int, cols: Int) {
         let config = TerminalDisplayConfig(
             mode: preferencesStore.getTerminalDisplayMode(),
             staticColumns: preferencesStore.getTerminalStaticColumns()
         )
-        let viewport = UIScreen.main.bounds.size
+        let viewport = Self.terminalViewport()
         let cell = TerminalGridEstimate.cellSize(scale: UIScreen.main.scale)
         return (
             rows: TerminalGridEstimate.rows(

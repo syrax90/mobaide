@@ -1,6 +1,5 @@
 package com.mobaide.app.ui.terminal
 
-import android.util.DisplayMetrics
 import com.mobaide.app.data.local.TerminalDisplayMode
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -24,11 +23,8 @@ import org.robolectric.annotation.Config
 @Config(sdk = [33])
 class TerminalGridEstimateTest {
 
-    private fun metrics(width: Int, height: Int): DisplayMetrics =
-        DisplayMetrics().apply {
-            widthPixels = width
-            heightPixels = height
-        }
+    private fun viewport(width: Int, height: Int): TerminalViewport =
+        TerminalViewport(widthPx = width, heightPx = height)
 
     @Test
     fun columns_staticMode_ignoresTheViewportEntirely() {
@@ -121,7 +117,7 @@ class TerminalGridEstimateTest {
         val grid = TerminalGridEstimate.of(
             mode = TerminalDisplayMode.Static,
             staticColumns = 120,
-            metrics = metrics(width = 0, height = 0),
+            viewport = viewport(width = 0, height = 0),
         )
 
         assertEquals(TerminalGrid(rows = 24, cols = 120), grid)
@@ -135,12 +131,12 @@ class TerminalGridEstimateTest {
         val wide = TerminalGridEstimate.of(
             mode = TerminalDisplayMode.Static,
             staticColumns = 120,
-            metrics = metrics(width = 1080, height = 2400),
+            viewport = viewport(width = 1080, height = 2400),
         )
         val narrow = TerminalGridEstimate.of(
             mode = TerminalDisplayMode.Static,
             staticColumns = 120,
-            metrics = metrics(width = 320, height = 2400),
+            viewport = viewport(width = 320, height = 2400),
         )
 
         assertEquals(120, wide.cols)

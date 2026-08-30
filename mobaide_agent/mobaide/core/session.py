@@ -52,15 +52,35 @@ logger = logging.getLogger(__name__)
 # longest sequence matched here (``ESC[?6n``, 5 bytes) fits well inside that
 # window. OSC color queries are likewise removed upstream by OscColorResponder,
 # so the OSC alternation here is belt-and-braces.
-# Alternate-screen enter/exit. Tracked because it decides whether replaying
-# output laid out at a stale width is harmful. On the alt screen a program owns
-# the whole grid and paints absolute positions, so old-width bytes desynchronize
-# it; on the normal screen the replay is line-oriented text the client's
-# emulator re-wraps correctly, and dropping it would delete usable scrollback.
-_ALT_SCREEN_RE = re.compile(rb"\x1b\[\?(?:1049|1047|47)([hl])")
-# Longest sequence above, minus one: what must be carried between reads so a
-# split sequence is still matched.
-_ALT_SCREEN_STRADDLE = 8
+# DECSET/DECRST, parsed as the parameter *list* it is: a TUI may batch modes
+# into one sequence (`ESC[?1049;25h`), so matching a single number followed by
+# `h`/`l` would miss the very transitions this tracks.
+_PRIVATE_MODE_RE = re.compile(rb"\x1b\[\?([\d;]*)([hl])")
+# Longest sequence worth carrying between reads so a split one still matches.
+# Bounded rather than exact: a pathologically long parameter list straddling a
+# read boundary is lost, which costs accuracy in the tracker, never correctness
+# of the stream (the bytes themselves are untouched).
+_PRIVATE_MODE_STRADDLE = 32
+
+# Any of these means the child is on the alternate screen: it owns the whole
+# grid and paints absolute positions, so replaying bytes laid out at a stale
+# width desynchronizes it. Off the alternate screen the replay is line-oriented
+# text the client's emulator re-wraps, and dropping it would delete scrollback.
+_ALT_SCREEN_MODES = (1049, 1047, 47)
+
+# Modes worth restoring ahead of a cut replay. When the ring is cut at a width
+# change, the retained suffix no longer contains the sequences that established
+# these — the client's replay wipe clears the display, not the emulator's mode
+# state — so the suffix would be parsed with the wrong screen buffer and the
+# wrong input semantics. Deliberately a curated set rather than every private
+# mode: these are the ones whose absence changes how the retained bytes render
+# or how the user's input is encoded.
+_RESTORED_MODES = (
+    *_ALT_SCREEN_MODES,
+    25,    # cursor visibility
+    2004,  # bracketed paste
+    1000, 1002, 1003, 1006, 1015,  # mouse reporting
+)
 
 _RING_SCRUB_RE = re.compile(
     rb"\x1b\[\?[\d;]*c"
@@ -169,8 +189,11 @@ class TerminalSession:
         # affect wrapping.
         self._ring_cols = config.cols
         self._ring_width_start = 0
-        self._alt_screen = False
-        self._alt_screen_tail = b""
+        # Private-mode state, tracked for the replay cut (see `_track_modes`).
+        self._modes: dict[int, bool] = {}
+        self._mode_tail = b""
+        # Sequences that re-establish the mode state a cut replay starts in.
+        self._ring_width_prefix = b""
         self._event_queue: asyncio.Queue[SessionEvent] = asyncio.Queue(
             maxsize=EVENT_QUEUE_MAXSIZE,
         )
@@ -295,7 +318,7 @@ class TerminalSession:
                     fut.add_done_callback(self._log_reply_write_failure)
                 if not data:
                     continue
-                self._track_alt_screen(data)
+                self._track_modes(data)
                 new_title = self._osc.feed(data)
                 if new_title is not None and new_title != self._pending_title:
                     self._pending_title = new_title
@@ -411,17 +434,36 @@ class TerminalSession:
                 exc,
             )
 
-    def _track_alt_screen(self, data: bytes) -> None:
-        """Follow the child in and out of the alternate screen.
+    def _track_modes(self, data: bytes) -> None:
+        """Follow the private modes a cut replay would otherwise lose.
 
         Stateful across reads, like the DA and OSC processors on the same
         bytes: a `?1049h` split across two 4 KiB reads still counts.
         """
-        window = self._alt_screen_tail + data
-        matches = _ALT_SCREEN_RE.findall(window)
-        if matches:
-            self._alt_screen = matches[-1] == b"h"
-        self._alt_screen_tail = window[-_ALT_SCREEN_STRADDLE:]
+        window = self._mode_tail + data
+        for params, action in _PRIVATE_MODE_RE.findall(window):
+            enabled = action == b"h"
+            for raw in params.split(b";"):
+                if not raw:
+                    continue
+                try:
+                    mode = int(raw)
+                except ValueError:  # pragma: no cover — regex admits digits only
+                    continue
+                if mode in _RESTORED_MODES:
+                    self._modes[mode] = enabled
+        self._mode_tail = window[-_PRIVATE_MODE_STRADDLE:]
+
+    @property
+    def _alt_screen(self) -> bool:
+        return any(self._modes.get(mode, False) for mode in _ALT_SCREEN_MODES)
+
+    def _mode_restore_prefix(self) -> bytes:
+        """DECSET/DECRST sequences re-establishing the current mode state."""
+        return b"".join(
+            b"\x1b[?%dh" % mode if enabled else b"\x1b[?%dl" % mode
+            for mode, enabled in sorted(self._modes.items())
+        )
 
     def _append_ring(self, data: bytes) -> None:
         # Scrub terminal query/response bytes in-line so the ring is always
@@ -465,6 +507,10 @@ class TerminalSession:
         the span. History older than that change is dropped from the replay —
         it is unrenderable at the current grid, which is the whole point.
 
+        A cut span is prefixed with the private modes in force when it was made
+        (`_mode_restore_prefix`), because the sequences that established them
+        are behind the cut and a client's replay wipe does not restore them.
+
         An empty ring yields nothing — callers that need a
         "handshake-always-has-an-OUTPUT-frame" invariant must emit one
         explicitly.
@@ -472,6 +518,8 @@ class TerminalSession:
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive: {chunk_size}")
         snapshot = bytes(self._ring[self._ring_width_start :])
+        if self._ring_width_start:
+            snapshot = self._ring_width_prefix + snapshot
         for start in range(0, len(snapshot), chunk_size):
             yield snapshot[start : start + chunk_size]
 
@@ -638,6 +686,12 @@ class TerminalSession:
             and self._state == SessionState.RUNNING
         ):
             self._ring_width_start = len(self._ring)
+            # The sequences that established the current modes are now behind
+            # the cut, and the client's replay wipe clears the display, not the
+            # emulator's mode state. Without this the retained paint is parsed
+            # on the primary screen, with the wrong scrolling and the wrong
+            # input encoding.
+            self._ring_width_prefix = self._mode_restore_prefix()
         # Recorded either way: the ring's current width is a fact about the PTY,
         # not about whether this particular change moved the mark.
         self._ring_cols = cols

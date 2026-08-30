@@ -2,7 +2,6 @@ package com.mobaide.app.ui.terminal
 
 import android.graphics.Paint
 import android.graphics.Typeface
-import android.util.DisplayMetrics
 import com.mobaide.app.data.local.TerminalDisplayMode
 import kotlin.math.ceil
 import kotlin.math.max
@@ -23,6 +22,10 @@ import kotlin.math.max
 /** A terminal grid. Named rather than a `Pair` — both axes are `Int`, and a
  * swapped pair reaches the wire as a plausible-looking PTY size. */
 data class TerminalGrid(val rows: Int, val cols: Int)
+
+/** The app window's extent in pixels — what the terminal is laid out in, which
+ * in split-screen and freeform is not the display. */
+data class TerminalViewport(val widthPx: Int, val heightPx: Int)
 
 object TerminalGridEstimate {
     /**
@@ -67,12 +70,12 @@ object TerminalGridEstimate {
     fun of(
         mode: TerminalDisplayMode,
         staticColumns: Int,
-        metrics: DisplayMetrics,
+        viewport: TerminalViewport,
     ): TerminalGrid {
         val (fontWidth, lineSpacing) = cellSize()
         return TerminalGrid(
-            rows = rows(metrics.heightPixels, lineSpacing),
-            cols = columns(mode, staticColumns, metrics.widthPixels, fontWidth),
+            rows = rows(viewport.heightPx, lineSpacing),
+            cols = columns(mode, staticColumns, viewport.widthPx, fontWidth),
         )
     }
 

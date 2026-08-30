@@ -9,6 +9,7 @@ import com.mobaide.app.data.local.CodexLaunchPrefs
 import android.content.res.Resources
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.ui.terminal.TerminalGridEstimate
+import com.mobaide.app.ui.terminal.TerminalViewport
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.AntigravityOptionsModel
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
@@ -1301,10 +1302,28 @@ class CreateSessionViewModel @Inject constructor(
             val grid = TerminalGridEstimate.of(
                 mode = preferencesStore.terminalDisplayMode.first(),
                 staticColumns = preferencesStore.terminalStaticColumns.first(),
-                metrics = Resources.getSystem().displayMetrics,
+                viewport = viewport ?: Resources.getSystem().displayMetrics.let {
+                    TerminalViewport(widthPx = it.widthPixels, heightPx = it.heightPixels)
+                },
             )
             copy(rows = grid.rows, cols = grid.cols)
         }.getOrDefault(this)
+
+    /**
+     * The app window the terminal will be laid out in, reported by the screen.
+     *
+     * Not read from `Resources.getSystem()`, which is documented as not being
+     * configured for the current screen: in split-screen or freeform it
+     * describes the display, so a Full-mode session would spawn at roughly
+     * twice the columns it ever gets — recreating the wrong-width opening paint
+     * this exists to prevent. The global metrics remain only as a fallback for
+     * a submit that somehow precedes the first composition.
+     */
+    fun onViewportChanged(widthPx: Int, heightPx: Int) {
+        viewport = TerminalViewport(widthPx = widthPx, heightPx = heightPx)
+    }
+
+    private var viewport: TerminalViewport? = null
 
     private fun submitSession(selection: ProjectSelection, request: CreateSessionRequest) {
         viewModelScope.launch {

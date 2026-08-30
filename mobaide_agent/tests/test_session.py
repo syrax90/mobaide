@@ -707,12 +707,21 @@ def _on_alt_screen(session: TerminalSession) -> TerminalSession:
     absolute positions. On the normal screen the replay is line-oriented text
     the client re-wraps, so history is kept — covered separately below.
     """
-    session._track_alt_screen(b"\x1b[?1049h")
+    session._track_modes(b"\x1b[?1049h")
     return session
 
 
 def _replay(session: TerminalSession) -> bytes:
     return b"".join(session.iter_ring_chunks(chunk_size=64))
+
+
+def _replay_body(session: TerminalSession) -> bytes:
+    """The replay minus the mode-restoring prefix a cut span carries.
+
+    The prefix is asserted on its own in ``test_a_cut_replay_restores_the_modes``;
+    everywhere else the question is which *output* survived the cut.
+    """
+    return _replay(session).removeprefix(session._ring_width_prefix)
 
 
 class TestRingWidthMark:
@@ -733,7 +742,7 @@ class TestRingWidthMark:
         await session.resize(24, 120)
         session._append_ring(b"one-twenty output")
 
-        assert _replay(session) == b"one-twenty output"
+        assert _replay_body(session) == b"one-twenty output"
         # Only the replay window moved — the bytes themselves are untouched.
         assert session.get_ring() == b"eighty-column prologueone-twenty output"
 
@@ -771,7 +780,7 @@ class TestRingWidthMark:
         session._append_ring(b"one-twenty output")
         await session.resize(24, 120)
 
-        assert _replay(session) == b"one-twenty output"
+        assert _replay_body(session) == b"one-twenty output"
 
     async def test_head_trim_moves_the_mark_with_the_bytes(self) -> None:
         # The mark is an absolute offset into a ring whose head is trimmed on
@@ -787,7 +796,7 @@ class TestRingWidthMark:
         # 10 bytes pushed against an 8-byte cap → two head bytes of the
         # 80-column run are trimmed, and the mark follows them from 4 to 2.
         assert session.get_ring() == b"AABBBBCC"
-        assert _replay(session) == b"BBBBCC"
+        assert _replay_body(session) == b"BBBBCC"
 
     async def test_normal_screen_history_survives_a_width_change(self) -> None:
         # Off the alternate screen the replay is line-oriented text, which the
@@ -812,7 +821,60 @@ class TestRingWidthMark:
 
         await session.resize(24, 120)
 
-        assert _replay(session) == b"what it died showing"
+        assert _replay_body(session) == b"what it died showing"
+
+    async def test_a_cut_replay_restores_the_modes(self) -> None:
+        # The sequences that set these are behind the cut, and a client's replay
+        # wipe clears the display, not the emulator's mode state. Without the
+        # prefix the retained paint is parsed on the primary screen, with the
+        # wrong scrolling and the wrong input encoding.
+        session = _width_session(cols=80)
+        session._track_modes(b"\x1b[?1049h\x1b[?2004h\x1b[?1006h\x1b[?25l")
+        session._append_ring(b"paint at eighty")
+
+        await session.resize(24, 120)
+        session._append_ring(b"repaint at one-twenty")
+
+        replay = _replay(session)
+        assert replay.endswith(b"repaint at one-twenty")
+        prefix = replay.removesuffix(b"repaint at one-twenty")
+        assert b"\x1b[?1049h" in prefix
+        assert b"\x1b[?2004h" in prefix
+        assert b"\x1b[?1006h" in prefix
+        assert b"\x1b[?25l" in prefix
+
+    async def test_an_uncut_replay_carries_no_prefix(self) -> None:
+        # Nothing was dropped, so the modes are still established by the bytes
+        # themselves; prepending them again would be redundant noise.
+        session = _width_session(cols=80)
+        session._track_modes(b"\x1b[?1049h")
+        session._append_ring(b"only ever one width")
+
+        assert _replay(session) == b"only ever one width"
+
+    async def test_batched_private_modes_are_recognised(self) -> None:
+        # A TUI may set several private modes in one sequence. Matching a single
+        # number followed by h/l would miss the alternate-screen transition
+        # entirely, and with it every cut the transition is supposed to gate.
+        session = _width_session(cols=80)
+
+        session._track_modes(b"\x1b[?1049;25h")
+        assert session._alt_screen
+        assert session._modes[25] is True
+
+        session._track_modes(b"\x1b[?1049;25l")
+        assert not session._alt_screen
+
+    async def test_a_private_mode_split_across_reads_is_tracked(self) -> None:
+        # 4 KiB reads cut wherever they cut; the tracker is stateful for the
+        # same reason the DA and OSC processors on these bytes are.
+        session = _width_session(cols=80)
+
+        session._track_modes(b"trailing output\x1b[?104")
+        session._track_modes(b"9;2004h")
+
+        assert session._alt_screen
+        assert session._modes[2004] is True
 
     async def test_head_trim_clamps_the_mark_at_zero(self) -> None:
         # An overflow larger than the mark would drive it negative, and a
@@ -825,7 +887,7 @@ class TestRingWidthMark:
         session._append_ring(b"B" * 12)
 
         assert session.get_ring() == b"B" * 8
-        assert _replay(session) == b"B" * 8
+        assert _replay_body(session) == b"B" * 8
 
 
 def _attention_config(

@@ -100,6 +100,8 @@ import com.mobaide.app.ui.common.SecretTextField
 import com.mobaide.app.ui.projects.ProjectFormSheet
 import com.mobaide.app.ui.projects.ProjectsUiEvent
 import com.mobaide.app.ui.projects.ProjectsViewModel
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -113,6 +115,19 @@ fun CreateSessionScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val projectsState by projectsViewModel.uiState.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+
+    // The grid a created session spawns at comes from here, not from the view
+    // model: `Configuration.screenWidthDp` is the app *window*, so split-screen
+    // and freeform report what the terminal will really get, where the global
+    // display metrics would report the whole screen.
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+    LaunchedEffect(configuration, density) {
+        viewModel.onViewportChanged(
+            widthPx = with(density) { configuration.screenWidthDp.dp.roundToPx() },
+            heightPx = with(density) { configuration.screenHeightDp.dp.roundToPx() },
+        )
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.navigateToSession.collect { sessionId -> onSessionCreated(sessionId) }
