@@ -571,6 +571,10 @@ final class AgentListModel {
                     if elapsed % Self.defensiveRefetchSeconds == 0
                         || elapsed == Self.waitForOnlineTimeoutSeconds {
                         try? await self.agentRepository.refreshAgents()
+                        // `try?` also swallows the CancellationError a dismiss or
+                        // re-scan raises mid-request; without this a cancelled
+                        // watcher would write `.success` over `.idle` or a newer wait.
+                        try Task.checkCancellation()
                     }
                     if self.isAgentOnline(agentId) {
                         self.qrPairing = .success(agentId: agentId, friendlyName: friendlyName)
