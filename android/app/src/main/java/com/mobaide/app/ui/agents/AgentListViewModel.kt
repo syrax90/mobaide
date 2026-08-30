@@ -43,13 +43,11 @@ sealed interface QrPairingState {
      * was shown as "Paired" with no error surface.
      *
      * The watcher coroutine in [AgentListViewModel.startWaitingForOnlineWatcher]
-     * collects `agent.status_changed` events (delivered via [UserEventBus] on
-     * `ws/user-events` → [AgentRepository.updateAgentOnline]) until either the
-     * agent flips to `online=true` ([Success]) or the timeout expires
-     * ([Error]). The timeout error message intentionally enumerates the
-     * remediation commands (`mobaide-agent show-qr`, `Get-ScheduledTask`,
-     * `Get-Content agent.err.log`) so a Windows operator can act without
-     * a docs round-trip.
+     * observes the cached agent list — fed by `agent.status_changed` events
+     * (delivered via [UserEventBus] on `ws/user-events` →
+     * [AgentRepository.updateAgentOnline]) and by a periodic REST resync —
+     * until either the agent flips to `online=true` ([Success]) or the
+     * timeout expires ([WaitTimedOut]).
      *
      * [wsDeliveredAtClaim] is the server's optional hint: `true` means
      * the agent's WS was registered at claim time and the credential push
@@ -64,7 +62,22 @@ sealed interface QrPairingState {
         val elapsedSeconds: Int = 0,
         val wsDeliveredAtClaim: Boolean? = null,
     ) : QrPairingState
+
+    /**
+     * The [WaitingForOnline] budget ran out with the agent still offline.
+     * Not a failure: the claim succeeded and the agent stays paired to the
+     * account; it simply has not connected back yet. The user can keep
+     * waiting ([AgentListViewModel.keepWaiting]) or close the dialog and
+     * watch the list, which flips the agent Online on its own.
+     */
+    data class WaitTimedOut(
+        val agentId: String,
+        val friendlyName: String,
+        val wsDeliveredAtClaim: Boolean?,
+    ) : QrPairingState
     data class Success(val agentId: String, val friendlyName: String) : QrPairingState
+
+    /** A claim that was refused or could not be sent. */
     data class Error(val message: String) : QrPairingState
 }
 
@@ -79,10 +92,48 @@ sealed interface QrPairingState {
  */
 internal const val WAIT_FOR_ONLINE_TIMEOUT_SECONDS: Int = 60
 
+/**
+ * How often the waiting-for-online watcher re-reads `GET /api/agents` while
+ * it waits. The `agent.status_changed` push stays the primary signal; this
+ * bounded resync (≤12 requests over the 60 s window, the same cadence as
+ * web's `DEFENSIVE_REFETCH_MS`) is what recovers when that push is lost —
+ * the user socket was down or still reconnecting when the relay emitted it,
+ * the event named an agent not yet in the cache, or a whole-list refresh in
+ * flight overwrote the flag it had just set. The relay computes `online`
+ * from its live routing table, so the poll is authoritative.
+ */
+internal const val DEFENSIVE_REFETCH_SECONDS: Int = 5
+
 internal const val DEVICE_CODE_POLL_INTERVAL_MS: Long = 2_000L
 
 /** The `detail.error` discriminator on the relay's account-trust-pin refusal. */
 internal const val TRUST_PIN_MISMATCH_CODE: String = "trust_key_pin_mismatch"
+
+/**
+ * Body of the "Agent not online yet" dialog. Same wording as iOS
+ * (`AgentListModel.waitTimeoutMessage`) and web (`waitTimeoutMessage`), and
+ * deliberately neutral about the agent host: the phone cannot tell whether
+ * it is a Windows task, a systemd unit, or a launchd job.
+ */
+internal fun buildWaitTimeoutMessage(
+    friendlyName: String,
+    wsDeliveredAtClaim: Boolean?,
+): String {
+    val parts = mutableListOf(
+        "‘$friendlyName’ was paired to your account but hasn't connected within " +
+            "$WAIT_FOR_ONLINE_TIMEOUT_SECONDS s. It will show as Online in your agents " +
+            "list as soon as its relay client connects.",
+    )
+    when (wsDeliveredAtClaim) {
+        true -> parts += "The relay delivered credentials to the agent, but its tunnel " +
+            "hasn't connected yet."
+        false -> parts += "Credentials were staged for the agent's next reconnect."
+        null -> Unit
+    }
+    parts += "Check that the agent service is running on that host, or run " +
+        "`mobaide-agent show-qr` there to restart pairing."
+    return parts.joinToString(" ")
+}
 
 data class AgentListUiState(
     val agents: List<AgentSummaryResponse> = emptyList(),
@@ -311,6 +362,16 @@ class AgentListViewModel @Inject constructor(
     fun dismissQrPairing() {
         cancelWaitForOnlineWatcher()
         _uiState.update { it.copy(qrPairing = QrPairingState.Idle) }
+    }
+
+    /** Give the agent another [WAIT_FOR_ONLINE_TIMEOUT_SECONDS] after a [QrPairingState.WaitTimedOut]. */
+    fun keepWaiting() {
+        val state = _uiState.value.qrPairing as? QrPairingState.WaitTimedOut ?: return
+        startWaitingForOnlineWatcher(
+            agentId = state.agentId,
+            friendlyName = state.friendlyName,
+            wsDeliveredAtClaim = state.wsDeliveredAtClaim,
+        )
     }
 
     /** Mint a pairing code and start watching for a machine to enter it. */
@@ -661,22 +722,29 @@ class AgentListViewModel @Inject constructor(
 
     /**
      * Drive the [QrPairingState.WaitingForOnline] phase. Cancels any prior
-     * watcher first — re-entrancy guard for a double-claim attempt or a
-     * rapid dismiss/re-scan.
+     * watcher first — re-entrancy guard for a double-claim attempt, a rapid
+     * dismiss/re-scan, or [keepWaiting].
      *
-     * Two parallel signals decide the outcome:
+     * Three signals decide the outcome:
      *  * `online=true` in [AgentRepository.observeAgents] — pushed by
      *    [UserEventBus] from the relay's `agent.status_changed` event when
-     *    the agent's `/ws/agent-tunnel` connects. This is the authoritative
-     *    "actually paired" signal.
+     *    the agent's `/ws/agent-tunnel` connects. The primary signal.
+     *  * A REST resync every [DEFENSIVE_REFETCH_SECONDS] and on the final
+     *    tick, so a lost push can never strand the dialog and the deadline
+     *    verdict is read fresh from the relay, never from a stale cache.
      *  * 1 s tick — emits an updated `elapsedSeconds` for the UI counter
-     *    and short-circuits to [QrPairingState.Error] at
+     *    and ends in [QrPairingState.WaitTimedOut] at
      *    [WAIT_FOR_ONLINE_TIMEOUT_SECONDS].
      *
-     * One extra `refreshAgents()` is fired as a defensive resync: the
+     * One extra `refreshAgents()` runs before the loop: the
      * [AgentRepository.claimAgentByPairing] call already does one, but a
      * `agent.status_changed=true` event delivered between those two calls
      * would be re-overwritten by the stale REST snapshot otherwise.
+     *
+     * Every online check reads the repository flow directly rather than
+     * `_uiState.agents`: that copy is filled by a separate collector, so a
+     * refresh followed by an immediate check would still see the previous
+     * list.
      */
     private fun startWaitingForOnlineWatcher(
         agentId: String,
@@ -694,45 +762,30 @@ class AgentListViewModel @Inject constructor(
                 ),
             )
         }
-        // Snapshot the just-claimed agent's online status in case the
-        // status_changed event raced ahead of the REST snapshot inside
-        // claimAgentByPairing — observed in CI on fast loopback networks.
-        val seedOnline = _uiState.value.agents
-            .firstOrNull { it.agent_id == agentId }?.online == true
-        if (seedOnline) {
+        // The status_changed event may have raced ahead of the REST snapshot
+        // inside claimAgentByPairing — observed in CI on fast loopback networks.
+        if (isAgentOnline(agentId)) {
             _uiState.update {
                 it.copy(qrPairing = QrPairingState.Success(agentId, friendlyName))
             }
             return
         }
         waitForOnlineJob = viewModelScope.launch {
-            try {
-                agentRepository.refreshAgents()
-            } catch (e: kotlin.coroutines.cancellation.CancellationException) {
-                // Structured concurrency requires CancellationException to
-                // propagate. A bare ``catch (_: Throwable)`` would swallow it
-                // and let the coroutine continue into the for-loop below;
-                // the subsequent ``delay`` would re-throw, but any non-
-                // suspending side-effect added between here and that delay
-                // would execute in a "zombie" coroutine — exactly the
-                // future-edit footgun that motivates re-throwing here.
-                throw e
-            } catch (_: Throwable) {
-                // Best-effort resync; the watcher loop still observes the
-                // flow for status_changed pushes regardless.
-            }
+            refreshAgentsBestEffort()
             for (elapsed in 1..WAIT_FOR_ONLINE_TIMEOUT_SECONDS) {
                 delay(1000L)
-                val current = _uiState.value
-                val online = current.agents
-                    .firstOrNull { it.agent_id == agentId }?.online == true
-                if (online) {
+                if (elapsed % DEFENSIVE_REFETCH_SECONDS == 0 ||
+                    elapsed == WAIT_FOR_ONLINE_TIMEOUT_SECONDS
+                ) {
+                    refreshAgentsBestEffort()
+                }
+                if (isAgentOnline(agentId)) {
                     _uiState.update {
                         it.copy(qrPairing = QrPairingState.Success(agentId, friendlyName))
                     }
                     return@launch
                 }
-                val pairing = current.qrPairing
+                val pairing = _uiState.value.qrPairing
                 if (pairing is QrPairingState.WaitingForOnline &&
                     pairing.agentId == agentId
                 ) {
@@ -745,42 +798,34 @@ class AgentListViewModel @Inject constructor(
             }
             _uiState.update {
                 it.copy(
-                    qrPairing = QrPairingState.Error(
-                        buildPairingTimeoutMessage(
-                            agentId = agentId,
-                            friendlyName = friendlyName,
-                            wsDeliveredAtClaim = wsDeliveredAtClaim,
-                        ),
+                    qrPairing = QrPairingState.WaitTimedOut(
+                        agentId = agentId,
+                        friendlyName = friendlyName,
+                        wsDeliveredAtClaim = wsDeliveredAtClaim,
                     ),
                 )
             }
         }
     }
 
-    private fun buildPairingTimeoutMessage(
-        agentId: String,
-        friendlyName: String,
-        wsDeliveredAtClaim: Boolean?,
-    ): String {
-        val shortId = agentId.take(8)
-        val baseMessage = "Agent $friendlyName ($shortId…) did not come online " +
-            "within $WAIT_FOR_ONLINE_TIMEOUT_SECONDS seconds. " +
-            "The pairing request was accepted by the server, but the agent " +
-            "never connected back."
-        val dispatchHint = when (wsDeliveredAtClaim) {
-            true -> " The server reports the credential push was delivered " +
-                "to the agent's WebSocket, so the agent likely received " +
-                "credentials but failed to start its relay client " +
-                "(check the agent host's network/firewall to the relay)."
-            false -> " The server reports the agent's WebSocket was NOT open " +
-                "at claim time; credentials were staged for the agent's " +
-                "next reconnect (check that the agent task is running)."
-            null -> ""
+    private fun isAgentOnline(agentId: String): Boolean =
+        agentRepository.observeAgents().value
+            .firstOrNull { it.agent_id == agentId }?.online == true
+
+    private suspend fun refreshAgentsBestEffort() {
+        try {
+            agentRepository.refreshAgents()
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            // Structured concurrency requires CancellationException to
+            // propagate. A bare ``catch (_: Throwable)`` would swallow it
+            // and let the watcher loop continue; the next ``delay`` would
+            // re-throw, but any non-suspending side-effect added before it
+            // would execute in a "zombie" coroutine.
+            throw e
+        } catch (_: Throwable) {
+            // Best-effort resync; the watcher loop still observes the
+            // flow for status_changed pushes regardless.
         }
-        val remediation = " On the agent host: `mobaide-agent show-qr` " +
-            "(re-render QR), `Get-ScheduledTask MobaideAgent` (task state), " +
-            "`Get-Content \"\$env:ProgramFiles\\MobaideAgent\\logs\\agent.err.log\" -Tail 50`."
-        return baseMessage + dispatchHint + remediation
     }
 
     fun connectToAgent(agent: AgentSummaryResponse) {

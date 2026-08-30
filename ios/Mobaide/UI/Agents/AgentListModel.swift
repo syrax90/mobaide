@@ -19,6 +19,15 @@ struct AgentCredentials: Identifiable, Equatable {
 @Observable
 final class AgentListModel {
     static let waitForOnlineTimeoutSeconds = 60
+    /// How often the waiting-for-online watcher re-reads `GET /api/agents`.
+    /// The `agent.status_changed` push stays primary; this bounded resync
+    /// (≤12 requests over the 60 s window, web's `DEFENSIVE_REFETCH_MS`
+    /// cadence) recovers a lost push — user socket down or reconnecting when
+    /// the relay emitted it, an event for an agent not yet cached, or a
+    /// whole-list refresh overwriting the flag it had just set. The relay
+    /// computes `online` from its live routing table, so the poll is
+    /// authoritative.
+    static let defensiveRefetchSeconds = 5
     static let deviceCodePollIntervalSeconds = 2
     /// The `detail.error` discriminator on the relay's account-trust-pin refusal.
     static let trustPinMismatchCode = "trust_key_pin_mismatch"
@@ -506,10 +515,17 @@ final class AgentListModel {
     }
 
     /// Abandon the pairing UI (Confirming cancel / Waiting "Stop waiting" /
-    /// Success OK / Error close). Does not undo an already-succeeded claim.
+    /// WaitTimedOut close / Success OK / Error close). Does not undo an
+    /// already-succeeded claim.
     func dismissPairing() {
         resetPairing()
         pairingSheetPresented = false
+    }
+
+    /// Give the agent another `waitForOnlineTimeoutSeconds` after a `.waitTimedOut`.
+    func keepWaiting() {
+        guard case .waitTimedOut(let agentId, let friendlyName, let ws) = qrPairing else { return }
+        startWaitingForOnlineWatcher(agentId: agentId, friendlyName: friendlyName, wsDeliveredAtClaim: ws)
     }
 
     /// Cancel the watcher and reset to idle without touching sheet presentation
@@ -550,6 +566,12 @@ final class AgentListModel {
                 for elapsed in 1...Self.waitForOnlineTimeoutSeconds {
                     try Task.checkCancellation()
                     try await self.sleeper.sleep(for: .seconds(1))
+                    // The deadline tick always resyncs, so the verdict below is
+                    // read fresh from the relay rather than from a stale cache.
+                    if elapsed % Self.defensiveRefetchSeconds == 0
+                        || elapsed == Self.waitForOnlineTimeoutSeconds {
+                        try? await self.agentRepository.refreshAgents()
+                    }
                     if self.isAgentOnline(agentId) {
                         self.qrPairing = .success(agentId: agentId, friendlyName: friendlyName)
                         return
@@ -564,8 +586,12 @@ final class AgentListModel {
                         wsDeliveredAtClaim: ws
                     )
                 }
-                self.qrPairing = .error(
-                    Self.timeoutMessage(friendlyName: friendlyName, wsDeliveredAtClaim: wsDeliveredAtClaim)
+                // Not a failure: the claim landed and the agent stays paired; it
+                // just has not connected back inside the budget.
+                self.qrPairing = .waitTimedOut(
+                    agentId: agentId,
+                    friendlyName: friendlyName,
+                    wsDeliveredAtClaim: wsDeliveredAtClaim
                 )
             } catch {
                 // Cancellation (dismiss / re-scan / deinit) unwinds here.
@@ -578,17 +604,27 @@ final class AgentListModel {
         agentRepository.currentAgents.first { $0.agent_id == agentId }?.online == true
     }
 
-    static func timeoutMessage(friendlyName: String, wsDeliveredAtClaim: Bool?) -> String {
-        var parts = ["‘\(friendlyName)’ did not come online within 60 s."]
+    /// Body of the "Agent not online yet" sheet. Same wording as Android
+    /// (`buildWaitTimeoutMessage`) and web (`waitTimeoutMessage`), and neutral
+    /// about the agent host's service manager.
+    static func waitTimeoutMessage(friendlyName: String, wsDeliveredAtClaim: Bool?) -> String {
+        var parts = [
+            "‘\(friendlyName)’ was paired to your account but hasn't connected within "
+                + "\(waitForOnlineTimeoutSeconds) s. It will show as Online in your agents list "
+                + "as soon as its relay client connects."
+        ]
         switch wsDeliveredAtClaim {
         case .some(true):
-            parts.append("The relay delivered credentials to the agent, but its tunnel hasn’t connected yet.")
+            parts.append("The relay delivered credentials to the agent, but its tunnel hasn't connected yet.")
         case .some(false):
-            parts.append("Credentials were staged for the agent’s next reconnect.")
+            parts.append("Credentials were staged for the agent's next reconnect.")
         case .none:
             break
         }
-        parts.append("On the agent host, run `mobaide-agent show-qr` to re-render the QR and restart pairing.")
+        parts.append(
+            "Check that the agent service is running on that host, or run `mobaide-agent show-qr` "
+                + "there to restart pairing."
+        )
         return parts.joined(separator: " ")
     }
 }

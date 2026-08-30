@@ -389,6 +389,8 @@ private struct PairingFlowView: View {
             progress("Claiming the pairing code…")
         case .waitingForOnline(_, let name, let elapsed, _):
             waiting(name: name, elapsed: elapsed)
+        case .waitTimedOut(_, let name, let ws):
+            notOnlineYet(name: name, wsDeliveredAtClaim: ws)
         case .success(_, let name):
             success(name: name)
         case .error(let message):
@@ -443,6 +445,28 @@ private struct PairingFlowView: View {
                 .monospacedDigit()
             Button("Stop waiting", role: .cancel) { model.dismissPairing() }
                 .buttonStyle(.pixel)
+        }
+    }
+
+    private func notOnlineYet(name: String, wsDeliveredAtClaim: Bool?) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "clock.badge.exclamationmark")
+                .font(.system(size: 40))
+                .foregroundStyle(colors.warning)
+            Text("Agent not online yet")
+                .font(MobaideTypography.dialogTitle)
+                .foregroundStyle(colors.accent)
+            Text(AgentListModel.waitTimeoutMessage(friendlyName: name, wsDeliveredAtClaim: wsDeliveredAtClaim))
+                .font(.callout)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(colors.textMuted)
+            HStack(spacing: 12) {
+                Button("Close", role: .cancel) { model.dismissPairing() }
+                    .buttonStyle(.pixel)
+                Button("Keep waiting") { model.keepWaiting() }
+                    .buttonStyle(.pixelPrimary)
+            }
+            .padding(.top, 4)
         }
     }
 

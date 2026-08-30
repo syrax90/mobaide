@@ -15,9 +15,9 @@ import {
   WAIT_FOR_ONLINE_TIMEOUT_SECONDS,
   deviceCodeBlockedMessage,
   deviceCodeErrorMessage,
-  waitTimeoutMessage,
 } from './pairCopy';
 import { useWaitForOnline } from './useWaitForOnline';
+import { WaitTimedOutPanel } from './WaitTimedOutPanel';
 
 /**
  * How often the browser asks whether a machine has entered the code.
@@ -57,6 +57,15 @@ type Phase =
       agentId: string;
       friendlyName: string;
       wsDelivered: boolean | null;
+      /** Bumped by "Keep waiting" so the watcher restarts its clock. */
+      attempt: number;
+    }
+  | {
+      kind: 'waitTimedOut';
+      agentId: string;
+      friendlyName: string;
+      wsDelivered: boolean | null;
+      attempt: number;
     }
   | { kind: 'success'; agentId: string; friendlyName: string }
   | { kind: 'error'; message: string };
@@ -189,6 +198,7 @@ export function PairHost() {
         agentId: result.agentId,
         friendlyName: result.agentFriendlyName,
         wsDelivered: result.wsDelivered,
+        attempt: 0,
       });
     },
     onError: (error: unknown) => {
@@ -196,7 +206,10 @@ export function PairHost() {
     },
   });
 
-  const wait = useWaitForOnline(phase.kind === 'waitingForOnline' ? phase.agentId : null);
+  const wait = useWaitForOnline(
+    phase.kind === 'waitingForOnline' ? phase.agentId : null,
+    phase.kind === 'waitingForOnline' ? phase.attempt : 0,
+  );
 
   useEffect(() => {
     if (phase.kind !== 'waitingForOnline') return;
@@ -211,8 +224,11 @@ export function PairHost() {
     }
     if (wait.timedOut) {
       setPhase({
-        kind: 'error',
-        message: waitTimeoutMessage(phase.friendlyName, phase.wsDelivered),
+        kind: 'waitTimedOut',
+        agentId: phase.agentId,
+        friendlyName: phase.friendlyName,
+        wsDelivered: phase.wsDelivered,
+        attempt: phase.attempt,
       });
     }
   }, [phase, wait.online, wait.timedOut]);
@@ -373,6 +389,22 @@ export function PairHost() {
             </button>
           </div>
         </div>
+      )}
+
+      {phase.kind === 'waitTimedOut' && (
+        <WaitTimedOutPanel
+          friendlyName={phase.friendlyName}
+          wsDelivered={phase.wsDelivered}
+          onKeepWaiting={() => {
+            setPhase({
+              kind: 'waitingForOnline',
+              agentId: phase.agentId,
+              friendlyName: phase.friendlyName,
+              wsDelivered: phase.wsDelivered,
+              attempt: phase.attempt + 1,
+            });
+          }}
+        />
       )}
 
       {phase.kind === 'success' && (

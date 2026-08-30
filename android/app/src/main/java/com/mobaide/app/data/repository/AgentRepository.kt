@@ -96,6 +96,10 @@ class AgentRepository(
      * transfers the agent row and pushes the credentials directly to the
      * agent over its pairing WebSocket. Refreshes the agent list on
      * success; the new agent appears within one round-trip.
+     *
+     * The refresh is best-effort, matching iOS and [confirmDeviceCode]: the
+     * claim has already landed server-side, so a transient list fetch
+     * failure must not report a pairing that succeeded as failed.
      */
     suspend fun claimAgentByPairing(
         nonce: String,
@@ -118,7 +122,7 @@ class AgentRepository(
                 friendly_name = friendlyName,
             ),
         )
-        refreshAgents()
+        runCatching { refreshAgents() }
         return response
     }
 

@@ -576,16 +576,23 @@ row). CLA-199 replaces it with an account-level server-side pin.
 
 **Waiting for the agent.** A claim's 200 only proves the relay persisted
 credentials; `ws_delivered` is tri-state diagnostic (`null` from an older
-relay must never collapse to `false`) and only refines the timeout copy. The
-authoritative signal is `agent.status_changed` with `online: true`. Android
-polls its cached list once a second; web does not need to, because that event
-already invalidates `['agents']` and an invalidation refetches the mounted
-query. What web keeps is the reason mobile refreshes *twice* — a status event
-landing between the claim's refresh and the watcher's start would be rolled
-back by the in-flight stale snapshot — plus a 5 s defensive interval so a
-dropped socket cannot strand the screen for the full 60 s. The timeout copy
-is iOS's short form; Android's enumerates `Get-ScheduledTask` and
-`agent.err.log` paths, which are Windows-specific by design.
+relay must never collapse to `false`) and only refines the wait-timeout copy.
+The authoritative signal is `agent.status_changed` with `online: true`, and
+the push stays primary on all three clients — that event already invalidates
+`['agents']` and an invalidation refetches the mounted query. The safety net
+for a lost push is a bounded REST resync: a 5 s interval
+(`DEFENSIVE_REFETCH_SECONDS` on Android/iOS, web's existing
+`DEFENSIVE_REFETCH_MS`, now also running in background tabs via
+`refetchIntervalInBackground: true`) plus one final resync on the 60 s
+deadline tick before any verdict, so "not online" is never shown while the
+agent actually is. What web keeps is the reason mobile refreshes *twice* — a
+status event landing between the claim's refresh and the watcher's start
+would be rolled back by the in-flight stale snapshot. The timeout is no
+longer an error: all three clients render a shared "Agent not online yet"
+state with a "Keep waiting" action that restarts the 60 s wait, and the
+timeout copy is now shared word-for-word and platform-neutral about the
+agent host — the Windows-specific `Get-ScheduledTask` / `agent.err.log`
+enumeration is gone.
 
 **`/agents`** is full mobile parity: cards (status dot, name, Online/Offline,
 agent id, version, added, last seen), manual add, re-register, remove, and the
