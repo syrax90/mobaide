@@ -3,15 +3,21 @@ import { defineConfig } from 'vitest/config';
 
 // Dev-server proxy mirrors the production Caddy site (WEB-02): the SPA is
 // same-origin with the relay, so /api, /ws, /relay and /proxy are forwarded
-// to a locally running central server.
+// to a locally running central server. MOBAIDE_WEB_PROXY_TARGET (set by
+// tests/e2e/manual_stack.py `up --web`) repoints all four at another
+// host:port; plain `npm run dev` keeps the localhost:9000 default. It is
+// deliberately not VITE_-prefixed: it must never reach client code.
+const target = process.env.MOBAIDE_WEB_PROXY_TARGET ?? 'http://localhost:9000';
+const wsTarget = target.replace(/^http/, 'ws');
+
 export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': { target: 'http://localhost:9000', changeOrigin: true },
-      '/ws': { target: 'ws://localhost:9000', ws: true },
-      '/relay': { target: 'ws://localhost:9000', ws: true },
-      '/proxy': { target: 'http://localhost:9000', changeOrigin: true, ws: true },
+      '/api': { target, changeOrigin: true },
+      '/ws': { target: wsTarget, ws: true },
+      '/relay': { target: wsTarget, ws: true },
+      '/proxy': { target, changeOrigin: true, ws: true },
     },
   },
   test: {

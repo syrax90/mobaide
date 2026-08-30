@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import xml.dom.minidom as minidom
 from pathlib import Path
 
@@ -270,3 +271,76 @@ def test_shutdown_save_keeps_a_concurrent_installers_record(tmp_path):
     reloaded = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
     assert reloaded["ios"]["installed_urls"] == {SIM_A: LOOPBACK_URL}
     assert reloaded["ios"]["baked_url"] == LOOPBACK_URL  # up's own writes survive
+
+
+def test_web_install_reason_decision(tmp_path):
+    """`up --web` re-runs `npm ci` exactly when the installed tree cannot be
+    current: node_modules missing, or package-lock.json newer than the
+    node_modules/.package-lock.json marker npm writes on every install. A tree
+    with no lockfile at all must count as current, or the check would re-run
+    `npm ci` on every boot forever."""
+    assert ms.web_install_reason(tmp_path) is not None  # nothing installed
+
+    node_modules = tmp_path / "node_modules"
+    node_modules.mkdir()
+    lock = tmp_path / "package-lock.json"
+    installed = node_modules / ".package-lock.json"
+    lock.write_text("{}", encoding="utf-8")
+    installed.write_text("{}", encoding="utf-8")
+
+    os.utime(lock, (1_000, 1_000))
+    os.utime(installed, (2_000, 2_000))
+    assert ms.web_install_reason(tmp_path) is None  # install postdates lockfile
+
+    os.utime(lock, (3_000, 3_000))
+    assert ms.web_install_reason(tmp_path) is not None  # lockfile changed since
+
+    installed.unlink()
+    assert ms.web_install_reason(tmp_path) is not None  # tree of unknown vintage
+
+    lock.unlink()
+    assert ms.web_install_reason(tmp_path) is None  # no lockfile: never loop
+
+
+def test_build_web_env_targets_the_stack_and_sanitizes(monkeypatch):
+    """The vite proxy must follow the actual server bind (wildcard -> loopback),
+    and stray shell exports must never leak into the web child: a leftover
+    MOBAIDE_WEB_PROXY_TARGET would point the proxy at a dead stack, and
+    NODE_ENV=production would make `vite dev` misbehave."""
+    monkeypatch.setenv("MOBAIDE_WEB_PROXY_TARGET", "http://stale:1")
+    monkeypatch.setenv("NODE_ENV", "production")
+    monkeypatch.setenv("MOBAIDE_ENV", "test")
+
+    env = ms.build_web_env(argparse.Namespace(host="0.0.0.0", port=9123))
+    assert env["MOBAIDE_WEB_PROXY_TARGET"] == "http://127.0.0.1:9123"
+    assert "NODE_ENV" not in env
+    assert "MOBAIDE_ENV" not in env
+
+    env = ms.build_web_env(argparse.Namespace(host="192.168.1.5", port=9123))
+    assert env["MOBAIDE_WEB_PROXY_TARGET"] == "http://192.168.1.5:9123"
+
+
+def test_up_parser_web_defaults():
+    """--web is per-run opt-in: plain `up` must not grow web behaviour, and
+    5173 stays the default origin (the one registered for OAuth in dev)."""
+    args = ms.build_parser().parse_args(["up"])
+    assert args.web is False
+    assert args.web_port == ms.DEFAULT_WEB_PORT == 5173
+
+    args = ms.build_parser().parse_args(["up", "--web", "--web-port", "5180"])
+    assert args.web is True
+    assert args.web_port == 5180
+
+
+def test_stale_matcher_covers_the_web_child():
+    """A hard-killed `up --web` leaves an npm/node tree behind; the reaping
+    pre-filter must recognise it on every platform (npm/node on POSIX, cmd.exe
+    on Windows) while still rejecting a python process wearing a recycled pid."""
+    matchers = {name: (token, names) for name, token, names in ms.STALE_PROCESS_MATCHERS}
+    assert set(matchers) == {"server", "agent", "web"}
+
+    cmdline_token, name_tokens = matchers["web"]
+    assert cmdline_token == "npm"
+    for proc_name in ("node", "npm", "npm.cmd", "cmd.exe"):
+        assert any(t in proc_name.lower() for t in name_tokens), proc_name
+    assert not any(t in "python3.12" for t in name_tokens)

@@ -49,7 +49,11 @@ Apple sign-in on web (WEB-11), pairing phase 2 (WEB-12), QR image decode
 Production serving model (WEB-02): `app.mobaide.com` as its own Caddy site
 block serving the SPA from disk and reverse-proxying `/api`, `/ws`,
 `/relay`, `/proxy` to the central server — fully same-origin, no CORS. The
-Vite dev server mirrors this with a proxy to `http://localhost:9000`.
+Vite dev server mirrors this with a proxy to `http://localhost:9000`; the
+config-only `MOBAIDE_WEB_PROXY_TARGET` env var repoints all four routes at
+another host:port, which is how `tests/e2e/manual_stack.py up --web` serves
+the SPA against the manual stack (see
+[manual-e2e-testing.md](manual-e2e-testing.md)).
 
 ## Stack
 
