@@ -14,7 +14,10 @@ Cross-platform (Windows / macOS / Linux). Reuses the automated harness recipe
   CENTRAL_SERVER_URL merge plus a generated debug-source-set
   network_security_config.xml override, and (on macOS) the iOS simulator's
   ios/Config/Local.xcconfig CENTRAL_SERVER_URL merge -- so no tracked file is
-  ever modified and release builds are unaffected.
+  ever modified and release builds are unaffected;
+* optionally (--web) the web client's Vite dev server on
+  http://localhost:5173, proxied to this stack, so a browser can log in with
+  the same throwaway account.
 
 Quickstart (from the repo root, inside your Python 3.12+ env):
 
@@ -59,6 +62,7 @@ DEFAULT_HOST = "0.0.0.0"
 DEFAULT_EMAIL = "dev@test.local"
 DEFAULT_PASSWORD = "Qwe>123"
 DEFAULT_AGENT_NAME = "manual-e2e-agent"
+DEFAULT_WEB_PORT = 5173
 
 # Internal wiring only: seeded via ADMIN_SEED_EMAIL/ADMIN_SEED_PASSWORD so the
 # script can authenticate the admin-gated /api/health counts for its own
@@ -102,6 +106,8 @@ IOS_SCHEME = "Mobaide"
 IOS_BUNDLE_ID = "com.mobaide.app"
 IOS_DEFAULT_SIM = "iPhone 16"
 
+WEB_DIR = REPO_ROOT / "web"
+
 # Vars a shell may still export from the old copy-paste recipe (or a dev .env
 # may define). Children get them popped, then the script's explicit values --
 # a leftover MOBAIDE_ENV=test would otherwise silently flip the real-mode agent
@@ -127,6 +133,7 @@ SANITIZED_ENV_VARS = (
     "PROJECTS",
     "LOG_FORMAT",
     "LOG_LEVEL",
+    "MOBAIDE_WEB_PROXY_TARGET",
 )
 
 _DEPS: SimpleNamespace | None = None
@@ -218,6 +225,62 @@ def ensure_no_proxy_env() -> None:
             if host not in parts:
                 parts.append(host)
         os.environ[key] = ",".join(parts)
+
+
+# --------------------------------------------------------------------------
+# Web client (--web)
+# --------------------------------------------------------------------------
+
+
+def find_npm() -> str:
+    """Absolute path to npm (shutil.which resolves npm.cmd on Windows)."""
+    npm = shutil.which("npm")
+    if npm is None:
+        engines = "see web/package.json"
+        try:
+            engines = json.loads(
+                (WEB_DIR / "package.json").read_text(encoding="utf-8")
+            )["engines"]["node"]
+        except (OSError, ValueError, KeyError):
+            pass
+        die(f"--web needs npm on PATH (Node {engines}); "
+            "install Node.js or rerun without --web")
+    return npm
+
+
+def web_install_reason(web_dir: Path) -> str | None:
+    """Why `npm ci` must run in web/, or None on the (two-stat-call) happy path.
+
+    npm writes node_modules/.package-lock.json on every install, so a
+    package-lock.json newer than it means the installed tree predates the
+    lockfile. A checkout that merely touches the lockfile mtime costs one
+    redundant `npm ci`, never a stale run.
+    """
+    node_modules = web_dir / "node_modules"
+    if not node_modules.is_dir():
+        return "web/node_modules is missing"
+    lock = web_dir / "package-lock.json"
+    installed = node_modules / ".package-lock.json"
+    if lock.exists() and (
+        not installed.exists()
+        or installed.stat().st_mtime < lock.stat().st_mtime
+    ):
+        return "web/package-lock.json is newer than the installed node_modules"
+    return None
+
+
+def ensure_web_install(npm: str) -> None:
+    reason = web_install_reason(WEB_DIR)
+    if reason is None:
+        return
+    log(f"{reason}; running `npm ci` in web/ (a first install downloads for a few minutes)")
+    env = dict(os.environ)
+    env.pop("NODE_ENV", None)  # NODE_ENV=production would skip devDependencies (vite itself)
+    try:
+        subprocess.run([npm, "ci"], cwd=str(WEB_DIR), env=env, check=True)
+    except (subprocess.CalledProcessError, OSError) as exc:
+        die(f"npm ci failed in {WEB_DIR} ({exc}).\n"
+            "Fix it manually (cd web && npm ci) or rerun without --web")
 
 
 # --------------------------------------------------------------------------
@@ -318,7 +381,7 @@ def free_loopback_port() -> int:
         s.close()
 
 
-def check_port_free(host: str, port: int) -> None:
+def check_port_free(host: str, port: int, *, flag: str = "--port") -> None:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         s.bind((host, port))
@@ -328,7 +391,7 @@ def check_port_free(host: str, port: int) -> None:
             "Another manual stack, the docker-compose dev server, or a crashed "
             "previous run may hold it.\n"
             "Try: python tests/e2e/manual_stack.py clean    (kills stale runs)\n"
-            "or pick another port with --port."
+            f"or pick another port with {flag}."
         )
     finally:
         s.close()
@@ -468,6 +531,17 @@ def record_runtime_process(state: dict, name: str, pid: int, psutil_mod) -> None
         runtime[f"{name}_create_time"] = None
 
 
+# (runtime key, token that must appear in the cmdline, tokens one of which must
+# appear in the process name). Only a pre-filter against strangers wearing a
+# recycled pid -- the actual identity gate stays the pid + create_time match.
+# `npm run dev` shows up as npm or node on POSIX and as cmd.exe on Windows.
+STALE_PROCESS_MATCHERS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("server", "central_server", ("python",)),
+    ("agent", "mobaide", ("python",)),
+    ("web", "npm", ("node", "npm", "cmd")),
+)
+
+
 def kill_stale_processes(state: dict, psutil_mod) -> None:
     """Self-heal after a hard kill: reap pids recorded by a previous `up`.
 
@@ -477,7 +551,7 @@ def kill_stale_processes(state: dict, psutil_mod) -> None:
     pid + create_time pair is unique per boot); otherwise leave it alone.
     """
     runtime = state.get("runtime") or {}
-    for name, module_token in (("server", "central_server"), ("agent", "mobaide")):
+    for name, cmdline_token, name_tokens in STALE_PROCESS_MATCHERS:
         pid = runtime.get(f"{name}_pid")
         recorded_created = runtime.get(f"{name}_create_time")
         if not pid:
@@ -488,7 +562,8 @@ def kill_stale_processes(state: dict, psutil_mod) -> None:
             created = proc.create_time()
         except psutil_mod.Error:
             continue
-        if module_token not in cmdline or "python" not in (proc.name() or "").lower():
+        proc_name = (proc.name() or "").lower()
+        if cmdline_token not in cmdline or not any(t in proc_name for t in name_tokens):
             continue
         if recorded_created is None or abs(created - recorded_created) > 1.0:
             log(
@@ -563,6 +638,15 @@ def build_agent_env(
     )
     if getattr(args, "projects", None):
         env["PROJECTS"] = args.projects
+    return env
+
+
+def build_web_env(args: argparse.Namespace) -> dict:
+    env = base_child_env()
+    env.pop("NODE_ENV", None)  # `vite dev` must stay in development mode
+    env["MOBAIDE_WEB_PROXY_TARGET"] = (
+        f"http://{local_probe_host(args.host)}:{args.port}"
+    )
     return env
 
 
@@ -1198,6 +1282,9 @@ def print_ready_banner(
         f"  App login:          {state['email']}  /  {state['password']}",
         f"  Agent:              {state['agent_name']} (online, id {state['agent_id'][:8]}...)",
     ]
+    if args.web:
+        lines.append(f"  Web client:         http://localhost:{args.web_port}  "
+                     "(vite dev, proxied to this stack -- use the App login above)")
     if args.fake_pty:
         lines.append("  Sessions:           FAKE echo PTY (--fake-pty): terminals only "
                      "echo bytes back")
@@ -1315,6 +1402,13 @@ def cmd_up(args: argparse.Namespace) -> int:
     check_port_free(args.host, args.port)
     probe_host = local_probe_host(args.host)
 
+    npm = None
+    if args.web:
+        # Fail fast (npm missing, port busy, npm ci broken) before any child exists.
+        npm = find_npm()
+        check_port_free("127.0.0.1", args.web_port, flag="--web-port")
+        ensure_web_install(npm)
+
     lan_ip, all_ips = detect_lan_ips(deps.psutil)
     if args.advertise_ip:
         lan_ip = args.advertise_ip
@@ -1350,8 +1444,7 @@ def cmd_up(args: argparse.Namespace) -> int:
             "first run and ALLOW Python on Private networks, or the phone cannot connect"
         )
 
-    server = None
-    agent = None
+    children: list[ChildProcess] = []
     client = None
     exit_code = 0
     try:
@@ -1363,6 +1456,7 @@ def cmd_up(args: argparse.Namespace) -> int:
             server_dir,
             logs_dir / "server.log",
         )
+        children.append(server)
         state["runtime"] = {"started_at": _utc_now()}
         record_runtime_process(state, "server", server.proc.pid, deps.psutil)
         save()
@@ -1386,6 +1480,7 @@ def cmd_up(args: argparse.Namespace) -> int:
             agent_dir,
             logs_dir / "agent.log",
         )
+        children.append(agent)
         record_runtime_process(state, "agent", agent.proc.pid, deps.psutil)
         save()
         wait_for_http_ok(
@@ -1408,11 +1503,32 @@ def cmd_up(args: argparse.Namespace) -> int:
             else:
                 log("--smoke needs --fake-pty (deterministic echo backend); skipping")
 
+        # Web boots last so a server/agent startup failure never has vite log
+        # lines interleaved into its diagnostics; the Vite proxy connects per
+        # request, so nothing here depends on boot order.
+        if args.web:
+            assert npm is not None  # resolved by the pre-boot --web block
+            log(f"starting web client (vite dev) on http://localhost:{args.web_port}")
+            web = ChildProcess(
+                "web",
+                [npm, "run", "dev", "--", "--port", str(args.web_port), "--strictPort"],
+                build_web_env(args),
+                WEB_DIR,
+                logs_dir / "web.log",
+            )
+            children.append(web)
+            record_runtime_process(state, "web", web.proc.pid, deps.psutil)
+            state["runtime"]["web_port"] = args.web_port
+            save()
+            wait_for_http_ok(
+                deps, f"http://localhost:{args.web_port}/", timeout=90, child=web
+            )
+
         print_ready_banner(args, state, lan_ip, all_ips, android, ios)
 
         while True:
             time.sleep(1)
-            for child in (server, agent):
+            for child in children:
                 if not child.alive():
                     child.dump_tail()
                     log(f"{child.name} exited unexpectedly "
@@ -1423,9 +1539,8 @@ def cmd_up(args: argparse.Namespace) -> int:
         log("Ctrl+C: shutting down")
         return exit_code
     finally:
-        for child in (agent, server):  # reverse boot order
-            if child is not None:
-                child.stop(deps.psutil)
+        for child in reversed(children):  # reverse boot order
+            child.stop(deps.psutil)
         if client is not None:
             client.close()
         state["runtime"] = {}
@@ -1536,6 +1651,18 @@ def cmd_status(args: argparse.Namespace) -> int:
         log(f"no state at {state_path} (stack never ran with this --state-dir)")
 
     deps = load_deps(auto_install=False)
+
+    # Informational only: the exit code stays driven by the server probe below
+    # (the mobile-ui-validation skill treats `status` exit 0 as stack-ready).
+    runtime = (state or {}).get("runtime") or {}
+    web_port = runtime.get("web_port")
+    if runtime.get("web_pid") and web_port:
+        try:
+            deps.httpx.get(f"http://localhost:{web_port}/", timeout=1.5)
+            log(f"web:       UP at http://localhost:{web_port}")
+        except Exception:  # noqa: BLE001
+            log(f"web:       DOWN (recorded on port {web_port})")
+
     probe = local_probe_host((state or {}).get("server_host") or DEFAULT_HOST)
     client = deps.mmc.MockMobileClient(f"http://{probe}:{port}", http_timeout=3.0)
     try:
@@ -1693,6 +1820,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="optional PROJECTS seed for the agent (real project dirs)")
     up.add_argument("--reinstall", action="store_true",
                     help="re-run the editable pip installs before booting")
+    up.add_argument("--web", action="store_true",
+                    help="also serve the web client (web/) via the Vite dev "
+                         "server, proxied to this stack; auto-runs `npm ci` in "
+                         "web/ when node_modules is missing or stale")
+    up.add_argument("--web-port", type=int, default=DEFAULT_WEB_PORT,
+                    help=f"Vite dev server port for --web "
+                         f"(default: {DEFAULT_WEB_PORT}; ignored without --web)")
     up.set_defaults(func=cmd_up)
 
     android = sub.add_parser("android", help="sync (or revert) the two gitignored "
