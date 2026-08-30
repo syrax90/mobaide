@@ -153,7 +153,7 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
     await websocket.send_bytes(FRAME_REPLAY_END)
 
     fanout = ensure_fanout(websocket.app.state, session)
-    subscription = fanout.subscribe()
+    subscription = fanout.subscribe(close_on_overflow=True)
 
     # Aggregated counters — emitted on disconnect, never per message.
     counters = {"bytes_in": 0, "bytes_out": 0, "msg_count": 0}

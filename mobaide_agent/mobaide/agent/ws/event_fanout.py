@@ -23,15 +23,18 @@ _ATTENTION_EVENT = "attention"
 class Subscription:
     """One consumer's slot on a session's event stream.
 
-    ``overflowed`` is set when the fan-out had to discard an event because
-    this queue was full. The consumer watches this flag and ends its
-    connection so a reconnect replays the ring.
+    ``close_on_overflow`` opt-in is load-bearing. Only a consumer that ends its
+    connection on ``overflowed`` may stop being fed: for one that ignores the
+    flag, skipping it is permanent silence, since nothing re-subscribes it. So
+    the flag-and-skip policy belongs to consumers that act on it (the direct-WS
+    endpoint), and everyone else keeps drop-and-continue.
     """
 
     queue: asyncio.Queue[SessionEvent] = field(
         default_factory=lambda: asyncio.Queue(maxsize=1000)
     )
     overflowed: asyncio.Event = field(default_factory=asyncio.Event)
+    close_on_overflow: bool = False
 
 
 class SessionEventFanout:
@@ -66,7 +69,7 @@ class SessionEventFanout:
             while True:
                 event = await self._session.event_queue.get()
                 for sub in list(self._subscribers):
-                    if sub.overflowed.is_set():
+                    if sub.close_on_overflow and sub.overflowed.is_set():
                         # Flagged already: the consumer needs event-loop turns
                         # to unsubscribe, and a slot freed meanwhile must not
                         # carry a post-hole event to it.
@@ -74,6 +77,8 @@ class SessionEventFanout:
                     try:
                         sub.queue.put_nowait(event)
                     except asyncio.QueueFull:
+                        if not sub.close_on_overflow:
+                            continue  # drop and keep feeding
                         if not sub.overflowed.is_set():
                             sub.overflowed.set()
                             logger.warning(
@@ -139,8 +144,8 @@ class SessionEventFanout:
         except asyncio.CancelledError:
             return
 
-    def subscribe(self) -> Subscription:
-        sub = Subscription()
+    def subscribe(self, *, close_on_overflow: bool = False) -> Subscription:
+        sub = Subscription(close_on_overflow=close_on_overflow)
         self._subscribers.add(sub)
         return sub
 

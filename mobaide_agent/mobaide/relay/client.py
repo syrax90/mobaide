@@ -2134,10 +2134,13 @@ class RelayClient:
     ) -> None:
         """Pump session events and send as CH_SESSION_IO envelopes.
 
-        ``subscription.overflowed`` is deliberately not acted on here: in relay
-        mode this is the session's single bridge, so an overflow means the shared
-        agent tunnel stalled and recovery is agent-wide rather than per-client.
-        The relay independently disconnects any mobile whose own queue overflows.
+        This subscribes without ``close_on_overflow``: in relay mode this is the
+        session's single bridge, so an overflow means the shared agent tunnel
+        stalled and recovery is agent-wide rather than per-client. Opting in
+        would be worse than the corruption it guards against — nothing
+        re-subscribes this bridge, so being skipped is permanent silence for
+        every client on the session. The relay independently disconnects any
+        mobile whose own queue overflows.
         """
         try:
             while True:

@@ -605,9 +605,9 @@ class TestSubscriberOverflow:
         session = _fake_session("s1")
         fanout = SessionEventFanout(session)
         try:
-            stalled = fanout.subscribe()
+            stalled = fanout.subscribe(close_on_overflow=True)
             self._saturate(stalled)
-            healthy = fanout.subscribe()
+            healthy = fanout.subscribe(close_on_overflow=True)
             fanout.start()
 
             await session.event_queue.put(
@@ -637,9 +637,9 @@ class TestSubscriberOverflow:
         session = _fake_session("s1")
         fanout = SessionEventFanout(session)
         try:
-            stalled = fanout.subscribe()
+            stalled = fanout.subscribe(close_on_overflow=True)
             self._saturate(stalled)
-            healthy = fanout.subscribe()
+            healthy = fanout.subscribe(close_on_overflow=True)
             fanout.start()
 
             with caplog.at_level(
@@ -665,6 +665,35 @@ class TestSubscriberOverflow:
                 and "fanout.subscriber_overflow" in r.getMessage()
             ]
             assert len(overflow_warnings) == 1
+        finally:
+            await _stop_and_await(fanout)
+
+    async def test_a_consumer_that_does_not_opt_in_keeps_being_fed(self):
+        """The relay bridge subscribes without `close_on_overflow` because
+        nothing re-subscribes it. Skipping such a consumer after one drop is
+        permanent silence for every client on the session — strictly worse than
+        the corruption the flag guards against.
+        """
+        session = _fake_session("s1")
+        fanout = SessionEventFanout(session)
+        try:
+            bridge = fanout.subscribe()
+            self._saturate(bridge)
+            healthy = fanout.subscribe(close_on_overflow=True)
+            fanout.start()
+
+            await session.event_queue.put(
+                SessionEvent(event_type="output", session_id="s1", data=b"dropped"),
+            )
+            assert (await _drain_one(healthy.queue)).data == b"dropped"
+            assert not bridge.overflowed.is_set()
+
+            # Drain the backlog, then prove the pump still delivers to it.
+            bridge.queue.get_nowait()
+            await session.event_queue.put(
+                SessionEvent(event_type="output", session_id="s1", data=b"after"),
+            )
+            assert (await _drain_one(bridge.queue)).data == b"after"
         finally:
             await _stop_and_await(fanout)
 
