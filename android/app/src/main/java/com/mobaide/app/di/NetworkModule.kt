@@ -75,4 +75,29 @@ object NetworkModule {
     fun provideCentralApi(@Named("central") client: OkHttpClient): CentralApi {
         return CentralApi(client, BuildConfig.CENTRAL_SERVER_URL)
     }
+
+    /**
+     * Client for user-scoped WebSockets (`ws/user-events`), which carry the
+     * dashboard JWT in their query string. It must not share the agent-scoped
+     * client above: [AuthInterceptor] synthesises a local 401 for every
+     * request made before an agent is connected, and the socket treats a 401
+     * upgrade as "token rejected" and signs the user out — so the channel,
+     * which now opens right after sign-in, would log every user straight back
+     * out. [CentralAuthInterceptor] only reacts to a real 401 from the relay,
+     * and the ping keeps a dead peer from stalling presence updates.
+     */
+    @Provides
+    @Singleton
+    @Named("user")
+    fun provideUserOkHttpClient(
+        centralAuthInterceptor: CentralAuthInterceptor,
+    ): OkHttpClient {
+        return OkHttpClient.Builder()
+            .addInterceptor(centralAuthInterceptor)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .pingInterval(30, TimeUnit.SECONDS)
+            .build()
+    }
 }

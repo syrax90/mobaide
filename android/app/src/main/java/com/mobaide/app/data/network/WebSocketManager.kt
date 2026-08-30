@@ -407,6 +407,13 @@ class WebSocketManager(
     private val sessionManager: SessionManager,
     private val userIdentityStore: UserIdentityStore,
     /**
+     * Client for user-scoped channels — see [createUserConnection]. Never
+     * [client]: its agent-scoped interceptor answers every request made
+     * before an agent is connected with a synthetic 401, which the socket
+     * would read as a rejected token and sign the user out.
+     */
+    private val userClient: OkHttpClient,
+    /**
      * Base for user-scoped channels when [TokenStore] holds no relay or
      * agent URL yet — see [resolveUserEventsUrl].
      */
@@ -501,11 +508,13 @@ class WebSocketManager(
      * (central-server dashboard token), not the agent-scoped mobile
      * token. Used for user-wide channels that span all of a user's
      * agents — e.g. presence events on `ws/user-events`. The URL comes
-     * from [resolveUserEventsUrl] on every (re)connect.
+     * from [resolveUserEventsUrl] on every (re)connect, and the upgrade
+     * goes through [userClient] so no agent-scoped interceptor can reject
+     * it locally while the account has no connected agent.
      */
     fun createUserConnection(path: String): WebSocketConnection {
         return WebSocketConnection(
-            client = client,
+            client = userClient,
             sessionManager = sessionManager,
             urlProvider = { resolveUserEventsUrl(path) },
             isAuthenticated = { userIdentityStore.isUserLoggedIn() },

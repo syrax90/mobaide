@@ -5,6 +5,7 @@ import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.auth.UserIdentityStore
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -29,6 +30,7 @@ class WebSocketManagerUserEventsUrlTest {
         tokenStore = tokenStore,
         sessionManager = mockk<SessionManager>(relaxed = true),
         userIdentityStore = userIdentityStore,
+        userClient = mockk<OkHttpClient>(),
         centralServerUrl = centralServerUrl,
     )
 
@@ -120,5 +122,30 @@ class WebSocketManagerUserEventsUrlTest {
             .resolveUserEventsUrl("ws/user-events")
 
         assertEquals("wss://central.test/ws/user-events?token=T", url)
+    }
+
+    @Test
+    fun createUserConnection_dialsThroughTheUserClient_neverTheAgentClient() {
+        // The agent-scoped client's interceptor answers every request made
+        // before an agent is connected with a synthetic 401, which the socket
+        // reads as a rejected token — dialling through it signed users out
+        // right after login once the channel started opening in UserOnly.
+        signedIn()
+        directMode(agentUrl = null)
+        val agentClient = mockk<OkHttpClient>(relaxed = true)
+        val userClient = mockk<OkHttpClient>(relaxed = true)
+        val manager = WebSocketManager(
+            client = agentClient,
+            tokenStore = tokenStore,
+            sessionManager = mockk<SessionManager>(relaxed = true),
+            userIdentityStore = userIdentityStore,
+            userClient = userClient,
+            centralServerUrl = "https://central.test",
+        )
+
+        manager.createUserConnection("ws/user-events").connect()
+
+        verify(timeout = 2_000) { userClient.newWebSocket(any(), any()) }
+        verify(exactly = 0) { agentClient.newWebSocket(any(), any()) }
     }
 }

@@ -33,6 +33,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
+import javax.inject.Named
 import javax.inject.Singleton
 
 @Module
@@ -49,11 +50,18 @@ object RepositoryModule {
     @Singleton
     fun provideWebSocketManager(
         client: OkHttpClient,
+        @Named("user") userClient: OkHttpClient,
         tokenStore: TokenStore,
         sessionManager: SessionManager,
         userIdentityStore: UserIdentityStore,
     ): WebSocketManager {
-        return WebSocketManager(client, tokenStore, sessionManager, userIdentityStore)
+        return WebSocketManager(
+            client = client,
+            tokenStore = tokenStore,
+            sessionManager = sessionManager,
+            userIdentityStore = userIdentityStore,
+            userClient = userClient,
+        )
     }
 
     @Provides
