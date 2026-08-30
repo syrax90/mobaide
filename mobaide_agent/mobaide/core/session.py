@@ -57,11 +57,12 @@ logger = logging.getLogger(__name__)
 # into one sequence (`ESC[?1049;25h`), so matching a single number followed by
 # `h`/`l` would miss the very transitions this tracks.
 _PRIVATE_MODE_RE = re.compile(rb"\x1b\[\?([\d;]*)([hl])")
-# Longest sequence worth carrying between reads so a split one still matches.
-# Bounded rather than exact: a pathologically long parameter list straddling a
-# read boundary is lost, which costs accuracy in the tracker, never correctness
-# of the stream (the bytes themselves are untouched).
-_PRIVATE_MODE_STRADDLE = 32
+# Upper bound on the unfinished sequence carried between reads. A batched
+# DECSET naming every mode this tracks is well under this; anything longer is
+# not a private-mode sequence, and the cap is what stops a stream of `ESC[?`
+# with no terminator from growing the carry without limit.
+_PRIVATE_MODE_TAIL_MAX = 256
+_PRIVATE_MODE_PARAM_BYTES = frozenset(b"0123456789;")
 
 # Three aliases for one thing: which screen buffer is selected. A program may
 # enter with one and leave with another, so they are tracked as a single state
@@ -227,18 +228,22 @@ class TerminalSession:
         # is never asked to repaint. So track where the current width began and
         # replay only from there. Rows are excluded deliberately — they do not
         # affect wrapping.
-        self._ring_cols = config.cols
+        # The grid the current replay span's bytes were produced at. Compared
+        # against on resize — not the PTY's latest grid, so a transient
+        # excursion that returns to it needs no cut at all.
+        self._span_cols = config.cols
+        self._span_rows = config.rows
         self._ring_width_start = 0
         # Private-mode state: one copy following the child, one pinned to the
         # start of the replay span (see `_track_modes` and `_span`).
         self._live = _TerminalModes()
         self._span = _TerminalModes()
         self._mode_tail = b""
-        # A grid change waits for the output that replaces the old span. Applied
-        # on the next append, so a child that dies before repainting keeps the
-        # screen it died showing rather than replaying nothing.
-        self._pending_cut: int | None = None
-        self._ring_rows = config.rows
+        # A grid change waits for the output that replaces the old span: the
+        # ring offset to cut at, the grid the span will then be at, and the
+        # modes in force when it was armed. Applied on the next append, so a
+        # child that dies before repainting keeps the screen it died showing.
+        self._pending_cut: tuple[int, int, int, _TerminalModes] | None = None
         self._event_queue: asyncio.Queue[SessionEvent] = asyncio.Queue(
             maxsize=EVENT_QUEUE_MAXSIZE,
         )
@@ -487,7 +492,33 @@ class TerminalSession:
         """
         window = self._mode_tail + data
         self._apply_modes(window, self._live)
-        self._mode_tail = window[-_PRIVATE_MODE_STRADDLE:]
+        self._mode_tail = self._unfinished_mode_tail(window)
+
+    @staticmethod
+    def _unfinished_mode_tail(window: bytes) -> bytes:
+        """The trailing bytes that could still become a private-mode sequence.
+
+        The sequence itself, not a fixed-size suffix: a batched DECSET naming
+        several modes runs well past any arbitrary window, so slicing the last
+        N bytes can drop the opening `ESC[?` and lose the whole sequence — and
+        with it an alternate-screen transition the replay cut depends on.
+        """
+        start = window.rfind(b"\x1b[?")
+        if start != -1:
+            candidate = window[start:]
+            params = candidate[3:]
+            if (
+                len(candidate) <= _PRIVATE_MODE_TAIL_MAX
+                and all(byte in _PRIVATE_MODE_PARAM_BYTES for byte in params)
+            ):
+                # Still unterminated, so it cannot have matched yet — and
+                # cannot match twice once the terminator arrives.
+                return candidate
+        # The split can also fall before the `?`.
+        for partial in (b"\x1b[", b"\x1b"):
+            if window.endswith(partial):
+                return partial
+        return b""
 
     @staticmethod
     def _apply_modes(data: bytes, state: _TerminalModes) -> None:
@@ -525,10 +556,15 @@ class TerminalSession:
         if not cleaned:
             return
         if self._pending_cut is not None:
-            # The replacement output is here, so the scheduled cut takes effect
-            # and the span starts in the mode state the child is in right now.
-            self._ring_width_start = min(self._pending_cut, len(self._ring))
-            self._span = self._live.copy()
+            # The replacement output is here, so the scheduled cut takes effect.
+            # The span starts in the modes captured when the cut was armed, not
+            # the ones live now: this very chunk may already have changed them
+            # (a repaint ending in `ESC[?1049l`), and the span's bytes were
+            # produced under the state that preceded it.
+            offset, rows, cols, modes = self._pending_cut
+            self._ring_width_start = min(offset, len(self._ring))
+            self._span = modes
+            self._span_rows, self._span_cols = rows, cols
             self._pending_cut = None
         self._ring += cleaned
         overflow = len(self._ring) - self._ring_cap
@@ -731,11 +767,15 @@ class TerminalSession:
 
         Three conditions, each load-bearing:
 
-        * **The grid changed.** Either axis: on the alternate screen a program
-          paints absolute positions, so rows drive cursor addresses, scrolling
-          regions and bottom-anchored UI exactly as columns drive wrapping.
-          Rows change routinely right after create, where every client's row
-          estimate includes chrome the real terminal subtracts.
+        * **The grid differs from the replay span's.** Either axis: on the
+          alternate screen a program paints absolute positions, so rows drive
+          cursor addresses, scrolling regions and bottom-anchored UI exactly as
+          columns drive wrapping. Rows change routinely right after create,
+          where every client's row estimate includes chrome the real terminal
+          subtracts. Compared against the *span's* grid rather than the last
+          resize, so an excursion that returns before any output — a transient
+          layout, or two clients asserting in turn — cancels its own cut
+          instead of discarding history the span never stopped matching.
         * **The child is on the alternate screen.** There, stale-grid bytes
           desynchronize its arithmetic for the rest of the span and no repaint
           after the replay repairs it. On the normal screen the replay is
@@ -750,19 +790,17 @@ class TerminalSession:
         that replaces the old span arrives. A child that dies between the
         resize and its repaint therefore keeps the screen it died showing,
         which the state check alone cannot cover — death can follow the resize
-        as easily as precede it.
+        as easily as precede it. The schedule carries the modes in force now,
+        because the chunk that lands it may itself change them.
         """
         self._backend.resize(rows, cols)
-        if (
-            (cols != self._ring_cols or rows != self._ring_rows)
-            and self._alt_screen
-            and self._state == SessionState.RUNNING
-        ):
-            self._pending_cut = len(self._ring)
-        # Recorded either way: the ring's current grid is a fact about the PTY,
-        # not about whether this particular change scheduled a cut.
-        self._ring_cols = cols
-        self._ring_rows = rows
+        if (rows, cols) == (self._span_rows, self._span_cols):
+            # Back to the grid the span was produced at — whatever excursion
+            # armed a cut, the span is homogeneous with the PTY again and
+            # cutting would discard history for nothing.
+            self._pending_cut = None
+        elif self._alt_screen and self._state == SessionState.RUNNING:
+            self._pending_cut = (len(self._ring), rows, cols, self._live.copy())
 
     def get_scrollback(self) -> list[str]:
         """Return the current scrollback buffer as decoded strings.

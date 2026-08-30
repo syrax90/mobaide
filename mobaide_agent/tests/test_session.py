@@ -967,6 +967,69 @@ class TestRingWidthMark:
 
         assert b"what it died showing" in _replay(session)
 
+    async def test_the_landing_chunk_cannot_rewrite_the_span_state(self) -> None:
+        # The reader tracks a whole read before appending it, so a chunk that
+        # repaints and then leaves the alternate screen would otherwise seed the
+        # span with the state at its *end* — and the retained repaint, produced
+        # on the alternate screen, would be parsed on the primary one.
+        session = _on_alt_screen(_width_session(cols=80))
+        session._append_ring(b"old paint")
+
+        await session.resize(24, 55)
+        landing = b"fresh paint\x1b[?1049l"
+        session._track_modes(landing)
+        session._append_ring(landing)
+
+        assert b"\x1b[?1049h" in _replay(session)
+
+    async def test_a_grid_excursion_that_returns_cancels_its_cut(self) -> None:
+        # Two resizes before any output, ending back where the span started —
+        # a transient layout, or two clients asserting in turn. Comparing
+        # against the last resize instead of the span's own grid would leave
+        # the cut armed and discard history the span never stopped matching.
+        session = _on_alt_screen(_width_session(cols=80))
+        session._append_ring(b"eighty-column history")
+
+        await session.resize(24, 120)
+        await session.resize(24, 80)
+
+        assert session._pending_cut is None
+        session._append_ring(b" continues")
+        assert b"eighty-column history" in _replay(session)
+
+    async def test_a_grid_change_that_settles_elsewhere_still_cuts(self) -> None:
+        session = _on_alt_screen(_width_session(cols=80))
+        session._append_ring(b"eighty-column history")
+
+        await session.resize(24, 120)
+        await session.resize(24, 132)
+        session._append_ring(b"one-thirty-two output")
+
+        assert _replay_body(session) == b"one-thirty-two output"
+
+    async def test_a_long_batched_sequence_survives_a_late_split(self) -> None:
+        # Carrying a fixed-size suffix drops the opening `ESC[?` of a batched
+        # DECSET longer than the window, losing every mode in it — including
+        # the alternate-screen entry the cut depends on.
+        session = _width_session(cols=80)
+        sequence = b"\x1b[?1;25;2004;1000;1002;1003;1006;1015;1049h"
+
+        session._track_modes(b"padding" + sequence[:38])
+        session._track_modes(sequence[38:])
+
+        assert session._alt_screen
+        assert session._live.modes[2004] is True
+        assert session._live.modes[1] is True
+
+    async def test_an_unterminated_sequence_does_not_grow_the_carry(self) -> None:
+        # The cap is what keeps a stream of `ESC[?` with no terminator from
+        # growing the carried tail without limit.
+        session = _width_session(cols=80)
+
+        session._track_modes(b"\x1b[?" + b"9" * 400)
+
+        assert len(session._mode_tail) <= 2
+
     async def test_head_trim_clamps_the_mark_at_zero(self) -> None:
         # An overflow larger than the mark would drive it negative, and a
         # negative slice start silently reads from the *tail* — the replay would

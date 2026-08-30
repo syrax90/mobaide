@@ -45,9 +45,9 @@ class TestCreateSession:
         manager = client._transport.app.state.session_manager
         session = await manager.get_session(resp.json()["session_id"])
         assert (session._config.rows, session._config.cols) == (40, 137)
-        # And the replay's width baseline is seeded from it, so a client
-        # asserting that same grid on first connect is not treated as a change.
-        assert session._ring_cols == 137
+        # And the replay span's grid is seeded from it, so a client asserting
+        # that same grid on first connect is not treated as a change.
+        assert (session._span_rows, session._span_cols) == (40, 137)
 
     async def test_create_exceeds_max_sessions_returns_409(self, client, auth_headers):
         """Creating sessions beyond max_sessions limit returns 409 Conflict."""
