@@ -1030,6 +1030,53 @@ class TestRingWidthMark:
 
         assert len(session._mode_tail) <= 2
 
+    async def test_a_chunk_read_before_the_resize_does_not_land_the_cut(self) -> None:
+        # The reader hands a chunk to the executor before the resize arrives, so
+        # the bytes it returns are old-grid output. Landing the cut on it would
+        # start the span grid-mixed — exactly what the cut exists to prevent.
+        session = _on_alt_screen(_width_session(cols=80))
+        session._read_seq = 5
+        session._append_ring(b"history", read_seq=5)
+
+        await session.resize(24, 55)
+        session._append_ring(b"stale old-grid tail", read_seq=5)
+        session._append_ring(b"fresh repaint", read_seq=6)
+
+        assert _replay_body(session) == b"fresh repaint"
+
+    async def test_a_partial_span_on_the_primary_screen_says_so(self) -> None:
+        # A client's emulator is retained across reconnects and the replay wipe
+        # clears the display, not the selected buffer. If the trim ate the exit
+        # sequence, an emulator left on the alternate buffer would parse this
+        # primary-screen history there.
+        session = _width_session(cols=80, ring_buffer_bytes=24)
+        session._track_modes(b"\x1b[?1049h")
+        session._append_ring(b"A" * 20, read_seq=1)
+        session._track_modes(b"\x1b[?1049l")
+        session._append_ring(b"\x1b[?1049l" + b"B" * 18, read_seq=2)
+
+        assert not session._span.alt_screen
+        assert _replay(session).startswith(b"\x1b[?1049l")
+
+    async def test_a_pristine_span_carries_no_synthesised_bytes(self) -> None:
+        # A span that still starts at the child's first byte establishes every
+        # mode it needs on its own; prefixing it would put bytes on the wire the
+        # session never produced.
+        session = _width_session(cols=80)
+        session._append_ring(b"untouched", read_seq=1)
+
+        assert _replay(session) == b"untouched"
+
+    async def test_a_mode_bisected_by_the_trim_still_reaches_the_span(self) -> None:
+        # The trim boundary is byte-granular, so it can split a sequence across
+        # the dropped and retained sides — neither half establishes the mode,
+        # and without a lookahead it would be lost entirely.
+        session = _width_session(cols=80, ring_buffer_bytes=24)
+        session._append_ring(b"A" * 20 + b"\x1b[?104", read_seq=1)
+        session._append_ring(b"9h" + b"B" * 18, read_seq=2)
+
+        assert session._span.alt_screen
+
     async def test_head_trim_clamps_the_mark_at_zero(self) -> None:
         # An overflow larger than the mark would drive it negative, and a
         # negative slice start silently reads from the *tail* — the replay would

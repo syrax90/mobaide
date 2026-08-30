@@ -537,12 +537,16 @@ cadence; they do **not** gate compatibility.
     correctly and dropping it would delete usable scrollback. The cut takes
     effect when the output replacing the old span arrives, so a child that
     dies before repainting still replays the screen it died showing.
-    Each span is prefixed with the private modes in force at its start —
-    alternate screen, application cursor keys, cursor visibility, bracketed
-    paste and mouse reporting — because the sequences that established them
-    may sit behind the span's start, whether cut away or trimmed off the ring's
-    head, and a client's replay wipe clears the display rather than the
-    emulator's mode state. Clients need no change for any of this: the frame
+    A span that no longer starts at the child's first byte — cut at a grid
+    change, or with its head trimmed as the ring rolled — is prefixed with the
+    private modes in force at its start: the selected screen buffer (stated
+    either way, since a client's emulator is retained across reconnects and the
+    replay wipe clears the display rather than the buffer selection),
+    application cursor keys, cursor visibility, bracketed paste and mouse
+    reporting. The sequences that established them sit behind the span's start,
+    and without the prefix the span is parsed on the wrong buffer or with the
+    wrong input encoding. A span that still starts at the first byte
+    establishes its own state and is sent verbatim. Clients need no change for any of this: the frame
     sequence is unaffected and the prefix is ordinary output bytes. But a
     replay can legitimately be shorter than the ring, and a session whose grid
     has just changed can replay little more than its mode prefix.

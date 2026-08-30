@@ -117,9 +117,14 @@ class _TerminalModes:
             b"\x1b[?%dh" % mode if enabled else b"\x1b[?%dl" % mode
             for mode, enabled in sorted(self.modes.items())
         ]
-        # Last, so it cannot be undone by an alias ordering ahead of it.
-        if self.alt_screen:
-            parts.append(b"\x1b[?%dh" % self.alt_screen_mode)
+        # Stated either way, and last so no alias ordering can undo it. A
+        # client's emulator is retained across reconnects and its replay wipe
+        # clears the display, not the selected buffer — so a span that starts
+        # on the primary screen has to say so, or an emulator left on the
+        # alternate buffer parses primary-screen history there.
+        parts.append(
+            b"\x1b[?%d%s" % (self.alt_screen_mode, b"h" if self.alt_screen else b"l")
+        )
         return b"".join(parts)
 
 
@@ -240,10 +245,21 @@ class TerminalSession:
         self._span = _TerminalModes()
         self._mode_tail = b""
         # A grid change waits for the output that replaces the old span: the
-        # ring offset to cut at, the grid the span will then be at, and the
-        # modes in force when it was armed. Applied on the next append, so a
-        # child that dies before repainting keeps the screen it died showing.
-        self._pending_cut: tuple[int, int, int, _TerminalModes] | None = None
+        # ring offset to cut at, the grid the span will then be at, the modes
+        # in force when it was armed, and the read it must not land on.
+        # Applied on a later append, so a child that dies before repainting
+        # keeps the screen it died showing.
+        self._pending_cut: tuple[int, int, int, _TerminalModes, int] | None = None
+        # Bumped as each PTY read is issued. A chunk the executor had already
+        # returned when the resize arrived carries pre-resize output, so it
+        # cannot be the replacement the cut is waiting for.
+        self._read_seq = 0
+        # True once the span stops being self-establishing — a cut landed, or
+        # the head trimmed. Only then does it need a state prefix: a span that
+        # still starts at the child's first byte carries every transition it
+        # needs, and prefixing it would put bytes on the wire that the session
+        # never produced.
+        self._span_partial = False
         self._event_queue: asyncio.Queue[SessionEvent] = asyncio.Queue(
             maxsize=EVENT_QUEUE_MAXSIZE,
         )
@@ -344,6 +360,8 @@ class TerminalSession:
         loop = asyncio.get_running_loop()
         while self._state == SessionState.RUNNING:
             try:
+                self._read_seq += 1
+                read_seq = self._read_seq
                 data: bytes = await loop.run_in_executor(
                     None, self._backend.read, 4096,
                 )
@@ -374,7 +392,7 @@ class TerminalSession:
                     self._pending_title = new_title
                     self._title_event.set()
                 self._scrollback.append(data)
-                self._append_ring(data)
+                self._append_ring(data, read_seq=read_seq)
                 self._startup_output_bytes += len(data)
                 if (
                     self._attention == "awaiting_os_permission"
@@ -521,9 +539,19 @@ class TerminalSession:
         return b""
 
     @staticmethod
-    def _apply_modes(data: bytes, state: _TerminalModes) -> None:
-        """Fold every DECSET/DECRST in ``data`` into ``state``."""
-        for params, action in _PRIVATE_MODE_RE.findall(data):
+    def _apply_modes(
+        data: bytes, state: _TerminalModes, starts_before: int | None = None
+    ) -> None:
+        """Fold every DECSET/DECRST in ``data`` into ``state``.
+
+        ``starts_before`` bounds which matches count by where they *begin*, so
+        a caller can append lookahead bytes purely to complete a sequence that
+        straddles the end of the region it cares about.
+        """
+        for match in _PRIVATE_MODE_RE.finditer(data):
+            if starts_before is not None and match.start() >= starts_before:
+                break
+            params, action = match.group(1), match.group(2)
             enabled = action == b"h"
             for raw in params.split(b";"):
                 if not raw:
@@ -546,7 +574,7 @@ class TerminalSession:
     def _alt_screen(self) -> bool:
         return self._live.alt_screen
 
-    def _append_ring(self, data: bytes) -> None:
+    def _append_ring(self, data: bytes, *, read_seq: int | None = None) -> None:
         # Scrub terminal query/response bytes in-line so the ring is always
         # clean. Replay senders rely on this — without the per-write strip
         # they'd have to snapshot-then-strip the entire (up to 4 MB) ring on
@@ -556,28 +584,56 @@ class TerminalSession:
         if not cleaned:
             return
         if self._pending_cut is not None:
-            # The replacement output is here, so the scheduled cut takes effect.
-            # The span starts in the modes captured when the cut was armed, not
-            # the ones live now: this very chunk may already have changed them
-            # (a repaint ending in `ESC[?1049l`), and the span's bytes were
-            # produced under the state that preceded it.
-            offset, rows, cols, modes = self._pending_cut
-            self._ring_width_start = min(offset, len(self._ring))
-            self._span = modes
-            self._span_rows, self._span_cols = rows, cols
-            self._pending_cut = None
+            offset, rows, cols, modes, armed_after = self._pending_cut
+            # A chunk whose read was already in flight when the resize arrived
+            # holds output the child produced at the old grid, so landing on it
+            # would start the span grid-mixed — the very thing the cut exists to
+            # prevent. Wait for a read issued after the resize instead.
+            if read_seq is None or read_seq > armed_after:
+                # The span starts in the modes captured when the cut was armed,
+                # not the ones live now: this very chunk may already have
+                # changed them (a repaint ending in `ESC[?1049l`), and the
+                # span's bytes were produced under the state that preceded it.
+                self._ring_width_start = min(offset, len(self._ring))
+                self._span = modes
+                self._span_rows, self._span_cols = rows, cols
+                self._span_partial = True
+                self._pending_cut = None
+            else:
+                # Push the cut past the stale chunk. `_live` already includes
+                # this chunk's own mode changes, which is exactly the state the
+                # span would start in were it to begin after it.
+                self._pending_cut = (
+                    len(self._ring) + len(cleaned),
+                    rows,
+                    cols,
+                    self._live.copy(),
+                    armed_after,
+                )
         self._ring += cleaned
         overflow = len(self._ring) - self._ring_cap
         if overflow > 0:
             dropped = bytes(self._ring[:overflow])
             del self._ring[:overflow]
+            self._span_partial = True
             # Whatever the trim ate *inside* the span is state the span no
             # longer establishes for itself, so fold it into the span's copy.
             # Without this a long-running session silently loses the modes its
             # replay depends on, exactly as a cut does.
             eaten = dropped[self._ring_width_start :]
             if eaten:
-                self._apply_modes(eaten, self._span)
+                # Lookahead into what survived: the trim boundary is byte-
+                # granular, so it can bisect a sequence — `ESC[?104` dropped,
+                # `9h` retained. Parsing the dropped side alone would miss the
+                # mode entirely, since neither half establishes it. Bounded by
+                # where the match starts so the retained bytes' own sequences
+                # are left to the replay.
+                span_start = len(eaten)
+                self._apply_modes(
+                    eaten + bytes(self._ring[:_PRIVATE_MODE_TAIL_MAX]),
+                    self._span,
+                    starts_before=span_start,
+                )
             self._ring_width_start = max(0, self._ring_width_start - overflow)
 
     def get_ring(self) -> bytes:
@@ -617,9 +673,9 @@ class TerminalSession:
         """
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive: {chunk_size}")
-        snapshot = self._span.restore_prefix() + bytes(
-            self._ring[self._ring_width_start :]
-        )
+        snapshot = bytes(self._ring[self._ring_width_start :])
+        if self._span_partial:
+            snapshot = self._span.restore_prefix() + snapshot
         for start in range(0, len(snapshot), chunk_size):
             yield snapshot[start : start + chunk_size]
 
@@ -800,7 +856,9 @@ class TerminalSession:
             # cutting would discard history for nothing.
             self._pending_cut = None
         elif self._alt_screen and self._state == SessionState.RUNNING:
-            self._pending_cut = (len(self._ring), rows, cols, self._live.copy())
+            self._pending_cut = (
+                len(self._ring), rows, cols, self._live.copy(), self._read_seq,
+            )
 
     def get_scrollback(self) -> list[str]:
         """Return the current scrollback buffer as decoded strings.
