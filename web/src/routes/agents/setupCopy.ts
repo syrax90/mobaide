@@ -24,15 +24,21 @@ export const PAIRING_HINT_LINK_LABEL = '[mobaide-agent] Or open this link in a b
 /**
  * A stand-in for the payload, shaped like the real one.
  *
- * The nonce, fingerprint and expiry are spelled out as placeholders rather than
- * faked with plausible-looking values: a user comparing this against their
- * terminal must never be able to mistake the example for something copyable.
- * The relay host is the production one, because that part *is* what they will
- * see — unlike the link's origin below, the relay URL is the agent's own
- * `PUBLIC_BASE_URL` and is not derivable from this browser.
+ * Every field but the `MOBA1` version tag is a placeholder rather than a
+ * plausible-looking value, so a user comparing this against their terminal can
+ * never mistake the example for something copyable — and so nothing here can be
+ * wrong for their deployment. That includes the relay URL, which is the agent's
+ * own `PUBLIC_BASE_URL`: unlike the link origin below it is *not* derivable
+ * here (the SPA reaches the relay same-origin through a proxy, `baseUrl: '/'`),
+ * and a hard-coded `api.mobaide.com` would be exactly the line a self-hosted
+ * agent never prints. Not being able to show the right value is a reason to
+ * show a placeholder, not a reason to show a wrong one.
+ *
+ * What carries the recognition is the `[mobaide-agent]` labels and the `MOBA1|`
+ * prefix, none of which vary by deployment.
  */
 export const PAIRING_HINT_EXAMPLE_PAYLOAD =
-  'MOBA1|https://api.mobaide.com|<nonce>|<fingerprint>|<expires>';
+  'MOBA1|<relay-url>|<nonce>|<fingerprint>|<expires>';
 
 /**
  * The link the agent prints, for a browser served from `webOrigin`.

@@ -74,6 +74,16 @@ describe('pairing hint example', () => {
     expect(pairingHintExample(SELF_HOSTED)).not.toContain('app.mobaide.com');
   });
 
+  it('names no host the reader’s own deployment might not use', () => {
+    // The link origin is derivable and so is rendered live; the payload's
+    // relay URL is the agent's `PUBLIC_BASE_URL`, which this browser cannot
+    // see at all (the SPA proxies same-origin). Neither may be pinned to a
+    // mobaide.com literal, or a self-hoster is told to match a line their
+    // agent never printed.
+    expect(pairingHintExample(SELF_HOSTED)).not.toContain('mobaide.com');
+    expect(PAIRING_HINT_EXAMPLE_PAYLOAD).toContain('<relay-url>');
+  });
+
   it('builds the same link shape as the agent’s format_pairing_link', () => {
     // `f"{pairing_web_origin()}/pair#{fragment}"`, and the origin is
     // `rstrip("/")`-ed there exactly as `window.location.origin` arrives here.

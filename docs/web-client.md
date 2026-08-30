@@ -626,8 +626,13 @@ so it can never be mistaken for a live code. The link's origin is
 link points at", which is *this* client, so a self-hosted deployment that
 configured its agent prints the origin the reader is already browsing — and a
 hard-coded default would tell them to look for a line their agent never wrote.
-The relay URL inside the payload stays literal, because that one is the agent's
-own `PUBLIC_BASE_URL` and is not derivable from the browser. While the guide is up the flat
+Every other varying field, the payload's relay URL included, is a
+`<placeholder>`. That one is the agent's own `PUBLIC_BASE_URL` and is *not*
+derivable here — the SPA reaches the relay same-origin through a proxy
+(`baseUrl: '/'`), so the browser only ever knows its own host — and not being
+able to show the right value is a reason to show a placeholder rather than a
+wrong one. What carries the recognition is the `[mobaide-agent]` labels and the
+`MOBA1|` prefix, neither of which varies by deployment. While the guide is up the flat
 four-button row is suppressed: every one of its actions appears in the guide in
 an order, and a flat row beside it would undo the ordering. The sessions and
 projects "No agents yet" lines now point at `/agents` rather than `/pair`, for
