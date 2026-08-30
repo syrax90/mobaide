@@ -40,6 +40,7 @@ import { onTabVisibility, tabHidden } from '../realtime/tabVisibility';
 import { onWindowFocus } from '../realtime/windowFocus';
 import { realScheduler, type Scheduler } from '../realtime/webSocketChannel';
 import { useToastStore } from '../stores/toastStore';
+import { TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE } from './gridEstimate';
 import { shouldSuspend, type BackgroundSpend } from './terminalSuspend';
 import { mountedTerminal, onMountedTerminal } from './watchedTerminal';
 import { useTerminalPrefsStore } from '../stores/terminalPrefsStore';
@@ -240,9 +241,8 @@ export class TerminalSessionModel {
       // would double-space everything a real shell prints.
       convertEol: false,
       cursorBlink: true,
-      fontFamily:
-        'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 13,
+      fontFamily: TERMINAL_FONT_FAMILY,
+      fontSize: TERMINAL_FONT_SIZE,
       // Left at xterm's default `true`: it scrolls to the tail on *genuine*
       // user input only, which is what keeps a program's own `ESC[6n` reply
       // from un-pausing a scrolled-up viewport. Both mobile clients had to
@@ -759,8 +759,9 @@ export class TerminalSessionModel {
    * The cache is written **before** the debounce, exactly as both mobile
    * clients do: a layout pass that settles before the socket opens must still
    * record the size so {@link assertSize} can deliver it on connect. Without
-   * that the PTY stays at the 24x80 it was spawned with and a full-screen TUI
-   * paints into the top 24 rows.
+   * that the PTY stays at the grid it was spawned with — the create request's
+   * estimate, or 24x80 for an agent-spawned session — and a full-screen TUI
+   * paints into the wrong one.
    */
   private pushSize(rows: number, cols: number): void {
     if (rows === this.lastRows && cols === this.lastCols) return;

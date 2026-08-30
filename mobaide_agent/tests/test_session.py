@@ -674,6 +674,160 @@ class TestIterRingChunks:
         assert len(chunks[1]) == 10
 
 
+def _width_config(cols: int, ring_buffer_bytes: int = 1024) -> SessionConfig:
+    return SessionConfig(
+        session_id="width-session",
+        command=["does-not-run"],
+        rows=24,
+        cols=cols,
+        scrollback_size=100,
+        ring_buffer_bytes=ring_buffer_bytes,
+    )
+
+
+def _width_session(cols: int = 80, ring_buffer_bytes: int = 1024) -> TerminalSession:
+    """A never-started session that can still take a ``resize()``.
+
+    Unlike the other ring tests this one needs a backend double: ``resize()``
+    reaches :meth:`PtyBackend.resize`, which asserts a spawned PTY. The
+    scripted double's ``read()`` is never called because no reader loop runs.
+    """
+    session = TerminalSession(
+        _width_config(cols, ring_buffer_bytes),
+        backend=cast(PtyBackend, _ScriptedPtyBackend([])),
+    )
+    session._state = SessionState.RUNNING
+    return session
+
+
+def _on_alt_screen(session: TerminalSession) -> TerminalSession:
+    """Put the child on the alternate screen, where the cut applies.
+
+    Only there does a stale-width replay actually break: the program paints
+    absolute positions. On the normal screen the replay is line-oriented text
+    the client re-wraps, so history is kept — covered separately below.
+    """
+    session._track_alt_screen(b"\x1b[?1049h")
+    return session
+
+
+def _replay(session: TerminalSession) -> bytes:
+    return b"".join(session.iter_ring_chunks(chunk_size=64))
+
+
+class TestRingWidthMark:
+    """Every replay must be width-homogeneous.
+
+    Ring bytes carry no width of their own and are re-rendered at whatever grid
+    the client has now, so replaying output laid out at a different column count
+    desynchronizes a full-screen TUI's cursor arithmetic for the rest of the
+    span — and nothing repairs it, because a same-size ``TIOCSWINSZ`` raises no
+    ``SIGWINCH``. ``_ring_width_start`` is the cut: ``iter_ring_chunks`` starts
+    there, so history older than the last column change is deliberately dropped.
+    """
+
+    async def test_column_change_drops_the_old_width_from_the_replay(self) -> None:
+        session = _on_alt_screen(_width_session(cols=80))
+        session._append_ring(b"eighty-column prologue")
+
+        await session.resize(24, 120)
+        session._append_ring(b"one-twenty output")
+
+        assert _replay(session) == b"one-twenty output"
+        # Only the replay window moved — the bytes themselves are untouched.
+        assert session.get_ring() == b"eighty-column prologueone-twenty output"
+
+    async def test_rows_only_change_keeps_the_whole_replay(self) -> None:
+        # Rows do not affect wrapping, so a rows-only resize must not throw
+        # perfectly renderable history away.
+        session = _width_session(cols=80)
+        session._append_ring(b"eighty-column output")
+
+        await session.resize(60, 80)
+        session._append_ring(b" and more")
+
+        assert _replay(session) == b"eighty-column output and more"
+
+    async def test_resize_to_the_spawn_width_is_not_a_width_change(self) -> None:
+        # The mark is seeded from ``config.cols``, not from "no width yet".
+        # Clients assert their size on first connect; at the width the PTY was
+        # spawned with that must be inert, or the prologue is lost for nothing.
+        session = _width_session(cols=120)
+        session._append_ring(b"spawned at one-twenty")
+
+        await session.resize(40, 120)
+
+        assert _replay(session) == b"spawned at one-twenty"
+
+    async def test_re_asserting_the_new_width_does_not_cut_again(self) -> None:
+        # Clients re-assert their cached size on every reconnect. Once the mark
+        # has moved to a width, repeating that width has to be inert — otherwise
+        # each reconnect would truncate the replay to whatever arrived since the
+        # previous one.
+        session = _on_alt_screen(_width_session(cols=80))
+        session._append_ring(b"eighty-column prologue")
+
+        await session.resize(24, 120)
+        session._append_ring(b"one-twenty output")
+        await session.resize(24, 120)
+
+        assert _replay(session) == b"one-twenty output"
+
+    async def test_head_trim_moves_the_mark_with_the_bytes(self) -> None:
+        # The mark is an absolute offset into a ring whose head is trimmed on
+        # overflow, so it has to be decremented by the same amount or it drifts
+        # forward over bytes it was meant to keep.
+        session = _on_alt_screen(_width_session(cols=80, ring_buffer_bytes=8))
+        session._append_ring(b"AAAA")
+
+        await session.resize(24, 120)
+        session._append_ring(b"BBBB")
+        session._append_ring(b"CC")
+
+        # 10 bytes pushed against an 8-byte cap → two head bytes of the
+        # 80-column run are trimmed, and the mark follows them from 4 to 2.
+        assert session.get_ring() == b"AABBBBCC"
+        assert _replay(session) == b"BBBBCC"
+
+    async def test_normal_screen_history_survives_a_width_change(self) -> None:
+        # Off the alternate screen the replay is line-oriented text, which the
+        # client's emulator re-wraps at whatever grid it has. Cutting it would
+        # delete usable scrollback — and since every client clears scrollback
+        # before a replay, the user would come back to an erased terminal.
+        session = _width_session(cols=80)
+        session._append_ring(b"shell history laid out at eighty\n")
+
+        await session.resize(24, 55)
+        session._append_ring(b"and what came after")
+
+        assert _replay(session) == b"shell history laid out at eighty\nand what came after"
+
+    async def test_a_dead_session_keeps_its_last_output(self) -> None:
+        # The master fd outlives the child until the liveness sweep, so a resize
+        # can still land on a crashed session. It will never repaint, so cutting
+        # its history just blanks whatever it died showing.
+        session = _on_alt_screen(_width_session(cols=80))
+        session._append_ring(b"what it died showing")
+        session._state = SessionState.CRASHED
+
+        await session.resize(24, 120)
+
+        assert _replay(session) == b"what it died showing"
+
+    async def test_head_trim_clamps_the_mark_at_zero(self) -> None:
+        # An overflow larger than the mark would drive it negative, and a
+        # negative slice start silently reads from the *tail* — the replay would
+        # lose most of the current width's output rather than none of it.
+        session = _on_alt_screen(_width_session(cols=80, ring_buffer_bytes=8))
+        session._append_ring(b"AAAA")
+
+        await session.resize(24, 120)
+        session._append_ring(b"B" * 12)
+
+        assert session.get_ring() == b"B" * 8
+        assert _replay(session) == b"B" * 8
+
+
 def _attention_config(
     *,
     session_id: str = "attn-session",

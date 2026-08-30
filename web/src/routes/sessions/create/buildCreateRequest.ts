@@ -16,6 +16,7 @@
  */
 import type { components } from '../../../api/generated/agent';
 import type { ProjectSummary } from '../../../api/projectRepository';
+import { currentGridEstimate } from '../../../terminal/gridEstimate';
 import {
   effectiveClaudeEffort,
   effectiveClaudeModel,
@@ -92,11 +93,16 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
   if (mode === 'auto_scan') return null;
 
   const place = placement(context);
+  // The agent spawns the PTY at this grid and the program lays its opening
+  // frames out there, before the terminal route has mounted. Those bytes stay
+  // in the agent's replay ring, so shipping a default no viewport matches means
+  // every later reconnect re-renders them at the wrong width.
+  const grid = currentGridEstimate();
   const base = {
     project_name: place.projectName,
     cwd: place.cwd,
-    rows: 24,
-    cols: 80,
+    rows: grid.rows,
+    cols: grid.cols,
   };
 
   if (mode === 'claude') {

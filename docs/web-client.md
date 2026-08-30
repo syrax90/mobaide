@@ -239,8 +239,10 @@ WEB-03 seams; the REST 401 path remains the authoritative session teardown.
 Browsers also expose no ping API, unlike both mobile clients (CLA-219).
 
 **Resume hooks.** The session I/O channel re-asserts the cached PTY size on
-every open — the client is the sole size authority and the agent spawns at
-24×80. WEB-05's replay state machine owns two further re-assert points
+every open — the client is the sole size authority and the agent never reports
+a size back. A client-created session now spawns at the grid its create request
+named (`currentGridEstimate`), but rows there are an estimate and an
+agent-spawned session (Auto Scan, GH #431) still starts at 24×80. WEB-05's replay state machine owns two further re-assert points
 (first inbound binary while reconnecting, and `replayEnd`) and drives them
 through `setSize`, because its model caches the measured grid *before* the
 resize debounce and can therefore be ahead of the channel's own cache. The
@@ -806,8 +808,9 @@ report parsed through their `write` callbacks.
 **Size authority.** The grid is cached before the 100 ms resize debounce and
 re-asserted at all four live triggers — socket open, first inbound binary
 of a cycle, `replayEnd`, and the tab-shown / window-focus switch-back edge
-(GH #631) — because the agent spawns every PTY at 24×80 and never reports
-back. The switch-edge trigger bypasses the same-size dedupe cache, since a
+(GH #631) — because the agent never reports a size back, and because the grid
+a session spawns at is only ever the create request's estimate (or 24×80 for an
+agent-spawned one). The switch-edge trigger bypasses the same-size dedupe cache, since a
 peer client may have resized the shared PTY while this one sat idle, and
 fires only while already live — every non-live state already re-asserts on
 its own path into live.

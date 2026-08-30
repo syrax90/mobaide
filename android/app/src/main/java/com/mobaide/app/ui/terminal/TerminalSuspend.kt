@@ -7,7 +7,9 @@ package com.mobaide.app.ui.terminal
  *
  * The session socket has no pause frame, so closing it is the only way to stop
  * the bytes — and undoing that is expensive, because the agent replays its
- * whole ring on every socket open (4 MiB by default, uncompressed) and the
+ * ring on every socket open (4 MiB by default, uncompressed — the replay
+ * starts at the agent's last column change, so that is a ceiling rather than
+ * the expected cost, and the constants below are sized to the ceiling) and the
  * client wipes the emulator before writing it.
  *
  * So neither half of the obvious policy works alone. Time alone charges an idle

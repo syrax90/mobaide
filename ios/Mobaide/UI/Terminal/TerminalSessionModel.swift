@@ -517,8 +517,9 @@ final class TerminalSessionModel {
     /// `.live`, and as the delivery step of every `scheduleSizeReassert`
     /// debounce.
     ///
-    /// The PTY is spawned at the create default (24x80) and only a resize frame
-    /// corrects it. `.connected` alone cannot carry that guarantee — the model is
+    /// The PTY is spawned at the grid the create request named — an estimate,
+    /// and 24x80 for an agent-spawned session — and only a resize frame corrects
+    /// it. `.connected` alone cannot carry that guarantee — the model is
     /// constructed and started inside the SwiftUI `View.init`, so on a first open
     /// the socket routinely opens before the terminal has ever been laid out and
     /// this call no-ops on an empty cache. The `sizeChanged` that follows is

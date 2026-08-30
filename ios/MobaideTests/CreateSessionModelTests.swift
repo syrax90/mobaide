@@ -114,6 +114,48 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.claude_options?.worktree, false)
     }
 
+    func testEveryRequestSiteCarriesTheStaticColumnCount() throws {
+        // The agent spawns the PTY at this grid and the program lays its opening
+        // frames out there. Those bytes then sit in the agent's replay ring with
+        // no width attached, so shipping the 80-column default here mis-renders
+        // on every later reconnect, not just at startup.
+        //
+        // Static is the shipped default and pins columns regardless of the
+        // device, which is what makes the wire value checkable at all — rows
+        // stay a screen-dependent estimate the first layout corrects.
+        let prefs = isolatedPrefs()
+        prefs.setTerminalDisplayMode(.static)
+        prefs.setTerminalStaticColumns(200)
+        let model = makeModel(prefs: prefs)
+        model.selection = .stored("alpha")
+
+        for mode in [.standard, .codex, .antigravity, .shell, .custom("0123456789ab")]
+            as [CreateSessionModel.Mode] {
+            let request = try XCTUnwrap(model.buildRequest(mode: mode))
+
+            XCTAssertEqual(request.cols, 200, "\(mode) still ships a default width")
+            XCTAssertGreaterThan(request.rows, 0, "\(mode) names no row count")
+        }
+    }
+
+    func testFullDisplayModeSizesColumnsFromTheScreenInsteadOfTheStaticCount() throws {
+        // Full derives its width from the viewport, so the two modes must not
+        // agree — if they did, the estimate would be ignoring the preference.
+        let prefs = isolatedPrefs()
+        prefs.setTerminalStaticColumns(240)
+        let model = makeModel(prefs: prefs)
+        model.selection = .stored("alpha")
+
+        prefs.setTerminalDisplayMode(.static)
+        let pinned = try XCTUnwrap(model.buildRequest(mode: .shell))
+        prefs.setTerminalDisplayMode(.full)
+        let derived = try XCTUnwrap(model.buildRequest(mode: .shell))
+
+        XCTAssertEqual(pinned.cols, 240)
+        XCTAssertLessThan(derived.cols, 240, "no phone is 240 columns wide at the terminal font")
+        XCTAssertGreaterThan(derived.cols, 0)
+    }
+
     func testClaudeFastModeLocksOpus() throws {
         let model = makeModel()
         model.selection = .stored("a")

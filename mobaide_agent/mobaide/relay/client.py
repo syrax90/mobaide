@@ -2072,17 +2072,26 @@ class RelayClient:
         within a UI frame on append.
         """
         try:
+            # Materialised before the first send, not consumed lazily across
+            # them. Unlike the direct-WS path — which finishes the handshake
+            # before it starts reading — this one races the client's own
+            # resize, handed to a separate task by `_enqueue_session_input`.
+            # Both clients assert their cached size the moment the socket
+            # opens, so a lazy generator would let that resize move the ring's
+            # width mark between two of these awaits, and whether the client
+            # got its scrollback or a cleared screen would come down to task
+            # scheduling. Peak memory is unchanged: the generator already
+            # snapshots the whole span on its first step.
+            chunks = list(session.iter_ring_chunks())
+
             status = _STATE_MAP.get(session.state, "running")
             state = _state_frame(status, session.pid)
             await ws.send(encode(CH_SESSION_IO, session_id, state))
 
             await ws.send(encode(CH_SESSION_IO, session_id, FRAME_REPLAY))
 
-            # The ring is DA-stripped at write time inside ``_append_ring``;
-            # ``iter_ring_chunks`` takes a single snapshot of the (already
-            # clean) ring and yields chunks of ``REPLAY_CHUNK_BYTES`` each.
             emitted_any = False
-            for chunk in session.iter_ring_chunks():
+            for chunk in chunks:
                 await ws.send(
                     encode(CH_SESSION_IO, session_id, FRAME_OUTPUT + chunk),
                 )

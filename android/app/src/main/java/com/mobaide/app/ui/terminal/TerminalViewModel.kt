@@ -632,8 +632,8 @@ class TerminalViewModel @Inject constructor(
      * Re-assert the last measured grid to the agent: on every entry into Live,
      * and as the delivery step of every [scheduleSizeReassert] debounce.
      *
-     * The PTY is spawned at the create default (24x80) and only a resize frame
-     * corrects it. The other resize trigger — a layout pass (TerminalScreen's
+     * The PTY is spawned at the grid the create request named — an estimate, and
+     * 24x80 for an agent-spawned session — and only a resize frame corrects it. The other resize trigger — a layout pass (TerminalScreen's
      * onResize) — can settle before the WS connects (common when the agent host is
      * slow to attach, e.g. a macOS agent behind a TCC prompt); that frame is dropped
      * by the transport and then suppressed by [resize]'s dedupe, leaving the PTY at

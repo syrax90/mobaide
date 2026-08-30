@@ -136,10 +136,12 @@ export function sessionChannelName(agentId: string, sessionId: string): string {
 /**
  * Binary PTY channel.
  *
- * The client is the sole PTY size authority: the agent spawns every session at
- * 24×80 and never reports a size back, so the measured grid has to be
- * re-asserted on every open or a reconnect silently leaves a full-screen TUI
- * drawing into 24 rows. `onOpen` covers the socket-open case from this channel's
+ * The client is the sole PTY size authority: the agent never reports a size
+ * back, so the measured grid has to be re-asserted on every open or a reconnect
+ * silently leaves a full-screen TUI drawing into the spawn grid. Client-created
+ * sessions now spawn at the grid their create request named, but rows are still
+ * an estimate there and agent-spawned (Auto Scan) sessions still start at 24×80
+ * (GH #431), so the re-assert is load-bearing either way. `onOpen` covers the socket-open case from this channel's
  * own cache; WEB-05 owns the replay state machine and its two extra re-assert
  * points (first inbound binary while reconnecting, and `replayEnd`), which it
  * drives through `setSize` because its model caches the measured grid *before*

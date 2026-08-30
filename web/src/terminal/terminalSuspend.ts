@@ -5,7 +5,9 @@
  * relay routes `CH_SESSION_IO` solely to clients registered on
  * `session_io:<sid>` — so closing the socket is the only way to stop the bytes.
  * That makes suspension expensive to undo: the agent replays its **entire**
- * ring on every socket open (`state → 'b' → N×'o' → 'e'`, 4 MiB by default,
+ * ring on every socket open (`state → 'b' → N×'o' → 'e'`, 4 MiB by default —
+ * a ceiling, since the replay starts at the agent's last column change, and the
+ * constants below are sized to the ceiling,
  * uncompressed), and the client wipes its emulator before writing it.
  *
  * So neither half of the obvious policy works alone:

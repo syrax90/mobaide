@@ -6,7 +6,9 @@ import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.AntigravityLaunchPrefs
 import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.CodexLaunchPrefs
+import android.content.res.Resources
 import com.mobaide.app.data.local.PreferencesStore
+import com.mobaide.app.ui.terminal.TerminalGridEstimate
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.AntigravityOptionsModel
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
@@ -30,6 +32,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -1275,11 +1278,40 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Stamp the grid the terminal will actually use.
+     *
+     * The agent sizes the PTY from this request and the program lays its opening
+     * frames out at that width, before any terminal view exists to measure. Those
+     * bytes live on in the agent's replay ring, so a wrong width here is not
+     * self-correcting: every later reconnect re-renders them at the real grid.
+     *
+     * Applied at the single submit funnel rather than at each of the eight
+     * request sites, so a new one cannot silently ship the 24x80 default.
+     * Columns are exact in Static mode; rows are an estimate the first layout
+     * corrects, and they neither affect wrapping nor reach the ring.
+     *
+     * Total by construction, and called outside the submit `try`: an estimate
+     * that cannot be computed must leave the request alone, never fail the
+     * launch. Launching at the wire default is a worse screen, not a worse
+     * outcome.
+     */
+    private suspend fun CreateSessionRequest.withSpawnGrid(): CreateSessionRequest =
+        runCatching {
+            val grid = TerminalGridEstimate.of(
+                mode = preferencesStore.terminalDisplayMode.first(),
+                staticColumns = preferencesStore.terminalStaticColumns.first(),
+                metrics = Resources.getSystem().displayMetrics,
+            )
+            copy(rows = grid.rows, cols = grid.cols)
+        }.getOrDefault(this)
+
     private fun submitSession(selection: ProjectSelection, request: CreateSessionRequest) {
         viewModelScope.launch {
             _uiState.update { it.copy(submitting = true) }
+            val sized = request.withSpawnGrid()
             try {
-                val response = sessionRepository.createSession(request)
+                val response = sessionRepository.createSession(sized)
                 when (selection) {
                     is ProjectSelection.Stored -> {
                         preferencesStore.setLastUsedProjectName(selection.name)

@@ -1,13 +1,26 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { components } from '../../../api/generated/agent';
 import type { ProjectSummary } from '../../../api/projectRepository';
 import { createSessionRequestSchema } from '../../../protocol/dto/sessionCreate';
+import { currentGridEstimate } from '../../../terminal/gridEstimate';
 import {
   buildCreateRequest,
   buildStartScanRequest,
   type CreateSessionRequest,
 } from './buildCreateRequest';
 import { INITIAL_WIZARD_STATE, type WizardMode, type WizardState } from './wizardState';
+
+// The real estimator measures a canvas, which jsdom does not implement — it
+// would silently return the 24x80 fallback here and make any assertion about
+// the grid indistinguishable from the hardcoded default this change removed.
+vi.mock('../../../terminal/gridEstimate', () => ({ currentGridEstimate: vi.fn() }));
+
+/** Nothing like 24x80, so a request site still shipping the default is visible. */
+const MEASURED_GRID = { rows: 41, cols: 143 };
+
+beforeEach(() => {
+  vi.mocked(currentGridEstimate).mockReturnValue(MEASURED_GRID);
+});
 
 // `satisfies`, not a `WizardMode` annotation: the literal type is what keeps the
 // mode tables below exhaustive rather than open-ended template-literal keys.
@@ -295,8 +308,22 @@ describe('buildCreateRequest — placement', () => {
     expect(request.claude_options).toMatchObject({ worktree: false });
   });
 
-  it('always sizes the PTY the same', () => {
+  // The agent spawns the PTY at whatever this request names and the program
+  // lays its opening frames out there. Those bytes outlive the launch in the
+  // agent's replay ring with no width attached, so a grid that matches no
+  // viewport mis-renders on every later reconnect — not just at startup.
+  it.each(REQUEST_MODES)('%s sizes the PTY from the measured grid', (mode) => {
+    expect(build(mode)).toMatchObject(MEASURED_GRID);
+  });
+
+  it('re-reads the estimate per build rather than capturing one at import', () => {
+    // The window can be resized — or first become measurable — between the
+    // wizard mounting and the launch. The `Once` value stands in for the
+    // unmeasurable 24x80 fallback the estimator returns before that.
+    vi.mocked(currentGridEstimate).mockReturnValueOnce({ rows: 24, cols: 80 });
+
     expect(build('shell')).toMatchObject({ rows: 24, cols: 80 });
+    expect(build('shell')).toMatchObject(MEASURED_GRID);
   });
 
   it('resolves the effective model and effort rather than the raw bucket', () => {

@@ -66,7 +66,7 @@ final class MobaideTerminalView: TerminalView {
         nativeForegroundColor = UIColor(MobaideColors.terminalForeground)
         backgroundColor = UIColor(MobaideColors.terminalBackground)
         caretColor = UIColor(MobaideColors.terminalCursor)
-        font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        font = TerminalGridEstimate.font
         // Drop SwiftTerm's `TerminalAccessory` (sticky-Ctrl bar) installed by
         // its `setup()`. The property is settable-public (not overridable), and
         // the accessory is installed exactly once at init, so a one-time nil
@@ -91,10 +91,7 @@ final class MobaideTerminalView: TerminalView {
     var cellSize: CGSize {
         let caret = caretFrame.size
         if caret.width >= 1, caret.height >= 1 { return caret }
-        let measured = ("W" as NSString).size(withAttributes: [.font: font])
-        let scale = UIScreen.main.scale
-        let snap = { (value: CGFloat) in max(1, ceil(value * scale) / scale) }
-        return CGSize(width: snap(measured.width), height: snap(measured.height))
+        return TerminalGridEstimate.cellSize(font: font, scale: UIScreen.main.scale)
     }
 
     // MARK: - Text selection

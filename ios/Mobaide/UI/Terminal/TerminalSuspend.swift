@@ -6,8 +6,10 @@ import Foundation
 ///
 /// The session socket has no pause frame, so closing it is the only way to stop
 /// the bytes — and undoing that is expensive, because the agent replays its
-/// whole ring on every socket open (4 MiB by default, uncompressed) and the
-/// client wipes the emulator before writing it.
+/// ring on every socket open (4 MiB by default, uncompressed) and the client
+/// wipes the emulator before writing it. The replay starts at the agent's last
+/// column change, so 4 MiB is the ceiling rather than the expected cost; the
+/// constants below are deliberately sized to that ceiling.
 ///
 /// So neither half of the obvious policy works alone. Time alone charges an
 /// idle session a full replay to save the ~0 bytes it was not sending; bytes

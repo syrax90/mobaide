@@ -26,6 +26,29 @@ class TestCreateSession:
         assert resp.status_code == 201
 
 
+    async def test_create_spawns_the_pty_at_the_requested_grid(self, client, auth_headers):
+        """The width a client asks for has to reach the PTY.
+
+        This is the link the whole width fix rests on, and it spans the DTO,
+        `SessionConfig` and the spawn. It is also the one that silently
+        regressed before: every client shipped the wire defaults, so every
+        session was born at 80 columns and its opening frames entered the
+        replay ring at a width no viewport matched.
+        """
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={"rows": 40, "cols": 137},
+        )
+        assert resp.status_code == 201
+
+        manager = client._transport.app.state.session_manager
+        session = await manager.get_session(resp.json()["session_id"])
+        assert (session._config.rows, session._config.cols) == (40, 137)
+        # And the replay's width baseline is seeded from it, so a client
+        # asserting that same grid on first connect is not treated as a change.
+        assert session._ring_cols == 137
+
     async def test_create_exceeds_max_sessions_returns_409(self, client, auth_headers):
         """Creating sessions beyond max_sessions limit returns 409 Conflict."""
         # agent_config fixture sets max_sessions=4

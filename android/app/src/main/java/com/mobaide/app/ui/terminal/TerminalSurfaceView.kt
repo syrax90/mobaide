@@ -146,7 +146,7 @@ fun TerminalSurfaceView(
                 isFocusable = true
                 isFocusableInTouchMode = true
                 setDefaultFocusHighlightEnabled(false)
-                setTextSize(36)
+                setTextSize(TerminalGridEstimate.TERMINAL_TEXT_SIZE_PX.toInt())
                 setTypeface(Typeface.MONOSPACE)
                 setTerminalViewClient(client)
                 attachSession(session)

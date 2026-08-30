@@ -7,14 +7,18 @@
  * `scrollback` is non-zero — it measures no real bar, and xterm 6 dropped
  * `scrollBarWidth` entirely. So the grid is inset by exactly that much
  * regardless, and putting the slider there costs no columns and triggers no
- * reflow. `--terminal-scrollbar-width` in `global.css` is the other half of that
- * pair; keep the two equal across an addon bump.
+ * reflow. `--terminal-scrollbar-width` in `global.css` and the exported
+ * {@link SCROLLBAR_GUTTER_PX} the create-time grid estimate divides by are the
+ * other two members; keep all three equal across an addon bump.
  *
  * Rendering takes no measurement: {@link ScrollbarView} is two fractions the
  * component hands to CSS as custom properties, which is what keeps this
  * testable under jsdom, where nothing has a layout. Only a drag needs real
  * pixels, and that arithmetic is {@link offsetFromDrag}.
  */
+
+/** The gutter `FitAddon` reserves (`options.overviewRuler?.width || 14`). */
+export const SCROLLBAR_GUTTER_PX = 14;
 
 import type { ScrollSample } from './terminalFollow';
 

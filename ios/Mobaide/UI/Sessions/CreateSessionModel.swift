@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 
 /// Create-session wizard state (Android `CreateSessionViewModel`). Builds
 /// byte-identical `CreateSessionRequest`s: managed CLIs carry worktree/branch
@@ -947,6 +948,36 @@ final class CreateSessionModel {
         value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
     }
 
+    /// The grid to spawn the PTY at.
+    ///
+    /// The agent sizes the PTY from this request and the program lays its
+    /// opening frames out at that width — before any terminal view exists to
+    /// measure. Those bytes then live in the agent's replay ring, so a wrong
+    /// width here is not self-correcting: every later reconnect re-renders
+    /// them at the real grid.
+    ///
+    /// Columns are exact in `.static` (the count is pinned regardless of the
+    /// device) and derived from the fixed terminal font in `.full`. Rows are an
+    /// estimate — the screen's chrome is not known here — but they neither
+    /// affect wrapping nor survive into the ring, and the first real layout
+    /// corrects them within a frame.
+    private func spawnGrid() -> (rows: Int, cols: Int) {
+        let config = TerminalDisplayConfig(
+            mode: preferencesStore.getTerminalDisplayMode(),
+            staticColumns: preferencesStore.getTerminalStaticColumns()
+        )
+        let viewport = UIScreen.main.bounds.size
+        let cell = TerminalGridEstimate.cellSize(scale: UIScreen.main.scale)
+        return (
+            rows: TerminalGridEstimate.rows(
+                viewportHeight: viewport.height, cellHeight: cell.height
+            ),
+            cols: TerminalGridEstimate.columns(
+                config: config, viewportWidth: viewport.width, cellWidth: cell.width
+            )
+        )
+    }
+
     /// `nil` for `.autoScan`, which starts a scan instead of creating a
     /// session — every other mode maps onto a request.
     func buildRequest(mode: Mode) -> CreateSessionRequest? {
@@ -970,6 +1001,7 @@ final class CreateSessionModel {
         let effectiveWorktree = gitEligible ? worktree : false
         let effectiveBranch = (gitEligible && !branchName.trimmingCharacters(in: .whitespaces).isEmpty)
             ? branchName : nil
+        let grid = spawnGrid()
 
         switch mode {
         case .autoScan:
@@ -987,7 +1019,13 @@ final class CreateSessionModel {
                 append_system_prompt: Self.blankToNil(claudeAppendSystemPrompt),
                 debug: claudeDebug
             )
-            return CreateSessionRequest(cwd: cwd, project_name: projectName, claude_options: options)
+            return CreateSessionRequest(
+                cwd: cwd,
+                rows: grid.rows,
+                cols: grid.cols,
+                project_name: projectName,
+                claude_options: options
+            )
         case .codex:
             let options = CodexOptionsModel(
                 model: codexModel,
@@ -998,7 +1036,14 @@ final class CreateSessionModel {
                 worktree: effectiveWorktree,
                 branch_name: effectiveBranch
             )
-            return CreateSessionRequest(cwd: cwd, project_name: projectName, cli: "codex", codex_options: options)
+            return CreateSessionRequest(
+                cwd: cwd,
+                rows: grid.rows,
+                cols: grid.cols,
+                project_name: projectName,
+                cli: "codex",
+                codex_options: options
+            )
         case .antigravity:
             let options = AntigravityOptionsModel(
                 model: antigravityModel,
@@ -1008,10 +1053,19 @@ final class CreateSessionModel {
                 worktree: effectiveWorktree,
                 branch_name: effectiveBranch
             )
-            return CreateSessionRequest(cwd: cwd, project_name: projectName, cli: "antigravity", antigravity_options: options)
+            return CreateSessionRequest(
+                cwd: cwd,
+                rows: grid.rows,
+                cols: grid.cols,
+                project_name: projectName,
+                cli: "antigravity",
+                antigravity_options: options
+            )
         case .shell:
             return CreateSessionRequest(
                 cwd: cwd,
+                rows: grid.rows,
+                cols: grid.cols,
                 project_name: projectName,
                 worktree: effectiveWorktree,
                 branch_name: effectiveBranch
@@ -1022,6 +1076,8 @@ final class CreateSessionModel {
             // command server-side; the client never sends it.
             return CreateSessionRequest(
                 cwd: cwd,
+                rows: grid.rows,
+                cols: grid.cols,
                 project_name: projectName,
                 cli: "custom_\(id)",
                 worktree: effectiveWorktree,

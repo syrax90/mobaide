@@ -52,6 +52,16 @@ logger = logging.getLogger(__name__)
 # longest sequence matched here (``ESC[?6n``, 5 bytes) fits well inside that
 # window. OSC color queries are likewise removed upstream by OscColorResponder,
 # so the OSC alternation here is belt-and-braces.
+# Alternate-screen enter/exit. Tracked because it decides whether replaying
+# output laid out at a stale width is harmful. On the alt screen a program owns
+# the whole grid and paints absolute positions, so old-width bytes desynchronize
+# it; on the normal screen the replay is line-oriented text the client's
+# emulator re-wraps correctly, and dropping it would delete usable scrollback.
+_ALT_SCREEN_RE = re.compile(rb"\x1b\[\?(?:1049|1047|47)([hl])")
+# Longest sequence above, minus one: what must be carried between reads so a
+# split sequence is still matched.
+_ALT_SCREEN_STRADDLE = 8
+
 _RING_SCRUB_RE = re.compile(
     rb"\x1b\[\?[\d;]*c"
     rb"|\x1b\[>[\d;]*c"
@@ -149,6 +159,18 @@ class TerminalSession:
         # Raw byte ring for binary-WS replay on reconnect.
         self._ring = bytearray()
         self._ring_cap = config.ring_buffer_bytes
+        # Bytes in the ring carry no width of their own, and a replay is
+        # rendered at whatever grid the client has now. Replaying output that
+        # was laid out at a different column count desynchronizes a full-screen
+        # TUI's cursor arithmetic for the whole rest of the span, and nothing
+        # repairs it: a same-size TIOCSWINSZ raises no SIGWINCH, so the program
+        # is never asked to repaint. So track where the current width began and
+        # replay only from there. Rows are excluded deliberately — they do not
+        # affect wrapping.
+        self._ring_cols = config.cols
+        self._ring_width_start = 0
+        self._alt_screen = False
+        self._alt_screen_tail = b""
         self._event_queue: asyncio.Queue[SessionEvent] = asyncio.Queue(
             maxsize=EVENT_QUEUE_MAXSIZE,
         )
@@ -273,6 +295,7 @@ class TerminalSession:
                     fut.add_done_callback(self._log_reply_write_failure)
                 if not data:
                     continue
+                self._track_alt_screen(data)
                 new_title = self._osc.feed(data)
                 if new_title is not None and new_title != self._pending_title:
                     self._pending_title = new_title
@@ -388,6 +411,18 @@ class TerminalSession:
                 exc,
             )
 
+    def _track_alt_screen(self, data: bytes) -> None:
+        """Follow the child in and out of the alternate screen.
+
+        Stateful across reads, like the DA and OSC processors on the same
+        bytes: a `?1049h` split across two 4 KiB reads still counts.
+        """
+        window = self._alt_screen_tail + data
+        matches = _ALT_SCREEN_RE.findall(window)
+        if matches:
+            self._alt_screen = matches[-1] == b"h"
+        self._alt_screen_tail = window[-_ALT_SCREEN_STRADDLE:]
+
     def _append_ring(self, data: bytes) -> None:
         # Scrub terminal query/response bytes in-line so the ring is always
         # clean. Replay senders rely on this — without the per-write strip
@@ -401,9 +436,15 @@ class TerminalSession:
         overflow = len(self._ring) - self._ring_cap
         if overflow > 0:
             del self._ring[:overflow]
+            self._ring_width_start = max(0, self._ring_width_start - overflow)
 
     def get_ring(self) -> bytes:
-        """Snapshot of the recent raw PTY bytes for binary-WS replay."""
+        """Whole-ring snapshot, for tests and diagnostics.
+
+        Binary-WS replay goes through ``iter_ring_chunks()``, which — unlike
+        this — starts at ``_ring_width_start`` so the span it yields is all one
+        column count.
+        """
         return bytes(self._ring)
 
     def iter_ring_chunks(
@@ -419,13 +460,18 @@ class TerminalSession:
         ``get_ring()`` + ``regex.sub`` double-materialisation, because the
         ring is already DA-clean (see ``_append_ring``).
 
+        Starts at the last column change, not at the head: output laid out at
+        a stale width cannot be re-wrapped and would mis-render for the rest of
+        the span. History older than that change is dropped from the replay —
+        it is unrenderable at the current grid, which is the whole point.
+
         An empty ring yields nothing — callers that need a
         "handshake-always-has-an-OUTPUT-frame" invariant must emit one
         explicitly.
         """
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive: {chunk_size}")
-        snapshot = bytes(self._ring)
+        snapshot = bytes(self._ring[self._ring_width_start :])
         for start in range(0, len(snapshot), chunk_size):
             yield snapshot[start : start + chunk_size]
 
@@ -569,13 +615,38 @@ class TerminalSession:
         await self.write_submit(data)
 
     async def resize(self, rows: int, cols: int) -> None:
-        """Resize the PTY terminal."""
+        """Resize the PTY terminal, and mark where the new width starts.
+
+        Three conditions, each load-bearing:
+
+        * **Columns changed.** Rows do not affect wrapping.
+        * **The child is on the alternate screen.** There it paints absolute
+          positions and old-width bytes desynchronize its cursor arithmetic for
+          the rest of the span, which no repaint after the replay repairs. On
+          the normal screen the replay is line-oriented text the client's
+          emulator re-wraps at the current width, so it stays readable and
+          dropping it would delete usable scrollback for no gain.
+        * **The session is running.** A stopped or crashed child will never
+          repaint, so cutting its history just blanks its last output. The
+          backend can still accept a resize after the child dies — the master
+          fd outlives it until the liveness sweep — so this has to be explicit.
+        """
         self._backend.resize(rows, cols)
+        if (
+            cols != self._ring_cols
+            and self._alt_screen
+            and self._state == SessionState.RUNNING
+        ):
+            self._ring_width_start = len(self._ring)
+        # Recorded either way: the ring's current width is a fact about the PTY,
+        # not about whether this particular change moved the mark.
+        self._ring_cols = cols
 
     def get_scrollback(self) -> list[str]:
         """Return the current scrollback buffer as decoded strings.
 
-        The realtime WS path uses ``get_ring()`` for byte-exact replay; this
+        The realtime WS path uses ``iter_ring_chunks()`` for byte-exact replay
+        (which starts at the last width change, unlike this); this
         helper exists for the REST ``/scrollback`` endpoint, which is JSON
         and therefore must hand back strings. Invalid UTF-8 is replaced.
         """

@@ -431,6 +431,7 @@ write-direction and live-only, matching Android's documented posture: a program
 may put text on the pasteboard (marked sensitive, so it is device-local and
 expires), but only from live output — `clipboardCopy` refuses bytes fed inside
 `applyingEmulatorOutput(replayed:)`, because the agent replays its ring verbatim
+from the last column change onward (`TerminalSession._ring_width_start`)
 on every attach and one yank sitting in that history would otherwise re-copy on
 every session open. The gate costs nothing here: the user's own Copy never
 reaches this delegate, calling `Clipboard.copy` directly from the model, so it is
