@@ -1327,8 +1327,10 @@ leaves `shouldReconnect` false, so `onResume`'s `forceReconnect` no-ops until
 the visibility handler's own `connect()` re-arms it. Firing it blindly is safe in both directions — `forceReconnect`
 no-ops once `disconnect()` has cleared `shouldReconnect`, so a declined channel
 stays declined, and the replay a reconnect triggers is dropped by both cursors.
-The terminal is deliberately left out: it is user-driven, so a dead socket
-announces itself the moment someone types. The residual case (a path
+The terminal opts in too, but narrowly: only a mounted, unsuspended session
+whose connection is not already `live`, because a reconnect there costs a
+ring replay the relay fans out to every client on that session, where an
+events reconnect costs nothing. The residual case (a path
 black-holing while the tab stays visible) needs a heartbeat the browser can
 observe, which is a protocol change across all three clients and is not
 attempted here.

@@ -9,7 +9,10 @@ description = "Mobaide agent — cross-platform PTY session manager with WebSock
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",
-    "uvicorn[standard]",
+    # >=0.52.1: the direct-WS session_io endpoint's desync close depends on
+    # websockets-sansio write flow control, added in uvicorn #3048. See the
+    # matching note in central_server/pyproject.toml.
+    "uvicorn[standard]>=0.52.1",
     "pywinpty; sys_platform == 'win32'",
     "PyJWT",
     "gql",

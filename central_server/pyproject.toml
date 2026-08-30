@@ -11,7 +11,13 @@ dependencies = [
     "fastapi",
     # >=0.49: first release with the "websockets-sansio" ws implementation
     # key that __main__.py pins; an older cached uvicorn dies at startup.
-    "uvicorn[standard]>=0.49",
+    # >=0.52.1: first release where that implementation applies write flow
+    # control (uvicorn #3048). Below it `writable` is set once and never
+    # cleared, so `send_bytes` never parks, `MobileClient.send_queue` never
+    # fills, and the session_io desync close is dead code — while a stalled
+    # peer's stream buffers unboundedly in the transport, where no counter
+    # and no cap can see it.
+    "uvicorn[standard]>=0.52.1",
     "PyJWT",
     "aiosqlite",
     "structlog>=24.1",

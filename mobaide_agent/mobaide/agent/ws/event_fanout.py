@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 
 import orjson
 from typing import TYPE_CHECKING
@@ -16,6 +17,21 @@ logger = logging.getLogger(__name__)
 _STATE_EVENTS = frozenset({"started", "stopped", "error"})
 _TITLE_EVENT = "title"
 _ATTENTION_EVENT = "attention"
+
+
+@dataclass(eq=False)
+class Subscription:
+    """One consumer's slot on a session's event stream.
+
+    ``overflowed`` is set when the fan-out had to discard an event because
+    this queue was full. The consumer watches this flag and ends its
+    connection so a reconnect replays the ring.
+    """
+
+    queue: asyncio.Queue[SessionEvent] = field(
+        default_factory=lambda: asyncio.Queue(maxsize=1000)
+    )
+    overflowed: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class SessionEventFanout:
@@ -35,7 +51,7 @@ class SessionEventFanout:
         self._broadcaster = broadcaster
         self._get_sessions = get_sessions
         self._event_bus = event_bus
-        self._subscribers: set[asyncio.Queue[SessionEvent]] = set()
+        self._subscribers: set[Subscription] = set()
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -49,11 +65,17 @@ class SessionEventFanout:
         try:
             while True:
                 event = await self._session.event_queue.get()
-                for q in list(self._subscribers):
+                for sub in list(self._subscribers):
                     try:
-                        q.put_nowait(event)
+                        sub.queue.put_nowait(event)
                     except asyncio.QueueFull:
-                        pass  # drop for slow consumers
+                        if not sub.overflowed.is_set():
+                            sub.overflowed.set()
+                            logger.warning(
+                                "fanout.subscriber_overflow session_id=%s — "
+                                "consumer is not draining; it must resync",
+                                self._session.session_id,
+                            )
                 if event.event_type == _TITLE_EVENT and self._get_sessions:
                     if self._event_bus is not None:
                         sessions_now = self._get_sessions()
@@ -112,13 +134,13 @@ class SessionEventFanout:
         except asyncio.CancelledError:
             return
 
-    def subscribe(self) -> asyncio.Queue[SessionEvent]:
-        q: asyncio.Queue[SessionEvent] = asyncio.Queue(maxsize=1000)
-        self._subscribers.add(q)
-        return q
+    def subscribe(self) -> Subscription:
+        sub = Subscription()
+        self._subscribers.add(sub)
+        return sub
 
-    def unsubscribe(self, q: asyncio.Queue[SessionEvent]) -> None:
-        self._subscribers.discard(q)
+    def unsubscribe(self, sub: Subscription) -> None:
+        self._subscribers.discard(sub)
 
     def stop(self) -> None:
         if self._task and not self._task.done():

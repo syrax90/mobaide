@@ -12,6 +12,7 @@ from mobaide.core.models import SessionEvent, SessionState
 from mobaide.relay.envelope import (
     PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
+    WS_CLOSE_STREAM_DESYNC,
 )
 
 from ..auth.dependencies import WebSocketAuthError, ws_authenticate
@@ -37,6 +38,10 @@ FRAME_SUBMIT = b"m"      # 0x6d  C->S  submit: payload + pause + CR (discrete En
 FRAME_STATE = b"s"       # 0x73  S->C  payload: UTF-8 JSON {status,pid?,exit_code?}
 FRAME_REPLAY = b"b"      # 0x62  S->C  marker: ring-buffer replay starts next frame
 FRAME_REPLAY_END = b"e"  # 0x65  S->C  marker: ring-buffer replay finished; live frames follow
+
+# How long to wait for the desync close frame to reach a client that has
+# already proven it is not reading.
+_DESYNC_CLOSE_TIMEOUT_S = 5.0
 
 _STATE_MAP = {
     SessionState.STARTING: "starting",
@@ -148,7 +153,7 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
     await websocket.send_bytes(FRAME_REPLAY_END)
 
     fanout = ensure_fanout(websocket.app.state, session)
-    consumer_queue = fanout.subscribe()
+    subscription = fanout.subscribe()
 
     # Aggregated counters — emitted on disconnect, never per message.
     counters = {"bytes_in": 0, "bytes_out": 0, "msg_count": 0}
@@ -203,7 +208,7 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
         """Read events from fanout queue and send to WebSocket."""
         try:
             while True:
-                event: SessionEvent = await consumer_queue.get()
+                event: SessionEvent = await subscription.queue.get()
                 if event.event_type == "output" and event.data:
                     counters["bytes_out"] += len(event.data)
                     await websocket.send_bytes(FRAME_OUTPUT + event.data)
@@ -216,19 +221,48 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
         except Exception as exc:
             log_ws_error(channel, exc, session_id=session_id, stage="writer")
 
-    # Run both concurrently; cancel the other when one finishes
+    # Run all three concurrently; cancel the others when one finishes. The
+    # third arm fires when the fan-out had to discard an event for this
+    # consumer: raw PTY bytes carry no sequence number, so the client's screen
+    # is corrupt from that point on and only a fresh replay repairs it.
     reader_task = asyncio.create_task(_reader(), name=f"ws-reader-{session_id}")
     writer_task = asyncio.create_task(_writer(), name=f"ws-writer-{session_id}")
+    desync_task = asyncio.create_task(
+        subscription.overflowed.wait(), name=f"ws-desync-{session_id}"
+    )
     try:
         done, pending = await asyncio.wait(
-            {reader_task, writer_task},
+            {reader_task, writer_task, desync_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
         for task in pending:
             task.cancel()
+        if desync_task in done:
+            # Unsubscribe and empty before waiting on the close. Unsubscribing
+            # alone does neither — the local binding keeps the queue alive —
+            # hence the drain, mirroring the relay. The `finally` below
+            # repeats the unsubscribe harmlessly (`set.discard`).
+            fanout.unsubscribe(subscription)
+            while True:
+                try:
+                    subscription.queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            # The queue filled because this peer stopped reading, so the close
+            # frame can stall the same way the events did. Bounded, and the
+            # socket goes down when this handler returns either way.
+            try:
+                await asyncio.wait_for(
+                    websocket.close(
+                        code=WS_CLOSE_STREAM_DESYNC, reason="Stream desynchronized"
+                    ),
+                    timeout=_DESYNC_CLOSE_TIMEOUT_S,
+                )
+            except Exception as exc:
+                log_ws_error(channel, exc, session_id=session_id, stage="desync_close")
     finally:
         # Unsubscribe but do NOT kill the session — it stays alive for reconnect
-        fanout.unsubscribe(consumer_queue)
+        fanout.unsubscribe(subscription)
         log_ws_disconnect(
             channel,
             session_id=session_id,

@@ -216,8 +216,10 @@ export function forceReconnectAgentEvents(agentId: string): void {
  * models disposal only). The auto-scan monitor opts in through `onResume`
  * instead, which it needs at least as much: at the default 300 s scan interval
  * that socket is silent for most of every cycle, and its screen is one a user
- * deliberately leaves open. The terminal is left out on purpose — it is
- * user-driven, so a dead socket announces itself the moment someone types.
+ * deliberately leaves open. The terminal opts in there too, but narrowly: only
+ * a mounted, unsuspended model whose connection is not already `'live'`, because
+ * a session reconnect costs a ring replay the agent fans out to every client on
+ * that session — where an events reconnect costs nothing.
  *
  * `connect()` before `forceReconnect()`, as the per-agent Refresh does:
  * `forceReconnect` returns early on a channel that stopped for good, which is

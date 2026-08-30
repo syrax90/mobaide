@@ -18,6 +18,7 @@ from mobaide.core.session import TerminalSession
 from mobaide.agent.ws.event_fanout import (
     SessionEventFanout,
     SessionListBroadcaster,
+    Subscription,
 )
 
 
@@ -141,7 +142,7 @@ class TestSessionEventFanoutPump:
             ev = SessionEvent(event_type="output", session_id="s1", data=b"hi")
             await session.event_queue.put(ev)
 
-            received = await _drain_one(sub)
+            received = await _drain_one(sub.queue)
             assert received is ev
             # Output events must NOT trigger state-change notifications.
             broadcaster.notify_serialized.assert_not_called()
@@ -176,7 +177,7 @@ class TestSessionEventFanoutPump:
             )
             # Wait for the fanout subscriber first — guarantees the pump has
             # progressed past the state-change side effects.
-            received = await _drain_one(sub)
+            received = await _drain_one(sub.queue)
             assert received.event_type == "started"
 
             # Yield a tick for any remaining scheduled callbacks.
@@ -233,7 +234,7 @@ class TestSessionEventFanoutPump:
             await session.event_queue.put(
                 SessionEvent(event_type="started", session_id="s1"),
             )
-            received = await _drain_one(sub)
+            received = await _drain_one(sub.queue)
             assert received.event_type == "started"
 
             await asyncio.sleep(0)
@@ -269,7 +270,7 @@ class TestSessionEventFanoutPump:
             await session.event_queue.put(
                 SessionEvent(event_type="stopped", session_id="s1"),
             )
-            received = await _drain_one(sub)
+            received = await _drain_one(sub.queue)
             assert received.event_type == "stopped"
 
             await asyncio.sleep(0)
@@ -310,7 +311,7 @@ class TestSessionEventFanoutPump:
             await session.event_queue.put(
                 SessionEvent(event_type="title", session_id="s1", data=None),
             )
-            received = await _drain_one(sub)
+            received = await _drain_one(sub.queue)
             assert received.event_type == "title"
 
             await asyncio.sleep(0)
@@ -345,7 +346,7 @@ class TestSessionEventFanoutPump:
             await session.event_queue.put(
                 SessionEvent(event_type="title", session_id="s1", data=None),
             )
-            received = await _drain_one(sub)
+            received = await _drain_one(sub.queue)
             assert received.event_type == "title"
 
             await asyncio.sleep(0)
@@ -381,7 +382,7 @@ class TestSessionEventFanoutPump:
             await session.event_queue.put(
                 SessionEvent(event_type="title", session_id="s1", data=None),
             )
-            received = await _drain_one(sub)
+            received = await _drain_one(sub.queue)
             assert received.event_type == "title"
 
             await asyncio.sleep(0)
@@ -425,7 +426,7 @@ class TestSessionEventFanoutPump:
                     attention="awaiting_permission",
                 ),
             )
-            received = await _drain_one(sub)
+            received = await _drain_one(sub.queue)
             assert received.event_type == "attention"
 
             await asyncio.sleep(0)
@@ -471,7 +472,7 @@ class TestSessionEventFanoutPump:
                     event_type="attention", session_id="s1", attention=None,
                 ),
             )
-            received = await _drain_one(sub)
+            received = await _drain_one(sub.queue)
             assert received.event_type == "attention"
 
             await asyncio.sleep(0)
@@ -504,7 +505,7 @@ class TestSessionEventFanoutPump:
                     attention="turn_finished",
                 ),
             )
-            received = await _drain_one(sub)
+            received = await _drain_one(sub.queue)
             assert received.event_type == "attention"
             # No bus to assert on; reaching here without raising is the contract.
         finally:
@@ -537,7 +538,7 @@ class TestSessionEventFanoutPump:
                     attention="turn_finished",
                 ),
             )
-            received = await _drain_one(sub)
+            received = await _drain_one(sub.queue)
             assert received.event_type == "attention"
 
             await asyncio.sleep(0)
@@ -554,8 +555,9 @@ class TestSessionEventFanoutPump:
             # swap out the subscriber with a maxsize-1 queue via the internal
             # set so we can exercise the QueueFull branch cheaply.
             fanout._subscribers.discard(full_sub)
-            tiny_full: asyncio.Queue[SessionEvent] = asyncio.Queue(maxsize=1)
-            tiny_full.put_nowait(
+            tiny_full = Subscription()
+            tiny_full.queue = asyncio.Queue(maxsize=1)
+            tiny_full.queue.put_nowait(
                 SessionEvent(event_type="prefill", session_id="s1"),
             )
             fanout._subscribers.add(tiny_full)
@@ -567,14 +569,102 @@ class TestSessionEventFanoutPump:
                 SessionEvent(event_type="output", session_id="s1", data=b"x"),
             )
 
-            received = await _drain_one(ok_sub)
+            received = await _drain_one(ok_sub.queue)
             assert received.event_type == "output"
             assert received.data == b"x"
 
-            # tiny_full is still at 1 item (silently dropped).
-            assert tiny_full.qsize() == 1
-            first = tiny_full.get_nowait()
+            # tiny_full is still at 1 item — the new event was dropped. That
+            # drop is no longer silent: TestSubscriberOverflow owns the flag
+            # and the warning it now carries.
+            assert tiny_full.queue.qsize() == 1
+            first = tiny_full.queue.get_nowait()
             assert first.event_type == "prefill"
+        finally:
+            await _stop_and_await(fanout)
+
+
+class TestSubscriberOverflow:
+    """A consumer that stops draining loses its connection, not its bytes.
+
+    ``output`` events carry raw PTY bytes with no sequence number, and the
+    protocol has no resync frame, so an event the fan-out discards is
+    unrecoverable corruption for whoever renders it.
+    """
+
+    @staticmethod
+    def _saturate(sub) -> None:
+        """Make ``sub``'s queue full without pushing 1000 events through it.
+
+        The consumer's writer is parked on the queue it was handed, so
+        swapping a full one in is a consumer that has stopped draining.
+        """
+        sub.queue = asyncio.Queue(maxsize=1)
+        sub.queue.put_nowait(SessionEvent(event_type="prefill", session_id="s1"))
+
+    async def test_full_subscriber_is_flagged_and_others_keep_streaming(self):
+        session = _fake_session("s1")
+        fanout = SessionEventFanout(session)
+        try:
+            stalled = fanout.subscribe()
+            self._saturate(stalled)
+            healthy = fanout.subscribe()
+            fanout.start()
+
+            await session.event_queue.put(
+                SessionEvent(event_type="output", session_id="s1", data=b"x"),
+            )
+
+            received = await _drain_one(healthy.queue)
+            assert received.data == b"x"
+            assert stalled.overflowed.is_set()
+            # One slow consumer must not cost the others their stream, and a
+            # consumer that is keeping up is never asked to resync.
+            assert not healthy.overflowed.is_set()
+            # The frame already queued is untouched — the new one was dropped.
+            assert stalled.queue.qsize() == 1
+            assert stalled.queue.get_nowait().event_type == "prefill"
+        finally:
+            await _stop_and_await(fanout)
+
+    async def test_burst_of_dropped_events_warns_once(self, caplog):
+        """A frozen consumer stays full for every event still in flight. The
+        flag is set once and carries a single warning — one line per dropped
+        event would flood the fan-out hot path with the session's whole
+        output rate.
+        """
+        import logging
+
+        session = _fake_session("s1")
+        fanout = SessionEventFanout(session)
+        try:
+            stalled = fanout.subscribe()
+            self._saturate(stalled)
+            healthy = fanout.subscribe()
+            fanout.start()
+
+            with caplog.at_level(
+                logging.WARNING, logger="mobaide.agent.ws.event_fanout"
+            ):
+                for index in range(3):
+                    await session.event_queue.put(
+                        SessionEvent(
+                            event_type="output",
+                            session_id="s1",
+                            data=str(index).encode(),
+                        ),
+                    )
+                # Draining the healthy subscriber is the barrier: the pump
+                # cannot have delivered event N without having tried N first.
+                for index in range(3):
+                    assert (await _drain_one(healthy.queue)).data == str(index).encode()
+
+            assert stalled.overflowed.is_set()
+            overflow_warnings = [
+                r for r in caplog.records
+                if r.levelno >= logging.WARNING
+                and "fanout.subscriber_overflow" in r.getMessage()
+            ]
+            assert len(overflow_warnings) == 1
         finally:
             await _stop_and_await(fanout)
 

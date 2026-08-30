@@ -152,6 +152,10 @@ final class TerminalSessionModel {
     /// Live output charged since then. Replay spans are not charged.
     private var unwatchedBytes = 0
     private var streamSuspended = false
+    /// Consumed by `resyncOnReturn()`: a resume already opened a socket, so the
+    /// return edge that follows it must not force-reconnect one (Android
+    /// `TerminalViewModel.resumedFromSuspend`).
+    private var resumedFromSuspend = false
 
     /// The suspend policy, overridable in tests so a case can exercise this
     /// wiring without pushing `TerminalSuspend.recoupBytes` through the
@@ -510,6 +514,10 @@ final class TerminalSessionModel {
     /// Single entry point into `.live` (Android `TerminalViewModel.enterLiveState`).
     private func enterLiveState() {
         connectionState = .live
+        // Clear here as well as on consumption (Android parity): a resume whose
+        // return edge never arrives must not leave the latch armed to swallow
+        // the next one.
+        resumedFromSuspend = false
         resendCachedSize()
     }
 
@@ -842,18 +850,35 @@ final class TerminalSessionModel {
         foregroundSessionTracker.setVisible(sessionId)
         screenVisible = true
         syncWatched()
-        // The watch gate owns the reconnect while suspended; forcing one here
-        // would race it against a core it is about to replace.
-        if connectionState != .live, !streamSuspended, let core {
+        resyncOnReturn()
+    }
+
+    /// Navigated back to this terminal, or the app returned from the
+    /// background. Two mutually exclusive halves, both required (Android
+    /// `TerminalViewModel.onScreenVisible`).
+    private func resyncOnReturn() {
+        guard !isTornDown, !streamSuspended else { return }
+        // `streamSuspended` above cannot catch this one: both callers run
+        // `syncWatched()` first, which clears it. Without the latch a resume
+        // would be force-reconnected into a second handshake, and a second ring
+        // replay that the agent fans out to every client on the session.
+        if resumedFromSuspend {
+            resumedFromSuspend = false
+            return
+        }
+        // Nudge rather than wait out `WebSocketCore`'s backoff, which reaches
+        // 30 s. Only this repairs a session the relay closed as desynced: the
+        // stream lost frames, and only the ring replay restores the screen.
+        if connectionState != .live {
+            guard let core else { return }
             Task { await core.forceReconnect() }
+            return
         }
-        // Returning over a healthy socket: a peer client may have resized the
-        // shared PTY meanwhile, and the local dedupe cache cannot know.
-        // Live-only on purpose — every other state re-asserts on its own entry
-        // into `.live`, so this edge is the one case nothing else covers.
-        if connectionState == .live, lastResizeRows > 0, lastResizeCols > 0 {
-            scheduleSizeReassert()
-        }
+        // A peer client may have resized the shared PTY, which the local dedupe
+        // cache cannot know. Live-only: every other state re-asserts on its own
+        // entry into `.live`.
+        guard lastResizeRows > 0, lastResizeCols > 0 else { return }
+        scheduleSizeReassert()
     }
 
     func markHidden() {
@@ -880,12 +905,10 @@ final class TerminalSessionModel {
         // Rising edge only: `.active` re-fires with no preceding background on
         // Control-Center bounces, and the store fans this call out to every
         // retained model, so `screenVisible` keeps off-screen models passive.
-        // Checked after `syncWatched()` so a resume it just started reads as
-        // `.reconnecting` here and defers to the connect-path re-assert.
-        if active, !wasActive, screenVisible, connectionState == .live,
-           lastResizeRows > 0, lastResizeCols > 0 {
-            scheduleSizeReassert()
-        }
+        // SwiftUI never re-fires `.onAppear` for a scene transition, so this is
+        // the only edge `markVisible()` cannot cover on an unlock.
+        guard active, !wasActive, screenVisible else { return }
+        resyncOnReturn()
     }
 
     /// A session is watched only while the app is active *and* this terminal is
@@ -949,6 +972,7 @@ final class TerminalSessionModel {
     func resumeStream() {
         guard streamSuspended, !isTornDown else { return }
         streamSuspended = false
+        resumedFromSuspend = true
         unwatchedBytes = 0
         connectionState = .reconnecting
         Task { await openConnection() }

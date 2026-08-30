@@ -56,6 +56,12 @@ def test_protocol_incompatible_close_code_matches() -> None:
     assert agent.PROTOCOL_INCOMPATIBLE_CLOSE_CODE == central.PROTOCOL_INCOMPATIBLE_CLOSE_CODE
 
 
+def test_stream_desync_close_code_matches() -> None:
+    agent = _import_agent()
+    central = _import_central()
+    assert agent.WS_CLOSE_STREAM_DESYNC == central.WS_CLOSE_STREAM_DESYNC
+
+
 def test_golden_file_consistency() -> None:
     record = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
     agent = _import_agent()

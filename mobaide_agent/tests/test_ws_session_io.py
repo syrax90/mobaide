@@ -141,3 +141,41 @@ class TestWsBinaryFrames:
             ws.receive_bytes()  # replay-end marker
             ws.send_bytes(b"m" + b"echo test")
             time.sleep(0.5)
+
+
+class TestStreamDesyncClose:
+    """The direct-WS half of the slow-consumer policy.
+
+    PTY bytes are ordered and carry no sequence number, so an event the
+    fan-out had to discard leaves this client's screen corrupt from that
+    point on. The endpoint ends the connection with 4013 instead.
+    """
+
+    def test_fanout_overflow_closes_the_socket_with_4013(
+        self, test_client, app, auth_token, session_id_sync,
+    ):
+        from starlette.websockets import WebSocketDisconnect
+
+        from mobaide.agent.ws.session_io import WS_CLOSE_STREAM_DESYNC
+
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            with test_client.websocket_connect(
+                f"/ws/session/{session_id_sync}?token={auth_token}",
+            ) as ws:
+                drain_text_preamble(ws)
+                ws.receive_bytes()  # state
+                ws.receive_bytes()  # replay-start marker
+                ws.receive_bytes()  # replay output (empty for fresh ring)
+                ws.receive_bytes()  # replay-end marker
+
+                subscriptions = list(app.state.fanouts[session_id_sync]._subscribers)
+                assert len(subscriptions) == 1
+                # What the pump does on ``QueueFull`` (pinned in
+                # ``test_session_event_fanout``), fired through the portal so it
+                # lands on the loop the handler is waiting on — a set() from the
+                # test thread queues a callback the idle loop never wakes for.
+                ws.portal.call(subscriptions[0].overflowed.set)
+
+                ws.receive_bytes()
+
+        assert excinfo.value.code == WS_CLOSE_STREAM_DESYNC

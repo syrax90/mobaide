@@ -23,6 +23,7 @@ from ..monitoring import record_send_queue_drop
 from .envelope import CH_AUTOSCAN, CH_CONTROL, CH_SESSION_IO, encode
 from .routing import (
     WS_CLOSE_AGENT_TRANSIENT_OFFLINE,
+    WS_CLOSE_STREAM_DESYNC,
     MobileClient,
     RoutingTable,
     try_enqueue_control,
@@ -31,6 +32,10 @@ from .routing import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/relay")
+
+# How long to wait for the desync close frame to reach a client that has
+# already proven it is not reading.
+_DESYNC_CLOSE_TIMEOUT_S = 5.0
 
 
 def _send_session_lifecycle(
@@ -140,14 +145,56 @@ async def relay_session_io(
         _mobile_writer(websocket, client, binary=True),
         name=f"mobile-writer-{device_id}-{session_id}",
     )
+    # Third arm of the race: the fan-out could not queue a PTY frame for this
+    # client, so its byte stream is holed and only a fresh replay can repair
+    # it. Ending the connection is that repair — the client reconnects and the
+    # agent replays the whole ring.
+    desync_task = asyncio.create_task(
+        client.desynced.wait(),
+        name=f"mobile-desync-{device_id}-{session_id}",
+    )
 
     try:
         done, pending = await asyncio.wait(
-            {reader_task, writer_task},
+            {reader_task, writer_task, desync_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
         for task in pending:
             task.cancel()
+        if desync_task in done:
+            # Unregister and empty the queue BEFORE waiting on the close. The writer
+            # is already cancelled, so for the whole close window this client would
+            # otherwise sit in the fan-out as a guaranteed-full, guaranteed-undrained
+            # queue. Both calls are idempotent, so the `finally` below stays as it is.
+            routing.unregister_mobile(agent_id, channel_key, client)
+            while True:
+                try:
+                    client.send_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            # The queue filled because this peer stopped reading, so the close
+            # frame can stall exactly like the frames before it did. Bounded
+            # so a frozen client cannot pin the handler.
+            try:
+                await asyncio.wait_for(
+                    websocket.close(
+                        code=WS_CLOSE_STREAM_DESYNC, reason="Stream desynchronized"
+                    ),
+                    timeout=_DESYNC_CLOSE_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                # Expected against a peer that is still not reading, but worth a
+                # line: it separates "closed cleanly" from "abandoned", which
+                # the counter alone cannot.
+                logger.warning(
+                    "relay.stream_desync.close_timeout device=%s session=%s",
+                    client.device_id,
+                    session_id,
+                )
+            except Exception:
+                # Anything else is the already-closed footgun the sibling
+                # helpers swallow too (`safe_send_reason_and_close`).
+                pass
     finally:
         routing.unregister_mobile(agent_id, channel_key, client)
         _send_session_lifecycle(

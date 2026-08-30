@@ -32,6 +32,10 @@ logger = get_logger(__name__)
 # Cumulative per-site send-queue drop counts. Keys are the stable semantic
 # labels passed to record_send_queue_drop() at each asyncio.QueueFull site:
 #   agent_to_mobile              relay/agent_ws._try_enqueue (fan-out)
+#   stream_desync_close          relay/agent_ws._try_enqueue — once per
+#                                connection when an ordered-channel drop
+#                                severs it; agent_to_mobile counts the
+#                                frames, this counts the disconnects
 #   mobile_to_agent_session_io   relay/mobile_ws._session_reader
 #   mobile_to_agent_autoscan     relay/mobile_ws._autoscan_reader
 #   autoscan_open / autoscan_close  relay/mobile_ws autoscan control

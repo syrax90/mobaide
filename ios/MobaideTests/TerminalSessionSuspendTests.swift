@@ -302,4 +302,91 @@ final class TerminalSessionSuspendTests: XCTestCase {
 
         XCTAssertEqual(resizeFrames(connection).count, before)
     }
+
+    // MARK: - Return-to-foreground resync
+    //
+    // A session the relay closed as desynced is repaired only by the reconnect's
+    // ring replay, and SwiftUI never re-fires `.onAppear` for a scene transition,
+    // so an unlock reaches neither `markVisible` nor the live-only re-assert
+    // above and waits out `WebSocketCore`'s backoff, which reaches 30 s.
+
+    func testAppActiveRisingEdgeWhileNotLiveForcesReconnect() async throws {
+        // No replay-end was emitted, so this model never reached `.live`.
+        let (model, connection, factory) = try await watchedModel()
+        XCTAssertNotEqual(model.connectionState, .live)
+
+        model.setAppActive(false)
+        model.setAppActive(true)
+
+        let reopened = try await factory.connection(2)
+        XCTAssertTrue(reopened.started)
+        XCTAssertEqual(connection.closeCalls.map(\.reason), ["Force reconnect"])
+    }
+
+    func testAppActiveRisingEdgeOnHiddenModelDoesNotReconnect() async throws {
+        // Same fan-out as the silent-re-assert case, on the reconnect half:
+        // an off-screen model is nobody's screen to repair, and reopening
+        // every retained socket on each unlock is a handshake storm.
+        let factory = FakeWebSocketTransportFactory()
+        let model = TerminalTestSupport.model(transportFactory: factory)
+        model.start()
+        let connection = try await factory.connection(1)
+        connection.emit(.opened)
+        XCTAssertNotEqual(model.connectionState, .live)
+
+        model.setAppActive(false)
+        model.setAppActive(true)
+
+        let stayedDown = await factory.assertNoConnection(beyond: 1)
+        XCTAssertTrue(stayedDown)
+        XCTAssertTrue(connection.closeCalls.isEmpty)
+    }
+
+    func testReturningToASuspendedSessionOpensExactlyOneSocket() async throws {
+        // The unlock drives both halves of the same edge: the watch gate resumes
+        // the stream, and the return edge that follows would find a not-live
+        // model and reconnect it again. One user gesture must buy one handshake.
+        let (model, connection, factory) = try await watchedModel()
+        connection.emit(.binary(replayEnd))
+        await waitForState(model, .live)
+
+        model.setAppActive(false)
+        connection.emit(.binary(outputFrame("spending")))
+        await waitForState(model, .suspended)
+
+        model.setAppActive(true)
+
+        let resumed = try await factory.connection(2)
+        let noThird = await factory.assertNoConnection(beyond: 2)
+        XCTAssertTrue(noThird, "the resume's own socket is the only one")
+        XCTAssertTrue(resumed.closeCalls.isEmpty)
+        XCTAssertFalse(connection.closeCalls.contains { $0.reason == "Force reconnect" })
+    }
+
+    func testTheResumeIsExemptOnlyOnceSoALaterReturnStillReconnects() async throws {
+        // The exemption belongs to one resume, not to the model. A session the
+        // relay closed as desynced is repaired only by a reconnect's ring
+        // replay, so a sticky exemption would swallow every later unlock and
+        // leave the screen mis-wrapped until the backoff — 30 s — expired.
+        let (model, connection, factory) = try await watchedModel()
+        connection.emit(.binary(replayEnd))
+        await waitForState(model, .live)
+
+        model.setAppActive(false)
+        connection.emit(.binary(outputFrame("spending")))
+        await waitForState(model, .suspended)
+
+        model.setAppActive(true)
+        let resumed = try await factory.connection(2)
+        resumed.emit(.opened)
+
+        // A second unlock over the resumed socket, which never finished its
+        // replay and so never reached `.live`.
+        model.setAppActive(false)
+        model.setAppActive(true)
+
+        let reconnected = try await factory.connection(3)
+        XCTAssertTrue(reconnected.started)
+        XCTAssertEqual(resumed.closeCalls.map(\.reason), ["Force reconnect"])
+    }
 }

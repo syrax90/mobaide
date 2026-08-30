@@ -30,8 +30,9 @@ import { forceReconnectAllEvents } from './channelRegistry';
  * Extra channels to re-open on a resume.
  *
  * The registry sweep covers the two account/agent-scoped events channels it owns.
- * A screen-scoped channel — the auto-scan monitor's — registers here instead,
- * because it is built by its consumer and `liveChannels` only models disposal.
+ * Screen-scoped channels — the auto-scan monitor's and the mounted terminal
+ * session's — register here instead, because they are built by their consumers
+ * and `liveChannels` only models disposal.
  */
 const subscribers = new Set<() => void>();
 

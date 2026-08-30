@@ -272,7 +272,7 @@ async def _reader(
                     channel_key = f"session_io:{session_id}"
                     clients = routing.get_mobile_clients(agent_id, channel_key)
                     for client in clients:
-                        _try_enqueue(client, payload, binary=True)
+                        _try_enqueue(client, payload, binary=True, ordered=True)
 
                 elif channel == CH_SESSIONS_LIST:
                     clients = routing.get_mobile_clients(agent_id, "sessions_list")
@@ -482,10 +482,15 @@ def _read_manifest(app):
     return store.read()
 
 
-def _try_enqueue(client: MobileClient, payload: bytes, *, binary: bool) -> None:
+def _try_enqueue(
+    client: MobileClient, payload: bytes, *, binary: bool, ordered: bool = False
+) -> None:
     """Non-blocking enqueue to a mobile client's send queue.
 
-    Drops the frame silently if the queue is full (slow consumer protection).
+    Drops the frame if the queue is full. On an ``ordered`` channel that drop is
+    unrecoverable, so the client is flagged desynced instead and its endpoint closes
+    the socket, whose reconnect replays the ring. Unordered channels carry JSON
+    state the client reconciles from a snapshot on connect, so they keep dropping.
     """
     try:
         if binary:
@@ -493,10 +498,20 @@ def _try_enqueue(client: MobileClient, payload: bytes, *, binary: bool) -> None:
         else:
             client.send_queue.put_nowait(payload.decode("utf-8"))
     except asyncio.QueueFull:
-        # No log: this is the agent→mobile fan-out hot path, and a slow
-        # mobile would turn every dropped frame into a log line. The
-        # counter surfaces the rate in monitoring.sample instead.
+        # No log on the unordered path: this is the agent→mobile fan-out hot
+        # path, and a slow mobile would turn every dropped frame into a log
+        # line. The counter surfaces the rate in monitoring.sample instead.
         record_send_queue_drop("agent_to_mobile")
+        if ordered and not client.desynced.is_set():
+            # Once per connection: the endpoint is about to close it, and
+            # every frame still in flight would otherwise log again.
+            record_send_queue_drop("stream_desync_close")
+            client.desynced.set()
+            logger.warning(
+                "relay.stream_desync device=%s — session send queue full, "
+                "closing so the client resyncs on reconnect",
+                client.device_id,
+            )
 
 
 def _enqueue_attach(conn, session_id: str) -> None:

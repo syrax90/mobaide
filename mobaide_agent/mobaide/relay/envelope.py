@@ -30,6 +30,10 @@ SUPPORTED_PROTOCOL_VERSIONS: tuple[int, ...] = (6, 7)
 
 # Application-private close codes (RFC 6455 §7.4.2).
 PROTOCOL_INCOMPATIBLE_CLOSE_CODE = 4002
+# Both packages emit it — the relay when a mobile's send queue fills, the
+# agent when a direct-WS fan-out subscription overflows — so it lives here
+# with the other code CI keeps in lockstep across the two envelope modules.
+WS_CLOSE_STREAM_DESYNC = 4013
 
 _VALID_CHANNELS = {
     CH_SESSION_IO,

@@ -2117,10 +2117,10 @@ class RelayClient:
         from mobaide.agent.ws.session_io import ensure_fanout
 
         fanout = ensure_fanout(self._app_state, session)
-        consumer_queue = fanout.subscribe()
+        subscription = fanout.subscribe()
 
         task = asyncio.create_task(
-            self._session_output_pump(sid, consumer_queue, fanout, ws),
+            self._session_output_pump(sid, subscription, fanout, ws),
             name=f"relay-bridge-{sid}",
         )
         self._bridges[sid] = task
@@ -2128,14 +2128,20 @@ class RelayClient:
     async def _session_output_pump(
         self,
         session_id: str,
-        queue: asyncio.Queue,
+        subscription: Any,
         fanout: Any,
         ws: ClientConnection,
     ) -> None:
-        """Pump session events and send as CH_SESSION_IO envelopes."""
+        """Pump session events and send as CH_SESSION_IO envelopes.
+
+        ``subscription.overflowed`` is deliberately not acted on here: in relay
+        mode this is the session's single bridge, so an overflow means the shared
+        agent tunnel stalled and recovery is agent-wide rather than per-client.
+        The relay independently disconnects any mobile whose own queue overflows.
+        """
         try:
             while True:
-                event: SessionEvent = await queue.get()
+                event: SessionEvent = await subscription.queue.get()
                 if self._ws is None:
                     break
                 try:
@@ -2166,7 +2172,7 @@ class RelayClient:
         except asyncio.CancelledError:
             pass
         finally:
-            fanout.unsubscribe(queue)
+            fanout.unsubscribe(subscription)
             self._bridges.pop(session_id, None)
 
     async def _watch_session_changes(self, ws: ClientConnection) -> None:

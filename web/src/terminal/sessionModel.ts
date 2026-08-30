@@ -38,6 +38,7 @@ import { useConnectionStore } from '../realtime/connectionStore';
 import { registerDisposable, unregisterDisposable } from '../realtime/liveChannels';
 import { onTabVisibility, tabHidden } from '../realtime/tabVisibility';
 import { onWindowFocus } from '../realtime/windowFocus';
+import { onResume } from '../realtime/resumeOnFocus';
 import { realScheduler, type Scheduler } from '../realtime/webSocketChannel';
 import { useToastStore } from '../stores/toastStore';
 import { shouldSuspend, type BackgroundSpend } from './terminalSuspend';
@@ -211,6 +212,13 @@ export class TerminalSessionModel {
   /** Live output charged since then. Replay spans are not charged. */
   private unwatchedBytes = 0;
   private suspended = false;
+  /** Consumed by the resume hook: a watch-gate resume already opened a socket,
+   * so the resume edge that follows must not force-reconnect a second one
+   * (iOS `resumedFromSuspend`, Android `TerminalViewModel.resumedFromSuspend`).
+   * A flag rather than an ordering assumption: `resumeOnFocus` and
+   * `tabVisibility` both listen on `document`, and which fires first is fixed
+   * only by the order two `useEffect`s run in `RealtimeProvider`. */
+  private resumedFromSuspend = false;
 
   constructor(
     agentId: string,
@@ -264,6 +272,7 @@ export class TerminalSessionModel {
     this.wireChannel();
     this.wireWatchGate();
     this.wireSwitchReassert();
+    this.wireResumeReconnect();
 
     registerDisposable(this);
     this.io.channel.connect();
@@ -553,6 +562,38 @@ export class TerminalSessionModel {
   }
 
   /**
+   * The other half of coming back: a socket already known dead when the tab
+   * returns. A session the relay closed as desynced (its PTY stream lost
+   * frames) is repaired only by the reconnect's ring replay, and without this
+   * the model sits out the channel's backoff first.
+   *
+   * Narrower than `forceReconnectAllEvents()`, which this sweep runs for the
+   * events channels: that one reconnects unconditionally because a half-open
+   * events socket costs nothing to replace, whereas a session reconnect costs a
+   * full ring replay that the relay fans out to *every* client on the session.
+   * So a `'live'` socket is deliberately left alone here even though a
+   * half-open one is indistinguishable from a healthy one in a browser
+   * (`resumeOnFocus`'s own header) — paying that replay on a guess is the wrong
+   * trade, and a genuinely dead socket surfaces as a close soon enough. A
+   * suspended model belongs to the watch gate, which is about to open a socket
+   * this would race (iOS `resyncOnReturn`, Android `onScreenVisible`).
+   */
+  private wireResumeReconnect(): void {
+    this.disposers.push(
+      onResume(() => {
+        if (this.disposed || this.suspended) return;
+        if (this.resumedFromSuspend) {
+          this.resumedFromSuspend = false;
+          return;
+        }
+        if (mountedTerminal() !== this.key) return;
+        if (this.replay.connection === 'live') return;
+        this.io.channel.forceReconnect();
+      }),
+    );
+  }
+
+  /**
    * Live-only on purpose: every other connection state re-asserts on its own
    * path into `'live'` (socket open, first binary, replayEnd) — including a
    * resume from suspension, which sits at `'connecting'` until its first
@@ -630,6 +671,7 @@ export class TerminalSessionModel {
   resume(): void {
     if (!this.suspended || this.disposed) return;
     this.suspended = false;
+    this.resumedFromSuspend = true;
     this.unwatchedBytes = 0;
     // The clock as well as the counter. `retryConnection()` reaches here on a
     // model that is still unwatched, and leaving the old stamp standing would
@@ -678,6 +720,10 @@ export class TerminalSessionModel {
           this.settleReplayPaint();
           break;
         case 'enterLive':
+          // Clear here as well as on consumption (iOS/Android parity): a resume
+          // whose resume edge never arrives must not leave the latch armed to
+          // swallow the next one.
+          this.resumedFromSuspend = false;
           this.assertSize();
           break;
       }

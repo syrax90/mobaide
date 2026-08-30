@@ -12,7 +12,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-from central_server.relay.envelope import CH_CONTROL, PROTOCOL_VERSION, decode
+from central_server.relay.envelope import (
+    CH_CONTROL,
+    CH_SESSION_IO,
+    CH_SESSIONS_LIST,
+    PROTOCOL_VERSION,
+    decode,
+    encode,
+)
 from central_server.relay.routing import AgentConnection
 
 
@@ -546,3 +553,238 @@ class TestHealthEndpoint:
         data = resp.json()
         assert data["status"] == "ok"
         assert "agents_online" not in data
+
+
+class TestOrderedStreamDesync:
+    """The slow-consumer policy on the PTY channel drops the *connection*.
+
+    A ``session_io`` stream is ordered bytes with no sequence number, and the
+    protocol has no resync frame, so one silently dropped frame is
+    unrecoverable.
+    """
+
+    @staticmethod
+    def _saturated_client(device_id: str = "dev-slow"):
+        """A mobile client whose send queue has stopped being drained."""
+        from central_server.relay.routing import MobileClient
+
+        client = MobileClient(device_id=device_id, websocket=_mock_agent_ws())
+        client.send_queue = asyncio.Queue(maxsize=1)
+        client.send_queue.put_nowait(b"already-full")
+        return client
+
+    def test_ordered_drop_marks_client_desynced_and_still_counts(self):
+        from central_server.monitoring import SEND_QUEUE_DROPS
+        from central_server.relay.agent_ws import _try_enqueue
+
+        client = self._saturated_client()
+        before = SEND_QUEUE_DROPS["agent_to_mobile"]
+
+        _try_enqueue(client, b"pty-bytes", binary=True, ordered=True)
+
+        assert client.desynced.is_set()
+        # Still counted: monitoring.sample must keep surfacing the drop rate,
+        # and the frame already queued is untouched.
+        assert SEND_QUEUE_DROPS["agent_to_mobile"] == before + 1
+        assert client.send_queue.qsize() == 1
+        assert client.send_queue.get_nowait() == b"already-full"
+
+    def test_unordered_drop_counts_without_marking_desynced(self):
+        """The JSON channels must keep their silent-drop contract: their
+        clients resynchronize from the snapshot they get on connect, so
+        closing the socket would buy a reconnect storm for nothing.
+        """
+        from central_server.monitoring import SEND_QUEUE_DROPS
+        from central_server.relay.agent_ws import _try_enqueue
+
+        client = self._saturated_client()
+        before = SEND_QUEUE_DROPS["agent_to_mobile"]
+
+        _try_enqueue(client, b'[{"session_id": "s1"}]', binary=False)
+
+        assert not client.desynced.is_set()
+        assert SEND_QUEUE_DROPS["agent_to_mobile"] == before + 1
+        assert client.send_queue.get_nowait() == b"already-full"
+
+    def test_burst_of_ordered_drops_warns_once(self, caplog):
+        """A frozen phone stays full for every frame still in flight.  The
+        flag is set once per connection and carries a single warning —
+        one log line per dropped frame would flood the fan-out hot path,
+        which is exactly why the unordered branch logs nothing at all.
+        """
+        import logging
+
+        from central_server.monitoring import SEND_QUEUE_DROPS
+        from central_server.relay.agent_ws import _try_enqueue
+
+        client = self._saturated_client()
+        before = SEND_QUEUE_DROPS["agent_to_mobile"]
+
+        with caplog.at_level(logging.WARNING, logger="central_server.relay.agent_ws"):
+            for _ in range(5):
+                _try_enqueue(client, b"pty-bytes", binary=True, ordered=True)
+
+        assert client.desynced.is_set()
+        assert SEND_QUEUE_DROPS["agent_to_mobile"] == before + 5
+        desync_warnings = [
+            r for r in caplog.records
+            if r.levelno >= logging.WARNING and "relay.stream_desync" in r.getMessage()
+        ]
+        assert len(desync_warnings) == 1
+
+    async def test_session_io_frame_to_full_queue_closes_mobile_with_4013(
+        self, app, registered_agent
+    ):
+        """Both real sockets: the agent pushes a PTY frame for a mobile that
+        stopped reading, and the mobile's endpoint ends the connection with
+        ``WS_CLOSE_STREAM_DESYNC`` instead of holing its byte stream.
+        """
+        from starlette.websockets import WebSocketDisconnect
+
+        from central_server.relay.routing import WS_CLOSE_STREAM_DESYNC
+
+        agent_id, raw_token = registered_agent
+        access = await _mobile_access_token(app, agent_id)
+
+        tc = TestClient(app)
+        with tc.websocket_connect("/ws/agent-tunnel") as tunnel:
+            tunnel.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": PROTOCOL_VERSION,
+            }))
+            tunnel.receive_text()  # auth_ok
+
+            with pytest.raises(WebSocketDisconnect) as excinfo:
+                with tc.websocket_connect(
+                    f"/relay/ws/session/{agent_id}/s-desync?token={access}",
+                ) as mobile:
+                    await asyncio.sleep(0.05)
+                    clients = app.state.routing.get_mobile_clients(
+                        agent_id, "session_io:s-desync"
+                    )
+                    assert len(clients) == 1
+                    client = next(iter(clients))
+                    # The writer task is parked on the queue it was handed at
+                    # connect, so swapping a full one in models a peer that has
+                    # stopped draining — the frozen-phone case.
+                    client.send_queue = asyncio.Queue(maxsize=1)
+                    client.send_queue.put_nowait(b"already-full")
+
+                    tunnel.send_bytes(
+                        encode(CH_SESSION_IO, "s-desync", b"pty-bytes")
+                    )
+                    mobile.receive_bytes()
+
+        assert excinfo.value.code == WS_CLOSE_STREAM_DESYNC
+
+    async def test_sessions_list_frame_to_full_queue_keeps_client(
+        self, app, registered_agent
+    ):
+        """Same saturation on the fan-out's other branch: the client keeps its
+        connection and is never flagged, so ``relay_sessions_list`` has
+        nothing to close.
+        """
+        agent_id, raw_token = registered_agent
+
+        client = self._saturated_client()
+        app.state.routing.register_mobile(agent_id, "sessions_list", client)
+
+        tc = TestClient(app)
+        with tc.websocket_connect("/ws/agent-tunnel") as tunnel:
+            tunnel.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": PROTOCOL_VERSION,
+            }))
+            tunnel.receive_text()  # auth_ok
+
+            tunnel.send_bytes(
+                encode(CH_SESSIONS_LIST, "", b'[{"session_id": "s1"}]')
+            )
+            await asyncio.sleep(0.05)
+
+        assert not client.desynced.is_set()
+        assert client.send_queue.get_nowait() == b"already-full"
+
+    def test_desync_close_is_counted_once_for_a_whole_overflow_burst(self):
+        """``agent_to_mobile`` counts frames; ``stream_desync_close`` counts
+        connections.  The second is the number an operator needs during an
+        incident, and one frozen phone is one severed connection however
+        many frames pile up behind it.
+        """
+        from central_server.monitoring import SEND_QUEUE_DROPS
+        from central_server.relay.agent_ws import _try_enqueue
+
+        client = self._saturated_client()
+        frames_before = SEND_QUEUE_DROPS["agent_to_mobile"]
+        closes_before = SEND_QUEUE_DROPS["stream_desync_close"]
+
+        for _ in range(4):
+            _try_enqueue(client, b"pty-bytes", binary=True, ordered=True)
+
+        assert SEND_QUEUE_DROPS["agent_to_mobile"] == frames_before + 4
+        assert SEND_QUEUE_DROPS["stream_desync_close"] == closes_before + 1
+
+    def test_unordered_drop_never_counts_a_desync_close(self):
+        """The JSON channels sever nothing, so the connection counter has to
+        stay flat however hard they drop; otherwise the series an operator
+        would page on is really the fan-out's ordinary backpressure.
+        """
+        from central_server.monitoring import SEND_QUEUE_DROPS
+        from central_server.relay.agent_ws import _try_enqueue
+
+        client = self._saturated_client()
+        closes_before = SEND_QUEUE_DROPS["stream_desync_close"]
+
+        for _ in range(4):
+            _try_enqueue(client, b'[{"session_id": "s1"}]', binary=False)
+
+        assert SEND_QUEUE_DROPS["stream_desync_close"] == closes_before
+
+    async def test_desync_close_releases_the_queue_before_it_waits(
+        self, app, registered_agent
+    ):
+        """The close is bounded but not instant, and it is awaited on a peer that has
+        already proven it is not reading. Holding the backlog across that window
+        would pin a queue's worth of PTY frames on a socket that is going away, so
+        the release happens first.
+        """
+        from starlette.websockets import WebSocketDisconnect
+
+        from central_server.relay.routing import WS_CLOSE_STREAM_DESYNC
+
+        agent_id, raw_token = registered_agent
+        access = await _mobile_access_token(app, agent_id)
+
+        tc = TestClient(app)
+        with tc.websocket_connect("/ws/agent-tunnel") as tunnel:
+            tunnel.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": PROTOCOL_VERSION,
+            }))
+            tunnel.receive_text()  # auth_ok
+
+            with pytest.raises(WebSocketDisconnect) as excinfo:
+                with tc.websocket_connect(
+                    f"/relay/ws/session/{agent_id}/s-release?token={access}",
+                ) as mobile:
+                    await asyncio.sleep(0.05)
+                    client = next(iter(app.state.routing.get_mobile_clients(
+                        agent_id, "session_io:s-release"
+                    )))
+                    client.send_queue = asyncio.Queue(maxsize=2)
+                    client.send_queue.put_nowait(b"stranded-1")
+                    client.send_queue.put_nowait(b"stranded-2")
+
+                    tunnel.send_bytes(
+                        encode(CH_SESSION_IO, "s-release", b"pty-bytes")
+                    )
+                    mobile.receive_bytes()
+
+        assert excinfo.value.code == WS_CLOSE_STREAM_DESYNC
+        assert client.send_queue.empty()

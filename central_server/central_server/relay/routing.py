@@ -16,6 +16,9 @@ from fastapi import WebSocket
 
 from ..monitoring import record_send_queue_drop
 from .envelope import CH_CONTROL, encode
+# Re-exported for `mobile_ws` and the relay tests, which import every close
+# code from this module. Unused here, hence the marker.
+from .envelope import WS_CLOSE_STREAM_DESYNC  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,9 @@ WS_CLOSE_ADMIN_REVOKED = 4010  # admin unregistered the user/agent
 # 4010 as "admin destructively unregistered", a transient agent restart
 # would have permanently killed every per-agent socket on the device.
 WS_CLOSE_AGENT_TRANSIENT_OFFLINE = 4012
+
+# 4013 WS_CLOSE_STREAM_DESYNC is defined in envelope.py, not here: the agent
+# emits it too, so CI keeps the paired modules in lockstep. See PROTOCOL.md.
 
 
 async def safe_send_reason_and_close(
@@ -151,6 +157,9 @@ class MobileClient:
     send_queue: asyncio.Queue[bytes | str] = field(
         default_factory=lambda: asyncio.Queue(maxsize=_MOBILE_QUEUE_SIZE)
     )
+    # Set once a frame on an ordered channel could not be queued; the
+    # channel's endpoint waits on it and closes with WS_CLOSE_STREAM_DESYNC.
+    desynced: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 @dataclass(eq=False)
