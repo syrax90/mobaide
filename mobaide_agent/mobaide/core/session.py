@@ -4,6 +4,7 @@ import asyncio
 import collections
 import logging
 import re
+from dataclasses import dataclass, field
 import sys
 import time
 from collections.abc import Iterator, Mapping
@@ -62,25 +63,64 @@ _PRIVATE_MODE_RE = re.compile(rb"\x1b\[\?([\d;]*)([hl])")
 # of the stream (the bytes themselves are untouched).
 _PRIVATE_MODE_STRADDLE = 32
 
-# Any of these means the child is on the alternate screen: it owns the whole
-# grid and paints absolute positions, so replaying bytes laid out at a stale
-# width desynchronizes it. Off the alternate screen the replay is line-oriented
-# text the client's emulator re-wraps, and dropping it would delete scrollback.
+# Three aliases for one thing: which screen buffer is selected. A program may
+# enter with one and leave with another, so they are tracked as a single state
+# rather than three flags — independent flags would leave the buffer "on"
+# after `ESC[?1049h` … `ESC[?47l` and put a fresh client back on the alternate
+# screen. On the alternate screen the program owns the whole grid and paints
+# absolute positions, so replaying bytes laid out at a stale grid desynchronizes
+# it; off it the replay is line-oriented text the client's emulator re-wraps,
+# and dropping it would delete usable scrollback.
 _ALT_SCREEN_MODES = (1049, 1047, 47)
+_DEFAULT_ALT_SCREEN_MODE = 1049
 
-# Modes worth restoring ahead of a cut replay. When the ring is cut at a width
-# change, the retained suffix no longer contains the sequences that established
-# these — the client's replay wipe clears the display, not the emulator's mode
-# state — so the suffix would be parsed with the wrong screen buffer and the
-# wrong input semantics. Deliberately a curated set rather than every private
-# mode: these are the ones whose absence changes how the retained bytes render
-# or how the user's input is encoded.
+# Modes worth restoring at the head of a replay span. The sequences that
+# established them may sit behind the span's start — cut at a grid change, or
+# trimmed away as the ring rolled — and a client's replay wipe clears the
+# display, not the emulator's mode state. Without them the span is parsed with
+# the wrong screen buffer, the wrong input encoding, or the wrong key
+# encoding. Curated rather than exhaustive: these are the modes whose absence
+# changes how the retained bytes render or how the user's input is encoded.
 _RESTORED_MODES = (
-    *_ALT_SCREEN_MODES,
+    1,     # DECCKM — application cursor keys (arrows as SS3, not CSI)
     25,    # cursor visibility
     2004,  # bracketed paste
     1000, 1002, 1003, 1006, 1015,  # mouse reporting
 )
+
+@dataclass
+class _TerminalModes:
+    """The private-mode state a replay span has to start in.
+
+    Two instances are kept per session: one following the child live, and one
+    pinned to the start of the current replay span. The span's copy is what a
+    reconnecting client needs, because the sequences that established it may
+    sit behind the span's start — cut at a grid change, or trimmed away as the
+    ring rolled.
+    """
+
+    alt_screen: bool = False
+    alt_screen_mode: int = _DEFAULT_ALT_SCREEN_MODE
+    modes: dict[int, bool] = field(default_factory=dict)
+
+    def copy(self) -> "_TerminalModes":
+        return _TerminalModes(
+            alt_screen=self.alt_screen,
+            alt_screen_mode=self.alt_screen_mode,
+            modes=dict(self.modes),
+        )
+
+    def restore_prefix(self) -> bytes:
+        """DECSET/DECRST sequences re-establishing this state."""
+        parts = [
+            b"\x1b[?%dh" % mode if enabled else b"\x1b[?%dl" % mode
+            for mode, enabled in sorted(self.modes.items())
+        ]
+        # Last, so it cannot be undone by an alias ordering ahead of it.
+        if self.alt_screen:
+            parts.append(b"\x1b[?%dh" % self.alt_screen_mode)
+        return b"".join(parts)
+
 
 _RING_SCRUB_RE = re.compile(
     rb"\x1b\[\?[\d;]*c"
@@ -189,11 +229,16 @@ class TerminalSession:
         # affect wrapping.
         self._ring_cols = config.cols
         self._ring_width_start = 0
-        # Private-mode state, tracked for the replay cut (see `_track_modes`).
-        self._modes: dict[int, bool] = {}
+        # Private-mode state: one copy following the child, one pinned to the
+        # start of the replay span (see `_track_modes` and `_span`).
+        self._live = _TerminalModes()
+        self._span = _TerminalModes()
         self._mode_tail = b""
-        # Sequences that re-establish the mode state a cut replay starts in.
-        self._ring_width_prefix = b""
+        # A grid change waits for the output that replaces the old span. Applied
+        # on the next append, so a child that dies before repainting keeps the
+        # screen it died showing rather than replaying nothing.
+        self._pending_cut: int | None = None
+        self._ring_rows = config.rows
         self._event_queue: asyncio.Queue[SessionEvent] = asyncio.Queue(
             maxsize=EVENT_QUEUE_MAXSIZE,
         )
@@ -435,13 +480,19 @@ class TerminalSession:
             )
 
     def _track_modes(self, data: bytes) -> None:
-        """Follow the private modes a cut replay would otherwise lose.
+        """Follow the private modes a replay span would otherwise start without.
 
         Stateful across reads, like the DA and OSC processors on the same
         bytes: a `?1049h` split across two 4 KiB reads still counts.
         """
         window = self._mode_tail + data
-        for params, action in _PRIVATE_MODE_RE.findall(window):
+        self._apply_modes(window, self._live)
+        self._mode_tail = window[-_PRIVATE_MODE_STRADDLE:]
+
+    @staticmethod
+    def _apply_modes(data: bytes, state: _TerminalModes) -> None:
+        """Fold every DECSET/DECRST in ``data`` into ``state``."""
+        for params, action in _PRIVATE_MODE_RE.findall(data):
             enabled = action == b"h"
             for raw in params.split(b";"):
                 if not raw:
@@ -450,20 +501,19 @@ class TerminalSession:
                     mode = int(raw)
                 except ValueError:  # pragma: no cover — regex admits digits only
                     continue
-                if mode in _RESTORED_MODES:
-                    self._modes[mode] = enabled
-        self._mode_tail = window[-_PRIVATE_MODE_STRADDLE:]
+                if mode in _ALT_SCREEN_MODES:
+                    # One state, whichever alias set it: a program can enter
+                    # with 1049 and leave with 47, and they select the same
+                    # buffer. The alias is remembered so the restore prefix
+                    # speaks the dialect the program itself used.
+                    state.alt_screen = enabled
+                    state.alt_screen_mode = mode
+                elif mode in _RESTORED_MODES:
+                    state.modes[mode] = enabled
 
     @property
     def _alt_screen(self) -> bool:
-        return any(self._modes.get(mode, False) for mode in _ALT_SCREEN_MODES)
-
-    def _mode_restore_prefix(self) -> bytes:
-        """DECSET/DECRST sequences re-establishing the current mode state."""
-        return b"".join(
-            b"\x1b[?%dh" % mode if enabled else b"\x1b[?%dl" % mode
-            for mode, enabled in sorted(self._modes.items())
-        )
+        return self._live.alt_screen
 
     def _append_ring(self, data: bytes) -> None:
         # Scrub terminal query/response bytes in-line so the ring is always
@@ -474,10 +524,24 @@ class TerminalSession:
         cleaned = _RING_SCRUB_RE.sub(b"", data)
         if not cleaned:
             return
+        if self._pending_cut is not None:
+            # The replacement output is here, so the scheduled cut takes effect
+            # and the span starts in the mode state the child is in right now.
+            self._ring_width_start = min(self._pending_cut, len(self._ring))
+            self._span = self._live.copy()
+            self._pending_cut = None
         self._ring += cleaned
         overflow = len(self._ring) - self._ring_cap
         if overflow > 0:
+            dropped = bytes(self._ring[:overflow])
             del self._ring[:overflow]
+            # Whatever the trim ate *inside* the span is state the span no
+            # longer establishes for itself, so fold it into the span's copy.
+            # Without this a long-running session silently loses the modes its
+            # replay depends on, exactly as a cut does.
+            eaten = dropped[self._ring_width_start :]
+            if eaten:
+                self._apply_modes(eaten, self._span)
             self._ring_width_start = max(0, self._ring_width_start - overflow)
 
     def get_ring(self) -> bytes:
@@ -517,9 +581,9 @@ class TerminalSession:
         """
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive: {chunk_size}")
-        snapshot = bytes(self._ring[self._ring_width_start :])
-        if self._ring_width_start:
-            snapshot = self._ring_width_prefix + snapshot
+        snapshot = self._span.restore_prefix() + bytes(
+            self._ring[self._ring_width_start :]
+        )
         for start in range(0, len(snapshot), chunk_size):
             yield snapshot[start : start + chunk_size]
 
@@ -663,38 +727,42 @@ class TerminalSession:
         await self.write_submit(data)
 
     async def resize(self, rows: int, cols: int) -> None:
-        """Resize the PTY terminal, and mark where the new width starts.
+        """Resize the PTY terminal, and schedule the replay cut it implies.
 
         Three conditions, each load-bearing:
 
-        * **Columns changed.** Rows do not affect wrapping.
-        * **The child is on the alternate screen.** There it paints absolute
-          positions and old-width bytes desynchronize its cursor arithmetic for
-          the rest of the span, which no repaint after the replay repairs. On
-          the normal screen the replay is line-oriented text the client's
-          emulator re-wraps at the current width, so it stays readable and
-          dropping it would delete usable scrollback for no gain.
+        * **The grid changed.** Either axis: on the alternate screen a program
+          paints absolute positions, so rows drive cursor addresses, scrolling
+          regions and bottom-anchored UI exactly as columns drive wrapping.
+          Rows change routinely right after create, where every client's row
+          estimate includes chrome the real terminal subtracts.
+        * **The child is on the alternate screen.** There, stale-grid bytes
+          desynchronize its arithmetic for the rest of the span and no repaint
+          after the replay repairs it. On the normal screen the replay is
+          line-oriented text the client's emulator re-wraps, so it stays
+          readable and dropping it would delete usable scrollback for no gain.
         * **The session is running.** A stopped or crashed child will never
           repaint, so cutting its history just blanks its last output. The
           backend can still accept a resize after the child dies — the master
           fd outlives it until the liveness sweep — so this has to be explicit.
+
+        The cut is *scheduled*, not applied: it takes effect when the output
+        that replaces the old span arrives. A child that dies between the
+        resize and its repaint therefore keeps the screen it died showing,
+        which the state check alone cannot cover — death can follow the resize
+        as easily as precede it.
         """
         self._backend.resize(rows, cols)
         if (
-            cols != self._ring_cols
+            (cols != self._ring_cols or rows != self._ring_rows)
             and self._alt_screen
             and self._state == SessionState.RUNNING
         ):
-            self._ring_width_start = len(self._ring)
-            # The sequences that established the current modes are now behind
-            # the cut, and the client's replay wipe clears the display, not the
-            # emulator's mode state. Without this the retained paint is parsed
-            # on the primary screen, with the wrong scrolling and the wrong
-            # input encoding.
-            self._ring_width_prefix = self._mode_restore_prefix()
-        # Recorded either way: the ring's current width is a fact about the PTY,
-        # not about whether this particular change moved the mark.
+            self._pending_cut = len(self._ring)
+        # Recorded either way: the ring's current grid is a fact about the PTY,
+        # not about whether this particular change scheduled a cut.
         self._ring_cols = cols
+        self._ring_rows = rows
 
     def get_scrollback(self) -> list[str]:
         """Return the current scrollback buffer as decoded strings.

@@ -674,18 +674,22 @@ class TestIterRingChunks:
         assert len(chunks[1]) == 10
 
 
-def _width_config(cols: int, ring_buffer_bytes: int = 1024) -> SessionConfig:
+def _width_config(
+    cols: int, ring_buffer_bytes: int = 1024, rows: int = 24
+) -> SessionConfig:
     return SessionConfig(
         session_id="width-session",
         command=["does-not-run"],
-        rows=24,
+        rows=rows,
         cols=cols,
         scrollback_size=100,
         ring_buffer_bytes=ring_buffer_bytes,
     )
 
 
-def _width_session(cols: int = 80, ring_buffer_bytes: int = 1024) -> TerminalSession:
+def _width_session(
+    cols: int = 80, ring_buffer_bytes: int = 1024, rows: int = 24
+) -> TerminalSession:
     """A never-started session that can still take a ``resize()``.
 
     Unlike the other ring tests this one needs a backend double: ``resize()``
@@ -693,7 +697,7 @@ def _width_session(cols: int = 80, ring_buffer_bytes: int = 1024) -> TerminalSes
     scripted double's ``read()`` is never called because no reader loop runs.
     """
     session = TerminalSession(
-        _width_config(cols, ring_buffer_bytes),
+        _width_config(cols, ring_buffer_bytes, rows),
         backend=cast(PtyBackend, _ScriptedPtyBackend([])),
     )
     session._state = SessionState.RUNNING
@@ -721,7 +725,7 @@ def _replay_body(session: TerminalSession) -> bytes:
     The prefix is asserted on its own in ``test_a_cut_replay_restores_the_modes``;
     everywhere else the question is which *output* survived the cut.
     """
-    return _replay(session).removeprefix(session._ring_width_prefix)
+    return _replay(session).removeprefix(session._span.restore_prefix())
 
 
 class TestRingWidthMark:
@@ -797,6 +801,7 @@ class TestRingWidthMark:
         # 80-column run are trimmed, and the mark follows them from 4 to 2.
         assert session.get_ring() == b"AABBBBCC"
         assert _replay_body(session) == b"BBBBCC"
+        assert session._ring_width_start == 2
 
     async def test_normal_screen_history_survives_a_width_change(self) -> None:
         # Off the alternate screen the replay is line-oriented text, which the
@@ -860,7 +865,7 @@ class TestRingWidthMark:
 
         session._track_modes(b"\x1b[?1049;25h")
         assert session._alt_screen
-        assert session._modes[25] is True
+        assert session._live.modes[25] is True
 
         session._track_modes(b"\x1b[?1049;25l")
         assert not session._alt_screen
@@ -874,7 +879,93 @@ class TestRingWidthMark:
         session._track_modes(b"9;2004h")
 
         assert session._alt_screen
-        assert session._modes[2004] is True
+        assert session._live.modes[2004] is True
+
+    async def test_the_prefix_survives_an_overflow_that_clamps_the_mark(self) -> None:
+        # The trim can drive the mark to zero while the retained bytes still
+        # begin after the transitions that established the modes. Gating the
+        # prefix on a non-zero mark would drop it exactly then, and a fresh
+        # emulator would parse the repaint on the primary screen.
+        session = _on_alt_screen(_width_session(cols=80, ring_buffer_bytes=32))
+        session._track_modes(b"\x1b[?2004h")
+        session._append_ring(b"old paint")
+
+        await session.resize(24, 55)
+        session._append_ring(b"X" * 60)
+
+        assert session._ring_width_start == 0
+        replay = _replay(session)
+        assert b"\x1b[?1049h" in replay
+        assert b"\x1b[?2004h" in replay
+
+    async def test_modes_trimmed_out_of_the_span_are_folded_into_the_prefix(self) -> None:
+        # A long-running session loses its own mode transitions off the head as
+        # the ring rolls. The span has to carry them even when no cut happened,
+        # or the replay is parsed without them.
+        session = _width_session(cols=80, ring_buffer_bytes=16)
+        session._track_modes(b"\x1b[?1049h")
+        session._append_ring(b"\x1b[?1049h")
+
+        session._append_ring(b"Z" * 24)
+
+        assert b"\x1b[?1049h" in _replay(session)
+
+    async def test_application_cursor_mode_is_restored(self) -> None:
+        # DECCKM decides whether arrows arrive as SS3 or CSI. A pager that
+        # enabled it before the cut would otherwise receive the wrong ones.
+        session = _on_alt_screen(_width_session(cols=80))
+        session._track_modes(b"\x1b[?1h")
+        session._append_ring(b"paint")
+
+        await session.resize(24, 55)
+        session._append_ring(b"repaint")
+
+        assert b"\x1b[?1h" in session._span.restore_prefix()
+
+    async def test_the_screen_aliases_are_one_state(self) -> None:
+        # 47, 1047 and 1049 select the same buffer, so a program may enter with
+        # one and leave with another. Tracked apart, the exit would be missed:
+        # a later resize would cut primary-screen history, and the prefix would
+        # put a fresh client back on the alternate buffer.
+        session = _width_session(cols=80)
+
+        session._track_modes(b"\x1b[?1049h")
+        assert session._alt_screen
+        session._track_modes(b"\x1b[?47l")
+        assert not session._alt_screen
+
+        session._append_ring(b"primary-screen history")
+        await session.resize(24, 55)
+        session._append_ring(b" continues")
+
+        replay = _replay(session)
+        assert b"primary-screen history" in replay
+        assert b"1049h" not in replay
+
+    async def test_a_rows_only_change_cuts_on_the_alternate_screen(self) -> None:
+        # There a program paints absolute positions, so rows drive cursor
+        # addresses and scrolling regions exactly as columns drive wrapping —
+        # and rows change routinely right after create, where every client's
+        # row estimate still includes chrome the terminal subtracts.
+        session = _on_alt_screen(_width_session(cols=80, rows=54))
+        session._append_ring(b"painted for fifty-four rows")
+
+        await session.resize(40, 80)
+        session._append_ring(b"painted for forty rows")
+
+        assert _replay_body(session) == b"painted for forty rows"
+
+    async def test_a_child_that_dies_before_repainting_keeps_its_screen(self) -> None:
+        # The state check cannot cover this on its own: death can follow the
+        # resize as easily as precede it, and a session that dies in between
+        # would replay nothing but a mode prefix.
+        session = _on_alt_screen(_width_session(cols=80))
+        session._append_ring(b"what it died showing")
+
+        await session.resize(24, 55)
+        session._state = SessionState.CRASHED
+
+        assert b"what it died showing" in _replay(session)
 
     async def test_head_trim_clamps_the_mark_at_zero(self) -> None:
         # An overflow larger than the mark would drive it negative, and a

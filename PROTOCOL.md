@@ -524,19 +524,28 @@ cadence; they do **not** gate compatibility.
     → (live frames…)``. ``N >= 1`` always; an empty ring still emits one
     empty ``FRAME_OUTPUT`` between the markers so clients can rely on at
     least one output frame inside the replay span.
-  * **The replay span is width-homogeneous.** Ring bytes carry no width of
-    their own and the client renders them at whatever grid it has now, so a
-    span mixing column counts desynchronizes a full-screen TUI's cursor
-    arithmetic for the rest of it — and nothing repairs that, because a
-    same-size ``TIOCSWINSZ`` raises no ``SIGWINCH``. The agent therefore
-    replays only from the last column change made while the child was on the
-    alternate screen (``TerminalSession._ring_width_start``); history older
-    than that cut is not sent. Off the alternate screen no cut is made, since
-    a line-oriented replay re-wraps correctly at any width and dropping it
-    would delete usable scrollback. Clients need no change for this — the
-    frame sequence is unaffected — but a replay can legitimately be shorter
-    than the ring, and a session whose width has just changed can replay
-    almost nothing.
+  * **The replay span is grid-homogeneous, and starts with its mode state.**
+    Ring bytes carry no grid of their own and the client renders them at
+    whatever grid it has now, so a span mixing grids desynchronizes a
+    full-screen TUI's cursor arithmetic for the rest of it — and nothing
+    repairs that, because a same-size ``TIOCSWINSZ`` raises no ``SIGWINCH``.
+    The agent therefore replays only from the last grid change (either axis:
+    on the alternate screen rows drive absolute cursor addresses and scrolling
+    regions as columns drive wrapping) made while the child was on the
+    alternate screen; history older than that cut is not sent. Off the
+    alternate screen no cut is made, since a line-oriented replay re-wraps
+    correctly and dropping it would delete usable scrollback. The cut takes
+    effect when the output replacing the old span arrives, so a child that
+    dies before repainting still replays the screen it died showing.
+    Each span is prefixed with the private modes in force at its start —
+    alternate screen, application cursor keys, cursor visibility, bracketed
+    paste and mouse reporting — because the sequences that established them
+    may sit behind the span's start, whether cut away or trimmed off the ring's
+    head, and a client's replay wipe clears the display rather than the
+    emulator's mode state. Clients need no change for any of this: the frame
+    sequence is unaffected and the prefix is ordinary output bytes. But a
+    replay can legitimately be shorter than the ring, and a session whose grid
+    has just changed can replay little more than its mode prefix.
   * Mobile clients now hold *ReplayingBuffer* state until ``'e'`` is
     received; chunked ``'o'`` frames in between are appended without state
     transitions.
