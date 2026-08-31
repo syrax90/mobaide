@@ -6,7 +6,8 @@ iOS app** on the simulator — to them, so a human tester can exercise the full
 mobile ↔ server ↔ agent path hands-on: registration, login, agent list, SHELL
 terminals and managed claude/codex/antigravity sessions. With `up --web` it also
 serves the **web client** (`web/`) on `http://localhost:5173`, proxied to the
-same stack, so a browser can join the test with the same throwaway account.
+same stack, and opens it in a browser tab with the throwaway account already
+filled into the login form, so a browser can join the test in one click.
 It is the manual-testing counterpart of the automated pytest harness documented
 in [e2e-harness.md](e2e-harness.md) and reuses the same recipe
 (`tests/e2e/conftest.py` + `tests/e2e/mock_mobile_client.py`) outside pytest.
@@ -37,8 +38,9 @@ cd android
 xcrun simctl boot 'iPhone 16'
 python tests/e2e/manual_stack.py ios --install-app
 
-# 3c. web (optional): start with `up --web` instead, then open
-#     http://localhost:5173 and log in with the banner credentials
+# 3c. web (optional): start with `up --web` instead -- a browser tab opens on
+#     http://localhost:5173/login with the banner credentials pre-filled;
+#     press Sign In yourself (--no-browser opts out of the tab)
 #     (the first --web run auto-installs web/node_modules via `npm ci`)
 ```
 
@@ -80,7 +82,13 @@ across restarts instead.
 7. With `--web`, boots `npm run dev` in `web/` on port 5173 (`--web-port` to
    change) with the Vite proxy pointed at the actual `--host`/`--port` via
    `MOBAIDE_WEB_PROXY_TARGET`, auto-running `npm ci` first when
-   `web/node_modules` is missing or older than the lockfile. The web child is
+   `web/node_modules` is missing or older than the lockfile. Once the stack is
+   READY it opens `http://localhost:5173/login` in a new browser tab
+   (`--no-browser` to skip, e.g. over SSH) with the account pre-filled: the
+   credentials travel to the login form's `defaultValues` as
+   `MOBAIDE_WEB_DEV_LOGIN_EMAIL`/`_PASSWORD`, which `web/vite.config.ts`
+   injects **only** under `vite dev` -- `vite build` always bakes `null`, so no
+   production bundle can carry them. Nothing is submitted; you press Sign In. The web child is
    supervised, logged (`[web]`, `<state>/logs/web.log`), stopped, and
    crash-reaped exactly like server and agent, and writes nothing to the
    checkout except the gitignored `web/node_modules` (kept across runs — it is
@@ -203,8 +211,9 @@ release builds. Use the simulator over loopback instead.
 | `up --install-app` | build + install the app for every client that was synced |
 | `android --install-app` | also run `gradlew :app:installDebug` |
 | `ios --install-app` | also run `xcodebuild` + `xcrun simctl install`/`launch` against the **booted** simulator (uninstalling first when the URL changed) |
-| `up --web` | also serve the web client at `http://localhost:5173`, proxied to this stack |
+| `up --web` | also serve the web client at `http://localhost:5173`, proxied to this stack, and open it with the login pre-filled |
 | `up --web --web-port <n>` | same, on another port (e.g. when 5173 is taken by a plain `npm run dev`) |
+| `up --web --no-browser` | same, but do not open a browser tab (headless boxes, SSH, scripted runs) |
 | `up --projects <paths>` | seed the agent's project list with real directories |
 | `up --keep-android` / `--keep-ios` | on stop, leave the test URL in place (default: restore it) |
 | `up --no-android` / `--no-ios` | skip that client's file sync entirely |

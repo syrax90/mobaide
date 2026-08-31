@@ -303,20 +303,27 @@ def test_web_install_reason_decision(tmp_path):
 
 
 def test_build_web_env_targets_the_stack_and_sanitizes(monkeypatch):
-    """The vite proxy must follow the actual server bind (wildcard -> loopback),
-    and stray shell exports must never leak into the web child: a leftover
-    MOBAIDE_WEB_PROXY_TARGET would point the proxy at a dead stack, and
-    NODE_ENV=production would make `vite dev` misbehave."""
+    """The vite proxy must follow the actual server bind (wildcard -> loopback)
+    and the login pre-fill must carry this stack's account, while stray shell
+    exports never leak into the web child: a leftover MOBAIDE_WEB_PROXY_TARGET
+    would point the proxy at a dead stack, leftover MOBAIDE_WEB_DEV_LOGIN_* would
+    pre-fill someone else's credentials, and NODE_ENV=production would make
+    `vite dev` misbehave."""
     monkeypatch.setenv("MOBAIDE_WEB_PROXY_TARGET", "http://stale:1")
+    monkeypatch.setenv("MOBAIDE_WEB_DEV_LOGIN_EMAIL", "stale@test.local")
+    monkeypatch.setenv("MOBAIDE_WEB_DEV_LOGIN_PASSWORD", "stale-pass")
     monkeypatch.setenv("NODE_ENV", "production")
     monkeypatch.setenv("MOBAIDE_ENV", "test")
+    state = {"email": "dev@test.local", "password": "Qwe>123"}
 
-    env = ms.build_web_env(argparse.Namespace(host="0.0.0.0", port=9123))
+    env = ms.build_web_env(argparse.Namespace(host="0.0.0.0", port=9123), state)
     assert env["MOBAIDE_WEB_PROXY_TARGET"] == "http://127.0.0.1:9123"
+    assert env["MOBAIDE_WEB_DEV_LOGIN_EMAIL"] == "dev@test.local"
+    assert env["MOBAIDE_WEB_DEV_LOGIN_PASSWORD"] == "Qwe>123"
     assert "NODE_ENV" not in env
     assert "MOBAIDE_ENV" not in env
 
-    env = ms.build_web_env(argparse.Namespace(host="192.168.1.5", port=9123))
+    env = ms.build_web_env(argparse.Namespace(host="192.168.1.5", port=9123), state)
     assert env["MOBAIDE_WEB_PROXY_TARGET"] == "http://192.168.1.5:9123"
 
 
@@ -326,10 +333,30 @@ def test_up_parser_web_defaults():
     args = ms.build_parser().parse_args(["up"])
     assert args.web is False
     assert args.web_port == ms.DEFAULT_WEB_PORT == 5173
+    assert args.no_browser is False  # --web opens a tab unless asked not to
 
-    args = ms.build_parser().parse_args(["up", "--web", "--web-port", "5180"])
+    args = ms.build_parser().parse_args(
+        ["up", "--web", "--web-port", "5180", "--no-browser"]
+    )
     assert args.web is True
     assert args.web_port == 5180
+    assert args.no_browser is True
+
+
+def test_open_web_client_is_best_effort(monkeypatch):
+    """The tab is a convenience layered on a stack that is already READY, so it
+    targets the pre-filled /login screen and a browser-less box (SSH, CI, a
+    stripped container) must not turn a working stack into a failed boot."""
+    opened = []
+    monkeypatch.setattr(ms.webbrowser, "open_new_tab", lambda url: opened.append(url) or True)
+    ms.open_web_client(5180)
+    assert opened == ["http://localhost:5180/login"]
+
+    def explode(url):
+        raise RuntimeError("no browser here")
+
+    monkeypatch.setattr(ms.webbrowser, "open_new_tab", explode)
+    ms.open_web_client(5180)  # must return normally
 
 
 def test_stale_matcher_covers_the_web_child():

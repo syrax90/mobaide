@@ -10,8 +10,24 @@ import { defineConfig } from 'vitest/config';
 const target = process.env.MOBAIDE_WEB_PROXY_TARGET ?? 'http://localhost:9000';
 const wsTarget = target.replace(/^http/, 'ws');
 
-export default defineConfig({
+// The throwaway manual-stack account, pre-filled into the login form so a
+// tester only has to press Sign In. Also set only by `up --web`, and also not
+// VITE_-prefixed -- but unlike the proxy target this value IS meant for client
+// code, so it is injected explicitly and only under `command === 'serve'`.
+// `vite build` always bakes null, which is what keeps a password out of every
+// production bundle regardless of what the build environment exports.
+function devLogin(command: string): { email: string; password: string } | null {
+  const email = process.env.MOBAIDE_WEB_DEV_LOGIN_EMAIL ?? '';
+  const password = process.env.MOBAIDE_WEB_DEV_LOGIN_PASSWORD ?? '';
+  if (command !== 'serve' || email === '' || password === '') return null;
+  return { email, password };
+}
+
+export default defineConfig(({ command }) => ({
   plugins: [react()],
+  define: {
+    __MOBAIDE_DEV_LOGIN__: JSON.stringify(devLogin(command)),
+  },
   server: {
     proxy: {
       '/api': { target, changeOrigin: true },
@@ -25,4 +41,4 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
   },
-});
+}));
