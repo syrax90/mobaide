@@ -229,8 +229,15 @@
       })(k);
     }
 
-    // Most visitors arrive on the phone they would install on.
-    var onIos = /iPad|iPhone|iPod/.test(navigator.userAgent || "");
+    // Most visitors arrive on the phone they would install on. An iPad carries
+    // no iPad token: since iPadOS 13 Safari asks for desktop sites by default
+    // and claims to be a Macintosh, so the only thing separating it from a real
+    // Mac is touch — Apple ships no touchscreen Mac, and a trackpad reports no
+    // touch points.
+    var ua = navigator.userAgent || "";
+    var onIos =
+      /iPad|iPhone|iPod/.test(ua) ||
+      (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1);
     select(onIos ? 1 : 0, false);
     container.classList.add("is-live");
   }

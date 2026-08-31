@@ -432,8 +432,13 @@ Consequences worth keeping:
 - The tabs use **automatic activation** (arrow keys move *and* select). That is only
   cheap because the hidden panel's images are `loading="lazy"` and have never been
   fetched — an arrow press costs exactly what a click costs.
-- The default panel follows `navigator.userAgent`: iOS on an iPhone/iPad, Android
-  otherwise. Visitors mostly arrive on the phone they would install on.
+- The default panel follows the user agent: iOS on an iPhone or iPad, Android
+  otherwise. Visitors mostly arrive on the phone they would install on. **An iPad
+  is not detectable from the UA string alone** — since iPadOS 13 Safari requests
+  desktop sites by default and reports a `Macintosh` UA carrying no iPad token —
+  so a `Macintosh` claim is confirmed against `navigator.maxTouchPoints`. Apple
+  ships no touchscreen Mac and a trackpad reports no touch points, so that pair
+  has no false positive to worry about.
 - `.shots-tab` takes its boundary from `--gray`, not `--rule`, for the same WCAG 1.4.11
   reason as `.copy-btn`; the selected tab is a `--brand` fill with `#fff` on it, which
   keeps the brand purples structural.
