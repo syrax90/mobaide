@@ -1,5 +1,5 @@
-/* Mobaide marketing site — reveal-on-scroll, the hero typewriter, and the
- * install-command copy buttons.
+/* Mobaide marketing site — reveal-on-scroll, the hero typewriter, the
+ * install-command copy buttons, and the Android/iOS screenshot switch.
  *
  * Loaded synchronously from <head> (not deferred) so the `js` class lands
  * before first paint: site.css gates every animation start-state on that class,
@@ -160,6 +160,89 @@
     }
     // Only now, with every button wired, does the stylesheet reveal them.
     document.documentElement.classList.add("can-copy");
+  }
+
+  /* ---- Android/iOS screenshot switch ---- */
+
+  /* Turns the two stacked screenshot panels into a tab pair. The markup ships
+   * with both panels visible and the tablist at display:none, so every early
+   * return below leaves a page that still shows every screenshot under its own
+   * heading — the `is-live` class at the end is what swaps in the switched
+   * presentation, and it is only reached once both tabs are wired.
+   */
+  function setUpShotSwitch() {
+    var container = document.querySelector("[data-shots-switch]");
+    if (!container) {
+      return;
+    }
+    var tabs = container.querySelectorAll("[role=tab]");
+    if (tabs.length !== 2) {
+      return;
+    }
+    var panels = [];
+    for (var i = 0; i < tabs.length; i++) {
+      var panel = document.getElementById(tabs[i].getAttribute("aria-controls"));
+      if (!panel) {
+        return;
+      }
+      panels.push(panel);
+    }
+
+    function select(index, moveFocus) {
+      for (var j = 0; j < tabs.length; j++) {
+        var on = j === index;
+        tabs[j].setAttribute("aria-selected", on ? "true" : "false");
+        // Roving tabindex: one stop for the whole group, arrows do the rest.
+        tabs[j].tabIndex = on ? 0 : -1;
+        panels[j].hidden = !on;
+      }
+      if (moveFocus) {
+        tabs[index].focus();
+      }
+    }
+
+    for (var k = 0; k < tabs.length; k++) {
+      (function (index) {
+        tabs[index].addEventListener("click", function () {
+          select(index, false);
+        });
+        tabs[index].addEventListener("keydown", function (event) {
+          // Left/Right only: the tablist is horizontal, so Up/Down belong to
+          // the page. Claiming them would swallow a scroll keypress — and
+          // switch platforms instead — whenever a tab holds focus.
+          var next = null;
+          if (event.key === "ArrowRight") {
+            next = (index + 1) % tabs.length;
+          } else if (event.key === "ArrowLeft") {
+            next = (index + tabs.length - 1) % tabs.length;
+          } else if (event.key === "Home") {
+            next = 0;
+          } else if (event.key === "End") {
+            next = tabs.length - 1;
+          }
+          if (next === null) {
+            return;
+          }
+          event.preventDefault();
+          // Automatic activation: the panels are already in the document and
+          // the hidden one's images are loading="lazy", so arrowing across
+          // costs nothing a click would not.
+          select(next, true);
+        });
+      })(k);
+    }
+
+    // Most visitors arrive on the phone they would install on. An iPad carries
+    // no iPad token: since iPadOS 13 Safari asks for desktop sites by default
+    // and claims to be a Macintosh, so the only thing separating it from a real
+    // Mac is touch — Apple ships no touchscreen Mac, and a trackpad reports no
+    // touch points.
+    var ua = navigator.userAgent || "";
+    var onIos =
+      /iPad|iPhone|iPod/.test(ua) ||
+      (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1);
+    select(onIos ? 1 : 0, false);
+    container.classList.add("is-live");
   }
 
   function setUpReveals() {
@@ -528,6 +611,8 @@
     setUpCopyButtons();
     // Likewise not motion — and consent must not depend on animation settings.
     setUpConsentBanner();
+    // Also not motion: a reduced-motion visitor still picks their platform.
+    setUpShotSwitch();
 
     if (reduceMotion) {
       // The `.js` class has already armed the hidden states, so hand the

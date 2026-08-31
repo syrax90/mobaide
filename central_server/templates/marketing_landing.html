@@ -360,39 +360,140 @@
 
   <section id="screens" class="section" data-reveal>
     <h2 class="h-pixel">In the app</h2>
-    <div class="shots">
-      <figure class="shot">
-        <div class="device">
-          <img src="/static/site/img/shot-terminal.webp?v={{ asset_version }}" width="420" height="801"
-               loading="lazy" decoding="async"
-               alt="A running Claude Code session in Mobaide's terminal view, with a command field and control-key bar.">
+    <div class="shots-switch" data-shots-switch>
+      {# Both panels render until site.js wires the tabs; see setUpShotSwitch(). #}
+      <div class="shots-tabs" role="tablist" aria-label="Choose a platform">
+        <button class="shots-tab" type="button" role="tab" id="shots-tab-android"
+                aria-controls="shots-panel-android" aria-selected="true">Android</button>
+        <button class="shots-tab" type="button" role="tab" id="shots-tab-ios"
+                aria-controls="shots-panel-ios" aria-selected="false">iOS</button>
+      </div>
+
+      <div class="shots-panel" id="shots-panel-android" role="tabpanel"
+           aria-labelledby="shots-tab-android">
+        <h3 class="shots-panel-title">On Android</h3>
+        <div class="shots">
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-android-terminal.webp?v={{ asset_version }}" width="420" height="835"
+                   loading="lazy" decoding="async"
+                   alt="A running Antigravity session in Mobaide for Android, with a command field and control-key bar.">
+            </div>
+            <figcaption>A live coding session, driven from the phone.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-android-sessions.webp?v={{ asset_version }}" width="420" height="832"
+                   loading="lazy" decoding="async"
+                   alt="Mobaide for Android listing an Auto Scan that is scanning plus three running Claude Code and Codex sessions.">
+            </div>
+            <figcaption>Several sessions at once, each with its own state.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-android-modes.webp?v={{ asset_version }}" width="420" height="837"
+                   loading="lazy" decoding="async"
+                   alt="Mobaide for Android offering Claude Code, Codex, Antigravity, Auto Scan, Terminal and a custom agent type.">
+            </div>
+            <figcaption>Claude Code, Codex, Antigravity, Auto Scan, Terminal — or your own.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-android-options.webp?v={{ asset_version }}" width="420" height="841"
+                   loading="lazy" decoding="async"
+                   alt="Mobaide for Android configuring a Claude Code session: model, effort, skip permissions and a new worktree.">
+            </div>
+            <figcaption>Model, effort, permissions and worktree, chosen before launch.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-android-templates.webp?v={{ asset_version }}" width="420" height="831"
+                   loading="lazy" decoding="async"
+                   alt="Mobaide for Android showing saved prompt templates, one of them marked as a favourite.">
+            </div>
+            <figcaption>Prompt templates, saved once and reused in any session.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-android-pairing.webp?v={{ asset_version }}" width="420" height="840"
+                   loading="lazy" decoding="async"
+                   alt="Mobaide for Android with no agents yet, offering install commands and a QR scanner.">
+            </div>
+            <figcaption>Pairing is an install command and a QR scan.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-android-qr.webp?v={{ asset_version }}" width="420" height="810"
+                   loading="lazy" decoding="async"
+                   alt="Mobaide for Android scanning the pairing QR the agent prints in its terminal after install.">
+            </div>
+            <figcaption>The agent prints the pairing QR; the phone scans it.</figcaption>
+          </figure>
         </div>
-        <figcaption>A live Claude Code session, driven from the phone.</figcaption>
-      </figure>
-      <figure class="shot">
-        <div class="device">
-          <img src="/static/site/img/shot-sessions.webp?v={{ asset_version }}" width="420" height="838"
-               loading="lazy" decoding="async"
-               alt="Mobaide's session list showing an active Auto Scan and two running sessions.">
+      </div>
+
+      <div class="shots-panel" id="shots-panel-ios" role="tabpanel"
+           aria-labelledby="shots-tab-ios">
+        <h3 class="shots-panel-title">On iOS</h3>
+        <div class="shots">
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-ios-terminal.webp?v={{ asset_version }}" width="420" height="859"
+                   loading="lazy" decoding="async"
+                   alt="A running Antigravity session in Mobaide for iOS, with a message field and control-key bar.">
+            </div>
+            <figcaption>A live coding session, driven from the phone.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-ios-sessions.webp?v={{ asset_version }}" width="420" height="858"
+                   loading="lazy" decoding="async"
+                   alt="Mobaide for iOS listing an Auto Scan that is scanning plus three running Claude Code and Codex sessions.">
+            </div>
+            <figcaption>Several sessions at once, each with its own state.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-ios-modes.webp?v={{ asset_version }}" width="420" height="855"
+                   loading="lazy" decoding="async"
+                   alt="Mobaide for iOS offering Claude Code, Codex, Antigravity, Auto Scan, Terminal and a custom agent type.">
+            </div>
+            <figcaption>Claude Code, Codex, Antigravity, Auto Scan, Terminal — or your own.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-ios-options.webp?v={{ asset_version }}" width="420" height="818"
+                   loading="lazy" decoding="async"
+                   alt="Mobaide for iOS configuring a Claude Code session: model, effort, permissions, memory and a new worktree.">
+            </div>
+            <figcaption>Model, effort, permissions and worktree, chosen before launch.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-ios-templates.webp?v={{ asset_version }}" width="420" height="865"
+                   loading="lazy" decoding="async"
+                   alt="Mobaide for iOS showing saved prompt templates, one of them marked as a favourite.">
+            </div>
+            <figcaption>Prompt templates, saved once and reused in any session.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-ios-pairing.webp?v={{ asset_version }}" width="420" height="862"
+                   loading="lazy" decoding="async"
+                   alt="Mobaide for iOS with no agents yet, offering install commands, a QR scanner and a pairing code.">
+            </div>
+            <figcaption>Pairing is an install command and a QR scan.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="device">
+              <img src="/static/site/img/shot-ios-qr.webp?v={{ asset_version }}" width="420" height="732"
+                   loading="lazy" decoding="async"
+                   alt="Mobaide for iOS scanning the pairing QR the agent prints in its terminal after install.">
+            </div>
+            <figcaption>The agent prints the pairing QR; the phone scans it.</figcaption>
+          </figure>
         </div>
-        <figcaption>Several sessions at once, each with its own state.</figcaption>
-      </figure>
-      <figure class="shot">
-        <div class="device">
-          <img src="/static/site/img/shot-pairing.webp?v={{ asset_version }}" width="420" height="819"
-               loading="lazy" decoding="async"
-               alt="Mobaide's empty agents screen, offering install commands and a QR scanner to pair an agent.">
-        </div>
-        <figcaption>Pairing is an install command and a QR scan.</figcaption>
-      </figure>
-      <figure class="shot">
-        <div class="device">
-          <img src="/static/site/img/shot-autoscan.webp?v={{ asset_version }}" width="420" height="836"
-               loading="lazy" decoding="async"
-               alt="Mobaide's Auto Scan monitor showing scan, label, worktree and spawn steps with recent Linear issues.">
-        </div>
-        <figcaption>Auto Scan, step by step, as it picks up issues.</figcaption>
-      </figure>
+      </div>
     </div>
   </section>
 
