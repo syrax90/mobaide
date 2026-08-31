@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import threading
+import time
 from typing import cast
 from unittest.mock import AsyncMock, call, patch
 
@@ -768,6 +769,7 @@ def _issue_read(session: TerminalSession, *, returned: bool = False) -> int:
     """
     session._read_seq += 1
     session._read_returned = returned
+    session._read_grid = (session._pty_rows, session._pty_cols)
     return session._read_seq
 
 
@@ -1270,6 +1272,101 @@ class TestRingWidthMark:
         prefix = session._live.restore_prefix()
         for alias in (9, 1000, 1001, 1002, 1003):
             assert b"\x1b[?%dl" % alias in prefix, alias
+
+    async def test_reporting_off_resets_every_mouse_encoding(self) -> None:
+        # Protocol and encoding are separate latches in both emulators, so a
+        # prefix that restores the protocol but says nothing about the encoding
+        # leaves taps arriving in SGR while the child expects the default.
+        session = _width_session(cols=80)
+        session._track_modes(b"\x1b[?1006h\x1b[?1006l\x1b[?1002h")
+
+        prefix = session._live.restore_prefix()
+        for alias in (1005, 1006, 1015):
+            assert b"\x1b[?%dl" % alias in prefix, alias
+        assert b"\x1b[?1002h" in prefix
+
+    async def test_the_prefix_states_modes_the_child_never_touched(self) -> None:
+        # The client's emulator survives the reconnect carrying whatever it
+        # reached at the end of the last replay — including a `?7l` that is
+        # still *ahead* of this span's head. Silence would replay the span's
+        # opening lines under it; the span head is at the power-on value.
+        session = _width_session(cols=80, ring_buffer_bytes=8)
+        session._append_ring(b"A" * 8, read_seq=1)
+        session._append_ring(b"\x1b[?7lB", read_seq=2)
+
+        assert session._span_partial
+        prefix = session._span.restore_prefix()
+        assert b"\x1b[?7h" in prefix
+        assert b"\x1b[?1l" in prefix and b"\x1b[?25h" in prefix
+        assert b"\x1b[?2004l" in prefix
+
+    async def test_a_resize_defers_to_the_chunk_it_has_not_parsed(self) -> None:
+        # `_alt_screen` is only as current as the last chunk parsed. A chunk
+        # the executor has already handed back can carry the entry, and
+        # deciding without it drops the cut entirely — the old-grid frame and
+        # the repaint then share one span.
+        session = _width_session(cols=80)
+        seq = _issue_read(session, returned=True)
+
+        await session.resize(40, 120)
+        assert session._pending_cut is None
+        assert session._stale_alt_check == seq
+
+        _deliver(session, seq, b"\x1b[?1049heighty-column paint")
+        assert session._pending_cut is not None
+        # The frame in that chunk was painted before the resize reached the
+        # child, so the span's grid is the one the read began at — not the
+        # PTY's new one, which would let a re-assert cancel the cut.
+        assert (session._alt_rows, session._alt_cols) == (24, 80)
+
+        await session.resize(40, 120)
+        assert session._pending_cut is not None
+
+        _read(session, b"one-twenty repaint")
+        assert _replay_body(session) == b"one-twenty repaint"
+
+    async def test_a_resize_on_the_normal_screen_still_keeps_its_history(self) -> None:
+        # The deferral must not become a blanket arm: a session that really is
+        # on the primary screen has re-wrappable scrollback worth keeping.
+        session = _width_session(cols=80)
+        seq = _issue_read(session, returned=True)
+
+        await session.resize(40, 120)
+        _deliver(session, seq, b"plain scrollback text")
+
+        assert session._pending_cut is None
+        _read(session, b"more text")
+        assert b"plain scrollback text" in _replay_body(session)
+
+    async def test_the_real_reader_loop_defers_across_a_returned_chunk(self) -> None:
+        """Drive `_reader_loop` with the resize interleaved mid-turn.
+
+        The window this closes is one event-loop turn wide — the worker has set
+        its flag, the loop has not yet run the reader's continuation — so the
+        test blocks the loop outright to sit inside it. `resize()` reaches no
+        await, so it runs to completion before the reader can resume.
+        """
+        backend = _BlockingReadBackend()
+        session = TerminalSession(
+            _width_config(cols=80), backend=cast(PtyBackend, backend),
+        )
+        session._state = SessionState.RUNNING
+        reader = asyncio.create_task(session._reader_loop())
+        try:
+            await _until(lambda: session._read_seq == 1)
+            backend.feed(b"\x1b[?1049heighty-column paint")
+            while not session._read_returned:
+                time.sleep(0.001)
+            assert not session._alt_screen
+
+            await session.resize(40, 120)
+            backend.feed(b"one-twenty repaint")
+            await _until(lambda: b"one-twenty repaint" in session.get_ring())
+
+            assert _replay_body(session) == b"one-twenty repaint"
+        finally:
+            reader.cancel()
+            backend.release()
 
     async def test_the_orphaned_half_of_a_bisected_sequence_is_dropped(self) -> None:
         # Its opening bytes are gone, so it can never parse again — it would

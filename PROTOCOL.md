@@ -544,9 +544,15 @@ cadence; they do **not** gate compatibility.
     replay wipe clears the display rather than the buffer selection, and
     followed by a clear so the buffer the prefix selects is the one that gets
     wiped — plus application cursor keys, autowrap, cursor visibility,
-    bracketed paste and mouse reporting. The sequences that established them sit behind the span's start,
-    and without the prefix the span is parsed on the wrong buffer or with the
-    wrong input encoding. A span that still starts at the first byte
+    bracketed paste, and mouse reporting (protocol and encoding, each stated by
+    resetting every alias but the live one, since emulators disagree on whether
+    the group is one selection or independent flags). The sequences that
+    established them sit behind the span's start, and without the prefix the
+    span is parsed on the wrong buffer or with the wrong input encoding. Every
+    one of these is stated unconditionally, including modes the child never
+    touched: silence would leave the retained emulator on a value it picked up
+    from bytes that are still *ahead* of the span's head, so the prefix names
+    the power-on value instead. A span that still starts at the first byte
     establishes its own state and is sent verbatim. Clients need no change for any of this: the frame
     sequence is unaffected and the prefix is ordinary output bytes. But a
     replay can legitimately be shorter than the ring, and a session whose grid

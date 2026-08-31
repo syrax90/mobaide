@@ -4,10 +4,10 @@ import asyncio
 import collections
 import logging
 import re
-from dataclasses import dataclass, field
 import sys
 import time
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -53,12 +53,12 @@ logger = logging.getLogger(__name__)
 # longest sequence matched here (``ESC[?6n``, 5 bytes) fits well inside that
 # window. OSC color queries are likewise removed upstream by OscColorResponder,
 # so the OSC alternation here is belt-and-braces.
-# DECSET/DECRST, parsed as the parameter *list* it is: a TUI may batch modes
-# into one sequence (`ESC[?1049;25h`), so matching a single number followed by
-# `h`/`l` would miss the very transitions this tracks.
-_PRIVATE_MODE_RE = re.compile(rb"\x1b\[\?([\d;]*)([hl])")
-# Both kinds of event in one pass, so a reset and a DECSET in the same read are
-# applied in the order the child emitted them.
+# Every event that moves a tracked mode: DECSET/DECRST, and the two resets
+# (RIS `ESC c`, DECSTR `ESC[!p`) that return all of them to their power-on
+# values. One pattern, so a reset and a DECSET in the same read are applied in
+# the order the child emitted them — and DECSET is matched as the parameter
+# *list* it is, since a TUI may batch modes into one sequence
+# (`ESC[?1049;25h`) that a single-number pattern would miss entirely.
 _MODE_EVENT_RE = re.compile(
     rb"\x1b\[\?(?P<params>[\d;]*)(?P<action>[hl])"
     rb"|(?P<reset>\x1bc|\x1b\[!p)",
@@ -81,20 +81,6 @@ _PRIVATE_MODE_PARAM_BYTES = frozenset(b"0123456789;")
 _ALT_SCREEN_MODES = (1049, 1047, 47)
 _DEFAULT_ALT_SCREEN_MODE = 1049
 
-# Modes worth restoring at the head of a replay span. The sequences that
-# established them may sit behind the span's start — cut at a grid change, or
-# trimmed away as the ring rolled — and a client's replay wipe clears the
-# display, not the emulator's mode state. Without them the span is parsed with
-# the wrong screen buffer, the wrong input encoding, or the wrong key
-# encoding. Curated rather than exhaustive: these are the modes whose absence
-# changes how the retained bytes render or how the user's input is encoded.
-_RESTORED_MODES = (
-    1,     # DECCKM — application cursor keys (arrows as SS3, not CSI)
-    7,     # DECAWM — autowrap; off, drawing the last column must not scroll
-    25,    # cursor visibility
-    2004,  # bracketed paste
-)
-
 # Mouse reporting is one selection, not a set of flags — the same shape as the
 # screen aliases. Emulators hold a single active protocol: setting any of these
 # replaces the previous one, and resetting *any* of them turns reporting off
@@ -105,23 +91,44 @@ _RESTORED_MODES = (
 _MOUSE_PROTOCOL_MODES = (9, 1000, 1001, 1002, 1003)
 _MOUSE_ENCODING_MODES = (1005, 1006, 1015)
 
-# The power-on values of the tracked modes, adopted on RIS/DECSTR.
+# Modes worth restoring at the head of a replay span, mapped to their power-on
+# values. The sequences that established them may sit behind the span's start —
+# cut at a grid change, or trimmed away as the ring rolled — and a client's
+# replay wipe clears the display, not the emulator's mode state. Without them
+# the span is parsed with the wrong key encoding, the wrong wrap behaviour, or
+# an input mode the child is not expecting. Curated rather than exhaustive:
+# these are the modes whose absence changes how the retained bytes render or
+# how the user's input is encoded.
+#
+# The values do double duty. They are what RIS and DECSTR restore, and they are
+# what a span says about a mode the child never touched — which is not the same
+# as saying nothing, because the client's emulator is retained across a
+# reconnect and may hold a value set later in the stream than the span's head.
 _MODE_DEFAULTS = {
-    1: False,     # DECCKM — normal cursor keys
-    7: True,      # DECAWM — autowrap on
-    25: True,     # cursor visible
-    2004: False,  # bracketed paste off
+    1: False,     # DECCKM — application cursor keys (arrows as SS3, not CSI)
+    7: True,      # DECAWM — autowrap; off, drawing the last column must not scroll
+    25: True,     # cursor visibility
+    2004: False,  # bracketed paste
 }
-
-# A full reset (RIS) or a soft one (DECSTR). Both return every mode tracked
-# here to its power-on value, so a scanner that only follows DECSET/DECRST
-# would keep re-asserting modes the child believes it cleared.
-_TERMINAL_RESET_RE = re.compile(rb"\x1bc|\x1b\[!p")
 
 # Home, erase display, erase scrollback — the same wipe every client feeds
 # before a replay, re-issued after the prefix selects a buffer so the one that
 # is actually about to be painted is the one that gets cleared.
 _CLEAR_SELECTED_BUFFER = b"\x1b[H\x1b[2J\x1b[3J"
+
+
+def _select_alias(aliases: tuple[int, ...], active: int | None) -> list[bytes]:
+    """DECRST every alias but ``active``, then DECSET ``active`` if there is one.
+
+    Reset-all-then-set, rather than setting the wanted one alone: an emulator
+    that models the group as independent flags keeps reporting under an alias
+    the child abandoned, and one that models it as a single selection is
+    unharmed by the redundant resets.
+    """
+    parts = [b"\x1b[?%dl" % alias for alias in aliases if alias != active]
+    if active is not None:
+        parts.append(b"\x1b[?%dh" % active)
+    return parts
 
 
 @dataclass
@@ -168,21 +175,23 @@ class _TerminalModes:
         parts = [
             b"\x1b[?%d%s" % (self.alt_screen_mode, b"h" if self.alt_screen else b"l")
         ]
+        # Every tracked mode, not just the ones the child touched. A mode
+        # missing from the map is at its power-on value *at this span's head*,
+        # and staying silent about it leaves whatever the retained emulator
+        # picked up from bytes that are still ahead of the head — a `?7l` the
+        # client rendered before the trim would wrap the span's opening lines
+        # under an autowrap setting the child had not yet asked for.
         parts.extend(
-            b"\x1b[?%dh" % mode if enabled else b"\x1b[?%dl" % mode
-            for mode, enabled in sorted(self.modes.items())
+            b"\x1b[?%dh" % mode if self.modes.get(mode, default) else b"\x1b[?%dl" % mode
+            for mode, default in sorted(_MODE_DEFAULTS.items())
         )
         # Mouse reporting is one selection to xterm.js and a set of independent
         # flags to the termux fork, so every alias but the wanted one is reset
         # explicitly. Resetting only the canonical alias would leave a termux
-        # emulator still reporting under whichever other one was live.
-        for alias in _MOUSE_PROTOCOL_MODES:
-            if alias != self.mouse_protocol:
-                parts.append(b"\x1b[?%dl" % alias)
-        if self.mouse_protocol is not None:
-            parts.append(b"\x1b[?%dh" % self.mouse_protocol)
-        if self.mouse_encoding is not None:
-            parts.append(b"\x1b[?%dh" % self.mouse_encoding)
+        # emulator still reporting under whichever other one was live. Protocol
+        # and encoding are separate latches on both, so both are re-selected.
+        parts.extend(_select_alias(_MOUSE_PROTOCOL_MODES, self.mouse_protocol))
+        parts.extend(_select_alias(_MOUSE_ENCODING_MODES, self.mouse_encoding))
         parts.append(_CLEAR_SELECTED_BUFFER)
         return b"".join(parts)
 
@@ -298,14 +307,13 @@ class TerminalSession:
         # Raw byte ring for binary-WS replay on reconnect.
         self._ring = bytearray()
         self._ring_cap = config.ring_buffer_bytes
-        # Bytes in the ring carry no width of their own, and a replay is
+        # Bytes in the ring carry no grid of their own, and a replay is
         # rendered at whatever grid the client has now. Replaying output that
-        # was laid out at a different column count desynchronizes a full-screen
-        # TUI's cursor arithmetic for the whole rest of the span, and nothing
-        # repairs it: a same-size TIOCSWINSZ raises no SIGWINCH, so the program
-        # is never asked to repaint. So track where the current width began and
-        # replay only from there. Rows are excluded deliberately — they do not
-        # affect wrapping.
+        # was laid out at a different one desynchronizes a full-screen TUI's
+        # cursor arithmetic for the whole rest of the span, and nothing repairs
+        # it: a same-size TIOCSWINSZ raises no SIGWINCH, so the program is
+        # never asked to repaint. So track where the current grid began and
+        # replay only from there.
         # The PTY's current grid.
         self._pty_cols = config.cols
         self._pty_rows = config.rows
@@ -344,6 +352,14 @@ class TerminalSession:
         # "still parked" for a chunk that already exists. A bool the worker
         # sets before returning has no such gap.
         self._read_returned = False
+        # The PTY grid as it stood when the current read was issued. The bytes
+        # a read returns were produced under it, not under whatever the grid
+        # became while the read was parked: the child only learns of a resize
+        # from a SIGWINCH it has to be scheduled to answer.
+        self._read_grid = (config.rows, config.cols)
+        # Set by `resize` to the read whose classification it could not make,
+        # and consumed by `_track_modes` once that read's bytes are parsed.
+        self._stale_alt_check: int | None = None
         # True once the span stops being self-establishing — a cut landed, or
         # the head trimmed. Only then does it need a state prefix: a span that
         # still starts at the child's first byte carries every transition it
@@ -466,6 +482,7 @@ class TerminalSession:
                 self._read_seq += 1
                 read_seq = self._read_seq
                 self._read_returned = False
+                self._read_grid = (self._pty_rows, self._pty_cols)
                 data: bytes = await loop.run_in_executor(
                     None, self._read_chunk, 4096,
                 )
@@ -612,15 +629,38 @@ class TerminalSession:
         Stateful across reads, like the DA and OSC processors on the same
         bytes: a `?1049h` split across two 4 KiB reads still counts.
         """
+        # A resize that ran while these bytes sat unparsed judged the child to
+        # be on the primary screen — using mode state that did not yet include
+        # them. If they are what carries the entry, the decision is remade here
+        # with the same bytes in hand.
+        stale_resize = self._stale_alt_check == self._read_seq
+        self._stale_alt_check = None
         was_alt = self._live.alt_screen
         window = self._mode_tail + data
         self._apply_modes(window, self._live)
         if self._live.alt_screen and not was_alt:
-            # Everything the child paints from here is laid out at the PTY's
-            # grid as it stands now — which is not the grid the span started
-            # at if the PTY was resized while the child was on the primary
-            # screen, where no cut is ever made.
-            self._alt_rows, self._alt_cols = self._pty_rows, self._pty_cols
+            if stale_resize and self._state == SessionState.RUNNING:
+                # The entry — and the first paint after it — predate the
+                # resize, so they are laid out at the grid the read began at.
+                # Recording that grid rather than the PTY's current one is what
+                # stops a re-assert of the new grid from reading as "the span
+                # already matches" and cancelling the cut below.
+                self._alt_rows, self._alt_cols = self._read_grid
+                # Arm against this very read: `_append_ring` refuses to land a
+                # cut on the chunk that armed it and steps the offset past it,
+                # so the span opens on the SIGWINCH repaint instead of on the
+                # old-grid frame these bytes carry.
+                self._pending_cut = (
+                    self._cut_offset(),
+                    self._live.copy(),
+                    self._read_seq,
+                )
+            else:
+                # Everything the child paints from here is laid out at the
+                # PTY's grid as it stands now — which is not the grid the span
+                # started at if the PTY was resized while the child was on the
+                # primary screen, where no cut is ever made.
+                self._alt_rows, self._alt_cols = self._pty_rows, self._pty_cols
         self._mode_tail = self._unfinished_mode_tail(window)
 
     @staticmethod
@@ -687,7 +727,7 @@ class TerminalSession:
                     # speaks the dialect the program itself used.
                     state.alt_screen = enabled
                     state.alt_screen_mode = mode
-                elif mode in _RESTORED_MODES:
+                elif mode in _MODE_DEFAULTS:
                     state.modes[mode] = enabled
 
     @property
@@ -814,14 +854,16 @@ class TerminalSession:
         ``get_ring()`` + ``regex.sub`` double-materialisation, because the
         ring is already DA-clean (see ``_append_ring``).
 
-        Starts at the last column change, not at the head: output laid out at
-        a stale width cannot be re-wrapped and would mis-render for the rest of
-        the span. History older than that change is dropped from the replay —
-        it is unrenderable at the current grid, which is the whole point.
+        Starts at the last grid change, not at the head: output laid out at a
+        stale grid cannot be re-wrapped or re-addressed and would mis-render
+        for the rest of the span. History older than that change is dropped
+        from the replay — it is unrenderable at the current grid, which is the
+        whole point.
 
-        A cut span is prefixed with the private modes in force when it was made
-        (`_mode_restore_prefix`), because the sequences that established them
-        are behind the cut and a client's replay wipe does not restore them.
+        A span that no longer starts at the child's first byte carries a
+        `_TerminalModes.restore_prefix`, because the sequences that established
+        its modes are behind its head and a client's replay wipe does not
+        restore them.
 
         An empty ring yields nothing — callers that need a
         "handshake-always-has-an-OUTPUT-frame" invariant must emit one
@@ -993,6 +1035,9 @@ class TerminalSession:
           after the replay repairs it. On the normal screen the replay is
           line-oriented text the client's emulator re-wraps, so it stays
           readable and dropping it would delete usable scrollback for no gain.
+          Answerable here only for chunks already parsed; when the executor has
+          handed back bytes the loop has not reached, the question is handed to
+          `_track_modes`, which asks it again with those bytes applied.
         * **The session is running.** A stopped or crashed child will never
           repaint, so cutting its history just blanks its last output. The
           backend can still accept a resize after the child dies — the master
@@ -1007,21 +1052,31 @@ class TerminalSession:
         """
         self._backend.resize(rows, cols)
         self._pty_rows, self._pty_cols = rows, cols
+        self._stale_alt_check = None
         if (rows, cols) == (self._alt_rows, self._alt_cols):
             # Back to the grid the span was produced at — whatever excursion
             # armed a cut, the span is homogeneous with the PTY again and
             # cutting would discard history for nothing.
             self._pending_cut = None
-        elif self._alt_screen and self._state == SessionState.RUNNING:
-            # A read still blocked will deliver the repaint, so the cut must
-            # land on it; one already returned holds old-grid output and must
-            # be stepped over.
-            in_flight = not self._read_returned
-            self._pending_cut = (
-                self._cut_offset(),
-                self._live.copy(),
-                self._read_seq - 1 if in_flight else self._read_seq,
-            )
+        elif self._state == SessionState.RUNNING:
+            if self._alt_screen:
+                # A read still blocked will deliver the repaint, so the cut
+                # must land on it; one already returned holds old-grid output
+                # and must be stepped over.
+                in_flight = not self._read_returned
+                self._pending_cut = (
+                    self._cut_offset(),
+                    self._live.copy(),
+                    self._read_seq - 1 if in_flight else self._read_seq,
+                )
+            elif self._read_returned:
+                # `_alt_screen` is only as current as the last chunk *parsed*,
+                # and one already returned by the executor has not been: the
+                # entry into the alternate screen may be sitting in it.
+                # Deferred rather than guessed — arming here would cut a
+                # genuinely primary-screen session's scrollback, and the bytes
+                # that settle it are one event loop turn away.
+                self._stale_alt_check = self._read_seq
 
     def get_scrollback(self) -> list[str]:
         """Return the current scrollback buffer as decoded strings.
