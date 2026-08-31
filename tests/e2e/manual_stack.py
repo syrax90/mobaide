@@ -41,6 +41,7 @@ import sys
 import tempfile
 import threading
 import time
+import webbrowser
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -134,6 +135,8 @@ SANITIZED_ENV_VARS = (
     "LOG_FORMAT",
     "LOG_LEVEL",
     "MOBAIDE_WEB_PROXY_TARGET",
+    "MOBAIDE_WEB_DEV_LOGIN_EMAIL",
+    "MOBAIDE_WEB_DEV_LOGIN_PASSWORD",
 )
 
 _DEPS: SimpleNamespace | None = None
@@ -641,12 +644,16 @@ def build_agent_env(
     return env
 
 
-def build_web_env(args: argparse.Namespace) -> dict:
+def build_web_env(args: argparse.Namespace, state: dict) -> dict:
     env = base_child_env()
     env.pop("NODE_ENV", None)  # `vite dev` must stay in development mode
     env["MOBAIDE_WEB_PROXY_TARGET"] = (
         f"http://{local_probe_host(args.host)}:{args.port}"
     )
+    # web/vite.config.ts injects these into the login form as defaults, but
+    # only under `vite dev` -- see devLogin() there.
+    env["MOBAIDE_WEB_DEV_LOGIN_EMAIL"] = state["email"]
+    env["MOBAIDE_WEB_DEV_LOGIN_PASSWORD"] = state["password"]
     return env
 
 
@@ -1283,8 +1290,11 @@ def print_ready_banner(
         f"  Agent:              {state['agent_name']} (online, id {state['agent_id'][:8]}...)",
     ]
     if args.web:
+        opens = "opens in your browser" if not args.no_browser else "--no-browser"
         lines.append(f"  Web client:         http://localhost:{args.web_port}  "
-                     "(vite dev, proxied to this stack -- use the App login above)")
+                     f"(vite dev, proxied to this stack; {opens})")
+        lines.append("      the App login above is pre-filled on /login -- press "
+                     "Sign In yourself")
     if args.fake_pty:
         lines.append("  Sessions:           FAKE echo PTY (--fake-pty): terminals only "
                      "echo bytes back")
@@ -1334,6 +1344,23 @@ def print_ready_banner(
         bar,
     ]
     print("\n".join(lines), flush=True)
+
+
+def open_web_client(port: int) -> None:
+    """Open the web client in a new tab once the stack is READY.
+
+    Deliberately best-effort: a headless box or an SSH session has no browser to
+    open, and that must never take the stack down with it. The /login deep link
+    rather than / because that is the screen the pre-filled credentials land on;
+    a browser that still holds a session is bounced straight to the app.
+    """
+    url = f"http://localhost:{port}/login"
+    try:
+        opened = webbrowser.open_new_tab(url)
+    except Exception as exc:  # pragma: no cover - platform dependent
+        log(f"could not open a browser ({exc}); open {url} yourself")
+        return
+    log(f"opened {url}" if opened else f"no browser to open; visit {url}")
 
 
 # --------------------------------------------------------------------------
@@ -1512,7 +1539,7 @@ def cmd_up(args: argparse.Namespace) -> int:
             web = ChildProcess(
                 "web",
                 [npm, "run", "dev", "--", "--port", str(args.web_port), "--strictPort"],
-                build_web_env(args),
+                build_web_env(args, state),
                 WEB_DIR,
                 logs_dir / "web.log",
             )
@@ -1525,6 +1552,9 @@ def cmd_up(args: argparse.Namespace) -> int:
             )
 
         print_ready_banner(args, state, lan_ip, all_ips, android, ios)
+
+        if args.web and not args.no_browser:
+            open_web_client(args.web_port)
 
         while True:
             time.sleep(1)
@@ -1827,6 +1857,9 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--web-port", type=int, default=DEFAULT_WEB_PORT,
                     help=f"Vite dev server port for --web "
                          f"(default: {DEFAULT_WEB_PORT}; ignored without --web)")
+    up.add_argument("--no-browser", action="store_true",
+                    help="do not open the web client in a browser once the "
+                         "stack is ready (ignored without --web)")
     up.set_defaults(func=cmd_up)
 
     android = sub.add_parser("android", help="sync (or revert) the two gitignored "
