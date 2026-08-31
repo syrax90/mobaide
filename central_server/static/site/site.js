@@ -207,10 +207,13 @@
           select(index, false);
         });
         tabs[index].addEventListener("keydown", function (event) {
+          // Left/Right only: the tablist is horizontal, so Up/Down belong to
+          // the page. Claiming them would swallow a scroll keypress — and
+          // switch platforms instead — whenever a tab holds focus.
           var next = null;
-          if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+          if (event.key === "ArrowRight") {
             next = (index + 1) % tabs.length;
-          } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+          } else if (event.key === "ArrowLeft") {
             next = (index + tabs.length - 1) % tabs.length;
           } else if (event.key === "Home") {
             next = 0;

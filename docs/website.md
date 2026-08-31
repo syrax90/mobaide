@@ -429,9 +429,12 @@ Consequences worth keeping:
   only thing naming the platform. The `alt` text is not — it names the platform and the
   per-platform control differences (Android's *command field* vs iOS's *message field*,
   iOS's extra "Pair with a code" affordance).
-- The tabs use **automatic activation** (arrow keys move *and* select). That is only
+- The tabs use **automatic activation** (Left/Right move *and* select). That is only
   cheap because the hidden panel's images are `loading="lazy"` and have never been
-  fetched — an arrow press costs exactly what a click costs.
+  fetched — an arrow press costs exactly what a click costs. **Up/Down are
+  deliberately not handled.** The tablist is horizontal, so the APG pattern leaves the
+  vertical pair to the page; claiming them would `preventDefault()` a scroll keypress —
+  and switch platforms instead of scrolling — for as long as a tab held focus.
 - The default panel follows the user agent: iOS on an iPhone or iPad, Android
   otherwise. Visitors mostly arrive on the phone they would install on. **An iPad
   is not detectable from the UA string alone** — since iPadOS 13 Safari requests
@@ -440,8 +443,13 @@ Consequences worth keeping:
   ships no touchscreen Mac and a trackpad reports no touch points, so that pair
   has no false positive to worry about.
 - `.shots-tab` takes its boundary from `--gray`, not `--rule`, for the same WCAG 1.4.11
-  reason as `.copy-btn`; the selected tab is a `--brand` fill with `#fff` on it, which
-  keeps the brand purples structural.
+  reason as `.copy-btn`. The selected tab is a `--brand` fill with `#fff` on it, so the
+  purples stay structural — but its **ring is `--accent`, not `--brand-2`**. 1.4.11 wants
+  3:1 for whatever identifies a *state*, and a `--brand-2` ring clears it on neither
+  edge: 1.53:1 against the `--brand` fill it encloses, 2.90:1 against the page. `--accent`
+  measures 5.79:1 and 10.99:1 on those same two edges. Because the ring now carries the
+  state, `.shots-tab:hover` may only brighten the label — giving hover a ring of its own
+  would make a merely-hovered tab read as the chosen one.
 
 ## Copyable command blocks
 
