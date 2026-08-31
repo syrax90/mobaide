@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { readFixture } from './__fixtures__/load';
 import {
   decodePairingFragment,
+  encodePairingFragment,
   normalizeRelayUrl,
   parseMoba1,
   readPairingInput,
@@ -68,6 +69,31 @@ describe('MOBA1 payload golden fixtures', () => {
 
   it.each(fixture.link_cases)('reads the $name payload as input', (testCase) => {
     expect(readPairingInput(testCase.payload)).toBe(testCase.payload);
+  });
+
+  it.each(fixture.link_cases)('encodes the $name fragment', (testCase) => {
+    // The same bytes the agent prints, from the same golden: padding stripped,
+    // and a non-ASCII relay URL encoded as UTF-8 rather than per code unit.
+    expect(encodePairingFragment(testCase.payload)).toBe(fragmentOf(testCase.expect));
+  });
+});
+
+describe('encodePairingFragment', () => {
+  it('round-trips every golden payload through the decoder', () => {
+    // The setup guide hands a pasted payload to `/pair` by navigating to a
+    // fragment; a mismatch between the two halves would turn a valid paste
+    // into "that is not a Mobaide pairing code" on arrival.
+    for (const testCase of fixture.link_cases) {
+      expect(decodePairingFragment(encodePairingFragment(testCase.payload))).toBe(
+        testCase.payload,
+      );
+    }
+  });
+
+  it('emits only URL-safe characters, so nothing downstream re-encodes it', () => {
+    for (const testCase of fixture.link_cases) {
+      expect(encodePairingFragment(testCase.payload)).toMatch(/^[A-Za-z0-9_-]+$/);
+    }
   });
 });
 

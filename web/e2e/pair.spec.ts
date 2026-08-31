@@ -87,3 +87,30 @@ test('a pasted payload feeds the same pipeline as a deep link', async ({ page })
 
   await expect(page.getByRole('heading', { name: 'Pair this agent?' })).toBeVisible();
 });
+
+test('the setup guide pairs a pasted payload without a detour through /pair', async ({
+  page,
+}) => {
+  await stubRelay(page, undefined, { pendingPairing: true });
+
+  await page.goto('/agents');
+  await signIn(page);
+
+  // The install command is on the page itself, not behind a button — it is the
+  // only step a first-run user can act on.
+  await expect(page.getByRole('heading', { name: 'No agents yet' })).toBeVisible();
+  await expect(
+    page.getByText('curl -fsSL https://get.mobaide.com/install.sh | bash'),
+  ).toBeVisible();
+  await expect(page.getByTestId('setup-example-output')).toContainText(
+    '[mobaide-agent] Or open this link in a browser:',
+  );
+
+  await page.getByLabel('Pairing code or link').fill(payload());
+  await page.getByRole('button', { name: 'Pair' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Pair this agent?' })).toBeVisible();
+  // The handoff rides the fragment, so `/pair`'s scrub has to catch it here too.
+  await expect(page).toHaveURL(/\/pair$/);
+  expect(page.url()).not.toContain('nonce-e2e');
+});

@@ -54,8 +54,8 @@ export function ProjectsScreen() {
         />
       ) : resolved === null ? (
         <p className="empty-state">
-          No agents yet. <Link to="/pair">Pair an agent</Link> to manage its projects
-          here.
+          No agents yet. <Link to="/agents">Set up an agent</Link> to manage its
+          projects here.
         </p>
       ) : (
         <ProjectList

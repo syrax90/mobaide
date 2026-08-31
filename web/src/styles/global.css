@@ -2219,6 +2219,164 @@ input[type='radio']:checked {
   align-items: center;
   text-align: center;
 }
+
+/*
+ * The first-run setup guide (`AgentsEmptyState`).
+ *
+ * Not `.empty-state`: that one centres muted text in a ring, which is right for
+ * "nothing here" and wrong for a plate carrying two shell commands, a terminal
+ * sample and a form. This is the `.confirm-panel` treatment instead — the same
+ * plate every other multi-part panel on this screen sits on.
+ */
+.setup-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 46rem;
+  padding: 1.25rem;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+}
+
+.setup-title {
+  margin: 0;
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: 1.1rem;
+  color: var(--accent);
+}
+
+.setup-steps {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.setup-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  /* Baseline, not start: step 3's title wraps on a narrow column, and aligning
+     the boxes would float the ordinal between its two lines. */
+  align-items: baseline;
+}
+
+/* The ordinal as a filled brand square — the third mirror of iOS
+   `PixelNumberedStep`. The kit has no circles, and `--brand` is a fill in both
+   themes, so the white digit holds its contrast without a per-theme override. */
+.setup-step-ordinal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  padding: 0 0.2rem;
+  background: var(--brand);
+  color: #fff;
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  line-height: 1.5rem;
+}
+
+.setup-step-main {
+  /* `min-width: 0` is what actually lets the code blocks below scroll instead
+     of widening the grid column past the plate. */
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.setup-step-title {
+  margin: 0;
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.setup-step-body {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+/*
+ * A sample of the agent's own stdout, and deliberately not a `.code-block`:
+ * that one carries a copy button, and nothing here is copyable — the payload is
+ * `<placeholder>`-shaped precisely so it cannot be mistaken for a live code.
+ */
+.terminal-sample {
+  margin: 0.2rem 0;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+}
+
+.terminal-sample-label {
+  padding: 0.35rem 0.6rem;
+  box-shadow: inset 0 -2px 0 0 var(--surface-2);
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.terminal-sample-body {
+  margin: 0;
+  padding: 0.6rem;
+  /* Scrolls rather than wraps, unlike its `.code-block-value` neighbour. That
+     one wraps because a truncated token cannot be copied; this one is not
+     copyable, and the property it has to teach is that the payload arrives as
+     one unbroken line — the same call Android's `InstallCommandCard` makes with
+     `maxLines = 1` plus `horizontalScroll`. `.setup-step-main`'s `min-width: 0`
+     is what keeps the scroll inside this box instead of widening the plate. */
+  overflow-x: auto;
+  font-family: var(--font-chrome);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.setup-fallbacks {
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+  box-shadow: inset 0 2px 0 0 var(--surface-2);
+  color: var(--text-muted);
+}
+
+.setup-fallbacks-title {
+  margin: 0 0 0.4rem;
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.setup-fallbacks ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* A button that has to sit inside a sentence. `.button` would break the line
+   into a control; this keeps the affordance an anchor's and the semantics a
+   button's, which is what a dialog-opener owes a keyboard user. */
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
 /* endregion */
 
 /* region projects, git & templates (WEB-09) */

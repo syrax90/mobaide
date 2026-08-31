@@ -608,6 +608,68 @@ install one-liners are byte-identical to `AgentCredentialsSheet` on both
 mobile clients, and are deliberately not OS-detected — the host is a different
 machine from the browser.
 
+**The first-run empty state** (`AgentsEmptyState`) is the web arm of Android
+and iOS `EmptyAgentsState`: install first, pair second, escape hatches last,
+because nothing is pairable until `mobaide-agent` runs somewhere. Mobile's
+step 2 is "scan the QR"; a browser has no camera, so the web equivalent is the
+two lines `pairing_qr.write_pairing_hints` prints *under* that QR — the
+`MOBA1|…` payload and the `/pair#…` link — which is why web's steps 2 and 3
+are alternatives rather than a sequence. Three divergences from mobile, all
+platform-convention: the install one-liners render inline rather than behind a
+bottom sheet (a sheet is a phone answer to a screen with no room), the guide
+quotes an example of the agent's stdout so a user can match it against their
+own scrollback, and it names `mobaide-agent show-qr` for a nonce that expired
+before they got back to the browser. `setupCopy.test.ts` reads
+`mobaide_agent/mobaide/agent/pairing_qr.py` and `__main__.py` off disk and
+holds the quoted labels and the subcommand to what the agent actually ships —
+nothing else fails when those drift, the guide just stops describing reality.
+The example payload carries `<placeholder>` fields that `parseMoba1` rejects,
+so it can never be mistaken for a live code. The link's origin is
+`window.location.origin`, never a hard-coded `app.mobaide.com`: the agent's
+`MOBAIDE_AGENT_PAIR_WEB_ORIGIN` means "origin of the web client the printed
+link points at", which is *this* client, so a self-hosted deployment that
+configured its agent prints the origin the reader is already browsing — and a
+hard-coded default would tell them to look for a line their agent never wrote.
+Every other varying field, the payload's relay URL included, is a
+`<placeholder>`. That one is the agent's own `PUBLIC_BASE_URL` and is *not*
+derivable here — the SPA reaches the relay same-origin through a proxy
+(`baseUrl: '/'`), so the browser only ever knows its own host — and not being
+able to show the right value is a reason to show a placeholder rather than a
+wrong one. What carries the recognition is the `[mobaide-agent]` labels and the
+`MOBA1|` prefix, neither of which varies by deployment. While the guide is up the flat
+four-button row is suppressed: every one of its actions appears in the guide in
+an order, and a flat row beside it would undo the ordering. The sessions and
+projects "No agents yet" lines now point at `/agents` rather than `/pair`, for
+the same reason — an account with nothing paired has no code to paste yet.
+
+**The guide's paste box hands off rather than pairing.** `/pair` owns the
+confirm → claim → wait machine and the expiry-before-trust ordering its tests
+pin, so a second copy on `/agents` is the kind of duplicate that drifts into a
+security bug. Instead the box runs `readPairingInput` (which already takes the
+payload, the whole link, or a bare fragment) and, on success, navigates to
+`/pair#…` with the payload re-encoded by `encodePairingFragment` — the new
+inverse of `decodePairingFragment`, pinned to the agent's own
+`format_pairing_link` by the shared golden's `link_cases`. base64url rather
+than `encodeURIComponent` so the fragment is `[A-Za-z0-9_-]` only and no layer
+in between can re-encode it into something the decoder reads back differently.
+That reuses the deep-link path verbatim, including its scrub, so the nonce
+still never survives in history.
+
+Routing a second flow through that path exposed a latent hole in it, now
+closed: the capture effect scrubs the fragment whether or not the
+`sessionStorage` write landed, so in a context that denies storage — a private
+window, a partitioned context — the payload was destroyed outright and the
+visitor was left on an empty paste box with a single-use nonce they could no
+longer produce. `Pair` now also holds it in a `handoffRef` and prefers that on
+read. A ref rather than module state because capture and consume are two
+effects on one mounted component, which is exactly the lifetime this needs;
+`sessionStorage` stays the arm that survives the sign-out bounce, which
+unmounts the component. Note for anyone testing this: `vi.spyOn(Storage
+.prototype, …)` silently intercepts nothing under Node >= 22, whose
+experimental `Storage` global shadows jsdom's — spy on
+`Object.getPrototypeOf(sessionStorage)` instead, or the test passes against
+unfixed code.
+
 Removing an agent calls `clearAgentToken(agentId)`, never
 `sessionStore.agentDisconnect()`, which clears *every* agent's tokens; it also
 drops the agent's events channel, its `mobaide-agent` / `mobaide-sessions`
@@ -1705,7 +1767,9 @@ handler omits `autoscan.list.changed` (CLA-249), and Android's ANSI parser is
 still a 16-colour subset with no fixture consumer (CLA-250).
 
 WEB-08's divergences are all platform-convention exempt: the paste box and
-the `/pair` deep link exist because a desktop browser has no camera, the
+the `/pair` deep link exist because a desktop browser has no camera — as does
+the setup guide's step 2, which reads the printed link where mobile scans the
+QR above it — the
 agent id and version on the card because a browser is the first client that
 can hold more than one agent, and the trust-mismatch copy's final sentence
 because a browser has no "clear app data". The `parse_qr_payload` tightening
@@ -1713,3 +1777,9 @@ went the other way — it moved the agent's Python parser onto the mobile
 clients' stricter contract rather than away from it — and the shared golden
 now pins all four implementations, with the Android arm tracked in CLA-235
 and the duplicated `central_server` encoder in CLA-236.
+
+One item from the setup guide *is* mirrorable rather than exempt: the
+"expired? run `mobaide-agent show-qr` on the host" hint. A stale QR is a real
+failure mode on a phone too, and neither mobile empty state says how to print
+a fresh one. It is called out here rather than filed because Linear issue
+creation has been rejecting new issues since 2026-08-12 (free-plan cap).

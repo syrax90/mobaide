@@ -163,6 +163,30 @@ describe('Pair deep link', () => {
     expect(await screen.findByText('Pair this agent?')).toBeInTheDocument();
   });
 
+  it('still pairs a signed-in visitor when session storage is denied', async () => {
+    // Safari's "block all cookies", a partitioned context, a locked-down
+    // profile: `setItem` throws. The scrub takes the fragment either way, so
+    // without the in-memory arm the nonce is destroyed and the visitor is left
+    // on an empty paste box with nothing left to paste.
+    // `Object.getPrototypeOf(sessionStorage)`, never the `Storage` global:
+    // Node >= 22 ships its own experimental `Storage` that shadows jsdom's, so
+    // spying on `Storage.prototype` here silently intercepts nothing and the
+    // test passes against the unfixed code.
+    const setItem = vi
+      .spyOn(Object.getPrototypeOf(sessionStorage) as Storage, 'setItem')
+      .mockImplementation(() => {
+        throw new DOMException('denied', 'SecurityError');
+      });
+
+    try {
+      renderPair(`/pair#${fragmentFor(payload())}`);
+
+      expect(await screen.findByText('Pair this agent?')).toBeInTheDocument();
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
   it('consumes the stash on read so a single-use nonce is not retried', async () => {
     sessionStorage.setItem(HANDOFF_KEY, payload());
 

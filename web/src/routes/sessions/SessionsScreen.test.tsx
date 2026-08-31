@@ -198,9 +198,11 @@ describe('SessionsScreen', () => {
     renderScreen();
 
     expect(await screen.findByText(/No agents yet/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Pair an agent' })).toHaveAttribute(
+    // `/agents`, not `/pair`: an account with nothing paired has no code to
+    // paste yet, and the setup guide is where the install command lives.
+    expect(screen.getByRole('link', { name: 'Set up an agent' })).toHaveAttribute(
       'href',
-      '/pair',
+      '/agents',
     );
   });
 

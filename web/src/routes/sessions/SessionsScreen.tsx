@@ -64,7 +64,8 @@ export function SessionsScreen() {
         />
       ) : resolved === null ? (
         <p className="empty-state">
-          No agents yet. <Link to="/pair">Pair an agent</Link> to see its sessions here.
+          No agents yet. <Link to="/agents">Set up an agent</Link> to see its sessions
+          here.
         </p>
       ) : (
         <SessionList
