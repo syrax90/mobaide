@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import json
+from unittest.mock import MagicMock
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -750,3 +751,77 @@ class TestClaimDeviceReassignment:
         agent = await qr_app.state.db.get_agent(resp.json()["agent_id"])
         assert agent is not None
         assert agent["owner_user_id"] == viewer_user["id"]
+
+
+class TestFirstPairingConversion:
+    """``_complete_pairing`` stamps ``users.first_paired_at`` exactly once per
+    account and hands the id to the ads uploader — independent of the trust
+    pin, which resets when an account drops to zero agents."""
+
+    async def _claim(self, client, qr_app, headers):
+        resp = await client.post(
+            "/api/pairing/initiate", json={"hostname": "alpha", "os": "Linux"}
+        )
+        assert resp.status_code == 200
+        return await client.post(
+            "/api/pairing/claim",
+            json={
+                "nonce": resp.json()["nonce"],
+                "trust_key_fp": compute_trust_key_fp(qr_app.state._test_pub_b64),
+                "mobile_device_id": _CLAIM_DEV_UUID,
+            },
+            headers=headers,
+        )
+
+    async def test_first_pair_marks_the_account_and_schedules_the_conversion(
+        self, client, qr_app, api_auth_headers
+    ):
+        uploader = MagicMock()
+        qr_app.state.ads_uploader = uploader
+        db = qr_app.state.db
+        owner = await db.get_user_by_email("viewer@test.local")
+
+        first = await self._claim(client, qr_app, api_auth_headers)
+        assert first.status_code == 200, first.text
+        marker = (await db.get_user_by_id(owner["id"]))["first_paired_at"]
+        assert marker is not None
+        uploader.schedule_first_pairing.assert_called_once_with(owner["id"])
+
+        second = await self._claim(client, qr_app, api_auth_headers)
+        assert second.status_code == 200, second.text
+        assert (await db.get_user_by_id(owner["id"]))["first_paired_at"] == marker
+        uploader.schedule_first_pairing.assert_called_once()
+
+    async def test_pairing_again_after_removing_every_agent_is_not_a_first_pairing(
+        self, client, qr_app, api_auth_headers
+    ):
+        uploader = MagicMock()
+        qr_app.state.ads_uploader = uploader
+        db = qr_app.state.db
+        owner = await db.get_user_by_email("viewer@test.local")
+
+        first = await self._claim(client, qr_app, api_auth_headers)
+        assert first.status_code == 200, first.text
+        marker = (await db.get_user_by_id(owner["id"]))["first_paired_at"]
+        await db.delete_agent(first.json()["agent_id"])
+        assert await db.count_agents_for_owner(owner["id"]) == 0
+
+        again = await self._claim(client, qr_app, api_auth_headers)
+        assert again.status_code == 200, again.text
+        row = await db.get_user_by_id(owner["id"])
+        # The pin was reset and re-taken; the marker never moved.
+        assert row["trust_key_fp"] is not None
+        assert row["first_paired_at"] == marker
+        uploader.schedule_first_pairing.assert_called_once()
+
+    async def test_scheduling_failure_does_not_fail_the_pairing(
+        self, client, qr_app, api_auth_headers
+    ):
+        uploader = MagicMock()
+        uploader.schedule_first_pairing.side_effect = RuntimeError("boom")
+        qr_app.state.ads_uploader = uploader
+
+        resp = await self._claim(client, qr_app, api_auth_headers)
+
+        assert resp.status_code == 200, resp.text
+        uploader.schedule_first_pairing.assert_called_once()

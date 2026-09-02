@@ -441,6 +441,10 @@ async def _complete_pairing(
     # so a pairing that fails the ownership guard or loses the CAS race
     # cannot leave a pin behind. No-op when the account already has one.
     await db.pin_user_trust_key_fp(user.sub, current_fp)
+    # The first-pairing marker sits with the pin for the same reason, but is
+    # never cleared: the pin resets when an account drops to zero agents,
+    # which would make the ads conversion below fire twice.
+    first_pairing = await db.mark_user_first_paired(user.sub)
 
     if current_agent_id:
         # Drop the tunnel the rotated token used to authenticate. Two
@@ -500,6 +504,20 @@ async def _complete_pairing(
         bool(current_agent_id),
         delivered,
     )
+
+    if first_pairing:
+        logger.info(
+            "pairing.first_agent_paired user_id=%s agent_id=%s", user.sub, agent_id
+        )
+        # After the credential push: a scheduling fault must never turn a
+        # delivered pairing into a 500 (the device-code wrapper would then
+        # reopen a code whose nonce is already consumed).
+        try:
+            request.app.state.ads_uploader.schedule_first_pairing(user.sub)
+        except Exception:
+            logger.exception(
+                "pairing.first_agent_paired_schedule_error user_id=%s", user.sub
+            )
 
     return PairingClaimResponse(
         agent_id=agent_id,

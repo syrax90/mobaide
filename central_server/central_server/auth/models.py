@@ -131,9 +131,44 @@ class RefreshableSessionRequest(BaseModel):
     session_transport: Literal["body", "cookie"] | None = None
 
 
+AD_CLICK_ID_PATTERN = r"^[A-Za-z0-9_-]{1,200}$"
+AdClickKind = Literal["gclid", "wbraid", "gbraid"]
+
+
+class AdAttribution(BaseModel):
+    """Google Ads click attribution the web client copies out of the
+    ``mobaide_ads`` cookie when it creates an account.
+
+    The cookie is minted and HMAC-signed by this server (``ads/consent.py``)
+    when the visitor accepts the banner on ``mobaide.com``; the client copies
+    its fields here verbatim. The signature proves the server minted the
+    value, and ``network`` — a keyed fingerprint of the address the Accept
+    came from — is what binds the *consent* to this visitor: the hashed-email
+    fallback is permitted only when the sign-up arrives from that network,
+    while a click id (no personal data) is kept either way. Anything that
+    fails verification is ignored at sign-up, never rejected, so a planted
+    or stale cookie cannot cost anyone the account. ``click_id`` /
+    ``click_id_kind`` are null on a consent-only visit; native clients never
+    send the object.
+    """
+
+    click_id: str | None = Field(default=None, pattern=AD_CLICK_ID_PATTERN)
+    click_id_kind: AdClickKind | None = None
+    clicked_at: int | None = Field(default=None, ge=0, le=4_102_444_800)
+    network: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    signature: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def _click_fields_travel_together(self) -> "AdAttribution":
+        if (self.click_id is None) != (self.click_id_kind is None):
+            raise ValueError("click_id and click_id_kind must be set together")
+        return self
+
+
 class UserRegisterRequest(RefreshableSessionRequest):
     email: str
     password: str
+    ad_attribution: AdAttribution | None = None
 
 
 class UserLoginRequest(RefreshableSessionRequest):
@@ -143,6 +178,7 @@ class UserLoginRequest(RefreshableSessionRequest):
 
 class GoogleAuthRequest(RefreshableSessionRequest):
     id_token: str
+    ad_attribution: AdAttribution | None = None
 
 
 class AppleAuthRequest(RefreshableSessionRequest):
@@ -155,6 +191,7 @@ class AppleAuthRequest(RefreshableSessionRequest):
 
     id_token: str = Field(..., min_length=1)
     nonce: str = Field(..., min_length=1)
+    ad_attribution: AdAttribution | None = None
 
 
 class UserRefreshRequest(BaseModel):

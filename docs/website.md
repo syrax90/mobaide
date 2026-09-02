@@ -184,6 +184,40 @@ policy promises no un-consented tracking:
   choice. Declining after a prior Accept pushes `consent update: denied` to a
   tag already running on the page and expires every `_gcl_*` cookie (both
   domain spellings — gtag registers them on the registrable domain).
+- **Accept also asks the server for our own `mobaide_ads` cookie.** `site.js`
+  never writes it — a domain cookie set from script proves nothing, since any
+  host on the registrable domain (the GitHub-Pages `get.mobaide.com`
+  included) could plant one. Instead the page POSTs the landing click id
+  (`gclid`/`wbraid`/`gbraid`, when the landing URL carried one) and the
+  page-load time to the same-origin `POST /api/ads/consent`
+  (`central_server/ads/router.py`), which answers with a `Set-Cookie` for
+  `Domain=<host>`, `Path=/`, 90 days, `SameSite=Lax`, `Secure` per
+  `USER_SESSION_COOKIE_SECURE`. The value is `<base64url(payload)>.<hmac>`
+  with payload `v=1&k=<kind>&t=<epoch s>&id=<id>&n=<network>` (`k`/`id`
+  absent on a bare consent marker), signed with a key derived from
+  `JWT_SECRET_KEY`; `t` is the arrival time capped at the server clock, so
+  neither a tab left open before Accept nor a skewed browser clock can
+  post-date a click, and `n` is a keyed fingerprint of the network the Accept
+  came from, which is what binds the consent to the visitor at sign-up (see
+  docs/deployment.md). If a Decline lands while the request is in flight,
+  the response handler clears the cookie again. Decline itself first POSTs
+  the cookie value to `/api/ads/consent/withdraw` — the server drops the
+  stored attribution from every account created with that cookie — and only
+  then expires the cookie locally. The
+  endpoint accepts same-origin requests only (`Sec-Fetch-Site` / `Origin`),
+  so a cross-site POST cannot mint a cookie for a victim either. An existing
+  cookie is requested anew only when the visit carries a new click id — a
+  plain return visit never renews the disclosed 90-day lifetime, and a stored
+  click id is never downgraded to a marker. The check runs on Accept and on
+  every stored-`granted` page load, and the same Decline path that clears
+  `_gcl_*` expires the cookie. Its only reader is the web SPA
+  (`web/src/auth/adAttribution.ts`), which forwards the fields and the
+  signature verbatim as the optional `ad_attribution` field of the register /
+  Google / Apple sign-up requests; the server verifies the signature before
+  storing anything on the new account and later reports the first agent
+  pairing back to the click — see *Google Ads conversion upload* in
+  docs/deployment.md. Pinned by `test_marketing.TestAttributionCookie` and
+  `tests/test_ads_consent.py`.
 - Because the tag is injected at runtime, the served HTML stays same-origin
   and inline-free — the two `test_marketing.py` self-containment guards still
   hold unchanged, and `TestConsentBanner` adds the reverse guard: the HTML must
@@ -194,14 +228,16 @@ policy promises no un-consented tracking:
 - The banner's disclosure lives in the privacy policy's Section 3.5 — the
   banner links it, and `central_server/legal/privacy.md` must stay in sync
   with what the tag actually does (cookies only after Accept, choice stored in
-  local storage, withdrawal by clearing site data).
+  local storage, withdrawal by clearing site data, the `mobaide_ads` cookie
+  and the one-time first-pairing report).
 
 Changing the tag id means changing `ADS_TAG_ID` in `site.js`; a new or renamed
 conversion action also means a new `ADS_PAGE_VIEW_LABEL`, pinned by
 `test_marketing.TestConsentBanner.test_site_js_fires_the_page_view_conversion`.
 Removing the tag means removing the banner, the `site.js` module, the
-`_LANDING_CSP` bucket, and the privacy-policy passages together — each is
-load-bearing for the others.
+`_LANDING_CSP` bucket, the `mobaide_ads` cookie writer together with
+`web/src/auth/adAttribution.ts` and the `ad_attribution` request field, and
+the privacy-policy passages — each is load-bearing for the others.
 
 `/robots.txt` disallows only `/api/` and `/portal/`, with one carve-out: an
 `Allow: /portal/delete-account-info` line **emitted before the disallows**. That

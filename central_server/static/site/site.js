@@ -458,6 +458,101 @@
     }
   }
 
+  /* First-party click attribution for the web app. Accepting the banner also
+   * records the Google Ads click id the visitor arrived with (gclid, or the
+   * iOS-era wbraid/gbraid) in a cookie on the registrable domain, so that
+   * app.mobaide.com can attach it to the sign-up request and the server can
+   * report the account's first agent pairing back to the ad click. Without a
+   * click id the cookie is a bare consent marker (the server then falls back
+   * to a hashed email). The cookie is issued and signed by the server, not
+   * written from script: a domain cookie set by script proves nothing, since
+   * any host on the registrable domain could plant one. This page only reads
+   * it back (to avoid renewing it) and expires it on Decline.
+   */
+  var ADS_COOKIE_NAME = "mobaide_ads";
+  var ADS_CLICK_ID_RE = /^[A-Za-z0-9_-]{1,200}$/;
+  var ADS_CLICK_PARAMS = ["gclid", "wbraid", "gbraid"];
+  // Stamped once per page load: the moment the click id arrived, not the
+  // moment the visitor got around to pressing Accept in a tab left open.
+  var LANDING_ARRIVED_AT = Math.floor(Date.now() / 1000);
+
+  function readLandingClickId() {
+    var params = new URLSearchParams(window.location.search);
+    for (var i = 0; i < ADS_CLICK_PARAMS.length; i++) {
+      var value = params.get(ADS_CLICK_PARAMS[i]);
+      if (value && ADS_CLICK_ID_RE.test(value)) {
+        return { kind: ADS_CLICK_PARAMS[i], id: value };
+      }
+    }
+    return null;
+  }
+
+  function readAdsCookie() {
+    var cookies;
+    try {
+      cookies = document.cookie.split(";");
+    } catch (err) {
+      return null;
+    }
+    for (var i = 0; i < cookies.length; i++) {
+      var entry = cookies[i];
+      var eq = entry.indexOf("=");
+      if (eq === -1) {
+        continue;
+      }
+      if (entry.slice(0, eq).replace(/^\s+/, "") === ADS_COOKIE_NAME) {
+        return entry.slice(eq + 1);
+      }
+    }
+    return null;
+  }
+
+  function requestAdsCookie() {
+    var click = readLandingClickId();
+    // Only a new click id rewrites an existing cookie. A plain return visit
+    // must not renew the 90-day lifetime the policy discloses — neither for
+    // a stored click id nor for a bare consent marker.
+    if (!click && readAdsCookie() !== null) {
+      return;
+    }
+    if (typeof window.fetch !== "function") {
+      return;
+    }
+    try {
+      window
+        .fetch("/api/ads/consent", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            click_id: click ? click.id : null,
+            click_id_kind: click ? click.kind : null,
+            arrived_at: LANDING_ARRIVED_AT,
+          }),
+          credentials: "same-origin",
+          keepalive: true,
+        })
+        .then(function () {
+          // A Decline that landed while this was in flight must win: the
+          // response's Set-Cookie would otherwise resurrect the cookie.
+          if (readAdsConsent() !== "granted") {
+            clearAdsCookie();
+          }
+        })
+        .catch(function () {
+          // Offline or blocked: the visit still counts on this page, only
+          // the sign-up attribution is lost.
+        });
+    } catch (err) {
+      // Same as above for a synchronous fetch failure.
+    }
+  }
+
+  function clearAdsCookie() {
+    document.cookie = ADS_COOKIE_NAME + "=; Max-Age=0; path=/";
+    document.cookie =
+      ADS_COOKIE_NAME + "=; Max-Age=0; path=/; domain=." + window.location.hostname;
+  }
+
   var googleTagInjected = false;
 
   /* The official snippet's `function gtag(){dataLayer.push(arguments)}`,
@@ -522,7 +617,8 @@
    * told to stop via the consent API, and Google's `_gcl_*` cookies are
    * expired outright — gtag writes them from script on this origin, so script
    * can remove them. Both domain spellings are expired because gtag registers
-   * them on the registrable domain, not the host.
+   * them on the registrable domain, not the host. Our own attribution cookie
+   * goes with them.
    */
   function withdrawGoogleTag() {
     if (googleTagInjected) {
@@ -530,6 +626,25 @@
         ad_storage: "denied",
         ad_user_data: "denied",
       });
+    }
+    // Tell the server first, while the cookie can still be read: an account
+    // created with it must lose the stored attribution too, not only the
+    // browser its copy. Best effort — the local deletion below never waits.
+    var existing = readAdsCookie();
+    if (existing !== null && typeof window.fetch === "function") {
+      try {
+        window
+          .fetch("/api/ads/consent/withdraw", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ value: existing }),
+            credentials: "same-origin",
+            keepalive: true,
+          })
+          .catch(function () {});
+      } catch (err) {
+        // Same as above: withdrawal is still recorded on this page.
+      }
     }
     var cookies = document.cookie.split(";");
     for (var i = 0; i < cookies.length; i++) {
@@ -540,6 +655,7 @@
           name + "=; Max-Age=0; path=/; domain=." + window.location.hostname;
       }
     }
+    clearAdsCookie();
   }
 
   /* The banner ships with the `hidden` attribute and is revealed only when no
@@ -577,6 +693,7 @@
       storeAdsConsent("granted");
       banner.hidden = true;
       loadGoogleTag();
+      requestAdsCookie();
     });
     decline.addEventListener("click", function () {
       storeAdsConsent("denied");
@@ -597,6 +714,7 @@
     var choice = readAdsConsent();
     if (choice === "granted") {
       loadGoogleTag();
+      requestAdsCookie();
       return;
     }
     if (choice === "denied") {

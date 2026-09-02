@@ -14,6 +14,7 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import __version__
+from .ads.router import router as ads_router
 from .agents.service import AgentService
 from .auth.dependencies import get_api_user, get_dashboard_user
 from .auth.email import build_email_sender
@@ -275,6 +276,15 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
 
         app.state.push_dispatcher = PushDispatcher.from_config(db, config)
 
+        from .ads import ConversionUploader
+
+        app.state.ads_uploader = ConversionUploader.from_config(db, config)
+        # Retention first: a pending row that crossed the 90-day line while
+        # the server was down must be gone before anything resumes it, and
+        # the hourly loop's first sweep is an hour away.
+        await _purge_stale_ad_attribution(db)
+        await app.state.ads_uploader.resume_pending()
+
         # Runs every 60 s; interval is not surfaced in the function signature.
         cleanup_task = asyncio.create_task(
             _token_cleanup_loop(db), name="token-cleanup"
@@ -291,6 +301,9 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             monitoring_loop(app.state.routing, config),
             name="monitoring",
         )
+        ad_purge_task = asyncio.create_task(
+            _ad_attribution_purge_loop(db), name="ad-attribution-purge"
+        )
 
         yield
 
@@ -299,6 +312,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         deletion_sweeper_task.cancel()
         heartbeat_flush_task.cancel()
         monitoring_task.cancel()
+        ad_purge_task.cancel()
         try:
             await cleanup_task
         except asyncio.CancelledError:
@@ -315,6 +329,10 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             await monitoring_task
         except asyncio.CancelledError:
             pass
+        try:
+            await ad_purge_task
+        except asyncio.CancelledError:
+            pass
         # Final sweep after the loop is cancelled (no interleaving) and
         # before db.close() so still-connected agents' freshest heartbeats
         # survive the restart.
@@ -322,6 +340,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             await _flush_agent_heartbeats(db, app.state.routing)
         except Exception as exc:
             logger.exception("heartbeat_flush.shutdown_error: %s", exc)
+        await app.state.ads_uploader.aclose()
         await app.state.push_dispatcher.aclose()
         app.state.auth_service.close()
         await db.close()
@@ -476,6 +495,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(templates_router)
     app.include_router(shortcuts_router)
     app.include_router(custom_agent_types_router)
+    app.include_router(ads_router)
 
     if config.enable_api_docs:
         _register_api_docs(app)
@@ -529,6 +549,25 @@ async def _token_cleanup_loop(db: Database) -> None:
             raise
         except Exception as exc:
             logger.exception("token_cleanup.error: %s", exc)
+
+
+async def _purge_stale_ad_attribution(db: Database) -> None:
+    purged = await db.purge_stale_ad_attribution()
+    if purged:
+        logger.info("ad_attribution.purged users=%d", purged)
+
+
+async def _ad_attribution_purge_loop(db: Database) -> None:
+    """Hourly: enforce the 90-day retention the privacy policy promises for
+    sign-up click attribution, whether or not the uploader ever ran."""
+    while True:
+        try:
+            await asyncio.sleep(3600)
+            await _purge_stale_ad_attribution(db)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("ad_attribution_purge.error: %s", exc)
 
 
 async def _account_deletion_sweeper_loop(

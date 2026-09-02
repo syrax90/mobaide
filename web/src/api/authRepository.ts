@@ -9,7 +9,13 @@
  * into an HttpOnly cookie instead of the response body. That is what lets a
  * session survive closing the last tab, and it means nothing here ever handles
  * the long-lived credential.
+ *
+ * The three calls that can create an account also forward the landing page's
+ * Google Ads click attribution (`ad_attribution`, read from the `mobaide_ads`
+ * cookie) so the server can report the first agent pairing to the ad click.
+ * Without the cookie the key is omitted and the wire shape is unchanged.
  */
+import { readAdAttribution, type AdAttribution } from '../auth/adAttribution';
 import { clearSignedInMarker, type UserSession } from '../auth/sessionTransport';
 import { postLogout } from '../auth/userSessionApi';
 import { relayClient } from './clients';
@@ -77,12 +83,24 @@ function fail(response: Response, error: unknown): never {
   throw toApiError(response, error);
 }
 
+/** The `ad_attribution` field for an account-creating body, or nothing. */
+function adAttributionField(): { ad_attribution?: AdAttribution } {
+  const ad_attribution = readAdAttribution();
+  return ad_attribution === null ? {} : { ad_attribution };
+}
+
 export async function register(
   email: string,
   password: string,
 ): Promise<AuthOutcome> {
   const { data, error, response } = await relayClient.POST('/api/auth/register', {
-    body: { email, password, refreshable: true, session_transport: 'cookie' },
+    body: {
+      email,
+      password,
+      refreshable: true,
+      session_transport: 'cookie',
+      ...adAttributionField(),
+    },
   });
   if (error !== undefined || data === undefined) fail(response, error);
   return toOutcome(data);
@@ -111,7 +129,12 @@ export async function login(
 
 export async function loginWithGoogle(idToken: string): Promise<AuthOutcome> {
   const { data, error, response } = await relayClient.POST('/api/auth/google', {
-    body: { id_token: idToken, refreshable: true, session_transport: 'cookie' },
+    body: {
+      id_token: idToken,
+      refreshable: true,
+      session_transport: 'cookie',
+      ...adAttributionField(),
+    },
   });
   if (error !== undefined || data === undefined) fail(response, error);
   return toOutcome(data);
@@ -127,7 +150,13 @@ export async function loginWithApple(
   nonce: string,
 ): Promise<AuthOutcome> {
   const { data, error, response } = await relayClient.POST('/api/auth/apple', {
-    body: { id_token: idToken, nonce, refreshable: true, session_transport: 'cookie' },
+    body: {
+      id_token: idToken,
+      nonce,
+      refreshable: true,
+      session_transport: 'cookie',
+      ...adAttributionField(),
+    },
   });
   if (error !== undefined || data === undefined) fail(response, error);
   return toOutcome(data);

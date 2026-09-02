@@ -241,6 +241,19 @@ vouched for, which is why `GET /api/pairing/trust-pin` is read-only and no
 client writes its response into a local trust store: an unattended write is a
 permanent lockout waiting for a bad value.
 
+### The first-pairing marker
+
+`_complete_pairing` also stamps `users.first_paired_at` on the account's
+first-ever successful claim, through its own compare-and-set right after the
+trust pin is taken. Unlike `trust_key_fp` it is never cleared — the pin resets
+when an account drops to zero agents, and this marker must not — which is
+what makes it safe as the trigger for the once-per-account Google Ads "Agent
+paired" conversion upload (see *Google Ads conversion upload* in
+docs/deployment.md): when the CAS wins, the user id is handed to
+`app.state.ads_uploader` after the credential push, so a scheduling fault can
+never fail a delivered pairing. Accounts that already owned an agent or
+carried a pin when the column arrived were backfilled by the v20 migration.
+
 The refusal is HTTP 409 with `detail.error = "trust_key_pin_mismatch"` — a
 structured detail rather than prose, because 409 already carries the "agent
 belongs to another account" refusal and the two need different copy.

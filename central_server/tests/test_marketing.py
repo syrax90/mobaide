@@ -663,3 +663,65 @@ class TestLandingInstallCommands:
         belongs in ``static/site/site.js``."""
         assert _INLINE_HANDLER_RE.search(landing) is None
 
+
+
+def _function_body(source: str, name: str) -> str:
+    """The text of one top-level ``site.js`` function (up to the next one)."""
+    start = source.index(f"function {name}(")
+    end = source.find("\n  function ", start + 1)
+    return source[start : end if end != -1 else len(source)]
+
+
+class TestAttributionCookie:
+    """Accept also records the landing click id in a first-party cookie the
+    web app forwards at sign-up (privacy policy §3.5); Decline removes it."""
+
+    def _source(self) -> str:
+        return (resolve_static_dir() / "site" / "site.js").read_text()
+
+    async def test_site_js_requests_the_attribution_cookie_inside_the_gated_flow(
+        self,
+    ) -> None:
+        """The cookie is minted and signed by the server — script never
+        writes it — so the page's job is one same-origin POST carrying the
+        click id and the page-load time, and only when there is something
+        new to record."""
+        source = self._source()
+        assert 'ADS_COOKIE_NAME = "mobaide_ads"' in source
+        assert "LANDING_ARRIVED_AT = Math.floor(Date.now() / 1000)" in source
+        for param in ("gclid", "wbraid", "gbraid"):
+            assert f'"{param}"' in source
+        requester = _function_body(source, "requestAdsCookie")
+        # A return visit without a click id must not renew the lifetime.
+        assert "readAdsCookie() !== null" in requester
+        assert '.fetch("/api/ads/consent"' in requester
+        assert "arrived_at: LANDING_ARRIVED_AT" in requester
+        assert 'credentials: "same-origin"' in requester
+        assert "document.cookie =" not in requester
+        # A Decline that lands while the request is in flight must win over
+        # the response's Set-Cookie.
+        assert 'readAdsConsent() !== "granted"' in requester
+        assert requester.index(".then(") < requester.index("clearAdsCookie()")
+        # Both call sites live inside the hostname-gated function, after
+        # the gate: Accept and the stored-"granted" page load.
+        banner = _function_body(source, "setUpConsentBanner")
+        assert banner.index('hostname !== "mobaide.com"') < banner.index("requestAdsCookie()")
+        assert banner.count("requestAdsCookie()") == 2
+
+    async def test_site_js_clears_the_attribution_cookie_on_withdrawal(self) -> None:
+        """Decline reports the withdrawal to the server (so an account created
+        with the cookie loses its stored attribution too) *before* deleting
+        the cookie it needs for that, then deletes it."""
+        source = self._source()
+        withdrawal = _function_body(source, "withdrawGoogleTag")
+        assert "clearAdsCookie()" in withdrawal
+        assert '.fetch("/api/ads/consent/withdraw"' in withdrawal
+        assert withdrawal.index("readAdsCookie()") < withdrawal.index("/api/ads/consent/withdraw")
+        assert withdrawal.index("/api/ads/consent/withdraw") < withdrawal.index("clearAdsCookie()")
+
+    async def test_attribution_cookie_name_is_never_server_rendered(
+        self, landing
+    ) -> None:
+        """The cookie is written by script after Accept; a server-rendered
+        reference would mean the HTML started carrying attribution logic."""
+        assert "mobaide_ads" not in landing

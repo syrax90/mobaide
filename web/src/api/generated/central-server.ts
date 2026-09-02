@@ -4,6 +4,53 @@
  */
 
 export interface paths {
+    "/api/ads/consent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Ads Consent
+         * @description Issue the signed ``mobaide_ads`` cookie after the visitor accepts the
+         *     landing page's banner. ``t`` is the arrival time the page reports, capped
+         *     at the server clock so a skewed browser cannot post-date a click.
+         */
+        post: operations["record_ads_consent_api_ads_consent_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ads/consent/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw Ads Consent
+         * @description Decline after an earlier Accept: drop the stored click attribution from
+         *     every account created with this cookie, and expire the cookie itself.
+         *
+         *     Only a value this server signed identifies anything, and withdrawing can
+         *     only ever remove data, so an invalid value is logged and otherwise
+         *     answered exactly like a valid one.
+         */
+        post: operations["withdraw_ads_consent_api_ads_consent_withdraw_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents": {
         parameters: {
             query?: never;
@@ -960,6 +1007,55 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * AdAttribution
+         * @description Google Ads click attribution the web client copies out of the
+         *     ``mobaide_ads`` cookie when it creates an account.
+         *
+         *     The cookie is minted and HMAC-signed by this server (``ads/consent.py``)
+         *     when the visitor accepts the banner on ``mobaide.com``; the client copies
+         *     its fields here verbatim. The signature proves the server minted the
+         *     value, and ``network`` — a keyed fingerprint of the address the Accept
+         *     came from — is what binds the *consent* to this visitor: the hashed-email
+         *     fallback is permitted only when the sign-up arrives from that network,
+         *     while a click id (no personal data) is kept either way. Anything that
+         *     fails verification is ignored at sign-up, never rejected, so a planted
+         *     or stale cookie cannot cost anyone the account. ``click_id`` /
+         *     ``click_id_kind`` are null on a consent-only visit; native clients never
+         *     send the object.
+         */
+        AdAttribution: {
+            /** Click Id */
+            click_id?: string | null;
+            /** Click Id Kind */
+            click_id_kind?: ("gclid" | "wbraid" | "gbraid") | null;
+            /** Clicked At */
+            clicked_at?: number | null;
+            /** Network */
+            network?: string | null;
+            /** Signature */
+            signature?: string | null;
+        };
+        /**
+         * AdsConsentRequest
+         * @description What the landing page knows when the visitor accepts the banner.
+         */
+        AdsConsentRequest: {
+            /** Arrived At */
+            arrived_at?: number | null;
+            /** Click Id */
+            click_id?: string | null;
+            /** Click Id Kind */
+            click_id_kind?: ("gclid" | "wbraid" | "gbraid") | null;
+        };
+        /**
+         * AdsWithdrawRequest
+         * @description The ``mobaide_ads`` value the page still holds when Decline is pressed.
+         */
+        AdsWithdrawRequest: {
+            /** Value */
+            value: string;
+        };
+        /**
          * AgentSummary
          * @description Agent listing response — no token.
          */
@@ -988,6 +1084,7 @@ export interface components {
          *     server can bind the token to this request and reject replays.
          */
         AppleAuthRequest: {
+            ad_attribution?: components["schemas"]["AdAttribution"] | null;
             /** Id Token */
             id_token: string;
             /** Nonce */
@@ -1349,6 +1446,7 @@ export interface components {
         };
         /** GoogleAuthRequest */
         GoogleAuthRequest: {
+            ad_attribution?: components["schemas"]["AdAttribution"] | null;
             /** Id Token */
             id_token: string;
             /**
@@ -1696,6 +1794,7 @@ export interface components {
         };
         /** UserRegisterRequest */
         UserRegisterRequest: {
+            ad_attribution?: components["schemas"]["AdAttribution"] | null;
             /** Email */
             email: string;
             /** Password */
@@ -1744,6 +1843,68 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    record_ads_consent_api_ads_consent_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdsConsentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    withdraw_ads_consent_api_ads_consent_withdraw_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdsWithdrawRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_agents_api_agents_get: {
         parameters: {
             query?: never;

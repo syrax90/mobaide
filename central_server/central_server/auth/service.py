@@ -24,8 +24,14 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from fastapi import BackgroundTasks
 
+from ..ads.consent import network_fingerprint, verify_attribution
 from ..relay.routing import WS_CLOSE_ADMIN_REVOKED
-from .models import DeleteAccountRequest, MobileTokenPayload, UserTokenPayload
+from .models import (
+    AdAttribution,
+    DeleteAccountRequest,
+    MobileTokenPayload,
+    UserTokenPayload,
+)
 
 if TYPE_CHECKING:
     from ..config import CentralServerConfig
@@ -46,6 +52,51 @@ _ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=1)
 # set only holds weak refs, so without this the GC can collect a task
 # mid-send (see Ruff RUF006 / CPython issue python/cpython#91887).
 _background_email_tasks: set[asyncio.Task] = set()
+
+
+def _ad_attribution_columns(
+    attribution: AdAttribution | None, secret: str, client_ip: str | None
+) -> dict[str, Any]:
+    """Map a sign-up request's attribution onto ``create_user`` kwargs.
+
+    Only a value this server signed is used at all, and only one whose
+    network fingerprint matches the sign-up's own address counts as consent
+    (the permission to fall back to a hashed email): a value an attacker
+    minted from their own client cannot carry a victim's consent. A click id
+    holds no personal data and is kept whichever network it arrives from.
+    Nothing here ever fails the sign-up itself.
+    """
+    if attribution is None:
+        return {}
+    if not verify_attribution(
+        secret,
+        click_id=attribution.click_id,
+        click_id_kind=attribution.click_id_kind,
+        clicked_at=attribution.clicked_at,
+        network=attribution.network,
+        signature=attribution.signature,
+    ):
+        logger.info("ads.attribution_rejected reason=bad_signature")
+        return {}
+    consent = attribution.network == network_fingerprint(secret, client_ip)
+    if not consent:
+        logger.info("ads.attribution_consent_unbound reason=network_mismatch")
+        if attribution.click_id is None:
+            return {}
+    clicked_at = attribution.clicked_at
+    return {
+        "ad_click_id": attribution.click_id,
+        "ad_click_kind": attribution.click_id_kind,
+        "ad_click_at": (
+            datetime.fromtimestamp(clicked_at, tz=timezone.utc).isoformat()
+            if clicked_at is not None
+            else None
+        ),
+        "ads_consent": consent,
+        # Lets a later Decline on the landing page withdraw this account's
+        # attribution without knowing whose account it is.
+        "ad_attribution_sig": attribution.signature,
+    }
 
 
 class VerificationRequiredError(Exception):
@@ -255,6 +306,9 @@ class AuthService:
         email: str,
         password: str,
         background_tasks: BackgroundTasks | None = None,
+        *,
+        ad_attribution: AdAttribution | None = None,
+        client_ip: str | None = None,
     ) -> RegisterResult:
         """Register a new user with email+password.
 
@@ -278,6 +332,9 @@ class AuthService:
                 password_hash=password_hash,
                 role="viewer",
                 email_verified=False,
+                **_ad_attribution_columns(
+                    ad_attribution, self._config.jwt_secret_key, client_ip
+                ),
             )
             await self._issue_verification_code(
                 user_id,
@@ -299,6 +356,9 @@ class AuthService:
             password_hash=password_hash,
             role="viewer",
             email_verified=True,
+            **_ad_attribution_columns(
+                    ad_attribution, self._config.jwt_secret_key, client_ip
+                ),
         )
         token = self._create_user_token(user_id, email, "viewer")
         return RegisterResult(
@@ -619,6 +679,8 @@ class AuthService:
         token_str: str,
         *,
         expected_nonce: str | None = None,
+        ad_attribution: AdAttribution | None = None,
+        client_ip: str | None = None,
     ) -> tuple[str, str, str, bool]:
         """Verify a Google ID token and return/create user.
 
@@ -670,6 +732,9 @@ class AuthService:
             google_sub=google_sub,
             role="viewer",
             email_verified=email_verified,
+            **_ad_attribution_columns(
+                    ad_attribution, self._config.jwt_secret_key, client_ip
+                ),
         )
         token = self._create_user_token(user_id, email, "viewer")
         return user_id, "viewer", token, True
@@ -774,6 +839,8 @@ class AuthService:
         token_str: str,
         *,
         nonce: str,
+        ad_attribution: AdAttribution | None = None,
+        client_ip: str | None = None,
     ) -> tuple[str, str, str, bool]:
         """Verify an Apple identity token and return/create the user.
 
@@ -840,6 +907,9 @@ class AuthService:
             apple_sub=apple_sub,
             role="viewer",
             email_verified=email_verified,
+            **_ad_attribution_columns(
+                    ad_attribution, self._config.jwt_secret_key, client_ip
+                ),
         )
         token = self._create_user_token(user_id, email, "viewer")
         return user_id, "viewer", token, True

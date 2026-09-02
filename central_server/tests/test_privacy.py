@@ -46,3 +46,13 @@ class TestRenderPrivacyLoader:
         better than serving an empty privacy page."""
         with pytest.raises(FileNotFoundError):
             render_privacy(tmp_path)
+
+
+class TestRenderedShape:
+    def test_toc_lists_fourteen_sections_and_every_table_renders(self) -> None:
+        """H2-only TOC (``toc_depth`` 2-2) and GFM tables: a malformed
+        heading or table row degrades silently to a paragraph, so the counts
+        are the only guard between an edit and the live page."""
+        rendered = render_privacy()
+        assert rendered["toc"].count("<li>") == 14
+        assert rendered["html"].count("<table>") == 7
