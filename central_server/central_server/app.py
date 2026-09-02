@@ -278,6 +278,10 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         from .ads import ConversionUploader
 
         app.state.ads_uploader = ConversionUploader.from_config(db, config)
+        # Retention first: a pending row that crossed the 90-day line while
+        # the server was down must be gone before anything resumes it, and
+        # the hourly loop's first sweep is an hour away.
+        await _purge_stale_ad_attribution(db)
         await app.state.ads_uploader.resume_pending()
 
         # Runs every 60 s; interval is not surfaced in the function signature.
@@ -545,15 +549,19 @@ async def _token_cleanup_loop(db: Database) -> None:
             logger.exception("token_cleanup.error: %s", exc)
 
 
+async def _purge_stale_ad_attribution(db: Database) -> None:
+    purged = await db.purge_stale_ad_attribution()
+    if purged:
+        logger.info("ad_attribution.purged users=%d", purged)
+
+
 async def _ad_attribution_purge_loop(db: Database) -> None:
     """Hourly: enforce the 90-day retention the privacy policy promises for
     sign-up click attribution, whether or not the uploader ever ran."""
     while True:
         try:
             await asyncio.sleep(3600)
-            purged = await db.purge_stale_ad_attribution()
-            if purged:
-                logger.info("ad_attribution.purged users=%d", purged)
+            await _purge_stale_ad_attribution(db)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

@@ -464,7 +464,8 @@
    * app.mobaide.com can attach it to the sign-up request and the server can
    * report the account's first agent pairing back to the ad click. Without a
    * click id the cookie is a bare consent marker (the server then falls back
-   * to a hashed email), but an existing click id is never downgraded to one.
+   * to a hashed email); an existing cookie is left alone unless the visit
+   * carries a new click id.
    * `Secure` only over https: identical bytes in production, while the
    * http://mobaide.com:<port> local recipe below would otherwise write
    * nothing at all.
@@ -507,8 +508,10 @@
 
   function writeAdsCookie() {
     var click = readLandingClickId();
-    var existing = readAdsCookie();
-    if (!click && existing && existing.indexOf("k=") !== -1) {
+    // Only a new click id rewrites an existing cookie. A plain return visit
+    // must not renew the 90-day lifetime the policy discloses — neither for
+    // a stored click id nor for a bare consent marker.
+    if (!click && readAdsCookie() !== null) {
       return;
     }
     var value = new URLSearchParams();

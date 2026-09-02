@@ -166,11 +166,29 @@ class TestSelectIdentifier:
     def test_missing_click_time_ages_from_sign_up(self):
         assert select_identifier(_row(ad_click_at=None), NOW).kind == "gclid"
         stale = _row(ad_click_at=None, created_at=(NOW - timedelta(days=91)).isoformat())
-        assert select_identifier(stale, NOW).kind == "hashed_email"
+        assert select_identifier(stale, NOW) is None
+
+    def test_future_click_time_is_capped_by_sign_up(self):
+        """The click stamp is the visitor's clock; sign-up is the server's."""
+        ahead = (NOW + timedelta(days=3650)).isoformat()
+        assert select_identifier(_row(ad_click_at=ahead), NOW).kind == "gclid"
+        old_account = _row(
+            ad_click_at=ahead, created_at=(NOW - timedelta(days=91)).isoformat()
+        )
+        assert select_identifier(old_account, NOW) is None
 
     def test_consent_without_click_uses_hashed_email(self):
         row = _row(ad_click_id=None, ad_click_kind=None, ad_click_at=None)
         assert select_identifier(row, NOW).kind == "hashed_email"
+
+    def test_email_fallback_expires_with_the_sign_up_window(self):
+        row = _row(
+            ad_click_id=None,
+            ad_click_kind=None,
+            ad_click_at=None,
+            created_at=(NOW - timedelta(days=91)).isoformat(),
+        )
+        assert select_identifier(row, NOW) is None
 
     def test_nothing_usable_returns_none(self):
         row = _row(ad_click_id=None, ad_click_kind=None, ad_click_at=None, email=None)

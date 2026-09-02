@@ -688,6 +688,8 @@ class TestAttributionCookie:
         for param in ("gclid", "wbraid", "gbraid"):
             assert f'"{param}"' in source
         writer = _function_body(source, "writeAdsCookie")
+        # A return visit without a click id must not renew the lifetime.
+        assert "readAdsCookie() !== null" in writer
         assert "SameSite=Lax" in writer
         assert 'domain=." + window.location.hostname' in writer
         assert '"; Secure"' in writer

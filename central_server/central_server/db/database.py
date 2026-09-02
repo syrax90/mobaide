@@ -2227,8 +2227,10 @@ class Database:
     async def purge_stale_ad_attribution(self) -> int:
         """Enforce the 90-day retention the privacy policy promises.
 
-        Age is measured from the click, or from sign-up when the account
-        carries a consent marker without a click id. ISO strings compare
+        Age runs from the click or from sign-up, whichever is earlier: the
+        click timestamp comes from the visitor's clock (the request model
+        accepts values decades out), so the server-stamped ``created_at`` is
+        the latest reference retention may use. ISO strings compare
         lexicographically, as everywhere else in this file.
         """
         now = datetime.now(timezone.utc)
@@ -2236,8 +2238,8 @@ class Database:
         cursor = await self.conn.execute(
             "UPDATE users SET ad_click_id = NULL, ad_click_kind = NULL, "
             "ad_click_at = NULL, ads_consent = 0, updated_at = ? "
-            "WHERE ads_consent = 1 AND COALESCE(ad_click_at, created_at) < ?",
-            (now.isoformat(), cutoff),
+            "WHERE ads_consent = 1 AND (created_at < ? OR ad_click_at < ?)",
+            (now.isoformat(), cutoff, cutoff),
         )
         await self.conn.commit()
         return cursor.rowcount

@@ -188,10 +188,12 @@ policy promises no un-consented tracking:
   `path=/`, 90 days, `SameSite=Lax`, `Secure` only over https so the local
   recipe above still works): `v=1&k=<gclid|wbraid|gbraid>&t=<epoch s>&id=<id>`
   when the landing URL carried a click id, `v=1&t=<epoch s>` as a bare consent
-  marker otherwise — and a stored click id is never downgraded to a marker on
-  a later organic visit. It is written on Accept and again on every
-  stored-`granted` page load (so a click on a return visit is captured), and
-  the same Decline path that clears `_gcl_*` expires it. Its only reader is
+  marker otherwise. An existing cookie is rewritten only when the visit
+  carries a new click id — a plain return visit never renews the disclosed
+  90-day lifetime, and a stored click id is never downgraded to a marker.
+  The check runs on Accept and on every stored-`granted` page load (so a
+  click on a return visit is captured), and the same Decline path that
+  clears `_gcl_*` expires the cookie. Its only reader is
   the web SPA (`web/src/auth/adAttribution.ts`), which forwards it as the
   optional `ad_attribution` field of the register / Google / Apple sign-up
   requests; the server stores it on new accounts and reports the first agent

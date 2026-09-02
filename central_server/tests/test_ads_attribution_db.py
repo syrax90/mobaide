@@ -187,12 +187,27 @@ class TestAttributionStorage:
         await db.conn.execute(
             "UPDATE users SET created_at = ? WHERE id = ?", (old, unconsented)
         )
+        # A skewed browser clock cannot extend retention: the click is
+        # stamped years ahead, but the account itself is 91 days old.
+        future_click = await _user(
+            db,
+            "future@test.local",
+            ad_click_id="c",
+            ad_click_kind="gclid",
+            ad_click_at=(datetime.now(timezone.utc) + timedelta(days=3650)).isoformat(),
+            ads_consent=True,
+        )
+        await db.conn.execute(
+            "UPDATE users SET created_at = ? WHERE id = ?", (old, future_click)
+        )
         await db.conn.commit()
 
-        assert await db.purge_stale_ad_attribution() == 2
+        assert await db.purge_stale_ad_attribution() == 3
         assert (await _row(db, stale_click))["ads_consent"] == 0
         assert (await _row(db, stale_click))["ad_click_id"] is None
         assert (await _row(db, stale_consent))["ads_consent"] == 0
+        assert (await _row(db, future_click))["ads_consent"] == 0
+        assert (await _row(db, future_click))["ad_click_id"] is None
         assert (await _row(db, fresh))["ads_consent"] == 1
         assert (await _row(db, fresh))["ad_click_id"] == "b"
         assert await db.purge_stale_ad_attribution() == 0

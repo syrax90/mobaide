@@ -76,8 +76,12 @@ class UploadOutcome:
 
 
 def normalize_email(email: str) -> str:
-    """Google's normalisation: trim + lowercase; Gmail also drops dots and
-    ``+suffix`` in the local part."""
+    """Google's enhanced-conversions normalisation: trim + lowercase, and for
+    gmail.com / googlemail.com drop every ``.`` and the ``+suffix`` from the
+    local part (both are spelled out in the API docs, with
+    ``Jane.Doe+Shopping@googlemail.com`` → ``janedoe@googlemail.com``, and the
+    official client-library sample strips the same two characters). Other
+    domains keep both."""
     candidate = email.strip().lower()
     local, sep, domain = candidate.rpartition("@")
     if not sep:
@@ -115,20 +119,23 @@ def select_identifier(
 ) -> ConversionIdentifier | None:
     """Fresh click id first, hashed email as the fallback — never both.
 
-    Click age is measured from ``ad_click_at`` when the cookie carried a
-    timestamp and from sign-up otherwise; a click older than the conversion
-    window is dropped rather than uploaded to a guaranteed no-match.
+    Anything older than the conversion window is dropped rather than
+    uploaded to a guaranteed no-match. The click timestamp comes from the
+    visitor's clock, so the server-stamped sign-up time caps it: age runs
+    from whichever of the two is earlier, and the email fallback (matched
+    by Google against a click that necessarily predates sign-up) ages from
+    sign-up alone.
     """
+    created_at = parse_iso_utc(row.get("created_at"))
     click_id = row.get("ad_click_id")
     kind = row.get("ad_click_kind")
     if click_id and kind in CLICK_KINDS:
-        age_reference = parse_iso_utc(row.get("ad_click_at")) or parse_iso_utc(
-            row.get("created_at")
-        )
-        if age_reference is None or now - age_reference <= CLICK_MAX_AGE:
+        clicked_at = parse_iso_utc(row.get("ad_click_at"))
+        candidates = [stamp for stamp in (clicked_at, created_at) if stamp is not None]
+        if not candidates or now - min(candidates) <= CLICK_MAX_AGE:
             return ConversionIdentifier(str(kind), str(click_id))
     email = row.get("email")
-    if email:
+    if email and (created_at is None or now - created_at <= CLICK_MAX_AGE):
         return ConversionIdentifier(HASHED_EMAIL, hash_email(str(email)))
     return None
 
