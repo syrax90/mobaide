@@ -305,6 +305,8 @@ The **credential** is read under exactly one name, chosen by that flag. Acceptin
 
 Mobile is unaffected: native clients never send `session_transport: "cookie"`, so they keep receiving the refresh token in the response body.
 
+One more cookie lives on the registrable domain by design: `mobaide_ads`, written by the marketing site's consent banner (`Domain=.mobaide.com`, JS-readable, deliberately not `__Host-`) so the SPA can read the landing page's Google Ads click id at sign-up. It is not a credential and **no server route reads it**: its value reaches the server only inside the optional `ad_attribution` field of the register / Google / Apple request bodies, where it is validated like any other input — see [Google Ads conversion upload](#google-ads-conversion-upload-agent-paired).
+
 **Deploy `deploy_central.py` before `deploy_web.py`, and roll back in the reverse order.** The two ship independently, and `RefreshableSessionRequest` does not set `extra="forbid"`, so a pre-cookie server silently *ignores* `session_transport` and returns the refresh token in the body — which a cookie-era SPA discards. The symptom is not a loud failure: browser sessions simply end every `USER_SESSION_ACCESS_EXPIRE_MINUTES` with no diagnostic. The window is the gap between the two deploys, so the ordering is the whole mitigation. A body-token fallback would reintroduce the JS-readable 30-day credential this design exists to remove.
 
 #### WebSocket Origin allow-list
@@ -314,6 +316,37 @@ Every WS endpoint checks the `Origin` header **before** accepting the handshake 
 ### Client IP behind Caddy
 
 `docker-compose.prod.yml` sets `FORWARDED_ALLOW_IPS=*` on `central-server`. Caddy runs as a separate container, so its bridge IP — not `127.0.0.1` — is the peer uvicorn sees; at uvicorn's default the `X-Forwarded-For` header is ignored and every request is attributed to Caddy. That collapses the per-IP password-reset quota onto one shared bucket (locking out real users while doing nothing to an attacker) and fills the access log with `172.x` addresses. The wildcard is safe here only because `central-server` is `expose`-only and never published, so Caddy on the compose network is the only possible peer. Do not copy it to the dev `docker-compose.yml`, which publishes `9000:9000` directly.
+
+### Google Ads conversion upload ("Agent paired")
+
+The relay can report **one offline click conversion per account** to Google Ads. The first time an account pairs an agent — either pairing direction, both finish in `_complete_pairing` — a compare-and-set on `users.first_paired_at` fires exactly once and hands the user id to `central_server/ads/` for a fire-and-forget upload to `customers/{id}:uploadClickConversions`. The identifier is the `gclid` / `wbraid` / `gbraid` the landing page captured at sign-up (see *The consent-gated Google Ads tag* in [docs/website.md](website.md)) when the click is at most 90 days old, otherwise the SHA-256 of the normalised account email (enhanced conversions for leads) — never both. The upload carries the consent state the banner actually collected (`adUserData: GRANTED`, `adPersonalization: DENIED`), only ever fires for accounts whose sign-up request carried the consent marker, and clears the account's attribution columns afterwards whatever the outcome; an upload interrupted by a restart is re-scheduled at the next startup (`ads.resume_pending`). An hourly job purges attribution older than 90 days regardless.
+
+**Fully inert unless configured.** Startup logs exactly one of `ads.disabled reason=not_configured`, `ads.misconfigured missing=<names>` (some variables set, some not — stays disabled) or `ads.enabled customer_id=… api_version=…`.
+
+| Variable | Required | Value |
+|---|---|---|
+| `GOOGLE_ADS_DEVELOPER_TOKEN` | yes | Developer token from the **manager** account's API Center. Basic access is enough; a Test-access token only reaches test accounts. |
+| `GOOGLE_ADS_CUSTOMER_ID` | yes | The Ads account that owns the conversion action. Dashes are stripped; anything but digits counts as unset. |
+| `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | when access is via a manager | The manager (MCC) account id, sent as `login-customer-id`. Leave unset when the OAuth user is a direct member of the Ads account. |
+| `GOOGLE_ADS_OAUTH_CLIENT_ID`, `GOOGLE_ADS_OAUTH_CLIENT_SECRET` | yes | A **Desktop app** OAuth client from the Google Cloud Console (any project with the Google Ads API enabled). |
+| `GOOGLE_ADS_OAUTH_REFRESH_TOKEN` | yes | Minted with `deploy/prod/google_ads_oauth.py` (below). |
+| `GOOGLE_ADS_CONVERSION_ACTION_ID` | yes | Numeric id of the `Agent paired` action (Goals → Conversions → Summary → the action; the number after `ctId=` in the URL). |
+| `GOOGLE_ADS_API_VERSION` | no | Defaults to `v25` (released July 2026, sunset around August 2027). Bump it here when Google retires the version; a malformed value falls back to the default. |
+
+**Setup runbook**
+
+1. Google Cloud Console: enable the *Google Ads API*, set the OAuth consent screen to **In production** — a consent screen left in *Testing* issues refresh tokens that expire after 7 days, and the symptom is `pairing.conversion_upload_failed … reason=oauth_refresh_failed` about a week after deploy — and create an OAuth client of type **Desktop app**.
+2. Google Ads: the action must be *Import → Other data sources → Track conversions from clicks*, counting **One** per click, with **Enhanced conversions for leads** switched on and the Customer Data Terms accepted; without those the hashed-email fallback is rejected permanently.
+3. Workstation: `python deploy/prod/google_ads_oauth.py --client-id <id> --verify --developer-token <token>`. It opens the browser (sign in with the Google account that administers the Ads account), prints the three `GOOGLE_ADS_OAUTH_*=` lines to stdout, and with `--verify` lists the `customers/…` resources the token can reach. If `GOOGLE_ADS_CUSTOMER_ID` is not in that list, the account is reached through a manager: set `GOOGLE_ADS_LOGIN_CUSTOMER_ID` to the manager id that is.
+4. Paste the values into `/opt/mobaide/.env` and run `deploy_central.py`.
+
+**Verifying and reading the logs**
+
+```bash
+docker compose logs central-server | grep -E 'ads\.|pairing\.(first_agent_paired|conversion_)'
+```
+
+`pairing.conversion_uploaded user_id=… identifier=<gclid|gbraid|wbraid|hashed_email> request_id=…` is the success line; the action's *Diagnostics* tab in Google Ads shows the upload within a few hours and attributed conversions within about a day. `pairing.conversion_upload_failed … reason=<r> status=<s> request_id=<id> message=<google message>` is terminal. The `reason` vocabulary: `http_4xx` (permanent — `USER_PERMISSION_DENIED` usually means a missing `login-customer-id`, an action-type error a mis-set action), `partial_failure` (Google accepted the request but rejected the row — an expired click, or the hashed-email fallback not enabled on the action), `oauth_refresh_failed`, `retries_exhausted` (three attempts over network errors / 429 / 5xx, 1 s then 4 s apart), `bad_response`. `pairing.conversion_skipped … reason=no_consent` is the normal outcome for every account that did not sign up through the consented web path. Click ids, emails and hashes never appear in the logs; the `request-id` is what Google support asks for. There is no `validateOnly` smoke mode yet — the first real pairing after deploy is the end-to-end test.
 
 ### Rollback
 

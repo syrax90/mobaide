@@ -458,6 +458,87 @@
     }
   }
 
+  /* First-party click attribution for the web app. Accepting the banner also
+   * records the Google Ads click id the visitor arrived with (gclid, or the
+   * iOS-era wbraid/gbraid) in a cookie on the registrable domain, so that
+   * app.mobaide.com can attach it to the sign-up request and the server can
+   * report the account's first agent pairing back to the ad click. Without a
+   * click id the cookie is a bare consent marker (the server then falls back
+   * to a hashed email), but an existing click id is never downgraded to one.
+   * `Secure` only over https: identical bytes in production, while the
+   * http://mobaide.com:<port> local recipe below would otherwise write
+   * nothing at all.
+   */
+  var ADS_COOKIE_NAME = "mobaide_ads";
+  var ADS_COOKIE_MAX_AGE = 7776000;
+  var ADS_CLICK_ID_RE = /^[A-Za-z0-9_-]{1,200}$/;
+  var ADS_CLICK_PARAMS = ["gclid", "wbraid", "gbraid"];
+
+  function readLandingClickId() {
+    var params = new URLSearchParams(window.location.search);
+    for (var i = 0; i < ADS_CLICK_PARAMS.length; i++) {
+      var value = params.get(ADS_CLICK_PARAMS[i]);
+      if (value && ADS_CLICK_ID_RE.test(value)) {
+        return { kind: ADS_CLICK_PARAMS[i], id: value };
+      }
+    }
+    return null;
+  }
+
+  function readAdsCookie() {
+    var cookies;
+    try {
+      cookies = document.cookie.split(";");
+    } catch (err) {
+      return null;
+    }
+    for (var i = 0; i < cookies.length; i++) {
+      var entry = cookies[i];
+      var eq = entry.indexOf("=");
+      if (eq === -1) {
+        continue;
+      }
+      if (entry.slice(0, eq).replace(/^\s+/, "") === ADS_COOKIE_NAME) {
+        return entry.slice(eq + 1);
+      }
+    }
+    return null;
+  }
+
+  function writeAdsCookie() {
+    var click = readLandingClickId();
+    var existing = readAdsCookie();
+    if (!click && existing && existing.indexOf("k=") !== -1) {
+      return;
+    }
+    var value = new URLSearchParams();
+    value.set("v", "1");
+    if (click) {
+      value.set("k", click.kind);
+    }
+    value.set("t", String(Math.floor(Date.now() / 1000)));
+    if (click) {
+      value.set("id", click.id);
+    }
+    try {
+      document.cookie =
+        ADS_COOKIE_NAME + "=" + value.toString() +
+        "; Max-Age=" + ADS_COOKIE_MAX_AGE +
+        "; path=/; domain=." + window.location.hostname +
+        "; SameSite=Lax" +
+        (window.location.protocol === "https:" ? "; Secure" : "");
+    } catch (err) {
+      // Cookies blocked: the visit still counts on this page, only the
+      // sign-up attribution is lost.
+    }
+  }
+
+  function clearAdsCookie() {
+    document.cookie = ADS_COOKIE_NAME + "=; Max-Age=0; path=/";
+    document.cookie =
+      ADS_COOKIE_NAME + "=; Max-Age=0; path=/; domain=." + window.location.hostname;
+  }
+
   var googleTagInjected = false;
 
   /* The official snippet's `function gtag(){dataLayer.push(arguments)}`,
@@ -522,7 +603,8 @@
    * told to stop via the consent API, and Google's `_gcl_*` cookies are
    * expired outright — gtag writes them from script on this origin, so script
    * can remove them. Both domain spellings are expired because gtag registers
-   * them on the registrable domain, not the host.
+   * them on the registrable domain, not the host. Our own attribution cookie
+   * goes with them.
    */
   function withdrawGoogleTag() {
     if (googleTagInjected) {
@@ -540,6 +622,7 @@
           name + "=; Max-Age=0; path=/; domain=." + window.location.hostname;
       }
     }
+    clearAdsCookie();
   }
 
   /* The banner ships with the `hidden` attribute and is revealed only when no
@@ -577,6 +660,7 @@
       storeAdsConsent("granted");
       banner.hidden = true;
       loadGoogleTag();
+      writeAdsCookie();
     });
     decline.addEventListener("click", function () {
       storeAdsConsent("denied");
@@ -597,6 +681,7 @@
     var choice = readAdsConsent();
     if (choice === "granted") {
       loadGoogleTag();
+      writeAdsCookie();
       return;
     }
     if (choice === "denied") {

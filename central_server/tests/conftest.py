@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from central_server.ads import ConversionUploader
 from central_server.agents.service import AgentService
 from central_server.app import create_app
 from central_server.auth.service import AuthService
@@ -85,6 +86,9 @@ async def app(config, db):
     # Disabled dispatcher (no APNs config in tests); push tests swap in a
     # fake sender.
     application.state.push_dispatcher = PushDispatcher(db, sender=None)
+    # Disabled uploader (no GOOGLE_ADS_* config in tests); ads tests build
+    # their own with a fake transport.
+    application.state.ads_uploader = ConversionUploader(db, client=None)
     # Seed admin user (mirrors lifespan)
     await application.state.auth_service.seed_admin_user()
     yield application

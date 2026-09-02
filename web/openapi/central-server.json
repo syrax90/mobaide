@@ -1,6 +1,54 @@
 {
   "components": {
     "schemas": {
+      "AdAttribution": {
+        "description": "Google Ads click attribution the web client copies out of the\n``mobaide_ads`` cookie when it creates an account.\n\nPresence of the object is the visitor's banner Accept on ``mobaide.com``;\n``click_id``/``click_id_kind`` are null on a consent-only visit. Native\nclients never send it. ``clicked_at`` is stamped by the visitor's clock,\nso its bounds are deliberately loose \u2014 rejecting a skewed timestamp\nwould turn a marketing cookie into a registration failure.",
+        "properties": {
+          "click_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_-]{1,200}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Click Id"
+          },
+          "click_id_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "gclid",
+                  "wbraid",
+                  "gbraid"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Click Id Kind"
+          },
+          "clicked_at": {
+            "anyOf": [
+              {
+                "maximum": 4102444800.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clicked At"
+          }
+        },
+        "title": "AdAttribution",
+        "type": "object"
+      },
       "AgentSummary": {
         "description": "Agent listing response \u2014 no token.",
         "properties": {
@@ -67,6 +115,16 @@
       "AppleAuthRequest": {
         "description": "Sign in with Apple identity-token exchange.\n\n``nonce`` is required (unlike the Google mobile path): the iOS client\nalways embeds its generated nonce verbatim in the identity token, so the\nserver can bind the token to this request and reject replays.",
         "properties": {
+          "ad_attribution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdAttribution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id_token": {
             "minLength": 1,
             "title": "Id Token",
@@ -801,6 +859,16 @@
       },
       "GoogleAuthRequest": {
         "properties": {
+          "ad_attribution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdAttribution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id_token": {
             "title": "Id Token",
             "type": "string"
@@ -1555,6 +1623,16 @@
       },
       "UserRegisterRequest": {
         "properties": {
+          "ad_attribution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdAttribution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "email": {
             "title": "Email",
             "type": "string"

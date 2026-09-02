@@ -131,9 +131,36 @@ class RefreshableSessionRequest(BaseModel):
     session_transport: Literal["body", "cookie"] | None = None
 
 
+AD_CLICK_ID_PATTERN = r"^[A-Za-z0-9_-]{1,200}$"
+AdClickKind = Literal["gclid", "wbraid", "gbraid"]
+
+
+class AdAttribution(BaseModel):
+    """Google Ads click attribution the web client copies out of the
+    ``mobaide_ads`` cookie when it creates an account.
+
+    Presence of the object is the visitor's banner Accept on ``mobaide.com``;
+    ``click_id``/``click_id_kind`` are null on a consent-only visit. Native
+    clients never send it. ``clicked_at`` is stamped by the visitor's clock,
+    so its bounds are deliberately loose — rejecting a skewed timestamp
+    would turn a marketing cookie into a registration failure.
+    """
+
+    click_id: str | None = Field(default=None, pattern=AD_CLICK_ID_PATTERN)
+    click_id_kind: AdClickKind | None = None
+    clicked_at: int | None = Field(default=None, ge=0, le=4_102_444_800)
+
+    @model_validator(mode="after")
+    def _click_fields_travel_together(self) -> "AdAttribution":
+        if (self.click_id is None) != (self.click_id_kind is None):
+            raise ValueError("click_id and click_id_kind must be set together")
+        return self
+
+
 class UserRegisterRequest(RefreshableSessionRequest):
     email: str
     password: str
+    ad_attribution: AdAttribution | None = None
 
 
 class UserLoginRequest(RefreshableSessionRequest):
@@ -143,6 +170,7 @@ class UserLoginRequest(RefreshableSessionRequest):
 
 class GoogleAuthRequest(RefreshableSessionRequest):
     id_token: str
+    ad_attribution: AdAttribution | None = None
 
 
 class AppleAuthRequest(RefreshableSessionRequest):
@@ -155,6 +183,7 @@ class AppleAuthRequest(RefreshableSessionRequest):
 
     id_token: str = Field(..., min_length=1)
     nonce: str = Field(..., min_length=1)
+    ad_attribution: AdAttribution | None = None
 
 
 class UserRefreshRequest(BaseModel):

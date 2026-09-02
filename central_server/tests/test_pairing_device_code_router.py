@@ -840,3 +840,45 @@ class TestRateLimiting:
         detail = resp.json()["detail"]
         assert detail["error"] == "device_code_rate_limited"
         assert detail["retry_after_seconds"] > 0
+
+
+class TestFirstPairingConversion:
+    async def test_confirm_marks_the_first_pairing_once_and_schedules_the_conversion(
+        self, client, dc_app, api_auth_headers
+    ):
+        uploader = MagicMock()
+        dc_app.state.ads_uploader = uploader
+        db = dc_app.state.db
+        owner = await db.get_user_by_email("viewer@test.local")
+
+        minted = await _mint(client, api_auth_headers)
+        await _redeem_and_accept(client, minted["code"], "redeemer-first")
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+        assert resp.status_code == 200, resp.text
+        marker = (await db.get_user_by_id(owner["id"]))["first_paired_at"]
+        assert marker is not None
+        uploader.schedule_first_pairing.assert_called_once_with(owner["id"])
+
+        minted = await _mint(client, api_auth_headers)
+        await _redeem_and_accept(client, minted["code"], "redeemer-second")
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+        assert resp.status_code == 200, resp.text
+        assert (await db.get_user_by_id(owner["id"]))["first_paired_at"] == marker
+        uploader.schedule_first_pairing.assert_called_once()
+
+    async def test_expired_confirm_does_not_mark_first_pairing(
+        self, client, dc_app, api_auth_headers
+    ):
+        uploader = MagicMock()
+        dc_app.state.ads_uploader = uploader
+        db = dc_app.state.db
+        owner = await db.get_user_by_email("viewer@test.local")
+
+        minted = await _mint(client, api_auth_headers)
+        redeemed = (await _redeem_and_accept(client, minted["code"], "redeemer-late")).json()
+        await _expire_nonce(db, redeemed["nonce"])
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+
+        assert resp.status_code == 410, resp.text
+        assert (await db.get_user_by_id(owner["id"]))["first_paired_at"] is None
+        uploader.schedule_first_pairing.assert_not_called()

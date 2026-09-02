@@ -960,6 +960,25 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * AdAttribution
+         * @description Google Ads click attribution the web client copies out of the
+         *     ``mobaide_ads`` cookie when it creates an account.
+         *
+         *     Presence of the object is the visitor's banner Accept on ``mobaide.com``;
+         *     ``click_id``/``click_id_kind`` are null on a consent-only visit. Native
+         *     clients never send it. ``clicked_at`` is stamped by the visitor's clock,
+         *     so its bounds are deliberately loose — rejecting a skewed timestamp
+         *     would turn a marketing cookie into a registration failure.
+         */
+        AdAttribution: {
+            /** Click Id */
+            click_id?: string | null;
+            /** Click Id Kind */
+            click_id_kind?: ("gclid" | "wbraid" | "gbraid") | null;
+            /** Clicked At */
+            clicked_at?: number | null;
+        };
+        /**
          * AgentSummary
          * @description Agent listing response — no token.
          */
@@ -988,6 +1007,7 @@ export interface components {
          *     server can bind the token to this request and reject replays.
          */
         AppleAuthRequest: {
+            ad_attribution?: components["schemas"]["AdAttribution"] | null;
             /** Id Token */
             id_token: string;
             /** Nonce */
@@ -1349,6 +1369,7 @@ export interface components {
         };
         /** GoogleAuthRequest */
         GoogleAuthRequest: {
+            ad_attribution?: components["schemas"]["AdAttribution"] | null;
             /** Id Token */
             id_token: string;
             /**
@@ -1696,6 +1717,7 @@ export interface components {
         };
         /** UserRegisterRequest */
         UserRegisterRequest: {
+            ad_attribution?: components["schemas"]["AdAttribution"] | null;
             /** Email */
             email: string;
             /** Password */

@@ -1546,6 +1546,22 @@ delete themselves. Unlike Google it needs no `disableAutoSelect` equivalent —
 Apple's popup always runs a fresh authorization, so the token is inside the
 server's five-minute freshness window by construction.
 
+### Ad attribution at sign-up
+
+`web/src/auth/adAttribution.ts` reads the `mobaide_ads` cookie the marketing
+site writes on `.mobaide.com` after its Google Ads consent banner is accepted
+(docs/website.md, *The consent-gated Google Ads tag*), and `authRepository.ts`
+spreads it into the register / Google / Apple bodies as the optional
+`ad_attribution` field — only those three, because only they can create an
+account, and only when the cookie exists, so the wire shape is unchanged for
+everyone else. The parser mirrors the server's Pydantic validator and is at
+least as strict, degrading to a consent-only object (or `null`) instead of
+throwing: any same-site host can plant the cookie, and forwarding garbage
+would turn a marketing cookie into a 422 on sign-up. The dev host never sees
+a `.mobaide.com` cookie, so the tests pass jar strings. Adding the field
+touched the committed OpenAPI snapshot and generated types (`npm run
+schema:dump && npm run schema:generate`).
+
 ## CI — `.github/workflows/web-ci.yml`
 
 Runs on every PR and push to main (no paths filter — schema drift is caused

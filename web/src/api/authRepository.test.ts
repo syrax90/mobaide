@@ -22,6 +22,21 @@ vi.mock('./clients', () => ({
   },
 }));
 
+// The landing page's click-attribution cookie, as the repository sees it.
+// jsdom's jar is empty, so the default (`null`) is also what a visitor who
+// never accepted the banner produces.
+const attribution = vi.hoisted(() => ({
+  value: null as null | {
+    click_id: string | null;
+    click_id_kind: 'gclid' | 'wbraid' | 'gbraid' | null;
+    clicked_at: number | null;
+  },
+}));
+
+vi.mock('../auth/adAttribution', () => ({
+  readAdAttribution: () => attribution.value,
+}));
+
 const {
   login,
   loginWithApple,
@@ -60,6 +75,7 @@ const okBody = {
 beforeEach(() => {
   relay.results.length = 0;
   relay.calls.length = 0;
+  attribution.value = null;
 });
 
 describe('session-minting calls', () => {
@@ -120,6 +136,36 @@ describe('session-minting calls', () => {
         },
       },
     ]);
+  });
+});
+
+describe('ad attribution forwarding', () => {
+  it('forwards ad_attribution on register, Google and Apple only', async () => {
+    attribution.value = { click_id: 'Cj0K_abc-123', click_id_kind: 'gclid', clicked_at: 1756800000 };
+    for (let i = 0; i < 5; i += 1) succeed(okBody);
+
+    await register('user@example.com', 'hunter22');
+    await login('user@example.com', 'hunter22');
+    await loginWithGoogle('google-id-token');
+    await loginWithApple('apple-id-token', 'nonce-1');
+    await verifyEmail('user@example.com', '123456');
+
+    // Login and verify cannot create an account, so they never carry it.
+    expect(relay.calls.map((call) => call.body.ad_attribution)).toEqual([
+      attribution.value,
+      undefined,
+      attribution.value,
+      attribution.value,
+      undefined,
+    ]);
+  });
+
+  it('omits the key entirely when the cookie is absent', async () => {
+    succeed(okBody);
+
+    await register('user@example.com', 'hunter22');
+
+    expect('ad_attribution' in relay.calls[0]!.body).toBe(false);
   });
 });
 

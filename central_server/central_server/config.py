@@ -50,6 +50,26 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+_DIGITS_RE = re.compile(r"^\d+$")
+_API_VERSION_RE = re.compile(r"^v\d{1,3}$")
+
+
+def _env_digits(name: str) -> str | None:
+    """Read a numeric id, tolerating the dashed ``123-456-7890`` spelling.
+
+    Anything but digits and dashes counts as unset: the consumer names the
+    missing variable at startup, which beats refusing to boot over an ads
+    knob (same degrade-don't-raise stance as ``_env_origin``).
+    """
+    raw = (os.getenv(name) or "").strip().replace("-", "")
+    return raw if _DIGITS_RE.fullmatch(raw) else None
+
+
+def _env_api_version(name: str, default: str) -> str:
+    raw = (os.getenv(name) or "").strip().lower()
+    return raw if _API_VERSION_RE.fullmatch(raw) else default
+
+
 def normalize_origin(raw: str) -> str | None:
     """Canonicalize an origin for equality comparison, or None if malformed.
 
@@ -324,6 +344,39 @@ class CentralServerConfig:
     apns_topic: str | None = None
     apns_use_sandbox: bool = False
 
+    # Google Ads offline conversion upload ("Agent paired"). All optional: the
+    # uploader is enabled only when the six credentials/ids are set, and a
+    # partial set logs `ads.misconfigured` at startup and stays disabled.
+    # Customer and action ids are stored digits-only; a value with anything
+    # but digits and dashes is treated as unset (see `_env_digits`).
+    # `login_customer_id` is the manager (MCC) account, needed only when the
+    # OAuth user reaches the Ads account through one.
+    google_ads_developer_token: str | None = None
+    google_ads_customer_id: str | None = None
+    google_ads_login_customer_id: str | None = None
+    google_ads_oauth_client_id: str | None = None
+    google_ads_oauth_client_secret: str | None = None
+    google_ads_oauth_refresh_token: str | None = None
+    google_ads_conversion_action_id: str | None = None
+    google_ads_api_version: str = "v25"
+
+    @property
+    def google_ads_missing(self) -> tuple[str, ...]:
+        """Env names of the required Google Ads settings that are unset."""
+        pairs = (
+            ("GOOGLE_ADS_DEVELOPER_TOKEN", self.google_ads_developer_token),
+            ("GOOGLE_ADS_CUSTOMER_ID", self.google_ads_customer_id),
+            ("GOOGLE_ADS_OAUTH_CLIENT_ID", self.google_ads_oauth_client_id),
+            ("GOOGLE_ADS_OAUTH_CLIENT_SECRET", self.google_ads_oauth_client_secret),
+            ("GOOGLE_ADS_OAUTH_REFRESH_TOKEN", self.google_ads_oauth_refresh_token),
+            ("GOOGLE_ADS_CONVERSION_ACTION_ID", self.google_ads_conversion_action_id),
+        )
+        return tuple(name for name, value in pairs if not value)
+
+    @property
+    def google_ads_enabled(self) -> bool:
+        return not self.google_ads_missing
+
     @property
     def is_test_mode(self) -> bool:
         """True when MOBAIDE_ENV=test selects the disposable test profile."""
@@ -505,4 +558,18 @@ class CentralServerConfig:
             apns_team_id=os.getenv("APNS_TEAM_ID") or None,
             apns_topic=os.getenv("APNS_TOPIC") or None,
             apns_use_sandbox=_env_bool("APNS_USE_SANDBOX", False),
+            google_ads_developer_token=os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN") or None,
+            google_ads_customer_id=_env_digits("GOOGLE_ADS_CUSTOMER_ID"),
+            google_ads_login_customer_id=_env_digits("GOOGLE_ADS_LOGIN_CUSTOMER_ID"),
+            google_ads_oauth_client_id=os.getenv("GOOGLE_ADS_OAUTH_CLIENT_ID") or None,
+            google_ads_oauth_client_secret=(
+                os.getenv("GOOGLE_ADS_OAUTH_CLIENT_SECRET") or None
+            ),
+            google_ads_oauth_refresh_token=(
+                os.getenv("GOOGLE_ADS_OAUTH_REFRESH_TOKEN") or None
+            ),
+            google_ads_conversion_action_id=_env_digits(
+                "GOOGLE_ADS_CONVERSION_ACTION_ID"
+            ),
+            google_ads_api_version=_env_api_version("GOOGLE_ADS_API_VERSION", "v25"),
         )

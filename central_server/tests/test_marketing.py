@@ -663,3 +663,47 @@ class TestLandingInstallCommands:
         belongs in ``static/site/site.js``."""
         assert _INLINE_HANDLER_RE.search(landing) is None
 
+
+
+def _function_body(source: str, name: str) -> str:
+    """The text of one top-level ``site.js`` function (up to the next one)."""
+    start = source.index(f"function {name}(")
+    end = source.find("\n  function ", start + 1)
+    return source[start : end if end != -1 else len(source)]
+
+
+class TestAttributionCookie:
+    """Accept also records the landing click id in a first-party cookie the
+    web app forwards at sign-up (privacy policy §3.5); Decline removes it."""
+
+    def _source(self) -> str:
+        return (resolve_static_dir() / "site" / "site.js").read_text()
+
+    async def test_site_js_writes_the_attribution_cookie_inside_the_gated_flow(
+        self,
+    ) -> None:
+        source = self._source()
+        assert 'ADS_COOKIE_NAME = "mobaide_ads"' in source
+        assert "ADS_COOKIE_MAX_AGE = 7776000" in source
+        for param in ("gclid", "wbraid", "gbraid"):
+            assert f'"{param}"' in source
+        writer = _function_body(source, "writeAdsCookie")
+        assert "SameSite=Lax" in writer
+        assert 'domain=." + window.location.hostname' in writer
+        assert '"; Secure"' in writer
+        # Both write sites live inside the hostname-gated function, after
+        # the gate: Accept and the stored-"granted" page load.
+        banner = _function_body(source, "setUpConsentBanner")
+        assert banner.index('hostname !== "mobaide.com"') < banner.index("writeAdsCookie()")
+        assert banner.count("writeAdsCookie()") == 2
+
+    async def test_site_js_clears_the_attribution_cookie_on_withdrawal(self) -> None:
+        source = self._source()
+        assert "clearAdsCookie()" in _function_body(source, "withdrawGoogleTag")
+
+    async def test_attribution_cookie_name_is_never_server_rendered(
+        self, landing
+    ) -> None:
+        """The cookie is written by script after Accept; a server-rendered
+        reference would mean the HTML started carrying attribution logic."""
+        assert "mobaide_ads" not in landing

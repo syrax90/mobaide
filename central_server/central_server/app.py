@@ -275,6 +275,11 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
 
         app.state.push_dispatcher = PushDispatcher.from_config(db, config)
 
+        from .ads import ConversionUploader
+
+        app.state.ads_uploader = ConversionUploader.from_config(db, config)
+        await app.state.ads_uploader.resume_pending()
+
         # Runs every 60 s; interval is not surfaced in the function signature.
         cleanup_task = asyncio.create_task(
             _token_cleanup_loop(db), name="token-cleanup"
@@ -291,6 +296,9 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             monitoring_loop(app.state.routing, config),
             name="monitoring",
         )
+        ad_purge_task = asyncio.create_task(
+            _ad_attribution_purge_loop(db), name="ad-attribution-purge"
+        )
 
         yield
 
@@ -299,6 +307,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         deletion_sweeper_task.cancel()
         heartbeat_flush_task.cancel()
         monitoring_task.cancel()
+        ad_purge_task.cancel()
         try:
             await cleanup_task
         except asyncio.CancelledError:
@@ -315,6 +324,10 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             await monitoring_task
         except asyncio.CancelledError:
             pass
+        try:
+            await ad_purge_task
+        except asyncio.CancelledError:
+            pass
         # Final sweep after the loop is cancelled (no interleaving) and
         # before db.close() so still-connected agents' freshest heartbeats
         # survive the restart.
@@ -322,6 +335,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             await _flush_agent_heartbeats(db, app.state.routing)
         except Exception as exc:
             logger.exception("heartbeat_flush.shutdown_error: %s", exc)
+        await app.state.ads_uploader.aclose()
         await app.state.push_dispatcher.aclose()
         app.state.auth_service.close()
         await db.close()
@@ -529,6 +543,21 @@ async def _token_cleanup_loop(db: Database) -> None:
             raise
         except Exception as exc:
             logger.exception("token_cleanup.error: %s", exc)
+
+
+async def _ad_attribution_purge_loop(db: Database) -> None:
+    """Hourly: enforce the 90-day retention the privacy policy promises for
+    sign-up click attribution, whether or not the uploader ever ran."""
+    while True:
+        try:
+            await asyncio.sleep(3600)
+            purged = await db.purge_stale_ad_attribution()
+            if purged:
+                logger.info("ad_attribution.purged users=%d", purged)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("ad_attribution_purge.error: %s", exc)
 
 
 async def _account_deletion_sweeper_loop(

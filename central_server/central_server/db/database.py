@@ -34,7 +34,21 @@ CREATE TABLE IF NOT EXISTS users (
     -- against. Taken on the first successful claim and compared on every
     -- later one, so a client whose local pin was wiped cannot silently
     -- re-trust a rotated key. NULL until the account pairs once.
-    trust_key_fp            TEXT
+    trust_key_fp            TEXT,
+    -- Google Ads click attribution copied from the web sign-up request
+    -- (consent-gated on the landing page). Read once, by the conversion
+    -- uploader on the first pairing, then cleared; ads_consent doubles as
+    -- the attribution-pending flag. first_paired_at is set exactly once,
+    -- on the first successful pairing, and unlike trust_key_fp is never
+    -- cleared, which is what makes it safe as the conversion trigger.
+    -- No comment may sit between the last comma and the last column, and
+    -- no quote may appear in these comments: SQLite rewrites this text on
+    -- ALTER TABLE DROP COLUMN and both break the rewrite.
+    ad_click_id             TEXT,
+    ad_click_kind           TEXT,
+    ad_click_at             TEXT,
+    ads_consent             INTEGER NOT NULL DEFAULT 0,
+    first_paired_at         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS agents (
@@ -672,6 +686,35 @@ class Database:
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 19")
 
+        if version < 20:
+            # Google Ads attribution + first-pairing marker on users. Columns
+            # are ALTERed in before the _SCHEMA re-run for the same reason
+            # as trust_key_fp above.
+            user_cursor = await self._conn.execute("PRAGMA table_info(users)")
+            user_cols = {r[1] for r in await user_cursor.fetchall()}
+            for column, ddl in (
+                ("ad_click_id", "TEXT"),
+                ("ad_click_kind", "TEXT"),
+                ("ad_click_at", "TEXT"),
+                ("ads_consent", "INTEGER NOT NULL DEFAULT 0"),
+                ("first_paired_at", "TEXT"),
+            ):
+                if column not in user_cols:
+                    await self._conn.execute(
+                        f"ALTER TABLE users ADD COLUMN {column} {ddl}"
+                    )
+            await self._conn.executescript(_SCHEMA)
+            # Accounts that paired before the marker existed must not read
+            # as first-time on their next claim. created_at is a stand-in;
+            # only non-NULL matters.
+            await self._conn.execute(
+                "UPDATE users SET first_paired_at = created_at "
+                "WHERE first_paired_at IS NULL AND (trust_key_fp IS NOT NULL "
+                "OR id IN (SELECT owner_user_id FROM agents "
+                "WHERE owner_user_id IS NOT NULL))"
+            )
+            await self._conn.execute("PRAGMA user_version = 20")
+
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -687,7 +730,8 @@ class Database:
     _USER_COLUMNS = (
         "id, email, password_hash, google_sub, apple_sub, role, "
         "email_verified, verified_at, created_at, updated_at, "
-        "scheduled_deletion_at, deletion_requested_at, trust_key_fp"
+        "scheduled_deletion_at, deletion_requested_at, trust_key_fp, "
+        "ad_click_id, ad_click_kind, ad_click_at, ads_consent, first_paired_at"
     )
 
     async def create_user(
@@ -698,12 +742,18 @@ class Database:
         apple_sub: str | None = None,
         role: str = "viewer",
         email_verified: bool = False,
+        ad_click_id: str | None = None,
+        ad_click_kind: str | None = None,
+        ad_click_at: str | None = None,
+        ads_consent: bool = False,
     ) -> str:
         """Create a new user. Returns user_id.
 
         ``email_verified=True`` is used by the admin seeder and by the
         Google/Apple OAuth paths (when the provider vouches for the address),
-        which all bypass the OTP flow.
+        which all bypass the OTP flow. The ``ad_*`` / ``ads_consent`` columns
+        are written here only — attribution is a fact about how the account
+        came to exist, never updated afterwards.
         """
         user_id = uuid.uuid4().hex[:12]
         now = _now_iso()
@@ -711,8 +761,9 @@ class Database:
         await self.conn.execute(
             "INSERT INTO users "
             "(id, email, password_hash, google_sub, apple_sub, role, "
-            "email_verified, verified_at, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "email_verified, verified_at, created_at, updated_at, "
+            "ad_click_id, ad_click_kind, ad_click_at, ads_consent) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 user_id,
                 email,
@@ -724,6 +775,10 @@ class Database:
                 verified_at,
                 now,
                 now,
+                ad_click_id,
+                ad_click_kind,
+                ad_click_at,
+                1 if ads_consent else 0,
             ),
         )
         await self.conn.commit()
@@ -2139,6 +2194,62 @@ class Database:
         )
         await self.conn.commit()
         return cursor.rowcount == 1
+
+    async def mark_user_first_paired(self, user_id: str) -> bool:
+        """Stamp the account's first-ever pairing; True for exactly one caller.
+
+        Same compare-and-set shape as the trust pin, but never cleared: the
+        pin resets when an account drops to zero agents, and the "Agent
+        paired" conversion must fire once per account, not once per epoch.
+        """
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "UPDATE users SET first_paired_at = ?, updated_at = ? "
+            "WHERE id = ? AND first_paired_at IS NULL",
+            (now, now, user_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    async def clear_user_ad_attribution(self, user_id: str) -> bool:
+        """Drop the sign-up click attribution once it has served its purpose."""
+        cursor = await self.conn.execute(
+            "UPDATE users SET ad_click_id = NULL, ad_click_kind = NULL, "
+            "ad_click_at = NULL, ads_consent = 0, updated_at = ? "
+            "WHERE id = ? AND (ads_consent = 1 OR ad_click_id IS NOT NULL)",
+            (_now_iso(), user_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    _AD_ATTRIBUTION_RETENTION_DAYS = 90
+
+    async def purge_stale_ad_attribution(self) -> int:
+        """Enforce the 90-day retention the privacy policy promises.
+
+        Age is measured from the click, or from sign-up when the account
+        carries a consent marker without a click id. ISO strings compare
+        lexicographically, as everywhere else in this file.
+        """
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=self._AD_ATTRIBUTION_RETENTION_DAYS)).isoformat()
+        cursor = await self.conn.execute(
+            "UPDATE users SET ad_click_id = NULL, ad_click_kind = NULL, "
+            "ad_click_at = NULL, ads_consent = 0, updated_at = ? "
+            "WHERE ads_consent = 1 AND COALESCE(ad_click_at, created_at) < ?",
+            (now.isoformat(), cutoff),
+        )
+        await self.conn.commit()
+        return cursor.rowcount
+
+    async def list_users_with_pending_ad_conversion(self) -> list[str]:
+        """Accounts whose first pairing landed but whose upload never finished."""
+        cursor = await self.conn.execute(
+            "SELECT id FROM users "
+            "WHERE first_paired_at IS NOT NULL AND ads_consent = 1"
+        )
+        rows = await cursor.fetchall()
+        return [row["id"] for row in rows]
 
     async def count_agents_for_owner(self, user_id: str) -> int:
         cursor = await self.conn.execute(

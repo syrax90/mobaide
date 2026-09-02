@@ -184,6 +184,19 @@ policy promises no un-consented tracking:
   choice. Declining after a prior Accept pushes `consent update: denied` to a
   tag already running on the page and expires every `_gcl_*` cookie (both
   domain spellings — gtag registers them on the registrable domain).
+- **Accept also writes our own `mobaide_ads` cookie** (`domain=.mobaide.com`,
+  `path=/`, 90 days, `SameSite=Lax`, `Secure` only over https so the local
+  recipe above still works): `v=1&k=<gclid|wbraid|gbraid>&t=<epoch s>&id=<id>`
+  when the landing URL carried a click id, `v=1&t=<epoch s>` as a bare consent
+  marker otherwise — and a stored click id is never downgraded to a marker on
+  a later organic visit. It is written on Accept and again on every
+  stored-`granted` page load (so a click on a return visit is captured), and
+  the same Decline path that clears `_gcl_*` expires it. Its only reader is
+  the web SPA (`web/src/auth/adAttribution.ts`), which forwards it as the
+  optional `ad_attribution` field of the register / Google / Apple sign-up
+  requests; the server stores it on new accounts and reports the first agent
+  pairing back to the click — see *Google Ads conversion upload* in
+  docs/deployment.md. Pinned by `test_marketing.TestAttributionCookie`.
 - Because the tag is injected at runtime, the served HTML stays same-origin
   and inline-free — the two `test_marketing.py` self-containment guards still
   hold unchanged, and `TestConsentBanner` adds the reverse guard: the HTML must
@@ -194,14 +207,16 @@ policy promises no un-consented tracking:
 - The banner's disclosure lives in the privacy policy's Section 3.5 — the
   banner links it, and `central_server/legal/privacy.md` must stay in sync
   with what the tag actually does (cookies only after Accept, choice stored in
-  local storage, withdrawal by clearing site data).
+  local storage, withdrawal by clearing site data, the `mobaide_ads` cookie
+  and the one-time first-pairing report).
 
 Changing the tag id means changing `ADS_TAG_ID` in `site.js`; a new or renamed
 conversion action also means a new `ADS_PAGE_VIEW_LABEL`, pinned by
 `test_marketing.TestConsentBanner.test_site_js_fires_the_page_view_conversion`.
 Removing the tag means removing the banner, the `site.js` module, the
-`_LANDING_CSP` bucket, and the privacy-policy passages together — each is
-load-bearing for the others.
+`_LANDING_CSP` bucket, the `mobaide_ads` cookie writer together with
+`web/src/auth/adAttribution.ts` and the `ad_attribution` request field, and
+the privacy-policy passages — each is load-bearing for the others.
 
 `/robots.txt` disallows only `/api/` and `/portal/`, with one carve-out: an
 `Allow: /portal/delete-account-info` line **emitted before the disallows**. That
