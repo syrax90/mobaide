@@ -698,6 +698,10 @@ class TestAttributionCookie:
         assert "arrived_at: LANDING_ARRIVED_AT" in requester
         assert 'credentials: "same-origin"' in requester
         assert "document.cookie =" not in requester
+        # A Decline that lands while the request is in flight must win over
+        # the response's Set-Cookie.
+        assert 'readAdsConsent() !== "granted"' in requester
+        assert requester.index(".then(") < requester.index("clearAdsCookie()")
         # Both call sites live inside the hostname-gated function, after
         # the gate: Accept and the stored-"granted" page load.
         banner = _function_body(source, "setUpConsentBanner")

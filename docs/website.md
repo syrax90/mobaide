@@ -193,10 +193,14 @@ policy promises no un-consented tracking:
   (`central_server/ads/router.py`), which answers with a `Set-Cookie` for
   `Domain=<host>`, `Path=/`, 90 days, `SameSite=Lax`, `Secure` per
   `USER_SESSION_COOKIE_SECURE`. The value is `<base64url(payload)>.<hmac>`
-  with payload `v=1&k=<kind>&t=<epoch s>&id=<id>` (or `v=1&t=<epoch s>` as a
-  bare consent marker), signed with a key derived from `JWT_SECRET_KEY`; `t`
-  is the arrival time capped at the server clock, so neither a tab left open
-  before Accept nor a skewed browser clock can post-date a click. The
+  with payload `v=1&k=<kind>&t=<epoch s>&id=<id>&n=<network>` (`k`/`id`
+  absent on a bare consent marker), signed with a key derived from
+  `JWT_SECRET_KEY`; `t` is the arrival time capped at the server clock, so
+  neither a tab left open before Accept nor a skewed browser clock can
+  post-date a click, and `n` is a keyed fingerprint of the network the Accept
+  came from, which is what binds the consent to the visitor at sign-up (see
+  docs/deployment.md). If a Decline lands while the request is in flight,
+  the response handler clears the cookie again. The
   endpoint accepts same-origin requests only (`Sec-Fetch-Site` / `Origin`),
   so a cross-site POST cannot mint a cookie for a victim either. An existing
   cookie is requested anew only when the visit carries a new click id — a

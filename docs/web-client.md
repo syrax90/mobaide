@@ -1556,7 +1556,8 @@ the optional `ad_attribution` field — only those three, because only they can
 create an account, and only when the cookie exists, so the wire shape is
 unchanged for everyone else. The value is `<base64url(payload)>.<signature>`;
 the parser decodes it, mirrors the server's Pydantic bounds, forwards the
-fields and the signature verbatim, and returns `null` for anything off
+fields, the network fingerprint and the signature verbatim, and returns
+`null` for anything off
 instead of throwing: any same-site host can plant a cookie, the server alone
 decides (by verifying the signature) whether it counts as consent, and
 forwarding garbage would turn a marketing cookie into a 422 on sign-up. The dev host never sees

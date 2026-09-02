@@ -531,6 +531,13 @@
           credentials: "same-origin",
           keepalive: true,
         })
+        .then(function () {
+          // A Decline that landed while this was in flight must win: the
+          // response's Set-Cookie would otherwise resurrect the cookie.
+          if (readAdsConsent() !== "granted") {
+            clearAdsCookie();
+          }
+        })
         .catch(function () {
           // Offline or blocked: the visit still counts on this page, only
           // the sign-up attribution is lost.

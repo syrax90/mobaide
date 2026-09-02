@@ -200,9 +200,14 @@ class TestAttributionStorage:
         await db.conn.execute(
             "UPDATE users SET created_at = ? WHERE id = ?", (old, future_click)
         )
+        # A click without network-bound consent is still attribution.
+        click_only = await _user(
+            db, "clickonly@test.local", ad_click_id="d", ad_click_kind="gclid", ad_click_at=old
+        )
         await db.conn.commit()
 
-        assert await db.purge_stale_ad_attribution() == 3
+        assert await db.purge_stale_ad_attribution() == 4
+        assert (await _row(db, click_only))["ad_click_id"] is None
         assert (await _row(db, stale_click))["ads_consent"] == 0
         assert (await _row(db, stale_click))["ad_click_id"] is None
         assert (await _row(db, stale_consent))["ads_consent"] == 0
@@ -219,4 +224,6 @@ class TestAttributionStorage:
         done = await _user(db, "done@test.local", ads_consent=True)
         await db.mark_user_first_paired(done)
         await db.clear_user_ad_attribution(done)
-        assert await db.list_users_with_pending_ad_conversion() == [pending]
+        click_only = await _user(db, "clickonly@test.local", ad_click_id="c", ad_click_kind="gclid")
+        await db.mark_user_first_paired(click_only)
+        assert await db.list_users_with_pending_ad_conversion() == [pending, click_only]

@@ -14,14 +14,23 @@ from central_server.ads.consent import (
     canonical_payload,
     cookie_domain,
     cookie_value,
+    network_fingerprint,
     sign_attribution,
     verify_attribution,
 )
 from tests.conftest import TEST_JWT_SECRET
 
 SECRET = "unit-secret"
-CLICK = {"click_id": "Cj0K_abc-123", "click_id_kind": "gclid", "clicked_at": 1_756_800_000}
-CONSENT_ONLY = {"click_id": None, "click_id_kind": None, "clicked_at": 1_756_800_000}
+NET = network_fingerprint(SECRET, "203.0.113.7")
+CLICK = {
+    "click_id": "Cj0K_abc-123",
+    "click_id_kind": "gclid",
+    "clicked_at": 1_756_800_000,
+    "network": NET,
+}
+CONSENT_ONLY = {"click_id": None, "click_id_kind": None, "clicked_at": 1_756_800_000, "network": NET}
+# The ASGI transport's default client address, i.e. what the endpoint sees.
+TEST_CLIENT_NET = network_fingerprint(TEST_JWT_SECRET, "127.0.0.1")
 
 
 def _decode(value: str) -> tuple[dict, str]:
@@ -46,6 +55,7 @@ class TestSigning:
             {"click_id_kind": "wbraid"},
             {"clicked_at": 1_756_800_001},
             {"click_id": None, "click_id_kind": None},
+            {"network": network_fingerprint(SECRET, "203.0.113.8")},
         ],
     )
     def test_tampered_fields_fail(self, mutation):
@@ -61,7 +71,8 @@ class TestSigning:
         assert not verify_attribution(SECRET, **{**CLICK, "clicked_at": None}, signature=signature)
         assert not verify_attribution(SECRET, **CLICK, signature=None)
         assert not verify_attribution(SECRET, **CLICK, signature="")
-        unpaired = {"click_id": "Cj0K_abc-123", "click_id_kind": None, "clicked_at": 1}
+        assert not verify_attribution(SECRET, **{**CLICK, "network": None}, signature=signature)
+        unpaired = {"click_id": "Cj0K_abc-123", "click_id_kind": None, "clicked_at": 1, "network": NET}
         assert not verify_attribution(SECRET, **unpaired, signature=signature)
 
     @pytest.mark.parametrize("hostile", ["sig☃", "\ud800", "x" * 10_000])
@@ -69,8 +80,8 @@ class TestSigning:
         assert verify_attribution(SECRET, **CLICK, signature=hostile) is False
 
     def test_canonical_payload_shapes(self):
-        assert canonical_payload(**CLICK) == "v=1&k=gclid&t=1756800000&id=Cj0K_abc-123"
-        assert canonical_payload(**CONSENT_ONLY) == "v=1&t=1756800000"
+        assert canonical_payload(**CLICK) == f"v=1&k=gclid&t=1756800000&id=Cj0K_abc-123&n={NET}"
+        assert canonical_payload(**CONSENT_ONLY) == f"v=1&t=1756800000&n={NET}"
 
     def test_cookie_value_is_cookie_safe_and_verifies(self):
         value = cookie_value(SECRET, **CLICK)
@@ -78,8 +89,35 @@ class TestSigning:
         # and the SPA would read the quotes back as part of the value.
         assert re.fullmatch(r"[A-Za-z0-9_.-]+", value)
         params, signature = _decode(value)
-        assert params == {"v": ["1"], "k": ["gclid"], "t": ["1756800000"], "id": ["Cj0K_abc-123"]}
+        assert params == {
+            "v": ["1"], "k": ["gclid"], "t": ["1756800000"], "id": ["Cj0K_abc-123"], "n": [NET],
+        }
         assert verify_attribution(SECRET, **CLICK, signature=signature)
+
+
+class TestNetworkFingerprint:
+    def test_is_stable_and_cookie_safe(self):
+        first = network_fingerprint(SECRET, "203.0.113.7")
+        assert first == network_fingerprint(SECRET, "203.0.113.7")
+        assert re.fullmatch(r"[A-Za-z0-9_-]{16}", first)
+
+    def test_differs_by_address_and_by_secret(self):
+        assert network_fingerprint(SECRET, "203.0.113.7") != network_fingerprint(SECRET, "203.0.113.8")
+        assert network_fingerprint(SECRET, "203.0.113.7") != network_fingerprint("other", "203.0.113.7")
+
+    def test_ipv6_binds_the_64_prefix(self):
+        """Privacy extensions rotate the host half within hours; the /64 is
+        what stays with the visitor."""
+        same = network_fingerprint(SECRET, "2001:db8:1:2:aaaa:bbbb:cccc:dddd")
+        assert same == network_fingerprint(SECRET, "2001:db8:1:2:1111:2222:3333:4444")
+        assert same != network_fingerprint(SECRET, "2001:db8:1:3:aaaa:bbbb:cccc:dddd")
+
+    def test_ipv4_mapped_ipv6_collapses_to_ipv4(self):
+        assert network_fingerprint(SECRET, "::ffff:203.0.113.7") == network_fingerprint(SECRET, "203.0.113.7")
+
+    def test_unknown_addresses_never_raise(self):
+        assert network_fingerprint(SECRET, None) == network_fingerprint(SECRET, "")
+        assert network_fingerprint(SECRET, "not an ip") == network_fingerprint(SECRET, " NOT AN IP ")
 
 
 @pytest.mark.parametrize(
@@ -125,12 +163,19 @@ class TestConsentEndpoint:
             assert attribute in lowered
         assert "httponly" not in lowered
         params, signature = _decode(value)
-        assert params == {"v": ["1"], "k": ["gclid"], "t": ["1756800000"], "id": ["Cj0K_abc-123"]}
+        assert params == {
+            "v": ["1"],
+            "k": ["gclid"],
+            "t": ["1756800000"],
+            "id": ["Cj0K_abc-123"],
+            "n": [TEST_CLIENT_NET],
+        }
         assert verify_attribution(
             TEST_JWT_SECRET,
             click_id="Cj0K_abc-123",
             click_id_kind="gclid",
             clicked_at=1_756_800_000,
+            network=TEST_CLIENT_NET,
             signature=signature,
         )
 
@@ -153,6 +198,7 @@ class TestConsentEndpoint:
             click_id=None,
             click_id_kind=None,
             clicked_at=int(params["t"][0]),
+            network=TEST_CLIENT_NET,
             signature=signature,
         )
 

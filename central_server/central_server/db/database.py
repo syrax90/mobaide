@@ -37,8 +37,8 @@ CREATE TABLE IF NOT EXISTS users (
     trust_key_fp            TEXT,
     -- Google Ads click attribution copied from the web sign-up request
     -- (consent-gated on the landing page). Read once, by the conversion
-    -- uploader on the first pairing, then cleared; ads_consent doubles as
-    -- the attribution-pending flag. first_paired_at is set exactly once,
+    -- uploader on the first pairing, then cleared; attribution is pending
+    -- while a click id or consent is stored. first_paired_at is set once,
     -- on the first successful pairing, and unlike trust_key_fp is never
     -- cleared, which is what makes it safe as the conversion trigger.
     -- No comment may sit between the last comma and the last column, and
@@ -2238,7 +2238,8 @@ class Database:
         cursor = await self.conn.execute(
             "UPDATE users SET ad_click_id = NULL, ad_click_kind = NULL, "
             "ad_click_at = NULL, ads_consent = 0, updated_at = ? "
-            "WHERE ads_consent = 1 AND (created_at < ? OR ad_click_at < ?)",
+            "WHERE (ads_consent = 1 OR ad_click_id IS NOT NULL) "
+            "AND (created_at < ? OR ad_click_at < ?)",
             (now.isoformat(), cutoff, cutoff),
         )
         await self.conn.commit()
@@ -2247,8 +2248,8 @@ class Database:
     async def list_users_with_pending_ad_conversion(self) -> list[str]:
         """Accounts whose first pairing landed but whose upload never finished."""
         cursor = await self.conn.execute(
-            "SELECT id FROM users "
-            "WHERE first_paired_at IS NOT NULL AND ads_consent = 1"
+            "SELECT id FROM users WHERE first_paired_at IS NOT NULL "
+            "AND (ads_consent = 1 OR ad_click_id IS NOT NULL)"
         )
         rows = await cursor.fetchall()
         return [row["id"] for row in rows]

@@ -4,9 +4,9 @@
 ``first_paired_at`` compare-and-set proved this is its first pairing ever.
 The upload runs in a fire-and-forget task so a slow Google round-trip never
 stalls the pairing response. Whatever the outcome, the account's attribution
-columns are cleared afterwards; ``ads_consent`` doubles as the pending flag,
-which is what lets ``resume_pending`` pick up uploads a previous process
-never finished.
+columns are cleared afterwards; a stored click id or consent is what marks
+an upload as pending, which is what lets ``resume_pending`` pick up uploads
+a previous process never finished.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from .google_ads import (
+    ConversionIdentifier,
     GoogleAdsConversionClient,
     UploadOutcome,
     parse_iso_utc,
@@ -154,25 +155,50 @@ class ConversionUploader:
             logger.exception("pairing.conversion_clear_failed user_id=%s", user_id)
         return reason
 
+    def _identifier_for(self, row: Mapping[str, Any]) -> ConversionIdentifier | None:
+        # The hashed-email fallback needs the account's network-bound
+        # consent; a click id holds no personal data and needs none.
+        return select_identifier(
+            row, self._clock(), email_allowed=bool(row.get("ads_consent"))
+        )
+
     async def _upload(self, user_id: str, row: Mapping[str, Any]) -> str:
         assert self._client is not None
-        if not row.get("ads_consent"):
-            logger.info(
-                "pairing.conversion_skipped user_id=%s reason=no_consent", user_id
-            )
-            return "no_consent"
-        identifier = select_identifier(row, self._clock())
+        identifier = self._identifier_for(row)
         if identifier is None:
-            logger.info(
-                "pairing.conversion_skipped user_id=%s reason=no_identifier", user_id
+            reason = (
+                "no_identifier"
+                if row.get("ads_consent") or row.get("ad_click_id")
+                else "no_consent"
             )
-            return "no_identifier"
+            logger.info(
+                "pairing.conversion_skipped user_id=%s reason=%s", user_id, reason
+            )
+            return reason
         # Identical across retries, so a re-upload after a lost response is
         # a duplicate Google dedupes rather than a second conversion.
         conversion_time = parse_iso_utc(row.get("first_paired_at")) or self._clock()
 
         outcome: UploadOutcome | None = None
         for attempt in range(1, self._max_attempts + 1):
+            if attempt > 1:
+                # The backoff is long enough for the account to be deleted
+                # or its attribution withdrawn; never send what the row no
+                # longer holds.
+                fresh = await self._db.get_user_by_id(user_id)
+                if fresh is None:
+                    logger.info(
+                        "pairing.conversion_skipped user_id=%s reason=user_deleted",
+                        user_id,
+                    )
+                    return "user_deleted"
+                if self._identifier_for(fresh) != identifier:
+                    logger.info(
+                        "pairing.conversion_skipped user_id=%s "
+                        "reason=attribution_withdrawn",
+                        user_id,
+                    )
+                    return "attribution_withdrawn"
             outcome = await self._client.upload(
                 identifier, conversion_time, timeout=self._attempt_timeout
             )

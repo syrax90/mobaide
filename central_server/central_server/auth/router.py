@@ -141,6 +141,7 @@ async def register(
             body.password,
             background_tasks,
             ad_attribution=body.ad_attribution,
+            client_ip=request.client.host if request.client else None,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -206,7 +207,9 @@ async def google_auth(
     db = request.app.state.db
     try:
         user_id, role, token, _is_new = await auth_service.google_authenticate(
-            body.id_token, ad_attribution=body.ad_attribution
+            body.id_token,
+            ad_attribution=body.ad_attribution,
+            client_ip=request.client.host if request.client else None,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -238,7 +241,10 @@ async def apple_auth(
     db = request.app.state.db
     try:
         user_id, role, token, _is_new = await auth_service.apple_authenticate(
-            body.id_token, nonce=body.nonce, ad_attribution=body.ad_attribution
+            body.id_token,
+            nonce=body.nonce,
+            ad_attribution=body.ad_attribution,
+            client_ip=request.client.host if request.client else None,
         )
     except ValueError as exc:
         raise HTTPException(

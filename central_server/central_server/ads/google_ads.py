@@ -115,7 +115,7 @@ def parse_iso_utc(text: Any) -> datetime | None:
 
 
 def select_identifier(
-    row: Mapping[str, Any], now: datetime
+    row: Mapping[str, Any], now: datetime, *, email_allowed: bool = True
 ) -> ConversionIdentifier | None:
     """Fresh click id first, hashed email as the fallback — never both.
 
@@ -124,7 +124,8 @@ def select_identifier(
     visitor's clock, so the server-stamped sign-up time caps it: age runs
     from whichever of the two is earlier, and the email fallback (matched
     by Google against a click that necessarily predates sign-up) ages from
-    sign-up alone.
+    sign-up alone. The fallback carries personal data, so it needs the
+    caller's ``email_allowed`` — the account's network-bound consent.
     """
     created_at = parse_iso_utc(row.get("created_at"))
     click_id = row.get("ad_click_id")
@@ -135,7 +136,11 @@ def select_identifier(
         if not candidates or now - min(candidates) <= CLICK_MAX_AGE:
             return ConversionIdentifier(str(kind), str(click_id))
     email = row.get("email")
-    if email and (created_at is None or now - created_at <= CLICK_MAX_AGE):
+    if (
+        email_allowed
+        and email
+        and (created_at is None or now - created_at <= CLICK_MAX_AGE)
+    ):
         return ConversionIdentifier(HASHED_EMAIL, hash_email(str(email)))
     return None
 

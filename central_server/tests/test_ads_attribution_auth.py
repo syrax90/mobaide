@@ -6,8 +6,9 @@ import time
 from datetime import datetime, timezone
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
-from central_server.ads.consent import sign_attribution
+from central_server.ads.consent import network_fingerprint, sign_attribution
 from central_server.auth.models import AdAttribution
 from central_server.auth.service import AuthService
 from tests.conftest import TEST_JWT_SECRET
@@ -15,20 +16,25 @@ from tests.conftest import TEST_JWT_SECRET
 GCLID = "Cj0KCQjw_abc-123"
 CLICKED_AT = 1_756_800_000
 CLICKED_AT_ISO = datetime.fromtimestamp(CLICKED_AT, tz=timezone.utc).isoformat()
+# The ASGI transport's default client address — the network the banner was
+# accepted from, as far as the server can tell.
+HOME_NET = network_fingerprint(TEST_JWT_SECRET, "127.0.0.1")
 
 
-def _signed(click_id, click_id_kind, clicked_at) -> dict:
+def _signed(click_id, click_id_kind, clicked_at, network=HOME_NET) -> dict:
     """An object the way the SPA forwards it: the server-minted fields plus
     the signature that proves the banner on mobaide.com issued them."""
     return {
         "click_id": click_id,
         "click_id_kind": click_id_kind,
         "clicked_at": clicked_at,
+        "network": network,
         "signature": sign_attribution(
             TEST_JWT_SECRET,
             click_id=click_id,
             click_id_kind=click_id_kind,
             clicked_at=clicked_at,
+            network=network,
         ),
     }
 
@@ -75,6 +81,8 @@ class TestRegisterEndpoint:
             {**ATTRIBUTION, "click_id": "Cj0KCQjw_abc-124"},
             {**ATTRIBUTION, "click_id_kind": "wbraid"},
             {**ATTRIBUTION, "clicked_at": CLICKED_AT + 1},
+            {**ATTRIBUTION, "network": network_fingerprint(TEST_JWT_SECRET, "10.0.0.9")},
+            {**ATTRIBUTION, "network": None},
             {**CONSENT_ONLY, "signature": ATTRIBUTION["signature"]},
         ],
     )
@@ -88,6 +96,27 @@ class TestRegisterEndpoint:
         row = await app.state.db.get_user_by_email("forged@example.com")
         assert row["ads_consent"] == 0
         assert row["ad_click_id"] is None
+
+    async def test_consent_minted_elsewhere_keeps_the_click_but_not_the_consent(
+        self, app
+    ):
+        """A validly signed value that reaches sign-up from a different
+        network than it was minted on — a visitor whose address changed, or
+        an attacker's client planting its own cookie for a victim — keeps
+        the click id (no personal data) but never the hashed-email consent."""
+        elsewhere = AsyncClient(
+            transport=ASGITransport(app=app, client=("10.0.0.9", 4242)),
+            base_url="https://test",
+        )
+        async with elsewhere:
+            with_click = await _register(elsewhere, "moved@example.com", ad_attribution=ATTRIBUTION)
+            assert with_click.status_code == 200, with_click.text
+            consent_only = await _register(elsewhere, "planted@example.com", ad_attribution=CONSENT_ONLY)
+            assert consent_only.status_code == 200, consent_only.text
+        moved = await app.state.db.get_user_by_email("moved@example.com")
+        assert moved["ad_click_id"] == GCLID and moved["ads_consent"] == 0
+        planted = await app.state.db.get_user_by_email("planted@example.com")
+        assert planted["ad_click_id"] is None and planted["ads_consent"] == 0
 
     async def test_register_without_ad_attribution_leaves_consent_off(self, client, app):
         resp = await _register(client, "plain@example.com")

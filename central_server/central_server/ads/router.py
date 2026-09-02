@@ -8,7 +8,13 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, model_validator
 
 from ..auth.models import AD_CLICK_ID_PATTERN, AdClickKind
-from .consent import COOKIE_MAX_AGE, COOKIE_NAME, cookie_domain, cookie_value
+from .consent import (
+    COOKIE_MAX_AGE,
+    COOKIE_NAME,
+    cookie_domain,
+    cookie_value,
+    network_fingerprint,
+)
 
 router = APIRouter(prefix="/api/ads", tags=["ads"])
 
@@ -59,6 +65,7 @@ async def record_ads_consent(request: Request, body: AdsConsentRequest) -> Respo
     config = request.app.state.config
     now = int(time.time())
     clicked_at = now if body.arrived_at is None else min(body.arrived_at, now)
+    client_ip = request.client.host if request.client else None
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     response.set_cookie(
         key=COOKIE_NAME,
@@ -67,6 +74,7 @@ async def record_ads_consent(request: Request, body: AdsConsentRequest) -> Respo
             click_id=body.click_id,
             click_id_kind=body.click_id_kind,
             clicked_at=clicked_at,
+            network=network_fingerprint(config.jwt_secret_key, client_ip),
         ),
         max_age=COOKIE_MAX_AGE,
         path="/",

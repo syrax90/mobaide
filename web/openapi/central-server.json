@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "AdAttribution": {
-        "description": "Google Ads click attribution the web client copies out of the\n``mobaide_ads`` cookie when it creates an account.\n\nThe cookie is minted and HMAC-signed by this server (``ads/consent.py``)\nwhen the visitor accepts the banner on ``mobaide.com``; the client copies\nits fields here verbatim and the signature is what proves the consent \u2014\na value without a valid ``signature`` is ignored at sign-up, never\nrejected, so a planted or stale cookie cannot cost anyone the account.\n``click_id``/``click_id_kind`` are null on a consent-only visit; native\nclients never send the object.",
+        "description": "Google Ads click attribution the web client copies out of the\n``mobaide_ads`` cookie when it creates an account.\n\nThe cookie is minted and HMAC-signed by this server (``ads/consent.py``)\nwhen the visitor accepts the banner on ``mobaide.com``; the client copies\nits fields here verbatim. The signature proves the server minted the\nvalue, and ``network`` \u2014 a keyed fingerprint of the address the Accept\ncame from \u2014 is what binds the *consent* to this visitor: the hashed-email\nfallback is permitted only when the sign-up arrives from that network,\nwhile a click id (no personal data) is kept either way. Anything that\nfails verification is ignored at sign-up, never rejected, so a planted\nor stale cookie cannot cost anyone the account. ``click_id`` /\n``click_id_kind`` are null on a consent-only visit; native clients never\nsend the object.",
         "properties": {
           "click_id": {
             "anyOf": [
@@ -44,6 +44,18 @@
               }
             ],
             "title": "Clicked At"
+          },
+          "network": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Network"
           },
           "signature": {
             "anyOf": [

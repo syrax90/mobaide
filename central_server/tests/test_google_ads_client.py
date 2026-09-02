@@ -194,6 +194,12 @@ class TestSelectIdentifier:
         row = _row(ad_click_id=None, ad_click_kind=None, ad_click_at=None, email=None)
         assert select_identifier(row, NOW) is None
 
+    def test_email_fallback_needs_permission_but_the_click_does_not(self):
+        assert select_identifier(_row(), NOW, email_allowed=False).kind == "gclid"
+        stale = _row(ad_click_at=(NOW - timedelta(days=91)).isoformat())
+        assert select_identifier(stale, NOW, email_allowed=False) is None
+        assert select_identifier(stale, NOW, email_allowed=True).kind == "hashed_email"
+
 
 def _resp(status, body, headers=None):
     return TransportResponse(status, headers if headers is not None else {"Request-Id": "req-1"}, body)

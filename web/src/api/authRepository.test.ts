@@ -30,6 +30,7 @@ const attribution = vi.hoisted(() => ({
     click_id: string | null;
     click_id_kind: 'gclid' | 'wbraid' | 'gbraid' | null;
     clicked_at: number | null;
+    network: string | null;
     signature: string | null;
   },
 }));
@@ -146,6 +147,7 @@ describe('ad attribution forwarding', () => {
       click_id: 'Cj0K_abc-123',
       click_id_kind: 'gclid',
       clicked_at: 1756800000,
+      network: 'n3tw0rk_fp-1234',
       signature: 'a'.repeat(43),
     };
     for (let i = 0; i < 5; i += 1) succeed(okBody);

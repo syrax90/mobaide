@@ -90,11 +90,13 @@ def _row(**overrides):
     return row
 
 
-def _uploader(db, transport, *, login_customer_id=None, **kwargs):
+def _uploader(db, transport, *, login_customer_id=None, on_sleep=None, **kwargs):
     sleeps: list[float] = []
 
     async def fake_sleep(seconds):
         sleeps.append(seconds)
+        if on_sleep is not None:
+            on_sleep()
 
     client = GoogleAdsConversionClient(
         transport=transport,
@@ -119,8 +121,8 @@ def _capture(caplog):
 
 
 class TestDecisionRules:
-    async def test_no_consent_skips_and_posts_nothing(self, caplog):
-        db = FakeDb({"u1": _row(ads_consent=0)})
+    async def test_no_consent_and_no_click_skips_and_posts_nothing(self, caplog):
+        db = FakeDb({"u1": _row(ads_consent=0, ad_click_id=None, ad_click_kind=None)})
         transport = ScriptedTransport()
         uploader, _ = _uploader(db, transport)
 
@@ -130,6 +132,23 @@ class TestDecisionRules:
         assert _messages(caplog, "pairing.conversion_skipped") == [
             "pairing.conversion_skipped user_id=u1 reason=no_consent"
         ]
+        assert db.cleared == ["u1"]
+
+    async def test_click_without_consent_still_uploads_the_click(self):
+        """A click id holds no personal data, so the network-bound consent
+        (which only licenses the hashed-email fallback) is not needed."""
+        transport = ScriptedTransport()
+        uploader, _ = _uploader(FakeDb({"u1": _row(ads_consent=0)}), transport)
+        assert await uploader.upload_first_pairing("u1") == "ok"
+        assert transport.calls[0]["json"]["conversions"][0]["gclid"] == GCLID
+
+    async def test_stale_click_without_consent_never_falls_back_to_email(self, caplog):
+        row = _row(ads_consent=0, ad_click_at=(NOW - timedelta(days=91)).isoformat())
+        transport = ScriptedTransport()
+        db = FakeDb({"u1": row})
+        uploader, _ = _uploader(db, transport)
+        assert await uploader.upload_first_pairing("u1") == "no_identifier"
+        assert transport.calls == []
         assert db.cleared == ["u1"]
 
     async def test_fresh_gclid_uploads_with_gclid_key(self, caplog):
@@ -281,6 +300,34 @@ class TestRetries:
         assert await uploader.upload_first_pairing("u1") == "oauth_refresh_failed"
         assert len(transport.calls) == 1
         assert "reason=oauth_refresh_failed" in _messages(caplog, "pairing.conversion_upload_failed")[0]
+
+    async def test_retry_aborts_when_the_account_was_deleted_meanwhile(self, caplog):
+        """The backoff is long enough for an immediate account deletion to
+        land; the retry must not send what the row no longer holds."""
+        db = FakeDb({"u1": _row()})
+        transport = ScriptedTransport(_status(500), _ok())
+        uploader, sleeps = _uploader(db, transport, on_sleep=lambda: db.rows.pop("u1"))
+
+        assert await uploader.upload_first_pairing("u1") == "user_deleted"
+
+        assert len(transport.calls) == 1 and sleeps == [1.0]
+        assert "reason=user_deleted" in caplog.text
+        assert _messages(caplog, "pairing.conversion_uploaded") == []
+
+    async def test_retry_aborts_when_attribution_was_withdrawn_meanwhile(self, caplog):
+        db = FakeDb({"u1": _row()})
+        transport = ScriptedTransport(_status(500), _ok())
+
+        def withdraw():
+            db.rows["u1"] = _row(ad_click_id=None, ad_click_kind=None, ad_click_at=None, ads_consent=0)
+
+        uploader, _ = _uploader(db, transport, on_sleep=withdraw)
+
+        assert await uploader.upload_first_pairing("u1") == "attribution_withdrawn"
+
+        assert len(transport.calls) == 1
+        assert "reason=attribution_withdrawn" in caplog.text
+        assert db.cleared == ["u1"]
 
     async def test_transient_exhaustion_clears_and_logs_retries_exhausted(self, caplog):
         db = FakeDb({"u1": _row()})
