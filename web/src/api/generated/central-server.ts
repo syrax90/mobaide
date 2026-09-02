@@ -4,6 +4,28 @@
  */
 
 export interface paths {
+    "/api/ads/consent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Ads Consent
+         * @description Issue the signed ``mobaide_ads`` cookie after the visitor accepts the
+         *     landing page's banner. ``t`` is the arrival time the page reports, capped
+         *     at the server clock so a skewed browser cannot post-date a click.
+         */
+        post: operations["record_ads_consent_api_ads_consent_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents": {
         parameters: {
             query?: never;
@@ -964,11 +986,13 @@ export interface components {
          * @description Google Ads click attribution the web client copies out of the
          *     ``mobaide_ads`` cookie when it creates an account.
          *
-         *     Presence of the object is the visitor's banner Accept on ``mobaide.com``;
-         *     ``click_id``/``click_id_kind`` are null on a consent-only visit. Native
-         *     clients never send it. ``clicked_at`` is stamped by the visitor's clock,
-         *     so its bounds are deliberately loose — rejecting a skewed timestamp
-         *     would turn a marketing cookie into a registration failure.
+         *     The cookie is minted and HMAC-signed by this server (``ads/consent.py``)
+         *     when the visitor accepts the banner on ``mobaide.com``; the client copies
+         *     its fields here verbatim and the signature is what proves the consent —
+         *     a value without a valid ``signature`` is ignored at sign-up, never
+         *     rejected, so a planted or stale cookie cannot cost anyone the account.
+         *     ``click_id``/``click_id_kind`` are null on a consent-only visit; native
+         *     clients never send the object.
          */
         AdAttribution: {
             /** Click Id */
@@ -977,6 +1001,20 @@ export interface components {
             click_id_kind?: ("gclid" | "wbraid" | "gbraid") | null;
             /** Clicked At */
             clicked_at?: number | null;
+            /** Signature */
+            signature?: string | null;
+        };
+        /**
+         * AdsConsentRequest
+         * @description What the landing page knows when the visitor accepts the banner.
+         */
+        AdsConsentRequest: {
+            /** Arrived At */
+            arrived_at?: number | null;
+            /** Click Id */
+            click_id?: string | null;
+            /** Click Id Kind */
+            click_id_kind?: ("gclid" | "wbraid" | "gbraid") | null;
         };
         /**
          * AgentSummary
@@ -1766,6 +1804,37 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    record_ads_consent_api_ads_consent_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdsConsentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_agents_api_agents_get: {
         parameters: {
             query?: never;

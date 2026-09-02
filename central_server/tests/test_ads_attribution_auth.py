@@ -7,13 +7,34 @@ from datetime import datetime, timezone
 
 import pytest
 
+from central_server.ads.consent import sign_attribution
 from central_server.auth.models import AdAttribution
 from central_server.auth.service import AuthService
+from tests.conftest import TEST_JWT_SECRET
 
 GCLID = "Cj0KCQjw_abc-123"
 CLICKED_AT = 1_756_800_000
-ATTRIBUTION = {"click_id": GCLID, "click_id_kind": "gclid", "clicked_at": CLICKED_AT}
 CLICKED_AT_ISO = datetime.fromtimestamp(CLICKED_AT, tz=timezone.utc).isoformat()
+
+
+def _signed(click_id, click_id_kind, clicked_at) -> dict:
+    """An object the way the SPA forwards it: the server-minted fields plus
+    the signature that proves the banner on mobaide.com issued them."""
+    return {
+        "click_id": click_id,
+        "click_id_kind": click_id_kind,
+        "clicked_at": clicked_at,
+        "signature": sign_attribution(
+            TEST_JWT_SECRET,
+            click_id=click_id,
+            click_id_kind=click_id_kind,
+            clicked_at=clicked_at,
+        ),
+    }
+
+
+ATTRIBUTION = _signed(GCLID, "gclid", CLICKED_AT)
+CONSENT_ONLY = _signed(None, None, CLICKED_AT)
 
 
 async def _register(client, email: str, **extra):
@@ -37,13 +58,36 @@ class TestRegisterEndpoint:
     async def test_register_consent_only_object_sets_consent_without_click(
         self, client, app
     ):
-        resp = await _register(client, "consent@example.com", ad_attribution={})
+        resp = await _register(client, "consent@example.com", ad_attribution=CONSENT_ONLY)
         assert resp.status_code == 200, resp.text
         row = await app.state.db.get_user_by_email("consent@example.com")
         assert row["ads_consent"] == 1
-        assert (row["ad_click_id"], row["ad_click_kind"], row["ad_click_at"]) == (
-            None, None, None,
-        )
+        assert (row["ad_click_id"], row["ad_click_kind"]) == (None, None)
+        assert row["ad_click_at"] == CLICKED_AT_ISO
+
+    @pytest.mark.parametrize(
+        "forged",
+        [
+            {},
+            {"clicked_at": CLICKED_AT},
+            {**ATTRIBUTION, "signature": None},
+            {**ATTRIBUTION, "signature": "not-the-real-one"},
+            {**ATTRIBUTION, "click_id": "Cj0KCQjw_abc-124"},
+            {**ATTRIBUTION, "click_id_kind": "wbraid"},
+            {**ATTRIBUTION, "clicked_at": CLICKED_AT + 1},
+            {**CONSENT_ONLY, "signature": ATTRIBUTION["signature"]},
+        ],
+    )
+    async def test_register_ignores_unsigned_or_tampered_attribution(
+        self, client, app, forged
+    ):
+        """A planted domain cookie must neither count as consent nor cost
+        anyone the account: the sign-up succeeds, nothing is stored."""
+        resp = await _register(client, "forged@example.com", ad_attribution=forged)
+        assert resp.status_code == 200, resp.text
+        row = await app.state.db.get_user_by_email("forged@example.com")
+        assert row["ads_consent"] == 0
+        assert row["ad_click_id"] is None
 
     async def test_register_without_ad_attribution_leaves_consent_off(self, client, app):
         resp = await _register(client, "plain@example.com")
@@ -71,7 +115,7 @@ class TestRegisterEndpoint:
     async def test_register_accepts_odd_but_parseable_clicked_at(self, client, app):
         """The timestamp comes from the visitor's clock; skew must not cost
         them the account."""
-        odd = {**ATTRIBUTION, "clicked_at": 4_102_444_800}
+        odd = _signed(GCLID, "gclid", 4_102_444_800)
         resp = await _register(client, "skew@example.com", ad_attribution=odd)
         assert resp.status_code == 200, resp.text
         row = await app.state.db.get_user_by_email("skew@example.com")

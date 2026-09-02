@@ -139,16 +139,19 @@ class AdAttribution(BaseModel):
     """Google Ads click attribution the web client copies out of the
     ``mobaide_ads`` cookie when it creates an account.
 
-    Presence of the object is the visitor's banner Accept on ``mobaide.com``;
-    ``click_id``/``click_id_kind`` are null on a consent-only visit. Native
-    clients never send it. ``clicked_at`` is stamped by the visitor's clock,
-    so its bounds are deliberately loose — rejecting a skewed timestamp
-    would turn a marketing cookie into a registration failure.
+    The cookie is minted and HMAC-signed by this server (``ads/consent.py``)
+    when the visitor accepts the banner on ``mobaide.com``; the client copies
+    its fields here verbatim and the signature is what proves the consent —
+    a value without a valid ``signature`` is ignored at sign-up, never
+    rejected, so a planted or stale cookie cannot cost anyone the account.
+    ``click_id``/``click_id_kind`` are null on a consent-only visit; native
+    clients never send the object.
     """
 
     click_id: str | None = Field(default=None, pattern=AD_CLICK_ID_PATTERN)
     click_id_kind: AdClickKind | None = None
     clicked_at: int | None = Field(default=None, ge=0, le=4_102_444_800)
+    signature: str | None = Field(default=None, max_length=128)
 
     @model_validator(mode="after")
     def _click_fields_travel_together(self) -> "AdAttribution":

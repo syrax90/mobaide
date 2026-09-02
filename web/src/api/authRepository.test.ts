@@ -30,6 +30,7 @@ const attribution = vi.hoisted(() => ({
     click_id: string | null;
     click_id_kind: 'gclid' | 'wbraid' | 'gbraid' | null;
     clicked_at: number | null;
+    signature: string | null;
   },
 }));
 
@@ -141,7 +142,12 @@ describe('session-minting calls', () => {
 
 describe('ad attribution forwarding', () => {
   it('forwards ad_attribution on register, Google and Apple only', async () => {
-    attribution.value = { click_id: 'Cj0K_abc-123', click_id_kind: 'gclid', clicked_at: 1756800000 };
+    attribution.value = {
+      click_id: 'Cj0K_abc-123',
+      click_id_kind: 'gclid',
+      clicked_at: 1756800000,
+      signature: 'a'.repeat(43),
+    };
     for (let i = 0; i < 5; i += 1) succeed(okBody);
 
     await register('user@example.com', 'hunter22');

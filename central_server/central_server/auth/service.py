@@ -24,6 +24,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from fastapi import BackgroundTasks
 
+from ..ads.consent import verify_attribution
 from ..relay.routing import WS_CLOSE_ADMIN_REVOKED
 from .models import (
     AdAttribution,
@@ -54,10 +55,23 @@ _background_email_tasks: set[asyncio.Task] = set()
 
 
 def _ad_attribution_columns(
-    attribution: AdAttribution | None,
+    attribution: AdAttribution | None, secret: str
 ) -> dict[str, Any]:
-    """Map a sign-up request's attribution onto ``create_user`` kwargs."""
+    """Map a sign-up request's attribution onto ``create_user`` kwargs.
+
+    Only a value this server signed counts as consent: anything else is
+    dropped silently (the sign-up itself must never fail over it).
+    """
     if attribution is None:
+        return {}
+    if not verify_attribution(
+        secret,
+        click_id=attribution.click_id,
+        click_id_kind=attribution.click_id_kind,
+        clicked_at=attribution.clicked_at,
+        signature=attribution.signature,
+    ):
+        logger.info("ads.attribution_rejected reason=bad_signature")
         return {}
     clicked_at = attribution.clicked_at
     return {
@@ -304,7 +318,7 @@ class AuthService:
                 password_hash=password_hash,
                 role="viewer",
                 email_verified=False,
-                **_ad_attribution_columns(ad_attribution),
+                **_ad_attribution_columns(ad_attribution, self._config.jwt_secret_key),
             )
             await self._issue_verification_code(
                 user_id,
@@ -326,7 +340,7 @@ class AuthService:
             password_hash=password_hash,
             role="viewer",
             email_verified=True,
-            **_ad_attribution_columns(ad_attribution),
+            **_ad_attribution_columns(ad_attribution, self._config.jwt_secret_key),
         )
         token = self._create_user_token(user_id, email, "viewer")
         return RegisterResult(
@@ -699,7 +713,7 @@ class AuthService:
             google_sub=google_sub,
             role="viewer",
             email_verified=email_verified,
-            **_ad_attribution_columns(ad_attribution),
+            **_ad_attribution_columns(ad_attribution, self._config.jwt_secret_key),
         )
         token = self._create_user_token(user_id, email, "viewer")
         return user_id, "viewer", token, True
@@ -871,7 +885,7 @@ class AuthService:
             apple_sub=apple_sub,
             role="viewer",
             email_verified=email_verified,
-            **_ad_attribution_columns(ad_attribution),
+            **_ad_attribution_columns(ad_attribution, self._config.jwt_secret_key),
         )
         token = self._create_user_token(user_id, email, "viewer")
         return user_id, "viewer", token, True

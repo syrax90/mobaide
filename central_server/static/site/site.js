@@ -464,16 +464,17 @@
    * app.mobaide.com can attach it to the sign-up request and the server can
    * report the account's first agent pairing back to the ad click. Without a
    * click id the cookie is a bare consent marker (the server then falls back
-   * to a hashed email); an existing cookie is left alone unless the visit
-   * carries a new click id.
-   * `Secure` only over https: identical bytes in production, while the
-   * http://mobaide.com:<port> local recipe below would otherwise write
-   * nothing at all.
+   * to a hashed email). The cookie is issued and signed by the server, not
+   * written from script: a domain cookie set by script proves nothing, since
+   * any host on the registrable domain could plant one. This page only reads
+   * it back (to avoid renewing it) and expires it on Decline.
    */
   var ADS_COOKIE_NAME = "mobaide_ads";
-  var ADS_COOKIE_MAX_AGE = 7776000;
   var ADS_CLICK_ID_RE = /^[A-Za-z0-9_-]{1,200}$/;
   var ADS_CLICK_PARAMS = ["gclid", "wbraid", "gbraid"];
+  // Stamped once per page load: the moment the click id arrived, not the
+  // moment the visitor got around to pressing Accept in a tab left open.
+  var LANDING_ARRIVED_AT = Math.floor(Date.now() / 1000);
 
   function readLandingClickId() {
     var params = new URLSearchParams(window.location.search);
@@ -506,7 +507,7 @@
     return null;
   }
 
-  function writeAdsCookie() {
+  function requestAdsCookie() {
     var click = readLandingClickId();
     // Only a new click id rewrites an existing cookie. A plain return visit
     // must not renew the 90-day lifetime the policy discloses — neither for
@@ -514,25 +515,28 @@
     if (!click && readAdsCookie() !== null) {
       return;
     }
-    var value = new URLSearchParams();
-    value.set("v", "1");
-    if (click) {
-      value.set("k", click.kind);
-    }
-    value.set("t", String(Math.floor(Date.now() / 1000)));
-    if (click) {
-      value.set("id", click.id);
+    if (typeof window.fetch !== "function") {
+      return;
     }
     try {
-      document.cookie =
-        ADS_COOKIE_NAME + "=" + value.toString() +
-        "; Max-Age=" + ADS_COOKIE_MAX_AGE +
-        "; path=/; domain=." + window.location.hostname +
-        "; SameSite=Lax" +
-        (window.location.protocol === "https:" ? "; Secure" : "");
+      window
+        .fetch("/api/ads/consent", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            click_id: click ? click.id : null,
+            click_id_kind: click ? click.kind : null,
+            arrived_at: LANDING_ARRIVED_AT,
+          }),
+          credentials: "same-origin",
+          keepalive: true,
+        })
+        .catch(function () {
+          // Offline or blocked: the visit still counts on this page, only
+          // the sign-up attribution is lost.
+        });
     } catch (err) {
-      // Cookies blocked: the visit still counts on this page, only the
-      // sign-up attribution is lost.
+      // Same as above for a synchronous fetch failure.
     }
   }
 
@@ -663,7 +667,7 @@
       storeAdsConsent("granted");
       banner.hidden = true;
       loadGoogleTag();
-      writeAdsCookie();
+      requestAdsCookie();
     });
     decline.addEventListener("click", function () {
       storeAdsConsent("denied");
@@ -684,7 +688,7 @@
     var choice = readAdsConsent();
     if (choice === "granted") {
       loadGoogleTag();
-      writeAdsCookie();
+      requestAdsCookie();
       return;
     }
     if (choice === "denied") {

@@ -184,21 +184,33 @@ policy promises no un-consented tracking:
   choice. Declining after a prior Accept pushes `consent update: denied` to a
   tag already running on the page and expires every `_gcl_*` cookie (both
   domain spellings — gtag registers them on the registrable domain).
-- **Accept also writes our own `mobaide_ads` cookie** (`domain=.mobaide.com`,
-  `path=/`, 90 days, `SameSite=Lax`, `Secure` only over https so the local
-  recipe above still works): `v=1&k=<gclid|wbraid|gbraid>&t=<epoch s>&id=<id>`
-  when the landing URL carried a click id, `v=1&t=<epoch s>` as a bare consent
-  marker otherwise. An existing cookie is rewritten only when the visit
-  carries a new click id — a plain return visit never renews the disclosed
-  90-day lifetime, and a stored click id is never downgraded to a marker.
-  The check runs on Accept and on every stored-`granted` page load (so a
-  click on a return visit is captured), and the same Decline path that
-  clears `_gcl_*` expires the cookie. Its only reader is
-  the web SPA (`web/src/auth/adAttribution.ts`), which forwards it as the
-  optional `ad_attribution` field of the register / Google / Apple sign-up
-  requests; the server stores it on new accounts and reports the first agent
+- **Accept also asks the server for our own `mobaide_ads` cookie.** `site.js`
+  never writes it — a domain cookie set from script proves nothing, since any
+  host on the registrable domain (the GitHub-Pages `get.mobaide.com`
+  included) could plant one. Instead the page POSTs the landing click id
+  (`gclid`/`wbraid`/`gbraid`, when the landing URL carried one) and the
+  page-load time to the same-origin `POST /api/ads/consent`
+  (`central_server/ads/router.py`), which answers with a `Set-Cookie` for
+  `Domain=<host>`, `Path=/`, 90 days, `SameSite=Lax`, `Secure` per
+  `USER_SESSION_COOKIE_SECURE`. The value is `<base64url(payload)>.<hmac>`
+  with payload `v=1&k=<kind>&t=<epoch s>&id=<id>` (or `v=1&t=<epoch s>` as a
+  bare consent marker), signed with a key derived from `JWT_SECRET_KEY`; `t`
+  is the arrival time capped at the server clock, so neither a tab left open
+  before Accept nor a skewed browser clock can post-date a click. The
+  endpoint accepts same-origin requests only (`Sec-Fetch-Site` / `Origin`),
+  so a cross-site POST cannot mint a cookie for a victim either. An existing
+  cookie is requested anew only when the visit carries a new click id — a
+  plain return visit never renews the disclosed 90-day lifetime, and a stored
+  click id is never downgraded to a marker. The check runs on Accept and on
+  every stored-`granted` page load, and the same Decline path that clears
+  `_gcl_*` expires the cookie. Its only reader is the web SPA
+  (`web/src/auth/adAttribution.ts`), which forwards the fields and the
+  signature verbatim as the optional `ad_attribution` field of the register /
+  Google / Apple sign-up requests; the server verifies the signature before
+  storing anything on the new account and later reports the first agent
   pairing back to the click — see *Google Ads conversion upload* in
-  docs/deployment.md. Pinned by `test_marketing.TestAttributionCookie`.
+  docs/deployment.md. Pinned by `test_marketing.TestAttributionCookie` and
+  `tests/test_ads_consent.py`.
 - Because the tag is injected at runtime, the served HTML stays same-origin
   and inline-free — the two `test_marketing.py` self-containment guards still
   hold unchanged, and `TestConsentBanner` adds the reverse guard: the HTML must

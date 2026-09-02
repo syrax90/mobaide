@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "AdAttribution": {
-        "description": "Google Ads click attribution the web client copies out of the\n``mobaide_ads`` cookie when it creates an account.\n\nPresence of the object is the visitor's banner Accept on ``mobaide.com``;\n``click_id``/``click_id_kind`` are null on a consent-only visit. Native\nclients never send it. ``clicked_at`` is stamped by the visitor's clock,\nso its bounds are deliberately loose \u2014 rejecting a skewed timestamp\nwould turn a marketing cookie into a registration failure.",
+        "description": "Google Ads click attribution the web client copies out of the\n``mobaide_ads`` cookie when it creates an account.\n\nThe cookie is minted and HMAC-signed by this server (``ads/consent.py``)\nwhen the visitor accepts the banner on ``mobaide.com``; the client copies\nits fields here verbatim and the signature is what proves the consent \u2014\na value without a valid ``signature`` is ignored at sign-up, never\nrejected, so a planted or stale cookie cannot cost anyone the account.\n``click_id``/``click_id_kind`` are null on a consent-only visit; native\nclients never send the object.",
         "properties": {
           "click_id": {
             "anyOf": [
@@ -44,9 +44,69 @@
               }
             ],
             "title": "Clicked At"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signature"
           }
         },
         "title": "AdAttribution",
+        "type": "object"
+      },
+      "AdsConsentRequest": {
+        "description": "What the landing page knows when the visitor accepts the banner.",
+        "properties": {
+          "arrived_at": {
+            "anyOf": [
+              {
+                "maximum": 4102444800.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arrived At"
+          },
+          "click_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_-]{1,200}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Click Id"
+          },
+          "click_id_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "gclid",
+                  "wbraid",
+                  "gbraid"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Click Id Kind"
+          }
+        },
+        "title": "AdsConsentRequest",
         "type": "object"
       },
       "AgentSummary": {
@@ -1755,6 +1815,41 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/ads/consent": {
+      "post": {
+        "description": "Issue the signed ``mobaide_ads`` cookie after the visitor accepts the\nlanding page's banner. ``t`` is the arrival time the page reports, capped\nat the server clock so a skewed browser cannot post-date a click.",
+        "operationId": "record_ads_consent_api_ads_consent_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdsConsentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Ads Consent",
+        "tags": [
+          "ads"
+        ]
+      }
+    },
     "/api/agents": {
       "get": {
         "description": "List agents owned by the authenticated user, with online status.",

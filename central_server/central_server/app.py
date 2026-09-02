@@ -14,6 +14,7 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import __version__
+from .ads.router import router as ads_router
 from .agents.service import AgentService
 from .auth.dependencies import get_api_user, get_dashboard_user
 from .auth.email import build_email_sender
@@ -494,6 +495,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(templates_router)
     app.include_router(shortcuts_router)
     app.include_router(custom_agent_types_router)
+    app.include_router(ads_router)
 
     if config.enable_api_docs:
         _register_api_docs(app)

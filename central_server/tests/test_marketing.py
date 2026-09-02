@@ -679,25 +679,30 @@ class TestAttributionCookie:
     def _source(self) -> str:
         return (resolve_static_dir() / "site" / "site.js").read_text()
 
-    async def test_site_js_writes_the_attribution_cookie_inside_the_gated_flow(
+    async def test_site_js_requests_the_attribution_cookie_inside_the_gated_flow(
         self,
     ) -> None:
+        """The cookie is minted and signed by the server — script never
+        writes it — so the page's job is one same-origin POST carrying the
+        click id and the page-load time, and only when there is something
+        new to record."""
         source = self._source()
         assert 'ADS_COOKIE_NAME = "mobaide_ads"' in source
-        assert "ADS_COOKIE_MAX_AGE = 7776000" in source
+        assert "LANDING_ARRIVED_AT = Math.floor(Date.now() / 1000)" in source
         for param in ("gclid", "wbraid", "gbraid"):
             assert f'"{param}"' in source
-        writer = _function_body(source, "writeAdsCookie")
+        requester = _function_body(source, "requestAdsCookie")
         # A return visit without a click id must not renew the lifetime.
-        assert "readAdsCookie() !== null" in writer
-        assert "SameSite=Lax" in writer
-        assert 'domain=." + window.location.hostname' in writer
-        assert '"; Secure"' in writer
-        # Both write sites live inside the hostname-gated function, after
+        assert "readAdsCookie() !== null" in requester
+        assert '.fetch("/api/ads/consent"' in requester
+        assert "arrived_at: LANDING_ARRIVED_AT" in requester
+        assert 'credentials: "same-origin"' in requester
+        assert "document.cookie =" not in requester
+        # Both call sites live inside the hostname-gated function, after
         # the gate: Accept and the stored-"granted" page load.
         banner = _function_body(source, "setUpConsentBanner")
-        assert banner.index('hostname !== "mobaide.com"') < banner.index("writeAdsCookie()")
-        assert banner.count("writeAdsCookie()") == 2
+        assert banner.index('hostname !== "mobaide.com"') < banner.index("requestAdsCookie()")
+        assert banner.count("requestAdsCookie()") == 2
 
     async def test_site_js_clears_the_attribution_cookie_on_withdrawal(self) -> None:
         source = self._source()

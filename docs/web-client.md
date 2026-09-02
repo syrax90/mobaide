@@ -1548,16 +1548,18 @@ server's five-minute freshness window by construction.
 
 ### Ad attribution at sign-up
 
-`web/src/auth/adAttribution.ts` reads the `mobaide_ads` cookie the marketing
-site writes on `.mobaide.com` after its Google Ads consent banner is accepted
-(docs/website.md, *The consent-gated Google Ads tag*), and `authRepository.ts`
-spreads it into the register / Google / Apple bodies as the optional
-`ad_attribution` field — only those three, because only they can create an
-account, and only when the cookie exists, so the wire shape is unchanged for
-everyone else. The parser mirrors the server's Pydantic validator and is at
-least as strict, degrading to a consent-only object (or `null`) instead of
-throwing: any same-site host can plant the cookie, and forwarding garbage
-would turn a marketing cookie into a 422 on sign-up. The dev host never sees
+`web/src/auth/adAttribution.ts` reads the `mobaide_ads` cookie the central
+server issues on `.mobaide.com` after the marketing site's Google Ads consent
+banner is accepted (docs/website.md, *The consent-gated Google Ads tag*), and
+`authRepository.ts` spreads it into the register / Google / Apple bodies as
+the optional `ad_attribution` field — only those three, because only they can
+create an account, and only when the cookie exists, so the wire shape is
+unchanged for everyone else. The value is `<base64url(payload)>.<signature>`;
+the parser decodes it, mirrors the server's Pydantic bounds, forwards the
+fields and the signature verbatim, and returns `null` for anything off
+instead of throwing: any same-site host can plant a cookie, the server alone
+decides (by verifying the signature) whether it counts as consent, and
+forwarding garbage would turn a marketing cookie into a 422 on sign-up. The dev host never sees
 a `.mobaide.com` cookie, so the tests pass jar strings. Adding the field
 touched the committed OpenAPI snapshot and generated types (`npm run
 schema:dump && npm run schema:generate`).
