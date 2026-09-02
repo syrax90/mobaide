@@ -322,3 +322,16 @@ def test_google_ads_api_version_falls_back_when_malformed(monkeypatch, raw):
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
     _set_all_google_ads(monkeypatch, GOOGLE_ADS_API_VERSION=raw)
     assert CentralServerConfig.from_env().google_ads_api_version == "v25"
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [(None, 90), ("30", 30), ("90", 90), ("200", 90), ("0", 1), ("abc", 90), ("", 90), ("-5", 90)],
+)
+def test_google_ads_click_window_days_parses_and_clamps(monkeypatch, raw, expected):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    if raw is None:
+        monkeypatch.delenv("GOOGLE_ADS_CLICK_WINDOW_DAYS", raising=False)
+    else:
+        monkeypatch.setenv("GOOGLE_ADS_CLICK_WINDOW_DAYS", raw)
+    assert CentralServerConfig.from_env().google_ads_click_window_days == expected

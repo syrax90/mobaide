@@ -1,6 +1,7 @@
-"""Anonymous endpoint behind the landing page's consent banner."""
+"""Anonymous endpoints behind the landing page's consent banner."""
 from __future__ import annotations
 
+import logging
 import time
 from urllib.parse import urlsplit
 
@@ -14,7 +15,11 @@ from .consent import (
     cookie_domain,
     cookie_value,
     network_fingerprint,
+    parse_cookie_value,
+    verify_attribution,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ads", tags=["ads"])
 
@@ -31,6 +36,12 @@ class AdsConsentRequest(BaseModel):
         if (self.click_id is None) != (self.click_id_kind is None):
             raise ValueError("click_id and click_id_kind must be set together")
         return self
+
+
+class AdsWithdrawRequest(BaseModel):
+    """The ``mobaide_ads`` value the page still holds when Decline is pressed."""
+
+    value: str = Field(min_length=1, max_length=512, pattern=r"^[A-Za-z0-9_.-]+$")
 
 
 def _is_same_origin(request: Request) -> bool:
@@ -77,6 +88,50 @@ async def record_ads_consent(request: Request, body: AdsConsentRequest) -> Respo
             network=network_fingerprint(config.jwt_secret_key, client_ip),
         ),
         max_age=COOKIE_MAX_AGE,
+        path="/",
+        domain=cookie_domain(request.url.hostname),
+        secure=config.user_session_cookie_secure,
+        httponly=False,
+        samesite="lax",
+    )
+    return response
+
+
+@router.post(
+    "/consent/withdraw",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def withdraw_ads_consent(request: Request, body: AdsWithdrawRequest) -> Response:
+    """Decline after an earlier Accept: drop the stored click attribution from
+    every account created with this cookie, and expire the cookie itself.
+
+    Only a value this server signed identifies anything, and withdrawing can
+    only ever remove data, so an invalid value is logged and otherwise
+    answered exactly like a valid one.
+    """
+    if not _is_same_origin(request):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Consent is recorded from the landing page only",
+        )
+    config = request.app.state.config
+    parsed = parse_cookie_value(body.value)
+    if parsed is not None and verify_attribution(
+        config.jwt_secret_key,
+        click_id=parsed.click_id,
+        click_id_kind=parsed.click_id_kind,
+        clicked_at=parsed.clicked_at,
+        network=parsed.network,
+        signature=parsed.signature,
+    ):
+        cleared = await request.app.state.db.withdraw_ad_attribution(parsed.signature)
+        logger.info("ads.consent_withdrawn accounts=%d", cleared)
+    else:
+        logger.info("ads.consent_withdrawal_ignored reason=bad_value")
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    response.delete_cookie(
+        key=COOKIE_NAME,
         path="/",
         domain=cookie_domain(request.url.hostname),
         secure=config.user_session_cookie_secure,

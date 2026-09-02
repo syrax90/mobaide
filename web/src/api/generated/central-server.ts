@@ -26,6 +26,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/ads/consent/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw Ads Consent
+         * @description Decline after an earlier Accept: drop the stored click attribution from
+         *     every account created with this cookie, and expire the cookie itself.
+         *
+         *     Only a value this server signed identifies anything, and withdrawing can
+         *     only ever remove data, so an invalid value is logged and otherwise
+         *     answered exactly like a valid one.
+         */
+        post: operations["withdraw_ads_consent_api_ads_consent_withdraw_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents": {
         parameters: {
             query?: never;
@@ -1023,6 +1048,14 @@ export interface components {
             click_id_kind?: ("gclid" | "wbraid" | "gbraid") | null;
         };
         /**
+         * AdsWithdrawRequest
+         * @description The ``mobaide_ads`` value the page still holds when Decline is pressed.
+         */
+        AdsWithdrawRequest: {
+            /** Value */
+            value: string;
+        };
+        /**
          * AgentSummary
          * @description Agent listing response — no token.
          */
@@ -1820,6 +1853,37 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["AdsConsentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    withdraw_ads_consent_api_ads_consent_withdraw_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdsWithdrawRequest"];
             };
         };
         responses: {

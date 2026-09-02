@@ -329,6 +329,37 @@ class TestRetries:
         assert "reason=attribution_withdrawn" in caplog.text
         assert db.cleared == ["u1"]
 
+    async def test_first_send_revalidates_under_the_send_lock(self, caplog):
+        """Sends queue behind one lock; an upload that waited must not send a
+        row deleted in the meantime — even on its first attempt."""
+        db = FakeDb({"u1": _row()})
+        transport = ScriptedTransport()
+        uploader, _ = _uploader(db, transport)
+        await uploader._send_lock.acquire()
+        try:
+            task = asyncio.create_task(uploader.upload_first_pairing("u1"))
+            await asyncio.sleep(0)
+            db.rows.pop("u1")
+        finally:
+            uploader._send_lock.release()
+        assert await task == "user_deleted"
+        assert transport.calls == []
+
+    async def test_click_window_follows_the_conversion_action(self):
+        """A click outside the action's click-through window is a guaranteed
+        no-match, so the fallback is tried instead."""
+        row = _row(ad_click_at=(NOW - timedelta(days=31)).isoformat())
+        transport = ScriptedTransport()
+        uploader, _ = _uploader(FakeDb({"u1": row}), transport, click_window_days=30)
+        assert await uploader.upload_first_pairing("u1") == "ok"
+        conversion = transport.calls[0]["json"]["conversions"][0]
+        assert "gclid" not in conversion and "userIdentifiers" in conversion
+
+    async def test_click_window_never_exceeds_retention(self):
+        transport = ScriptedTransport()
+        uploader, _ = _uploader(FakeDb({"u1": _row()}), transport, click_window_days=400)
+        assert uploader._click_window == timedelta(days=90)
+
     async def test_transient_exhaustion_clears_and_logs_retries_exhausted(self, caplog):
         db = FakeDb({"u1": _row()})
         transport = ScriptedTransport(*(TransientTransportError("ConnectionError") for _ in range(3)))
@@ -470,7 +501,7 @@ class TestFromConfig:
         assert uploader.enabled
         assert (
             "ads.enabled customer_id=1234567890 action_id=987654321 "
-            "api_version=v25 login_customer_id_set=True"
+            "api_version=v25 login_customer_id_set=True click_window_days=90"
         ) in caplog.text
         for secret in ("dev-token", "GOCSPX-secret", "refresh-secret"):
             assert secret not in caplog.text

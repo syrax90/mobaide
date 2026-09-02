@@ -70,6 +70,15 @@ def _env_api_version(name: str, default: str) -> str:
     return raw if _API_VERSION_RE.fullmatch(raw) else default
 
 
+def _env_int_clamped(name: str, default: int, low: int, high: int) -> int:
+    """An integer knob that degrades to ``default`` on garbage and is clamped
+    into ``[low, high]``."""
+    raw = (os.getenv(name) or "").strip()
+    if not raw.isascii() or not raw.isdigit():
+        return default
+    return max(low, min(high, int(raw)))
+
+
 def normalize_origin(raw: str) -> str | None:
     """Canonicalize an origin for equality comparison, or None if malformed.
 
@@ -359,6 +368,10 @@ class CentralServerConfig:
     google_ads_oauth_refresh_token: str | None = None
     google_ads_conversion_action_id: str | None = None
     google_ads_api_version: str = "v25"
+    # The conversion action's click-through window in days: a click older
+    # than this is not attributable, so the uploader tries the hashed-email
+    # fallback instead. Clamped to the 90-day retention the policy promises.
+    google_ads_click_window_days: int = 90
 
     @property
     def google_ads_missing(self) -> tuple[str, ...]:
@@ -572,4 +585,7 @@ class CentralServerConfig:
                 "GOOGLE_ADS_CONVERSION_ACTION_ID"
             ),
             google_ads_api_version=_env_api_version("GOOGLE_ADS_API_VERSION", "v25"),
+            google_ads_click_window_days=_env_int_clamped(
+                "GOOGLE_ADS_CLICK_WINDOW_DAYS", 90, 1, 90
+            ),
         )

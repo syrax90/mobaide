@@ -48,8 +48,15 @@ CREATE TABLE IF NOT EXISTS users (
     ad_click_kind           TEXT,
     ad_click_at             TEXT,
     ads_consent             INTEGER NOT NULL DEFAULT 0,
+    ad_attribution_sig      TEXT,
     first_paired_at         TEXT
 );
+
+-- The signature of the consent cookie an account was created with, so a
+-- later Decline on the landing page can withdraw that account's stored
+-- attribution without knowing who the visitor is.
+CREATE INDEX IF NOT EXISTS idx_users_ad_attribution_sig
+    ON users(ad_attribution_sig) WHERE ad_attribution_sig IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS agents (
     agent_id               TEXT PRIMARY KEY,
@@ -316,6 +323,19 @@ def _users_filter(q: str, verified: bool | None) -> tuple[str, list]:
 _NEVER_EXPIRES_AT = "9999-12-31T23:59:59.999999+00:00"
 
 
+# users columns the v20 block introduced, in ALTER TABLE form. Hoisted into
+# connect()'s pre-ladder guard because _SCHEMA's idx_users_ad_attribution_sig
+# references one of them.
+_AD_ATTRIBUTION_COLUMNS = (
+    ("ad_click_id", "TEXT"),
+    ("ad_click_kind", "TEXT"),
+    ("ad_click_at", "TEXT"),
+    ("ads_consent", "INTEGER NOT NULL DEFAULT 0"),
+    ("ad_attribution_sig", "TEXT"),
+    ("first_paired_at", "TEXT"),
+)
+
+
 class Database:
     """Async SQLite database for the central server."""
 
@@ -359,6 +379,23 @@ class Database:
                     await self._conn.execute(
                         "ALTER TABLE users ADD COLUMN apple_sub TEXT"
                     )
+
+        # Same hoist for the v20 attribution columns: idx_users_ad_attribution_sig
+        # in _SCHEMA references users.ad_attribution_sig, and every block
+        # below re-runs _SCHEMA, so a DB older than v20 must gain the columns
+        # before the first of those re-runs, not in the v20 block itself.
+        if version < 20:
+            users_cursor = await self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
+            )
+            if await users_cursor.fetchone() is not None:
+                col_cursor = await self._conn.execute("PRAGMA table_info(users)")
+                user_cols = {r[1] for r in await col_cursor.fetchall()}
+                for column, ddl in _AD_ATTRIBUTION_COLUMNS:
+                    if column not in user_cols:
+                        await self._conn.execute(
+                            f"ALTER TABLE users ADD COLUMN {column} {ddl}"
+                        )
 
         if version < 3:
             # Legacy DBs may have an `agents` table WITHOUT the `owner_user_id`
@@ -687,22 +724,10 @@ class Database:
             await self._conn.execute("PRAGMA user_version = 19")
 
         if version < 20:
-            # Google Ads attribution + first-pairing marker on users. Columns
-            # are ALTERed in before the _SCHEMA re-run for the same reason
-            # as trust_key_fp above.
-            user_cursor = await self._conn.execute("PRAGMA table_info(users)")
-            user_cols = {r[1] for r in await user_cursor.fetchall()}
-            for column, ddl in (
-                ("ad_click_id", "TEXT"),
-                ("ad_click_kind", "TEXT"),
-                ("ad_click_at", "TEXT"),
-                ("ads_consent", "INTEGER NOT NULL DEFAULT 0"),
-                ("first_paired_at", "TEXT"),
-            ):
-                if column not in user_cols:
-                    await self._conn.execute(
-                        f"ALTER TABLE users ADD COLUMN {column} {ddl}"
-                    )
+            # Google Ads attribution + first-pairing marker on users. The
+            # columns themselves were ALTERed in by the hoisted guard above
+            # (they must predate every _SCHEMA re-run, not just this one);
+            # this block owns the index, the backfill and the version bump.
             await self._conn.executescript(_SCHEMA)
             # Accounts that paired before the marker existed must not read
             # as first-time on their next claim. created_at is a stand-in;
@@ -731,7 +756,8 @@ class Database:
         "id, email, password_hash, google_sub, apple_sub, role, "
         "email_verified, verified_at, created_at, updated_at, "
         "scheduled_deletion_at, deletion_requested_at, trust_key_fp, "
-        "ad_click_id, ad_click_kind, ad_click_at, ads_consent, first_paired_at"
+        "ad_click_id, ad_click_kind, ad_click_at, ads_consent, "
+        "ad_attribution_sig, first_paired_at"
     )
 
     async def create_user(
@@ -746,6 +772,7 @@ class Database:
         ad_click_kind: str | None = None,
         ad_click_at: str | None = None,
         ads_consent: bool = False,
+        ad_attribution_sig: str | None = None,
     ) -> str:
         """Create a new user. Returns user_id.
 
@@ -762,8 +789,9 @@ class Database:
             "INSERT INTO users "
             "(id, email, password_hash, google_sub, apple_sub, role, "
             "email_verified, verified_at, created_at, updated_at, "
-            "ad_click_id, ad_click_kind, ad_click_at, ads_consent) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "ad_click_id, ad_click_kind, ad_click_at, ads_consent, "
+            "ad_attribution_sig) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 user_id,
                 email,
@@ -779,6 +807,7 @@ class Database:
                 ad_click_kind,
                 ad_click_at,
                 1 if ads_consent else 0,
+                ad_attribution_sig,
             ),
         )
         await self.conn.commit()
@@ -2215,12 +2244,25 @@ class Database:
         """Drop the sign-up click attribution once it has served its purpose."""
         cursor = await self.conn.execute(
             "UPDATE users SET ad_click_id = NULL, ad_click_kind = NULL, "
-            "ad_click_at = NULL, ads_consent = 0, updated_at = ? "
+            "ad_click_at = NULL, ads_consent = 0, ad_attribution_sig = NULL, "
+            "updated_at = ? "
             "WHERE id = ? AND (ads_consent = 1 OR ad_click_id IS NOT NULL)",
             (_now_iso(), user_id),
         )
         await self.conn.commit()
         return cursor.rowcount == 1
+
+    async def withdraw_ad_attribution(self, signature: str) -> int:
+        """Decline on the landing page: drop the attribution from every account
+        created with the cookie carrying ``signature``. Returns the count."""
+        cursor = await self.conn.execute(
+            "UPDATE users SET ad_click_id = NULL, ad_click_kind = NULL, "
+            "ad_click_at = NULL, ads_consent = 0, ad_attribution_sig = NULL, "
+            "updated_at = ? WHERE ad_attribution_sig = ?",
+            (_now_iso(), signature),
+        )
+        await self.conn.commit()
+        return cursor.rowcount
 
     _AD_ATTRIBUTION_RETENTION_DAYS = 90
 
@@ -2237,7 +2279,8 @@ class Database:
         cutoff = (now - timedelta(days=self._AD_ATTRIBUTION_RETENTION_DAYS)).isoformat()
         cursor = await self.conn.execute(
             "UPDATE users SET ad_click_id = NULL, ad_click_kind = NULL, "
-            "ad_click_at = NULL, ads_consent = 0, updated_at = ? "
+            "ad_click_at = NULL, ads_consent = 0, ad_attribution_sig = NULL, "
+            "updated_at = ? "
             "WHERE (ads_consent = 1 OR ad_click_id IS NOT NULL) "
             "AND (created_at < ? OR ad_click_at < ?)",
             (now.isoformat(), cutoff, cutoff),

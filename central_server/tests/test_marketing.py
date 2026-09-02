@@ -709,8 +709,15 @@ class TestAttributionCookie:
         assert banner.count("requestAdsCookie()") == 2
 
     async def test_site_js_clears_the_attribution_cookie_on_withdrawal(self) -> None:
+        """Decline reports the withdrawal to the server (so an account created
+        with the cookie loses its stored attribution too) *before* deleting
+        the cookie it needs for that, then deletes it."""
         source = self._source()
-        assert "clearAdsCookie()" in _function_body(source, "withdrawGoogleTag")
+        withdrawal = _function_body(source, "withdrawGoogleTag")
+        assert "clearAdsCookie()" in withdrawal
+        assert '.fetch("/api/ads/consent/withdraw"' in withdrawal
+        assert withdrawal.index("readAdsCookie()") < withdrawal.index("/api/ads/consent/withdraw")
+        assert withdrawal.index("/api/ads/consent/withdraw") < withdrawal.index("clearAdsCookie()")
 
     async def test_attribution_cookie_name_is_never_server_rendered(
         self, landing

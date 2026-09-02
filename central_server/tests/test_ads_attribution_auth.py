@@ -59,6 +59,7 @@ class TestRegisterEndpoint:
         assert row["ad_click_kind"] == "gclid"
         assert row["ad_click_at"] == CLICKED_AT_ISO
         assert row["ads_consent"] == 1
+        assert row["ad_attribution_sig"] == ATTRIBUTION["signature"]
         assert row["first_paired_at"] is None
 
     async def test_register_consent_only_object_sets_consent_without_click(

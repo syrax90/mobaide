@@ -35,12 +35,21 @@ def upgrade() -> None:
                 server_default=sa.text("0"),
             )
         )
+        batch_op.add_column(sa.Column("ad_attribution_sig", sa.Text(), nullable=True))
         batch_op.add_column(sa.Column("first_paired_at", sa.Text(), nullable=True))
+    op.create_index(
+        "idx_users_ad_attribution_sig",
+        "users",
+        ["ad_attribution_sig"],
+        sqlite_where=sa.text("ad_attribution_sig IS NOT NULL"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("idx_users_ad_attribution_sig", table_name="users")
     with op.batch_alter_table("users") as batch_op:
         batch_op.drop_column("first_paired_at")
+        batch_op.drop_column("ad_attribution_sig")
         batch_op.drop_column("ads_consent")
         batch_op.drop_column("ad_click_at")
         batch_op.drop_column("ad_click_kind")

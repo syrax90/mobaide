@@ -627,6 +627,25 @@
         ad_user_data: "denied",
       });
     }
+    // Tell the server first, while the cookie can still be read: an account
+    // created with it must lose the stored attribution too, not only the
+    // browser its copy. Best effort — the local deletion below never waits.
+    var existing = readAdsCookie();
+    if (existing !== null && typeof window.fetch === "function") {
+      try {
+        window
+          .fetch("/api/ads/consent/withdraw", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ value: existing }),
+            credentials: "same-origin",
+            keepalive: true,
+          })
+          .catch(function () {});
+      } catch (err) {
+        // Same as above: withdrawal is still recorded on this page.
+      }
+    }
     var cookies = document.cookie.split(";");
     for (var i = 0; i < cookies.length; i++) {
       var name = cookies[i].split("=")[0].replace(/^\s+/, "");

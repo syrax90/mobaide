@@ -121,6 +121,23 @@
         "title": "AdsConsentRequest",
         "type": "object"
       },
+      "AdsWithdrawRequest": {
+        "description": "The ``mobaide_ads`` value the page still holds when Decline is pressed.",
+        "properties": {
+          "value": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "AdsWithdrawRequest",
+        "type": "object"
+      },
       "AgentSummary": {
         "description": "Agent listing response \u2014 no token.",
         "properties": {
@@ -1857,6 +1874,41 @@
           }
         },
         "summary": "Record Ads Consent",
+        "tags": [
+          "ads"
+        ]
+      }
+    },
+    "/api/ads/consent/withdraw": {
+      "post": {
+        "description": "Decline after an earlier Accept: drop the stored click attribution from\nevery account created with this cookie, and expire the cookie itself.\n\nOnly a value this server signed identifies anything, and withdrawing can\nonly ever remove data, so an invalid value is logged and otherwise\nanswered exactly like a valid one.",
+        "operationId": "withdraw_ads_consent_api_ads_consent_withdraw_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdsWithdrawRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Ads Consent",
         "tags": [
           "ads"
         ]

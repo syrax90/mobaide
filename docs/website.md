@@ -200,7 +200,10 @@ policy promises no un-consented tracking:
   post-date a click, and `n` is a keyed fingerprint of the network the Accept
   came from, which is what binds the consent to the visitor at sign-up (see
   docs/deployment.md). If a Decline lands while the request is in flight,
-  the response handler clears the cookie again. The
+  the response handler clears the cookie again. Decline itself first POSTs
+  the cookie value to `/api/ads/consent/withdraw` — the server drops the
+  stored attribution from every account created with that cookie — and only
+  then expires the cookie locally. The
   endpoint accepts same-origin requests only (`Sec-Fetch-Site` / `Origin`),
   so a cross-site POST cannot mint a cookie for a victim either. An existing
   cookie is requested anew only when the visit carries a new click id — a

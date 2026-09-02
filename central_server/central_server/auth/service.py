@@ -93,6 +93,9 @@ def _ad_attribution_columns(
             else None
         ),
         "ads_consent": consent,
+        # Lets a later Decline on the landing page withdraw this account's
+        # attribution without knowing whose account it is.
+        "ad_attribution_sig": attribution.signature,
     }
 
 

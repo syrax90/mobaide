@@ -11,10 +11,12 @@ import pytest
 
 from central_server.ads.consent import (
     COOKIE_NAME,
+    ParsedAttribution,
     canonical_payload,
     cookie_domain,
     cookie_value,
     network_fingerprint,
+    parse_cookie_value,
     sign_attribution,
     verify_attribution,
 )
@@ -93,6 +95,54 @@ class TestSigning:
             "v": ["1"], "k": ["gclid"], "t": ["1756800000"], "id": ["Cj0K_abc-123"], "n": [NET],
         }
         assert verify_attribution(SECRET, **CLICK, signature=signature)
+
+
+class TestParseCookieValue:
+    def test_round_trips_what_the_server_mints(self):
+        value = cookie_value(SECRET, **CLICK)
+        assert parse_cookie_value(value) == ParsedAttribution(
+            "Cj0K_abc-123", "gclid", 1_756_800_000, NET, sign_attribution(SECRET, **CLICK)
+        )
+        consent_only = cookie_value(SECRET, **CONSENT_ONLY)
+        parsed = parse_cookie_value(consent_only)
+        assert parsed is not None and parsed.click_id is None and parsed.network == NET
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "",
+            "no-dot",
+            "djEmdD01.",
+            "%%%.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "djEmdD01.bad sig",
+            "x" * 600,
+            None,
+            42,
+        ],
+    )
+    def test_rejects_malformed_values(self, raw):
+        assert parse_cookie_value(raw) is None
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "v=2&t=5&n=abc",
+            "t=5&n=abc",
+            "v=1&n=abc",
+            "v=1&t=-5&n=abc",
+            "v=1&t=4102444801&n=abc",
+            "v=1&t=5",
+            "v=1&t=5&n=a%20b",
+            "v=1&t=5&n=abc&k=gclid",
+            "v=1&t=5&n=abc&id=xyz",
+            "v=1&t=5&n=abc&k=fbclid&id=xyz",
+            "v=1&t=5&n=abc&k=gclid&id=a%20b",
+            "v=1&t=5&n=abc&v=1",
+        ],
+    )
+    def test_rejects_malformed_payloads(self, payload):
+        encoded = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+        assert parse_cookie_value(f"{encoded}.{'a' * 43}") is None
 
 
 class TestNetworkFingerprint:
@@ -239,3 +289,98 @@ class TestConsentEndpoint:
             "/api/ads/consent", json={}, headers={"Sec-Fetch-Site": "same-origin"}
         )
         assert resp.status_code == 204
+
+
+def _account_with(value: str, email: str) -> dict:
+    parsed = parse_cookie_value(value)
+    assert parsed is not None
+    return {
+        "email": email,
+        "password": "strongpass123",
+        "ad_attribution": {
+            "click_id": parsed.click_id,
+            "click_id_kind": parsed.click_id_kind,
+            "clicked_at": parsed.clicked_at,
+            "network": parsed.network,
+            "signature": parsed.signature,
+        },
+    }
+
+
+class TestWithdrawEndpoint:
+    async def _minted(self, client, click_id: str = "Cj0K_abc-123") -> str:
+        resp = await client.post(
+            "/api/ads/consent",
+            json={"click_id": click_id, "click_id_kind": "gclid", "arrived_at": 1_756_800_000},
+            headers=SAME_ORIGIN,
+        )
+        assert resp.status_code == 204
+        return _cookie_from(resp)[1]
+
+    async def test_clears_every_account_created_with_the_cookie(self, client, app):
+        value = await self._minted(client)
+        # A different click: the value (and so the signature) differs, which
+        # is what scopes the withdrawal to the accounts made with `value`.
+        other = await self._minted(client, click_id="Cj0K_other-456")
+        assert other != value
+        for email in ("first@example.com", "second@example.com"):
+            resp = await client.post("/api/auth/register", json=_account_with(value, email))
+            assert resp.status_code == 200, resp.text
+        resp = await client.post("/api/auth/register", json=_account_with(other, "third@example.com"))
+        assert resp.status_code == 200, resp.text
+        db = app.state.db
+        assert (await db.get_user_by_email("first@example.com"))["ads_consent"] == 1
+
+        resp = await client.post(
+            "/api/ads/consent/withdraw", json={"value": value}, headers=SAME_ORIGIN
+        )
+
+        assert resp.status_code == 204, resp.text
+        header = resp.headers["set-cookie"]
+        assert header.startswith(f"{COOKIE_NAME}=") and "max-age=0" in header.lower()
+        assert "domain=test" in header.lower()
+        for email in ("first@example.com", "second@example.com"):
+            row = await db.get_user_by_email(email)
+            assert (row["ads_consent"], row["ad_click_id"], row["ad_attribution_sig"]) == (0, None, None)
+        untouched = await db.get_user_by_email("third@example.com")
+        assert untouched["ads_consent"] == 1 and untouched["ad_click_id"] == "Cj0K_other-456"
+
+    @pytest.mark.parametrize("value", ["not-a-cookie", "djEmdD01.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
+    async def test_unsigned_values_change_nothing_but_still_expire_the_cookie(
+        self, client, app, value
+    ):
+        minted = await self._minted(client)
+        resp = await client.post("/api/auth/register", json=_account_with(minted, "keep@example.com"))
+        assert resp.status_code == 200
+
+        resp = await client.post(
+            "/api/ads/consent/withdraw", json={"value": value}, headers=SAME_ORIGIN
+        )
+
+        assert resp.status_code == 204
+        assert "max-age=0" in resp.headers["set-cookie"].lower()
+        assert (await app.state.db.get_user_by_email("keep@example.com"))["ads_consent"] == 1
+
+    async def test_tampered_values_change_nothing(self, client, app):
+        minted = await self._minted(client)
+        resp = await client.post("/api/auth/register", json=_account_with(minted, "keep2@example.com"))
+        assert resp.status_code == 200
+        encoded, _, signature = minted.rpartition(".")
+        forged = f"{encoded}.{'b' * len(signature)}"
+
+        resp = await client.post(
+            "/api/ads/consent/withdraw", json={"value": forged}, headers=SAME_ORIGIN
+        )
+
+        assert resp.status_code == 204
+        assert (await app.state.db.get_user_by_email("keep2@example.com"))["ads_consent"] == 1
+
+    @pytest.mark.parametrize("bad", [{"value": ""}, {"value": "has space"}, {"value": "x" * 600}, {}])
+    async def test_rejects_malformed_bodies(self, client, bad):
+        resp = await client.post("/api/ads/consent/withdraw", json=bad, headers=SAME_ORIGIN)
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("headers", [{}, {"Origin": "https://get.mobaide.com"}])
+    async def test_refuses_cross_site_requests(self, client, headers):
+        resp = await client.post("/api/ads/consent/withdraw", json={"value": "abc.def"}, headers=headers)
+        assert resp.status_code == 403

@@ -227,3 +227,37 @@ class TestAttributionStorage:
         click_only = await _user(db, "clickonly@test.local", ad_click_id="c", ad_click_kind="gclid")
         await db.mark_user_first_paired(click_only)
         assert await db.list_users_with_pending_ad_conversion() == [pending, click_only]
+
+
+class TestWithdrawal:
+    async def test_withdraw_clears_every_account_created_with_the_cookie(self, db):
+        first = await _user(
+            db, "first@test.local", ad_click_id="a", ad_click_kind="gclid",
+            ads_consent=True, ad_attribution_sig="sig-1",
+        )
+        second = await _user(db, "second@test.local", ads_consent=True, ad_attribution_sig="sig-1")
+        other = await _user(
+            db, "other@test.local", ad_click_id="b", ad_click_kind="gclid",
+            ads_consent=True, ad_attribution_sig="sig-2",
+        )
+        assert (await _row(db, first))["ad_attribution_sig"] == "sig-1"
+
+        assert await db.withdraw_ad_attribution("sig-1") == 2
+
+        for user in (first, second):
+            row = await _row(db, user)
+            assert (row["ads_consent"], row["ad_click_id"], row["ad_attribution_sig"]) == (0, None, None)
+        assert (await _row(db, other))["ad_click_id"] == "b"
+        assert await db.withdraw_ad_attribution("sig-1") == 0
+        assert await db.withdraw_ad_attribution("never-minted") == 0
+
+    async def test_clear_and_purge_drop_the_signature_too(self, db):
+        cleared = await _user(db, "cleared@test.local", ads_consent=True, ad_attribution_sig="sig-c")
+        await db.clear_user_ad_attribution(cleared)
+        assert (await _row(db, cleared))["ad_attribution_sig"] is None
+        old = (datetime.now(timezone.utc) - timedelta(days=91)).isoformat()
+        stale = await _user(db, "stale@test.local", ads_consent=True, ad_attribution_sig="sig-s")
+        await db.conn.execute("UPDATE users SET created_at = ? WHERE id = ?", (old, stale))
+        await db.conn.commit()
+        assert await db.purge_stale_ad_attribution() == 1
+        assert (await _row(db, stale))["ad_attribution_sig"] is None

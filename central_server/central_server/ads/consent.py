@@ -27,10 +27,16 @@ import base64
 import hashlib
 import hmac
 import ipaddress
-from urllib.parse import urlencode
+import re
+from dataclasses import dataclass
+from urllib.parse import parse_qs, urlencode
 
 COOKIE_NAME = "mobaide_ads"
 COOKIE_MAX_AGE = 90 * 24 * 3600
+CLICK_KINDS = ("gclid", "wbraid", "gbraid")
+_CLICK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_MAX_CLICKED_AT = 4_102_444_800
 _KEY_CONTEXT = b"mobaide-ads-attribution-cookie-v1"
 _NETWORK_CONTEXT = b"mobaide-ads-attribution-network-v1"
 
@@ -153,6 +159,55 @@ def cookie_value(
         network=network,
     )
     return f"{encoded.rstrip('=')}.{signature}"
+
+
+@dataclass(frozen=True)
+class ParsedAttribution:
+    click_id: str | None
+    click_id_kind: str | None
+    clicked_at: int
+    network: str
+    signature: str
+
+
+def parse_cookie_value(value: object) -> ParsedAttribution | None:
+    """Decode a ``mobaide_ads`` value the way the SPA does — shape only, no
+    signature check; ``None`` for anything off."""
+    if not isinstance(value, str) or len(value) > 512:
+        return None
+    encoded, dot, signature = value.rpartition(".")
+    if not dot or not _TOKEN_RE.fullmatch(signature):
+        return None
+    try:
+        payload = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode(
+            "ascii"
+        )
+    except (ValueError, UnicodeDecodeError):
+        return None
+    single = {
+        key: values[0]
+        for key, values in parse_qs(payload, keep_blank_values=True).items()
+        if len(values) == 1
+    }
+    if single.get("v") != "1":
+        return None
+    stamp = single.get("t")
+    if stamp is None or not stamp.isascii() or not stamp.isdigit():
+        return None
+    if int(stamp) > _MAX_CLICKED_AT:
+        return None
+    network = single.get("n")
+    if network is None or not _TOKEN_RE.fullmatch(network):
+        return None
+    kind = single.get("k")
+    click_id = single.get("id")
+    if (kind is None) != (click_id is None):
+        return None
+    if kind is not None and (
+        kind not in CLICK_KINDS or not _CLICK_ID_RE.fullmatch(click_id or "")
+    ):
+        return None
+    return ParsedAttribution(click_id, kind, int(stamp), network, signature)
 
 
 def cookie_domain(hostname: str | None) -> str | None:

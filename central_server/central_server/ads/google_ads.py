@@ -115,7 +115,11 @@ def parse_iso_utc(text: Any) -> datetime | None:
 
 
 def select_identifier(
-    row: Mapping[str, Any], now: datetime, *, email_allowed: bool = True
+    row: Mapping[str, Any],
+    now: datetime,
+    *,
+    email_allowed: bool = True,
+    click_window: timedelta = CLICK_MAX_AGE,
 ) -> ConversionIdentifier | None:
     """Fresh click id first, hashed email as the fallback — never both.
 
@@ -126,6 +130,9 @@ def select_identifier(
     by Google against a click that necessarily predates sign-up) ages from
     sign-up alone. The fallback carries personal data, so it needs the
     caller's ``email_allowed`` — the account's network-bound consent.
+    ``click_window`` is the conversion action's click-through window: a
+    click outside it would be uploaded to a guaranteed no-match while the
+    usable fallback went untried.
     """
     created_at = parse_iso_utc(row.get("created_at"))
     click_id = row.get("ad_click_id")
@@ -133,13 +140,13 @@ def select_identifier(
     if click_id and kind in CLICK_KINDS:
         clicked_at = parse_iso_utc(row.get("ad_click_at"))
         candidates = [stamp for stamp in (clicked_at, created_at) if stamp is not None]
-        if not candidates or now - min(candidates) <= CLICK_MAX_AGE:
+        if not candidates or now - min(candidates) <= click_window:
             return ConversionIdentifier(str(kind), str(click_id))
     email = row.get("email")
     if (
         email_allowed
         and email
-        and (created_at is None or now - created_at <= CLICK_MAX_AGE)
+        and (created_at is None or now - created_at <= click_window)
     ):
         return ConversionIdentifier(HASHED_EMAIL, hash_email(str(email)))
     return None

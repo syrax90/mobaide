@@ -13,10 +13,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from .google_ads import (
+    CLICK_MAX_AGE,
     ConversionIdentifier,
     GoogleAdsConversionClient,
     UploadOutcome,
@@ -57,6 +58,7 @@ class ConversionUploader:
         backoff: Sequence[float] = (1.0, 4.0),
         attempt_timeout: float = 15.0,
         drain_timeout: float = 20.0,
+        click_window_days: int = CLICK_MAX_AGE.days,
     ) -> None:
         self._db = db
         self._client = client
@@ -66,7 +68,15 @@ class ConversionUploader:
         self._backoff = tuple(backoff) or (1.0,)
         self._attempt_timeout = attempt_timeout
         self._drain_timeout = drain_timeout
+        # Never beyond the retention the policy promises.
+        self._click_window = timedelta(
+            days=max(1, min(CLICK_MAX_AGE.days, click_window_days))
+        )
         self._tasks: set[asyncio.Task] = set()
+        # Sends are serialised (the transport holds one blocking session), so
+        # the pre-send re-read below runs under the same lock: an upload that
+        # queued behind another must not send what the row no longer holds.
+        self._send_lock = asyncio.Lock()
 
     @property
     def enabled(self) -> bool:
@@ -103,13 +113,14 @@ class ConversionUploader:
         )
         logger.info(
             "ads.enabled customer_id=%s action_id=%s api_version=%s "
-            "login_customer_id_set=%s",
+            "login_customer_id_set=%s click_window_days=%d",
             config.google_ads_customer_id,
             config.google_ads_conversion_action_id,
             config.google_ads_api_version,
             bool(config.google_ads_login_customer_id),
+            config.google_ads_click_window_days,
         )
-        return cls(db, client)
+        return cls(db, client, click_window_days=config.google_ads_click_window_days)
 
     def schedule_first_pairing(self, user_id: str) -> None:
         """Fire-and-forget the account's one conversion upload."""
@@ -159,7 +170,10 @@ class ConversionUploader:
         # The hashed-email fallback needs the account's network-bound
         # consent; a click id holds no personal data and needs none.
         return select_identifier(
-            row, self._clock(), email_allowed=bool(row.get("ads_consent"))
+            row,
+            self._clock(),
+            email_allowed=bool(row.get("ads_consent")),
+            click_window=self._click_window,
         )
 
     async def _upload(self, user_id: str, row: Mapping[str, Any]) -> str:
@@ -181,10 +195,10 @@ class ConversionUploader:
 
         outcome: UploadOutcome | None = None
         for attempt in range(1, self._max_attempts + 1):
-            if attempt > 1:
-                # The backoff is long enough for the account to be deleted
-                # or its attribution withdrawn; never send what the row no
-                # longer holds.
+            async with self._send_lock:
+                # Re-read right before sending: the queue wait and the
+                # backoff are both long enough for the account to be
+                # deleted or its attribution withdrawn.
                 fresh = await self._db.get_user_by_id(user_id)
                 if fresh is None:
                     logger.info(
@@ -199,9 +213,9 @@ class ConversionUploader:
                         user_id,
                     )
                     return "attribution_withdrawn"
-            outcome = await self._client.upload(
-                identifier, conversion_time, timeout=self._attempt_timeout
-            )
+                outcome = await self._client.upload(
+                    identifier, conversion_time, timeout=self._attempt_timeout
+                )
             if outcome.ok or outcome.permanent:
                 break
             if attempt < self._max_attempts:
