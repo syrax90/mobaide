@@ -59,8 +59,11 @@ CAVEATS = """\
 Before you rely on this token:
   * The OAuth consent screen must be "In production" (or "Internal" on a
     Workspace domain). A "Testing" consent screen issues refresh tokens that
-    expire after 7 days — the server then logs
-    pairing.conversion_upload_failed ... reason=oauth_refresh_failed.
+    expire after 7 days — the server then logs one
+    ads.credentials_rejected reason=oauth_refresh_failed warning and
+    pairing.conversion_upload_deferred for every upload it holds back; the
+    uploads are kept (not lost) until you re-run this script and recreate
+    the container, but the 90-day retention purge still ages them out.
   * The account you just signed in with must be a user of the Ads account
     that owns the conversion action, or of a manager account above it. In
     the latter case set GOOGLE_ADS_LOGIN_CUSTOMER_ID to that manager's id
