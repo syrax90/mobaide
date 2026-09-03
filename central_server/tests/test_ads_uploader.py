@@ -54,7 +54,8 @@ class FakeDb:
 class ScriptedTransport:
     """``script`` answers posts in order (an ``_ok()`` once exhausted);
     ``status_script`` answers gets the same way (a SUCCESS verdict once
-    exhausted)."""
+    exhausted). Like the real transport, one lock serialises posts and
+    gets; ``gate`` / ``get_gate`` hold a request in flight under it."""
 
     def __init__(self, *script, status_script=()):
         self.script = list(script)
@@ -63,22 +64,28 @@ class ScriptedTransport:
         self.gets: list[dict] = []
         self.closed = False
         self.gate: asyncio.Event | None = None
+        self.get_gate: asyncio.Event | None = None
+        self.lock = asyncio.Lock()
 
     async def post(self, url, *, json, headers, timeout):
-        self.calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
-        if self.gate is not None:
-            await self.gate.wait()
-        item = self.script.pop(0) if self.script else _ok()
-        if isinstance(item, BaseException):
-            raise item
-        return item
+        async with self.lock:
+            self.calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+            if self.gate is not None:
+                await self.gate.wait()
+            item = self.script.pop(0) if self.script else _ok()
+            if isinstance(item, BaseException):
+                raise item
+            return item
 
     async def get(self, url, *, params, headers, timeout):
-        self.gets.append({"url": url, "params": params, "headers": headers, "timeout": timeout})
-        item = self.status_script.pop(0) if self.status_script else _verdict("SUCCESS")
-        if isinstance(item, BaseException):
-            raise item
-        return item
+        async with self.lock:
+            self.gets.append({"url": url, "params": params, "headers": headers, "timeout": timeout})
+            if self.get_gate is not None:
+                await self.get_gate.wait()
+            item = self.status_script.pop(0) if self.status_script else _verdict("SUCCESS")
+            if isinstance(item, BaseException):
+                raise item
+            return item
 
     def close(self):
         self.closed = True
@@ -144,6 +151,14 @@ def _event(transport, index=0):
 
 def _messages(caplog, prefix):
     return [r.getMessage() for r in caplog.records if r.getMessage().startswith(prefix)]
+
+
+async def _until(predicate, timeout=2.0):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        assert loop.time() < deadline, "condition never met"
+        await asyncio.sleep(0.005)
 
 
 @pytest.fixture(autouse=True)
@@ -515,6 +530,28 @@ class TestStatusFollowUp:
         assert sum(sleeps) < STATUS_DEADLINE + STATUS_RECHECK
         record = next(r for r in caplog.records if "conversion_status" in r.getMessage())
         assert record.levelno == logging.WARNING and "status=PROCESSING" in record.getMessage()
+
+    async def test_status_check_holds_the_send_lock_so_the_re_read_follows_the_wait(self):
+        """A follow-up GET occupies the transport for up to a request
+        timeout. An upload that re-read its row and then queued behind that
+        GET would send an identifier withdrawn meanwhile; with the GET under
+        the send lock, the re-read happens after the wait instead."""
+        db = FakeDb({"u1": _row(), "u2": _row(id="u2")})
+        transport = ScriptedTransport()
+        transport.get_gate = asyncio.Event()
+        uploader, _ = _uploader(db, transport)
+
+        assert await uploader.upload_first_pairing("u1") == "ok"
+        await _until(lambda: transport.gets)  # the follow-up's GET is in flight
+        second = asyncio.create_task(uploader.upload_first_pairing("u2"))
+        await asyncio.sleep(0.02)
+        assert len(transport.calls) == 1 and not second.done()
+        db.rows["u2"] = _row(id="u2", ad_click_id=None, ad_click_kind=None, ads_consent=0)
+        transport.get_gate.set()
+
+        assert await second == "attribution_withdrawn"
+        assert len(transport.calls) == 1
+        await uploader.drain()
 
     async def test_200_without_a_request_id_fails_instead_of_a_blind_success(self, caplog):
         """The id is the only handle on an accepted request: without one the

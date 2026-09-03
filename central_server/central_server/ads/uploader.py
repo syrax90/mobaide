@@ -113,6 +113,9 @@ class ConversionUploader:
         # Sends are serialised (the transport holds one blocking session), so
         # the pre-send re-read below runs under the same lock: an upload that
         # queued behind another must not send what the row no longer holds.
+        # Status follow-ups take it for their GET as well — otherwise the
+        # transport's own lock would let an upload pass its re-read and then
+        # wait behind a GET, outside the window the re-read covers.
         self._send_lock = asyncio.Lock()
 
     @property
@@ -337,7 +340,8 @@ class ConversionUploader:
         Best effort: the verdict is diagnostic (the action's Diagnostics tab
         in Google Ads is the source of truth), so a restart simply loses the
         follow-up. Polls while Google still reports ``PROCESSING``, up to
-        the deadline.
+        the deadline. Each GET runs under the send lock so an upload's
+        pre-send re-read can never precede a wait on the transport.
         """
         assert self._client is not None
         outcome: StatusOutcome | None = None
@@ -345,9 +349,10 @@ class ConversionUploader:
             waited = self._status_first_check
             await self._sleep(self._status_first_check)
             while True:
-                outcome = await self._client.request_status(
-                    request_id, timeout=self._attempt_timeout
-                )
+                async with self._send_lock:
+                    outcome = await self._client.request_status(
+                        request_id, timeout=self._attempt_timeout
+                    )
                 if outcome.terminal or waited >= self._status_deadline:
                     break
                 await self._sleep(self._status_recheck)

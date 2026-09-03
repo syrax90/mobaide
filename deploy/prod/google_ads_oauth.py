@@ -263,10 +263,11 @@ def _digits(value: str | None) -> str | None:
     return raw if raw.isascii() and raw.isdigit() else None
 
 
-def transaction_id(kind: str, value: str, timestamp: str) -> str:
+def transaction_id(kind: str, value: str, instant: str) -> str:
     """Mirror of ``central_server.ads.data_manager.transaction_id``: a
-    digest of the report's own fields, nothing else."""
-    material = "\n".join((kind, value, timestamp))
+    digest of the identifier and the pairing instant (microsecond ISO form
+    in UTC), nothing else."""
+    material = "\n".join((kind, value, instant))
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
 
 
@@ -307,7 +308,9 @@ def build_verify_request(
                 "eventSource": "WEB",
                 # Same shape as the relay's deduplication key, so the
                 # validation covers the field too.
-                "transactionId": transaction_id("gclid", gclid, timestamp),
+                "transactionId": transaction_id(
+                    "gclid", gclid, stamp.isoformat(timespec="microseconds")
+                ),
                 "consent": {
                     "adUserData": "CONSENT_GRANTED",
                     "adPersonalization": "CONSENT_DENIED",

@@ -155,19 +155,31 @@ def format_event_timestamp(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _digest_timestamp(dt: datetime) -> str:
+    """The pairing instant at its stored microsecond precision, in UTC."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat(timespec="microseconds")
+
+
 def transaction_id(identifier: ConversionIdentifier, event_time: datetime) -> str:
     """Google's deduplication key for the event.
 
     A retry after a lost response, and a resumed upload after a restart,
     re-send the same event; without this key Google would count each copy.
-    Derived from the report's own contents and nothing else, so it discloses
-    nothing the report does not already carry — the privacy policy's
-    "nothing else about your account" holds — and it is identical across
-    retries and processes because both inputs are stored: the identifier on
-    the account row and the event time in ``first_paired_at``.
+    A one-way digest of the identifier and the pairing instant and nothing
+    else, so it discloses nothing beyond what the report already carries
+    (the report shows the same instant at second precision) — the privacy
+    policy's "nothing else about your account" holds — and it is identical
+    across retries and processes because both inputs are stored: the
+    identifier on the account row, the instant in ``first_paired_at``. The
+    instant goes in at its stored microseconds rather than the second the
+    report shows: the ``mobaide_ads`` cookie is not consumed at sign-up, so
+    two accounts created from one click that pair within the same second
+    must not collapse into one key.
     """
     material = "\n".join(
-        (identifier.kind, identifier.value, format_event_timestamp(event_time))
+        (identifier.kind, identifier.value, _digest_timestamp(event_time))
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:_TRANSACTION_ID_LENGTH]
 

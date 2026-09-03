@@ -143,12 +143,30 @@ def test_payload_carries_nothing_else_about_the_account():
 
 
 class TestTransactionId:
-    def test_is_a_digest_of_the_report_fields_only(self):
-        """Google gets the identifier and the timestamp anyway, so a digest
-        of the two discloses nothing more — and nothing else goes in."""
-        material = "\n".join(("gclid", "c", "2026-09-02T12:18:00Z")).encode("utf-8")
+    def test_is_a_digest_of_the_identifier_and_the_pairing_instant(self):
+        """Google gets the identifier and the instant (to the second) anyway,
+        so a one-way digest of the two discloses nothing more — and nothing
+        else goes in."""
+        material = "\n".join(("gclid", "c", "2026-09-02T12:18:00.000000+00:00")).encode("utf-8")
         expected = hashlib.sha256(material).hexdigest()[:32]
         assert transaction_id(ConversionIdentifier("gclid", "c"), NOW) == expected
+
+    def test_two_accounts_from_one_click_in_the_same_second_get_distinct_keys(self):
+        """The cookie is not consumed at sign-up, so two accounts can share a
+        click id; their stored first_paired_at differ in the microseconds
+        the report itself rounds away."""
+        first = NOW.replace(microsecond=100)
+        second = NOW.replace(microsecond=200)
+        assert format_event_timestamp(first) == format_event_timestamp(second)
+        assert transaction_id(ConversionIdentifier("gclid", "c"), first) != transaction_id(
+            ConversionIdentifier("gclid", "c"), second
+        )
+
+    def test_naive_datetimes_count_as_utc(self):
+        naive = NOW.replace(tzinfo=None)
+        assert transaction_id(ConversionIdentifier("gclid", "c"), naive) == transaction_id(
+            ConversionIdentifier("gclid", "c"), NOW
+        )
 
     def test_is_stable_across_calls_and_timezones(self):
         """A retry and a resumed upload must produce the same key."""

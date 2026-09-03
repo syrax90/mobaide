@@ -13,6 +13,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -167,12 +168,14 @@ def _body(request):
 
 
 def test_verify_request_is_a_validate_only_ingest_for_the_destination():
+    now = datetime(2026, 9, 2, 12, 18, 0, 123456, tzinfo=timezone.utc)
     request = oauth.build_verify_request(
         access_token="at",
         customer_id="1234567890",
         conversion_action_id="987654321",
         login_customer_id="5555",
         click_id="Cj0K-placeholder",
+        now=now,
     )
     assert request.get_method() == "POST"
     assert request.full_url == oauth.INGEST_ENDPOINT
@@ -191,8 +194,10 @@ def test_verify_request_is_a_validate_only_ingest_for_the_destination():
     event = body["events"][0]
     assert event["adIdentifiers"] == {"gclid": "Cj0K-placeholder"}
     assert event["eventSource"] == "WEB"
-    # The relay's deduplication key, so validate-only covers the field too.
-    material = "\n".join(("gclid", "Cj0K-placeholder", event["eventTimestamp"]))
+    assert event["eventTimestamp"] == "2026-09-02T12:18:00Z"
+    # The relay's deduplication key (identifier + microsecond instant), so
+    # validate-only covers the field too.
+    material = "\n".join(("gclid", "Cj0K-placeholder", "2026-09-02T12:18:00.123456+00:00"))
     assert event["transactionId"] == hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
     assert event["consent"] == {
         "adUserData": "CONSENT_GRANTED",
