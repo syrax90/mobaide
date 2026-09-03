@@ -162,33 +162,88 @@ def test_env_lines_exact_text():
     )
 
 
-def test_verify_request_has_both_headers_and_no_login_customer_id():
-    request = oauth.build_verify_request(access_token="at", developer_token="dt")
-    assert request.full_url == (
-        "https://googleads.googleapis.com/v25/customers:listAccessibleCustomers"
+def _body(request):
+    return json.loads(request.data.decode("utf-8"))
+
+
+def test_verify_request_is_a_validate_only_ingest_for_the_destination():
+    request = oauth.build_verify_request(
+        access_token="at",
+        customer_id="1234567890",
+        conversion_action_id="987654321",
+        login_customer_id="5555",
+        click_id="Cj0K-placeholder",
     )
+    assert request.get_method() == "POST"
+    assert request.full_url == oauth.INGEST_ENDPOINT
     assert request.get_header("Authorization") == "Bearer at"
-    assert request.get_header("Developer-token") == "dt"
-    assert request.get_header("Login-customer-id") is None
+    assert request.get_header("Content-type") == "application/json"
+    assert request.get_header("Developer-token") is None
+    body = _body(request)
+    assert body["validateOnly"] is True
+    assert body["destinations"] == [
+        {
+            "operatingAccount": {"accountType": "GOOGLE_ADS", "accountId": "1234567890"},
+            "productDestinationId": "987654321",
+            "loginAccount": {"accountType": "GOOGLE_ADS", "accountId": "5555"},
+        }
+    ]
+    event = body["events"][0]
+    assert event["adIdentifiers"] == {"gclid": "Cj0K-placeholder"}
+    assert event["eventSource"] == "WEB"
+    assert event["consent"] == {
+        "adUserData": "CONSENT_GRANTED",
+        "adPersonalization": "CONSENT_DENIED",
+    }
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", event["eventTimestamp"])
 
 
-def test_verify_token_returns_resource_names():
-    request = oauth.build_verify_request(access_token="at", developer_token="dt")
-    names = oauth.verify_token(
-        request, opener=_opener_returning({"resourceNames": ["customers/1234567890"]})
+def test_verify_request_omits_login_account_and_invents_a_click_id():
+    request = oauth.build_verify_request(
+        access_token="at", customer_id="1234567890", conversion_action_id="987654321"
     )
-    assert names == ["customers/1234567890"]
+    body = _body(request)
+    assert "loginAccount" not in body["destinations"][0]
+    assert body["events"][0]["adIdentifiers"]["gclid"].startswith("Cj0KCQjw")
 
 
-def test_verify_token_translates_ads_api_error():
-    request = oauth.build_verify_request(access_token="at", developer_token="dt")
-    with pytest.raises(oauth.OAuthFlowError, match="developer token"):
-        oauth.verify_token(
+def test_verify_destination_returns_field_warnings():
+    request = oauth.build_verify_request(
+        access_token="at", customer_id="1", conversion_action_id="2"
+    )
+    assert oauth.verify_destination(request, opener=_opener_returning({})) == []
+    warnings = oauth.verify_destination(
+        request,
+        opener=_opener_returning(
+            {"fieldWarnings": [{"field": "events[0]", "description": "odd click id"}]}
+        ),
+    )
+    assert warnings == ["odd click id"]
+
+
+def test_verify_destination_translates_permission_error():
+    request = oauth.build_verify_request(
+        access_token="at", customer_id="1", conversion_action_id="2"
+    )
+    with pytest.raises(oauth.OAuthFlowError, match="PERMISSION_DENIED: The caller"):
+        oauth.verify_destination(
             request,
             opener=_opener_raising(
-                401, {"error": {"code": 401, "message": "The developer token is not valid."}}
+                403,
+                {
+                    "error": {
+                        "code": 403,
+                        "message": "The caller does not have permission",
+                        "status": "PERMISSION_DENIED",
+                    }
+                },
             ),
         )
+
+
+@pytest.mark.parametrize("raw, expected", [("123-456-7890", "1234567890"), (" 42 ", "42"), ("12ab", None), ("", None), (None, None)])
+def test_digits_tolerates_dashes_and_rejects_garbage(raw, expected):
+    assert oauth._digits(raw) == expected
 
 
 def test_listener_captures_the_redirect_and_ignores_favicon():
@@ -260,3 +315,86 @@ def test_main_reports_flow_errors_on_stderr(monkeypatch, capsys):
     assert rc == 1
     assert captured.out == ""
     assert "access_denied" in captured.err
+
+
+def test_main_requires_destination_ids_for_verify(monkeypatch, capsys):
+    monkeypatch.delenv("GOOGLE_ADS_CUSTOMER_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_ADS_CONVERSION_ACTION_ID", raising=False)
+
+    def _never(port):
+        raise AssertionError("listener must not start")
+
+    monkeypatch.setattr(oauth, "start_listener", _never)
+
+    rc = oauth.main(["--client-id", "cid", "--client-secret", "sec", "--verify"])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert captured.out == ""
+    assert "--customer-id" in captured.err
+
+
+def _fake_flow(monkeypatch):
+    class FakeServer:
+        server_address = ("127.0.0.1", 43123)
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(oauth, "start_listener", lambda port: FakeServer())
+    monkeypatch.setattr(oauth.webbrowser, "open", lambda url: True)
+    monkeypatch.setattr(oauth, "wait_for_code", lambda server, state, timeout: "code-1")
+    monkeypatch.setattr(
+        oauth,
+        "exchange_code",
+        lambda request, opener=None: {"access_token": "at", "refresh_token": "rt"},
+    )
+
+
+def test_main_verify_reports_the_validated_destination(monkeypatch, capsys):
+    _fake_flow(monkeypatch)
+    seen = {}
+
+    def fake_verify(request, opener=None):
+        seen["body"] = json.loads(request.data.decode("utf-8"))
+        return ["odd click id"]
+
+    monkeypatch.setattr(oauth, "verify_destination", fake_verify)
+
+    rc = oauth.main(
+        [
+            "--client-id", "cid", "--client-secret", "sec", "--verify",
+            "--customer-id", "123-456-7890", "--conversion-action-id", "987654321",
+            "--login-customer-id", "555-555-5555",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out == oauth.env_lines(client_id="cid", client_secret="sec", refresh_token="rt")
+    assert seen["body"]["destinations"][0]["operatingAccount"]["accountId"] == "1234567890"
+    assert seen["body"]["destinations"][0]["loginAccount"]["accountId"] == "5555555555"
+    assert "Validated" in captured.err and "via manager 5555555555" in captured.err
+    assert "warning: odd click id" in captured.err
+
+
+def test_main_verify_failure_keeps_the_token_and_returns_1(monkeypatch, capsys):
+    _fake_flow(monkeypatch)
+
+    def refuse(request, opener=None):
+        raise oauth.OAuthFlowError("HTTP 403 from x: PERMISSION_DENIED: nope")
+
+    monkeypatch.setattr(oauth, "verify_destination", refuse)
+
+    rc = oauth.main(
+        [
+            "--client-id", "cid", "--client-secret", "sec", "--verify",
+            "--customer-id", "1234567890", "--conversion-action-id", "987654321",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == oauth.env_lines(client_id="cid", client_secret="sec", refresh_token="rt")
+    assert "PERMISSION_DENIED" in captured.err
+    assert "GOOGLE_ADS_LOGIN_CUSTOMER_ID" in captured.err

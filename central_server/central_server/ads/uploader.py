@@ -7,19 +7,26 @@ stalls the pairing response. Whatever the outcome, the account's attribution
 columns are cleared afterwards; a stored click id or consent is what marks
 an upload as pending, which is what lets ``resume_pending`` pick up uploads
 a previous process never finished.
+
+The Data Manager API answers an accepted upload with a request id only; the
+match verdict is published later through ``requestStatus:retrieve``. A
+best-effort follow-up task fetches it and logs ``pairing.conversion_status``
+— diagnostic only, never persisted, dropped at shutdown.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
-from .google_ads import (
+from .data_manager import (
     CLICK_MAX_AGE,
     ConversionIdentifier,
-    GoogleAdsConversionClient,
+    DataManagerConversionClient,
+    StatusOutcome,
     UploadOutcome,
     parse_iso_utc,
     select_identifier,
@@ -32,7 +39,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _GOOGLE_ADS_FIELDS = (
-    "google_ads_developer_token",
     "google_ads_customer_id",
     "google_ads_login_customer_id",
     "google_ads_oauth_client_id",
@@ -40,17 +46,30 @@ _GOOGLE_ADS_FIELDS = (
     "google_ads_oauth_refresh_token",
     "google_ads_conversion_action_id",
 )
+# Settings of the retired Google Ads API path. A leftover value is harmless,
+# but one warning tells the operator it no longer does anything.
+_OBSOLETE_ENV = ("GOOGLE_ADS_DEVELOPER_TOKEN", "GOOGLE_ADS_API_VERSION")
+
+# Google publishes a verdict from roughly 30 minutes after ingest and within
+# a day.
+STATUS_FIRST_CHECK = 45 * 60.0
+STATUS_RECHECK = 2 * 3600.0
+STATUS_DEADLINE = 24 * 3600.0
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _format_counts(counts: Sequence[tuple[str, int]]) -> str:
+    return ",".join(f"{reason}:{count}" for reason, count in counts) or "-"
+
+
 class ConversionUploader:
     def __init__(
         self,
         db: "Database",
-        client: GoogleAdsConversionClient | None,
+        client: DataManagerConversionClient | None,
         *,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], datetime] = _utcnow,
@@ -59,6 +78,9 @@ class ConversionUploader:
         attempt_timeout: float = 15.0,
         drain_timeout: float = 20.0,
         click_window_days: int = CLICK_MAX_AGE.days,
+        status_first_check: float = STATUS_FIRST_CHECK,
+        status_recheck: float = STATUS_RECHECK,
+        status_deadline: float = STATUS_DEADLINE,
     ) -> None:
         self._db = db
         self._client = client
@@ -72,7 +94,11 @@ class ConversionUploader:
         self._click_window = timedelta(
             days=max(1, min(CLICK_MAX_AGE.days, click_window_days))
         )
+        self._status_first_check = status_first_check
+        self._status_recheck = status_recheck
+        self._status_deadline = status_deadline
         self._tasks: set[asyncio.Task] = set()
+        self._followups: set[asyncio.Task] = set()
         # Sends are serialised (the transport holds one blocking session), so
         # the pre-send re-read below runs under the same lock: an upload that
         # queued behind another must not send what the row no longer holds.
@@ -88,6 +114,9 @@ class ConversionUploader:
     ) -> "ConversionUploader":
         """Build the uploader from GOOGLE_ADS_* config; disabled (no errors)
         when nothing is set, disabled with a warning when only some is."""
+        for name in _OBSOLETE_ENV:
+            if os.environ.get(name):
+                logger.warning("ads.obsolete_setting name=%s reason=data_manager_api", name)
         missing = config.google_ads_missing
         if missing:
             if any(getattr(config, name) for name in _GOOGLE_ADS_FIELDS):
@@ -103,20 +132,17 @@ class ConversionUploader:
             client_secret=config.google_ads_oauth_client_secret or "",
             refresh_token=config.google_ads_oauth_refresh_token or "",
         )
-        client = GoogleAdsConversionClient(
+        client = DataManagerConversionClient(
             transport=transport,
-            developer_token=config.google_ads_developer_token or "",
             customer_id=config.google_ads_customer_id or "",
             conversion_action_id=config.google_ads_conversion_action_id or "",
             login_customer_id=config.google_ads_login_customer_id,
-            api_version=config.google_ads_api_version,
         )
         logger.info(
-            "ads.enabled customer_id=%s action_id=%s api_version=%s "
+            "ads.enabled api=data_manager customer_id=%s action_id=%s "
             "login_customer_id_set=%s click_window_days=%d",
             config.google_ads_customer_id,
             config.google_ads_conversion_action_id,
-            config.google_ads_api_version,
             bool(config.google_ads_login_customer_id),
             config.google_ads_click_window_days,
         )
@@ -240,6 +266,15 @@ class ConversionUploader:
                 identifier.kind,
                 outcome.request_id,
             )
+            if outcome.message:
+                logger.info(
+                    "pairing.conversion_upload_warnings user_id=%s request_id=%s %s",
+                    user_id,
+                    outcome.request_id,
+                    outcome.message,
+                )
+            if outcome.request_id:
+                self._schedule_status_check(user_id, outcome.request_id)
             return "ok"
         reason = outcome.reason if outcome.permanent else "retries_exhausted"
         logger.warning(
@@ -254,14 +289,80 @@ class ConversionUploader:
         )
         return reason
 
+    def _schedule_status_check(self, user_id: str, request_id: str) -> None:
+        task = asyncio.create_task(
+            self.check_status(user_id, request_id), name=f"ads-status-{user_id}"
+        )
+        self._followups.add(task)
+        task.add_done_callback(self._followups.discard)
+
+    async def check_status(self, user_id: str, request_id: str) -> str:
+        """Fetch Google's verdict for an accepted upload and log it.
+
+        Best effort: the verdict is diagnostic (the action's Diagnostics tab
+        in Google Ads is the source of truth), so a restart simply loses the
+        follow-up. Polls while Google still reports ``PROCESSING``, up to
+        the deadline.
+        """
+        assert self._client is not None
+        outcome: StatusOutcome | None = None
+        try:
+            waited = self._status_first_check
+            await self._sleep(self._status_first_check)
+            while True:
+                outcome = await self._client.request_status(
+                    request_id, timeout=self._attempt_timeout
+                )
+                if outcome.terminal or waited >= self._status_deadline:
+                    break
+                await self._sleep(self._status_recheck)
+                waited += self._status_recheck
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "pairing.conversion_status_crashed user_id=%s request_id=%s",
+                user_id,
+                request_id,
+            )
+            return "exception"
+        assert outcome is not None
+        level = logging.INFO if outcome.healthy else logging.WARNING
+        logger.log(
+            level,
+            "pairing.conversion_status user_id=%s request_id=%s status=%s "
+            "records=%s errors=%s warnings=%s message=%s",
+            user_id,
+            request_id,
+            outcome.status,
+            outcome.records,
+            _format_counts(outcome.errors),
+            _format_counts(outcome.warnings),
+            outcome.message,
+        )
+        return outcome.status
+
     async def drain(self) -> None:
-        """Await every scheduled upload (tests and shutdown helpers)."""
-        if self._tasks:
-            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        """Await every scheduled upload and follow-up (tests and shutdown
+        helpers)."""
+        while self._tasks or self._followups:
+            await asyncio.gather(
+                *list(self._tasks), *list(self._followups), return_exceptions=True
+            )
+
+    async def _cancel_followups(self) -> None:
+        pending = list(self._followups)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._followups.clear()
 
     async def aclose(self) -> None:
         """Drain rather than cancel: the CAS already fired, so a cancelled
-        upload is a conversion lost for good. Bounded so shutdown cannot hang."""
+        upload is a conversion lost for good. Bounded so shutdown cannot hang.
+        Status follow-ups are only diagnostics and are cancelled outright."""
+        await self._cancel_followups()
         pending = list(self._tasks)
         if pending:
             _done, still_running = await asyncio.wait(
@@ -272,5 +373,7 @@ class ConversionUploader:
             if still_running:
                 await asyncio.gather(*still_running, return_exceptions=True)
         self._tasks.clear()
+        # An upload that finished during the drain scheduled a new follow-up.
+        await self._cancel_followups()
         if self._client is not None:
             self._client.close()

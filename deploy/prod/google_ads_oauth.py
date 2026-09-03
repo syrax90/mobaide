@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-"""Mint the Google Ads OAuth refresh token the central server uploads with.
+"""Mint the OAuth refresh token the central server reports conversions with.
 
 Runs the OAuth 2.0 desktop flow (loopback redirect + PKCE) against a
-*Desktop app* OAuth client and prints the three ``GOOGLE_ADS_OAUTH_*`` lines
-for ``/opt/mobaide/.env``. Standard library only, so it runs from a bare
-clone on any Python 3.12+.
+*Desktop app* OAuth client for the Data Manager API scope and prints the
+three ``GOOGLE_ADS_OAUTH_*`` lines for ``/opt/mobaide/.env``. Standard
+library only (plus the sibling ``tls_preflight`` for the CA-bundle fallback),
+so it runs from a bare clone on any Python 3.12+.
 
 Usage:
     python deploy/prod/google_ads_oauth.py --client-id <id>          # prompts for the secret
-    python deploy/prod/google_ads_oauth.py --client-id <id> --verify --developer-token <token>
+    python deploy/prod/google_ads_oauth.py --client-id <id> --verify \\
+        --customer-id <ads account> --conversion-action-id <ctId> [--login-customer-id <manager>]
     python deploy/prod/google_ads_oauth.py --client-id <id> --no-browser   # print the URL instead
+
+``--verify`` sends a validate-only ``events:ingest`` to the real destination:
+Google checks the token, that the Data Manager API is enabled, that the
+signed-in account reaches the Ads account (through the manager, when given)
+and that the conversion action exists — and records nothing.
 
 Only the ``.env`` lines go to stdout; everything else goes to stderr, so
 ``>> some-file`` captures exactly the lines to paste. The client secret is
@@ -17,9 +24,10 @@ never echoed.
 
 Before running: the Google Cloud project's OAuth consent screen must be
 **In production** (a *Testing* consent screen issues refresh tokens that
-expire after 7 days), the Google Ads API must be enabled on it, and the
-Google account you sign in with must reach the Ads account — directly, or
-through the manager account whose id then goes in GOOGLE_ADS_LOGIN_CUSTOMER_ID.
+expire after 7 days), the Data Manager API must be enabled on it, and the
+Google account you sign in with must be a user of the Ads account — directly,
+or of the manager account whose id then goes in GOOGLE_ADS_LOGIN_CUSTOMER_ID.
+No developer token is involved.
 """
 from __future__ import annotations
 
@@ -37,14 +45,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 MIN_PYTHON = (3, 12)
-SCOPE = "https://www.googleapis.com/auth/adwords"
+SCOPE = "https://www.googleapis.com/auth/datamanager"
 AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
-API_BASE = "https://googleads.googleapis.com"
-DEFAULT_API_VERSION = "v25"
+INGEST_ENDPOINT = "https://datamanager.googleapis.com/v1/events:ingest"
 REVOKE_URL = "https://myaccount.google.com/permissions"
 
 CAVEATS = """\
@@ -53,11 +61,12 @@ Before you rely on this token:
     Workspace domain). A "Testing" consent screen issues refresh tokens that
     expire after 7 days — the server then logs
     pairing.conversion_upload_failed ... reason=oauth_refresh_failed.
-  * The account you just signed in with must reach the Ads account. If it
-    does so through a manager account, set GOOGLE_ADS_LOGIN_CUSTOMER_ID to
-    that manager's id (digits only).
-  * The developer token needs Basic access before real uploads succeed; a
-    Test-access token only reaches test accounts.
+  * The account you just signed in with must be a user of the Ads account
+    that owns the conversion action, or of a manager account above it. In
+    the latter case set GOOGLE_ADS_LOGIN_CUSTOMER_ID to that manager's id
+    (digits only).
+  * The Data Manager API must be enabled on the Cloud project that owns the
+    OAuth client. No developer token is involved on this path.
   * Google keeps at most 100 live refresh tokens per account per client, and
     re-running this script does not revoke the previous one — revoke it at
     %s if you are rotating.
@@ -191,27 +200,45 @@ def _describe_error(raw: str) -> str:
         return raw[:300]
     error = payload.get("error") if isinstance(payload, dict) else None
     if isinstance(error, dict):
-        return str(error.get("message") or error)[:300]
+        message = str(error.get("message") or error)
+        status = error.get("status")
+        return (f"{status}: {message}" if status else message)[:300]
     description = payload.get("error_description", "") if isinstance(payload, dict) else ""
     return f"{error or ''}: {description}".strip(": ")[:300] or raw[:300]
 
 
-def _read_json(opener: Callable[..., Any], request: urllib.request.Request) -> dict:
+def _read_json(opener: Callable[..., Any], request: urllib.request.Request) -> Any:
     try:
         with opener(request, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
+            raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = _describe_error(exc.read().decode("utf-8", "replace"))
         raise OAuthFlowError(f"HTTP {exc.code} from {request.full_url}: {detail}") from None
     except urllib.error.URLError as exc:
         raise OAuthFlowError(f"could not reach {request.full_url}: {exc.reason}") from None
+    return json.loads(raw) if raw.strip() else {}
+
+
+def build_opener() -> Callable[..., Any]:
+    """urllib's default opener, or one verifying against certifi when this
+    Python trusts no certificate authority at all (python.org macOS builds
+    before Install Certificates.command has run)."""
+    try:
+        import tls_preflight
+    except ImportError:
+        return urllib.request.urlopen
+    context, warning = tls_preflight.build_ssl_context()
+    if context is None:
+        return urllib.request.urlopen
+    _info(f"warning: {warning}")
+    return urllib.request.build_opener(urllib.request.HTTPSHandler(context=context)).open
 
 
 def exchange_code(
     request: urllib.request.Request, opener: Callable[..., Any] = urllib.request.urlopen
 ) -> dict:
     payload = _read_json(opener, request)
-    if not payload.get("refresh_token"):
+    if not isinstance(payload, dict) or not payload.get("refresh_token"):
         raise OAuthFlowError(
             "the token response carried no refresh_token. prompt=consent was "
             f"sent, so Google only omits it when a live grant already exists: "
@@ -228,25 +255,76 @@ def env_lines(*, client_id: str, client_secret: str, refresh_token: str) -> str:
     )
 
 
+def _digits(value: str | None) -> str | None:
+    raw = (value or "").strip().replace("-", "")
+    return raw if raw.isascii() and raw.isdigit() else None
+
+
 def build_verify_request(
-    *, access_token: str, developer_token: str, api_version: str = DEFAULT_API_VERSION
+    *,
+    access_token: str,
+    customer_id: str,
+    conversion_action_id: str,
+    login_customer_id: str | None = None,
+    click_id: str | None = None,
+    now: datetime | None = None,
 ) -> urllib.request.Request:
-    # User-scoped: lists every customer the signed-in account can reach, so
-    # no login-customer-id is needed here.
+    """A validate-only ``events:ingest`` for the real destination.
+
+    Google validates the token, the API, the account path and the action id
+    and records nothing. The click id is a placeholder of a real gclid's
+    shape: clicks are matched during processing, which validate-only never
+    reaches.
+    """
+    destination: dict[str, Any] = {
+        "operatingAccount": {"accountType": "GOOGLE_ADS", "accountId": customer_id},
+        "productDestinationId": conversion_action_id,
+    }
+    if login_customer_id:
+        destination["loginAccount"] = {
+            "accountType": "GOOGLE_ADS",
+            "accountId": login_customer_id,
+        }
+    stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    body = {
+        "destinations": [destination],
+        "events": [
+            {
+                "adIdentifiers": {"gclid": click_id or "Cj0KCQjw" + secrets.token_urlsafe(48)},
+                "eventTimestamp": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "eventSource": "WEB",
+                "consent": {
+                    "adUserData": "CONSENT_GRANTED",
+                    "adPersonalization": "CONSENT_DENIED",
+                },
+            }
+        ],
+        "validateOnly": True,
+    }
     return urllib.request.Request(
-        f"{API_BASE}/{api_version}/customers:listAccessibleCustomers",
+        INGEST_ENDPOINT,
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
         headers={
             "Authorization": f"Bearer {access_token}",
-            "developer-token": developer_token,
+            "Content-Type": "application/json",
         },
     )
 
 
-def verify_token(
+def verify_destination(
     request: urllib.request.Request, opener: Callable[..., Any] = urllib.request.urlopen
 ) -> list[str]:
+    """Run the validation; returns the field warnings Google attached
+    (normally none). A refused destination raises ``OAuthFlowError``."""
     payload = _read_json(opener, request)
-    return [str(name) for name in payload.get("resourceNames", [])]
+    warnings = payload.get("fieldWarnings") if isinstance(payload, dict) else None
+    if not isinstance(warnings, list):
+        return []
+    return [
+        str(item.get("description") or item) if isinstance(item, dict) else str(item)
+        for item in warnings
+    ]
 
 
 def run(args: argparse.Namespace) -> int:
@@ -262,11 +340,25 @@ def run(args: argparse.Namespace) -> int:
     if not client_secret:
         _info("error: a client secret is required")
         return 2
-    developer_token = args.developer_token or os.environ.get("GOOGLE_ADS_DEVELOPER_TOKEN")
-    if args.verify and not developer_token:
-        _info("error: --verify needs --developer-token (or GOOGLE_ADS_DEVELOPER_TOKEN)")
-        return 2
+    destination: tuple[str, str, str | None] | None = None
+    if args.verify:
+        customer_id = _digits(args.customer_id or os.environ.get("GOOGLE_ADS_CUSTOMER_ID"))
+        action_id = _digits(
+            args.conversion_action_id or os.environ.get("GOOGLE_ADS_CONVERSION_ACTION_ID")
+        )
+        login_id = _digits(
+            args.login_customer_id or os.environ.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID")
+        )
+        if not customer_id or not action_id:
+            _info(
+                "error: --verify needs --customer-id and --conversion-action-id "
+                "(digits, dashes allowed; or GOOGLE_ADS_CUSTOMER_ID / "
+                "GOOGLE_ADS_CONVERSION_ACTION_ID in the environment)"
+            )
+            return 2
+        destination = (customer_id, action_id, login_id)
 
+    opener = build_opener()
     verifier, challenge = make_pkce_pair()
     state = secrets.token_urlsafe(16)
     server = start_listener(args.port)
@@ -299,7 +391,8 @@ def run(args: argparse.Namespace) -> int:
             code=code,
             redirect_uri=redirect_uri,
             code_verifier=verifier,
-        )
+        ),
+        opener,
     )
     sys.stdout.write(
         env_lines(
@@ -310,19 +403,35 @@ def run(args: argparse.Namespace) -> int:
     )
     sys.stdout.flush()
 
-    if args.verify:
-        names = verify_token(
-            build_verify_request(
-                access_token=tokens["access_token"],
-                developer_token=developer_token,
-                api_version=args.api_version,
+    if destination is not None:
+        customer_id, action_id, login_id = destination
+        try:
+            warnings = verify_destination(
+                build_verify_request(
+                    access_token=tokens["access_token"],
+                    customer_id=customer_id,
+                    conversion_action_id=action_id,
+                    login_customer_id=login_id,
+                ),
+                opener,
             )
-        )
-        _info("Accessible customers: " + (", ".join(names) or "(none)"))
+        except OAuthFlowError as exc:
+            _info(f"error: validation failed — {exc}")
+            _info(
+                "The token above is minted and valid; Google refused the destination. "
+                "PERMISSION_DENIED: the signed-in account does not reach the Ads "
+                "account (missing or wrong GOOGLE_ADS_LOGIN_CUSTOMER_ID), or the Data "
+                "Manager API is not enabled on the Cloud project. NOT_FOUND / "
+                "INVALID_ARGUMENT: check the customer and conversion action ids."
+            )
+            return 1
+        via = f" via manager {login_id}" if login_id else ""
         _info(
-            "If GOOGLE_ADS_CUSTOMER_ID is not listed, set GOOGLE_ADS_LOGIN_CUSTOMER_ID "
-            "to the manager account that is."
+            f"Validated: Google accepted a validate-only upload for customer "
+            f"{customer_id}, conversion action {action_id}{via}."
         )
+        for warning in warnings:
+            _info(f"  warning: {warning}")
     _info("")
     _info(CAVEATS)
     return 0
@@ -340,12 +449,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--verify",
         action="store_true",
-        help="after minting, list the Ads customers the token can reach",
+        help="after minting, send a validate-only upload to the real destination",
     )
     parser.add_argument(
-        "--developer-token", help="needed with --verify (env GOOGLE_ADS_DEVELOPER_TOKEN)"
+        "--customer-id",
+        help="Ads account that owns the conversion action (env GOOGLE_ADS_CUSTOMER_ID)",
     )
-    parser.add_argument("--api-version", default=DEFAULT_API_VERSION)
+    parser.add_argument(
+        "--login-customer-id",
+        help="manager account the signed-in user reaches it through (env GOOGLE_ADS_LOGIN_CUSTOMER_ID)",
+    )
+    parser.add_argument(
+        "--conversion-action-id",
+        help="numeric id of the Agent paired action (env GOOGLE_ADS_CONVERSION_ACTION_ID)",
+    )
     parser.add_argument("--port", type=int, default=0, help="loopback port (default: random)")
     parser.add_argument(
         "--no-browser", action="store_true", help="print the authorization URL instead of opening it"
