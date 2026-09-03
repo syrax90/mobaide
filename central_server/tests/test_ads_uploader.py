@@ -1,5 +1,6 @@
-"""``ConversionUploader``: decision rules, retries, logging hygiene, task
-lifecycle and config gating — against a fake DB and a scripted transport."""
+"""``ConversionUploader``: decision rules, retries, logging hygiene, the
+status follow-up, task lifecycle and config gating — against a fake DB and a
+scripted transport."""
 from __future__ import annotations
 
 import asyncio
@@ -9,14 +10,19 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from central_server.ads.google_ads import (
+from central_server.ads.data_manager import (
     AuthRefreshFailed,
-    GoogleAdsConversionClient,
+    DataManagerConversionClient,
     TransientTransportError,
     TransportResponse,
     hash_email,
 )
-from central_server.ads.uploader import ConversionUploader
+from central_server.ads.uploader import (
+    STATUS_DEADLINE,
+    STATUS_FIRST_CHECK,
+    STATUS_RECHECK,
+    ConversionUploader,
+)
 
 NOW = datetime(2026, 9, 2, 12, 18, 0, tzinfo=timezone.utc)
 GCLID = "Cj0KCQjw-secret-click"
@@ -46,33 +52,62 @@ class FakeDb:
 
 
 class ScriptedTransport:
-    def __init__(self, *script):
+    """``script`` answers posts in order (an ``_ok()`` once exhausted);
+    ``status_script`` answers gets the same way (a SUCCESS verdict once
+    exhausted). Like the real transport, one lock serialises posts and
+    gets; ``gate`` / ``get_gate`` hold a request in flight under it."""
+
+    def __init__(self, *script, status_script=()):
         self.script = list(script)
+        self.status_script = list(status_script)
         self.calls: list[dict] = []
+        self.gets: list[dict] = []
         self.closed = False
         self.gate: asyncio.Event | None = None
+        self.get_gate: asyncio.Event | None = None
+        self.lock = asyncio.Lock()
 
     async def post(self, url, *, json, headers, timeout):
-        self.calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
-        if self.gate is not None:
-            await self.gate.wait()
-        item = self.script.pop(0) if self.script else _ok()
-        if isinstance(item, BaseException):
-            raise item
-        return item
+        async with self.lock:
+            self.calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+            if self.gate is not None:
+                await self.gate.wait()
+            item = self.script.pop(0) if self.script else _ok()
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+    async def get(self, url, *, params, headers, timeout):
+        async with self.lock:
+            self.gets.append({"url": url, "params": params, "headers": headers, "timeout": timeout})
+            if self.get_gate is not None:
+                await self.get_gate.wait()
+            item = self.status_script.pop(0) if self.status_script else _verdict("SUCCESS")
+            if isinstance(item, BaseException):
+                raise item
+            return item
 
     def close(self):
         self.closed = True
 
 
-def _ok():
-    return TransportResponse(200, {"request-id": "req-1"}, {"results": [{}]})
+def _ok(request_id="req-1"):
+    return TransportResponse(200, {}, {"requestId": request_id})
 
 
 def _status(code, body=None):
     if body is None:
         body = {"error": {"message": f"boom {code}"}}
-    return TransportResponse(code, {"request-id": f"req-{code}"}, body)
+    return TransportResponse(code, {}, body)
+
+
+def _verdict(status, records="1", errors=(), http=200):
+    entry = {"requestStatus": status, "eventsIngestionStatus": {"recordCount": records}}
+    if errors:
+        entry["errorInfo"] = {
+            "errorCounts": [{"reason": reason, "recordCount": str(count)} for reason, count in errors]
+        }
+    return TransportResponse(http, {}, {"requestStatusPerDestination": [entry]})
 
 
 def _row(**overrides):
@@ -98,9 +133,8 @@ def _uploader(db, transport, *, login_customer_id=None, on_sleep=None, **kwargs)
         if on_sleep is not None:
             on_sleep()
 
-    client = GoogleAdsConversionClient(
+    client = DataManagerConversionClient(
         transport=transport,
-        developer_token="dev",
         customer_id="1234567890",
         conversion_action_id="987654321",
         login_customer_id=login_customer_id,
@@ -111,8 +145,20 @@ def _uploader(db, transport, *, login_customer_id=None, on_sleep=None, **kwargs)
     return uploader, sleeps
 
 
+def _event(transport, index=0):
+    return transport.calls[index]["json"]["events"][0]
+
+
 def _messages(caplog, prefix):
     return [r.getMessage() for r in caplog.records if r.getMessage().startswith(prefix)]
+
+
+async def _until(predicate, timeout=2.0):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        assert loop.time() < deadline, "condition never met"
+        await asyncio.sleep(0.005)
 
 
 @pytest.fixture(autouse=True)
@@ -140,7 +186,7 @@ class TestDecisionRules:
         transport = ScriptedTransport()
         uploader, _ = _uploader(FakeDb({"u1": _row(ads_consent=0)}), transport)
         assert await uploader.upload_first_pairing("u1") == "ok"
-        assert transport.calls[0]["json"]["conversions"][0]["gclid"] == GCLID
+        assert _event(transport)["adIdentifiers"] == {"gclid": GCLID}
 
     async def test_stale_click_without_consent_never_falls_back_to_email(self, caplog):
         row = _row(ads_consent=0, ad_click_at=(NOW - timedelta(days=91)).isoformat())
@@ -158,9 +204,10 @@ class TestDecisionRules:
 
         assert await uploader.upload_first_pairing("u1") == "ok"
 
-        conversion = transport.calls[0]["json"]["conversions"][0]
-        assert conversion["gclid"] == GCLID
-        assert "userIdentifiers" not in conversion
+        event = _event(transport)
+        assert event["adIdentifiers"] == {"gclid": GCLID}
+        assert "userData" not in event
+        assert "encoding" not in transport.calls[0]["json"]
         assert _messages(caplog, "pairing.conversion_uploaded") == [
             "pairing.conversion_uploaded user_id=u1 identifier=gclid request_id=req-1"
         ]
@@ -172,7 +219,7 @@ class TestDecisionRules:
         transport = ScriptedTransport()
         uploader, _ = _uploader(FakeDb({"u1": _row(ad_click_kind=kind)}), transport)
         await uploader.upload_first_pairing("u1")
-        assert transport.calls[0]["json"]["conversions"][0][kind] == GCLID
+        assert _event(transport)["adIdentifiers"] == {kind: GCLID}
 
     async def test_stale_click_uses_hashed_email(self, caplog):
         row = _row(ad_click_at=(NOW - timedelta(days=91)).isoformat())
@@ -181,11 +228,10 @@ class TestDecisionRules:
 
         await uploader.upload_first_pairing("u1")
 
-        conversion = transport.calls[0]["json"]["conversions"][0]
-        assert "gclid" not in conversion
-        assert conversion["userIdentifiers"] == [
-            {"userIdentifierSource": "FIRST_PARTY", "hashedEmail": hash_email(EMAIL)}
-        ]
+        event = _event(transport)
+        assert "adIdentifiers" not in event
+        assert event["userData"] == {"userIdentifiers": [{"emailAddress": hash_email(EMAIL)}]}
+        assert transport.calls[0]["json"]["encoding"] == "HEX"
         assert "identifier=hashed_email" in _messages(caplog, "pairing.conversion_uploaded")[0]
 
     async def test_consent_without_click_uses_hashed_email(self):
@@ -193,7 +239,7 @@ class TestDecisionRules:
         transport = ScriptedTransport()
         uploader, _ = _uploader(FakeDb({"u1": row}), transport)
         await uploader.upload_first_pairing("u1")
-        assert "userIdentifiers" in transport.calls[0]["json"]["conversions"][0]
+        assert "userData" in _event(transport)
 
     async def test_consent_without_click_or_email_is_skipped(self, caplog):
         row = _row(ad_click_id=None, ad_click_kind=None, ad_click_at=None, email=None)
@@ -202,47 +248,44 @@ class TestDecisionRules:
         assert await uploader.upload_first_pairing("u1") == "no_identifier"
         assert transport.calls == []
 
-    async def test_conversion_time_is_first_paired_at(self):
+    async def test_event_time_is_first_paired_at(self):
         earlier = (NOW - timedelta(days=1)).isoformat()
         transport = ScriptedTransport()
         uploader, _ = _uploader(FakeDb({"u1": _row(first_paired_at=earlier)}), transport)
         await uploader.upload_first_pairing("u1")
-        assert (
-            transport.calls[0]["json"]["conversions"][0]["conversionDateTime"]
-            == "2026-09-01 12:18:00+00:00"
-        )
+        assert _event(transport)["eventTimestamp"] == "2026-09-01T12:18:00Z"
 
-    async def test_conversion_time_falls_back_to_clock(self):
+    async def test_event_time_falls_back_to_clock(self):
         transport = ScriptedTransport()
         uploader, _ = _uploader(FakeDb({"u1": _row(first_paired_at=None)}), transport)
         await uploader.upload_first_pairing("u1")
-        assert (
-            transport.calls[0]["json"]["conversions"][0]["conversionDateTime"]
-            == "2026-09-02 12:18:00+00:00"
-        )
+        assert _event(transport)["eventTimestamp"] == "2026-09-02T12:18:00Z"
 
     async def test_identifiers_never_reach_the_logs(self, caplog):
-        transport = ScriptedTransport(_status(400), )
+        transport = ScriptedTransport(_status(400))
         uploader, _ = _uploader(FakeDb({"u1": _row()}), transport)
         await uploader.upload_first_pairing("u1")
         stale = _row(ad_click_at=(NOW - timedelta(days=91)).isoformat(), id="u2")
         uploader2, _ = _uploader(FakeDb({"u2": stale}), ScriptedTransport())
         await uploader2.upload_first_pairing("u2")
+        await uploader2.drain()
 
         for secret in (GCLID, EMAIL, EMAIL.lower(), hash_email(EMAIL)):
             assert secret not in caplog.text
 
-    async def test_login_customer_id_header_present_when_configured(self):
+    async def test_login_account_present_when_configured(self):
         transport = ScriptedTransport()
         uploader, _ = _uploader(FakeDb({"u1": _row()}), transport, login_customer_id="5555")
         await uploader.upload_first_pairing("u1")
-        assert transport.calls[0]["headers"]["login-customer-id"] == "5555"
+        destination = transport.calls[0]["json"]["destinations"][0]
+        assert destination["loginAccount"] == {"accountType": "GOOGLE_ADS", "accountId": "5555"}
+        assert destination["operatingAccount"]["accountId"] == "1234567890"
 
-    async def test_login_customer_id_header_absent_when_unset(self):
+    async def test_login_account_absent_when_unset(self):
         transport = ScriptedTransport()
         uploader, _ = _uploader(FakeDb({"u1": _row()}), transport)
         await uploader.upload_first_pairing("u1")
-        assert "login-customer-id" not in transport.calls[0]["headers"]
+        assert "loginAccount" not in transport.calls[0]["json"]["destinations"][0]
 
     async def test_attempt_timeout_is_forwarded(self):
         transport = ScriptedTransport()
@@ -274,7 +317,9 @@ class TestRetries:
 
     async def test_400_is_permanent_and_not_retried(self, caplog):
         db = FakeDb({"u1": _row()})
-        transport = ScriptedTransport(_status(400))
+        transport = ScriptedTransport(
+            _status(400, {"error": {"message": "boom 400", "status": "INVALID_ARGUMENT"}})
+        )
         uploader, sleeps = _uploader(db, transport)
 
         assert await uploader.upload_first_pairing("u1") == "http_4xx"
@@ -282,24 +327,83 @@ class TestRetries:
         assert len(transport.calls) == 1 and sleeps == []
         assert _messages(caplog, "pairing.conversion_upload_failed") == [
             "pairing.conversion_upload_failed user_id=u1 identifier=gclid "
-            "reason=http_4xx status=400 request_id=req-400 message=boom 400"
+            "reason=http_4xx status=400 request_id=None message=INVALID_ARGUMENT: boom 400"
         ]
         assert db.cleared == ["u1"]
+        assert uploader._followups == set()
 
-    async def test_partial_failure_is_permanent(self, caplog):
-        body = {"results": [{}], "partialFailureError": {"message": "click expired"}}
-        transport = ScriptedTransport(TransportResponse(200, {}, body))
+    async def test_retries_reuse_the_same_transaction_id(self):
+        """A lost response is re-sent as the same event: Google dedupes on
+        the transaction id instead of counting a second conversion."""
+        transport = ScriptedTransport(_status(500), _ok())
         uploader, _ = _uploader(FakeDb({"u1": _row()}), transport)
-        assert await uploader.upload_first_pairing("u1") == "partial_failure"
-        assert len(transport.calls) == 1
-        assert "message=click expired" in _messages(caplog, "pairing.conversion_upload_failed")[0]
+        assert await uploader.upload_first_pairing("u1") == "ok"
+        first, second = _event(transport, 0), _event(transport, 1)
+        assert first["transactionId"] == second["transactionId"]
+        assert first == second
 
-    async def test_refresh_error_is_permanent(self, caplog):
+    async def test_refresh_error_defers_and_keeps_the_attribution(self, caplog):
+        """A refresh token minted for the wrong scope (an upgrade that kept
+        the old token) must not burn the backlog: nothing is cleared, and
+        the next process, with the corrected token, resumes the upload."""
+        db = FakeDb({"u1": _row()})
         transport = ScriptedTransport(AuthRefreshFailed("RefreshError"))
-        uploader, _ = _uploader(FakeDb({"u1": _row()}), transport)
-        assert await uploader.upload_first_pairing("u1") == "oauth_refresh_failed"
+        uploader, sleeps = _uploader(db, transport)
+
+        assert await uploader.upload_first_pairing("u1") == "deferred"
+
+        assert len(transport.calls) == 1 and sleeps == []
+        assert db.cleared == []
+        assert _messages(caplog, "ads.credentials_rejected") == [
+            "ads.credentials_rejected reason=oauth_refresh_failed status=None message=None"
+        ]
+        assert _messages(caplog, "pairing.conversion_upload_deferred") == [
+            "pairing.conversion_upload_deferred user_id=u1 identifier=gclid "
+            "reason=oauth_refresh_failed"
+        ]
+        assert _messages(caplog, "pairing.conversion_upload_failed") == []
+        assert uploader._followups == set()
+
+    @pytest.mark.parametrize("status", [401, 403])
+    async def test_credential_rejection_short_circuits_the_rest_of_the_backlog(
+        self, status, caplog
+    ):
+        """One network round-trip decides for the whole backlog; every
+        later upload in this process is deferred without a send."""
+        db = FakeDb({"u1": _row(), "u2": _row(id="u2"), "u3": _row(id="u3")})
+        db.pending = ["u1", "u2"]
+        transport = ScriptedTransport(
+            _status(status, {"error": {"message": "no access", "status": "PERMISSION_DENIED"}})
+        )
+        uploader, _ = _uploader(db, transport)
+
+        await uploader.resume_pending()
+        await uploader.drain()
+        uploader.schedule_first_pairing("u3")
+        await uploader.drain()
+
         assert len(transport.calls) == 1
-        assert "reason=oauth_refresh_failed" in _messages(caplog, "pairing.conversion_upload_failed")[0]
+        assert db.cleared == []
+        assert uploader._credentials_rejected == f"http_{status}"
+        assert _messages(caplog, "ads.credentials_rejected") == [
+            f"ads.credentials_rejected reason=http_{status} status={status} "
+            "message=PERMISSION_DENIED: no access"
+        ]
+        deferred = _messages(caplog, "pairing.conversion_upload_deferred")
+        assert sorted(deferred) == [
+            f"pairing.conversion_upload_deferred user_id=u{n} identifier=gclid "
+            f"reason=http_{status}"
+            for n in (1, 2, 3)
+        ]
+        assert _messages(caplog, "pairing.conversion_upload_failed") == []
+
+    async def test_credential_rejection_after_a_transient_error_still_defers(self, caplog):
+        db = FakeDb({"u1": _row()})
+        transport = ScriptedTransport(_status(500), _status(401))
+        uploader, sleeps = _uploader(db, transport)
+        assert await uploader.upload_first_pairing("u1") == "deferred"
+        assert len(transport.calls) == 2 and sleeps == [1.0]
+        assert db.cleared == []
 
     async def test_retry_aborts_when_the_account_was_deleted_meanwhile(self, caplog):
         """The backoff is long enough for an immediate account deletion to
@@ -352,8 +456,8 @@ class TestRetries:
         transport = ScriptedTransport()
         uploader, _ = _uploader(FakeDb({"u1": row}), transport, click_window_days=30)
         assert await uploader.upload_first_pairing("u1") == "ok"
-        conversion = transport.calls[0]["json"]["conversions"][0]
-        assert "gclid" not in conversion and "userIdentifiers" in conversion
+        event = _event(transport)
+        assert "adIdentifiers" not in event and "userData" in event
 
     async def test_click_window_never_exceeds_retention(self):
         transport = ScriptedTransport()
@@ -370,6 +474,122 @@ class TestRetries:
         assert len(transport.calls) == 3 and sleeps == [1.0, 4.0]
         assert "reason=retries_exhausted" in _messages(caplog, "pairing.conversion_upload_failed")[0]
         assert db.cleared == ["u1"]
+
+
+class TestStatusFollowUp:
+    async def test_success_verdict_is_logged_after_the_first_check(self, caplog):
+        transport = ScriptedTransport()
+        uploader, sleeps = _uploader(FakeDb({"u1": _row()}), transport)
+
+        assert await uploader.upload_first_pairing("u1") == "ok"
+        assert len(uploader._followups) == 1
+        await uploader.drain()
+
+        assert sleeps == [STATUS_FIRST_CHECK]
+        assert transport.gets[0]["params"] == {"requestId": "req-1"}
+        assert _messages(caplog, "pairing.conversion_status") == [
+            "pairing.conversion_status user_id=u1 request_id=req-1 status=SUCCESS "
+            "records=1 errors=- warnings=- message=None"
+        ]
+        assert [r.levelno for r in caplog.records if "conversion_status" in r.getMessage()] == [
+            logging.INFO
+        ]
+
+    async def test_processing_is_rechecked_until_terminal(self, caplog):
+        transport = ScriptedTransport(
+            status_script=[_verdict("PROCESSING"), _status(404), _verdict("SUCCESS")]
+        )
+        uploader, sleeps = _uploader(FakeDb({"u1": _row()}), transport)
+        await uploader.upload_first_pairing("u1")
+        await uploader.drain()
+        assert sleeps == [STATUS_FIRST_CHECK, STATUS_RECHECK, STATUS_RECHECK]
+        assert len(transport.gets) == 3
+        assert "status=SUCCESS" in _messages(caplog, "pairing.conversion_status")[0]
+
+    async def test_failed_verdict_is_a_warning_with_stripped_reasons(self, caplog):
+        transport = ScriptedTransport(
+            status_script=[
+                _verdict(
+                    "FAILED", records="0", errors=[("PROCESSING_ERROR_REASON_EVENT_TOO_OLD", 1)]
+                )
+            ]
+        )
+        uploader, _ = _uploader(FakeDb({"u1": _row()}), transport)
+        await uploader.upload_first_pairing("u1")
+        await uploader.drain()
+        record = next(r for r in caplog.records if "conversion_status" in r.getMessage())
+        assert record.levelno == logging.WARNING
+        assert "status=FAILED records=0 errors=EVENT_TOO_OLD:1 warnings=-" in record.getMessage()
+
+    async def test_gives_up_at_the_deadline_still_processing(self, caplog):
+        transport = ScriptedTransport(status_script=[_verdict("PROCESSING")] * 20)
+        uploader, sleeps = _uploader(FakeDb({"u1": _row()}), transport)
+        await uploader.upload_first_pairing("u1")
+        await uploader.drain()
+        assert sum(sleeps) >= STATUS_DEADLINE
+        assert sum(sleeps) < STATUS_DEADLINE + STATUS_RECHECK
+        record = next(r for r in caplog.records if "conversion_status" in r.getMessage())
+        assert record.levelno == logging.WARNING and "status=PROCESSING" in record.getMessage()
+
+    async def test_status_check_holds_the_send_lock_so_the_re_read_follows_the_wait(self):
+        """A follow-up GET occupies the transport for up to a request
+        timeout. An upload that re-read its row and then queued behind that
+        GET would send an identifier withdrawn meanwhile; with the GET under
+        the send lock, the re-read happens after the wait instead."""
+        db = FakeDb({"u1": _row(), "u2": _row(id="u2")})
+        transport = ScriptedTransport()
+        transport.get_gate = asyncio.Event()
+        uploader, _ = _uploader(db, transport)
+
+        assert await uploader.upload_first_pairing("u1") == "ok"
+        await _until(lambda: transport.gets)  # the follow-up's GET is in flight
+        second = asyncio.create_task(uploader.upload_first_pairing("u2"))
+        await asyncio.sleep(0.02)
+        assert len(transport.calls) == 1 and not second.done()
+        db.rows["u2"] = _row(id="u2", ad_click_id=None, ad_click_kind=None, ads_consent=0)
+        transport.get_gate.set()
+
+        assert await second == "attribution_withdrawn"
+        assert len(transport.calls) == 1
+        await uploader.drain()
+
+    async def test_200_without_a_request_id_fails_instead_of_a_blind_success(self, caplog):
+        """The id is the only handle on an accepted request: without one the
+        upload is reported broken (and cleared), never as uploaded."""
+        db = FakeDb({"u1": _row()})
+        transport = ScriptedTransport(TransportResponse(200, {}, {}))
+        uploader, sleeps = _uploader(db, transport)
+
+        assert await uploader.upload_first_pairing("u1") == "bad_response"
+
+        assert len(transport.calls) == 1 and sleeps == []
+        assert uploader._followups == set() and transport.gets == []
+        assert _messages(caplog, "pairing.conversion_uploaded") == []
+        assert _messages(caplog, "pairing.conversion_upload_failed") == [
+            "pairing.conversion_upload_failed user_id=u1 identifier=gclid "
+            "reason=bad_response status=200 request_id=None message=missing_request_id"
+        ]
+        assert db.cleared == ["u1"]
+
+    async def test_field_warnings_are_logged_by_count(self, caplog):
+        body = {"requestId": "req-1", "fieldWarnings": [{"field": "x", "description": "y"}]}
+        transport = ScriptedTransport(TransportResponse(200, {}, body))
+        uploader, _ = _uploader(FakeDb({"u1": _row()}), transport)
+        await uploader.upload_first_pairing("u1")
+        assert _messages(caplog, "pairing.conversion_upload_warnings") == [
+            "pairing.conversion_upload_warnings user_id=u1 request_id=req-1 field_warnings=1"
+        ]
+
+    async def test_status_crash_is_logged_not_raised(self, caplog):
+        transport = ScriptedTransport()
+        uploader, _ = _uploader(FakeDb({"u1": _row()}), transport)
+
+        async def boom(seconds):
+            raise RuntimeError("clock broke")
+
+        uploader._sleep = boom
+        assert await uploader.check_status("u1", "req-9") == "exception"
+        assert "pairing.conversion_status_crashed user_id=u1 request_id=req-9" in caplog.text
 
 
 class TestHousekeeping:
@@ -406,9 +626,10 @@ class TestHousekeeping:
         uploader.schedule_first_pairing("u1")
         assert len(uploader._tasks) == 1
         await uploader.drain()
-        assert uploader._tasks == set()
+        assert uploader._tasks == set() and uploader._followups == set()
         assert db.cleared == ["u1"]
         assert len(_messages(caplog, "pairing.conversion_uploaded")) == 1
+        assert len(_messages(caplog, "pairing.conversion_status")) == 1
 
     async def test_resume_pending_schedules_each_pending_user_once(self, caplog):
         db = FakeDb({"u1": _row(), "u2": _row(id="u2")})
@@ -457,11 +678,32 @@ class TestHousekeeping:
         # A cancelled upload keeps its attribution for resume_pending().
         assert db.cleared == []
 
+    async def test_aclose_cancels_a_sleeping_status_follow_up(self, caplog):
+        """The follow-up is diagnostics only; shutdown must not wait 45 min."""
+        db = FakeDb({"u1": _row()})
+        transport = ScriptedTransport()
+        client = DataManagerConversionClient(
+            transport=transport, customer_id="1234567890", conversion_action_id="987654321"
+        )
+        uploader = ConversionUploader(db, client, clock=lambda: NOW)  # real asyncio.sleep
+        assert await uploader.upload_first_pairing("u1") == "ok"
+        followup = next(iter(uploader._followups))
+        await asyncio.sleep(0)
+
+        await uploader.aclose()
+
+        assert followup.cancelled()
+        assert uploader._followups == set()
+        assert transport.gets == []
+        assert _messages(caplog, "pairing.conversion_status") == []
+
 
 class TestFromConfig:
     async def test_unconfigured_returns_disabled_uploader_without_warnings(
-        self, db, config, caplog
+        self, db, config, caplog, monkeypatch
     ):
+        monkeypatch.delenv("GOOGLE_ADS_DEVELOPER_TOKEN", raising=False)
+        monkeypatch.delenv("GOOGLE_ADS_API_VERSION", raising=False)
         with caplog.at_level(logging.INFO):
             uploader = ConversionUploader.from_config(db, config)
         assert not uploader.enabled
@@ -471,9 +713,7 @@ class TestFromConfig:
         assert uploader._tasks == set()
 
     async def test_partial_config_warns_and_stays_disabled(self, db, config, caplog):
-        partial = replace(
-            config, google_ads_developer_token="dev-token", google_ads_customer_id="1234567890"
-        )
+        partial = replace(config, google_ads_customer_id="1234567890")
         with caplog.at_level(logging.WARNING):
             uploader = ConversionUploader.from_config(db, partial)
         assert not uploader.enabled
@@ -483,12 +723,24 @@ class TestFromConfig:
             "GOOGLE_ADS_OAUTH_CLIENT_SECRET,GOOGLE_ADS_OAUTH_REFRESH_TOKEN,"
             "GOOGLE_ADS_CONVERSION_ACTION_ID"
         ]
+
+    async def test_obsolete_developer_token_is_flagged_once(self, db, config, caplog, monkeypatch):
+        """A leftover Google Ads API setting is harmless but tells the
+        operator their .env predates the Data Manager move."""
+        monkeypatch.setenv("GOOGLE_ADS_DEVELOPER_TOKEN", "dev-token")
+        with caplog.at_level(logging.INFO):
+            uploader = ConversionUploader.from_config(db, config)
+        assert not uploader.enabled
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings == [
+            "ads.obsolete_setting name=GOOGLE_ADS_DEVELOPER_TOKEN reason=data_manager_api"
+        ]
         assert "dev-token" not in caplog.text
+        assert "ads.disabled reason=not_configured" in caplog.text
 
     async def test_full_config_builds_enabled_uploader(self, db, config, caplog):
         full = replace(
             config,
-            google_ads_developer_token="dev-token",
             google_ads_customer_id="1234567890",
             google_ads_login_customer_id="9876543210",
             google_ads_oauth_client_id="client-id.apps.googleusercontent.com",
@@ -500,9 +752,9 @@ class TestFromConfig:
             uploader = ConversionUploader.from_config(db, full)
         assert uploader.enabled
         assert (
-            "ads.enabled customer_id=1234567890 action_id=987654321 "
-            "api_version=v25 login_customer_id_set=True click_window_days=90"
+            "ads.enabled api=data_manager customer_id=1234567890 action_id=987654321 "
+            "login_customer_id_set=True click_window_days=90"
         ) in caplog.text
-        for secret in ("dev-token", "GOCSPX-secret", "refresh-secret"):
+        for secret in ("GOCSPX-secret", "refresh-secret"):
             assert secret not in caplog.text
         await uploader.aclose()

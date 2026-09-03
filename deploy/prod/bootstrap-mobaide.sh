@@ -246,12 +246,12 @@ JWT_SECRET_KEY=${JWT_SECRET}
 # APPLE_CLIENT_ID=com.mobaide.app
 # APPLE_WEB_CLIENT_ID=com.mobaide.web
 
-# Required only for the Google Ads "Agent paired" conversion upload. Mint the
-# three OAuth values with deploy/prod/google_ads_oauth.py (the consent screen
-# must be In production or the refresh token dies in 7 days). All six ids /
-# secrets or nothing: a partial set logs ads.misconfigured and stays off.
+# Required only for the Google Ads "Agent paired" conversion upload (Data
+# Manager API — no developer token). Mint the three OAuth values with
+# deploy/prod/google_ads_oauth.py (the consent screen must be In production
+# or the refresh token dies in 7 days). All five ids / secrets or nothing: a
+# partial set logs ads.misconfigured and stays off.
 # See docs/deployment.md, "Google Ads conversion upload".
-# GOOGLE_ADS_DEVELOPER_TOKEN=
 # GOOGLE_ADS_CUSTOMER_ID=
 # GOOGLE_ADS_LOGIN_CUSTOMER_ID=
 # GOOGLE_ADS_OAUTH_CLIENT_ID=

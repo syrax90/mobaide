@@ -156,10 +156,9 @@ ENABLE_API_DOCS=1
 
 See the "Public API surface" section of [`docs/deployment.md`](../../docs/deployment.md) for the full policy.
 
-If you run Google Ads and want the once-per-account "Agent paired" conversion reported back to the ad click, add the seven `GOOGLE_ADS_*` values (developer token, customer id, optional manager id, the Desktop-app OAuth client id/secret plus the refresh token minted with `deploy/prod/google_ads_oauth.py`, and the conversion action id). The uploader stays off until all six required ones are set — see the "Google Ads conversion upload" section of [`docs/deployment.md`](../../docs/deployment.md), including the consent-screen-must-be-In-production trap.
+If you run Google Ads and want the once-per-account "Agent paired" conversion reported back to the ad click, add the six `GOOGLE_ADS_*` values (customer id, optional manager id, the Desktop-app OAuth client id/secret plus the refresh token minted with `deploy/prod/google_ads_oauth.py`, and the conversion action id). The upload goes through the Data Manager API, so there is no developer token. The uploader stays off until all five required ones are set — see the "Google Ads conversion upload" section of [`docs/deployment.md`](../../docs/deployment.md), including the consent-screen-must-be-In-production trap.
 
 ```
-GOOGLE_ADS_DEVELOPER_TOKEN=
 GOOGLE_ADS_CUSTOMER_ID=
 GOOGLE_ADS_LOGIN_CUSTOMER_ID=
 GOOGLE_ADS_OAUTH_CLIENT_ID=
