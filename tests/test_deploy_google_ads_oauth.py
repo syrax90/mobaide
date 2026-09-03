@@ -191,6 +191,9 @@ def test_verify_request_is_a_validate_only_ingest_for_the_destination():
     event = body["events"][0]
     assert event["adIdentifiers"] == {"gclid": "Cj0K-placeholder"}
     assert event["eventSource"] == "WEB"
+    # The relay's deduplication key, so validate-only covers the field too.
+    material = "\n".join(("gclid", "Cj0K-placeholder", event["eventTimestamp"]))
+    assert event["transactionId"] == hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
     assert event["consent"] == {
         "adUserData": "CONSENT_GRANTED",
         "adPersonalization": "CONSENT_DENIED",

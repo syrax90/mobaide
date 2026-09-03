@@ -34,11 +34,17 @@ CONSENT = {"adUserData": "CONSENT_GRANTED", "adPersonalization": "CONSENT_DENIED
 # attributed, so the hashed-email path takes over.
 CLICK_MAX_AGE = timedelta(days=90)
 STATUS_PROCESSING = "PROCESSING"
+# Outcomes where the credentials, not the event, were refused: a rejected
+# refresh token, or a 401 / 403 (insufficient scope, no access to the
+# account, Data Manager API not enabled). Nothing about the event can change
+# that verdict, and nothing but the operator's fix can.
+CREDENTIAL_REASONS = frozenset({"oauth_refresh_failed", "http_401", "http_403"})
 
 _JSON_HEADERS = {"Content-Type": "application/json"}
 _MESSAGE_LIMIT = 200
 _GOOGLE_MAIL_DOMAINS = frozenset({"gmail.com", "googlemail.com"})
 _REASON_PREFIXES = ("PROCESSING_ERROR_REASON_", "PROCESSING_WARNING_REASON_")
+_TRANSACTION_ID_LENGTH = 32
 
 
 class TransientTransportError(Exception):
@@ -98,6 +104,13 @@ class UploadOutcome:
     request_id: str | None = None
     message: str | None = None
 
+    @property
+    def credential_failure(self) -> bool:
+        """Refused credentials rather than a refused event — see
+        ``CREDENTIAL_REASONS``. The upload is worth keeping for the process
+        that runs with the corrected token."""
+        return self.reason in CREDENTIAL_REASONS
+
 
 @dataclass(frozen=True)
 class StatusOutcome:
@@ -140,6 +153,23 @@ def format_event_timestamp(dt: datetime) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def transaction_id(identifier: ConversionIdentifier, event_time: datetime) -> str:
+    """Google's deduplication key for the event.
+
+    A retry after a lost response, and a resumed upload after a restart,
+    re-send the same event; without this key Google would count each copy.
+    Derived from the report's own contents and nothing else, so it discloses
+    nothing the report does not already carry — the privacy policy's
+    "nothing else about your account" holds — and it is identical across
+    retries and processes because both inputs are stored: the identifier on
+    the account row and the event time in ``first_paired_at``.
+    """
+    material = "\n".join(
+        (identifier.kind, identifier.value, format_event_timestamp(event_time))
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:_TRANSACTION_ID_LENGTH]
 
 
 def parse_iso_utc(text: Any) -> datetime | None:
@@ -224,14 +254,16 @@ def build_ingest_payload(
 ) -> dict[str, Any]:
     """One event for one destination.
 
-    Deliberately no ``transactionId``: the privacy policy promises the
-    report carries the click id (or the email hash), the consent state and
-    nothing else about the account, and a retry resends a byte-identical
-    event anyway.
+    The privacy policy promises the report carries the click id (or the
+    email hash), the consent state and nothing else about the account. The
+    ``transactionId`` keeps that promise: it is a digest of those very
+    fields (see ``transaction_id``), there so that a re-sent event is
+    deduplicated rather than counted twice.
     """
     event: dict[str, Any] = {
         "eventTimestamp": format_event_timestamp(event_time),
         "eventSource": "WEB",
+        "transactionId": transaction_id(identifier, event_time),
         "consent": dict(CONSENT),
     }
     if identifier.kind == HASHED_EMAIL:
@@ -281,28 +313,31 @@ def classify_response(resp: TransportResponse) -> UploadOutcome:
 
     Fast-fail model: a 200 accepts the whole request for processing (the
     body carries ``requestId`` and at most field warnings) and a 4xx rejects
-    it outright — there is no partial-failure envelope to inspect.
+    it outright — there is no partial-failure envelope to inspect. A 200
+    without a ``requestId`` is not evidence of acceptance: the id is the
+    only handle on the request, so the response is treated as broken.
     """
     status = resp.status
     body = resp.body
     if status == 200:
-        if not isinstance(body, dict):
-            return UploadOutcome(False, True, "bad_response", status, None, _truncate(body))
-        request_id = body.get("requestId")
+        request_id = body.get("requestId") if isinstance(body, dict) else None
+        if not isinstance(request_id, str) or not request_id:
+            message = "missing_request_id" if isinstance(body, dict) else _truncate(body)
+            return UploadOutcome(False, True, "bad_response", status, None, message)
         warnings = body.get("fieldWarnings")
         message = (
             f"field_warnings={len(warnings)}"
             if isinstance(warnings, list) and warnings
             else None
         )
-        return UploadOutcome(
-            True, False, "ok", status, str(request_id) if request_id else None, message
-        )
+        return UploadOutcome(True, False, "ok", status, request_id, message)
     message = _truncate(_error_message(body))
     if status == 429:
         return UploadOutcome(False, False, "http_429", status, None, message)
     if 500 <= status <= 599:
         return UploadOutcome(False, False, "http_5xx", status, None, message)
+    if status in (401, 403):
+        return UploadOutcome(False, True, f"http_{status}", status, None, message)
     if 400 <= status <= 499:
         return UploadOutcome(False, True, "http_4xx", status, None, message)
     return UploadOutcome(False, True, "bad_response", status, None, message)

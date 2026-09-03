@@ -24,6 +24,7 @@ from central_server.ads.data_manager import (
     normalize_email,
     parse_iso_utc,
     select_identifier,
+    transaction_id,
 )
 from central_server.db.database import _now_iso
 
@@ -99,6 +100,7 @@ def test_payload_click_kinds(kind):
             {
                 "eventTimestamp": "2026-09-02T12:18:00Z",
                 "eventSource": "WEB",
+                "transactionId": transaction_id(ConversionIdentifier(kind, "Cj0K-abc_123"), NOW),
                 "consent": CONSENT_JSON,
                 "adIdentifiers": {kind: "Cj0K-abc_123"},
             }
@@ -124,7 +126,8 @@ def test_payload_hashed_email_declares_hex_encoding():
 
 
 def test_payload_carries_nothing_else_about_the_account():
-    """The privacy policy promises click id / email hash + consent only."""
+    """The privacy policy promises click id / email hash + consent only; the
+    transaction id is a digest of exactly those fields."""
     payload = build_ingest_payload(
         customer_id="1234567890",
         conversion_action_id="987654321",
@@ -132,7 +135,45 @@ def test_payload_carries_nothing_else_about_the_account():
         event_time=NOW,
     )
     assert set(payload) == {"destinations", "events"}
-    assert set(payload["events"][0]) == {"eventTimestamp", "eventSource", "consent", "adIdentifiers"}
+    event = payload["events"][0]
+    assert set(event) == {
+        "eventTimestamp", "eventSource", "transactionId", "consent", "adIdentifiers"
+    }
+    assert event["transactionId"] == transaction_id(ConversionIdentifier("gclid", "c"), NOW)
+
+
+class TestTransactionId:
+    def test_is_a_digest_of_the_report_fields_only(self):
+        """Google gets the identifier and the timestamp anyway, so a digest
+        of the two discloses nothing more — and nothing else goes in."""
+        material = "\n".join(("gclid", "c", "2026-09-02T12:18:00Z")).encode("utf-8")
+        expected = hashlib.sha256(material).hexdigest()[:32]
+        assert transaction_id(ConversionIdentifier("gclid", "c"), NOW) == expected
+
+    def test_is_stable_across_calls_and_timezones(self):
+        """A retry and a resumed upload must produce the same key."""
+        local = NOW.astimezone(timezone(timedelta(hours=3)))
+        assert transaction_id(ConversionIdentifier("gclid", "c"), NOW) == transaction_id(
+            ConversionIdentifier("gclid", "c"), local
+        )
+
+    @pytest.mark.parametrize(
+        "identifier, event_time",
+        [
+            (ConversionIdentifier("gclid", "d"), NOW),
+            (ConversionIdentifier("gbraid", "c"), NOW),
+            (ConversionIdentifier("hashed_email", "c"), NOW),
+            (ConversionIdentifier("gclid", "c"), NOW + timedelta(seconds=1)),
+        ],
+    )
+    def test_changes_with_any_input(self, identifier, event_time):
+        assert transaction_id(identifier, event_time) != transaction_id(
+            ConversionIdentifier("gclid", "c"), NOW
+        )
+
+    def test_shape(self):
+        value = transaction_id(ConversionIdentifier("gclid", "c"), NOW)
+        assert len(value) == 32 and all(ch in "0123456789abcdef" for ch in value)
 
 
 def test_payload_validate_only_flag():
@@ -231,9 +272,16 @@ class TestClassifyResponse:
         assert outcome.ok and outcome.reason == "ok" and outcome.request_id == "req-1"
         assert outcome.message is None
 
-    def test_200_without_request_id_is_still_accepted(self):
-        outcome = classify_response(_resp(200, {}))
-        assert outcome.ok and outcome.request_id is None
+    @pytest.mark.parametrize("body", [{}, {"requestId": ""}, {"requestId": None}, {"requestId": 7}])
+    def test_200_without_a_request_id_is_a_permanent_bad_response(self, body):
+        """The id is the only handle on an accepted request; a 200 without
+        one is a broken response, not a success."""
+        outcome = classify_response(_resp(200, body))
+        assert (outcome.ok, outcome.permanent, outcome.reason, outcome.status) == (
+            False, True, "bad_response", 200
+        )
+        assert outcome.request_id is None and outcome.message == "missing_request_id"
+        assert not outcome.credential_failure
 
     def test_field_warnings_are_counted_not_echoed(self):
         body = {
@@ -258,9 +306,20 @@ class TestClassifyResponse:
         assert outcome.message == "INVALID_ARGUMENT: Request contains an invalid argument."
         assert "SECRET-GCLID" not in repr(outcome)
 
-    @pytest.mark.parametrize("status", [401, 403, 404])
-    def test_other_4xx_are_permanent(self, status):
-        assert classify_response(_resp(status, {"error": {"message": "x"}})).permanent
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_401_and_403_are_credential_failures(self, status):
+        outcome = classify_response(
+            _resp(status, {"error": {"message": "no access", "status": "PERMISSION_DENIED"}})
+        )
+        assert (outcome.permanent, outcome.reason, outcome.status) == (True, f"http_{status}", status)
+        assert outcome.credential_failure
+        assert outcome.message == "PERMISSION_DENIED: no access"
+
+    @pytest.mark.parametrize("status", [400, 404, 422])
+    def test_other_4xx_are_permanent_event_failures(self, status):
+        outcome = classify_response(_resp(status, {"error": {"message": "x"}}))
+        assert outcome.permanent and outcome.reason == "http_4xx"
+        assert not outcome.credential_failure
 
     def test_429_is_transient(self):
         outcome = classify_response(_resp(429, "slow down"))
@@ -272,7 +331,8 @@ class TestClassifyResponse:
         assert (outcome.permanent, outcome.reason, outcome.status) == (False, "http_5xx", status)
 
     def test_non_json_200_is_permanent_bad_response(self):
-        assert classify_response(_resp(200, "<html>")).reason == "bad_response"
+        outcome = classify_response(_resp(200, "<html>"))
+        assert (outcome.permanent, outcome.reason, outcome.message) == (True, "bad_response", "<html>")
 
     def test_unexpected_status_is_permanent_bad_response(self):
         outcome = classify_response(_resp(302, None))
@@ -407,6 +467,7 @@ class TestClient:
             ConversionIdentifier("gclid", "c"), NOW, timeout=1.0
         )
         assert (outcome.ok, outcome.permanent, outcome.reason) == (False, permanent, reason)
+        assert outcome.credential_failure == (reason == "oauth_refresh_failed")
 
     async def test_request_status_gets_by_request_id(self):
         transport = FakeTransport(TransportResponse(200, {}, _status_body("SUCCESS")))

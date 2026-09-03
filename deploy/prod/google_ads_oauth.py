@@ -260,6 +260,13 @@ def _digits(value: str | None) -> str | None:
     return raw if raw.isascii() and raw.isdigit() else None
 
 
+def transaction_id(kind: str, value: str, timestamp: str) -> str:
+    """Mirror of ``central_server.ads.data_manager.transaction_id``: a
+    digest of the report's own fields, nothing else."""
+    material = "\n".join((kind, value, timestamp))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
+
+
 def build_verify_request(
     *,
     access_token: str,
@@ -286,13 +293,18 @@ def build_verify_request(
             "accountId": login_customer_id,
         }
     stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    gclid = click_id or "Cj0KCQjw" + secrets.token_urlsafe(48)
+    timestamp = stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
     body = {
         "destinations": [destination],
         "events": [
             {
-                "adIdentifiers": {"gclid": click_id or "Cj0KCQjw" + secrets.token_urlsafe(48)},
-                "eventTimestamp": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "adIdentifiers": {"gclid": gclid},
+                "eventTimestamp": timestamp,
                 "eventSource": "WEB",
+                # Same shape as the relay's deduplication key, so the
+                # validation covers the field too.
+                "transactionId": transaction_id("gclid", gclid, timestamp),
                 "consent": {
                     "adUserData": "CONSENT_GRANTED",
                     "adPersonalization": "CONSENT_DENIED",

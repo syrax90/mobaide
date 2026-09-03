@@ -6,7 +6,12 @@ The upload runs in a fire-and-forget task so a slow Google round-trip never
 stalls the pairing response. Whatever the outcome, the account's attribution
 columns are cleared afterwards; a stored click id or consent is what marks
 an upload as pending, which is what lets ``resume_pending`` pick up uploads
-a previous process never finished.
+a previous process never finished. The one exception is refused
+credentials (a rejected refresh token, a 401 or a 403): the event is not
+what Google objected to, so the upload is deferred — attribution kept, no
+further sends from this process — and resumed by the process that runs with
+the operator's fix. The 90-day retention purge still bounds how long a
+deferred upload can wait.
 
 The Data Manager API answers an accepted upload with a request id only; the
 match verdict is published later through ``requestStatus:retrieve``. A
@@ -55,6 +60,8 @@ _OBSOLETE_ENV = ("GOOGLE_ADS_DEVELOPER_TOKEN", "GOOGLE_ADS_API_VERSION")
 STATUS_FIRST_CHECK = 45 * 60.0
 STATUS_RECHECK = 2 * 3600.0
 STATUS_DEADLINE = 24 * 3600.0
+# Terminal reason of an upload kept for a later process.
+DEFERRED = "deferred"
 
 
 def _utcnow() -> datetime:
@@ -99,6 +106,10 @@ class ConversionUploader:
         self._status_deadline = status_deadline
         self._tasks: set[asyncio.Task] = set()
         self._followups: set[asyncio.Task] = set()
+        # Latched by the first credential failure: the refresh token or the
+        # account access is wrong for every upload alike, and only a restart
+        # with corrected settings can change that.
+        self._credentials_rejected: str | None = None
         # Sends are serialised (the transport holds one blocking session), so
         # the pre-send re-read below runs under the same lock: an upload that
         # queued behind another must not send what the row no longer holds.
@@ -170,7 +181,8 @@ class ConversionUploader:
             self.schedule_first_pairing(user_id)
 
     async def upload_first_pairing(self, user_id: str) -> str:
-        """The task body; returns the terminal reason (``"ok"`` on success)."""
+        """The task body; returns the terminal reason — ``"ok"`` on success,
+        ``DEFERRED`` when the attribution was kept for a later process."""
         row = await self._db.get_user_by_id(user_id)
         if row is None:
             logger.info(
@@ -186,6 +198,8 @@ class ConversionUploader:
         except Exception:
             logger.exception("pairing.conversion_upload_crashed user_id=%s", user_id)
             reason = "exception"
+        if reason == DEFERRED:
+            return reason
         try:
             await self._db.clear_user_ad_attribution(user_id)
         except Exception:
@@ -215,13 +229,16 @@ class ConversionUploader:
                 "pairing.conversion_skipped user_id=%s reason=%s", user_id, reason
             )
             return reason
-        # Identical across retries, so a re-upload after a lost response is
-        # a duplicate Google dedupes rather than a second conversion.
+        # Identical across retries and processes; with the identifier it
+        # yields the event's transactionId, so a re-upload after a lost
+        # response is a duplicate Google drops rather than a second conversion.
         conversion_time = parse_iso_utc(row.get("first_paired_at")) or self._clock()
 
         outcome: UploadOutcome | None = None
         for attempt in range(1, self._max_attempts + 1):
             async with self._send_lock:
+                if self._credentials_rejected is not None:
+                    return self._defer(user_id, identifier, self._credentials_rejected)
                 # Re-read right before sending: the queue wait and the
                 # backoff are both long enough for the account to be
                 # deleted or its attribution withdrawn.
@@ -242,6 +259,15 @@ class ConversionUploader:
                 outcome = await self._client.upload(
                     identifier, conversion_time, timeout=self._attempt_timeout
                 )
+                if outcome.credential_failure:
+                    self._credentials_rejected = outcome.reason
+                    logger.warning(
+                        "ads.credentials_rejected reason=%s status=%s message=%s",
+                        outcome.reason,
+                        outcome.status,
+                        outcome.message,
+                    )
+                    return self._defer(user_id, identifier, outcome.reason)
             if outcome.ok or outcome.permanent:
                 break
             if attempt < self._max_attempts:
@@ -288,6 +314,15 @@ class ConversionUploader:
             outcome.message,
         )
         return reason
+
+    def _defer(self, user_id: str, identifier: ConversionIdentifier, reason: str) -> str:
+        logger.info(
+            "pairing.conversion_upload_deferred user_id=%s identifier=%s reason=%s",
+            user_id,
+            identifier.kind,
+            reason,
+        )
+        return DEFERRED
 
     def _schedule_status_check(self, user_id: str, request_id: str) -> None:
         task = asyncio.create_task(

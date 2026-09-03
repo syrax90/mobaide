@@ -317,12 +317,78 @@ class TestRetries:
         assert db.cleared == ["u1"]
         assert uploader._followups == set()
 
-    async def test_refresh_error_is_permanent(self, caplog):
-        transport = ScriptedTransport(AuthRefreshFailed("RefreshError"))
+    async def test_retries_reuse_the_same_transaction_id(self):
+        """A lost response is re-sent as the same event: Google dedupes on
+        the transaction id instead of counting a second conversion."""
+        transport = ScriptedTransport(_status(500), _ok())
         uploader, _ = _uploader(FakeDb({"u1": _row()}), transport)
-        assert await uploader.upload_first_pairing("u1") == "oauth_refresh_failed"
+        assert await uploader.upload_first_pairing("u1") == "ok"
+        first, second = _event(transport, 0), _event(transport, 1)
+        assert first["transactionId"] == second["transactionId"]
+        assert first == second
+
+    async def test_refresh_error_defers_and_keeps_the_attribution(self, caplog):
+        """A refresh token minted for the wrong scope (an upgrade that kept
+        the old token) must not burn the backlog: nothing is cleared, and
+        the next process, with the corrected token, resumes the upload."""
+        db = FakeDb({"u1": _row()})
+        transport = ScriptedTransport(AuthRefreshFailed("RefreshError"))
+        uploader, sleeps = _uploader(db, transport)
+
+        assert await uploader.upload_first_pairing("u1") == "deferred"
+
+        assert len(transport.calls) == 1 and sleeps == []
+        assert db.cleared == []
+        assert _messages(caplog, "ads.credentials_rejected") == [
+            "ads.credentials_rejected reason=oauth_refresh_failed status=None message=None"
+        ]
+        assert _messages(caplog, "pairing.conversion_upload_deferred") == [
+            "pairing.conversion_upload_deferred user_id=u1 identifier=gclid "
+            "reason=oauth_refresh_failed"
+        ]
+        assert _messages(caplog, "pairing.conversion_upload_failed") == []
+        assert uploader._followups == set()
+
+    @pytest.mark.parametrize("status", [401, 403])
+    async def test_credential_rejection_short_circuits_the_rest_of_the_backlog(
+        self, status, caplog
+    ):
+        """One network round-trip decides for the whole backlog; every
+        later upload in this process is deferred without a send."""
+        db = FakeDb({"u1": _row(), "u2": _row(id="u2"), "u3": _row(id="u3")})
+        db.pending = ["u1", "u2"]
+        transport = ScriptedTransport(
+            _status(status, {"error": {"message": "no access", "status": "PERMISSION_DENIED"}})
+        )
+        uploader, _ = _uploader(db, transport)
+
+        await uploader.resume_pending()
+        await uploader.drain()
+        uploader.schedule_first_pairing("u3")
+        await uploader.drain()
+
         assert len(transport.calls) == 1
-        assert "reason=oauth_refresh_failed" in _messages(caplog, "pairing.conversion_upload_failed")[0]
+        assert db.cleared == []
+        assert uploader._credentials_rejected == f"http_{status}"
+        assert _messages(caplog, "ads.credentials_rejected") == [
+            f"ads.credentials_rejected reason=http_{status} status={status} "
+            "message=PERMISSION_DENIED: no access"
+        ]
+        deferred = _messages(caplog, "pairing.conversion_upload_deferred")
+        assert sorted(deferred) == [
+            f"pairing.conversion_upload_deferred user_id=u{n} identifier=gclid "
+            f"reason=http_{status}"
+            for n in (1, 2, 3)
+        ]
+        assert _messages(caplog, "pairing.conversion_upload_failed") == []
+
+    async def test_credential_rejection_after_a_transient_error_still_defers(self, caplog):
+        db = FakeDb({"u1": _row()})
+        transport = ScriptedTransport(_status(500), _status(401))
+        uploader, sleeps = _uploader(db, transport)
+        assert await uploader.upload_first_pairing("u1") == "deferred"
+        assert len(transport.calls) == 2 and sleeps == [1.0]
+        assert db.cleared == []
 
     async def test_retry_aborts_when_the_account_was_deleted_meanwhile(self, caplog):
         """The backoff is long enough for an immediate account deletion to
@@ -450,12 +516,23 @@ class TestStatusFollowUp:
         record = next(r for r in caplog.records if "conversion_status" in r.getMessage())
         assert record.levelno == logging.WARNING and "status=PROCESSING" in record.getMessage()
 
-    async def test_no_follow_up_without_a_request_id(self):
+    async def test_200_without_a_request_id_fails_instead_of_a_blind_success(self, caplog):
+        """The id is the only handle on an accepted request: without one the
+        upload is reported broken (and cleared), never as uploaded."""
+        db = FakeDb({"u1": _row()})
         transport = ScriptedTransport(TransportResponse(200, {}, {}))
-        uploader, _ = _uploader(FakeDb({"u1": _row()}), transport)
-        assert await uploader.upload_first_pairing("u1") == "ok"
-        assert uploader._followups == set()
-        assert transport.gets == []
+        uploader, sleeps = _uploader(db, transport)
+
+        assert await uploader.upload_first_pairing("u1") == "bad_response"
+
+        assert len(transport.calls) == 1 and sleeps == []
+        assert uploader._followups == set() and transport.gets == []
+        assert _messages(caplog, "pairing.conversion_uploaded") == []
+        assert _messages(caplog, "pairing.conversion_upload_failed") == [
+            "pairing.conversion_upload_failed user_id=u1 identifier=gclid "
+            "reason=bad_response status=200 request_id=None message=missing_request_id"
+        ]
+        assert db.cleared == ["u1"]
 
     async def test_field_warnings_are_logged_by_count(self, caplog):
         body = {"requestId": "req-1", "fieldWarnings": [{"field": "x", "description": "y"}]}
