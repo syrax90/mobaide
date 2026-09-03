@@ -396,7 +396,10 @@ class ConversionUploader:
     async def aclose(self) -> None:
         """Drain rather than cancel: the CAS already fired, so a cancelled
         upload is a conversion lost for good. Bounded so shutdown cannot hang.
-        Status follow-ups are only diagnostics and are cancelled outright."""
+        Status follow-ups are only diagnostics and are cancelled outright —
+        one caught mid-request finishes that round-trip first, because the
+        transport holds its lock through the cancellation, so the drain never
+        shares the session with it and ``close`` runs with no thread active."""
         await self._cancel_followups()
         pending = list(self._tasks)
         if pending:

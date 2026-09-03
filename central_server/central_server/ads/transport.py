@@ -4,7 +4,12 @@ The only module in the package that imports google-auth. ``AuthorizedSession``
 refreshes the access token on first use and again on a 401, so the server
 holds nothing but the refresh token. Calls are serialised on one lock and run
 in the default executor: ``requests.Session`` and ``Credentials.refresh`` are
-not documented thread-safe, and this path fires once per new account.
+not documented thread-safe, and this path fires once per new account. The
+lock survives cancellation: a cancelled task cannot interrupt its worker
+thread, so the lock is held until that thread returns (bounded by the
+request timeout) and only then does the cancellation propagate — otherwise
+a shutdown that cancels a status follow-up would let the draining uploads
+share the session with a request still in flight, and close it under it.
 """
 from __future__ import annotations
 
@@ -19,6 +24,18 @@ from .data_manager import (
 )
 
 TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+
+async def _settle(future: asyncio.Future) -> None:
+    """Wait for an executor future through any number of cancellations."""
+    while not future.done():
+        try:
+            await asyncio.wait({future})
+        except asyncio.CancelledError:
+            continue
+    if not future.cancelled():
+        # Nobody else will read it; an unretrieved exception is logged at GC.
+        future.exception()
 
 
 class AuthorizedSessionTransport:
@@ -78,9 +95,14 @@ class AuthorizedSessionTransport:
     ) -> TransportResponse:
         async with self._lock:
             loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(
+            future = loop.run_in_executor(
                 None, self._request_sync, method, url, payload, params, dict(headers), timeout
             )
+            try:
+                return await asyncio.shield(future)
+            except asyncio.CancelledError:
+                await _settle(future)
+                raise
 
     def _request_sync(
         self,
