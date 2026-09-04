@@ -122,7 +122,7 @@ final class AppContainer {
             sink: FirebaseAnalyticsSink(),
             fetchMe: { [centralAPI] token in try await centralAPI.me(userToken: token) },
             userIdentityStore: userIdentityStore,
-            preferences: preferencesStore
+            state: ConversionStateStore()
         )
 
         let webSocketFactory = WebSocketCoreFactory.live()

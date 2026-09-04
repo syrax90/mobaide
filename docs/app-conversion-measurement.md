@@ -61,14 +61,13 @@ Rules the component enforces, identical on both platforms:
 | `armedAt` is a set-if-absent device timestamp written at the first launch of a Firebase-capable build (Android `MainActivity.onCreate`, iOS `AppContainer.start()`) and self-armed inside `reconcile()` as a fallback; it is never moved afterwards. | Accounts that paired *before* this install or upgrade — including every account backfilled on 2026-09-02 — never log; a pairing done elsewhere while the app was closed does log on the next connect. |
 | Outcomes are strings: `logged` or `skipped_predates_install`. A null or unparseable stamp persists nothing (retry next connect). | `first_paired_at` never changes, so "predates install" is final and old accounts stop hitting `/me`. Two states are distinguishable in a bug report. |
 | Log first, persist second, inside one lock (Android `Mutex`; iOS one actor turn with no `await` between the check and the write, re-checked after the `/me` await). | The SDK's `logEvent` is a local enqueue that never throws; a duplicate is cheaper than a lost conversion, and the live event and the connect reconcile can race by milliseconds. |
-| Outcomes are keyed `agent_paired_logged::<userId>` in the app preferences store and are **not** purged by the sign-out sweeps. | Sign-out then sign-in on the same account must not re-log. The preferences store is included in platform backups; a restored outcome only suppresses. |
+| Outcomes (keyed `agent_paired_logged::<userId>`) and the arming time live in a **per-install** store that platform backups and device transfers never carry — Android: the `ads_conversion` DataStore, excluded in both backup-rule files like the device identity; iOS: a JSON file under Application Support flagged `isExcludedFromBackup` — and are **not** purged by the sign-out sweeps. | Sign-out then sign-in on the same account must not re-log. An arming time restored from an older install would let a pairing made in between pass the gate on the new install and count as a fresh install conversion; per-install state makes the gate mean what it says, and a reinstall arms afresh so an earlier pairing is skipped rather than re-logged. |
 | 1 h tolerance, only on the reconcile path. | Covers device-clock skew against the server stamp; widening it would mostly admit web pairings that preceded the install, which are the website lane's conversions. The server stamp may omit fractional seconds when the microsecond is zero, so iOS parses with two `ISO8601DateFormatter`s. |
 | Never `setUserId` / user properties; automatic screen reporting off; SSAID (Android) and IDFV (iOS) collection off. | The privacy policy promises the events are keyed by the Firebase app-instance id only. |
 
-Accepted: a reinstall on the same device after pairing can re-log once
-(outcome lost with the app data); a second device installed *before* the
-pairing logs too — Google Ads attributes the event only to that device's own
-ad-driven install, so a duplicate without an ad click is inert. Set the Google
+Accepted: a second device installed *before* the pairing logs too — Google
+Ads attributes the event only to that device's own ad-driven install, so a
+duplicate without an ad click is inert. Set the Google
 Ads conversion action's counting to **"One"** per click (Stage 6) so the
 remaining duplicates collapse.
 
@@ -144,8 +143,9 @@ absence and to refuse to *release* without them:
 - Code: `data/analytics/AnalyticsSink.kt` (interface, `FirebaseAnalyticsSink`
   with `isEnabled` computed from `FirebaseApp.getApps(context)`,
   `NoOpAnalyticsSink`), `data/analytics/AgentPairedConversion.kt`,
-  `di/AnalyticsModule.kt`; `PreferencesStore` keys `conversion_armed_at` and
-  `agent_paired_logged::<userId>`; `CentralApi.getMe`; the
+  `data/analytics/ConversionStateStore.kt` (own `ads_conversion` DataStore,
+  excluded from backup and transfer), `di/AnalyticsModule.kt`;
+  `CentralApi.getMe`; the
   `UserEventBus` branch and connect reconcile; `MainActivity.onCreate` arms
   at launch (`armIfNeeded()`), before any sign-in, so an account that pairs
   elsewhere between the install and its first connect still counts. The
@@ -190,7 +190,8 @@ absence and to refuse to *release* without them:
 - Code: `Data/Analytics/AnalyticsSink.swift`, `Data/Analytics/AgentPairedConversion.swift`
   (an actor), the `FirstAgentPairedApplying` hook in `EventBusHooks.swift`,
   `UserEventBus` demux/route/connect-reconcile, `CentralAPI.me(userToken:)`,
-  `PreferencesStore` keys, `AppContainer` wiring (`start()` arms before the
+  `Data/Analytics/ConversionStateStore.swift` (backup-excluded JSON file under
+  Application Support), `AppContainer` wiring (`start()` arms before the
   user-events bus starts), guarded configure in `MobaideApp.init()`.
 - Debugging: launch with the `-FIRDebugEnabled` argument (Xcode scheme or
   `xcrun simctl launch … -FIRDebugEnabled`) and watch DebugView;

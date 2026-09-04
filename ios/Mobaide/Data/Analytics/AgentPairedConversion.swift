@@ -27,26 +27,26 @@ actor AgentPairedConversion: FirstAgentPairedApplying {
     private let sink: any AnalyticsSink
     private let fetchMe: @Sendable (String) async throws -> MeResponse
     private let userIdentityStore: UserIdentityStore
-    private let preferences: PreferencesStore
+    private let state: ConversionStateStore
     private let now: @Sendable () -> Date
 
     init(
         sink: any AnalyticsSink,
         fetchMe: @escaping @Sendable (String) async throws -> MeResponse,
         userIdentityStore: UserIdentityStore,
-        preferences: PreferencesStore,
+        state: ConversionStateStore,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.sink = sink
         self.fetchMe = fetchMe
         self.userIdentityStore = userIdentityStore
-        self.preferences = preferences
+        self.state = state
         self.now = now
     }
 
     func armIfNeeded() {
         guard sink.isEnabled else { return }
-        _ = preferences.armConversionIfUnset(now: now())
+        _ = state.armIfUnset(now: now())
     }
 
     func firstAgentPaired(agentId: String) async {
@@ -58,20 +58,20 @@ actor AgentPairedConversion: FirstAgentPairedApplying {
         guard sink.isEnabled,
               let userId = userIdentityStore.getUserId(),
               let token = userIdentityStore.getUserAccessToken(),
-              preferences.getAgentPairedOutcome(userId: userId) == nil
+              state.getOutcome(userId: userId) == nil
         else { return }
-        let armedAt = preferences.armConversionIfUnset(now: now())
+        let armedAt = state.armIfUnset(now: now())
         guard let me = try? await fetchMe(token),
               me.user_id == userId,
               let stamp = me.first_paired_at,
               let pairedAt = parse(stamp)
         else { return }
         // The live event may have landed during the fetch.
-        guard preferences.getAgentPairedOutcome(userId: userId) == nil else { return }
+        guard state.getOutcome(userId: userId) == nil else { return }
         if pairedAt >= armedAt.addingTimeInterval(-Self.firstPairingTolerance) {
             record(userId: userId, source: "reconcile")
         } else {
-            preferences.setAgentPairedOutcome(
+            state.setOutcome(
                 userId: userId, outcome: Outcome.skippedPredatesInstall.rawValue
             )
         }
@@ -81,9 +81,9 @@ actor AgentPairedConversion: FirstAgentPairedApplying {
     /// Log first — `logEvent` is a local enqueue that never throws, and a
     /// duplicate is cheaper than a lost conversion.
     private func record(userId: String, source: String) {
-        guard preferences.getAgentPairedOutcome(userId: userId) == nil else { return }
+        guard state.getOutcome(userId: userId) == nil else { return }
         sink.logEvent(Self.eventName, parameters: ["source": source])
-        preferences.setAgentPairedOutcome(userId: userId, outcome: Outcome.logged.rawValue)
+        state.setOutcome(userId: userId, outcome: Outcome.logged.rawValue)
     }
 
     /// The server omits the fractional part when the microsecond is zero.

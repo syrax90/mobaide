@@ -44,22 +44,21 @@ final class AgentPairedConversionTests: XCTestCase {
 
     private static let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    private var suiteName: String!
-    private var defaults: UserDefaults!
-    private var preferences: PreferencesStore!
+    private var stateDirectory: URL!
+    private var state: ConversionStateStore!
     private var identity: UserIdentityStore!
 
     override func setUp() {
         super.setUp()
-        suiteName = "agent-paired-\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)
-        preferences = PreferencesStore(defaults: defaults)
+        stateDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-paired-\(UUID().uuidString)", isDirectory: true)
+        state = ConversionStateStore(directory: stateDirectory)
         identity = UserIdentityStore(keychain: InMemoryKeychainStore())
         identity.saveUserSession(accessToken: "tok", email: "e@x.com", userId: "u1", role: "viewer")
     }
 
     override func tearDown() {
-        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: stateDirectory)
         super.tearDown()
     }
 
@@ -93,7 +92,7 @@ final class AgentPairedConversionTests: XCTestCase {
             sink: sink,
             fetchMe: { try await stub.fetch($0) },
             userIdentityStore: identity,
-            preferences: preferences,
+            state: state,
             now: { now }
         )
         return (conversion, sink, stub)
@@ -108,7 +107,7 @@ final class AgentPairedConversionTests: XCTestCase {
         await conversion.firstAgentPaired(agentId: "a1")
 
         XCTAssertEqual(sink.events, [LoggedEvent(name: "agent_paired", parameters: ["source": "live"])])
-        XCTAssertEqual(preferences.getAgentPairedOutcome(userId: "u1"), "logged")
+        XCTAssertEqual(state.getOutcome(userId: "u1"), "logged")
     }
 
     func testDisabledSinkTouchesNothing() async {
@@ -123,8 +122,8 @@ final class AgentPairedConversionTests: XCTestCase {
 
         XCTAssertEqual(sink.events, [])
         XCTAssertEqual(stub.calls, 0)
-        XCTAssertNil(preferences.getAgentPairedOutcome(userId: "u1"))
-        XCTAssertNil(preferences.getConversionArmedAt())
+        XCTAssertNil(state.getOutcome(userId: "u1"))
+        XCTAssertNil(state.getArmedAt())
     }
 
     func testSignedOutUserIsIgnored() async {
@@ -148,7 +147,7 @@ final class AgentPairedConversionTests: XCTestCase {
         await conversion.reconcileAfterConnect()
 
         XCTAssertEqual(sink.events, [LoggedEvent(name: "agent_paired", parameters: ["source": "reconcile"])])
-        XCTAssertEqual(preferences.getAgentPairedOutcome(userId: "u1"), "logged")
+        XCTAssertEqual(state.getOutcome(userId: "u1"), "logged")
     }
 
     func testReconcileAcceptsAStampWithoutFractionalSeconds() async {
@@ -167,8 +166,8 @@ final class AgentPairedConversionTests: XCTestCase {
 
         await conversion.reconcileAfterConnect()
 
-        XCTAssertEqual(preferences.getConversionArmedAt(), Self.now)
-        XCTAssertNil(preferences.getAgentPairedOutcome(userId: "u1"))
+        XCTAssertEqual(state.getArmedAt(), Self.now)
+        XCTAssertNil(state.getOutcome(userId: "u1"))
     }
 
     func testUnpairedAccountPersistsNothingAndRetriesNextConnect() async {
@@ -179,7 +178,7 @@ final class AgentPairedConversionTests: XCTestCase {
 
         XCTAssertEqual(sink.events, [])
         XCTAssertEqual(stub.calls, 2)
-        XCTAssertNil(preferences.getAgentPairedOutcome(userId: "u1"))
+        XCTAssertNil(state.getOutcome(userId: "u1"))
     }
 
     func testPairingOlderThanTheInstallIsSkippedForGood() async {
@@ -191,7 +190,7 @@ final class AgentPairedConversionTests: XCTestCase {
         await conversion.reconcileAfterConnect()
 
         XCTAssertEqual(sink.events, [])
-        XCTAssertEqual(preferences.getAgentPairedOutcome(userId: "u1"), "skipped_predates_install")
+        XCTAssertEqual(state.getOutcome(userId: "u1"), "skipped_predates_install")
         XCTAssertEqual(stub.calls, 1, "a stored outcome short-circuits before the fetch")
     }
 
@@ -215,7 +214,7 @@ final class AgentPairedConversionTests: XCTestCase {
 
         await second.armIfNeeded()
 
-        XCTAssertEqual(preferences.getConversionArmedAt(), Self.now)
+        XCTAssertEqual(state.getArmedAt(), Self.now)
     }
 
     func testFetchFailurePersistsNothing() async {
@@ -224,7 +223,7 @@ final class AgentPairedConversionTests: XCTestCase {
         await conversion.reconcileAfterConnect()
 
         XCTAssertEqual(sink.events, [])
-        XCTAssertNil(preferences.getAgentPairedOutcome(userId: "u1"))
+        XCTAssertNil(state.getOutcome(userId: "u1"))
     }
 
     func testUnparseableStampPersistsNothing() async {
@@ -233,7 +232,7 @@ final class AgentPairedConversionTests: XCTestCase {
         await conversion.reconcileAfterConnect()
 
         XCTAssertEqual(sink.events, [])
-        XCTAssertNil(preferences.getAgentPairedOutcome(userId: "u1"))
+        XCTAssertNil(state.getOutcome(userId: "u1"))
     }
 
     func testProfileOfAnotherUserIsIgnored() async {
@@ -245,8 +244,8 @@ final class AgentPairedConversionTests: XCTestCase {
         await conversion.reconcileAfterConnect()
 
         XCTAssertEqual(sink.events, [])
-        XCTAssertNil(preferences.getAgentPairedOutcome(userId: "u1"))
-        XCTAssertNil(preferences.getAgentPairedOutcome(userId: "u2"))
+        XCTAssertNil(state.getOutcome(userId: "u1"))
+        XCTAssertNil(state.getOutcome(userId: "u2"))
     }
 
     func testLiveEventAndReconcileTogetherLogExactlyOnce() async {
@@ -258,7 +257,7 @@ final class AgentPairedConversionTests: XCTestCase {
         _ = await (live, reconcile)
 
         XCTAssertEqual(sink.events.count, 1)
-        XCTAssertEqual(preferences.getAgentPairedOutcome(userId: "u1"), "logged")
+        XCTAssertEqual(state.getOutcome(userId: "u1"), "logged")
     }
 
     func testOutcomesAreKeyedPerAccount() async {
@@ -269,7 +268,7 @@ final class AgentPairedConversionTests: XCTestCase {
         await conversion.firstAgentPaired(agentId: "a2")
 
         XCTAssertEqual(sink.events.count, 2)
-        XCTAssertEqual(preferences.getAgentPairedOutcome(userId: "u1"), "logged")
-        XCTAssertEqual(preferences.getAgentPairedOutcome(userId: "u2"), "logged")
+        XCTAssertEqual(state.getOutcome(userId: "u1"), "logged")
+        XCTAssertEqual(state.getOutcome(userId: "u2"), "logged")
     }
 }
