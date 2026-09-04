@@ -133,3 +133,8 @@ data class AgentStatusChangedPayload(
     val agent_id: String,
     val online: Boolean,
 )
+
+@Serializable
+data class FirstAgentPairedPayload(
+    val agent_id: String,
+)

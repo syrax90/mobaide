@@ -9,6 +9,24 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// Firebase Analytics is configured by the git-ignored app/google-services.json.
+// Debug and unit-test builds run without it (analytics inert, see
+// AnalyticsSink); a release build without it would silently ship with no
+// conversion measurement, so it is refused before anything compiles.
+val googleServicesJson = file("google-services.json")
+if (googleServicesJson.exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+gradle.taskGraph.whenReady {
+    val releaseTaskPaths = setOf("${project.path}:bundleRelease", "${project.path}:assembleRelease")
+    if (allTasks.any { it.path in releaseTaskPaths } && !googleServicesJson.exists()) {
+        throw GradleException(
+            "android/app/google-services.json is missing: release builds must ship Firebase " +
+                "Analytics. Materialise it from the GOOGLE_SERVICES_JSON_BASE64 secret."
+        )
+    }
+}
+
 // Google OAuth 2.0 Web Client ID is resolved at build time from (in priority order):
 //   1. GOOGLE_WEB_CLIENT_ID environment variable (CI / release builds)
 //   2. android/local.properties key `GOOGLE_WEB_CLIENT_ID` (developer machines)
@@ -255,6 +273,10 @@ dependencies {
     // Chrome Custom Tabs — used to open the privacy policy from the
     // login/register/settings screens with a native in-app browser tab.
     implementation(libs.androidx.browser)
+
+    // Firebase Analytics — the app-install conversion lane for Google Ads.
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.analytics)
 
     // Unit testing
     testImplementation(libs.junit)

@@ -69,6 +69,16 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Materialise google-services.json
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -z "${GOOGLE_SERVICES_JSON_BASE64}" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON_BASE64 is not set; the release build requires the Firebase config (android/app/google-services.json)."
+            exit 1
+          fi
+          echo "${GOOGLE_SERVICES_JSON_BASE64}" | base64 -d > android/app/google-services.json
+
       - name: Build release bundle
         env:
           ANDROID_KEYSTORE_PATH: release.keystore
