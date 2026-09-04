@@ -1,5 +1,19 @@
 # Android Changelog
 
+## [3.6.4](https://github.com/syrax90/claude_mobile/compare/android-v3.6.3...android-v3.6.4) (2026-09-04)
+
+
+### Features
+
+* **android:** log the Firebase agent_paired conversion once per account ([f59eb55](https://github.com/syrax90/claude_mobile/commit/f59eb552759b8b2e79308825c577cf66847fe764))
+* in-app "Agent paired" conversion via Firebase Analytics (Stage 5) ([50a74de](https://github.com/syrax90/claude_mobile/commit/50a74dea63f69efbc447dee2252ef22b2b30604e))
+
+
+### Bug Fixes
+
+* **android:** arm the conversion window at launch, before any sign-in ([0303914](https://github.com/syrax90/claude_mobile/commit/03039145cd237ef32c3de2731e758268adc723bf))
+* **android:** keep the conversion state out of backups and device transfers ([e6feda1](https://github.com/syrax90/claude_mobile/commit/e6feda1792bd09b3bd556e68873869d383af9a86))
+
 ## [3.6.3](https://github.com/syrax90/claude_mobile/compare/android-v3.6.2...android-v3.6.3) (2026-08-30)
 
 
