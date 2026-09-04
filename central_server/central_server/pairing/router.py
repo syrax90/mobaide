@@ -35,7 +35,7 @@ from ..auth.models import (
     MobileTokenResponse,
     UserTokenPayload,
 )
-from ..relay.routing import WS_CLOSE_AGENT_TRANSIENT_OFFLINE
+from ..relay.routing import WS_CLOSE_AGENT_TRANSIENT_OFFLINE, broadcast_user_event
 from ..ws_origin import enforce_ws_origin
 from .device_code import (
     format_code,
@@ -445,6 +445,7 @@ async def _complete_pairing(
     # never cleared: the pin resets when an account drops to zero agents,
     # which would make the ads conversion below fire twice.
     first_pairing = await db.mark_user_first_paired(user.sub)
+    routing = getattr(request.app.state, "routing", None)
 
     if current_agent_id:
         # Drop the tunnel the rotated token used to authenticate. Two
@@ -457,7 +458,6 @@ async def _complete_pairing(
         # credentials. 4012, not 4010: the agent is expected back, and the
         # mobile sockets closed alongside it must keep reconnecting rather
         # than treat this as a destructive revocation.
-        routing = getattr(request.app.state, "routing", None)
         if routing is not None:
             closed = await routing.disconnect_agent(
                 agent_id, WS_CLOSE_AGENT_TRANSIENT_OFFLINE, "credentials_rotated"
@@ -509,9 +509,24 @@ async def _complete_pairing(
         logger.info(
             "pairing.first_agent_paired user_id=%s agent_id=%s", user.sub, agent_id
         )
-        # After the credential push: a scheduling fault must never turn a
-        # delivered pairing into a 500 (the device-code wrapper would then
-        # reopen a code whose nonce is already consumed).
+        # After the credential push: neither the broadcast nor the upload
+        # scheduling may turn a delivered pairing into a 500 (the device-code
+        # wrapper would then reopen a code whose nonce is already consumed).
+        # The apps log their Firebase conversion off this event; an app that
+        # is closed now catches up from GET /api/auth/me on its next connect.
+        if routing is not None:
+            try:
+                broadcast_user_event(
+                    routing,
+                    user.sub,
+                    "account.first_agent_paired",
+                    {"agent_id": agent_id},
+                )
+            except Exception:
+                logger.exception(
+                    "pairing.first_agent_paired_broadcast_error user_id=%s",
+                    user.sub,
+                )
         try:
             request.app.state.ads_uploader.schedule_first_pairing(user.sub)
         except Exception:

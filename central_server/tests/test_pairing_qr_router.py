@@ -30,6 +30,8 @@ from central_server.config import CentralServerConfig
 from central_server.pairing.qr_signer import compute_trust_key_fp, hash_pairing_nonce
 from central_server.pairing.ws_handlers import PairingWsRegistry
 
+from tests.test_user_events import _make_user_client
+
 _CLAIM_DEV_UUID = "11111111-1111-4111-8111-111111111111"
 _NEW_DEV_UUID = "22222222-2222-4222-8222-222222222222"
 _SHARED_DEV_UUID = "33333333-3333-4333-8333-333333333333"
@@ -820,6 +822,52 @@ class TestFirstPairingConversion:
         uploader = MagicMock()
         uploader.schedule_first_pairing.side_effect = RuntimeError("boom")
         qr_app.state.ads_uploader = uploader
+
+        resp = await self._claim(client, qr_app, api_auth_headers)
+
+        assert resp.status_code == 200, resp.text
+        uploader.schedule_first_pairing.assert_called_once()
+
+    async def test_first_pair_broadcasts_the_account_event_once(
+        self, client, qr_app, api_auth_headers
+    ):
+        qr_app.state.ads_uploader = MagicMock()
+        owner = await qr_app.state.db.get_user_by_email("viewer@test.local")
+        listener = _make_user_client(owner["id"])
+        qr_app.state.routing.register_user_client(owner["id"], listener)
+
+        first = await self._claim(client, qr_app, api_auth_headers)
+        assert first.status_code == 200, first.text
+        assert json.loads(listener.send_queue.get_nowait()) == {
+            "type": "account.first_agent_paired",
+            "payload": {"agent_id": first.json()["agent_id"]},
+        }
+
+        second = await self._claim(client, qr_app, api_auth_headers)
+        assert second.status_code == 200, second.text
+        assert listener.send_queue.empty()
+
+    async def test_missing_routing_table_does_not_fail_the_pairing(
+        self, client, qr_app, api_auth_headers
+    ):
+        uploader = MagicMock()
+        qr_app.state.ads_uploader = uploader
+        qr_app.state.routing = None
+
+        resp = await self._claim(client, qr_app, api_auth_headers)
+
+        assert resp.status_code == 200, resp.text
+        uploader.schedule_first_pairing.assert_called_once()
+
+    async def test_broadcast_failure_does_not_fail_the_pairing(
+        self, client, qr_app, api_auth_headers, monkeypatch
+    ):
+        uploader = MagicMock()
+        qr_app.state.ads_uploader = uploader
+        monkeypatch.setattr(
+            "central_server.pairing.router.broadcast_user_event",
+            MagicMock(side_effect=RuntimeError("boom")),
+        )
 
         resp = await self._claim(client, qr_app, api_auth_headers)
 

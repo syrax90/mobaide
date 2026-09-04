@@ -4,12 +4,13 @@ Covers:
 - POST /api/auth/register (happy path, duplicate email, response shape)
 - POST /api/auth/login (happy path, wrong password, nonexistent email, response shape)
 - POST /api/auth/google (not configured error)
+- GET /api/auth/me (auth required, response shape, first_paired_at mirror)
 """
 from __future__ import annotations
 
 import pytest
 
-from tests.conftest import TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
+from tests.conftest import TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD, TEST_VIEWER_EMAIL
 
 
 class TestRegisterEndpoint:
@@ -104,3 +105,47 @@ class TestGoogleEndpoint:
         )
         assert resp.status_code == 401
         assert "not configured" in resp.json()["detail"]
+
+
+class TestMeEndpoint:
+    async def test_requires_a_bearer_token(self, client):
+        resp = await client.get("/api/auth/me")
+        assert resp.status_code == 401
+
+    async def test_returns_the_profile_and_nothing_secret(
+        self, client, viewer_user, api_auth_headers
+    ):
+        resp = await client.get("/api/auth/me", headers=api_auth_headers)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body) == {
+            "user_id",
+            "email",
+            "role",
+            "created_at",
+            "scheduled_deletion_at",
+            "first_paired_at",
+        }
+        assert body["user_id"] == viewer_user["id"]
+        assert body["email"] == TEST_VIEWER_EMAIL
+        assert body["role"] == "viewer"
+        assert body["created_at"] == viewer_user["created_at"]
+        assert body["scheduled_deletion_at"] is None
+        assert body["first_paired_at"] is None
+
+    async def test_first_paired_at_mirrors_the_pairing_marker(
+        self, client, app, viewer_user, api_auth_headers
+    ):
+        db = app.state.db
+        assert await db.mark_user_first_paired(viewer_user["id"]) is True
+        stamped = (await db.get_user_by_id(viewer_user["id"]))["first_paired_at"]
+
+        resp = await client.get("/api/auth/me", headers=api_auth_headers)
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["first_paired_at"] == stamped
+
+    async def test_admin_tokens_are_accepted(self, client, admin_api_auth_headers):
+        resp = await client.get("/api/auth/me", headers=admin_api_auth_headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["role"] == "admin"

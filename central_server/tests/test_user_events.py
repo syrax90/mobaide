@@ -21,7 +21,7 @@ from starlette.testclient import TestClient
 from central_server.db.database import Database
 from central_server.relay.agent_ws import _broadcast_status
 from central_server.relay.envelope import PROTOCOL_VERSION
-from central_server.relay.routing import RoutingTable, UserClient
+from central_server.relay.routing import RoutingTable, UserClient, broadcast_user_event
 
 from tests.conftest import (
     TEST_ADMIN_EMAIL,
@@ -282,6 +282,25 @@ class TestUserEventsEndpoint:
             assert envelope["payload"] == {
                 "agent_id": "agent-xyz",
                 "online": False,
+            }
+
+    async def test_receives_first_agent_paired_when_broadcast(self, app):
+        token = await _user_token(app, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD)
+        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+
+        client = TestClient(app)
+        with client.websocket_connect(
+            f"/ws/user-events?token={token}"
+        ) as ws:
+            broadcast_user_event(
+                app.state.routing,
+                admin["id"],
+                "account.first_agent_paired",
+                {"agent_id": "agent-xyz"},
+            )
+            assert json.loads(ws.receive_text()) == {
+                "type": "account.first_agent_paired",
+                "payload": {"agent_id": "agent-xyz"},
             }
 
     async def test_user_scoping_other_user_does_not_receive(self, app):
