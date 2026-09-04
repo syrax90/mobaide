@@ -1565,6 +1565,17 @@ a `.mobaide.com` cookie, so the tests pass jar strings. Adding the field
 touched the committed OpenAPI snapshot and generated types (`npm run
 schema:dump && npm run schema:generate`).
 
+**Parity mirror for the in-app conversion.** The mobile apps log a Firebase
+`agent_paired` conversion once per account (docs/app-conversion-measurement.md)
+off two server signals that web mirrors without acting on: the
+`account.first_agent_paired` user event (`firstAgentPairedSchema` in
+`protocol/dto/userEvents.ts`, a pointer rule in `queryBridge.ts` that
+invalidates the agent list — the first agent just appeared — pinned by
+`tests/protocol_fixtures/dto/central/FirstAgentPairedPayload.json`) and
+`GET /api/auth/me` (`authRepository.getMe()`, typed from the generated schema;
+`MeResponse.json` is deferred to `OWNER.generated`). Web carries no analytics
+SDK, so nothing here logs anything.
+
 ## CI — `.github/workflows/web-ci.yml`
 
 Runs on every PR and push to main (no paths filter — schema drift is caused

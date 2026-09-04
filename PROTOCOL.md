@@ -101,6 +101,19 @@ cadence; they do **not** gate compatibility.
   usual REST refresh (``GET /api/custom-agent-types``). Per-type shortcut
   scoping needs no server change: ``custom_<12hex>`` already satisfies
   the shortcuts ``KIND_PATTERN`` and the server stores kinds opaquely.
+* **First-pairing account event** (additive, **no version bump** — the
+  CLA-106 precedent; neither ``envelope.py`` copy changes). New user-event
+  kind ``account.first_agent_paired`` ``{"agent_id"}``, broadcast once per
+  account from ``_complete_pairing`` when the ``users.first_paired_at``
+  compare-and-set wins, and a new REST route ``GET /api/auth/me`` →
+  ``{"user_id", "email", "role", "created_at", "scheduled_deletion_at"?,
+  "first_paired_at"?}`` (dashboard/user JWT, any role). Together they let
+  the mobile apps log their Firebase ``agent_paired`` conversion exactly
+  once per account — live off the event, or on the next user-events
+  connect off the ``/me`` stamp when the app was closed at pairing time
+  (see docs/app-conversion-measurement.md). Older clients ignore the kind
+  (``else -> Unit`` / ``default: .none`` / ``{kind: 'ignored'}``); the web
+  client mirrors both shapes and invalidates its agent list on the event.
 * Protocol-fixture updates under ``tests/protocol_fixtures/`` (dropping
   the ``unknown_coerces_to_claude`` cases, adding ``custom_*`` round-trip
   cases and the ``CustomAgentTypeDto`` fixtures) rode with the iOS client
