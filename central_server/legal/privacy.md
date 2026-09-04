@@ -1,7 +1,7 @@
 # Privacy Policy for Mobaide
 
 **Effective date:** 22 May 2026
-**Last updated:** 2 September 2026
+**Last updated:** 4 September 2026
 
 This Privacy Policy describes how the Mobaide mobile application ("**Mobaide**", "**the app**", "**we**", "**our**") collects, uses, stores, and discloses information about you ("**you**", "**user**") when you install and use the app on an Android or iOS device, when you use the browser client at `app.mobaide.com`, and when you use the supporting Mobaide central server hosted at `api.mobaide.com`.
 
@@ -118,7 +118,7 @@ The website's landing page additionally asks you — through a consent banner �
 
 Accepting the banner also asks our server to set **one first-party cookie of our own**, `mobaide_ads`, for `.mobaide.com` (90 days). It holds the Google Ads click identifier your browser arrived with, if the address you landed on carried one (`gclid`, `wbraid` or `gbraid`), its kind, the time your browser arrived on the page, and a marker that you accepted — nothing else, and nothing from Google. It also carries a one-way fingerprint of the network address you accepted from. Our server signs the whole cookie, so nothing else on the domain can forge it, and it acts on it only when that signature checks out; the click identifier is used whatever network you later sign up from, but the consent to use a hash of your email address instead is honoured only when your sign-up arrives from that same network — so a cookie transplanted from elsewhere can never carry your consent. Its only reader is the `app.mobaide.com` web application, which copies its contents into the request that creates your account (an email registration, or a Google or Apple sign-in that results in a new account); our servers keep that data only when the request creates an account and ignore it everywhere else — although, like any cookie for the domain, your browser attaches it to requests to our `mobaide.com` sites until it expires. What happens to the stored copy is described in Sections 3.1, 6 and 8.
 
-This applies to the `mobaide.com` landing page only — the mobile apps, the `app.mobaide.com` web application, and the privacy and account-deletion pages load no advertising or analytics code; the web application's one contact with advertising data is reading the `mobaide_ads` cookie at the moment your account is created, as described above.
+This applies to the `mobaide.com` landing page only — the `app.mobaide.com` web application and the privacy and account-deletion pages load no advertising or analytics code; the web application's one contact with advertising data is reading the `mobaide_ads` cookie at the moment your account is created, as described above. The mobile apps show no cookie banner and load no web tag; their one measurement mechanism is the Firebase Analytics integration described in Section 3.8.
 
 ### 3.6 In-app support requests
 
@@ -133,16 +133,35 @@ For transparency, the app does **not** collect or use:
 
 - Your real name (unless you put it in your prompt-template body yourself).
 - Your phone number, address, or any contact details other than the email address you register with.
-- Your location (no location permission is requested or used).
+- Your location. No location permission is requested or used and the apps never read the device's position; the only location-related processing is Google deriving a city-level approximation from the IP address of the analytics requests described in Section 3.8, which we never see.
 - Your contacts, calendar, SMS, call logs, or any other personal-information surface on the device.
 - Photos or microphone input. Neither app requests access to your photo library or your microphone.
 - Camera imagery. Both apps can scan a pairing QR code, and the two platforms do it differently:
   - **Android:** QR pairing uses the Google Play Services "Code Scanner" module, which runs in a separate Google Play process and only returns the decoded text of the scanned QR code — the Android app does not request the `CAMERA` permission and never receives raw camera frames.
   - **iOS:** there is no equivalent out-of-process scanner, so the iOS app asks for camera permission and reads the camera itself while the scanner sheet is open. Frames are decoded on your device, in the app, purely to read the QR code. They are never recorded, never written to storage, and never sent to the central server or anyone else, and the camera is released as soon as you leave the scanner. You can decline the permission and still pair, using the device-code flow or by adding the agent manually.
-- Advertising identifiers. The Android Advertising ID is not read, and the iOS app does not use Apple's IDFA, the AdSupport framework, or App Tracking Transparency — its App Store privacy manifest declares that the app performs no tracking.
-- Crash reports or telemetry from third-party SDKs. The app does **not** integrate Firebase Analytics, Firebase Crashlytics, Google Analytics, Sentry, Amplitude, Mixpanel, Facebook SDK, or any comparable analytics/tracking SDK.
+- Advertising identifiers, with one Android exception. The iOS app does not use Apple's IDFA, the AdSupport framework, or App Tracking Transparency — its App Store privacy manifest declares that the app performs no tracking — and it has vendor-identifier (IDFV) collection switched off. On Android, the Google Analytics for Firebase SDK described in Section 3.8 reads the resettable Android Advertising ID for install attribution unless you have deleted it in Android's settings; nothing else in the app reads it, and it is never combined with your account.
+- Crash reports or product telemetry. The apps do **not** integrate Firebase Crashlytics, Sentry, Amplitude, Mixpanel, the Facebook SDK, or any comparable crash-reporting or behavioural-analytics SDK. The one analytics SDK they carry — Google Analytics for Firebase — is limited to the ad-conversion measurement in Section 3.8 and is never handed your account, session, or agent data.
 
 The in-app support diagnostics described in Section 3.6 are not an exception to the above: they are **not** collected automatically or in the background. They are assembled only when you tap "Email support", are shown to you in your own email client, and reach us only if you choose to send the message.
+
+### 3.8 Ad-conversion measurement inside the mobile apps
+
+Both mobile apps include **Google Analytics for Firebase**, an SDK from Google LLC, for exactly one purpose: telling Google Ads when an app installed from one of our ads led to an account that paired its first agent, so that our app-install campaigns can be measured. It is the in-app counterpart of the website measurement in Section 3.5 — an account created inside the app carries no cookie and no click identifier, so the website mechanism cannot see it.
+
+What the SDK sends to Google:
+
+- A random **Firebase app-instance identifier** generated on your device when the app is first opened. It is not your account ID, it is not the device identifier in Section 3.2, and it changes when you reinstall the app.
+- **Android only:** the resettable **Android Advertising ID**, which Google uses to attribute the install to the ad you tapped. You can reset or delete it at any time in Android's settings (Settings → Privacy → Ads); a deleted ID is reported as all zeros and attributes nothing.
+- **iOS:** nothing that identifies your device. The app does not link Apple's AdSupport framework, does not read the IDFA, never shows the App Tracking Transparency prompt, and has vendor-identifier (IDFV) collection switched off. Install attribution on iOS relies on Apple's SKAdNetwork, which reports an install to the ad network without identifying you, and on Google's on-device conversion measurement, which matches de-identified, temporary event data (derived from signals such as the IP address and timestamps) on the device itself — Google states that no user-identifying information leaves the device through it.
+- Basic device information the SDK collects automatically: device model, operating-system version, app version, language, and the IP address of each request, from which Google derives an approximate (city-level) location. We do not receive the IP address or the location.
+- Standard usage events the SDK generates on its own: app opened, session started, app updated. Automatic screen tracking is switched off, so the screens you visit inside the app are not reported.
+- **One custom event, `agent_paired`**, sent at most once per account from a given installation, when your account pairs its first agent. Its only parameter records whether the app learned of the pairing live or on a later launch.
+
+What the SDK never receives: your email address, your Mobaide account ID, the device identifier in Section 3.2, your agents, your projects, your prompts, or any terminal traffic. The app never assigns a user ID or user properties to the analytics data, so the events cannot be tied to your Mobaide account and Google Analytics keeps them under the app-instance identifier only.
+
+Consent settings sent with every event: **personalised advertising is denied for everyone** — the data is used to measure whether an ad led to a paired user, not to build an advertising profile or to target you with ads. For users in the **European Economic Area, the United Kingdom and Switzerland**, the advertising-measurement signal (`ad_user_data`) is additionally **denied by default**, so installs from those regions are not attributed to our ads at all; there is no consent prompt in the apps, and this default cannot be switched on from inside the app. Google Analytics still receives the app-instance-level usage events described above in those regions.
+
+This measurement runs in the background without a prompt, on the legal basis described in Section 5. Section 6 describes what Google does with the data, Section 8 how long it is kept, and Section 10 how to limit it.
 
 ---
 
@@ -150,11 +169,18 @@ The in-app support diagnostics described in Section 3.6 are not an exception to 
 
 ### Android
 
-The Android app declares the following permission, used strictly for its core functionality:
+The Android app carries the following permissions. The first group is declared by the app itself for its core functionality; the second is merged in by the Google Analytics for Firebase SDK described in Section 3.8; the third is merged in by other libraries the app is built with and reads no personal data:
 
 | Permission | Why it is needed |
 |---|---|
 | `INTERNET` | Connect to the central server over WSS/HTTPS. |
+| `POST_NOTIFICATIONS` | Show the "a session is waiting for your input" alert; Android 13 and later ask you before the first one. |
+| `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE` | Keep the events connection to your agent alive while the app is in the background so that those alerts arrive without a push service. |
+| `com.google.android.gms.permission.AD_ID` | Lets Google Analytics for Firebase read the resettable Android Advertising ID for ad-install attribution (Section 3.8). Delete or reset the ID in Android's settings to withhold it. |
+| `ACCESS_ADSERVICES_AD_ID`, `ACCESS_ADSERVICES_ATTRIBUTION` | The Android 13+ Privacy Sandbox counterparts of the row above: reading the Advertising ID and receiving install attribution through the system's ad services, merged in by the same SDK. |
+| `com.google.android.finsky.permission.BIND_GET_INSTALL_REFERRER_SERVICE` | Merged in by the same SDK: asks Google Play which ad, if any, led to the installation. |
+| `ACCESS_NETWORK_STATE`, `WAKE_LOCK` | Merged in by Google Play services libraries to defer network work until a connection is available. |
+| `USE_BIOMETRIC`, `USE_FINGERPRINT` | Merged in by the AndroidX security library that encrypts the auth tokens (Section 9); the app never asks for a fingerprint or face. |
 
 The Android app does **not** declare `CAMERA`, `RECORD_AUDIO`, `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION`, `READ_CONTACTS`, `READ_SMS`, `READ_PHONE_STATE`, `READ_EXTERNAL_STORAGE`, or any other sensitive permission.
 
@@ -185,8 +211,9 @@ All three are optional: declining the camera leaves the device-code and manual p
 | Detect abuse / brute-force login attempts (rate limiting) | Email, IP address, timestamp | Art. 6(1)(f) — legitimate interest in security. |
 | Respond to your in-app support requests | App version, device model, device UUID, and — if you are signed in — your account email, together with the message you write | Art. 6(1)(f) — legitimate interest in providing user support and troubleshooting the app. |
 | Measure which Google Ads campaigns bring visitors to the website (the `mobaide.com` landing page only, and only after you accept its cookie banner), and whether such a visitor went on to create an account and pair an agent | Google Ads cookie identifiers and ad-click / conversion events, processed by Google (see Section 3.5); and, if you create an account in the web application, the click identifier stored on your account (Section 3.1) or, when there is none, a SHA-256 hash of your account email address | Art. 6(1)(a) — consent. You are free to decline the banner, and you can withdraw consent at any time as described in Sections 3.5 and 10. |
+| Measure which Google Ads app-install campaigns lead to an account that pairs an agent (the mobile apps, Section 3.8) | Firebase app-instance identifier, the Android Advertising ID where available, the automatically collected device and usage data, and the single `agent_paired` event, processed by Google | Art. 6(1)(f) — our legitimate interest in measuring the advertising that funds the app, balanced by the safeguards in Section 3.8: no personalised advertising, no account data, no tracking prompt or advertising identifier on iOS, and the advertising-measurement signal denied by default in the EEA, the UK and Switzerland. You can object at any time (Section 10). |
 
-We do **not** use your account or app data for advertising, profiling, automated decision-making with legal effect, or training machine-learning models. The one advertising-related processing anywhere in Mobaide is the consent-gated Google Ads conversion measurement on the website's landing page described in Section 3.5 — it runs only if you accept the banner there, and the only account data it ever touches is the click identifier stored at sign-up — or, when there is none, a one-way hash of your email address — sent to Google exactly once, when your account pairs its first agent (Section 6).
+We do **not** use your account or app data for advertising, profiling, automated decision-making with legal effect, or training machine-learning models. Advertising-related processing in Mobaide is limited to measuring whether our own Google Ads led to a paired user, in two places. The first is the consent-gated conversion measurement on the website's landing page described in Section 3.5 — it runs only if you accept the banner there, and the only account data it ever touches is the click identifier stored at sign-up — or, when there is none, a one-way hash of your email address — sent to Google exactly once, when your account pairs its first agent (Section 6). The second is the Firebase Analytics measurement inside the mobile apps described in Section 3.8, which never touches account data at all.
 
 ---
 
@@ -198,6 +225,7 @@ We do **not** sell, rent, or trade your personal data. Your information is share
 - **Google LLC** — only when you choose "Sign in with Google". Google verifies your Google ID token; we receive your email and your Google `sub` from Google's identity service. Google's processing is governed by [Google's Privacy Policy](https://policies.google.com/privacy).
 - **Google Play services** — for distributing the Android app, delivering in-app updates, and providing the GMS Code Scanner module used for QR pairing. Google Play's processing of installation telemetry is governed by [Google Play's terms](https://play.google.com/about/play-terms/).
 - **Google LLC (Google Ads)** — only if you accept the cookie banner on the `mobaide.com` landing page. Google then receives the ad-click and conversion events and the cookie identifiers described in Section 3.5, to measure which Google Ads campaigns bring visitors to the site. If you then create a Mobaide account in the web application, Google additionally receives — exactly once, when that account pairs its first agent — the stored ad-click identifier, or, when none was recorded, a SHA-256 hash of your account email address, so that Google Ads can match the conversion to the ad click; that report carries the consent state you gave on the banner (ad user data: granted; ad personalization: denied) and nothing else about your account. Google's processing is governed by [Google's Privacy Policy](https://policies.google.com/privacy). Decline the banner and nothing is shared with Google Ads at all.
+- **Google LLC (Google Analytics for Firebase)** — in the mobile apps only, as described in Section 3.8. Google receives the Firebase app-instance identifier, on Android the Advertising ID, the automatically collected device and usage data, and the one `agent_paired` event, and processes them to attribute app installs and first pairings to our Google Ads app-install campaigns. For the analytics data Google acts on our instructions under the [Google Analytics for Firebase Terms](https://firebase.google.com/terms/analytics) and the [Google Ads Data Processing Terms](https://privacy.google.com/businesses/processorterms/); for the advertising measurement itself Google is an independent controller under [Google's Privacy Policy](https://policies.google.com/privacy). Personalised advertising is denied for every user, and the advertising-measurement signal is denied by default in the EEA, the UK and Switzerland.
 - **Apple Inc.** — in three distinct roles. (a) **Sign in with Apple**, only if you choose it, and available both in the iOS app and in the `app.mobaide.com` web application: Apple verifies your Apple identity token, and we receive your Apple `sub` and the email address you agreed to share, which may be one of Apple's private-relay addresses. The remaining two roles are iOS-only. (b) **Apple Push Notification service**, which carries the "a session is waiting for your input" alerts to your iPhone. Apple receives, and holds until delivery, the whole alert we send — which is a short headline plus one line naming the session, using the session's title where it has one (a coding CLI often sets that title to a few words about what it is currently doing) or otherwise your project's name, together with the session and agent identifiers. This is the one place where something derived from your session leaves our relay in stored form, and it is the price of an alert that is useful on a lock screen; the terminal traffic itself is still only relayed and discarded as described in Section 3.4. Switching notifications off in iOS Settings suppresses the alert on your screen but does not stop it being sent. Signing out from Settings asks us to delete the push address, but that request is best-effort — if it does not reach us, revoking the device or requesting account deletion is what reliably stops the alerts — the latter takes effect immediately, ahead of the 14-day grace window. (c) **App Store** distribution of the iOS app. Apple's processing is governed by [Apple's Privacy Policy](https://www.apple.com/legal/privacy/).
 - **Email-delivery providers** (SMTP transactional email) that send our verification, password-reset, and security-notification emails, and that carry the support emails you send us through the in-app "Email support" action. These providers process the recipient address and the email body strictly to deliver the message.
 - **Anthropic** — when you type a prompt that is routed through your own agent to Claude Code. The content you send to Claude is processed by Anthropic according to [Anthropic's Privacy Policy](https://www.anthropic.com/legal/privacy). Mobaide is not a party to your Anthropic relationship; we merely relay the bytes.
@@ -205,7 +233,7 @@ We do **not** sell, rent, or trade your personal data. Your information is share
 - **GitHub, Inc.** — when you tap "Ask the community", the app opens our public GitHub Discussions page in your browser. The app does not send GitHub any of your data; anything you choose to post there is provided by you and processed by GitHub under [GitHub's Privacy Statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
 - **Public authorities**, if compelled by a valid legal order and only to the extent legally required.
 
-Beyond the consent-gated Google Ads measurement on the website described in Sections 3.5 and 6 — including the one-time first-pairing report — we do **not** share your data with advertisers, data brokers, or analytics aggregators.
+Beyond the Google Ads measurement described in Sections 3.5, 3.8 and 6 — the website's consent-gated tag, the one-time first-pairing report, and the Firebase Analytics events from the mobile apps — we do **not** share your data with advertisers, data brokers, or analytics aggregators.
 
 ---
 
@@ -230,6 +258,7 @@ Some of the third parties listed in Section 6 (in particular Google, Apple, Anth
 | Operational logs (connection-event level, no payload) | Up to 90 days, then permanently deleted. |
 | Google Ads cookies on `mobaide.com` (set only after you accept the website's cookie banner — see Section 3.5) | Set by Google in your browser with lifetimes Google determines — typically up to 90 days for the `_gcl_*` cookies. You can remove them at any time — pressing **Decline** after reopening the banner via the website footer's "Cookie settings" deletes them immediately, as does clearing your browser's site data for `mobaide.com`; your Accept/Decline choice itself stays in your browser's local storage until you change or clear it. The ad-click and conversion events Google receives are retained by Google under [Google's Privacy Policy](https://policies.google.com/privacy); what we hold ourselves is described in the next row. |
 | Google Ads click attribution on your account record (Section 3.1) | Cleared as soon as the one-time first-pairing report has been sent or has definitively failed, and in any case no later than 90 days after the click or after your sign-up, whichever comes first, by a server job that runs hourly and at every restart; also removed on request (Section 10). The `mobaide_ads` cookie in your own browser lasts 90 days and is deleted at once when you press **Decline**. |
+| Google Analytics for Firebase data from the mobile apps (Section 3.8) | Held by Google under our Google Analytics property settings: event-level data for 2 months, after which only aggregated reports remain; Google Signals (linking with signed-in Google accounts across devices) is switched off. On your device the app keeps only a small marker recording that the one-time `agent_paired` event has already been sent for your account, so that it is never sent twice; it stays in the app's preferences until you clear the app's data or uninstall the app. |
 | Deletion audit record (account identifier, timestamps, request source and outcome) | Retained indefinitely as a minimal proof-of-deletion record, in order to demonstrate compliance with GDPR Art. 17 ("right to erasure"). |
 | Support correspondence (the email you send to our support address and our replies) | Kept only as long as necessary to handle your request and for a reasonable period afterwards, then deleted. |
 | Server-side backups | Rolled over within 30 days. |
@@ -275,6 +304,7 @@ If you are in the EU/EEA, the UK, or another jurisdiction with comparable rights
 - **Object** to processing carried out under our legitimate interest (Art. 6(1)(f)) — in particular our operational logs.
 - **Portability** — receive a machine-readable copy of the data you provided to us.
 - **Withdraw consent** at any time (where processing relies on consent). For the website's Google Ads measurement, reopen the banner via the footer's **Cookie settings** and press **Decline** — this deletes the `mobaide_ads` cookie along with Google's and removes the stored click attribution from any account created with that cookie. If the cookie has already expired or you decline from another browser, email us and we will remove it (it is in any case cleared after the one-time report or after 90 days, see Section 8).
+- **Limit the in-app measurement** described in Section 3.8. On Android, delete or reset your Advertising ID in Settings → Privacy → Ads, after which nothing the app sends can be attributed to an ad. On iOS there is nothing to switch off — the app reads no advertising identifier and performs no tracking. Everywhere, personalised advertising is already denied, and in the EEA, the UK and Switzerland the advertising-measurement signal is denied by default. You can also object to this processing altogether by emailing us; because the analytics data is not linked to your account, deleting it on Google's side depends on identifying your app instance, and we will walk you through that.
 - **Lodge a complaint** with your local supervisory authority.
 
 To exercise any of these rights, email `paveltimonin90@gmail.com`. We will respond within 30 days. We may need to verify that the requester is the account holder before acting.
@@ -304,6 +334,7 @@ The apps are built with, among others, the following third-party components. Non
 - Google Credential Manager + Google ID (Apache-2.0) — Sign in with Google
 - Google Play In-App Update (Apache-2.0)
 - Google Play Services Code Scanner (Apache-2.0) — QR scanning
+- Google Analytics for Firebase (Apache-2.0 SDK around Google's proprietary `play-services-measurement` binary) — ad-conversion measurement (Section 3.8)
 - Termux `terminal-view` (Apache-2.0, vendored fork) — terminal renderer
 - Calvin-LL/Reorderable (MIT) — drag-and-drop reordering
 
@@ -312,6 +343,7 @@ The apps are built with, among others, the following third-party components. Non
 - SwiftTerm (MIT) — terminal renderer
 - GoogleSignIn-iOS (Apache-2.0) — Sign in with Google, together with its dependencies AppAuth-iOS, GTMAppAuth, GoogleUtilities, gtm-session-fetcher, Google App Check, interop-ios-for-google-sdks, and Google Promises (all Apache-2.0)
 - swift-argument-parser (Apache-2.0)
+- Firebase Apple SDK — `FirebaseAnalytics` (Apache-2.0) together with Google's proprietary `GoogleAppMeasurement` and on-device conversion measurement binaries and its nanopb (zlib) and GoogleUtilities (Apache-2.0) dependencies — ad-conversion measurement (Section 3.8)
 
 Networking, the Keychain, the camera-based QR scanner, Sign in with Apple, and push notifications on iOS all use Apple's own system frameworks rather than third-party libraries.
 
