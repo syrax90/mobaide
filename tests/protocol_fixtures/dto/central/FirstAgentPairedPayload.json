@@ -1,0 +1,6 @@
+{
+  "type": "FirstAgentPairedPayload",
+  "cases": [
+    { "name": "full", "wire": { "agent_id": "a1b2c3d4e5f6" } }
+  ]
+}

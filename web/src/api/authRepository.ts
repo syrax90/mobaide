@@ -264,6 +264,34 @@ export async function cancelAccountDeletion(): Promise<void> {
   if (error !== undefined) fail(response, error);
 }
 
+/** The signed-in account as `GET /api/auth/me` reports it. */
+export interface AccountProfile {
+  userId: string;
+  email: string;
+  role: string;
+  createdAt: string;
+  scheduledDeletionAt: string | null;
+  /**
+   * When the account paired its first agent ever; never cleared. The mobile
+   * apps log their Firebase `agent_paired` conversion off it — the web client
+   * has no analytics and mirrors the shape only.
+   */
+  firstPairedAt: string | null;
+}
+
+export async function getMe(): Promise<AccountProfile> {
+  const { data, error, response } = await relayClient.GET('/api/auth/me');
+  if (error !== undefined || data === undefined) fail(response, error);
+  return {
+    userId: data.user_id,
+    email: data.email,
+    role: data.role,
+    createdAt: data.created_at,
+    scheduledDeletionAt: data.scheduled_deletion_at ?? null,
+    firstPairedAt: data.first_paired_at ?? null,
+  };
+}
+
 /**
  * User-facing copy for a delete failure.
  *

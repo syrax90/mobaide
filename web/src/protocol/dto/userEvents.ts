@@ -2,7 +2,8 @@
  * Payload shapes carried by the user-scoped events channel (`ws/user-events`).
  *
  * Pinned by `tests/protocol_fixtures/dto/central/{TemplateDto,
- * TemplateDeletedPayload,CustomAgentTypeDto,CustomTypeDeletedPayload}.json`.
+ * TemplateDeletedPayload,CustomAgentTypeDto,CustomTypeDeletedPayload,
+ * FirstAgentPairedPayload}.json`.
  * `agent.status_changed` and `session.attention` have no fixture file; their
  * shapes come from PROTOCOL.md and the Android/iOS payload structs.
  */
@@ -58,7 +59,17 @@ export const sessionAttentionSchema = z.looseObject({
   agent_id: optionalWireString(),
 });
 
+/**
+ * Sent once per account, when the relay stamps `users.first_paired_at` on the
+ * first-ever pairing. The mobile apps log their Firebase `agent_paired`
+ * conversion off it; the web client only refetches the agent list.
+ */
+export const firstAgentPairedSchema = z.looseObject({
+  agent_id: z.string(),
+});
+
 export type Template = z.infer<typeof templateSchema>;
 export type CustomAgentType = z.infer<typeof customAgentTypeSchema>;
 export type AgentStatusChanged = z.infer<typeof agentStatusChangedSchema>;
 export type SessionAttention = z.infer<typeof sessionAttentionSchema>;
+export type FirstAgentPaired = z.infer<typeof firstAgentPairedSchema>;

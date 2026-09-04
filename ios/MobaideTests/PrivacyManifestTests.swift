@@ -38,24 +38,33 @@ final class PrivacyManifestTests: XCTestCase {
         XCTAssertEqual((manifest["NSPrivacyTrackingDomains"] as? [String])?.isEmpty, true)
     }
 
+    /// The Firebase Analytics binaries ship no privacy manifest of their own, so
+    /// this file is the only declaration of what the SDK collects: the app
+    /// instance id (Device ID), app opens and the pairing event (Product
+    /// Interaction) and the coarse location Google derives from the IP. None
+    /// of it is tracking — no IDFA, no AdSupport, no ATT.
     func testCollectedDataTypesAreLinkedNonTrackingAndPurposed() throws {
+        let appFunctionality = "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        let analytics = "NSPrivacyCollectedDataTypePurposeAnalytics"
+        let advertising = "NSPrivacyCollectedDataTypePurposeDeveloperAdvertising"
+        let expected: [String: (linked: Bool, purposes: [String])] = [
+            "NSPrivacyCollectedDataTypeEmailAddress": (true, [appFunctionality]),
+            "NSPrivacyCollectedDataTypeUserID": (true, [appFunctionality]),
+            "NSPrivacyCollectedDataTypeDeviceID": (true, [appFunctionality, analytics, advertising]),
+            "NSPrivacyCollectedDataTypeProductInteraction": (false, [analytics, advertising]),
+            "NSPrivacyCollectedDataTypeCoarseLocation": (false, [analytics]),
+        ]
         let collected = try XCTUnwrap(manifest["NSPrivacyCollectedDataTypes"] as? [[String: Any]])
         XCTAssertEqual(
             Set(collected.compactMap { $0["NSPrivacyCollectedDataType"] as? String }),
-            [
-                "NSPrivacyCollectedDataTypeEmailAddress",
-                "NSPrivacyCollectedDataTypeUserID",
-                "NSPrivacyCollectedDataTypeDeviceID",
-            ]
+            Set(expected.keys)
         )
         for entry in collected {
             let name = entry["NSPrivacyCollectedDataType"] as? String ?? "?"
+            let spec = try XCTUnwrap(expected[name], name)
             XCTAssertEqual(entry["NSPrivacyCollectedDataTypeTracking"] as? Bool, false, name)
-            XCTAssertEqual(
-                entry["NSPrivacyCollectedDataTypePurposes"] as? [String],
-                ["NSPrivacyCollectedDataTypePurposeAppFunctionality"],
-                name
-            )
+            XCTAssertEqual(entry["NSPrivacyCollectedDataTypeLinked"] as? Bool, spec.linked, name)
+            XCTAssertEqual(entry["NSPrivacyCollectedDataTypePurposes"] as? [String], spec.purposes, name)
         }
     }
 }

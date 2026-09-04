@@ -170,6 +170,21 @@ data class CancelAccountDeletionResponse(
 )
 
 /**
+ * `GET /api/auth/me`. `first_paired_at` is the server's never-cleared
+ * first-pairing stamp (ISO-8601, UTC), `null` until the account pairs its
+ * first agent.
+ */
+@Serializable
+data class MeResponse(
+    val user_id: String,
+    val email: String,
+    val role: String,
+    val created_at: String,
+    val scheduled_deletion_at: String? = null,
+    val first_paired_at: String? = null,
+)
+
+/**
  * 403 error body from `/api/auth/me/delete` when the supplied credential
  * proof is rejected. FastAPI wraps as `{"detail": {"error": "reauth_required", "message": ...}}`.
  */

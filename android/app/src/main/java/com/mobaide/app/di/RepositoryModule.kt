@@ -1,6 +1,7 @@
 package com.mobaide.app.di
 
 import android.content.Context
+import com.mobaide.app.data.analytics.AgentPairedConversion
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.auth.UserIdentityStore
@@ -200,6 +201,7 @@ object RepositoryModule {
         templatesRepository: TemplatesRepository,
         shortcutsRepository: ShortcutsRepository,
         customAgentTypesRepository: CustomAgentTypesRepository,
+        agentPairedConversion: AgentPairedConversion,
     ): UserEventBus {
         return UserEventBus(
             webSocketManager,
@@ -209,6 +211,7 @@ object RepositoryModule {
             templatesRepository,
             shortcutsRepository,
             customAgentTypesRepository,
+            agentPairedConversion,
         )
     }
 

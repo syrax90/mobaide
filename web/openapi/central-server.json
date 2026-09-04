@@ -1021,6 +1021,57 @@
         "title": "ManifestResponse",
         "type": "object"
       },
+      "MeResponse": {
+        "description": "Response for ``GET /api/auth/me`` \u2014 the calling account's profile.\n\n``first_paired_at`` (ISO-8601, UTC) is the never-cleared stamp\n``_complete_pairing`` writes when the account pairs its first agent. The\nmobile apps read it to log their Firebase ``agent_paired`` conversion once\nper account, including when the pairing happened while the app was closed.\nField names mirror ``AuthTokenResponse``; the row's secrets and ad\nattribution columns are deliberately not exposed.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "first_paired_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Paired At"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "scheduled_deletion_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Deletion At"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "email",
+          "role",
+          "created_at"
+        ],
+        "title": "MeResponse",
+        "type": "object"
+      },
       "MobileRefreshRequest": {
         "properties": {
           "refresh_token": {
@@ -2332,6 +2383,28 @@
           }
         },
         "summary": "Logout All",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "description": "Return the calling account's profile, including ``first_paired_at``.",
+        "operationId": "get_me_api_auth_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Me",
         "tags": [
           "auth"
         ]

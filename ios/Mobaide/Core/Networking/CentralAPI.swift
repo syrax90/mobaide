@@ -1,6 +1,6 @@
 import Foundation
 
-/// Mirror of Android `CentralApi` (23 routes) plus the `CentralAuthInterceptor`
+/// Mirror of Android `CentralApi` (24 routes) plus the `CentralAuthInterceptor`
 /// reaction: the user Bearer is attached per call (never injected), and a 401
 /// outside the register/login/google paths invalidates the user session before
 /// the error propagates — dashboard JWTs have no refresh token.
@@ -92,6 +92,10 @@ struct CentralAPI: Sendable {
 
     func cancelAccountDeletion(userToken: String) async throws -> CancelAccountDeletionResponse {
         try await execute(method: "POST", path: "/api/auth/me/delete/cancel", rawBody: Data(), bearer: userToken)
+    }
+
+    func me(userToken: String) async throws -> MeResponse {
+        try await execute(method: "GET", path: "/api/auth/me", bearer: userToken)
     }
 
     func getMobileTokens(userToken: String, agentId: String, request: MobileTokenRequest) async throws -> MobileTokenResponse {

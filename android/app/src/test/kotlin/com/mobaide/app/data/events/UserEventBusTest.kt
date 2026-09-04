@@ -1,5 +1,6 @@
 package com.mobaide.app.data.events
 
+import com.mobaide.app.data.analytics.AgentPairedConversion
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.network.WebSocketConnection
@@ -70,6 +71,7 @@ class UserEventBusTest {
         val shortcutsRepository: ShortcutsRepository,
         val customAgentTypesRepository: CustomAgentTypesRepository,
         val authStateFlow: MutableStateFlow<SessionManager.AuthState>,
+        val agentPairedConversion: AgentPairedConversion,
     )
 
     private fun newBus(initiallyLoggedIn: Boolean = true): Fixture {
@@ -113,15 +115,19 @@ class UserEventBusTest {
         every { customAgentTypesRepository.clear() } just Runs
         coEvery { customAgentTypesRepository.refreshTypes() } just Runs
 
+        val agentPairedConversion = mockk<AgentPairedConversion>()
+        coEvery { agentPairedConversion.onFirstAgentPairedEvent() } just Runs
+        coEvery { agentPairedConversion.reconcile() } just Runs
+
         val bus = UserEventBus(
             wsm, sessionManager, userIdentityStore,
             agentRepository, templatesRepository, shortcutsRepository,
-            customAgentTypesRepository,
+            customAgentTypesRepository, agentPairedConversion,
         )
         return Fixture(
             bus, connEvents, conn, wsm,
             agentRepository, templatesRepository, shortcutsRepository,
-            customAgentTypesRepository, authStateFlow,
+            customAgentTypesRepository, authStateFlow, agentPairedConversion,
         )
     }
 
@@ -404,6 +410,108 @@ class UserEventBusTest {
         verify(exactly = 1) { repo.updateAgentOnline(any(), any()) }
 
         bus.stop()
+    }
+
+    // ---- parse(): account.first_agent_paired -> conversion ------------------
+
+    @Test
+    fun message_firstAgentPaired_callsConversion() = runTest {
+        val f = newBus()
+        f.bus.start()
+        awaitSubscribed(f.connEvents)
+
+        emit(
+            f.connEvents,
+            WsEvent.Message(
+                """{"type":"account.first_agent_paired","payload":{"agent_id":"a1b2c3d4e5f6"}}""",
+            ),
+        )
+
+        coVerify(timeout = 2000, exactly = 1) { f.agentPairedConversion.onFirstAgentPairedEvent() }
+
+        f.bus.stop()
+    }
+
+    @Test
+    fun message_firstAgentPaired_malformedPayload_isDropped() = runTest {
+        val f = newBus()
+        f.bus.start()
+        awaitSubscribed(f.connEvents)
+
+        emit(
+            f.connEvents,
+            WsEvent.Message("""{"type":"account.first_agent_paired","payload":{}}"""),
+        )
+        emit(
+            f.connEvents,
+            WsEvent.Message(
+                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
+            ),
+        )
+
+        verify(timeout = 2000, exactly = 1) { f.agentRepository.updateAgentOnline("sync", true) }
+        coVerify(exactly = 0) { f.agentPairedConversion.onFirstAgentPairedEvent() }
+
+        f.bus.stop()
+    }
+
+    @Test
+    fun message_firstAgentPaired_conversionFailure_doesNotBreakTheCollector() = runTest {
+        val f = newBus()
+        coEvery { f.agentPairedConversion.onFirstAgentPairedEvent() } throws RuntimeException("boom")
+        f.bus.start()
+        awaitSubscribed(f.connEvents)
+
+        emit(
+            f.connEvents,
+            WsEvent.Message(
+                """{"type":"account.first_agent_paired","payload":{"agent_id":"a1b2c3d4e5f6"}}""",
+            ),
+        )
+        emit(
+            f.connEvents,
+            WsEvent.Message(
+                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
+            ),
+        )
+
+        verify(timeout = 2000, exactly = 1) { f.agentRepository.updateAgentOnline("sync", true) }
+
+        f.bus.stop()
+    }
+
+    @Test
+    fun connected_event_triggersConversionReconcile() = runTest {
+        val f = newBus()
+        f.bus.start()
+        awaitSubscribed(f.connEvents)
+
+        emit(f.connEvents, WsEvent.Connected)
+
+        coVerify(timeout = 2000, exactly = 1) { f.agentPairedConversion.reconcile() }
+
+        f.bus.stop()
+    }
+
+    @Test
+    fun connected_reconcileFailure_doesNotBreakTheHandler() = runTest {
+        val f = newBus()
+        coEvery { f.agentPairedConversion.reconcile() } throws RuntimeException("boom")
+        f.bus.start()
+        awaitSubscribed(f.connEvents)
+
+        emit(f.connEvents, WsEvent.Connected)
+        emit(
+            f.connEvents,
+            WsEvent.Message(
+                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
+            ),
+        )
+
+        verify(timeout = 2000, exactly = 1) { f.agentRepository.updateAgentOnline("sync", true) }
+        assertEquals(UserEventBus.ConnState.Connected, f.bus.connection.value)
+
+        f.bus.stop()
     }
 
     // ---- Non-Message WsEvents: Connected refreshes, Binary is ignored -------

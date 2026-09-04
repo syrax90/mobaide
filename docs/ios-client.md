@@ -556,8 +556,11 @@ ios/
 │                                 # + optional #include of Local.xcconfig (gitignored dev overrides;
 │                                 #   see Config/Local.xcconfig.example)
 ├── Mobaide.xcodeproj             # hand-authored; objectVersion 70, Xcode 16 synchronized folder groups;
-│                                 # SPM: GoogleSignIn-iOS ≥ 9.0, SwiftTerm 1.15.0
-│                                 #   (+ swift-argument-parser transitively; Package.resolved committed)
+│                                 # SPM: GoogleSignIn-iOS ≥ 9.0, SwiftTerm 1.15.0,
+│                                 #   firebase-ios-sdk ≥ 12.18 (product FirebaseAnalytics only)
+│                                 #   (+ swift-argument-parser, GoogleAppMeasurement, Google Ads
+│                                 #   on-device conversion, GoogleDataTransport, nanopb
+│                                 #   transitively; Package.resolved committed)
 ├── Mobaide/
 │   ├── App/                      # entry point, AppConfig, AppContainer (manual DI), AuthStateModel
 │   ├── Assets.xcassets/          # AppIcon — single 1024×1024 opaque icon (iOS 17 needs no smaller
@@ -692,16 +695,49 @@ suites; adding an App Group entitlement would make `1C8F.1` the right reason.
 
 When adding an API from any Required Reason category (file timestamps, disk
 space, system boot time, active keyboard), add its declaration here too. The
-bundled SDKs ship their own manifests (GoogleSignIn and its transitive
-dependencies); SwiftTerm uses no Required Reason API and needs none.
+bundled SDKs ship their own manifests (GoogleSignIn, Firebase Analytics /
+GoogleAppMeasurement and their transitive dependencies), which App Store
+Connect aggregates with the app's; SwiftTerm uses no Required Reason API and
+needs none.
 
-`NSPrivacyCollectedDataTypes` lists email address, user ID, and device ID — all
-app-functionality, linked to the user, non-tracking. It must stay consistent
-with the App Privacy answers in App Store Connect. Terminal I/O is relayed in
-real time and not retained server-side, so it is not "collected" under Apple's
-definition. `MobaideTests/PrivacyManifestTests.swift` asserts all of the above
-against the built bundle, so a dropped or edited manifest fails at test time
-rather than at upload time.
+`NSPrivacyCollectedDataTypes` lists five types, non-tracking throughout
+(`NSPrivacyTracking` is `false`, no tracking domains): email address and user
+ID (linked, app functionality); device ID (linked; app functionality plus
+analytics and developer's advertising, because Google Analytics for Firebase
+keys its events by a Firebase app-instance id — IDFV collection is switched
+off); product interaction and coarse location (not linked; analytics and, for
+product interaction, developer's advertising — the SDK's automatic app-open /
+session events and the single `agent_paired` conversion, with the location
+derived by Google from the request IP). It must stay consistent with the App
+Privacy answers in App Store Connect and with the privacy policy's Section
+3.8; docs/app-conversion-measurement.md carries the App Privacy answers.
+Terminal I/O is relayed in real time and not retained server-side, so it is
+not "collected" under Apple's definition. `MobaideTests/PrivacyManifestTests.swift`
+asserts all of the above against the built bundle, so a dropped or edited
+manifest fails at test time rather than at upload time.
+
+### Firebase Analytics (ad-conversion measurement)
+
+The app links exactly one Firebase product, `FirebaseAnalytics`, for the
+once-per-account `agent_paired` conversion described in
+docs/app-conversion-measurement.md. `FirebaseAnalyticsIdentitySupport` (IDFA)
+is never added, `AdSupport` is not linked, and there is no
+`NSUserTrackingUsageDescription`, so no App Tracking Transparency prompt
+exists; iOS App campaigns attribute through SKAdNetwork (`SKAdNetworkItems`
+carries Google's `cstr6suwn9.skadnetwork`). `OTHER_LDFLAGS` carries `-ObjC`
+for the Analytics binary. `MobaideApp.init()` calls
+`FirebaseApp.configure(options:)` only when `GoogleService-Info.plist` is in
+the bundle — the file is gitignored and absent in worktrees and CI, where the
+`FirebaseAnalyticsSink` reports itself disabled and the conversion component
+performs no I/O. A Release-only run-script phase ("Require Firebase config
+for Release", first in the app target's build phases) fails the build when
+the plist is missing, so an App Store archive cannot ship with analytics
+inert while Debug and CI builds stay config-free. `Info.plist` fixes the consent-mode defaults
+(`GOOGLE_ANALYTICS_DEFAULT_ALLOW_*`: analytics and ad storage granted, ad user
+data `eu_consent_policy`, ad personalisation denied), switches automatic
+screen reporting, IDFV collection and the app-delegate proxy off (the app owns
+its APNs delegate); `MobaideTests/FirebaseConfigurationTests.swift` pins all of
+them.
 
 ## Export compliance
 

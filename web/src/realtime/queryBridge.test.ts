@@ -48,6 +48,27 @@ describe('applyUserEvent', () => {
     expect(invalidated).toEqual([['custom-agent-types']]);
   });
 
+  it('refetches the agent list when the account pairs its first agent', () => {
+    const outcome = applyUserEvent(
+      client,
+      frame('account.first_agent_paired', { agent_id: 'a1b2c3d4e5f6' }),
+    );
+
+    expect(outcome).toEqual({
+      kind: 'invalidated',
+      type: 'account.first_agent_paired',
+      keys: [['agents']],
+    });
+    expect(invalidated).toEqual([['agents']]);
+  });
+
+  it('drops a first-pairing notice that names no agent', () => {
+    const outcome = applyUserEvent(client, frame('account.first_agent_paired', {}));
+
+    expect(outcome).toEqual({ kind: 'dropped' });
+    expect(invalidated).toEqual([]);
+  });
+
   it('invalidates the list a well-formed payload belongs to', () => {
     const outcome = applyUserEvent(client, frame('template.updated', template));
 

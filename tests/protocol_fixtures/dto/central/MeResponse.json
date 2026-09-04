@@ -1,0 +1,18 @@
+{
+  "type": "MeResponse",
+  "cases": [
+    {
+      "name": "full",
+      "wire": { "user_id": "u1", "email": "e@x.com", "role": "viewer", "created_at": "2026-09-01T10:00:00+00:00", "scheduled_deletion_at": "2026-09-20T00:00:00+00:00", "first_paired_at": "2026-09-03T15:07:12.123456+00:00" }
+    },
+    {
+      "name": "nulls",
+      "wire": { "user_id": "u1", "email": "e@x.com", "role": "viewer", "created_at": "2026-09-01T10:00:00+00:00", "scheduled_deletion_at": null, "first_paired_at": null },
+      "decoded_canonical": { "user_id": "u1", "email": "e@x.com", "role": "viewer", "created_at": "2026-09-01T10:00:00+00:00" }
+    },
+    {
+      "name": "optionals_absent",
+      "wire": { "user_id": "u1", "email": "e@x.com", "role": "viewer", "created_at": "2026-09-01T10:00:00+00:00" }
+    }
+  ]
+}

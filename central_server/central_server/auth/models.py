@@ -244,6 +244,25 @@ class AuthTokenResponse(BaseModel):
     session_transport: Literal["body", "cookie"] = "body"
 
 
+class MeResponse(BaseModel):
+    """Response for ``GET /api/auth/me`` — the calling account's profile.
+
+    ``first_paired_at`` (ISO-8601, UTC) is the never-cleared stamp
+    ``_complete_pairing`` writes when the account pairs its first agent. The
+    mobile apps read it to log their Firebase ``agent_paired`` conversion once
+    per account, including when the pairing happened while the app was closed.
+    Field names mirror ``AuthTokenResponse``; the row's secrets and ad
+    attribution columns are deliberately not exposed.
+    """
+
+    user_id: str
+    email: str
+    role: str
+    created_at: str
+    scheduled_deletion_at: str | None = None
+    first_paired_at: str | None = None
+
+
 class VerifyEmailRequest(RefreshableSessionRequest):
     email: str
     code: str

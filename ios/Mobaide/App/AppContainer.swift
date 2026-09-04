@@ -24,6 +24,7 @@ final class AppContainer {
     let centralAPI: CentralAPI
     let agentEventBus: AgentEventBus
     let userEventBus: UserEventBus
+    let agentPairedConversion: AgentPairedConversion
     let authRepository: AuthRepository
     let signInService: SignInService
     let versionGate: VersionGateRepository
@@ -117,6 +118,13 @@ final class AppContainer {
             userIdentityStore: userIdentityStore
         )
 
+        let agentPairedConversion = AgentPairedConversion(
+            sink: FirebaseAnalyticsSink(),
+            fetchMe: { [centralAPI] token in try await centralAPI.me(userToken: token) },
+            userIdentityStore: userIdentityStore,
+            state: ConversionStateStore()
+        )
+
         let webSocketFactory = WebSocketCoreFactory.live()
         let agentEventBus = AgentEventBus(
             webSocketFactory: webSocketFactory,
@@ -132,7 +140,8 @@ final class AppContainer {
             agentStatusApplier: agentRepository,
             templateSync: templatesRepository,
             shortcutSync: shortcutsRepository,
-            customTypeSync: customAgentTypesRepository
+            customTypeSync: customAgentTypesRepository,
+            conversion: agentPairedConversion
         )
 
         let authRepository = AuthRepository(
@@ -160,6 +169,7 @@ final class AppContainer {
         self.centralAPI = centralAPI
         self.agentEventBus = agentEventBus
         self.userEventBus = userEventBus
+        self.agentPairedConversion = agentPairedConversion
         self.agentRepository = agentRepository
         self.templatesRepository = templatesRepository
         self.shortcutsRepository = shortcutsRepository
@@ -336,6 +346,8 @@ final class AppContainer {
         deepLinkCoordinator.start()
         pushRegistrationCoordinator.start()
         await agentEventBus.start()
+        // Armed before the user socket's first connect can reconcile.
+        await agentPairedConversion.armIfNeeded()
         await userEventBus.start()
     }
 }

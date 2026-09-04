@@ -1,6 +1,7 @@
 package com.mobaide.app.data.events
 
 import android.util.Log
+import com.mobaide.app.data.analytics.AgentPairedConversion
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.network.WebSocketConnection
@@ -57,6 +58,7 @@ class UserEventBus @Inject constructor(
     private val templatesRepository: TemplatesRepository,
     private val shortcutsRepository: ShortcutsRepository,
     private val customAgentTypesRepository: CustomAgentTypesRepository,
+    private val agentPairedConversion: AgentPairedConversion,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val json = Json { ignoreUnknownKeys = true }
@@ -151,6 +153,11 @@ class UserEventBus @Inject constructor(
                 } catch (t: Throwable) {
                     Log.w(TAG, "refreshTypes on WS connect failed", t)
                 }
+                try {
+                    agentPairedConversion.reconcile()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "conversion reconcile on WS connect failed", t)
+                }
             }
             is WsEvent.Disconnected -> _connection.value = ConnState.Connecting
             is WsEvent.Error -> _connection.value = ConnState.Connecting
@@ -159,7 +166,7 @@ class UserEventBus @Inject constructor(
         }
     }
 
-    private fun parse(text: String) {
+    private suspend fun parse(text: String) {
         val envelope = try {
             json.decodeFromString(AgentEventEnvelope.serializer(), text)
         } catch (t: Throwable) {
@@ -241,6 +248,19 @@ class UserEventBus @Inject constructor(
                 // The server cascades the type's saved shortcuts in the same
                 // transaction without per-shortcut events — mirror it locally.
                 shortcutsRepository.purgeKind("custom_${p.id}")
+            }
+            "account.first_agent_paired" -> {
+                try {
+                    json.decodeFromJsonElement(FirstAgentPairedPayload.serializer(), payload)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Malformed account.first_agent_paired payload", t)
+                    return
+                }
+                try {
+                    agentPairedConversion.onFirstAgentPairedEvent()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "agent_paired conversion failed", t)
+                }
             }
             // Unknown types are silently ignored — forward compatible.
             else -> Unit

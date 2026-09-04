@@ -274,6 +274,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Me
+         * @description Return the calling account's profile, including ``first_paired_at``.
+         */
+        get: operations["get_me_api_auth_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/me/delete": {
         parameters: {
             query?: never;
@@ -1471,6 +1491,31 @@ export interface components {
             /** Signature B64 */
             signature_b64: string;
         };
+        /**
+         * MeResponse
+         * @description Response for ``GET /api/auth/me`` — the calling account's profile.
+         *
+         *     ``first_paired_at`` (ISO-8601, UTC) is the never-cleared stamp
+         *     ``_complete_pairing`` writes when the account pairs its first agent. The
+         *     mobile apps read it to log their Firebase ``agent_paired`` conversion once
+         *     per account, including when the pairing happened while the app was closed.
+         *     Field names mirror ``AuthTokenResponse``; the row's secrets and ad
+         *     attribution columns are deliberately not exposed.
+         */
+        MeResponse: {
+            /** Created At */
+            created_at: string;
+            /** Email */
+            email: string;
+            /** First Paired At */
+            first_paired_at?: string | null;
+            /** Role */
+            role: string;
+            /** Scheduled Deletion At */
+            scheduled_deletion_at?: string | null;
+            /** User Id */
+            user_id: string;
+        };
         /** MobileRefreshRequest */
         MobileRefreshRequest: {
             /** Refresh Token */
@@ -2231,6 +2276,26 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_me_api_auth_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
             };
         };
     };

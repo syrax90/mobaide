@@ -14,6 +14,7 @@ from .models import (
     ForgotPasswordRequest,
     ForgotPasswordResponse,
     GoogleAuthRequest,
+    MeResponse,
     ResendVerificationRequest,
     ResendVerificationResponse,
     ResetPasswordRequest,
@@ -514,6 +515,29 @@ async def reset_password(
             detail={"error": "new_password_same_as_old"},
         )
     return ResetPasswordResponse()
+
+
+@router.get("/me", response_model=MeResponse)
+async def get_me(
+    request: Request,
+    user: UserTokenPayload = Depends(get_api_user),
+) -> MeResponse:
+    """Return the calling account's profile, including ``first_paired_at``."""
+    row = await request.app.state.db.get_user_by_id(user.sub)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return MeResponse(
+        user_id=row["id"],
+        email=row["email"],
+        role=row["role"],
+        created_at=row["created_at"],
+        scheduled_deletion_at=row["scheduled_deletion_at"],
+        first_paired_at=row["first_paired_at"],
+    )
 
 
 @router.post(

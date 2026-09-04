@@ -78,6 +78,7 @@ CLA-170), but the website must not repeat them:
 | "10,000-line scrollback" replays on reconnect | Two different buffers. The realtime WS path replays byte-exactly from a ring capped at `RING_MAX_BYTES` (4 MiB, `core/session.py`); the 10,000 figure is `scrollback_size`, a deque of read **chunks** that backs the REST `/scrollback` endpoint (see `get_scrollback`'s docstring). | "a rolling buffer of recent output" — state the guarantee, not a line count |
 | "JWT auth on every hop" | Only the app→relay hop is a JWT. Each agent presents an opaque per-agent token verified by SHA-256 `compare_digest` (`auth/service.py` → `db.verify_agent_token`). | name the two mechanisms separately |
 | "every hop is TLS-encrypted" **unqualified** | True for the relay path, which is the only one a client can take. The DIRECT-mode plumbing the clients still carry would build `ws://` unless the agent sits behind HTTPS — `WebSocketManager.kt`: `if (agentUrl.startsWith("https")) "wss" else "ws"` — and the agent's own listener is plain HTTP by default. | scope it ("going through the relay, every hop is…") — without describing a direct mode, see the next row |
+| "no analytics SDKs in the app" (any absolute no-analytics / no-tracking claim about the mobile apps) | Since Phase 2 of the Google Ads rollout both mobile apps carry Google Analytics for Firebase for install-conversion measurement (docs/app-conversion-measurement.md); the privacy policy's Section 3.8 describes it. The *agent* still has none. | "The agent carries no analytics SDK; the mobile apps carry Google's Firebase Analytics for one purpose — telling Google Ads which installs went on to pair an agent" — keep the agent claim, name the single purpose, and say it never sees sessions |
 | a "direct"/"LAN" mode, or "point the app straight at the agent" | No client exposes one. `AuthRepository.connectAgent()` (Android and iOS) has no UI caller — the Connections screen's "+" routes to the relay login — and the agent's `UserStore.add_user()` has no CLI verb or endpoint, so the user store `POST /api/auth/token` checks is always empty. The mode is code, not a feature. | say nothing about it; describe only the relay path |
 
 The worktree capability itself is broad and true, and the page says so: every
@@ -229,7 +230,9 @@ policy promises no un-consented tracking:
   banner links it, and `central_server/legal/privacy.md` must stay in sync
   with what the tag actually does (cookies only after Accept, choice stored in
   local storage, withdrawal by clearing site data, the `mobaide_ads` cookie
-  and the one-time first-pairing report).
+  and the one-time first-pairing report). The mobile apps' Firebase lane has
+  its own disclosure in Section 3.8 and the same sync rule against
+  docs/app-conversion-measurement.md.
 
 Changing the tag id means changing `ADS_TAG_ID` in `site.js`; a new or renamed
 conversion action also means a new `ADS_PAGE_VIEW_LABEL`, pinned by

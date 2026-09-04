@@ -51,6 +51,15 @@ protocol CustomTypeSyncApplying: Sendable {
     func clear() async
 }
 
+protocol FirstAgentPairedApplying: Sendable {
+    /// Live `account.first_agent_paired`: the account just paired its first
+    /// agent ever, on any client.
+    func firstAgentPaired(agentId: String) async
+    /// After every (re)connect: catch up on a first pairing that happened
+    /// while the socket was down.
+    func reconcileAfterConnect() async
+}
+
 struct NoOpAgentStatusApplier: AgentStatusApplying {
     func updateAgentOnline(agentId: String, online: Bool) async {}
     func refreshAgents() async throws {}
@@ -77,4 +86,9 @@ struct NoOpCustomTypeSyncApplier: CustomTypeSyncApplying {
     func applyDeleted(typeId: String) async {}
     func refreshCustomTypes() async throws {}
     func clear() async {}
+}
+
+struct NoOpFirstAgentPairedApplier: FirstAgentPairedApplying {
+    func firstAgentPaired(agentId: String) async {}
+    func reconcileAfterConnect() async {}
 }

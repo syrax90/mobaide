@@ -5,6 +5,7 @@ import com.mobaide.app.data.network.dto.CancelAccountDeletionResponse
 import com.mobaide.app.data.network.dto.CreateAgentRequest
 import com.mobaide.app.data.network.dto.CreateAgentResponse
 import com.mobaide.app.data.network.dto.CreateCustomAgentTypeRequest
+import com.mobaide.app.data.network.dto.MeResponse
 import com.mobaide.app.data.network.dto.CreateShortcutRequest
 import com.mobaide.app.data.network.dto.CreateTemplateRequest
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
@@ -206,6 +207,15 @@ class CentralApi(
         val request = Request.Builder()
             .url("${baseUrl()}/api/auth/me/delete/cancel")
             .post("".toRequestBody(jsonMediaType))
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun getMe(userToken: String): MeResponse {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/auth/me")
+            .get()
             .header("Authorization", "Bearer $userToken")
             .build()
         return execute(request)

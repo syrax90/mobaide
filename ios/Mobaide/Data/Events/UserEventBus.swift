@@ -27,6 +27,7 @@ actor UserEventBus {
     private let templateSync: any TemplateSyncApplying
     private let shortcutSync: any ShortcutSyncApplying
     private let customTypeSync: any CustomTypeSyncApplying
+    private let conversion: any FirstAgentPairedApplying
 
     private let connectionBroadcaster = Broadcaster<BusConnectionState>.stateFlow()
 
@@ -43,7 +44,8 @@ actor UserEventBus {
         agentStatusApplier: any AgentStatusApplying = NoOpAgentStatusApplier(),
         templateSync: any TemplateSyncApplying = NoOpTemplateSyncApplier(),
         shortcutSync: any ShortcutSyncApplying = NoOpShortcutSyncApplier(),
-        customTypeSync: any CustomTypeSyncApplying = NoOpCustomTypeSyncApplier()
+        customTypeSync: any CustomTypeSyncApplying = NoOpCustomTypeSyncApplier(),
+        conversion: any FirstAgentPairedApplying = NoOpFirstAgentPairedApplier()
     ) {
         self.webSocketFactory = webSocketFactory
         self.sessionManager = sessionManager
@@ -54,6 +56,7 @@ actor UserEventBus {
         self.templateSync = templateSync
         self.shortcutSync = shortcutSync
         self.customTypeSync = customTypeSync
+        self.conversion = conversion
         connectionBroadcaster.emit(.disconnected)
     }
 
@@ -161,6 +164,7 @@ actor UserEventBus {
         try? await templateSync.refreshTemplates()
         try? await shortcutSync.refreshShortcuts()
         try? await customTypeSync.refreshCustomTypes()
+        await conversion.reconcileAfterConnect()
     }
 
     private func route(_ text: String) async {
@@ -182,6 +186,8 @@ actor UserEventBus {
             // The server cascades the type's saved shortcuts in the same
             // transaction without per-shortcut events — mirror it locally.
             await shortcutSync.purgeKind("custom_\(typeId)")
+        case .firstAgentPaired(let agentId):
+            await conversion.firstAgentPaired(agentId: agentId)
         case .none:
             break
         }
@@ -242,6 +248,7 @@ enum UserEnvelopeDemux {
         case shortcutDeleted(shortcutId: String)
         case customTypeUpserted(CustomAgentTypeDto)
         case customTypeDeleted(typeId: String)
+        case firstAgentPaired(agentId: String)
         case none
     }
 
@@ -285,6 +292,11 @@ enum UserEnvelopeDemux {
                 return .none
             }
             return .customTypeDeleted(typeId: payload.id)
+        case "account.first_agent_paired":
+            guard let payload = try? WireJSON.decoder().decode(FirstAgentPairedPayload.self, from: data) else {
+                return .none
+            }
+            return .firstAgentPaired(agentId: payload.agent_id)
         default:
             return .none
         }

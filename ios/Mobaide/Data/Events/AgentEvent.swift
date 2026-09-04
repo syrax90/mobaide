@@ -53,6 +53,10 @@ struct AgentStatusChangedPayload: Codable, Equatable, Sendable {
     let online: Bool
 }
 
+struct FirstAgentPairedPayload: Codable, Equatable, Sendable {
+    let agent_id: String
+}
+
 /// Demux for the agent-scoped `ws/events` channel (Android
 /// `AgentEventBus.parseAndEmit`). Pure so tests can drive the full fixture
 /// matrix without WebSocket plumbing.

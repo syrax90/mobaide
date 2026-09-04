@@ -253,6 +253,11 @@ docs/deployment.md): when the CAS wins, the user id is handed to
 `app.state.ads_uploader` after the credential push, so a scheduling fault can
 never fail a delivered pairing. Accounts that already owned an agent or
 carried a pin when the column arrived were backfilled by the v20 migration.
+The same winning CAS also broadcasts the `account.first_agent_paired` user
+event (`{"agent_id"}`) to the account's user-events sockets, under the same
+never-raise rule, and the stamp is readable afterwards from
+`GET /api/auth/me` — the two signals the mobile apps' in-app conversion
+(docs/app-conversion-measurement.md) is built on.
 
 The refusal is HTTP 409 with `detail.error = "trust_key_pin_mismatch"` — a
 structured detail rather than prose, because 409 already carries the "agent

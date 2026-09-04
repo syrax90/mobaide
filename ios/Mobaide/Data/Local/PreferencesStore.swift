@@ -20,6 +20,8 @@ struct PreferencesStore: @unchecked Sendable {
 
     static let attentionSeenPrefix = "attention_seen::"
     static let recentCustomPathsPrefix = "recent_custom_paths::"
+    /// Outside every sign-out sweep on purpose: the `agent_paired` conversion
+    /// is once per account, so signing back in must find the outcome.
 
     static let maxRecentCustomPaths = 5
     static let maxRecentShortcutChords = 10

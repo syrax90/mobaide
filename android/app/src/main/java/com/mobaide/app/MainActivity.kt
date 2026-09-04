@@ -20,6 +20,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.mobaide.app.data.analytics.AgentPairedConversion
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.events.UserEventBus
@@ -60,6 +61,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var preferencesStore: PreferencesStore
 
+    @Inject
+    lateinit var agentPairedConversion: AgentPairedConversion
+
     /** Session id from a tapped notification; consumed by [AppNavigation]. */
     private val deepLinkSessionId = MutableStateFlow<String?>(null)
 
@@ -74,6 +78,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         agentEventBus.start()
         userEventBus.start()
+        // Arm the conversion window at launch, before any sign-in, so a
+        // pairing done elsewhere before this install's first connect still
+        // counts (iOS parity: AppContainer.start()).
+        lifecycleScope.launch { agentPairedConversion.armIfNeeded() }
         maybeRequestNotificationPermission()
         consumeSessionExtra(intent)
 
