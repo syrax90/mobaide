@@ -54,6 +54,7 @@ import {
   agentStatusChangedSchema,
   customAgentTypeSchema,
   customTypeDeletedSchema,
+  firstAgentPairedSchema,
   sessionAttentionSchema,
   templateDeletedSchema,
   templateSchema,
@@ -84,6 +85,10 @@ const constantKeys =
     keys;
 
 const USER_EVENT_RULES: Readonly<Record<string, UserEventRule>> = {
+  'account.first_agent_paired': {
+    schema: firstAgentPairedSchema,
+    keys: constantKeys(queryKeys.agents()),
+  },
   'agent.status_changed': {
     schema: agentStatusChangedSchema,
     keys: constantKeys(queryKeys.agents()),

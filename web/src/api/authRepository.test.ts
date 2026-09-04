@@ -19,6 +19,14 @@ vi.mock('./clients', () => ({
       }
       return Promise.resolve(next);
     },
+    GET: (path: string) => {
+      relay.calls.push({ path, body: {} });
+      const next = relay.results.shift();
+      if (next === undefined) {
+        return Promise.reject(new Error(`unexpected GET ${path}`));
+      }
+      return Promise.resolve(next);
+    },
   },
 }));
 
@@ -40,6 +48,7 @@ vi.mock('../auth/adAttribution', () => ({
 }));
 
 const {
+  getMe,
   login,
   loginWithApple,
   loginWithGoogle,
@@ -286,5 +295,42 @@ describe('resendVerification', () => {
     await expect(resendVerification('user@example.com')).rejects.toBeInstanceOf(
       ApiError,
     );
+  });
+});
+
+describe('getMe', () => {
+  it('maps the profile and keeps absent stamps as null', async () => {
+    succeed({
+      user_id: 'user-1',
+      email: 'user@example.com',
+      role: 'viewer',
+      created_at: '2026-09-01T10:00:00+00:00',
+      scheduled_deletion_at: null,
+      first_paired_at: null,
+    });
+
+    await expect(getMe()).resolves.toEqual({
+      userId: 'user-1',
+      email: 'user@example.com',
+      role: 'viewer',
+      createdAt: '2026-09-01T10:00:00+00:00',
+      scheduledDeletionAt: null,
+      firstPairedAt: null,
+    });
+    expect(relay.calls).toEqual([{ path: '/api/auth/me', body: {} }]);
+  });
+
+  it('carries the first-pairing stamp through and raises on a 401', async () => {
+    succeed({
+      user_id: 'user-1',
+      email: 'user@example.com',
+      role: 'viewer',
+      created_at: '2026-09-01T10:00:00+00:00',
+      first_paired_at: '2026-09-03T15:07:12+00:00',
+    });
+    expect((await getMe()).firstPairedAt).toBe('2026-09-03T15:07:12+00:00');
+
+    failWith(401, { detail: 'Invalid token' });
+    await expect(getMe()).rejects.toBeInstanceOf(ApiError);
   });
 });
