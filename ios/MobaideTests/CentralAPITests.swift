@@ -26,6 +26,29 @@ final class CentralAPITests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer user-jwt")
     }
 
+    func testMeIsAGetWithTheUserBearer() async throws {
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"user_id":"u1","email":"e@x.com","role":"viewer","created_at":"2026-09-01T10:00:00+00:00","scheduled_deletion_at":null,"first_paired_at":"2026-09-03T15:07:12+00:00"}"#
+        )
+        let me = try await makeAPI().me(userToken: "user-jwt")
+
+        XCTAssertEqual(
+            me,
+            MeResponse(
+                user_id: "u1",
+                email: "e@x.com",
+                role: "viewer",
+                created_at: "2026-09-01T10:00:00+00:00",
+                first_paired_at: "2026-09-03T15:07:12+00:00"
+            )
+        )
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.absoluteString, "https://central.example.com/api/auth/me")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer user-jwt")
+    }
+
     func testAuthRoutesSendNoAuthorizationHeader() async throws {
         StubURLProtocol.enqueue(
             status: 200,

@@ -288,6 +288,23 @@ final class RecordingCustomTypeSync: CustomTypeSyncApplying, @unchecked Sendable
     }
 }
 
+final class RecordingFirstAgentPairedApplier: FirstAgentPairedApplying, @unchecked Sendable {
+    private let lock = NSLock()
+    private var pairedStorage: [String] = []
+    private var reconcileCountStorage = 0
+
+    var paired: [String] { lock.withLock { pairedStorage } }
+    var reconcileCount: Int { lock.withLock { reconcileCountStorage } }
+
+    func firstAgentPaired(agentId: String) async {
+        lock.withLock { pairedStorage.append(agentId) }
+    }
+
+    func reconcileAfterConnect() async {
+        lock.withLock { reconcileCountStorage += 1 }
+    }
+}
+
 // MARK: - Envelope builders
 
 enum EnvelopeFixtures {

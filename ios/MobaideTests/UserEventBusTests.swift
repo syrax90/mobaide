@@ -10,6 +10,7 @@ final class UserEventBusTests: XCTestCase {
         let templateSync = RecordingTemplateSync()
         let shortcutSync = RecordingShortcutSync()
         let customTypeSync = RecordingCustomTypeSync()
+        let conversion = RecordingFirstAgentPairedApplier()
         let bus: UserEventBus
 
         init(session: SessionHarness) {
@@ -26,7 +27,8 @@ final class UserEventBusTests: XCTestCase {
                 agentStatusApplier: agentStatus,
                 templateSync: templateSync,
                 shortcutSync: shortcutSync,
-                customTypeSync: customTypeSync
+                customTypeSync: customTypeSync,
+                conversion: conversion
             )
         }
     }
@@ -164,6 +166,21 @@ final class UserEventBusTests: XCTestCase {
         XCTAssertEqual(action, .agentStatusChanged(agentId: "A1", online: true))
     }
 
+    func testFirstAgentPairedFixtureDemux() throws {
+        for fixtureCase in try EnvelopeFixtures.cases(fixture: "dto/central/FirstAgentPairedPayload.json") {
+            let envelope = try EnvelopeFixtures.envelope(type: "account.first_agent_paired", payload: fixtureCase.wire)
+            XCTAssertEqual(
+                UserEnvelopeDemux.demux(envelope),
+                .firstAgentPaired(agentId: "a1b2c3d4e5f6"),
+                fixtureCase.name
+            )
+        }
+        XCTAssertEqual(
+            UserEnvelopeDemux.demux(#"{"type":"account.first_agent_paired","payload":{}}"#),
+            .none
+        )
+    }
+
     func testUnknownAndMalformedAreSilentlyIgnored() {
         XCTAssertEqual(UserEnvelopeDemux.demux(#"{"type":"totally.new","payload":{}}"#), .none)
         XCTAssertEqual(UserEnvelopeDemux.demux("not json"), .none)
@@ -286,6 +303,26 @@ final class UserEventBusTests: XCTestCase {
         XCTAssertEqual(harness.agentStatus.updates.first?.agentId, "A1")
         XCTAssertEqual(harness.agentStatus.updates.first?.online, false)
         XCTAssertEqual(harness.templateSync.deletes, ["t1"])
+    }
+
+    func testFirstAgentPairedRoutesToTheConversionAndConnectReconcilesIt() async throws {
+        let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
+        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
+        let states = StreamCollector(harness.bus.connectionStates())
+
+        await harness.bus.start()
+        let connection = try await harness.transportFactory.connection(1)
+        connection.emit(.opened)
+        _ = try await states.next(where: { $0 == .connected })
+
+        connection.emit(.text(#"{"type":"account.first_agent_paired","payload":{"agent_id":"A1"}}"#))
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline, harness.conversion.paired.isEmpty {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertEqual(harness.conversion.reconcileCount, 1, "on-connect reconcile reaches the conversion")
+        XCTAssertEqual(harness.conversion.paired, ["A1"])
     }
 
     func testShortcutEventsRouteToHooksAndReconcileRefreshes() async throws {

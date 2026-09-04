@@ -73,6 +73,7 @@ enum FixtureRegistry {
         "ResetErrorBody": runner(ResetErrorBody.self),
         "DeleteAccountRequest": runner(DeleteAccountRequest.self),
         "CancelAccountDeletionResponse": runner(CancelAccountDeletionResponse.self),
+        "MeResponse": runner(MeResponse.self),
         "DeleteAccountReauthDetail": runner(DeleteAccountReauthDetail.self),
         "DeleteAccountReauthErrorBody": runner(DeleteAccountReauthErrorBody.self),
         // AutoScanDto.swift
@@ -142,6 +143,7 @@ enum FixtureRegistry {
         "CreateTemplateRequest": runner(CreateTemplateRequest.self),
         "UpdateTemplateRequest": runner(UpdateTemplateRequest.self),
         "TemplateDeletedPayload": runner(TemplateDeletedPayload.self),
+        "FirstAgentPairedPayload": runner(FirstAgentPairedPayload.self),
         // VersionDto.swift
         "VersionInfoResponse": runner(VersionInfoResponse.self),
     ]

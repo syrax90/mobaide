@@ -20,6 +20,10 @@ struct PreferencesStore: @unchecked Sendable {
 
     static let attentionSeenPrefix = "attention_seen::"
     static let recentCustomPathsPrefix = "recent_custom_paths::"
+    /// Outside every sign-out sweep on purpose: the `agent_paired` conversion
+    /// is once per account, so signing back in must find the outcome.
+    static let agentPairedLoggedPrefix = "agent_paired_logged::"
+    static let keyConversionArmedAt = "conversion_armed_at"
 
     static let maxRecentCustomPaths = 5
     static let maxRecentShortcutChords = 10
@@ -29,6 +33,7 @@ struct PreferencesStore: @unchecked Sendable {
     static func recentCustomPathsKey(agentKey: String) -> String { "\(recentCustomPathsPrefix)\(agentKey)" }
     static func recentShortcutChordsKey(kindKey: String) -> String { "recent_shortcut_chords::\(kindKey)" }
     static func attentionSeenKey(agentKey: String) -> String { "\(attentionSeenPrefix)\(agentKey)" }
+    static func agentPairedLoggedKey(userId: String) -> String { "\(agentPairedLoggedPrefix)\(userId)" }
 
     // UserDefaults is documented thread-safe; this struct holds no other
     // mutable state, hence @unchecked Sendable.
@@ -197,6 +202,27 @@ struct PreferencesStore: @unchecked Sendable {
 
     func setAttentionSeen(agentKey: String, record: AttentionSeenRecord) {
         encodeBlob(record, forKey: Self.attentionSeenKey(agentKey: agentKey))
+    }
+
+    func getAgentPairedOutcome(userId: String) -> String? {
+        defaults.string(forKey: Self.agentPairedLoggedKey(userId: userId))
+    }
+
+    func setAgentPairedOutcome(userId: String, outcome: String) {
+        defaults.set(outcome, forKey: Self.agentPairedLoggedKey(userId: userId))
+    }
+
+    func getConversionArmedAt() -> Date? {
+        guard let seconds = defaults.object(forKey: Self.keyConversionArmedAt) as? Double else { return nil }
+        return Date(timeIntervalSince1970: seconds)
+    }
+
+    /// Set-if-absent: the first Firebase-capable launch fixes the moment
+    /// before which a first pairing does not count for this install.
+    func armConversionIfUnset(now: Date) -> Date {
+        if let existing = getConversionArmedAt() { return existing }
+        defaults.set(now.timeIntervalSince1970, forKey: Self.keyConversionArmedAt)
+        return now
     }
 
     /// Drop every agent's attention bucket at sign-out.
