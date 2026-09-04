@@ -103,6 +103,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = CA9700000000000000000072 /* Build configuration list for PBXNativeTarget "Mobaide" */;
 			buildPhases = (
+				CA9700000000000000000057 /* Require Firebase config for Release */,
 				CA9700000000000000000051 /* Sources */,
 				CA9700000000000000000052 /* Frameworks */,
 				CA9700000000000000000053 /* Resources */,
@@ -203,6 +204,29 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		CA9700000000000000000057 /* Require Firebase config for Release */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Require Firebase config for Release";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"${CONFIGURATION}\" = \"Release\" ] && [ ! -f \"${SRCROOT}/Mobaide/GoogleService-Info.plist\" ]; then\n  echo \"error: Mobaide/GoogleService-Info.plist is missing: Release builds must ship Firebase Analytics. Copy the gitignored file from the main checkout.\"\n  exit 1\nfi\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		CA9700000000000000000051 /* Sources */ = {

@@ -729,7 +729,10 @@ for the Analytics binary. `MobaideApp.init()` calls
 `FirebaseApp.configure(options:)` only when `GoogleService-Info.plist` is in
 the bundle — the file is gitignored and absent in worktrees and CI, where the
 `FirebaseAnalyticsSink` reports itself disabled and the conversion component
-performs no I/O. `Info.plist` fixes the consent-mode defaults
+performs no I/O. A Release-only run-script phase ("Require Firebase config
+for Release", first in the app target's build phases) fails the build when
+the plist is missing, so an App Store archive cannot ship with analytics
+inert while Debug and CI builds stay config-free. `Info.plist` fixes the consent-mode defaults
 (`GOOGLE_ANALYTICS_DEFAULT_ALLOW_*`: analytics and ad storage granted, ad user
 data `eu_consent_policy`, ad personalisation denied), switches automatic
 screen reporting, IDFV collection and the app-delegate proxy off (the app owns

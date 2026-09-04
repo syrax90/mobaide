@@ -58,7 +58,7 @@ Rules the component enforces, identical on both platforms:
 | Rule | Why |
 |---|---|
 | **Sink disabled ⇒ return before any I/O.** No `/me` call, no arming, no outcome. | Worktree, CI and dev builds have no Firebase config; they must stay silent, and a later configured build must evaluate fresh. |
-| `armedAt` is a set-if-absent device timestamp written the first time a Firebase-capable build runs `reconcile()` (iOS also arms in `AppContainer.start()`); it is never moved afterwards. | Accounts that paired *before* this install or upgrade — including every account backfilled on 2026-09-02 — never log; a pairing done elsewhere while the app was closed does log on the next connect. |
+| `armedAt` is a set-if-absent device timestamp written at the first launch of a Firebase-capable build (Android `MainActivity.onCreate`, iOS `AppContainer.start()`) and self-armed inside `reconcile()` as a fallback; it is never moved afterwards. | Accounts that paired *before* this install or upgrade — including every account backfilled on 2026-09-02 — never log; a pairing done elsewhere while the app was closed does log on the next connect. |
 | Outcomes are strings: `logged` or `skipped_predates_install`. A null or unparseable stamp persists nothing (retry next connect). | `first_paired_at` never changes, so "predates install" is final and old accounts stop hitting `/me`. Two states are distinguishable in a bug report. |
 | Log first, persist second, inside one lock (Android `Mutex`; iOS one actor turn with no `await` between the check and the write, re-checked after the `/me` await). | The SDK's `logEvent` is a local enqueue that never throws; a duplicate is cheaper than a lost conversion, and the live event and the connect reconcile can race by milliseconds. |
 | Outcomes are keyed `agent_paired_logged::<userId>` in the app preferences store and are **not** purged by the sign-out sweeps. | Sign-out then sign-in on the same account must not re-log. The preferences store is included in platform backups; a restored outcome only suppresses. |
@@ -118,9 +118,11 @@ absence and to refuse to *release* without them:
   `MobaideApp.init()` configures Firebase only when
   `FirebaseOptions(contentsOfFile:)` finds the plist; `ios-build.yml` (push to
   `main`, iPhone 16 simulator, `-onlyUsePackageVersionsFromResolvedFile`) runs
-  the whole test bundle with no plist. App Store builds are made locally from
-  the main checkout, where the plist exists; verify `GoogleService-Info.plist`
-  is inside the archived `.app` before uploading.
+  the whole test bundle with no plist. A Release-only run-script phase
+  ("Require Firebase config for Release", first in the app target's build
+  phases) fails the build when the plist is missing, so an App Store archive
+  made from a worktree cannot ship with analytics inert; Debug and CI builds
+  are unaffected.
 - **Worktrees** — copy both files in from the main checkout to build with
   analytics (`cp ../../android/app/google-services.json android/app/` and
   the iOS equivalent); they stay untracked.
@@ -144,12 +146,12 @@ absence and to refuse to *release* without them:
   `NoOpAnalyticsSink`), `data/analytics/AgentPairedConversion.kt`,
   `di/AnalyticsModule.kt`; `PreferencesStore` keys `conversion_armed_at` and
   `agent_paired_logged::<userId>`; `CentralApi.getMe`; the
-  `UserEventBus` branch and connect reconcile. Arming happens inside the
-  first connect-time `reconcile()` rather than in `Application.onCreate`:
-  injecting the conversion into the `Application` class pulled the whole
-  Hilt graph (down to the Keystore-backed `TokenStore`) into every
-  Robolectric test, and no pairing from an install can precede its first
-  user-events connect, so the semantics are identical.
+  `UserEventBus` branch and connect reconcile; `MainActivity.onCreate` arms
+  at launch (`armIfNeeded()`), before any sign-in, so an account that pairs
+  elsewhere between the install and its first connect still counts. The
+  `Application` class is deliberately not the arming site: injecting the
+  conversion there pulled the whole Hilt graph (down to the Keystore-backed
+  `TokenStore`) into every Robolectric test.
 - Debugging: `adb shell setprop debug.firebase.analytics.app com.mobaide.app`
   then watch Firebase console → Analytics → DebugView; `logcat -s FA FA-SVC`
   shows the SDK's own decisions (consent, missing config).
