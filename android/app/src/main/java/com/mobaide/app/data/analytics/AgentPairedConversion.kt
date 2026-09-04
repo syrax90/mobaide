@@ -2,7 +2,6 @@ package com.mobaide.app.data.analytics
 
 import android.util.Log
 import com.mobaide.app.data.auth.UserIdentityStore
-import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.CentralApi
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -30,31 +29,31 @@ class AgentPairedConversion(
     private val sink: AnalyticsSink,
     private val centralApi: CentralApi,
     private val userIdentityStore: UserIdentityStore,
-    private val preferencesStore: PreferencesStore,
+    private val state: ConversionStateStore,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val mutex = Mutex()
 
     suspend fun armIfNeeded() {
         if (!sink.isEnabled) return
-        preferencesStore.armConversionIfUnset(clock())
+        state.armIfUnset(clock())
     }
 
     suspend fun onFirstAgentPairedEvent() {
         if (!sink.isEnabled) return
         val userId = userIdentityStore.getUserId() ?: return
         mutex.withLock {
-            if (preferencesStore.getAgentPairedOutcome(userId) != null) return
+            if (state.getOutcome(userId) != null) return
             sink.logEvent(EVENT_NAME, mapOf(PARAM_SOURCE to SOURCE_LIVE))
-            preferencesStore.setAgentPairedOutcome(userId, OUTCOME_LOGGED)
+            state.setOutcome(userId, OUTCOME_LOGGED)
         }
     }
 
     suspend fun reconcile() {
         if (!sink.isEnabled) return
         val userId = userIdentityStore.getUserId() ?: return
-        if (preferencesStore.getAgentPairedOutcome(userId) != null) return
-        val armedAt = preferencesStore.armConversionIfUnset(clock())
+        if (state.getOutcome(userId) != null) return
+        val armedAt = state.armIfUnset(clock())
         val token = userIdentityStore.getUserAccessToken() ?: return
         val me = try {
             centralApi.getMe(token)
@@ -65,12 +64,12 @@ class AgentPairedConversion(
         if (me.user_id != userId) return
         val pairedAt = me.first_paired_at?.let(::parseIsoMillis) ?: return
         mutex.withLock {
-            if (preferencesStore.getAgentPairedOutcome(userId) != null) return
+            if (state.getOutcome(userId) != null) return
             if (pairedAt >= armedAt - FIRST_PAIRING_TOLERANCE_MS) {
                 sink.logEvent(EVENT_NAME, mapOf(PARAM_SOURCE to SOURCE_RECONCILE))
-                preferencesStore.setAgentPairedOutcome(userId, OUTCOME_LOGGED)
+                state.setOutcome(userId, OUTCOME_LOGGED)
             } else {
-                preferencesStore.setAgentPairedOutcome(userId, OUTCOME_SKIPPED_PREDATES_INSTALL)
+                state.setOutcome(userId, OUTCOME_SKIPPED_PREDATES_INSTALL)
             }
         }
     }

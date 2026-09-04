@@ -11,4 +11,5 @@
 <full-backup-content>
     <exclude domain="sharedpref" path="mobaide_auth.xml" />
     <exclude domain="file" path="datastore/device_identity.preferences_pb" />
+    <exclude domain="file" path="datastore/ads_conversion.preferences_pb" />
 </full-backup-content>

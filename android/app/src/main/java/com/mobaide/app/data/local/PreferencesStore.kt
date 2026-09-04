@@ -5,7 +5,6 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
-import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.mobaide.app.data.network.dto.LinearLabelDto
@@ -34,7 +33,6 @@ class PreferencesStore(private val context: Context) {
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
     private val keyExternalSessionsNoticeDismissed =
         booleanPreferencesKey("external_sessions_notice_dismissed")
-    private val keyConversionArmedAt = longPreferencesKey("conversion_armed_at")
 
     // Lenient (ignore unknown keys) so adding fields server-side later doesn't
     // crash a stale cached blob.
@@ -53,9 +51,6 @@ class PreferencesStore(private val context: Context) {
 
     private fun keyRecentShortcutChords(sessionKindKey: String) =
         stringPreferencesKey("recent_shortcut_chords::$sessionKindKey")
-
-    private fun keyAgentPairedOutcome(userId: String) =
-        stringPreferencesKey("$AGENT_PAIRED_LOGGED_PREFIX$userId")
 
     private val stringListSerializer = ListSerializer(String.serializer())
 
@@ -310,35 +305,8 @@ class PreferencesStore(private val context: Context) {
         }
     }
 
-    /**
-     * Outcome of the once-per-account `agent_paired` conversion for [userId]
-     * (see `AgentPairedConversion`). Keyed by account and deliberately left
-     * alone by every sign-out sweep: a sign-out/sign-in cycle must not log
-     * the conversion a second time.
-     */
-    suspend fun getAgentPairedOutcome(userId: String): String? =
-        context.dataStore.data.map { it[keyAgentPairedOutcome(userId)] }.first()
-
-    suspend fun setAgentPairedOutcome(userId: String, outcome: String) {
-        context.dataStore.edit { prefs ->
-            prefs[keyAgentPairedOutcome(userId)] = outcome
-        }
-    }
-
-    suspend fun getConversionArmedAt(): Long? =
-        context.dataStore.data.map { it[keyConversionArmedAt] }.first()
-
-    /** Records [nowMillis] as the conversion window's start once; returns the stored value. */
-    suspend fun armConversionIfUnset(nowMillis: Long): Long {
-        val prefs = context.dataStore.edit { prefs ->
-            if (prefs[keyConversionArmedAt] == null) prefs[keyConversionArmedAt] = nowMillis
-        }
-        return prefs[keyConversionArmedAt] ?: nowMillis
-    }
-
     companion object {
         const val RECENT_CUSTOM_PATHS_PREFIX: String = "recent_custom_paths::"
-        const val AGENT_PAIRED_LOGGED_PREFIX: String = "agent_paired_logged::"
         const val MAX_RECENT_CUSTOM_PATHS: Int = 5
         const val MAX_RECENT_SHORTCUT_CHORDS: Int = 10
     }

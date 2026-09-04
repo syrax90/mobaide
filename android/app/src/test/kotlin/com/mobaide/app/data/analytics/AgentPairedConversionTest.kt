@@ -1,7 +1,6 @@
 package com.mobaide.app.data.analytics
 
 import com.mobaide.app.data.auth.UserIdentityStore
-import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.CentralApi
 import com.mobaide.app.data.network.dto.MeResponse
 import io.mockk.coEvery
@@ -21,8 +20,8 @@ import java.time.ZoneOffset
 /**
  * Unit tests for [AgentPairedConversion]: the once-per-account rule, the
  * armed-window gate on the reconcile path, and the disabled-sink
- * short-circuit. The preferences store is a map-backed mock so outcomes can
- * be asserted directly.
+ * short-circuit. The conversion state store is a map-backed mock so outcomes
+ * can be asserted directly.
  */
 class AgentPairedConversionTest {
 
@@ -40,18 +39,18 @@ class AgentPairedConversionTest {
         var armedAt: Long? = null
         val api = mockk<CentralApi>()
         val identity = mockk<UserIdentityStore>()
-        val prefs = mockk<PreferencesStore>()
+        val prefs = mockk<ConversionStateStore>()
         val conversion: AgentPairedConversion
 
         init {
             every { identity.getUserId() } returns userId
             every { identity.getUserAccessToken() } returns "tok"
-            coEvery { prefs.getAgentPairedOutcome(any()) } answers { outcomes[firstArg()] }
-            coEvery { prefs.setAgentPairedOutcome(any(), any()) } answers {
+            coEvery { prefs.getOutcome(any()) } answers { outcomes[firstArg()] }
+            coEvery { prefs.setOutcome(any(), any()) } answers {
                 outcomes[firstArg()] = secondArg()
                 Unit
             }
-            coEvery { prefs.armConversionIfUnset(any()) } answers {
+            coEvery { prefs.armIfUnset(any()) } answers {
                 armedAt ?: firstArg<Long>().also { armedAt = it }
             }
             conversion = AgentPairedConversion(sink, api, identity, prefs) { this.now }
