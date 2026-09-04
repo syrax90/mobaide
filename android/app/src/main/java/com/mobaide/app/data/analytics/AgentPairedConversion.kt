@@ -16,10 +16,12 @@ import java.time.OffsetDateTime
  * post-install by construction, and a reconcile on every user-events
  * connect that reads `first_paired_at` from `GET /api/auth/me` for a
  * pairing that happened while the app was closed. The reconcile only counts
- * a pairing stamped after this install armed — the first reconcile of a
- * build carrying the sink, which no pairing from this install can precede —
- * so backfilled and pre-existing accounts never log; the skip is persisted
- * because the stamp never changes.
+ * a pairing stamped after this install armed — at the first launch of a
+ * build carrying the sink ([armIfNeeded] from `MainActivity`), or at the
+ * first reconcile if that somehow came first — so backfilled and
+ * pre-existing accounts never log; the skip is persisted because the stamp
+ * never changes. Arming at launch rather than at sign-in matters: an account
+ * that pairs elsewhere before this install's first connect must still count.
  *
  * Both paths stop before any I/O when the sink is disabled, so a build
  * without Firebase config neither calls the server nor persists an outcome.
@@ -32,6 +34,11 @@ class AgentPairedConversion(
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val mutex = Mutex()
+
+    suspend fun armIfNeeded() {
+        if (!sink.isEnabled) return
+        preferencesStore.armConversionIfUnset(clock())
+    }
 
     suspend fun onFirstAgentPairedEvent() {
         if (!sink.isEnabled) return

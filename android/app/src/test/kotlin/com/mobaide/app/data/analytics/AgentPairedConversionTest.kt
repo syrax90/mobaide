@@ -258,6 +258,42 @@ class AgentPairedConversionTest {
         assertEquals("logged", f.outcomes["u1"])
     }
 
+    // ---- arming -------------------------------------------------------------
+
+    @Test
+    fun armIfNeeded_recordsTheLaunchTime_once() = runTest {
+        val f = Fixture()
+
+        f.conversion.armIfNeeded()
+        f.now = T0 + 3_600_000L
+        f.conversion.armIfNeeded()
+
+        assertEquals(T0, f.armedAt)
+    }
+
+    @Test
+    fun armIfNeeded_sinkDisabled_doesNotArm() = runTest {
+        val f = Fixture()
+        f.sink.isEnabled = false
+
+        f.conversion.armIfNeeded()
+
+        assertNull(f.armedAt)
+    }
+
+    @Test
+    fun reconcile_pairingAfterLaunchButBeforeFirstConnect_logs() = runTest {
+        val f = Fixture()
+        f.conversion.armIfNeeded()
+        f.serverSays(firstPairedAt = iso(T0 + 2 * 3_600_000L))
+        f.now = T0 + 5 * 3_600_000L
+
+        f.conversion.reconcile()
+
+        assertEquals(listOf("agent_paired" to mapOf("source" to "reconcile")), f.sink.events)
+        assertEquals("logged", f.outcomes["u1"])
+    }
+
     private companion object {
         val T0: Long = Instant.parse("2026-09-04T12:00:00Z").toEpochMilli()
 
