@@ -1,5 +1,38 @@
 # central_server Changelog
 
+## [0.2.15](https://github.com/syrax90/claude_mobile/compare/server-v0.2.14...server-v0.2.15) (2026-09-04)
+
+
+### Features
+
+* in-app "Agent paired" conversion via Firebase Analytics (Stage 5) ([50a74de](https://github.com/syrax90/claude_mobile/commit/50a74dea63f69efbc447dee2252ef22b2b30604e))
+* **server:** broadcast account.first_agent_paired and expose first_paired_at on GET /api/auth/me ([e26a30d](https://github.com/syrax90/claude_mobile/commit/e26a30dfae7ec6544f7054fb31326954a5540965))
+* **server:** show Android and iOS screenshots behind a platform switch ([68fae7d](https://github.com/syrax90/claude_mobile/commit/68fae7d4338d4aebaea6e34b18af2a1ce87678b1))
+* **server:** show Android and iOS screenshots behind a platform switch ([5dd449e](https://github.com/syrax90/claude_mobile/commit/5dd449ea918aaad06776f9f1941cce4f9fd1c6c1))
+* **server:** upload an "Agent paired" Google Ads conversion on first pairing ([c4514bb](https://github.com/syrax90/claude_mobile/commit/c4514bbadf249cddaf325641981c7e048b55ddb9))
+* **server:** upload an "Agent paired" Google Ads conversion on first pairing ([ba949b0](https://github.com/syrax90/claude_mobile/commit/ba949b0d59d977e53a6f0efc2d76734a566dead9))
+
+
+### Bug Fixes
+
+* **ios:** keep the conversion state out of backups and device transfers ([6958dbf](https://github.com/syrax90/claude_mobile/commit/6958dbfe8d4f0730168d6ccd28e758895f98ecd3))
+* **server:** bind ad consent to the visitor's network, revalidate before retries, guard late consent responses ([615d99e](https://github.com/syrax90/claude_mobile/commit/615d99e9983f3c0e573af0c1c8e5d0e197a7c097))
+* **server:** cap ad-attribution retention by sign-up, purge before resume, never renew the consent cookie ([b9a510c](https://github.com/syrax90/claude_mobile/commit/b9a510c08d05651b7096c46061860c3e3595b264))
+* **server:** dedupe re-sent conversions, defer uploads on refused credentials, reject a 200 without a request id ([a1fbfd3](https://github.com/syrax90/claude_mobile/commit/a1fbfd3956abfc6f332099dee03088d224b197cc))
+* **server:** give the selected platform tab a 3:1 state indicator ([6456605](https://github.com/syrax90/claude_mobile/commit/6456605f6e2408bf68df253d69cf65935624852a))
+* **server:** hold the ads transport lock through a cancelled request ([0e84c0c](https://github.com/syrax90/claude_mobile/commit/0e84c0ca2c35da4cce84d2b42c6baaa8e2b53705))
+* **server:** issue the ad-attribution cookie server-side, signed and same-origin only ([22f8818](https://github.com/syrax90/claude_mobile/commit/22f88187875b622d3c54d3079cbc322630056b7e))
+* **server:** move the "Agent paired" conversion upload to the Data Manager API ([4a1810a](https://github.com/syrax90/claude_mobile/commit/4a1810a86d57603ffc1af447ea746669cc953444))
+* **server:** move the "Agent paired" conversion upload to the Data Manager API ([14f0064](https://github.com/syrax90/claude_mobile/commit/14f006406253930caf40d76110d66ccbbc02b922))
+* **server:** propagate consent withdrawal, trust Cloudflare edges, revalidate under the send lock, match the click window ([7c7d30b](https://github.com/syrax90/claude_mobile/commit/7c7d30b54dceaa8fbda04cbeb035207cad800b11))
+* **server:** run status GETs under the send lock, key transaction ids on the microsecond pairing instant ([810cad6](https://github.com/syrax90/claude_mobile/commit/810cad6d98cd05b5549eb44ada19e0d75041762a))
+* **server:** treat a desktop-mode iPad as iOS in the screenshot switch ([321e183](https://github.com/syrax90/claude_mobile/commit/321e18311f38582f61be7b9e0cd38d74246957a0))
+
+
+### Documentation
+
+* **server:** describe the apps' Firebase measurement in the privacy policy and landing copy ([e780faa](https://github.com/syrax90/claude_mobile/commit/e780faa663c444292e443f8fd685b43de4cbd10c))
+
 ## [0.2.14](https://github.com/syrax90/claude_mobile/compare/server-v0.2.13...server-v0.2.14) (2026-08-30)
 
 
