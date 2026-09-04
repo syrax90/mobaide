@@ -9,7 +9,9 @@ only be attributed through Google's own chain: **Google Analytics for
 Firebase → GA4 → Google Ads**. This document is that second lane: what the
 apps send, how "once per account" is enforced on a device, how the untracked
 Firebase config files reach a build, and what the two store consoles must be
-told. The privacy policy's Section 3.8 (`central_server/legal/privacy.md`) is
+told. The rollout as a whole — both lanes, the stage history, the account
+configuration and how to pause, change or remove it — is
+[agent-paired-conversion.md](agent-paired-conversion.md). The privacy policy's Section 3.8 (`central_server/legal/privacy.md`) is
 the user-facing statement of the same facts and must stay in sync with it.
 
 ## Wire contract
