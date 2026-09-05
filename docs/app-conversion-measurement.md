@@ -69,9 +69,8 @@ Rules the component enforces, identical on both platforms:
 
 Accepted: a second device installed *before* the pairing logs too — Google
 Ads attributes the event only to that device's own ad-driven install, so a
-duplicate without an ad click is inert. Set the Google
-Ads conversion action's counting to **"One"** per click (Stage 6) so the
-remaining duplicates collapse.
+duplicate without an ad click is inert. The imported Google Ads actions
+count **One** per click, so the remaining duplicates collapse.
 
 ## Consent defaults and data minimisation
 
@@ -161,20 +160,31 @@ absence and to refuse to *release* without them:
 ## iOS
 
 - Package: `https://github.com/firebase/firebase-ios-sdk` (up to next major
-  from `12.18.0`, Xcode ≥ 26.2), product **`FirebaseAnalytics` only** —
-  `FirebaseAnalyticsIdentitySupport` is the IDFA opt-in and must never be
-  added; no `AdSupport` link, no `NSUserTrackingUsageDescription`
-  (`otool -L` on the built app shows neither AdSupport nor
-  AppTrackingTransparency). `OTHER_LDFLAGS` carries `-ObjC` for the Analytics
-  binary. Firebase 12 also links Google's on-device conversion measurement
-  package (`google-ads-on-device-conversion-ios-sdk`); its "event data"
-  variant matches de-identified, temporary event data on the device and is
-  left at its default (opt out with
+  from `12.18.0`, Xcode ≥ 26.2), product **`FirebaseAnalytics`**. In 12.x that
+  product bundles `GoogleAppMeasurementIdentitySupport` (IDFA-capable code)
+  and Google's on-device conversion measurement
+  (`google-ads-on-device-conversion-ios-sdk`); the IDFA-free product is
+  `FirebaseAnalyticsCore`, which would also drop on-device measurement. The
+  IDFA code is inert as long as the app never links `AdSupport` and never
+  requests tracking permission — Firebase's documented guard — so: no
+  `AdSupport` link, no `NSUserTrackingUsageDescription`, and `otool -L` on
+  every release archive must show neither AdSupport nor
+  AppTrackingTransparency (`strings -a Mobaide | grep -c ASIdentifierManager`
+  finds the dormant code; expected, not a leak). `OTHER_LDFLAGS` carries
+  `-ObjC` for the Analytics binary. The on-device "event data" variant matches
+  de-identified, temporary event data on the device and is active with no
+  code call; it is left at its default (opt out with
   `GOOGLE_ADS_ON_DEVICE_CONVERSION_EVENT_DATA_ENABLED = NO` if that ever
   changes — and update privacy policy §3.8 with it). Firebase's Analytics
   xcframeworks ship no privacy manifest of their own (only `FirebaseCore`
   does), so the app manifest is the sole declaration.
   `Package.resolved` is committed — CI resolves from it only.
+- App Store upload: Xcode embeds the static Firebase xcframeworks as ~51 KB
+  code-less stub dylibs, so the Organizer prints four "Upload Symbols Failed …
+  no dSYM" warnings (FirebaseAnalytics, GoogleAppMeasurement,
+  GoogleAppMeasurementIdentitySupport, GoogleAdsOnDeviceConversion). Harmless;
+  keep "Upload your app's symbols" on — the app's own dSYM is the one that
+  matters.
 - `Support/Info.plist`: `SKAdNetworkItems` with Google's
   `cstr6suwn9.skadnetwork` (iOS App campaigns attribute through SKAdNetwork;
   there is no per-advertiser id), the consent keys above,
@@ -216,38 +226,82 @@ config files copied into the worktree and DebugView enabled on the device:
 4. Sign in with an account that paired before the app was installed → nothing
    logged, and `/me` is not called again on later connects.
 
-## Stage 6 runbook (console wiring — YOU)
+## Console wiring (done 2026-09-04/05)
 
-1. Add the `GOOGLE_SERVICES_JSON_BASE64` repository secret before tagging an
-   `android-v*` release.
-2. GA4 property (Firebase console → Analytics settings): data retention
-   **2 months** for event-level data (the privacy policy states it), Google
-   Signals **off**.
-3. After the first released builds send events: Firebase console → Analytics
-   → Events → mark `agent_paired` as a **key event**.
-4. Google Ads → Goals → Conversions → **+ New → App → Google Analytics 4
-   (Firebase)** → import `agent_paired` for the Android app and for the iOS
-   app; counting **One**; add both actions to the existing **"Agent paired"
-   custom goal** and mark them Primary; point App campaigns at the goal.
-   Keep the bidding caution from Stage 4: no tCPA until ~15–30 conversions in
-   30 days.
-5. Update the Play Data Safety form and the App Store privacy details with
-   the answers below **with** the store submissions; check the published
-   store-listing texts (30 locales) for any surviving "no analytics / no
-   tracking" claim and remove it.
-6. The privacy policy's Section 13 promises notice of material changes;
-   decide whether the release notes plus the updated policy suffice or an
-   email goes out.
+What Stage 6 left configured and the rules for the next change. The
+account-level inventory is §6 of
+[agent-paired-conversion.md](agent-paired-conversion.md).
+
+- **GA4 property** (Firebase console → Analytics settings): event-level data
+  retention 2 months (the privacy policy states it), Google Signals off,
+  `agent_paired` a key event. No SKAdNetwork conversion value schema (below).
+- **Google Ads import** (Goals → Conversions → Summary → + New conversion
+  action → sources page, keep *Conversions on an app* → *Create multiple
+  conversion actions from a linked account* → the GA4 property): three rows —
+  `agent_paired` for the Android stream and for the iOS stream (category
+  Sign-up, Count **One**, the same value as the offline "Agent paired" action,
+  **Primary**) and `first_open` for **iOS only** (category Download, no value,
+  Count One, Primary in the Download goal). Android installs are already the
+  Play action Google created with the Android campaign; a Firebase `first_open`
+  for Android would count each install twice.
+- **Custom goal "Agent paired"**: the offline action plus the two app
+  `agent_paired` actions. Only the web (Performance Max) campaign uses it. App
+  campaigns never use conversion goals — they pick actions in Settings →
+  Bidding — so the goal edit changed nothing about them.
+- **App campaigns** (Android; iOS created 2026-09-05): focus *Install volume*,
+  *All users*; install tracking = the Play action (Android) / the imported iOS
+  `first_open` (iOS). The `agent_paired` actions report on their own (Campaigns
+  table → Segment → Conversions → Conversion action; the row appears with the
+  first attributed pairing). **Switch to the pairing focus only with data:** at
+  roughly 30 pairings attributed to the campaign in 30 days (Google's bar is
+  ≥10 different users a day), Settings → Bidding → focus *In-app actions*,
+  tick only that platform's `agent_paired`, untick the target (*Maximize
+  conversions for in-app actions*) or set the observed cost per pairing × 1.2
+  with a daily budget ≥10–15× it; then leave it 14 days and judge over 30.
+  Never a guessed target: with no observed pairings the focus has nothing to
+  optimise toward and a target only throttles delivery. Demote the Play install
+  action to Secondary (observe only) only once the Android campaign bids on
+  in-app actions. *Users likely to perform an in-app action* is in Google's
+  docs but not offered in this account; skip it.
+- **iOS specifics:** the campaign's Conversions column shows Google's modeled
+  conversions — up to 5 days late, click-through and engaged-view only — so
+  judge ranges that end ≥5 days ago. The SKAdNetwork conversions report
+  (Campaigns → Reports → Goals and conversions) is Apple's separate attribution
+  and never reconciles with it. Keep ≤8 iOS install campaigns per app. The
+  SKAdNetwork conversion value schema (GA4 → Admin → Data streams → iOS →
+  *Configure SKAdNetwork conversion values*) stays unset: Google reads only the
+  fine value of postback window 1 (0–2 days after install), wants ~50 installs
+  and >10 occurrences of each mapped event a day, and a pairing days after the
+  install never reaches it. If it is ever set: `agent_paired` → a fine value in
+  window 1, in GA4 only, never a second schema through the Ads API or an
+  attribution partner.
+- **Expect** the campaign figures well below GA4's: GA4 counts every user who
+  pairs, updaters and organic installs included; Ads counts attributed
+  pairings inside the conversion window.
 
 ## Store disclosures
+
+Submitted with Android 3.6.4 (Play, 2026-09-04) and iOS 1.0.3 (6) (App Privacy
+published 2026-09-05). The tables below are the record of what was declared and
+must keep matching the shipped build; a change to the collected data goes here,
+into `PrivacyInfo.xcprivacy` and into privacy §3.8 together.
 
 ### Google Play — Data safety form
 
 Overview answers: collects or shares required data types **Yes**; all
 collected data encrypted in transit **Yes**; users can request deletion
 **Yes** (`https://mobaide.com/portal/delete-account-info`, unchanged); app
-contains ads **No**; the app requests the advertising ID (the form asks once
-`AD_ID` is present) **Yes — for advertising or marketing measurement**.
+contains ads **No**. The separate **Advertising ID** declaration (App content):
+uses advertising ID **Yes**, purposes **Analytics** and **Advertising or
+marketing**; leave *Turn off release errors* unticked.
+
+Traps met on 2026-09-04: with `AD_ID` in the manifest and the declaration still
+at "No", `release-android.yml` fails at the Play commit; fix the declaration
+**and** click *Send changes for review* on Publishing overview before
+re-running — saving alone does not clear the check. The release page then
+warns that older active artifacts lack `AD_ID`: *Release without permission*
+is the right button; *Update declaration* would flip it back to "No" and block
+the next upload.
 
 | Category → type | Collected | Shared | Required / optional | Purposes | Notes |
 |---|---|---|---|---|---|
@@ -261,8 +315,18 @@ contains ads **No**; the app requests the advertising ID (the form asks once
 
 ### App Store Connect — App Privacy
 
+Edited under App Store Connect → the app → App Privacy → Data Types → Edit and
+**published**; publishing is independent of a version and has no review. The
+six types below are `PrivacyInfo.xcprivacy` verbatim — Apple cross-reads the
+manifest, so keep them in lockstep. Product Interaction, not Advertising Data:
+the app receives nothing about ads (no `NSAdvertisingAttributionReportEndpoint`,
+so SKAdNetwork postbacks go Apple → Google; the SDK's ad events fire only with
+the Mobile Ads SDK).
+
 Data used to **track** you: **none** (no IDFA, no ATT, `NSPrivacyTracking =
-false`; SKAdNetwork attribution is not tracking under Apple's definition).
+false`; SKAdNetwork attribution is Apple's own channel and on-device
+measurement leaves the phone only in de-identified form — neither is tracking
+under Apple's definition).
 
 | Section | Data type | Purposes | Notes |
 |---|---|---|---|
