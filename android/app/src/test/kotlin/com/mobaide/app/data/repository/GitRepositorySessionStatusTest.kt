@@ -12,6 +12,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -161,17 +162,63 @@ class GitRepositorySessionStatusTest {
     }
 
     @Test
-    fun manualRefresh_fetchesWithoutWaitingForTheTick() = runTest {
+    fun manualRefresh_fetchesWithoutWaitingForTheTick_andIsMarkedManual() = runTest {
         val f = newFixture()
-        coEvery { f.restApi.getSessionGitStatus("s1", any()) } returns status("e1")
+        val body = status("e1")
+        coEvery { f.restApi.getSessionGitStatus("s1", any()) } returns body
+
+        f.observe().test {
+            assertEquals(SessionGitStatusLoad.Loaded(body, manual = false), awaitItem())
+            f.refreshRequests.emit(Unit)
+            runCurrent()
+
+            assertEquals(SessionGitStatusLoad.Loaded(body, manual = true), awaitItem())
+            coVerify(exactly = 2) { f.restApi.getSessionGitStatus("s1", any()) }
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun aManualRequestDuringAFetch_isAnsweredByTheNextLoad_notTheOneInFlight() = runTest {
+        // The fetch already running when the user pulled may predate the
+        // pull; only the load its request actually produced may end the spinner.
+        val f = newFixture()
+        val inFlight = CompletableDeferred<GitStatusResponse>()
+        coEvery { f.restApi.getSessionGitStatus("s1", any()) } coAnswers { inFlight.await() } andThen
+            status("e2")
+
+        f.observe().test {
+            runCurrent()
+            f.refreshRequests.emit(Unit)
+            runCurrent()
+            expectNoEvents()
+            coVerify(exactly = 1) { f.restApi.getSessionGitStatus("s1", any()) }
+
+            inFlight.complete(status("e1"))
+            runCurrent()
+
+            assertEquals(SessionGitStatusLoad.Loaded(status("e1"), manual = false), awaitItem())
+            assertEquals(SessionGitStatusLoad.Loaded(status("e2"), manual = true), awaitItem())
+            coVerify(exactly = 2) { f.restApi.getSessionGitStatus("s1", any()) }
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun aManualRefreshThatFails_isStillMarkedManual() = runTest {
+        val f = newFixture()
+        val first = status("e1")
+        coEvery { f.restApi.getSessionGitStatus("s1", any()) } returns first andThenThrows
+            IOException("down")
 
         f.observe().test {
             awaitItem()
             f.refreshRequests.emit(Unit)
             runCurrent()
 
-            assertEquals("e1", loaded(awaitItem()).etag)
-            coVerify(exactly = 2) { f.restApi.getSessionGitStatus("s1", any()) }
+            val failure = failed(awaitItem())
+            assertTrue(failure.manual)
+            assertEquals(first, failure.cached)
             cancelAndIgnoreRemainingEvents()
         }
     }

@@ -22,7 +22,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -60,10 +62,12 @@ class GitChangesViewModel @Inject constructor(
             foreground = appForegroundTracker.isForeground,
             refreshRequests = refreshRequests,
             initial = { lastStatus },
-        ).onEach { load ->
-            load.cached?.let { lastStatus = it }
-            manualRefreshing.value = false
-        }
+        ).onStart { manualRefreshing.value = false }
+            .onEach { load ->
+                load.cached?.let { lastStatus = it }
+                if (load.manual) manualRefreshing.value = false
+            }
+            .onCompletion { manualRefreshing.value = false }
 
     val uiState: StateFlow<GitChangesUiState> =
         combine(loads, manualRefreshing) { load, refreshing -> toUiState(load, refreshing) }
@@ -77,7 +81,9 @@ class GitChangesViewModel @Inject constructor(
     val events: Flow<GitChangesEvent> = _events.receiveAsFlow()
 
     fun refresh() {
-        manualRefreshing.value = true
+        // A pull on a finished feed (old agent, session gone) has nobody to
+        // answer it; arming the indicator then would leave it spinning.
+        if (refreshRequests.subscriptionCount.value > 0) manualRefreshing.value = true
         refreshRequests.tryEmit(Unit)
     }
 

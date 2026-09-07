@@ -66,6 +66,8 @@ internal fun buildDiffRows(diff: GitDiffResponse): List<DiffRow> {
         else -> {
             var shown = 0
             diff.hunks.forEachIndexed { h, hunk ->
+                // A hunk with no lines in a truncated diff is overflow past the cap, not content.
+                if (diff.truncated && hunk.lines.isEmpty()) return@forEachIndexed
                 rows += DiffRow.HunkHeader(
                     key = "h$h",
                     range = "@@ -${hunk.old_start},${hunk.old_lines} +${hunk.new_start},${hunk.new_lines} @@",

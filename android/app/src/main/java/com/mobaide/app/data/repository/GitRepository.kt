@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -44,19 +45,31 @@ import kotlin.time.Duration.Companion.seconds
  */
 class GitBusyException(val busyBy: List<BusyHolder>) : Exception("Git item busy")
 
-/** One answer of the session Changes poll; [cached] is the last full body seen. */
+/**
+ * One answer of the session Changes poll; [cached] is the last full body seen.
+ * [manual] is true when a caller's explicit refresh request was among the
+ * triggers coalesced into this fetch — a pull-to-refresh queued behind an
+ * in-flight tick is answered by the *next* load, not the one already running.
+ */
 sealed interface SessionGitStatusLoad {
     val cached: GitStatusResponse?
+    val manual: Boolean
 
-    data class Loaded(val status: GitStatusResponse) : SessionGitStatusLoad {
+    data class Loaded(
+        val status: GitStatusResponse,
+        override val manual: Boolean = false,
+    ) : SessionGitStatusLoad {
         override val cached: GitStatusResponse get() = status
     }
 
     data class Failed(
         override val cached: GitStatusResponse?,
         val error: Throwable,
+        override val manual: Boolean = false,
     ) : SessionGitStatusLoad
 }
+
+private enum class PollTrigger { Tick, Push, Manual }
 
 class GitRepository(
     private val restApi: RestApi,
@@ -127,16 +140,22 @@ class GitRepository(
         interval: Duration = SESSION_GIT_POLL_INTERVAL,
     ): Flow<SessionGitStatusLoad> = flow {
         var cached = initial()
+        // Set on the producer side, before conflation can drop the trigger.
+        var manualPending = false
         val ticks = foreground.distinctUntilChanged().flatMapLatest { inForeground ->
             if (inForeground) ticker(interval) else emptyFlow()
-        }
+        }.map { PollTrigger.Tick }
         val pushes = eventBus.stream<AgentEvent.GitChanged>()
             .filter { event -> matchesSession(event, projectName(), cached?.repo) }
-            .map { }
+            .map { PollTrigger.Push }
+        val manual = refreshRequests.map { PollTrigger.Manual }
         emitAll(
-            merge(ticks, pushes, refreshRequests)
+            merge(ticks, pushes, manual)
+                .onEach { trigger -> if (trigger == PollTrigger.Manual) manualPending = true }
                 .conflate()
                 .map {
+                    val answersManual = manualPending
+                    manualPending = false
                     try {
                         val fresh = sessionGitStatus(sessionId, cached?.etag)
                         val body = when {
@@ -145,11 +164,11 @@ class GitRepository(
                             else -> sessionGitStatus(sessionId, null)
                         }
                         cached = body
-                        SessionGitStatusLoad.Loaded(body)
+                        SessionGitStatusLoad.Loaded(body, manual = answersManual)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        SessionGitStatusLoad.Failed(cached, e)
+                        SessionGitStatusLoad.Failed(cached, e, manual = answersManual)
                     }
                 }
                 .transformWhile { load ->

@@ -318,7 +318,7 @@ private fun DiffBody(state: GitDiffUiState.Ready, modifier: Modifier = Modifier)
                 is DiffRow.HunkHeader -> HunkHeaderRow(row)
                 is DiffRow.Line -> DiffLineRow(row, metrics, scrollState, lineStyle)
                 is DiffRow.NoNewline -> NoNewlineRow(lineStyle)
-                is DiffRow.Truncated -> NoticeRow("Truncated at ${row.shown} lines (${row.total} total)")
+                is DiffRow.Truncated -> NoticeRow(truncatedNotice(row))
                 is DiffRow.Notice -> NoticeRow(row.text)
             }
         }
@@ -411,6 +411,12 @@ private fun NoNewlineRow(style: TextStyle) {
         modifier = Modifier.padding(start = 12.dp),
     )
 }
+
+// `total_lines` is only a lower bound when the agent's byte cap cut git off
+// (PROTOCOL.md), so the copy never claims an exact size.
+private fun truncatedNotice(row: DiffRow.Truncated): String =
+    if (row.total > row.shown) "Showing the first ${row.shown} of at least ${row.total} lines"
+    else "Truncated after ${row.shown} lines — the full diff is longer"
 
 @Composable
 private fun NoticeRow(text: String) {

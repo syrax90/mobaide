@@ -168,7 +168,10 @@ cadence; they do **not** gate compatibility.
     ``hunks[] {old_start, old_lines, new_start, new_lines, heading, lines[]
     {t: ctx|add|del, old, new, text, no_newline}}``, ``truncated``,
     ``total_lines`` (body lines seen — a lower bound when the byte cap killed
-    git), ``line_limit`` (5 000) and ``byte_limit`` (1 MiB). The **agent
+    git), ``line_limit`` (5 000) and ``byte_limit`` (1 MiB). Past the line
+    cap the agent keeps counting but returns no further hunks, so a sparse
+    diff never ships header-only hunks after the preview (clients still skip
+    a header-only hunk of a truncated diff). The **agent
     parses** the unified diff so the three clients are dumb renderers with
     one tested parser; ``\r`` is preserved verbatim in ``text``. ``path`` and
     the optional ``orig_path`` are repo-relative as returned by ``status``;

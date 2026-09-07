@@ -217,6 +217,57 @@ class TestParseUnifiedDiff:
         assert parsed.total_lines == LINE_LIMIT + 2
         assert len(parsed.hunks[0].lines) == LINE_LIMIT
 
+    def test_hunks_past_the_line_cap_are_counted_but_not_retained(self):
+        first = b"".join(b"+line %d\n" % i for i in range(LINE_LIMIT + 1))
+        parsed = parse_unified_diff(
+            b"diff --git a/f b/f\n--- a/f\n+++ b/f\n"
+            b"@@ -0,0 +1,%d @@\n" % (LINE_LIMIT + 1) + first
+            + b"@@ -10,2 +20,2 @@\n one\n-two\n+deux\n"
+            + b"@@ -30,1 +40,1 @@\n three\n"
+        )
+
+        assert parsed.truncated is True
+        assert parsed.total_lines == LINE_LIMIT + 1 + 3 + 1
+        assert len(parsed.hunks) == 1
+        assert len(parsed.hunks[0].lines) == LINE_LIMIT
+
+    def test_a_cap_landing_on_a_hunk_boundary_drops_the_header_only_hunk(self):
+        first = b"".join(b"+line %d\n" % i for i in range(LINE_LIMIT))
+        parsed = parse_unified_diff(
+            b"diff --git a/f b/f\n--- a/f\n+++ b/f\n"
+            b"@@ -0,0 +1,%d @@\n" % LINE_LIMIT + first
+            + b"@@ -10,2 +20,2 @@\n one\n-two\n+deux\n"
+        )
+
+        assert parsed.truncated is True
+        assert parsed.total_lines == LINE_LIMIT + 3
+        assert len(parsed.hunks) == 1
+        assert len(parsed.hunks[0].lines) == LINE_LIMIT
+
+    def test_a_byte_cut_right_after_a_hunk_header_drops_that_hunk(self):
+        parsed = parse_unified_diff(
+            b"diff --git a/f b/f\n--- a/f\n+++ b/f\n"
+            b"@@ -1,1 +1,1 @@\n-one\n+uno\n"
+            b"@@ -10,1 +10,1 @@\n-te",
+            truncated=True,
+        )
+
+        assert parsed.truncated is True
+        assert [h.old_start for h in parsed.hunks] == [1]
+        assert parsed.total_lines == 2
+
+    def test_byte_cap_truncation_alone_keeps_every_hunk(self):
+        parsed = parse_unified_diff(
+            b"diff --git a/f b/f\n--- a/f\n+++ b/f\n"
+            b"@@ -1,1 +1,1 @@\n-one\n+uno\n"
+            b"@@ -10,1 +10,1 @@\n-ten\n+diez\n",
+            truncated=True,
+        )
+
+        assert parsed.truncated is True
+        assert [h.old_start for h in parsed.hunks] == [1, 10]
+        assert parsed.total_lines == 4
+
     def test_no_newline_marker_after_dropped_line_is_ignored(self):
         body = b"".join(b"+line %d\n" % i for i in range(LINE_LIMIT + 1))
         parsed = parse_unified_diff(

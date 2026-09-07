@@ -117,6 +117,35 @@ class GitDiffRowsTest {
     }
 
     @Test
+    fun aTruncatedDiff_dropsHeaderOnlyHunks() {
+        val empty1 = hunk(oldStart = 40, oldLines = 2, newStart = 41, newLines = 2, lines = emptyList())
+        val empty2 = hunk(oldStart = 90, oldLines = 1, newStart = 92, newLines = 1, lines = emptyList())
+        val rows = buildDiffRows(
+            diff(hunks = listOf(textHunk, empty1, empty2), truncated = true, totalLines = 9),
+        )
+
+        assertEquals(
+            listOf(
+                DiffRow.HunkHeader("h0", "@@ -6,4 +6,5 @@", "class Foo:"),
+                DiffRow.Line("h0:l0", GitDiffLine.T_CTX, 6, 6, "def foo():"),
+                DiffRow.Line("h0:l1", GitDiffLine.T_DEL, 7, null, "    return x"),
+                DiffRow.Line("h0:l2", GitDiffLine.T_ADD, null, 7, "    y = 2"),
+                DiffRow.Truncated("truncated", shown = 3, total = 9),
+            ),
+            rows,
+        )
+    }
+
+    @Test
+    fun anEmptyHunk_keepsItsHeader_whenNothingWasTruncated() {
+        val empty = hunk(oldStart = 40, oldLines = 0, newStart = 41, newLines = 0, lines = emptyList())
+        val rows = buildDiffRows(diff(hunks = listOf(textHunk, empty)))
+
+        assertEquals(DiffRow.HunkHeader("h1", "@@ -40,0 +41,0 @@", ""), rows.last())
+        assertEquals(5, rows.size)
+    }
+
+    @Test
     fun binaryTooLargeAndMissing_collapseToASingleNotice() {
         assertEquals(
             listOf(DiffRow.Notice("notice", "Binary file — no preview")),

@@ -600,6 +600,10 @@ def parse_unified_diff(data: bytes, *, truncated: bool = False) -> ParsedDiff:
     hunk: GitDiffHunk | None = None
     old_no = new_no = 0
     last_kept = False
+    # Past the line cap, later hunks are still parsed so total_lines keeps
+    # counting, but they are not retained: a sparse diff would otherwise ship
+    # thousands of header-only hunks after the preview.
+    capped = False
     for raw in lines:
         if raw.startswith(b"diff --cc ") or raw.startswith(b"diff --combined "):
             raise GitCommandError("combined diff is not supported")
@@ -630,10 +634,10 @@ def parse_unified_diff(data: bytes, *, truncated: bool = False) -> ParsedDiff:
             elif raw.startswith(b"Binary files "):
                 parsed.binary = True
             elif raw.startswith(b"@@ "):
-                hunk, old_no, new_no = _start_hunk(raw, parsed)
+                hunk, old_no, new_no = _start_hunk(raw, parsed, retain=not capped)
             continue
         if raw.startswith(b"@@ "):
-            hunk, old_no, new_no = _start_hunk(raw, parsed)
+            hunk, old_no, new_no = _start_hunk(raw, parsed, retain=not capped)
             continue
         if raw.startswith(b"\\ "):
             # the marker belongs to the line just before it, which may have
@@ -655,6 +659,7 @@ def parse_unified_diff(data: bytes, *, truncated: bool = False) -> ParsedDiff:
         parsed.total_lines += 1
         if parsed.total_lines > LINE_LIMIT:
             parsed.truncated = True
+            capped = True
             last_kept = False
             continue
         last_kept = True
@@ -669,10 +674,16 @@ def parse_unified_diff(data: bytes, *, truncated: bool = False) -> ParsedDiff:
             line = GitDiffLine(t="del", old=old_no, new=None, text=_text(text))
             old_no += 1
         hunk.lines.append(line)
+    # A cap that lands exactly on a hunk boundary (or a byte cut right after a
+    # header) leaves one retained hunk with no lines; git never emits one.
+    if parsed.truncated and parsed.hunks and not parsed.hunks[-1].lines:
+        parsed.hunks.pop()
     return parsed
 
 
-def _start_hunk(raw: bytes, parsed: ParsedDiff) -> tuple[GitDiffHunk, int, int]:
+def _start_hunk(
+    raw: bytes, parsed: ParsedDiff, *, retain: bool = True
+) -> tuple[GitDiffHunk, int, int]:
     match = _HUNK_RE.match(raw)
     if match is None:
         raise GitCommandError("unrecognised hunk header")
@@ -687,7 +698,8 @@ def _start_hunk(raw: bytes, parsed: ParsedDiff) -> tuple[GitDiffHunk, int, int]:
         new_lines=new_lines,
         heading=_text(match.group(5) or b""),
     )
-    parsed.hunks.append(hunk)
+    if retain:
+        parsed.hunks.append(hunk)
     return hunk, old_start, new_start
 
 

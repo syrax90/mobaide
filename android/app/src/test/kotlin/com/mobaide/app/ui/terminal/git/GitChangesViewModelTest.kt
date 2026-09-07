@@ -20,6 +20,9 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -38,9 +41,10 @@ import java.io.IOException
 /**
  * Unit tests for [GitChangesViewModel]. The repository poll is replaced by a
  * hand-driven [MutableSharedFlow] of [SessionGitStatusLoad]s, so each test
- * pushes exactly the load it is about; the two lambdas the ViewModel hands the
- * repository are captured so the project-name lookup and the etag seed can be
- * checked as values.
+ * pushes exactly the load it is about; the two lambdas and the refresh flow
+ * the ViewModel hands the repository are captured so the project-name lookup
+ * and the etag seed can be checked as values and a test can stand in for the
+ * poll that listens for pulls.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class GitChangesViewModelTest {
@@ -51,6 +55,7 @@ class GitChangesViewModelTest {
     private class Fixture(
         val vm: GitChangesViewModel,
         val loads: MutableSharedFlow<SessionGitStatusLoad>,
+        val refreshRequests: Flow<Unit>,
         val tracker: ForegroundSessionTracker,
         val projectName: () -> String?,
         val initial: () -> GitStatusResponse?,
@@ -60,13 +65,14 @@ class GitChangesViewModelTest {
         val repo = mockk<GitRepository>(relaxed = true)
         val loads = MutableSharedFlow<SessionGitStatusLoad>(replay = 0, extraBufferCapacity = 8)
         val projectNameSlot = slot<() -> String?>()
+        val refreshSlot = slot<Flow<Unit>>()
         val initialSlot = slot<() -> GitStatusResponse?>()
         every {
             repo.observeSessionGitStatus(
                 sessionId = "s1",
                 projectName = capture(projectNameSlot),
                 foreground = any(),
-                refreshRequests = any(),
+                refreshRequests = capture(refreshSlot),
                 initial = capture(initialSlot),
                 interval = any(),
             )
@@ -95,6 +101,7 @@ class GitChangesViewModelTest {
         return Fixture(
             vm = vm,
             loads = loads,
+            refreshRequests = refreshSlot.captured,
             tracker = tracker,
             projectName = { projectNameSlot.captured() },
             initial = { initialSlot.captured() },
@@ -105,6 +112,17 @@ class GitChangesViewModelTest {
     private fun TestScope.subscribe(vm: GitChangesViewModel) {
         backgroundScope.launch { vm.uiState.collect { } }
         runCurrent()
+    }
+
+    /**
+     * The real poll collects the ViewModel's refresh requests for as long as
+     * it runs; the stubbed one never does, so a test that pulls stands in for
+     * it. Cancel the returned collector to end the poll.
+     */
+    private fun TestScope.attachFeed(f: Fixture): Job {
+        val feed = backgroundScope.launch { f.refreshRequests.collect { } }
+        runCurrent()
+        return feed
     }
 
     private fun entry(
@@ -278,6 +296,7 @@ class GitChangesViewModelTest {
     fun refresh_marksReadyRefreshing_untilTheNextLoad() = runTest {
         val f = newFixture()
         subscribe(f.vm)
+        attachFeed(f)
         f.loads.emit(SessionGitStatusLoad.Loaded(status("e1")))
         runCurrent()
         assertFalse(ready(f.vm).refreshing)
@@ -287,11 +306,57 @@ class GitChangesViewModelTest {
         assertTrue(ready(f.vm).refreshing)
 
         val next = status("e2")
-        f.loads.emit(SessionGitStatusLoad.Loaded(next))
+        f.loads.emit(SessionGitStatusLoad.Loaded(next, manual = true))
         runCurrent()
         val ready = ready(f.vm)
         assertSame(next, ready.status)
         assertFalse(ready.refreshing)
+    }
+
+    @Test
+    fun refresh_outlivesAnOlderLoad_andClearsOnTheOneItCaused() = runTest {
+        // A tick fetch already in flight when the user pulled answers first:
+        // its body shows, but the spinner stays until the pull's own load lands.
+        val f = newFixture()
+        subscribe(f.vm)
+        attachFeed(f)
+        f.loads.emit(SessionGitStatusLoad.Loaded(status("e1")))
+        runCurrent()
+
+        f.vm.refresh()
+        runCurrent()
+        assertTrue(ready(f.vm).refreshing)
+
+        val older = status("e2")
+        f.loads.emit(SessionGitStatusLoad.Loaded(older, manual = false))
+        runCurrent()
+        var ready = ready(f.vm)
+        assertSame(older, ready.status)
+        assertTrue(ready.refreshing)
+
+        val answer = status("e3")
+        f.loads.emit(SessionGitStatusLoad.Loaded(answer, manual = true))
+        runCurrent()
+        ready = ready(f.vm)
+        assertSame(answer, ready.status)
+        assertFalse(ready.refreshing)
+    }
+
+    @Test
+    fun refreshAfterTheFeedEnded_isDroppedWithoutArmingTheIndicator() = runTest {
+        // An old agent or a gone session ends the poll; a pull then has no
+        // fetch to answer it, so the indicator must not be armed.
+        val f = newFixture()
+        subscribe(f.vm)
+        val feed = attachFeed(f)
+        f.loads.emit(SessionGitStatusLoad.Loaded(status("e1")))
+        runCurrent()
+
+        feed.cancelAndJoin()
+        f.vm.refresh()
+        runCurrent()
+
+        assertFalse(ready(f.vm).refreshing)
     }
 
     @Test
@@ -300,6 +365,7 @@ class GitChangesViewModelTest {
         // Error, which the StateFlow dedupes into no visible reaction at all.
         val f = newFixture()
         subscribe(f.vm)
+        attachFeed(f)
         val down = SessionGitStatusLoad.Failed(null, SessionGitException.Network(IOException("down")))
         val error = GitChangesUiState.Error(
             "Could not reach the agent. Check the connection and try again.",
@@ -313,7 +379,7 @@ class GitChangesViewModelTest {
         runCurrent()
         assertEquals(GitChangesUiState.Loading, f.vm.uiState.value)
 
-        f.loads.emit(down)
+        f.loads.emit(down.copy(manual = true))
         runCurrent()
         assertEquals(error, f.vm.uiState.value)
     }
@@ -324,6 +390,7 @@ class GitChangesViewModelTest {
         // `refreshing` on the stale rows, not as an unchanged Ready.
         val f = newFixture()
         subscribe(f.vm)
+        attachFeed(f)
         val cached = status()
         val down = SessionGitStatusLoad.Failed(
             cached, SessionGitException.Network(IOException("down")),
@@ -344,7 +411,7 @@ class GitChangesViewModelTest {
         assertTrue(ready.refreshing)
         assertEquals(stale, ready.staleError)
 
-        f.loads.emit(down)
+        f.loads.emit(down.copy(manual = true))
         runCurrent()
         ready = ready(f.vm)
         assertSame(cached, ready.status)
