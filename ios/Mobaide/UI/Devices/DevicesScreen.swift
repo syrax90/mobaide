@@ -26,6 +26,7 @@ private struct DevicesContent: View {
     var body: some View {
         content
             .navigationTitle("My devices")
+            .navigationBarTitleDisplayMode(.inline)
             .refreshable { await model.refresh() }
             .task { await model.refresh() }
             .alert(
@@ -58,13 +59,14 @@ private struct DevicesContent: View {
     private var content: some View {
         if model.isEmpty {
             if model.isLoading {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                LoadingIndicator()
+                    .pixelScreenBackground()
             } else {
-                ContentUnavailableView(
-                    "No devices yet",
-                    systemImage: "iphone",
-                    description: Text("Pair an agent to register this device.")
-                )
+                ScrollView {
+                    PixelEmptyState("No devices yet", systemImage: "iphone", description: "Pair an agent to register this device.")
+                        .padding(16)
+                }
+                .pixelScreenBackground()
             }
         } else {
             List {
@@ -72,9 +74,11 @@ private struct DevicesContent: View {
                     DeviceRow(device: device, isCurrent: model.isCurrent(device)) {
                         model.revokeTarget = device
                     }
+                    .pixelCard(selected: model.isCurrent(device))
+                    .pixelListRow()
                 }
             }
-            .listStyle(.plain)
+            .pixelList()
         }
     }
 }
@@ -84,34 +88,33 @@ private struct DeviceRow: View {
     let isCurrent: Bool
     let onRevoke: () -> Void
 
+    @Environment(\.mobaideColors) private var colors
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Text(device.name ?? "Unnamed device").font(.headline)
+                    Text(device.name ?? "Unnamed device")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(colors.text)
                     if isCurrent {
-                        Text("This device")
-                            .font(MobaideTypography.labelSmall)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.15), in: Capsule())
+                        PixelChip("This device", .filled)
                     }
                 }
                 Text(device.device_id)
                     .font(MobaideTypography.code)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(colors.textMuted)
                     .lineLimit(1)
                 Text("Added: \(device.created_at)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(colors.textMuted)
                 Text("Last seen: \(device.last_seen_at ?? "—")")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(colors.textMuted)
             }
             Spacer(minLength: 0)
             Button("Revoke", role: .destructive, action: onRevoke)
-                .buttonStyle(.bordered)
+                .buttonStyle(.pixelSmallDanger)
         }
-        .padding(.vertical, 4)
     }
 }

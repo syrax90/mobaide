@@ -1,5 +1,5 @@
-/* Mobaide marketing site — reveal-on-scroll, the hero typewriter, and the
- * install-command copy buttons.
+/* Mobaide marketing site — reveal-on-scroll, the hero typewriter, the
+ * install-command copy buttons, and the Android/iOS screenshot switch.
  *
  * Loaded synchronously from <head> (not deferred) so the `js` class lands
  * before first paint: site.css gates every animation start-state on that class,
@@ -160,6 +160,89 @@
     }
     // Only now, with every button wired, does the stylesheet reveal them.
     document.documentElement.classList.add("can-copy");
+  }
+
+  /* ---- Android/iOS screenshot switch ---- */
+
+  /* Turns the two stacked screenshot panels into a tab pair. The markup ships
+   * with both panels visible and the tablist at display:none, so every early
+   * return below leaves a page that still shows every screenshot under its own
+   * heading — the `is-live` class at the end is what swaps in the switched
+   * presentation, and it is only reached once both tabs are wired.
+   */
+  function setUpShotSwitch() {
+    var container = document.querySelector("[data-shots-switch]");
+    if (!container) {
+      return;
+    }
+    var tabs = container.querySelectorAll("[role=tab]");
+    if (tabs.length !== 2) {
+      return;
+    }
+    var panels = [];
+    for (var i = 0; i < tabs.length; i++) {
+      var panel = document.getElementById(tabs[i].getAttribute("aria-controls"));
+      if (!panel) {
+        return;
+      }
+      panels.push(panel);
+    }
+
+    function select(index, moveFocus) {
+      for (var j = 0; j < tabs.length; j++) {
+        var on = j === index;
+        tabs[j].setAttribute("aria-selected", on ? "true" : "false");
+        // Roving tabindex: one stop for the whole group, arrows do the rest.
+        tabs[j].tabIndex = on ? 0 : -1;
+        panels[j].hidden = !on;
+      }
+      if (moveFocus) {
+        tabs[index].focus();
+      }
+    }
+
+    for (var k = 0; k < tabs.length; k++) {
+      (function (index) {
+        tabs[index].addEventListener("click", function () {
+          select(index, false);
+        });
+        tabs[index].addEventListener("keydown", function (event) {
+          // Left/Right only: the tablist is horizontal, so Up/Down belong to
+          // the page. Claiming them would swallow a scroll keypress — and
+          // switch platforms instead — whenever a tab holds focus.
+          var next = null;
+          if (event.key === "ArrowRight") {
+            next = (index + 1) % tabs.length;
+          } else if (event.key === "ArrowLeft") {
+            next = (index + tabs.length - 1) % tabs.length;
+          } else if (event.key === "Home") {
+            next = 0;
+          } else if (event.key === "End") {
+            next = tabs.length - 1;
+          }
+          if (next === null) {
+            return;
+          }
+          event.preventDefault();
+          // Automatic activation: the panels are already in the document and
+          // the hidden one's images are loading="lazy", so arrowing across
+          // costs nothing a click would not.
+          select(next, true);
+        });
+      })(k);
+    }
+
+    // Most visitors arrive on the phone they would install on. An iPad carries
+    // no iPad token: since iPadOS 13 Safari asks for desktop sites by default
+    // and claims to be a Macintosh, so the only thing separating it from a real
+    // Mac is touch — Apple ships no touchscreen Mac, and a trackpad reports no
+    // touch points.
+    var ua = navigator.userAgent || "";
+    var onIos =
+      /iPad|iPhone|iPod/.test(ua) ||
+      (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1);
+    select(onIos ? 1 : 0, false);
+    container.classList.add("is-live");
   }
 
   function setUpReveals() {
@@ -348,6 +431,11 @@
   // Public Ads tag id — the same value every visitor's DOM would show, so it
   // ships in source rather than through template plumbing.
   var ADS_TAG_ID = "AW-18403068615";
+  // Conversion label of the "Page view" conversion action, minted by Google
+  // Ads next to the tag id. `config` alone pings the tag but counts no
+  // *labelled* action, which Google Ads reports against that action as "never
+  // received a tag ping" for as long as the event below is missing.
+  var ADS_PAGE_VIEW_LABEL = "-6EGCOnoq-ccEMeVosdE";
   var ADS_CONSENT_KEY = "mobaide-ads-consent";
 
   /* localStorage can throw on access (private windows, blocked site data), so
@@ -370,6 +458,101 @@
     }
   }
 
+  /* First-party click attribution for the web app. Accepting the banner also
+   * records the Google Ads click id the visitor arrived with (gclid, or the
+   * iOS-era wbraid/gbraid) in a cookie on the registrable domain, so that
+   * app.mobaide.com can attach it to the sign-up request and the server can
+   * report the account's first agent pairing back to the ad click. Without a
+   * click id the cookie is a bare consent marker (the server then falls back
+   * to a hashed email). The cookie is issued and signed by the server, not
+   * written from script: a domain cookie set by script proves nothing, since
+   * any host on the registrable domain could plant one. This page only reads
+   * it back (to avoid renewing it) and expires it on Decline.
+   */
+  var ADS_COOKIE_NAME = "mobaide_ads";
+  var ADS_CLICK_ID_RE = /^[A-Za-z0-9_-]{1,200}$/;
+  var ADS_CLICK_PARAMS = ["gclid", "wbraid", "gbraid"];
+  // Stamped once per page load: the moment the click id arrived, not the
+  // moment the visitor got around to pressing Accept in a tab left open.
+  var LANDING_ARRIVED_AT = Math.floor(Date.now() / 1000);
+
+  function readLandingClickId() {
+    var params = new URLSearchParams(window.location.search);
+    for (var i = 0; i < ADS_CLICK_PARAMS.length; i++) {
+      var value = params.get(ADS_CLICK_PARAMS[i]);
+      if (value && ADS_CLICK_ID_RE.test(value)) {
+        return { kind: ADS_CLICK_PARAMS[i], id: value };
+      }
+    }
+    return null;
+  }
+
+  function readAdsCookie() {
+    var cookies;
+    try {
+      cookies = document.cookie.split(";");
+    } catch (err) {
+      return null;
+    }
+    for (var i = 0; i < cookies.length; i++) {
+      var entry = cookies[i];
+      var eq = entry.indexOf("=");
+      if (eq === -1) {
+        continue;
+      }
+      if (entry.slice(0, eq).replace(/^\s+/, "") === ADS_COOKIE_NAME) {
+        return entry.slice(eq + 1);
+      }
+    }
+    return null;
+  }
+
+  function requestAdsCookie() {
+    var click = readLandingClickId();
+    // Only a new click id rewrites an existing cookie. A plain return visit
+    // must not renew the 90-day lifetime the policy discloses — neither for
+    // a stored click id nor for a bare consent marker.
+    if (!click && readAdsCookie() !== null) {
+      return;
+    }
+    if (typeof window.fetch !== "function") {
+      return;
+    }
+    try {
+      window
+        .fetch("/api/ads/consent", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            click_id: click ? click.id : null,
+            click_id_kind: click ? click.kind : null,
+            arrived_at: LANDING_ARRIVED_AT,
+          }),
+          credentials: "same-origin",
+          keepalive: true,
+        })
+        .then(function () {
+          // A Decline that landed while this was in flight must win: the
+          // response's Set-Cookie would otherwise resurrect the cookie.
+          if (readAdsConsent() !== "granted") {
+            clearAdsCookie();
+          }
+        })
+        .catch(function () {
+          // Offline or blocked: the visit still counts on this page, only
+          // the sign-up attribution is lost.
+        });
+    } catch (err) {
+      // Same as above for a synchronous fetch failure.
+    }
+  }
+
+  function clearAdsCookie() {
+    document.cookie = ADS_COOKIE_NAME + "=; Max-Age=0; path=/";
+    document.cookie =
+      ADS_COOKIE_NAME + "=; Max-Age=0; path=/; domain=." + window.location.hostname;
+  }
+
   var googleTagInjected = false;
 
   /* The official snippet's `function gtag(){dataLayer.push(arguments)}`,
@@ -382,7 +565,8 @@
     window.dataLayer.push(arguments);
   }
 
-  /* Injects gtag.js exactly once (Google's one-tag-per-page rule). Runs only
+  /* Injects gtag.js exactly once (Google's one-tag-per-page rule) and fires
+   * the page-view conversion behind it. Runs only
    * after an explicit Accept — nothing here may execute pre-consent, which is
    * what keeps the EU/ePrivacy side of this honest. The Consent Mode v2
    * default-denied → update-granted pair is queued ahead of the script so the
@@ -413,6 +597,14 @@
     });
     gtagPush("js", new Date());
     gtagPush("config", ADS_TAG_ID);
+    // Queued after `config`, which gtag requires to have run before it can
+    // resolve `send_to`. Value and currency restate the conversion action's
+    // own setting in Google Ads; change them in both places or not at all.
+    gtagPush("event", "conversion", {
+      send_to: ADS_TAG_ID + "/" + ADS_PAGE_VIEW_LABEL,
+      value: 1.0,
+      currency: "CZK",
+    });
 
     var script = document.createElement("script");
     script.async = true;
@@ -425,7 +617,8 @@
    * told to stop via the consent API, and Google's `_gcl_*` cookies are
    * expired outright — gtag writes them from script on this origin, so script
    * can remove them. Both domain spellings are expired because gtag registers
-   * them on the registrable domain, not the host.
+   * them on the registrable domain, not the host. Our own attribution cookie
+   * goes with them.
    */
   function withdrawGoogleTag() {
     if (googleTagInjected) {
@@ -433,6 +626,25 @@
         ad_storage: "denied",
         ad_user_data: "denied",
       });
+    }
+    // Tell the server first, while the cookie can still be read: an account
+    // created with it must lose the stored attribution too, not only the
+    // browser its copy. Best effort — the local deletion below never waits.
+    var existing = readAdsCookie();
+    if (existing !== null && typeof window.fetch === "function") {
+      try {
+        window
+          .fetch("/api/ads/consent/withdraw", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ value: existing }),
+            credentials: "same-origin",
+            keepalive: true,
+          })
+          .catch(function () {});
+      } catch (err) {
+        // Same as above: withdrawal is still recorded on this page.
+      }
     }
     var cookies = document.cookie.split(";");
     for (var i = 0; i < cookies.length; i++) {
@@ -443,6 +655,7 @@
           name + "=; Max-Age=0; path=/; domain=." + window.location.hostname;
       }
     }
+    clearAdsCookie();
   }
 
   /* The banner ships with the `hidden` attribute and is revealed only when no
@@ -480,6 +693,7 @@
       storeAdsConsent("granted");
       banner.hidden = true;
       loadGoogleTag();
+      requestAdsCookie();
     });
     decline.addEventListener("click", function () {
       storeAdsConsent("denied");
@@ -500,6 +714,7 @@
     var choice = readAdsConsent();
     if (choice === "granted") {
       loadGoogleTag();
+      requestAdsCookie();
       return;
     }
     if (choice === "denied") {
@@ -514,6 +729,8 @@
     setUpCopyButtons();
     // Likewise not motion — and consent must not depend on animation settings.
     setUpConsentBanner();
+    // Also not motion: a reduced-motion visitor still picks their platform.
+    setUpShotSwitch();
 
     if (reduceMotion) {
       // The `.js` class has already armed the hidden states, so hand the

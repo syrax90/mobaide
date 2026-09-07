@@ -20,6 +20,7 @@ private struct AgentListContent: View {
 
     @Environment(Router.self) private var router
     @Environment(AuthStateModel.self) private var authStateModel
+    @Environment(\.mobaideColors) private var colors
 
     let container: AppContainer
 
@@ -38,10 +39,16 @@ private struct AgentListContent: View {
     var body: some View {
         content
             .navigationTitle("Agents")
+            .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .top, spacing: 0) {
                 GraceBannerSection(authRepository: container.authRepository)
             }
             .toolbar {
+                // The web header's brand mark: the authenticated root carries
+                // the wordmark; pushed screens keep their text titles.
+                ToolbarItem(placement: .principal) {
+                    PixelWordmark(width: 104)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         // Above the install commands because this is the path
@@ -143,21 +150,25 @@ private struct AgentListContent: View {
     @ViewBuilder
     private var content: some View {
         if model.agents.isEmpty {
-            ContentUnavailableView {
-                Label("No agents yet", systemImage: "server.rack")
-            } description: {
-                Text("Scan the pairing QR shown on your agent host, or add one manually.")
-            } actions: {
-                Button("Scan pairing QR") { model.startScan() }
-                    .buttonStyle(.borderedProminent)
-                Button("Show install commands") { model.showInstallSheet = true }
+            ScrollView {
+                EmptyAgentsState(
+                    onShowInstall: { model.showInstallSheet = true },
+                    onScan: { model.startScan() },
+                    onPairWithCode: { model.startDeviceCodePairing() },
+                    onAddManually: { model.startAdd() }
+                )
+                .padding(16)
+                // Clears the 56pt scan FAB so the last row stays tappable.
+                .padding(.bottom, 88)
             }
+            .pixelScreenBackground()
         } else {
             List {
                 ForEach(model.agents, id: \.agent_id) { agent in
+                    let isConnected = agent.agent_id == model.connectedAgentId
                     HStack(spacing: 8) {
                         Button { model.connect(agent) } label: {
-                            AgentRow(agent: agent, isConnected: agent.agent_id == model.connectedAgentId)
+                            AgentRow(agent: agent, isConnected: isConnected)
                         }
                         .buttonStyle(.plain)
                         Spacer(minLength: 0)
@@ -170,25 +181,31 @@ private struct AgentListContent: View {
                             }
                         } label: {
                             Image(systemName: "ellipsis")
-                                .padding(8)
+                                .foregroundStyle(colors.accent)
+                                .frame(width: 44, height: 44)
                                 .contentShape(Rectangle())
                         }
                     }
+                    .pixelCard(selected: isConnected)
+                    .pixelListRow()
                 }
             }
-            .listStyle(.plain)
+            .pixelList()
         }
     }
 
+    /// The web has no FAB; this keeps Android's scan-primary affordance in the
+    /// pixel button grammar — a `brand` square on its hard shadow.
     private var scanFab: some View {
         Button { model.startScan() } label: {
             Image(systemName: "qrcode.viewfinder")
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 56, height: 56)
-                .background(Color.accentColor, in: Circle())
-                .shadow(radius: 4)
+                .background(MobaideColorScheme.brand)
+                .pixelShadow(MobaideColorScheme.btnShadow)
         }
+        .buttonStyle(.plain)
         .padding(20)
         .accessibilityLabel("Scan pairing QR")
     }
@@ -196,10 +213,7 @@ private struct AgentListContent: View {
     @ViewBuilder
     private var busyOverlay: some View {
         if model.isAddBusy || model.isReRegisterBusy {
-            ProgressView()
-                .controlSize(.large)
-                .padding(28)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            PixelBusyOverlay()
         }
     }
 
@@ -212,29 +226,122 @@ private struct AgentListContent: View {
     }
 }
 
+// MARK: - Empty state (Android `EmptyAgentsState`)
+
+/// Nothing is scannable until `mobaide-agent` runs on a host, so the two
+/// actions are an ordered pair — install, then pair — rather than the flat
+/// button row this screen used to show, which led with the scan.
+private struct EmptyAgentsState: View {
+    let onShowInstall: () -> Void
+    let onScan: () -> Void
+    let onPairWithCode: () -> Void
+    let onAddManually: () -> Void
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        PixelEmptyState(
+            "No agents yet",
+            systemImage: "qrcode.viewfinder",
+            description: "Install mobaide-agent on a host machine. The agent will display "
+                + "a pairing QR after install — scan it here to finish setup."
+        ) {
+            VStack(alignment: .leading, spacing: 20) {
+                step(1, "Install on your host") {
+                    Button(action: onShowInstall) {
+                        Label("Show install commands", systemImage: "terminal")
+                    }
+                    .buttonStyle(.pixelPrimaryBlock)
+                }
+                step(2, "Scan the pairing QR shown after install") {
+                    Button(action: onScan) {
+                        Label("Scan QR code", systemImage: "qrcode.viewfinder")
+                    }
+                    .buttonStyle(.pixelBlock)
+                }
+                VStack(spacing: 0) {
+                    fallback("Pair with a code instead", action: onPairWithCode)
+                    fallback("Add manually instead", action: onAddManually)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .padding(.top, 8)
+        }
+    }
+
+    private func step<Content: View>(
+        _ number: Int,
+        _ title: String,
+        @ViewBuilder button: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            PixelNumberedStep(number: number, title: title)
+            button()
+        }
+    }
+
+    /// The two escape hatches stay plain text: a third and fourth ringed pixel
+    /// button would read as peers of the numbered steps.
+    private func fallback(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.footnote)
+            .foregroundStyle(colors.accent)
+            // Padding, not a fixed minHeight: it is a 44pt target at the
+            // default size and keeps the two links apart as the text grows.
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+    }
+}
+
+/// The ordinal as a filled `brand` square — the pixel kit has no circles.
+private struct PixelNumberedStep: View {
+    let number: Int
+    let title: String
+
+    /// Scaled, not fixed: the ordinal is Dynamic Type text, and a 20pt box
+    /// clips it outright at the accessibility sizes.
+    @ScaledMetric(relativeTo: .caption) private var side: CGFloat = 20
+
+    var body: some View {
+        // Baseline, not center: step 2's label wraps, and centering would
+        // float the square between its two lines.
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("\(number)")
+                .font(MobaideTypography.chromeSmall)
+                .foregroundStyle(.white)
+                .frame(minWidth: side, minHeight: side)
+                .background(MobaideColorScheme.brand)
+            Text(title)
+                .sectionHeading()
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
 private struct AgentRow: View {
     let agent: AgentSummaryResponse
     let isConnected: Bool
 
+    @Environment(\.mobaideColors) private var colors
+
     var body: some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(agent.online ? MobaideColors.stateRunning : MobaideColors.stateStopped)
-                .frame(width: 10, height: 10)
-            VStack(alignment: .leading, spacing: 2) {
+            PixelStatusSquare(tone: agent.online ? .ok : .muted)
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Text(agent.name).font(.headline)
+                    Text(agent.name)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(colors.text)
                     if isConnected {
-                        Text("Connected")
-                            .font(MobaideTypography.labelSmall)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.15), in: Capsule())
+                        PixelChip("Connected", .filled)
                     }
                 }
                 Text(agent.online ? "Online" : "Offline")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.footnote)
+                    .foregroundStyle(colors.textMuted)
             }
         }
         .padding(.vertical, 4)
@@ -261,6 +368,7 @@ private struct PairingSheet: View {
                         .padding()
                         .navigationBarTitleDisplayMode(.inline)
                 }
+                .pixelSheet()
                 .presentationDetents([.medium])
             }
         }
@@ -271,6 +379,8 @@ private struct PairingSheet: View {
 private struct PairingFlowView: View {
     @Bindable var model: AgentListModel
 
+    @Environment(\.mobaideColors) private var colors
+
     var body: some View {
         switch model.qrPairing {
         case .confirming(let payload):
@@ -279,6 +389,8 @@ private struct PairingFlowView: View {
             progress("Claiming the pairing code…")
         case .waitingForOnline(_, let name, let elapsed, _):
             waiting(name: name, elapsed: elapsed)
+        case .waitTimedOut(_, let name, let ws):
+            notOnlineYet(name: name, wsDeliveredAtClaim: ws)
         case .success(_, let name):
             success(name: name)
         case .error(let message):
@@ -292,18 +404,22 @@ private struct PairingFlowView: View {
         VStack(spacing: 16) {
             Image(systemName: "qrcode")
                 .font(.system(size: 44))
-                .foregroundStyle(.tint)
-            Text("Pair this agent?").font(.title3.bold())
+                .foregroundStyle(colors.accent)
+            Text("Pair this agent?")
+                .font(MobaideTypography.dialogTitle)
+                .foregroundStyle(colors.accent)
             VStack(alignment: .leading, spacing: 6) {
                 LabeledContent("Relay", value: payload.relayUrl)
                 LabeledContent("Pairing code", value: "\(payload.nonce.prefix(8))…")
                 LabeledContent("Expires (unix)", value: String(payload.expUnix))
             }
             .font(.callout)
-            HStack {
+            .foregroundStyle(colors.text)
+            HStack(spacing: 12) {
                 Button("Cancel", role: .cancel) { model.dismissPairing() }
+                    .buttonStyle(.pixel)
                 Button("Pair") { model.confirmClaim() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.pixelPrimary)
             }
             .padding(.top, 4)
         }
@@ -311,29 +427,60 @@ private struct PairingFlowView: View {
 
     private func progress(_ text: String) -> some View {
         VStack(spacing: 16) {
-            ProgressView()
-            Text(text).font(.headline)
+            PixelLoadingBlock(width: 10, height: 18)
+            Text(text)
+                .font(.headline)
+                .foregroundStyle(colors.text)
         }
     }
 
     private func waiting(name: String, elapsed: Int) -> some View {
         VStack(spacing: 16) {
-            ProgressView()
-            Text("Waiting for ‘\(name)’ to come online…").font(.headline)
+            PixelLoadingBlock(width: 10, height: 18)
+            Text("Waiting for ‘\(name)’ to come online…")
+                .font(.headline)
+                .foregroundStyle(colors.text)
             Text("Elapsed \(elapsed)s / \(AgentListModel.waitForOnlineTimeoutSeconds)s")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(colors.textMuted)
+                .monospacedDigit()
             Button("Stop waiting", role: .cancel) { model.dismissPairing() }
+                .buttonStyle(.pixel)
+        }
+    }
+
+    private func notOnlineYet(name: String, wsDeliveredAtClaim: Bool?) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "clock.badge.exclamationmark")
+                .font(.system(size: 40))
+                .foregroundStyle(colors.warning)
+            Text("Agent not online yet")
+                .font(MobaideTypography.dialogTitle)
+                .foregroundStyle(colors.accent)
+            Text(AgentListModel.waitTimeoutMessage(friendlyName: name, wsDeliveredAtClaim: wsDeliveredAtClaim))
+                .font(.callout)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(colors.textMuted)
+            HStack(spacing: 12) {
+                Button("Close", role: .cancel) { model.dismissPairing() }
+                    .buttonStyle(.pixel)
+                Button("Keep waiting") { model.keepWaiting() }
+                    .buttonStyle(.pixelPrimary)
+            }
+            .padding(.top, 4)
         }
     }
 
     private func success(name: String) -> some View {
         VStack(spacing: 16) {
-            Image(systemName: "checkmark.circle.fill")
+            Image(systemName: "checkmark.square.fill")
                 .font(.system(size: 44))
-                .foregroundStyle(MobaideColors.stateRunning)
-            Text("‘\(name)’ paired and online").font(.title3.bold())
+                .foregroundStyle(colors.ok)
+            Text("‘\(name)’ paired and online")
+                .font(MobaideTypography.dialogTitle)
+                .foregroundStyle(colors.accent)
+                .multilineTextAlignment(.center)
             Button("OK") { model.dismissPairing() }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.pixelPrimary)
         }
     }
 
@@ -341,14 +488,16 @@ private struct PairingFlowView: View {
         VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 40))
-                .foregroundStyle(MobaideColors.warningYellow)
-            Text("Pairing failed").font(.title3.bold())
+                .foregroundStyle(colors.warning)
+            Text("Pairing failed")
+                .font(MobaideTypography.dialogTitle)
+                .foregroundStyle(colors.accent)
             Text(message)
                 .font(.callout)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(colors.textMuted)
             Button("Close") { model.dismissPairing() }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.pixelPrimary)
         }
     }
 }
@@ -360,12 +509,15 @@ private struct PairingFlowView: View {
 private struct DeviceCodePairingSheet: View {
     @Bindable var model: AgentListModel
 
+    @Environment(\.mobaideColors) private var colors
+
     var body: some View {
         NavigationStack {
             content
                 .padding()
                 .navigationBarTitleDisplayMode(.inline)
         }
+        .pixelSheet()
         .presentationDetents([.medium])
         .interactiveDismissDisabled(model.deviceCodePairing.isClaiming)
     }
@@ -377,8 +529,10 @@ private struct DeviceCodePairingSheet: View {
             EmptyView()
         case .minting:
             VStack(spacing: 16) {
-                ProgressView()
-                Text("Getting a code…").font(.headline)
+                PixelLoadingBlock(width: 10, height: 18)
+                Text("Getting a code…")
+                    .font(.headline)
+                    .foregroundStyle(colors.text)
             }
         case .waitingForHost(_, let code, let command):
             waitingForHost(code: code, command: command)
@@ -391,21 +545,25 @@ private struct DeviceCodePairingSheet: View {
             )
         case .claiming:
             VStack(spacing: 16) {
-                ProgressView()
-                Text("Pairing…").font(.headline)
+                PixelLoadingBlock(width: 10, height: 18)
+                Text("Pairing…")
+                    .font(.headline)
+                    .foregroundStyle(colors.text)
             }
         case .error(let message):
             VStack(spacing: 16) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 40))
-                    .foregroundStyle(MobaideColors.warningYellow)
-                Text("Pairing failed").font(.title3.bold())
+                    .foregroundStyle(colors.warning)
+                Text("Pairing failed")
+                    .font(MobaideTypography.dialogTitle)
+                    .foregroundStyle(colors.accent)
                 Text(message)
                     .font(.callout)
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(colors.textMuted)
                 Button("Close") { model.dismissDeviceCodePairing() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.pixelPrimary)
             }
         }
     }
@@ -414,8 +572,10 @@ private struct DeviceCodePairingSheet: View {
         VStack(spacing: 16) {
             Image(systemName: "keyboard")
                 .font(.system(size: 40))
-                .foregroundStyle(.tint)
-            Text("On the computer you want to pair, run:").font(.headline)
+                .foregroundStyle(colors.accent)
+            Text("On the computer you want to pair, run:")
+                .font(.headline)
+                .foregroundStyle(colors.text)
             CopyableCodeBlock(label: "Pairing command", code: command)
             Text(
                 "The code is \(code) if you would rather type it yourself. The agent "
@@ -424,12 +584,13 @@ private struct DeviceCodePairingSheet: View {
             )
             .font(.footnote)
             .multilineTextAlignment(.center)
-            .foregroundStyle(.secondary)
-            ProgressView()
+            .foregroundStyle(colors.textMuted)
+            PixelLoadingBlock()
             Text("Waiting for a machine to enter the code…")
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(colors.textMuted)
             Button("Cancel", role: .cancel) { model.dismissDeviceCodePairing() }
+                .buttonStyle(.pixel)
         }
     }
 
@@ -442,12 +603,14 @@ private struct DeviceCodePairingSheet: View {
         VStack(spacing: 16) {
             Image(systemName: "desktopcomputer")
                 .font(.system(size: 40))
-                .foregroundStyle(.tint)
+                .foregroundStyle(colors.accent)
             Text(
                 repairAgentName.map { "Move ‘\($0)’ to this machine?" }
                     ?? "Is this your machine?"
             )
-            .font(.title3.bold())
+            .font(MobaideTypography.dialogTitle)
+            .foregroundStyle(colors.accent)
+            .multilineTextAlignment(.center)
             VStack(alignment: .leading, spacing: 6) {
                 LabeledContent("Hostname", value: hostname)
                 if let os {
@@ -455,6 +618,7 @@ private struct DeviceCodePairingSheet: View {
                 }
             }
             .font(.callout)
+            .foregroundStyle(colors.text)
             // The name above is whatever the machine that entered the code
             // reported, over an endpoint that authenticates nobody — it helps a
             // user recognise their own host and proves nothing by itself.
@@ -464,7 +628,7 @@ private struct DeviceCodePairingSheet: View {
             )
             .font(.footnote)
             .multilineTextAlignment(.center)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(colors.textMuted)
             if let repairAgentName {
                 Text(
                     "That machine reported it is already ‘\(repairAgentName)’. "
@@ -474,18 +638,19 @@ private struct DeviceCodePairingSheet: View {
                 )
                 .font(.footnote)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(colors.textMuted)
             }
             if let blocked {
                 Text(blocked.message)
                     .font(.footnote)
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(MobaideColors.warningYellow)
+                    .foregroundStyle(colors.warning)
             }
-            HStack {
+            HStack(spacing: 12) {
                 Button("Cancel", role: .cancel) { model.dismissDeviceCodePairing() }
+                    .buttonStyle(.pixel)
                 Button("Pair this machine") { model.confirmDeviceCode() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.pixelPrimary)
                     .disabled(blocked != nil)
             }
             .padding(.top, 4)

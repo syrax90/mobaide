@@ -4,7 +4,10 @@
 agent on your PC and wires the **real Android app** — and, on macOS, the **real
 iOS app** on the simulator — to them, so a human tester can exercise the full
 mobile ↔ server ↔ agent path hands-on: registration, login, agent list, SHELL
-terminals and managed claude/codex/antigravity sessions.
+terminals and managed claude/codex/antigravity sessions. With `up --web` it also
+serves the **web client** (`web/`) on `http://localhost:5173`, proxied to the
+same stack, and opens it in a browser tab with the throwaway account already
+filled into the login form, so a browser can join the test in one click.
 It is the manual-testing counterpart of the automated pytest harness documented
 in [e2e-harness.md](e2e-harness.md) and reuses the same recipe
 (`tests/e2e/conftest.py` + `tests/e2e/mock_mobile_client.py`) outside pytest.
@@ -34,6 +37,11 @@ cd android
 # 3b. iOS (macOS): boot a simulator, then let the script build + install
 xcrun simctl boot 'iPhone 16'
 python tests/e2e/manual_stack.py ios --install-app
+
+# 3c. web (optional): start with `up --web` instead -- a browser tab opens on
+#     http://localhost:5173/login with the banner credentials pre-filled;
+#     press Sign In yourself (--no-browser opts out of the tab)
+#     (the first --web run auto-installs web/node_modules via `npm ci`)
 ```
 
 Then open the app on the phone or simulator, **register or log in** with the
@@ -71,7 +79,21 @@ across restarts instead.
    READY banner, then streams `[server]` / `[agent]` logs until `Ctrl+C`
    (logs are also written under the state dir). iOS is synced only on macOS,
    where the app can actually be built; `--ios` forces it elsewhere.
-7. On stop, restores both `CENTRAL_SERVER_URL` values to what they were and
+7. With `--web`, boots `npm run dev` in `web/` on port 5173 (`--web-port` to
+   change) with the Vite proxy pointed at the actual `--host`/`--port` via
+   `MOBAIDE_WEB_PROXY_TARGET`, auto-running `npm ci` first when
+   `web/node_modules` is missing or older than the lockfile. Once the stack is
+   READY it opens `http://localhost:5173/login` in a new browser tab
+   (`--no-browser` to skip, e.g. over SSH) with the account pre-filled: the
+   credentials travel to the login form's `defaultValues` as
+   `MOBAIDE_WEB_DEV_LOGIN_EMAIL`/`_PASSWORD`, which `web/vite.config.ts`
+   injects **only** under `vite dev` -- `vite build` always bakes `null`, so no
+   production bundle can carry them. Nothing is submitted; you press Sign In. The web child is
+   supervised, logged (`[web]`, `<state>/logs/web.log`), stopped, and
+   crash-reaped exactly like server and agent, and writes nothing to the
+   checkout except the gitignored `web/node_modules` (kept across runs — it is
+   a dev dependency like the Python venv, not a temp file).
+8. On stop, restores both `CENTRAL_SERVER_URL` values to what they were and
    removes the generated Android debug override (skip with `--keep-android` /
    `--keep-ios`).
 
@@ -189,6 +211,9 @@ release builds. Use the simulator over loopback instead.
 | `up --install-app` | build + install the app for every client that was synced |
 | `android --install-app` | also run `gradlew :app:installDebug` |
 | `ios --install-app` | also run `xcodebuild` + `xcrun simctl install`/`launch` against the **booted** simulator (uninstalling first when the URL changed) |
+| `up --web` | also serve the web client at `http://localhost:5173`, proxied to this stack, and open it with the login pre-filled |
+| `up --web --web-port <n>` | same, on another port (e.g. when 5173 is taken by a plain `npm run dev`) |
+| `up --web --no-browser` | same, but do not open a browser tab (headless boxes, SSH, scripted runs) |
 | `up --projects <paths>` | seed the agent's project list with real directories |
 | `up --keep-android` / `--keep-ios` | on stop, leave the test URL in place (default: restore it) |
 | `up --no-android` / `--no-ios` | skip that client's file sync entirely |
@@ -221,7 +246,11 @@ session-create time with a `<cli>_cli_missing` marker.
 | `could not log in ... state.json no longer match` | DB and state diverged (e.g. deleted one of them). `up --fresh`, or pass matching `--email/--password`. |
 | Agent listed but offline in the app | Check `[agent]` log lines in the console or `<state>/logs/agent.log`. |
 | Registration/verification emails | Never sent — the test server uses an in-process email sink. Verification is disabled; password-reset flows are not testable locally. |
-| Google Sign-In fails | Expected against the local server; use email/password. |
+| Google Sign-In fails | Expected against the local server (in the apps and in the `--web` browser client alike); use email/password. |
+| `--web needs npm on PATH` | Install Node.js in the version range from `web/package.json` `engines.node`, or rerun without `--web`. |
+| `port 5173 on 127.0.0.1 is busy` | A plain `npm run dev` (or another stack) already serves there. Stop it, or pass `--web-port`. |
+| `npm ci failed in .../web` | Run `cd web && npm ci` by hand to see the full error (network, Node version, lockfile drift), then re-run `up --web`. |
+| `clean` left `web/node_modules` behind | Deliberate: it is a kept dev dependency (like the Python installs), gitignored and minutes-expensive to rebuild. Delete it by hand if you want the disk back. |
 | State vanished after reboot (Linux/macOS) | `/tmp` may be cleared on reboot; use `--state-dir ~/mobaide-manual-e2e`. |
 
 ## Production safety

@@ -17,6 +17,7 @@ import { GoogleSignInButton } from '../../components/auth/GoogleSignInButton';
 import { PasswordField } from '../../components/form/PasswordField';
 import { TextField } from '../../components/form/TextField';
 import { loginMessage } from './authCopy';
+import { devLoginDefaults } from './devLogin';
 import { useAfterAuth } from './useAfterAuth';
 
 interface LoginForm {
@@ -32,7 +33,7 @@ export function Login() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const { register, handleSubmit } = useForm<LoginForm>({ defaultValues: { email: '', password: '' } });
+  const { register, handleSubmit } = useForm<LoginForm>({ defaultValues: devLoginDefaults() });
 
   // Why the last session ended ("your session has expired", "your account was
   // removed"). Consumption nulls the store value, so this stays one-shot per

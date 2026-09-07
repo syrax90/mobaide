@@ -200,24 +200,24 @@ enum SessionDisplay {
         return kind
     }
 
-    static func stateColor(_ state: String) -> Color {
+    /// Web `.session-dot-*`: starting and stopping collapse to one pending tone.
+    static func stateTone(_ state: String) -> PixelTone {
         switch state {
-        case "running": return MobaideColors.stateRunning
-        case "starting": return MobaideColors.stateStarting
-        case "stopping": return MobaideColors.stateStopping
-        case "crashed": return MobaideColors.stateCrashed
-        default: return MobaideColors.stateStopped
+        case "running": return .ok
+        case "starting", "stopping": return .accent
+        case "crashed": return .danger
+        default: return .muted
         }
     }
 
-    static func attention(_ value: String?) -> (text: String, color: Color)? {
+    static func attention(_ value: String?) -> (text: String, tone: PixelTone)? {
         switch value {
         case "awaiting_permission", "awaiting_os_permission":
-            return ("Needs permission", MobaideColors.warningYellow)
+            return ("Needs permission", .warning)
         case "turn_finished":
-            return ("Ready", MobaideColors.stateRunning)
+            return ("Ready", .ok)
         case "ended":
-            return ("Ended", MobaideColors.stateStopped)
+            return ("Ended", .muted)
         default:
             return nil
         }

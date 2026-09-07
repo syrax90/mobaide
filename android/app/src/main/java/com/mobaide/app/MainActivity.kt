@@ -1,21 +1,31 @@
 package com.mobaide.app
 
 import android.Manifest
+import android.app.UiModeManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.mobaide.app.data.analytics.AgentPairedConversion
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.events.UserEventBus
+import com.mobaide.app.data.local.PreferencesStore
+import com.mobaide.app.data.local.ThemeMode
 import com.mobaide.app.data.repository.ServerCompatibility
 import com.mobaide.app.data.repository.VersionGateRepository
 import com.mobaide.app.notifications.SessionEventService
@@ -24,7 +34,10 @@ import com.mobaide.app.ui.theme.MobaideTheme
 import com.mobaide.app.ui.update.InAppUpdateManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -45,6 +58,12 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var inAppUpdateManager: InAppUpdateManager
 
+    @Inject
+    lateinit var preferencesStore: PreferencesStore
+
+    @Inject
+    lateinit var agentPairedConversion: AgentPairedConversion
+
     /** Session id from a tapped notification; consumed by [AppNavigation]. */
     private val deepLinkSessionId = MutableStateFlow<String?>(null)
 
@@ -59,6 +78,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         agentEventBus.start()
         userEventBus.start()
+        // Arm the conversion window at launch, before any sign-in, so a
+        // pairing done elsewhere before this install's first connect still
+        // counts (iOS parity: AppContainer.start()).
+        lifecycleScope.launch { agentPairedConversion.armIfNeeded() }
         maybeRequestNotificationPermission()
         consumeSessionExtra(intent)
 
@@ -89,8 +112,53 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+        // The saved theme must be known before the first frame: an async load
+        // would flash the wrong theme on every recreation for users who chose
+        // the opposite of the system mode (the window background resources can
+        // only follow the system), and gating composition on the flow would
+        // blank the app if the prefs file were unreadable. Blocking on the
+        // tiny local DataStore file is the same tradeoff the web client makes
+        // with its pre-paint theme script — but with a hard timeout well under
+        // the ANR threshold, so a stalled read (slow storage, lock contention)
+        // degrades to Auto for the first frame instead of freezing startup;
+        // the composed collector below then corrects the theme when the value
+        // eventually arrives.
+        val initialThemeMode = runBlocking {
+            runCatching {
+                withTimeoutOrNull(THEME_LOAD_TIMEOUT_MS) { preferencesStore.themeMode.first() }
+            }.getOrNull()
+        } ?: ThemeMode.Auto
         setContent {
-            MobaideTheme {
+            val themeMode by preferencesStore.themeMode
+                .collectAsStateWithLifecycle(initialValue = initialThemeMode)
+            val darkTheme = when (themeMode) {
+                ThemeMode.Auto -> isSystemInDarkTheme()
+                ThemeMode.Light -> false
+                ThemeMode.Dark -> true
+            }
+            // Android 12+ paints the cold-start splash from the system-qualified
+            // theme before this process exists; registering the override with
+            // the OS is the only way that starting window can follow it.
+            LaunchedEffect(themeMode) { syncApplicationNightMode(themeMode) }
+            // Re-assert bar icon contrast whenever the in-app override diverges
+            // from the system theme (enableEdgeToEdge alone follows the system).
+            DisposableEffect(darkTheme) {
+                val transparent = android.graphics.Color.TRANSPARENT
+                enableEdgeToEdge(
+                    statusBarStyle = if (darkTheme) {
+                        SystemBarStyle.dark(transparent)
+                    } else {
+                        SystemBarStyle.light(transparent, transparent)
+                    },
+                    navigationBarStyle = if (darkTheme) {
+                        SystemBarStyle.dark(transparent)
+                    } else {
+                        SystemBarStyle.light(transparent, transparent)
+                    },
+                )
+                onDispose {}
+            }
+            MobaideTheme(darkTheme = darkTheme) {
                 AppNavigation(
                     sessionManager = sessionManager,
                     deepLinkSessionId = deepLinkSessionId,
@@ -127,6 +195,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Persists the in-app theme as the app's per-package night mode. The
+     * system applies it to this app's resource configuration (so `values-night`
+     * and the splash resources resolve by the saved choice, not the device
+     * setting); `Auto` clears the override. No-op below API 31, where the
+     * theme is composed in-process and no system splash exists.
+     */
+    private fun syncApplicationNightMode(mode: ThemeMode) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val uiModeManager = getSystemService(UiModeManager::class.java) ?: return
+        uiModeManager.setApplicationNightMode(
+            when (mode) {
+                ThemeMode.Auto -> UiModeManager.MODE_NIGHT_AUTO
+                ThemeMode.Light -> UiModeManager.MODE_NIGHT_NO
+                ThemeMode.Dark -> UiModeManager.MODE_NIGHT_YES
+            },
+        )
+    }
+
     private fun maybeRequestNotificationPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         val granted = ContextCompat.checkSelfPermission(
@@ -140,5 +227,8 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_SESSION_ID = "com.mobaide.app.EXTRA_SESSION_ID"
+
+        /** Normal reads finish in single-digit ms; far below the ~5s ANR bar. */
+        private const val THEME_LOAD_TIMEOUT_MS = 500L
     }
 }

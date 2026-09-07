@@ -16,20 +16,22 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
+import com.mobaide.app.ui.common.pixel.PixelScaffold
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import com.mobaide.app.ui.common.pixel.PixelBrandMark
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -84,8 +87,8 @@ fun LoginScreen(
         viewModel.errorEvents.collect { snackbarHostState.showSnackbar(it) }
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+    PixelScaffold(
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -95,10 +98,7 @@ fun LoginScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                text = "Mobaide",
-                style = MaterialTheme.typography.headlineLarge,
-            )
+            PixelBrandMark()
 
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -111,6 +111,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(32.dp))
 
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = uiState.email,
                 onValueChange = viewModel::updateEmail,
                 label = { Text("Email") },
@@ -126,6 +127,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = uiState.password,
                 onValueChange = viewModel::updatePassword,
                 label = { Text("Password") },
@@ -161,7 +163,7 @@ fun LoginScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.End,
             ) {
-                TextButton(
+                PixelTextButton(
                     onClick = onForgotPasswordClick,
                     enabled = !uiState.isLoading,
                 ) {
@@ -171,16 +173,16 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Button(
+            PixelButton(
+                style = PixelButtonStyle.Primary,
                 onClick = viewModel::loginWithPassword,
                 enabled = !uiState.isLoading,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (uiState.isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.height(20.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        strokeWidth = 2.dp,
+                    PixelBlinkCursor(
+                        height = 20.dp,
+                        color = LocalContentColor.current,
                     )
                 } else {
                     Text("Sign In")
@@ -193,7 +195,7 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            OutlinedButton(
+            PixelButton(
                 onClick = {
                     scope.launch {
                         viewModel.onGoogleAuthStart()
@@ -205,9 +207,8 @@ fun LoginScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (uiState.isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.height(20.dp),
-                        strokeWidth = 2.dp,
+                    PixelBlinkCursor(
+                        height = 20.dp,
                     )
                 } else {
                     Row(
@@ -227,18 +228,18 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            TextButton(onClick = onRegisterClick) {
+            PixelTextButton(onClick = onRegisterClick) {
                 Text("Don't have an account? Create one")
             }
 
-            TextButton(onClick = onHelpSupportClick) {
+            PixelTextButton(onClick = onHelpSupportClick) {
                 Text(
                     text = "Help & Support",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
 
-            TextButton(
+            PixelTextButton(
                 onClick = { openUrlInCustomTab(context, BuildConfig.PRIVACY_POLICY_URL) },
             ) {
                 Text(

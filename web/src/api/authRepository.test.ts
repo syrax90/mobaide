@@ -19,10 +19,36 @@ vi.mock('./clients', () => ({
       }
       return Promise.resolve(next);
     },
+    GET: (path: string) => {
+      relay.calls.push({ path, body: {} });
+      const next = relay.results.shift();
+      if (next === undefined) {
+        return Promise.reject(new Error(`unexpected GET ${path}`));
+      }
+      return Promise.resolve(next);
+    },
   },
 }));
 
+// The landing page's click-attribution cookie, as the repository sees it.
+// jsdom's jar is empty, so the default (`null`) is also what a visitor who
+// never accepted the banner produces.
+const attribution = vi.hoisted(() => ({
+  value: null as null | {
+    click_id: string | null;
+    click_id_kind: 'gclid' | 'wbraid' | 'gbraid' | null;
+    clicked_at: number | null;
+    network: string | null;
+    signature: string | null;
+  },
+}));
+
+vi.mock('../auth/adAttribution', () => ({
+  readAdAttribution: () => attribution.value,
+}));
+
 const {
+  getMe,
   login,
   loginWithApple,
   loginWithGoogle,
@@ -60,6 +86,7 @@ const okBody = {
 beforeEach(() => {
   relay.results.length = 0;
   relay.calls.length = 0;
+  attribution.value = null;
 });
 
 describe('session-minting calls', () => {
@@ -120,6 +147,42 @@ describe('session-minting calls', () => {
         },
       },
     ]);
+  });
+});
+
+describe('ad attribution forwarding', () => {
+  it('forwards ad_attribution on register, Google and Apple only', async () => {
+    attribution.value = {
+      click_id: 'Cj0K_abc-123',
+      click_id_kind: 'gclid',
+      clicked_at: 1756800000,
+      network: 'n3tw0rk_fp-1234',
+      signature: 'a'.repeat(43),
+    };
+    for (let i = 0; i < 5; i += 1) succeed(okBody);
+
+    await register('user@example.com', 'hunter22');
+    await login('user@example.com', 'hunter22');
+    await loginWithGoogle('google-id-token');
+    await loginWithApple('apple-id-token', 'nonce-1');
+    await verifyEmail('user@example.com', '123456');
+
+    // Login and verify cannot create an account, so they never carry it.
+    expect(relay.calls.map((call) => call.body.ad_attribution)).toEqual([
+      attribution.value,
+      undefined,
+      attribution.value,
+      attribution.value,
+      undefined,
+    ]);
+  });
+
+  it('omits the key entirely when the cookie is absent', async () => {
+    succeed(okBody);
+
+    await register('user@example.com', 'hunter22');
+
+    expect('ad_attribution' in relay.calls[0]!.body).toBe(false);
   });
 });
 
@@ -232,5 +295,42 @@ describe('resendVerification', () => {
     await expect(resendVerification('user@example.com')).rejects.toBeInstanceOf(
       ApiError,
     );
+  });
+});
+
+describe('getMe', () => {
+  it('maps the profile and keeps absent stamps as null', async () => {
+    succeed({
+      user_id: 'user-1',
+      email: 'user@example.com',
+      role: 'viewer',
+      created_at: '2026-09-01T10:00:00+00:00',
+      scheduled_deletion_at: null,
+      first_paired_at: null,
+    });
+
+    await expect(getMe()).resolves.toEqual({
+      userId: 'user-1',
+      email: 'user@example.com',
+      role: 'viewer',
+      createdAt: '2026-09-01T10:00:00+00:00',
+      scheduledDeletionAt: null,
+      firstPairedAt: null,
+    });
+    expect(relay.calls).toEqual([{ path: '/api/auth/me', body: {} }]);
+  });
+
+  it('carries the first-pairing stamp through and raises on a 401', async () => {
+    succeed({
+      user_id: 'user-1',
+      email: 'user@example.com',
+      role: 'viewer',
+      created_at: '2026-09-01T10:00:00+00:00',
+      first_paired_at: '2026-09-03T15:07:12+00:00',
+    });
+    expect((await getMe()).firstPairedAt).toBe('2026-09-03T15:07:12+00:00');
+
+    failWith(401, { detail: 'Invalid token' });
+    await expect(getMe()).rejects.toBeInstanceOf(ApiError);
   });
 });

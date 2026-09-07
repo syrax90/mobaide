@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,11 +13,13 @@ interface ClaimResult {
 
 const api = vi.hoisted((): {
   agents: Agent[];
+  listCalls: number;
   claims: { nonce: string; trustKeyFp: string }[];
   claimResult: ClaimResult;
   claimError: Error | null;
 } => ({
   agents: [],
+  listCalls: 0,
   claims: [],
   claimResult: {
     agentId: 'agent-1',
@@ -28,7 +30,10 @@ const api = vi.hoisted((): {
 }));
 
 vi.mock('../../api/agentRepository', () => ({
-  listAgents: () => Promise.resolve(api.agents),
+  listAgents: () => {
+    api.listCalls += 1;
+    return Promise.resolve(api.agents);
+  },
   claimPairing: (nonce: string, trustKeyFp: string) => {
     api.claims.push({ nonce, trustKeyFp });
     const failure = api.claimError;
@@ -105,6 +110,7 @@ function renderPair(initialEntry = '/pair') {
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   api.agents = [agent('agent-1', true)];
+  api.listCalls = 0;
   api.claims.length = 0;
   api.claimResult = {
     agentId: 'agent-1',
@@ -121,6 +127,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  focusManager.setFocused(undefined);
   client.clear();
   localStorage.clear();
 });
@@ -154,6 +161,30 @@ describe('Pair deep link', () => {
     renderPair();
 
     expect(await screen.findByText('Pair this agent?')).toBeInTheDocument();
+  });
+
+  it('still pairs a signed-in visitor when session storage is denied', async () => {
+    // Safari's "block all cookies", a partitioned context, a locked-down
+    // profile: `setItem` throws. The scrub takes the fragment either way, so
+    // without the in-memory arm the nonce is destroyed and the visitor is left
+    // on an empty paste box with nothing left to paste.
+    // `Object.getPrototypeOf(sessionStorage)`, never the `Storage` global:
+    // Node >= 22 ships its own experimental `Storage` that shadows jsdom's, so
+    // spying on `Storage.prototype` here silently intercepts nothing and the
+    // test passes against the unfixed code.
+    const setItem = vi
+      .spyOn(Object.getPrototypeOf(sessionStorage) as Storage, 'setItem')
+      .mockImplementation(() => {
+        throw new DOMException('denied', 'SecurityError');
+      });
+
+    try {
+      renderPair(`/pair#${fragmentFor(payload())}`);
+
+      expect(await screen.findByText('Pair this agent?')).toBeInTheDocument();
+    } finally {
+      setItem.mockRestore();
+    }
   });
 
   it('consumes the stash on read so a single-use nonce is not retried', async () => {
@@ -298,7 +329,13 @@ describe('Pair claim', () => {
     expect(await screen.findByText(/paired and online/)).toBeInTheDocument();
   });
 
-  it('gives up after the timeout without claiming the agent is paired', async () => {
+  /** The claim's refetch and the watcher's one-shot refetch have both landed. */
+  const agentsQuerySettled = () =>
+    waitFor(() => {
+      expect(client.getQueryState(['agents'])?.fetchStatus).toBe('idle');
+    });
+
+  it('reports "not online yet" after the timeout, as a status rather than a failure', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     api.agents = [agent('agent-1', false)];
     api.claimResult = { ...api.claimResult, wsDelivered: null };
@@ -308,10 +345,79 @@ describe('Pair claim', () => {
 
     await vi.advanceTimersByTimeAsync(61_000);
 
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('did not come online within 60 s');
+    // The claim succeeded and the agent is paired; the wait running out is
+    // not an error, so no `alert` and no "Pairing failed".
+    const heading = await screen.findByRole('heading', { name: 'Agent not online yet' });
+    const panel = heading.closest('[role="status"]');
+    expect(panel).not.toBeNull();
+    expect(panel).toHaveTextContent('paired to your account');
     // `null` ws_delivered appends nothing — never the `false` sentence.
-    expect(alert).not.toHaveTextContent('staged');
+    expect(panel).not.toHaveTextContent('staged');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/Pairing failed/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Keep waiting' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'All agents' })).toBeInTheDocument();
+  });
+
+  it('recovers through the 5 s resync when no status event ever arrives', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.agents = [agent('agent-1', false)];
+
+    await confirmDeepLink();
+    await screen.findByText(/Waiting for/);
+    await agentsQuerySettled();
+    const listCallsBefore = api.listCalls;
+    // The relay now routes the agent, but the `agent.status_changed` push
+    // was lost — nothing invalidates `['agents']`.
+    api.agents = [agent('agent-1', true)];
+
+    await vi.advanceTimersByTimeAsync(5_500);
+
+    expect(await screen.findByText(/paired and online/)).toBeInTheDocument();
+    expect(api.listCalls).toBeGreaterThan(listCallsBefore);
+  });
+
+  it('keeps resyncing while the tab is in the background', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.agents = [agent('agent-1', false)];
+
+    await confirmDeepLink();
+    await screen.findByText(/Waiting for/);
+    await agentsQuerySettled();
+    // Pairing is the flow where the user leaves this tab for a terminal.
+    // TanStack pauses interval refetches in an unfocused tab by default.
+    focusManager.setFocused(false);
+    api.agents = [agent('agent-1', true)];
+
+    await vi.advanceTimersByTimeAsync(5_500);
+
+    expect(await screen.findByText(/paired and online/)).toBeInTheDocument();
+  });
+
+  it('restarts the clock from zero on "Keep waiting"', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.agents = [agent('agent-1', false)];
+
+    await confirmDeepLink();
+    await screen.findByText(/Waiting for/);
+    await vi.advanceTimersByTimeAsync(61_000);
+    await screen.findByRole('heading', { name: 'Agent not online yet' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep waiting' }));
+
+    expect(await screen.findByText(/Waiting for/)).toBeInTheDocument();
+    expect(screen.getByText(/Elapsed 0s/)).toBeInTheDocument();
+
+    // Half-way through a fresh 60 s budget it is still counting, not timed
+    // out again at once from the previous attempt's elapsed count.
+    await vi.advanceTimersByTimeAsync(30_500);
+    expect(screen.getByText(/Elapsed 3[01]s/)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Agent not online yet' })).toBeNull();
+
+    api.agents = [agent('agent-1', true)];
+    await client.invalidateQueries({ queryKey: ['agents'] });
+
+    expect(await screen.findByText(/paired and online/)).toBeInTheDocument();
   });
 
   it('shows the remedy copy for a consumed nonce', async () => {

@@ -104,7 +104,8 @@ struct InputBar: View {
             }
         }
         .padding(.vertical, 6)
-        .background(colors.surfaceVariant.opacity(0.3))
+        .background(colors.surface)
+        .overlay(alignment: .top) { PixelDivider() }
         .animation(.easeInOut(duration: 0.15), value: model.composerVisible)
         .task {
             for await focused in model.focusRequests() {
@@ -130,12 +131,12 @@ struct InputBar: View {
                     } label: {
                         if let image = key.systemImage {
                             Image(systemName: image)
+                                .font(.system(size: 13, weight: .semibold))
                         } else {
                             Text(key.label)
                         }
                     }
-                    .buttonStyle(.bordered)
-                    .font(.footnote)
+                    .buttonStyle(.pixelSmall)
                     // Same gate as every other byte-send surface (Android
                     // connected-AND-running parity): a key tapped during
                     // replay or after the session stopped must not feed the
@@ -152,16 +153,16 @@ struct InputBar: View {
                     model.pasteFromClipboard()
                 } label: {
                     Image(systemName: "doc.on.clipboard")
+                        .font(.system(size: 13, weight: .semibold))
                 }
-                .buttonStyle(.bordered)
-                .font(.footnote)
+                .buttonStyle(.pixelSmall)
                 .disabled(!model.canSendTerminalBytes)
                 .accessibilityLabel("Paste")
                 Button(action: onOpenShortcuts) {
                     Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .semibold))
                 }
-                .buttonStyle(.bordered)
-                .font(.footnote)
+                .buttonStyle(.pixelSmall)
                 .disabled(!model.canSendTerminalBytes)
                 .accessibilityLabel("Custom shortcut")
                 ForEach(model.savedShortcutsForKind) { shortcut in
@@ -197,10 +198,10 @@ struct InputBar: View {
             // tokens.
             TextField("Message", text: $model.inputText, axis: .vertical)
                 .lineLimit(1...5)
-                .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .focused($inputFocused)
+                .pixelField(isFocused: inputFocused)
 
             Button(action: onSaveTemplate) {
                 Image(systemName: "square.and.arrow.down")
@@ -251,8 +252,7 @@ struct InputBar: View {
             } label: {
                 Label("Command field", systemImage: "keyboard")
             }
-            .buttonStyle(.bordered)
-            .font(.footnote)
+            .buttonStyle(.pixelSmall)
 
             Spacer()
         }
@@ -283,7 +283,7 @@ private struct SavedShortcutKeyButton: View {
         } label: {
             label
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.pixelSmall)
         .contextMenu {
             Button(action: onRename) {
                 Label("Rename", systemImage: "pencil")
@@ -298,11 +298,10 @@ private struct SavedShortcutKeyButton: View {
     @ViewBuilder
     private var label: some View {
         let text = Text(shortcut.label)
-            .font(.footnote.monospaced())
             .lineLimit(1)
         Group {
             if shortcut.risky {
-                text.foregroundStyle(colors.tertiary)
+                text.foregroundStyle(colors.warning)
             } else {
                 text
             }

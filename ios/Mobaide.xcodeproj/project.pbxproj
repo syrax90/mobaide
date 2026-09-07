@@ -11,6 +11,7 @@
 		CA9700000000000000000103 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = CA9700000000000000000102 /* GoogleSignIn */; };
 		CA9700000000000000000105 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = CA9700000000000000000104 /* GoogleSignInSwift */; };
 		CA9700000000000000000203 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = CA9700000000000000000202 /* SwiftTerm */; };
+		CA9700000000000000000303 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = CA9700000000000000000302 /* FirebaseAnalytics */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -53,6 +54,7 @@
 				CA9700000000000000000103 /* GoogleSignIn in Frameworks */,
 				CA9700000000000000000105 /* GoogleSignInSwift in Frameworks */,
 				CA9700000000000000000203 /* SwiftTerm in Frameworks */,
+				CA9700000000000000000303 /* FirebaseAnalytics in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -101,6 +103,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = CA9700000000000000000072 /* Build configuration list for PBXNativeTarget "Mobaide" */;
 			buildPhases = (
+				CA9700000000000000000057 /* Require Firebase config for Release */,
 				CA9700000000000000000051 /* Sources */,
 				CA9700000000000000000052 /* Frameworks */,
 				CA9700000000000000000053 /* Resources */,
@@ -117,6 +120,7 @@
 				CA9700000000000000000102 /* GoogleSignIn */,
 				CA9700000000000000000104 /* GoogleSignInSwift */,
 				CA9700000000000000000202 /* SwiftTerm */,
+				CA9700000000000000000302 /* FirebaseAnalytics */,
 			);
 			productName = Mobaide;
 			productReference = CA9700000000000000000021 /* Mobaide.app */;
@@ -171,6 +175,7 @@
 			packageReferences = (
 				CA9700000000000000000101 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 				CA9700000000000000000201 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				CA9700000000000000000301 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 			);
 			productRefGroup = CA9700000000000000000003 /* Products */;
 			projectDirPath = "";
@@ -199,6 +204,29 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		CA9700000000000000000057 /* Require Firebase config for Release */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Require Firebase config for Release";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"${CONFIGURATION}\" = \"Release\" ] && [ ! -f \"${SRCROOT}/Mobaide/GoogleService-Info.plist\" ]; then\n  echo \"error: Mobaide/GoogleService-Info.plist is missing: Release builds must ship Firebase Analytics. Copy the gitignored file from the main checkout.\"\n  exit 1\nfi\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		CA9700000000000000000051 /* Sources */ = {
@@ -354,7 +382,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Mobaide/Support/Mobaide.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 5NNN5NQNYW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -368,7 +396,11 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.3;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mobaide.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTS_MACCATALYST = NO;
@@ -385,7 +417,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Mobaide/Support/Mobaide.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = 5NNN5NQNYW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -399,7 +431,11 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.3;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mobaide.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTS_MACCATALYST = NO;
@@ -491,6 +527,14 @@
 				minimumVersion = 1.15.0;
 			};
 		};
+		CA9700000000000000000301 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 12.18.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -508,6 +552,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = CA9700000000000000000201 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
 			productName = SwiftTerm;
+		};
+		CA9700000000000000000302 /* FirebaseAnalytics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CA9700000000000000000301 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalytics;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -1,5 +1,6 @@
 package com.mobaide.app.data.network
 
+import com.mobaide.app.BuildConfig
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.auth.UserIdentityStore
@@ -405,6 +406,18 @@ class WebSocketManager(
     private val tokenStore: TokenStore,
     private val sessionManager: SessionManager,
     private val userIdentityStore: UserIdentityStore,
+    /**
+     * Client for user-scoped channels — see [createUserConnection]. Never
+     * [client]: its agent-scoped interceptor answers every request made
+     * before an agent is connected with a synthetic 401, which the socket
+     * would read as a rejected token and sign the user out.
+     */
+    private val userClient: OkHttpClient,
+    /**
+     * Base for user-scoped channels when [TokenStore] holds no relay or
+     * agent URL yet — see [resolveUserEventsUrl].
+     */
+    private val centralServerUrl: String = BuildConfig.CENTRAL_SERVER_URL,
 ) {
     /**
      * Build a [WebSocketConnection] whose URL provider pulls the latest
@@ -460,38 +473,50 @@ class WebSocketManager(
     }
 
     /**
+     * Resolve the URL of a user-scoped channel such as `ws/user-events`, or
+     * `null` when nobody is signed in.
+     *
+     * The base is the stored relay URL (relay mode) or the stored agent URL
+     * (direct mode, single-agent dev setups where the agent fronts the user
+     * API) when one exists, otherwise [centralServerUrl]. Both stores are
+     * written only by connecting to an already-paired agent, so an account
+     * that has never connected one — every first pairing — and any account
+     * after [SessionManager.agentDisconnect] has neither. Without the
+     * fallback the user socket never opened in that state and the
+     * `agent.status_changed` push behind "waiting for the agent to come
+     * online" could not arrive. Mirrors iOS `UserEventBus.urlProvider`.
+     */
+    internal fun resolveUserEventsUrl(path: String): String? {
+        if (!userIdentityStore.isUserLoggedIn()) return null
+        val token = userIdentityStore.getUserAccessToken() ?: return null
+
+        val baseUrl = when (tokenStore.getConnectionMode()) {
+            TokenStore.ConnectionMode.RELAY -> tokenStore.getRelayServerUrl()
+            TokenStore.ConnectionMode.DIRECT -> tokenStore.getAgentUrl()
+        } ?: centralServerUrl
+
+        val wsScheme = if (baseUrl.startsWith("https")) "wss" else "ws"
+        val host = baseUrl.removePrefix("https://").removePrefix("http://").trimEnd('/')
+        val url = "$wsScheme://$host/$path"
+
+        val separator = if (url.contains("?")) "&" else "?"
+        return "$url${separator}token=$token"
+    }
+
+    /**
      * Build a WebSocket connection authenticated with the **user** JWT
      * (central-server dashboard token), not the agent-scoped mobile
      * token. Used for user-wide channels that span all of a user's
-     * agents — e.g. presence events on `ws/user-events`.
-     *
-     * The URL is always resolved against the central server (`relay mode`
-     * server URL in relay deployments; `agent URL` as a fallback in
-     * direct mode for single-agent dev setups where the agent itself
-     * fronts the user API).
+     * agents — e.g. presence events on `ws/user-events`. The URL comes
+     * from [resolveUserEventsUrl] on every (re)connect, and the upgrade
+     * goes through [userClient] so no agent-scoped interceptor can reject
+     * it locally while the account has no connected agent.
      */
     fun createUserConnection(path: String): WebSocketConnection {
-        val provider: () -> String? = fun(): String? {
-            if (!userIdentityStore.isUserLoggedIn()) return null
-            val token = userIdentityStore.getUserAccessToken() ?: return null
-
-            val baseUrl = when (tokenStore.getConnectionMode()) {
-                TokenStore.ConnectionMode.RELAY -> tokenStore.getRelayServerUrl()
-                TokenStore.ConnectionMode.DIRECT -> tokenStore.getAgentUrl()
-            } ?: return null
-
-            val wsScheme = if (baseUrl.startsWith("https")) "wss" else "ws"
-            val host = baseUrl.removePrefix("https://").removePrefix("http://")
-            val url = "$wsScheme://$host/$path"
-
-            val separator = if (url.contains("?")) "&" else "?"
-            return "$url${separator}token=$token"
-        }
-
         return WebSocketConnection(
-            client = client,
+            client = userClient,
             sessionManager = sessionManager,
-            urlProvider = provider,
+            urlProvider = { resolveUserEventsUrl(path) },
             isAuthenticated = { userIdentityStore.isUserLoggedIn() },
             // 4001/401 (TokenRejected) or 4010 (AccountRemoved) on the
             // user-scoped channel both mean the locally-stored credentials

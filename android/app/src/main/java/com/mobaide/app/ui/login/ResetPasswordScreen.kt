@@ -19,17 +19,20 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
+import com.mobaide.app.ui.common.pixel.PixelScaffold
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -79,8 +82,8 @@ fun ResetPasswordScreen(
         viewModel.errorEvents.collect { snackbarHostState.showSnackbar(it) }
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+    PixelScaffold(
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -123,6 +126,7 @@ fun ResetPasswordScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = uiState.newPassword,
                 onValueChange = viewModel::updateNewPassword,
                 label = { Text("New password") },
@@ -148,6 +152,7 @@ fun ResetPasswordScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = uiState.confirmPassword,
                 onValueChange = viewModel::updateConfirmPassword,
                 label = { Text("Confirm new password") },
@@ -173,16 +178,16 @@ fun ResetPasswordScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            Button(
+            PixelButton(
+                style = PixelButtonStyle.Primary,
                 onClick = viewModel::submit,
                 enabled = !uiState.isLoading,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (uiState.isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.height(20.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        strokeWidth = 2.dp,
+                    PixelBlinkCursor(
+                        height = 20.dp,
+                        color = LocalContentColor.current,
                     )
                 } else {
                     Text("Reset password")
@@ -196,14 +201,14 @@ fun ResetPasswordScreen(
                 uiState.cooldownSeconds > 0 -> "Resend code (${uiState.cooldownSeconds}s)"
                 else -> "Resend code"
             }
-            TextButton(
+            PixelTextButton(
                 onClick = viewModel::resend,
                 enabled = !uiState.isResending && uiState.cooldownSeconds == 0,
             ) {
                 Text(resendLabel)
             }
 
-            TextButton(onClick = onBack) {
+            PixelTextButton(onClick = onBack) {
                 Text("Back to sign in")
             }
             Spacer(modifier = Modifier.height(24.dp))

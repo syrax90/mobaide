@@ -556,12 +556,16 @@ ios/
 │                                 # + optional #include of Local.xcconfig (gitignored dev overrides;
 │                                 #   see Config/Local.xcconfig.example)
 ├── Mobaide.xcodeproj             # hand-authored; objectVersion 70, Xcode 16 synchronized folder groups;
-│                                 # SPM: GoogleSignIn-iOS ≥ 9.0, SwiftTerm 1.15.0
-│                                 #   (+ swift-argument-parser transitively; Package.resolved committed)
+│                                 # SPM: GoogleSignIn-iOS ≥ 9.0, SwiftTerm 1.15.0,
+│                                 #   firebase-ios-sdk ≥ 12.18 (product FirebaseAnalytics only)
+│                                 #   (+ swift-argument-parser, GoogleAppMeasurement, Google Ads
+│                                 #   on-device conversion, GoogleDataTransport, nanopb
+│                                 #   transitively; Package.resolved committed)
 ├── Mobaide/
 │   ├── App/                      # entry point, AppConfig, AppContainer (manual DI), AuthStateModel
 │   ├── Assets.xcassets/          # AppIcon — single 1024×1024 opaque icon (iOS 17 needs no smaller
-│   │                             # sizes); wired via ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
+│   │                             # sizes); wired via ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon.
+│   │                             # Wordmark — the pixel mark, 1x only (see Theme below)
 │   ├── Core/Concurrency/         # Broadcaster (StateFlow/SharedFlow replay parity)
 │   ├── Core/Protocol/            # TerminalFrame, JSONValue, WireJSON, ProtocolVersion
 │   ├── Core/Networking/          # WebSocketCore, NWWebSocketTransport, RelayRouting,
@@ -576,14 +580,15 @@ ios/
 │   │                             # AttentionCoordinator/Content/Suppression (iOS-09),
 │   │                             # PushAppDelegate/PushRegistrationCoordinator/
 │   │                             # PushEnvironment (iOS-10 APNs)
-│   ├── UI/                       # Theme, Navigation (Router, RootView), Common, Onboarding,
+│   ├── UI/                       # Theme (modern-pixel tokens, Departure Mono, pixel controls —
+│   │                             # see below), Navigation (Router, RootView), Common, Onboarding,
 │   │                             # Connections, Sessions (list + create wizard), Terminal
 │   │                             # (SwiftTerm host, InputBar, keyboard pan, wheel scroll,
 │   │                             # shortcut picker, session model/store), and the feature
 │   │                             # screens (Agents, Projects, Devices, Templates, AutoScan,
 │   │                             # Settings, Support, Update)
 │   └── Support/                  # Info.plist (protocol keys, CentralServerURL, Google client ids,
-│                                 # reversed-client-id URL scheme) + Mobaide.entitlements (SIWA)
+│                                 # reversed-client-id URL scheme, UIAppFonts) + Mobaide.entitlements (SIWA)
 └── MobaideTests/                 # unit tests + fixture round-trip suites
 tests/protocol_fixtures/          # language-neutral golden fixtures (see below)
 ```
@@ -592,6 +597,62 @@ Both `Mobaide/` and `MobaideTests/` are Xcode 16 synchronized folder groups:
 files added on disk join the right target automatically — no pbxproj edits.
 The test bundle pulls `tests/protocol_fixtures/` in wholesale through a folder
 reference, so new fixture files need no project changes either.
+
+## Theme / design system
+
+The app renders in the web client's "modern pixel" design system
+([`docs/website.md`](website.md), `web/src/styles/theme.css`), not Android's
+Material template. `ios/Mobaide/UI/Theme/` is the **third token mirror**:
+`Theme.swift`'s `MobaideColorScheme.dark` copies `site.css`'s `:root` verbatim
+and `.light` copies `theme.css`'s light block — **a token change on the web
+must be mirrored here**, hex for hex. The brand purples (`brand` `#6008AC`,
+`brand2` `#6650A4`) are `static` fill/ring colours only, never text on dark;
+text takes `accent`. Interactive control boundaries ring in `gray`, decorative
+frames in `rule`, plates in `surface2`.
+
+| File | What |
+|---|---|
+| `Theme.swift` | `MobaideColorScheme` (both palettes), `PixelTone` (the semantic tone a display helper returns; views resolve it with `colors.color(_:)` / `colors.ring(_:)`), `MobaideColorScheme.dynamic(_:)` for UIKit appearance proxies, the `\.mobaideColors` environment key, `mobaideTheme()` (also installs the checkbox `ToggleStyle` app-wide), `ThemePreference.colorScheme` + `ThemePreferenceModifier`. |
+| `Type.swift` | `MobaideTypography`: Departure Mono is the **chrome** face (nav titles, section headings, field labels, chips, small buttons, page titles at 11 / 13 / 18 / 22 / 33 pt on its 11px grid); body copy stays the system face — the web's `--font-chrome` / `--font-body` split. `chrome(_:relativeTo:)` uses `Font.custom(_:size:relativeTo:)` so Dynamic Type still scales, and degrades to the platform monospace when the font is not registered (`chromeAvailable`). |
+| `PixelMetrics.swift` | `px` (4pt: hard-shadow offset and pressed travel), `ring` (2pt), the 8pt status square, 18/16pt checkbox/radio, the 24pt dot-grid tile, control insets. |
+| `PixelModifiers.swift` | The grammar as modifiers: `pixelRing` (a 2pt **inset** `strokeBorder`, never `stroke`), `pixelShadow` (an offset `Rectangle`, no blur, reserving its 4pt so siblings never overlap it), the plates (`pixelCard` / `pixelPanel` / `pixelSelectedCard` / `pixelDangerPanel` / `pixelInfoBanner` / `pixelCodePlate`), `chromeText` (font + `.textCase(.uppercase)` + 0.08em kerning — visual only, VoiceOver reads the source string), `sectionHeading`, `pageTitle`, `pixelScreenBackground`, `pixelSheet`, `pixelList` / `pixelListRow`, `pixelForm` / `pixelFormSection`, `PixelSectionHeader`, `PixelDivider`, `PixelLinkBullet`. |
+| `PixelButtonStyle.swift` | `.pixel` (ghost), `.pixelPrimary`, `.pixelDanger`, the `Small` and `Block` variants. Pressed = `offset(4, 4)` with the shadow hidden, under `.transaction { $0.animation = nil }` so no ambient animation tweens it (the web's `steps(2)`). Applied per site, never globally — toolbar items and `Menu` labels must not pick it up. |
+| `PixelToggleStyle.swift` | `PixelCheckboxToggleStyle` (18pt square, `brand` fill when on; exposes a real `Toggle` to VoiceOver) and `PixelRadio` (the cored 16pt square). |
+| `PixelField.swift` | `pixelField(isInvalid:isFocused:)` — a modifier because a `TextFieldStyle` cannot observe focus — and `PixelLabeledField` (chrome label above, hint / error below). |
+| `PixelSegmented.swift` | The web `ThemePicker` segment: neighbours overlap 2pt to share one divider, the selected one sits on `surface` in a `brand2` ring at `zIndex(1)`. Replaces every `.pickerStyle(.segmented)`; menu-style `Picker`s stay system. |
+| `PixelChip.swift` | `PixelChip` (`.status(tone)`, `.verbatim(checked:)`, `.filled`) and `PixelStatusSquare` — status is an 8pt square, never a circle. |
+| `PixelLoadingBlock.swift` | The only progress indicator: a block cursor blinking at 900 ms with a stepped 50% duty cycle (`TimelineView`, not a repeating animation, so it never interpolates); lit steady under Reduce Motion. `PixelBusyOverlay` is the modal form. |
+| `DotGridBackground.swift` | The page texture: one `surface2` dot per 24pt tile on `bg`, a bitmap cached per (scheme, display scale) and GPU-tiled, so scrolling redraws nothing. Never put it inside list rows. |
+| `NavigationBarAppearance.swift` | `PixelNavigationBarAppearance.install()`, called from `MobaideApp.init()` before the first `NavigationStack` exists: opaque `headBg`, a 2pt `surface2` bottom rule (a template `shadowImage` tinted by `shadowColor`), titles in the chrome face in `accent`, trait-resolving `UIColor`s so one appearance serves both themes. `DEBUG` asserts if the font is missing. |
+| `Fonts/` | `DepartureMono-Regular.otf` (v1.500, PostScript name `DepartureMono-Regular`, from the [upstream release](https://github.com/rektdeckard/departure-mono) — the web ships only the woff2, which iOS cannot register) and its OFL, both copied into the bundle; registered through `UIAppFonts` in `Support/Info.plist`. `ChromeFontTests` fails if either half is missing. |
+
+Brand mark: `Assets.xcassets/Wordmark.imageset` is a byte copy of
+`web/public/wordmark.png` at **1x only** — it is pixel art, and
+`PixelWordmark` scales it nearest-neighbour (`.interpolation(.none)`) on the
+`plate` (`#F4F4F4`) chip in both themes, because the ink is drawn for a light
+background. The authenticated root (`AgentListScreen`) carries it as the
+navigation bar's principal item, the auth screens above their card.
+
+Appearance: `ThemeStore` (`Data/Local/`, an `@Observable` over
+`PreferencesStore` like `TerminalDisplayStore`) holds the web `ThemePicker`'s
+three-way preference under the same key, `mobaide-theme`; `MobaideApp` applies
+it as `preferredColorScheme` above `mobaideTheme()`, and Settings › Appearance
+is a `PixelSegmented` (Auto / Light / Dark). Unknown stored values coerce to
+`system`.
+
+Always dark, in both themes: the SwiftTerm grid (`MobaideColors.terminal*`,
+now the web's `#12141A` / `#E6E8EE` / cursor `#4DA3FF`; the 16-colour ANSI table
+is fixture-locked and shared with Android and the web) and the auto-scan log
+pane (`MobaideColors.log*`). An ANSI palette is a matched set with its
+background.
+
+Deliberate deviations, all platform conventions: `NavigationStack` push
+navigation instead of the web header's links, system `.alert` /
+`confirmationDialog`, menu-style `Picker`s and `Stepper`, and the vendor
+Google / Apple sign-in buttons (the app's only rounded corners). `Form`
+sections cannot carry a ring, so `pixelForm()` renders them as square `bg2`
+rows on the dot grid. `List`s keep their pull-to-refresh and swipe actions with
+`pixelList()` + per-row `pixelCard()`.
 
 ## Device support
 
@@ -634,16 +695,49 @@ suites; adding an App Group entitlement would make `1C8F.1` the right reason.
 
 When adding an API from any Required Reason category (file timestamps, disk
 space, system boot time, active keyboard), add its declaration here too. The
-bundled SDKs ship their own manifests (GoogleSignIn and its transitive
-dependencies); SwiftTerm uses no Required Reason API and needs none.
+bundled SDKs ship their own manifests (GoogleSignIn, Firebase Analytics /
+GoogleAppMeasurement and their transitive dependencies), which App Store
+Connect aggregates with the app's; SwiftTerm uses no Required Reason API and
+needs none.
 
-`NSPrivacyCollectedDataTypes` lists email address, user ID, and device ID — all
-app-functionality, linked to the user, non-tracking. It must stay consistent
-with the App Privacy answers in App Store Connect. Terminal I/O is relayed in
-real time and not retained server-side, so it is not "collected" under Apple's
-definition. `MobaideTests/PrivacyManifestTests.swift` asserts all of the above
-against the built bundle, so a dropped or edited manifest fails at test time
-rather than at upload time.
+`NSPrivacyCollectedDataTypes` lists five types, non-tracking throughout
+(`NSPrivacyTracking` is `false`, no tracking domains): email address and user
+ID (linked, app functionality); device ID (linked; app functionality plus
+analytics and developer's advertising, because Google Analytics for Firebase
+keys its events by a Firebase app-instance id — IDFV collection is switched
+off); product interaction and coarse location (not linked; analytics and, for
+product interaction, developer's advertising — the SDK's automatic app-open /
+session events and the single `agent_paired` conversion, with the location
+derived by Google from the request IP). It must stay consistent with the App
+Privacy answers in App Store Connect and with the privacy policy's Section
+3.8; docs/app-conversion-measurement.md carries the App Privacy answers.
+Terminal I/O is relayed in real time and not retained server-side, so it is
+not "collected" under Apple's definition. `MobaideTests/PrivacyManifestTests.swift`
+asserts all of the above against the built bundle, so a dropped or edited
+manifest fails at test time rather than at upload time.
+
+### Firebase Analytics (ad-conversion measurement)
+
+The app links exactly one Firebase product, `FirebaseAnalytics`, for the
+once-per-account `agent_paired` conversion described in
+docs/app-conversion-measurement.md. `FirebaseAnalyticsIdentitySupport` (IDFA)
+is never added, `AdSupport` is not linked, and there is no
+`NSUserTrackingUsageDescription`, so no App Tracking Transparency prompt
+exists; iOS App campaigns attribute through SKAdNetwork (`SKAdNetworkItems`
+carries Google's `cstr6suwn9.skadnetwork`). `OTHER_LDFLAGS` carries `-ObjC`
+for the Analytics binary. `MobaideApp.init()` calls
+`FirebaseApp.configure(options:)` only when `GoogleService-Info.plist` is in
+the bundle — the file is gitignored and absent in worktrees and CI, where the
+`FirebaseAnalyticsSink` reports itself disabled and the conversion component
+performs no I/O. A Release-only run-script phase ("Require Firebase config
+for Release", first in the app target's build phases) fails the build when
+the plist is missing, so an App Store archive cannot ship with analytics
+inert while Debug and CI builds stay config-free. `Info.plist` fixes the consent-mode defaults
+(`GOOGLE_ANALYTICS_DEFAULT_ALLOW_*`: analytics and ad storage granted, ad user
+data `eu_consent_policy`, ad personalisation denied), switches automatic
+screen reporting, IDFV collection and the app-delegate proxy off (the app owns
+its APNs delegate); `MobaideTests/FirebaseConfigurationTests.swift` pins all of
+them.
 
 ## Export compliance
 

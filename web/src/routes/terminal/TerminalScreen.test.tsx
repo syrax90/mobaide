@@ -13,6 +13,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PromptTemplate } from '../../api/templateRepository';
 import { recordingClipboard, refusingClipboard } from '../../test/clipboardStub';
+import { ApiError } from '../../api/errors';
 
 // The real model is the point — where the screen mounts the toolbar is a
 // property of the tree it builds around it — so only the two things a model
@@ -76,12 +77,26 @@ const escaped = vi.hoisted(
 /** {@link escaped} with ESC and C1 gone; the markers degrade to literal text. */
 const escapedStripped = 'review this [201~echo pwned0m';
 
+/** Creates recorded off the wire, plus the failure the editor has to survive. */
+const created = vi.hoisted(() => ({
+  calls: [] as { name: string; body: string }[],
+  error: null as Error | null,
+}));
+
 vi.mock('../../api/templateRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/templateRepository')>();
   return {
     ...actual,
     listTemplates: () => Promise.resolve([alpha, multiline, escaped]),
     touchTemplate: () => Promise.resolve(),
+    // Shadowed rather than left to the `...actual` spread, which would let the
+    // real one reach `relayClient` and fetch.
+    createTemplate: (name: string, body: string) => {
+      created.calls.push({ name, body });
+      return created.error === null
+        ? Promise.resolve()
+        : Promise.reject(created.error);
+    },
   };
 });
 
@@ -91,6 +106,12 @@ const { acquireTerminal, evictTerminalSessions, useTerminalStore } = await impor
 );
 const { useToastStore } = await import('../../stores/toastStore');
 const { TerminalScreen } = await import('./TerminalScreen');
+
+const toastKinds = (): string[] =>
+  useToastStore.getState().toasts.map((toast) => toast.kind);
+
+const toastMessage = (): string | undefined =>
+  useToastStore.getState().toasts[0]?.message;
 
 function renderTerminal({ strict = false }: { strict?: boolean } = {}): RenderResult {
   const subject = (
@@ -110,6 +131,8 @@ function renderTerminal({ strict = false }: { strict?: boolean } = {}): RenderRe
 
 afterEach(() => {
   cleanup();
+  created.calls.length = 0;
+  created.error = null;
   for (const model of Object.values(useTerminalStore.getState().models)) {
     model.dispose();
   }
@@ -171,12 +194,6 @@ describe('TerminalScreen eviction exemption', () => {
 
 describe('TerminalScreen template picks', () => {
   const clipboardWrites = recordingClipboard();
-
-  const toastKinds = (): string[] =>
-    useToastStore.getState().toasts.map((toast) => toast.kind);
-
-  const toastMessage = (): string | undefined =>
-    useToastStore.getState().toasts[0]?.message;
 
   /**
    * Let the clipboard promise and the toast hanging off it land.
@@ -443,5 +460,143 @@ describe('TerminalScreen template picks', () => {
       expect(clipboardWrites).toEqual([alpha.body]);
       expect(toastKinds()).toEqual(['success']);
     });
+  });
+});
+
+describe('TerminalScreen template creation', () => {
+  /** Walk the header button into the picker, then into the editor. */
+  const openEditor = async (): Promise<void> => {
+    fireEvent.click(screen.getByRole('button', { name: 'Templates' }));
+    await screen.findByRole('button', { name: 'New template' });
+    fireEvent.click(screen.getByRole('button', { name: 'New template' }));
+    await screen.findByRole('dialog', { name: 'New template' });
+  };
+
+  const nameField = (): HTMLElement => screen.getByLabelText('Name');
+  const bodyField = (): HTMLElement => screen.getByLabelText('Prompt body');
+
+  /** React Query settles its mutation on a timer, outside the click's task. */
+  const flush = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+  };
+
+  it('opens the editor on the terminal selection, with the picker gone', async () => {
+    // The single-dialog invariant. `TemplatesPicker` hangs its key handler on
+    // the ancestor of everything it renders, and the top layer reorders paint
+    // rather than propagation — so an editor left mounted inside it would lose
+    // its textarea's arrow keys to the row walk and its draft to the picker's
+    // Escape. The panel union is what makes that unrepresentable.
+    const model = acquireTerminal('a1', 's1');
+    vi.spyOn(model, 'selectionText').mockReturnValue('npm run build\nfailed');
+    renderTerminal();
+
+    await openEditor();
+
+    expect(screen.queryByRole('dialog', { name: 'Templates' })).toBeNull();
+    expect(bodyField()).toHaveValue('npm run build\nfailed');
+    expect(nameField()).toHaveValue('');
+  });
+
+  it('opens empty when nothing is selected', async () => {
+    const model = acquireTerminal('a1', 's1');
+    vi.spyOn(model, 'selectionText').mockReturnValue('');
+    renderTerminal();
+
+    await openEditor();
+
+    expect(bodyField()).toHaveValue('');
+    // Both fields are required, so an empty body cannot be saved by naming it.
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('snapshots the selection when the picker opens, not when the editor does', async () => {
+    // The reason the selection is carried in the panel rather than read late:
+    // PTY output keeps arriving behind the modal, and a mouse-protocol change,
+    // an alternate-screen switch, a row-count change and the replay wipe each
+    // clear xterm's selection. Reading at editor-open would hand back whatever
+    // survived that; reading at picker-open cannot.
+    const model = acquireTerminal('a1', 's1');
+    const selection = vi.spyOn(model, 'selectionText').mockReturnValue('first');
+    renderTerminal();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Templates' }));
+    await screen.findByRole('button', { name: 'New template' });
+    selection.mockReturnValue('second');
+    fireEvent.click(screen.getByRole('button', { name: 'New template' }));
+    await screen.findByRole('dialog', { name: 'New template' });
+
+    expect(bodyField()).toHaveValue('first');
+    expect(selection).toHaveBeenCalledTimes(1);
+  });
+
+  it('trims the name, sends the body verbatim, and closes to the terminal', async () => {
+    // Trailing whitespace in a body is load-bearing — it reaches the PTY
+    // unchanged — so only the name is trimmed. The toast is raised after the
+    // dialog is gone, because `.toast-viewport` paints below the top layer.
+    const model = acquireTerminal('a1', 's1');
+    vi.spyOn(model, 'selectionText').mockReturnValue('git status  ');
+    const focus = vi.spyOn(model, 'focus').mockImplementation(() => undefined);
+    renderTerminal();
+    await openEditor();
+
+    fireEvent.change(nameField(), { target: { value: '  Standup  ' } });
+    const before = focus.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await flush();
+
+    expect(created.calls).toEqual([{ name: 'Standup', body: 'git status  ' }]);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(toastKinds()).toEqual(['success']);
+    expect(toastMessage()).toBe('Saved template "Standup"');
+    // The grid takes focus back on the dismissal, not on the picker-to-editor
+    // hop that preceded it.
+    expect(focus.mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it('keeps the editor and the draft when the save fails', async () => {
+    // The draft is the expensive thing to lose, and the failure has to render
+    // inline: it is raised while the dialog is still up, which is precisely
+    // where a toast cannot be seen.
+    created.error = new ApiError({
+      status: 500,
+      message: 'relay refused',
+      code: null,
+      retryAfterSeconds: null,
+      detail: null,
+    });
+    const model = acquireTerminal('a1', 's1');
+    vi.spyOn(model, 'selectionText').mockReturnValue('git status');
+    renderTerminal();
+    await openEditor();
+
+    fireEvent.change(nameField(), { target: { value: 'Standup' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await flush();
+
+    expect(screen.getByText('Failed to save template: relay refused')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'New template' })).toBeInTheDocument();
+    expect(bodyField()).toHaveValue('git status');
+    expect(toastKinds()).toEqual([]);
+  });
+
+  it('returns to the terminal, not the picker, when cancelled', async () => {
+    // Save has to close everything for its toast to be visible, so Cancel lands
+    // in the same place: two exits to different screens would be the
+    // surprising half of the pair.
+    const model = acquireTerminal('a1', 's1');
+    vi.spyOn(model, 'selectionText').mockReturnValue('git status');
+    const focus = vi.spyOn(model, 'focus').mockImplementation(() => undefined);
+    renderTerminal();
+    await openEditor();
+
+    const before = focus.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await flush();
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(created.calls).toEqual([]);
+    expect(focus.mock.calls.length).toBeGreaterThan(before);
   });
 });

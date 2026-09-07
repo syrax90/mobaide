@@ -764,6 +764,90 @@ h1 {
   font-size: 0.875rem;
 }
 
+/* ---------- screenshot platform switch ---------- */
+
+/* Ships out of the document, the same shape as .copy-btn: the tabs do nothing
+   until site.js wires them, so until `is-live` lands both panels render in full
+   under their own headings. This is NOT the hidden-by-default state the
+   accessibility invariants forbid — `is-live` is set synchronously from init(),
+   and no animation is in the path. */
+.shots-tabs {
+  display: none;
+}
+
+.is-live .shots-tabs {
+  display: inline-flex;
+  margin-bottom: 26px;
+}
+
+.shots-tab {
+  padding: 9px 18px;
+  border: 0;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  /* --gray (5.26:1), not --rule (2.78:1): WCAG 1.4.11 wants 3:1 for the
+     boundary of a control the user has to find. */
+  box-shadow: inset 0 0 0 2px var(--gray);
+  cursor: pointer;
+}
+
+/* The two segments share one 2px rule rather than stacking two. */
+.shots-tab + .shots-tab {
+  margin-left: -2px;
+}
+
+/* Hover brightens the label only. The ring is the selected-state indicator and
+   may not be borrowed here, or a hovered tab would read as the chosen one. */
+.shots-tab:hover {
+  color: #fff;
+}
+
+/* --accent rather than --brand-2 for the ring: WCAG 1.4.11 wants 3:1 for what
+   identifies a *state*, and --brand-2 clears it on neither side (1.53:1 against
+   the --brand fill it encloses, 2.90:1 against the page). --accent measures
+   5.79:1 and 10.99:1 on those same two edges. The fill stays --brand, so the
+   purples remain structural. */
+.shots-tab[aria-selected="true"] {
+  /* Lifts the shared edge so the ring is unbroken whichever tab is chosen. */
+  position: relative;
+  z-index: 1;
+  background: var(--brand);
+  color: #fff;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.shots-panel[hidden] {
+  display: none;
+}
+
+.shots-panel + .shots-panel {
+  margin-top: 44px;
+}
+
+/* Once the switch is live the selected tab names the platform, so the panel
+   heading and the gap it separates are both redundant. */
+.is-live .shots-panel-title {
+  display: none;
+}
+
+.is-live .shots-panel + .shots-panel {
+  margin-top: 0;
+}
+
+.shots-panel-title {
+  margin: 0 0 18px;
+  color: var(--gray);
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-sm);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 /* ---------- faq ---------- */
 
 .faq {

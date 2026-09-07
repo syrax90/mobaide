@@ -2,8 +2,11 @@
  * The pairing screen's state, as a pure module.
  *
  * Mirrors Android's `QrPairingState` (Idle / Confirming / Claiming /
- * WaitingForOnline / Success / Error) and its iOS port. The signed-out case has
- * no state of its own: a deep link can land on a signed-out browser, but
+ * WaitingForOnline / WaitTimedOut / Success / Error) and its iOS port. `error`
+ * is a refused or unsent claim; `waitTimedOut` is a claim that succeeded whose
+ * agent has not connected back yet — it stays paired, and "Keep waiting"
+ * re-enters `waitingForOnline` with the next `attempt`. The signed-out case
+ * has no state of its own: a deep link can land on a signed-out browser, but
  * `Pair.tsx` redirects to sign-in and renders nothing, so the machine never
  * observes it.
  *
@@ -31,6 +34,15 @@ export type PairState =
       agentId: string;
       friendlyName: string;
       wsDelivered: boolean | null;
+      /** Bumped by "Keep waiting" so the watcher restarts its clock. */
+      attempt: number;
+    }
+  | {
+      kind: 'waitTimedOut';
+      agentId: string;
+      friendlyName: string;
+      wsDelivered: boolean | null;
+      attempt: number;
     }
   | { kind: 'success'; agentId: string; friendlyName: string }
   | { kind: 'error'; message: string };

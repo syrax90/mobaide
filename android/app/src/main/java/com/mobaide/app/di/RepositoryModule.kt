@@ -1,6 +1,7 @@
 package com.mobaide.app.di
 
 import android.content.Context
+import com.mobaide.app.data.analytics.AgentPairedConversion
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.auth.UserIdentityStore
@@ -33,6 +34,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
+import javax.inject.Named
 import javax.inject.Singleton
 
 @Module
@@ -49,11 +51,18 @@ object RepositoryModule {
     @Singleton
     fun provideWebSocketManager(
         client: OkHttpClient,
+        @Named("user") userClient: OkHttpClient,
         tokenStore: TokenStore,
         sessionManager: SessionManager,
         userIdentityStore: UserIdentityStore,
     ): WebSocketManager {
-        return WebSocketManager(client, tokenStore, sessionManager, userIdentityStore)
+        return WebSocketManager(
+            client = client,
+            tokenStore = tokenStore,
+            sessionManager = sessionManager,
+            userIdentityStore = userIdentityStore,
+            userClient = userClient,
+        )
     }
 
     @Provides
@@ -192,6 +201,7 @@ object RepositoryModule {
         templatesRepository: TemplatesRepository,
         shortcutsRepository: ShortcutsRepository,
         customAgentTypesRepository: CustomAgentTypesRepository,
+        agentPairedConversion: AgentPairedConversion,
     ): UserEventBus {
         return UserEventBus(
             webSocketManager,
@@ -201,6 +211,7 @@ object RepositoryModule {
             templatesRepository,
             shortcutsRepository,
             customAgentTypesRepository,
+            agentPairedConversion,
         )
     }
 

@@ -13,6 +13,7 @@ dependencies fall open in that state, matching ``_require_reset_ip_quota``.
 from __future__ import annotations
 
 import base64
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -26,6 +27,8 @@ from central_server.pairing.qr_signer import (
     hash_pairing_nonce,
 )
 from central_server.pairing.ws_handlers import PairingWsRegistry
+
+from tests.test_user_events import _make_user_client
 
 _DEVICE_UUID = "11111111-1111-4111-8111-111111111111"
 _STALE_FP = "aa" * 32
@@ -840,3 +843,87 @@ class TestRateLimiting:
         detail = resp.json()["detail"]
         assert detail["error"] == "device_code_rate_limited"
         assert detail["retry_after_seconds"] > 0
+
+
+class TestFirstPairingConversion:
+    async def test_confirm_marks_the_first_pairing_once_and_schedules_the_conversion(
+        self, client, dc_app, api_auth_headers
+    ):
+        uploader = MagicMock()
+        dc_app.state.ads_uploader = uploader
+        db = dc_app.state.db
+        owner = await db.get_user_by_email("viewer@test.local")
+
+        minted = await _mint(client, api_auth_headers)
+        await _redeem_and_accept(client, minted["code"], "redeemer-first")
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+        assert resp.status_code == 200, resp.text
+        marker = (await db.get_user_by_id(owner["id"]))["first_paired_at"]
+        assert marker is not None
+        uploader.schedule_first_pairing.assert_called_once_with(owner["id"])
+
+        minted = await _mint(client, api_auth_headers)
+        await _redeem_and_accept(client, minted["code"], "redeemer-second")
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+        assert resp.status_code == 200, resp.text
+        assert (await db.get_user_by_id(owner["id"]))["first_paired_at"] == marker
+        uploader.schedule_first_pairing.assert_called_once()
+
+    async def test_expired_confirm_does_not_mark_first_pairing(
+        self, client, dc_app, api_auth_headers
+    ):
+        uploader = MagicMock()
+        dc_app.state.ads_uploader = uploader
+        db = dc_app.state.db
+        owner = await db.get_user_by_email("viewer@test.local")
+
+        minted = await _mint(client, api_auth_headers)
+        redeemed = (await _redeem_and_accept(client, minted["code"], "redeemer-late")).json()
+        await _expire_nonce(db, redeemed["nonce"])
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+
+        assert resp.status_code == 410, resp.text
+        assert (await db.get_user_by_id(owner["id"]))["first_paired_at"] is None
+        uploader.schedule_first_pairing.assert_not_called()
+
+    async def test_confirm_broadcasts_the_account_event_once(
+        self, client, dc_app, api_auth_headers
+    ):
+        dc_app.state.ads_uploader = MagicMock()
+        owner = await dc_app.state.db.get_user_by_email("viewer@test.local")
+        listener = _make_user_client(owner["id"])
+        dc_app.state.routing.register_user_client(owner["id"], listener)
+
+        minted = await _mint(client, api_auth_headers)
+        await _redeem_and_accept(client, minted["code"], "redeemer-first")
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+        assert resp.status_code == 200, resp.text
+        assert json.loads(listener.send_queue.get_nowait()) == {
+            "type": "account.first_agent_paired",
+            "payload": {"agent_id": resp.json()["agent_id"]},
+        }
+
+        minted = await _mint(client, api_auth_headers)
+        await _redeem_and_accept(client, minted["code"], "redeemer-second")
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+        assert resp.status_code == 200, resp.text
+        assert listener.send_queue.empty()
+
+    async def test_broadcast_failure_does_not_reopen_the_code(
+        self, client, dc_app, api_auth_headers, monkeypatch
+    ):
+        uploader = MagicMock()
+        dc_app.state.ads_uploader = uploader
+        monkeypatch.setattr(
+            "central_server.pairing.router.broadcast_user_event",
+            MagicMock(side_effect=RuntimeError("boom")),
+        )
+
+        minted = await _mint(client, api_auth_headers)
+        await _redeem_and_accept(client, minted["code"], "redeemer-first")
+        resp = await _confirm(client, api_auth_headers, minted["request_id"])
+
+        assert resp.status_code == 200, resp.text
+        uploader.schedule_first_pairing.assert_called_once()
+        again = await _confirm(client, api_auth_headers, minted["request_id"])
+        assert again.status_code == 410, again.text

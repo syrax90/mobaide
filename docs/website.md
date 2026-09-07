@@ -18,7 +18,12 @@ sheet (`static/style.css`) and is deliberately not part of this system.
 see the Theming bullet in [`docs/web-client.md`](web-client.md)). Its dark theme
 copies this sheet's `:root` values verbatim — **a token change in `site.css`
 must be mirrored there** — and its light theme is a derived variant that exists
-only in the SPA. Two invariants restate per-theme on that side: the brand
+only in the SPA. **A fourth is the iOS app** (`ios/Mobaide/UI/Theme/Theme.swift`,
+see *Theme / design system* in [`docs/ios-client.md`](ios-client.md)): its
+`MobaideColorScheme.dark` / `.light` copy both of the SPA's blocks hex for hex,
+so a token change here or in `theme.css` must be mirrored there too. It ships
+Departure Mono as the upstream OTF (iOS cannot register a woff2) with the same
+OFL, and a byte copy of the wordmark at 1x. Two invariants restate per-theme on that side: the brand
 purples stay fill/border-only **on dark surfaces**, while on the SPA's light
 theme `#6008ac` doubles as the accent *text* colour (8.97:1 on `#f4f4f4`); and
 the light `--danger`/`--ok` are `#8c1d18`/`#116a2e`, because this sheet's
@@ -37,7 +42,7 @@ ships its own copy of the Departure Mono woff2 + OFL under `web/public/fonts/`
 | `central_server/static/site/portal.css` | Additions `site.css` lacks: forms, alerts, tables, choice fieldsets, legal-doc layout. Loaded **after** `site.css`. Declares no tokens and no `@font-face`. |
 | `central_server/templates/portal_base.html` | Shell for the static pages — loads both sheets, carries the shared chrome markup, and loads **no script at all**. |
 | `central_server/static/style.css` | **Admin dashboard only.** Light sheet (`--primary: #0d6efd`, `--radius: 6px`), not part of this design system. |
-| `central_server/static/site/site.js` | Reveal-on-scroll, hero typewriter, the install-command copy buttons, and the cookie-consent banner with its post-consent Google Ads gtag.js loader. Landing page only — `portal_base.html` deliberately does not load it. |
+| `central_server/static/site/site.js` | Reveal-on-scroll, hero typewriter, the install-command copy buttons, the Android/iOS screenshot switch, and the cookie-consent banner with its post-consent Google Ads gtag.js loader. Landing page only — `portal_base.html` deliberately does not load it. |
 | `central_server/static/site/img/`, `fonts/` | Assets — see *Regenerating assets*. |
 | `central_server/tests/test_marketing.py` | Route, header, and copy-accuracy tests. |
 | `central_server/tests/test_portal_assets.py` | Static-page asset stamping + the `portal.css` invariants. |
@@ -73,6 +78,7 @@ CLA-170), but the website must not repeat them:
 | "10,000-line scrollback" replays on reconnect | Two different buffers. The realtime WS path replays byte-exactly from a ring capped at `RING_MAX_BYTES` (4 MiB, `core/session.py`); the 10,000 figure is `scrollback_size`, a deque of read **chunks** that backs the REST `/scrollback` endpoint (see `get_scrollback`'s docstring). | "a rolling buffer of recent output" — state the guarantee, not a line count |
 | "JWT auth on every hop" | Only the app→relay hop is a JWT. Each agent presents an opaque per-agent token verified by SHA-256 `compare_digest` (`auth/service.py` → `db.verify_agent_token`). | name the two mechanisms separately |
 | "every hop is TLS-encrypted" **unqualified** | True for the relay path, which is the only one a client can take. The DIRECT-mode plumbing the clients still carry would build `ws://` unless the agent sits behind HTTPS — `WebSocketManager.kt`: `if (agentUrl.startsWith("https")) "wss" else "ws"` — and the agent's own listener is plain HTTP by default. | scope it ("going through the relay, every hop is…") — without describing a direct mode, see the next row |
+| "no analytics SDKs in the app" (any absolute no-analytics / no-tracking claim about the mobile apps) | Since Phase 2 of the Google Ads rollout both mobile apps carry Google Analytics for Firebase for install-conversion measurement (docs/app-conversion-measurement.md); the privacy policy's Section 3.8 describes it. The *agent* still has none. | "The agent carries no analytics SDK; the mobile apps carry Google's Firebase Analytics for one purpose — telling Google Ads which installs went on to pair an agent" — keep the agent claim, name the single purpose, and say it never sees sessions |
 | a "direct"/"LAN" mode, or "point the app straight at the agent" | No client exposes one. `AuthRepository.connectAgent()` (Android and iOS) has no UI caller — the Connections screen's "+" routes to the relay login — and the agent's `UserStore.add_user()` has no CLI verb or endpoint, so the user store `POST /api/auth/token` checks is always empty. The mode is code, not a feature. | say nothing about it; describe only the relay path |
 
 The worktree capability itself is broad and true, and the page says so: every
@@ -157,7 +163,14 @@ policy promises no un-consented tracking:
   `http://mobaide.com:<port>/` (`location.hostname` never carries the port).
 - **Accept** stores `granted` and injects
   `https://www.googletagmanager.com/gtag/js?id=AW-18403068615` with a Consent
-  Mode v2 default-denied → update-granted pair queued ahead of it. Only
+  Mode v2 default-denied → update-granted pair queued ahead of it, followed by
+  `config` and the `conversion` event that counts the "Page view" conversion
+  action (`send_to: AW-18403068615/<label>`, `ADS_PAGE_VIEW_LABEL` in
+  `site.js`). The label is what makes the base tag measure anything: `config`
+  on its own pings the tag but counts no labelled action, and Google Ads
+  reports that action as "never received a tag ping" until the event lands.
+  The event must stay queued *after* `config` — gtag resolves `send_to`
+  against the configured tag. Only
   `ad_storage` and `ad_user_data` are ever granted: the banner promises
   measurement, so `ad_personalization` stays denied — which is also what keeps
   gtag off the per-country `www.google.<tld>` remarketing endpoints no static
@@ -172,6 +185,40 @@ policy promises no un-consented tracking:
   choice. Declining after a prior Accept pushes `consent update: denied` to a
   tag already running on the page and expires every `_gcl_*` cookie (both
   domain spellings — gtag registers them on the registrable domain).
+- **Accept also asks the server for our own `mobaide_ads` cookie.** `site.js`
+  never writes it — a domain cookie set from script proves nothing, since any
+  host on the registrable domain (the GitHub-Pages `get.mobaide.com`
+  included) could plant one. Instead the page POSTs the landing click id
+  (`gclid`/`wbraid`/`gbraid`, when the landing URL carried one) and the
+  page-load time to the same-origin `POST /api/ads/consent`
+  (`central_server/ads/router.py`), which answers with a `Set-Cookie` for
+  `Domain=<host>`, `Path=/`, 90 days, `SameSite=Lax`, `Secure` per
+  `USER_SESSION_COOKIE_SECURE`. The value is `<base64url(payload)>.<hmac>`
+  with payload `v=1&k=<kind>&t=<epoch s>&id=<id>&n=<network>` (`k`/`id`
+  absent on a bare consent marker), signed with a key derived from
+  `JWT_SECRET_KEY`; `t` is the arrival time capped at the server clock, so
+  neither a tab left open before Accept nor a skewed browser clock can
+  post-date a click, and `n` is a keyed fingerprint of the network the Accept
+  came from, which is what binds the consent to the visitor at sign-up (see
+  docs/deployment.md). If a Decline lands while the request is in flight,
+  the response handler clears the cookie again. Decline itself first POSTs
+  the cookie value to `/api/ads/consent/withdraw` — the server drops the
+  stored attribution from every account created with that cookie — and only
+  then expires the cookie locally. The
+  endpoint accepts same-origin requests only (`Sec-Fetch-Site` / `Origin`),
+  so a cross-site POST cannot mint a cookie for a victim either. An existing
+  cookie is requested anew only when the visit carries a new click id — a
+  plain return visit never renews the disclosed 90-day lifetime, and a stored
+  click id is never downgraded to a marker. The check runs on Accept and on
+  every stored-`granted` page load, and the same Decline path that clears
+  `_gcl_*` expires the cookie. Its only reader is the web SPA
+  (`web/src/auth/adAttribution.ts`), which forwards the fields and the
+  signature verbatim as the optional `ad_attribution` field of the register /
+  Google / Apple sign-up requests; the server verifies the signature before
+  storing anything on the new account and later reports the first agent
+  pairing back to the click — see *Google Ads conversion upload* in
+  docs/deployment.md. Pinned by `test_marketing.TestAttributionCookie` and
+  `tests/test_ads_consent.py`.
 - Because the tag is injected at runtime, the served HTML stays same-origin
   and inline-free — the two `test_marketing.py` self-containment guards still
   hold unchanged, and `TestConsentBanner` adds the reverse guard: the HTML must
@@ -182,12 +229,18 @@ policy promises no un-consented tracking:
 - The banner's disclosure lives in the privacy policy's Section 3.5 — the
   banner links it, and `central_server/legal/privacy.md` must stay in sync
   with what the tag actually does (cookies only after Accept, choice stored in
-  local storage, withdrawal by clearing site data).
+  local storage, withdrawal by clearing site data, the `mobaide_ads` cookie
+  and the one-time first-pairing report). The mobile apps' Firebase lane has
+  its own disclosure in Section 3.8 and the same sync rule against
+  docs/app-conversion-measurement.md.
 
-Changing the tag id means changing `ADS_TAG_ID` in `site.js` and nothing else.
+Changing the tag id means changing `ADS_TAG_ID` in `site.js`; a new or renamed
+conversion action also means a new `ADS_PAGE_VIEW_LABEL`, pinned by
+`test_marketing.TestConsentBanner.test_site_js_fires_the_page_view_conversion`.
 Removing the tag means removing the banner, the `site.js` module, the
-`_LANDING_CSP` bucket, and the privacy-policy passages together — each is
-load-bearing for the others.
+`_LANDING_CSP` bucket, the `mobaide_ads` cookie writer together with
+`web/src/auth/adAttribution.ts` and the `ad_attribution` request field, and
+the privacy-policy passages — each is load-bearing for the others.
 
 `/robots.txt` disallows only `/api/` and `/portal/`, with one carve-out: an
 `Allow: /portal/delete-account-info` line **emitted before the disallows**. That
@@ -294,30 +347,6 @@ landing page raises on a missing `app_origin`, while the two `Jinja2Templates`
 routers would render `href="/login"` — a same-origin path that does not exist on
 this host — so both are asserted in `test_marketing.py` and `test_portal.py`.
 
-## Weight budget
-
-Keep the page under **200 KB** all-inclusive (raw, before Caddy's gzip).
-Measure by summing the HTML plus every same-origin URL it references (the
-screenshots are `loading="lazy"` below the fold, but they count).
-
-**Measured 2026-08-24: ~220 KB — over budget.** Two findings from that
-measurement: the ~194 KB figure this section used to carry had gone stale —
-the page was already ~211 KB before the Ads consent banner landed — and the
-banner plus its withdrawal control then added ~9 KB across the HTML,
-`site.css` and `site.js`. (`gtag.js` itself is outside the budget by the
-measurement rule: third-party, and loaded only after the visitor accepts.)
-The four WebP screenshots are ~100 KB on their own and are the documented
-lever: re-encoding them is what brings the page back under 200 KB, and the
-next asset of any size needs that done first.
-
-The budget covers the **landing page only**. The `portal_base.html` pages ship
-none of the screenshots and no JavaScript whatsoever; they add only `portal.css`
-(~26 KB raw, ~8.5 KB gzipped — comments are only ~1 KB of that; the bulk is the
-form, table and legal-document rules, in the same expanded
-one-property-per-line format as `site.css`). All three are well inside 200 KB. If
-`portal.css` starts approaching `site.css`'s size, that is the signal a rule
-belongs in `site.css` instead.
-
 ## Accessibility invariants
 
 - **`--brand` (`#6008AC`) and `--brand-2` (`#6650A4`) are fill and border
@@ -417,6 +446,50 @@ them and any future `hx-indicator` is silently dead.
 `.detail-row` are intentionally **not** ported: they stay in `static/style.css`
 for the admin dashboard.
 
+## Screenshots and the platform switch
+
+`#screens` carries **two panels of seven captures each**, Android and iOS, behind an
+`aria` tab pair. The phone body around every capture is drawn by `.device` in CSS, so
+the files must stay **bare app captures** — a screenshot with a frame already baked in
+double-frames.
+
+**The switch degrades to both panels.** The markup ships with the tablist at
+`display: none` and *neither* panel `hidden`, so with scripting off — or if `site.js`
+fails to load, or `setUpShotSwitch()` returns early because an id does not resolve — the
+page shows all fourteen screenshots under their `On Android` / `On iOS` headings.
+`setUpShotSwitch()` adds `is-live` to `[data-shots-switch]` only after both tabs are
+wired, and that class is what reveals the tablist and hides the now-redundant headings.
+This is the `can-copy` pattern, and the same reasoning as the accessibility invariant
+below: never a hidden state that only a *successful* run can undo.
+
+Consequences worth keeping:
+
+- Captions are **platform-neutral**, so both panels read identically and the tab is the
+  only thing naming the platform. The `alt` text is not — it names the platform and the
+  per-platform control differences (Android's *command field* vs iOS's *message field*,
+  iOS's extra "Pair with a code" affordance).
+- The tabs use **automatic activation** (Left/Right move *and* select). That is only
+  cheap because the hidden panel's images are `loading="lazy"` and have never been
+  fetched — an arrow press costs exactly what a click costs. **Up/Down are
+  deliberately not handled.** The tablist is horizontal, so the APG pattern leaves the
+  vertical pair to the page; claiming them would `preventDefault()` a scroll keypress —
+  and switch platforms instead of scrolling — for as long as a tab held focus.
+- The default panel follows the user agent: iOS on an iPhone or iPad, Android
+  otherwise. Visitors mostly arrive on the phone they would install on. **An iPad
+  is not detectable from the UA string alone** — since iPadOS 13 Safari requests
+  desktop sites by default and reports a `Macintosh` UA carrying no iPad token —
+  so a `Macintosh` claim is confirmed against `navigator.maxTouchPoints`. Apple
+  ships no touchscreen Mac and a trackpad reports no touch points, so that pair
+  has no false positive to worry about.
+- `.shots-tab` takes its boundary from `--gray`, not `--rule`, for the same WCAG 1.4.11
+  reason as `.copy-btn`. The selected tab is a `--brand` fill with `#fff` on it, so the
+  purples stay structural — but its **ring is `--accent`, not `--brand-2`**. 1.4.11 wants
+  3:1 for whatever identifies a *state*, and a `--brand-2` ring clears it on neither
+  edge: 1.53:1 against the `--brand` fill it encloses, 2.90:1 against the page. `--accent`
+  measures 5.79:1 and 10.99:1 on those same two edges. Because the ring now carries the
+  state, `.shots-tab:hover` may only brighten the label — giving hover a ring of its own
+  would make a merely-hovered tab read as the chosen one.
+
 ## Copyable command blocks
 
 The two install one-liners in step 01 each sit in their own `.copyblock` — a
@@ -504,10 +577,14 @@ a one-off script, not committed; recreate it when assets need to change:
    the bbox — 454×81 — then box-downscale by 2. Ship one resolution only:
    `image-rendering: pixelated` wants a crisp nearest-neighbour upscale, so a 2x
    variant is both heavier and smoother than intended.
-3. Screenshots: use `Screenshots/original/*.png` (bare app captures), **not** the
-   `*_1080px.png` files — those are Play marketing composites with a headline and
-   phone frame already baked in, which would double-frame against the CSS device
-   frame. Resize to 420px wide, WebP quality 72.
+3. Screenshots: two trees, one per platform — Android in
+   `Google Play Console/Screenshots/original/<design>/` and iOS in
+   `IOS/app-store-connect/screenshots/original/<design>/`. Take the **bare app
+   captures** there, **not** any `*_1080px.png` sibling — those are store marketing
+   composites with a headline and phone frame already baked in, which would
+   double-frame against the CSS device frame. Resize to 420px wide, WebP quality 72,
+   and name the output `shot-<android|ios>-<slug>.webp`; the template declares each
+   file's encoded height, so record it as you go.
 4. Icons: `favicon.ico` multi-size 16/32/48; `apple-touch-icon.png` at 180px
    quantized to 64 colours.
 5. OG card: 1200×630 **PNG or JPEG** (several scrapers reject WebP), composed

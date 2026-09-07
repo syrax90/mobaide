@@ -3,14 +3,17 @@ package com.mobaide.app.data.local
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.mobaide.app.data.network.dto.LinearLabelDto
 import com.mobaide.app.data.network.dto.LinearStateDto
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.io.IOException
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -26,6 +29,7 @@ class PreferencesStore(private val context: Context) {
     private val keyLastAntigravityOptions = stringPreferencesKey("last_used_antigravity_options")
     private val keyLastAutoScanOptions = stringPreferencesKey("last_used_auto_scan_options")
     private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
+    private val keyThemeMode = stringPreferencesKey("theme_mode")
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
     private val keyExternalSessionsNoticeDismissed =
         booleanPreferencesKey("external_sessions_notice_dismissed")
@@ -61,6 +65,20 @@ class PreferencesStore(private val context: Context) {
                 runCatching { TerminalDisplayMode.valueOf(stored) }.getOrNull()
             } ?: TerminalDisplayMode.Static
         }
+
+    val themeMode: Flow<ThemeMode> =
+        context.dataStore.data
+            // Unlike the screen-scoped preference flows, this one gates
+            // MainActivity's first frame — a corrupt or unreadable prefs file
+            // must degrade to the Auto default, never break the whole UI.
+            .catch { e ->
+                if (e is IOException) emit(emptyPreferences()) else throw e
+            }
+            .map { prefs ->
+                prefs[keyThemeMode]?.let { stored ->
+                    runCatching { ThemeMode.valueOf(stored) }.getOrNull()
+                } ?: ThemeMode.Auto
+            }
 
     val externalSessionsNoticeDismissed: Flow<Boolean> =
         context.dataStore.data.map { it[keyExternalSessionsNoticeDismissed] ?: false }
@@ -141,6 +159,12 @@ class PreferencesStore(private val context: Context) {
     suspend fun setLastUsedAntigravityOptions(prefs: AntigravityLaunchPrefs) {
         val payload = cacheJson.encodeToString(AntigravityLaunchPrefs.serializer(), prefs)
         context.dataStore.edit { it[keyLastAntigravityOptions] = payload }
+    }
+
+    suspend fun setThemeMode(mode: ThemeMode) {
+        context.dataStore.edit { prefs ->
+            prefs[keyThemeMode] = mode.name
+        }
     }
 
     suspend fun setTerminalDisplayMode(mode: TerminalDisplayMode) {

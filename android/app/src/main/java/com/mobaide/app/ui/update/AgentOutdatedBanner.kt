@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,8 +46,8 @@ fun AgentOutdatedBanner(
             color = MaterialTheme.colorScheme.onTertiaryContainer,
             modifier = Modifier.weight(1f),
         )
-        TextButton(onClick = onInstallNow) { Text("Install now") }
-        TextButton(onClick = {
+        PixelTextButton(onClick = onInstallNow) { Text("Install now") }
+        PixelTextButton(onClick = {
             dismissed = true
             onDismiss()
         }) { Text("Dismiss") }

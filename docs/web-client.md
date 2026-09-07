@@ -49,7 +49,11 @@ Apple sign-in on web (WEB-11), pairing phase 2 (WEB-12), QR image decode
 Production serving model (WEB-02): `app.mobaide.com` as its own Caddy site
 block serving the SPA from disk and reverse-proxying `/api`, `/ws`,
 `/relay`, `/proxy` to the central server — fully same-origin, no CORS. The
-Vite dev server mirrors this with a proxy to `http://localhost:9000`.
+Vite dev server mirrors this with a proxy to `http://localhost:9000`; the
+config-only `MOBAIDE_WEB_PROXY_TARGET` env var repoints all four routes at
+another host:port, which is how `tests/e2e/manual_stack.py up --web` serves
+the SPA against the manual stack (see
+[manual-e2e-testing.md](manual-e2e-testing.md)).
 
 ## Stack
 
@@ -576,16 +580,23 @@ row). CLA-199 replaces it with an account-level server-side pin.
 
 **Waiting for the agent.** A claim's 200 only proves the relay persisted
 credentials; `ws_delivered` is tri-state diagnostic (`null` from an older
-relay must never collapse to `false`) and only refines the timeout copy. The
-authoritative signal is `agent.status_changed` with `online: true`. Android
-polls its cached list once a second; web does not need to, because that event
-already invalidates `['agents']` and an invalidation refetches the mounted
-query. What web keeps is the reason mobile refreshes *twice* — a status event
-landing between the claim's refresh and the watcher's start would be rolled
-back by the in-flight stale snapshot — plus a 5 s defensive interval so a
-dropped socket cannot strand the screen for the full 60 s. The timeout copy
-is iOS's short form; Android's enumerates `Get-ScheduledTask` and
-`agent.err.log` paths, which are Windows-specific by design.
+relay must never collapse to `false`) and only refines the wait-timeout copy.
+The authoritative signal is `agent.status_changed` with `online: true`, and
+the push stays primary on all three clients — that event already invalidates
+`['agents']` and an invalidation refetches the mounted query. The safety net
+for a lost push is a bounded REST resync: a 5 s interval
+(`DEFENSIVE_REFETCH_SECONDS` on Android/iOS, web's existing
+`DEFENSIVE_REFETCH_MS`, now also running in background tabs via
+`refetchIntervalInBackground: true`) plus one final resync on the 60 s
+deadline tick before any verdict, so "not online" is never shown while the
+agent actually is. What web keeps is the reason mobile refreshes *twice* — a
+status event landing between the claim's refresh and the watcher's start
+would be rolled back by the in-flight stale snapshot. The timeout is no
+longer an error: all three clients render a shared "Agent not online yet"
+state with a "Keep waiting" action that restarts the 60 s wait, and the
+timeout copy is now shared word-for-word and platform-neutral about the
+agent host — the Windows-specific `Get-ScheduledTask` / `agent.err.log`
+enumeration is gone.
 
 **`/agents`** is full mobile parity: cards (status dot, name, Online/Offline,
 agent id, version, added, last seen), manual add, re-register, remove, and the
@@ -596,6 +607,68 @@ way to spot a host that missed an auto-update. The per-OS `.env` table and the
 install one-liners are byte-identical to `AgentCredentialsSheet` on both
 mobile clients, and are deliberately not OS-detected — the host is a different
 machine from the browser.
+
+**The first-run empty state** (`AgentsEmptyState`) is the web arm of Android
+and iOS `EmptyAgentsState`: install first, pair second, escape hatches last,
+because nothing is pairable until `mobaide-agent` runs somewhere. Mobile's
+step 2 is "scan the QR"; a browser has no camera, so the web equivalent is the
+two lines `pairing_qr.write_pairing_hints` prints *under* that QR — the
+`MOBA1|…` payload and the `/pair#…` link — which is why web's steps 2 and 3
+are alternatives rather than a sequence. Three divergences from mobile, all
+platform-convention: the install one-liners render inline rather than behind a
+bottom sheet (a sheet is a phone answer to a screen with no room), the guide
+quotes an example of the agent's stdout so a user can match it against their
+own scrollback, and it names `mobaide-agent show-qr` for a nonce that expired
+before they got back to the browser. `setupCopy.test.ts` reads
+`mobaide_agent/mobaide/agent/pairing_qr.py` and `__main__.py` off disk and
+holds the quoted labels and the subcommand to what the agent actually ships —
+nothing else fails when those drift, the guide just stops describing reality.
+The example payload carries `<placeholder>` fields that `parseMoba1` rejects,
+so it can never be mistaken for a live code. The link's origin is
+`window.location.origin`, never a hard-coded `app.mobaide.com`: the agent's
+`MOBAIDE_AGENT_PAIR_WEB_ORIGIN` means "origin of the web client the printed
+link points at", which is *this* client, so a self-hosted deployment that
+configured its agent prints the origin the reader is already browsing — and a
+hard-coded default would tell them to look for a line their agent never wrote.
+Every other varying field, the payload's relay URL included, is a
+`<placeholder>`. That one is the agent's own `PUBLIC_BASE_URL` and is *not*
+derivable here — the SPA reaches the relay same-origin through a proxy
+(`baseUrl: '/'`), so the browser only ever knows its own host — and not being
+able to show the right value is a reason to show a placeholder rather than a
+wrong one. What carries the recognition is the `[mobaide-agent]` labels and the
+`MOBA1|` prefix, neither of which varies by deployment. While the guide is up the flat
+four-button row is suppressed: every one of its actions appears in the guide in
+an order, and a flat row beside it would undo the ordering. The sessions and
+projects "No agents yet" lines now point at `/agents` rather than `/pair`, for
+the same reason — an account with nothing paired has no code to paste yet.
+
+**The guide's paste box hands off rather than pairing.** `/pair` owns the
+confirm → claim → wait machine and the expiry-before-trust ordering its tests
+pin, so a second copy on `/agents` is the kind of duplicate that drifts into a
+security bug. Instead the box runs `readPairingInput` (which already takes the
+payload, the whole link, or a bare fragment) and, on success, navigates to
+`/pair#…` with the payload re-encoded by `encodePairingFragment` — the new
+inverse of `decodePairingFragment`, pinned to the agent's own
+`format_pairing_link` by the shared golden's `link_cases`. base64url rather
+than `encodeURIComponent` so the fragment is `[A-Za-z0-9_-]` only and no layer
+in between can re-encode it into something the decoder reads back differently.
+That reuses the deep-link path verbatim, including its scrub, so the nonce
+still never survives in history.
+
+Routing a second flow through that path exposed a latent hole in it, now
+closed: the capture effect scrubs the fragment whether or not the
+`sessionStorage` write landed, so in a context that denies storage — a private
+window, a partitioned context — the payload was destroyed outright and the
+visitor was left on an empty paste box with a single-use nonce they could no
+longer produce. `Pair` now also holds it in a `handoffRef` and prefers that on
+read. A ref rather than module state because capture and consume are two
+effects on one mounted component, which is exactly the lifetime this needs;
+`sessionStorage` stays the arm that survives the sign-out bounce, which
+unmounts the component. Note for anyone testing this: `vi.spyOn(Storage
+.prototype, …)` silently intercepts nothing under Node >= 22, whose
+experimental `Storage` global shadows jsdom's — spy on
+`Object.getPrototypeOf(sessionStorage)` instead, or the test passes against
+unfixed code.
 
 Removing an agent calls `clearAgentToken(agentId)`, never
 `sessionStore.agentDisconnect()`, which clears *every* agent's tokens; it also
@@ -715,7 +788,9 @@ case-insensitively — deliberately not the picker's recents-first grouping,
 because a management list must show every template exactly once. The editor
 keeps its draft on a failed save (iOS's guard; Android has none), and the body
 is sent verbatim while the name is trimmed, since a body reaches the PTY
-unchanged.
+unchanged. `TemplateEditorDialog` is shared with the terminal's picker, which
+creates mid-session through its optional `initialBody` (see *Terminal screen*
+below); `/templates` stays the only place one is edited or deleted.
 
 Fixture coverage: `ProjectInfo`, `BusyByResponse` and `BusyHolder` moved into
 `COVERED_FIXTURES` with Zod mirrors — the first because it crosses a socket
@@ -1038,8 +1113,52 @@ sits below the top layer; the clipboard-outcome toast below is outside that
 rule because it fires after the dialog has closed. Loading, load failure
 (with Retry), an empty account and a filter with no matches are each their
 own state, and rows disable with an explanation while the session refuses
-input. It is read-only here (list, Recents/Favorites/All grouping, filter,
-insert, favourite toggle); creating and deleting templates is WEB-09.
+input. It lists, groups Recents/Favorites/All, filters, inserts and toggles a
+favourite; editing and deleting a template still belong to `/templates`.
+
+**Creating one without leaving the session.** A **New template** button sits
+beside Close in the picker's head and opens the same `TemplateEditorDialog`
+`/templates` uses, seeded through its optional `initialBody`. Three decisions
+hold it up.
+
+*The two dialogs are never co-mounted.* `TerminalView` keeps a single
+`TemplatePanel` union (`none` / `picker` / `editor`) rather than two booleans,
+so opening the editor unmounts the picker. The picker hangs its key handler on
+the ancestor of everything it renders, and an element on the top layer still
+propagates events through its DOM parent — paint order is what the top layer
+changes, not propagation — so an editor nested inside would lose ArrowUp and
+ArrowDown in its textarea to the row walk, and its draft to the Escape that
+dismisses the picker. The union also collapses the focus-restore condition to
+`panel.kind !== 'none'`, which is what keeps the picker-to-editor hop from
+reading as a dismissal and yanking focus out of the field it just opened.
+
+*The body is the terminal selection, snapshotted when the picker opens.* WEB-06
+removed the composer, so the selection is the only in-session text source web
+has. It is read in the Templates button's own handler rather than when the
+editor mounts: blur is not the risk — xterm holds the selection in its own
+model, not the document's — but PTY output keeps arriving behind the modal, and
+`SelectionService` clears on user input, on a row-count change, on an
+alternate-screen switch and on a mouse-protocol change, as does the replay
+wipe. There is no staleness to trade against, because the grid is inert while
+the dialog is up.
+
+*The pre-fill declines `screenIsSettled()`*, which every other selection read in
+`sessionModel` carries. That guard exists because a copy puts text the user may
+never have seen onto the system clipboard, silently and irreversibly; this text
+lands in an editable field they have to name and save, so the review is the
+guard. It also toasts on refusal, and that toast would be raised over an open
+`<dialog>`, where nothing can be read.
+
+The success toast is the one message here exempt from the inline rule above —
+the editor closes first, in the same commit, so the viewport is clear by the
+time it paints. A failed save stays inline and keeps the draft.
+
+**Mobile's shape differs, deliberately.** Android and iOS put a *Save as
+template* button in the composer's action row (`SaveTemplateDialog.kt`,
+`TerminalScreen.swift`): the body is the composer text, rendered as a read-only
+preview, and the dialog dismisses optimistically. Web has no composer, so the
+body is the selection and stays editable, and — as with the management editor
+below — the dialog survives a failed save.
 
 ## Desktop keyboard & shortcuts (WEB-06)
 
@@ -1427,6 +1546,36 @@ delete themselves. Unlike Google it needs no `disableAutoSelect` equivalent —
 Apple's popup always runs a fresh authorization, so the token is inside the
 server's five-minute freshness window by construction.
 
+### Ad attribution at sign-up
+
+`web/src/auth/adAttribution.ts` reads the `mobaide_ads` cookie the central
+server issues on `.mobaide.com` after the marketing site's Google Ads consent
+banner is accepted (docs/website.md, *The consent-gated Google Ads tag*), and
+`authRepository.ts` spreads it into the register / Google / Apple bodies as
+the optional `ad_attribution` field — only those three, because only they can
+create an account, and only when the cookie exists, so the wire shape is
+unchanged for everyone else. The value is `<base64url(payload)>.<signature>`;
+the parser decodes it, mirrors the server's Pydantic bounds, forwards the
+fields, the network fingerprint and the signature verbatim, and returns
+`null` for anything off
+instead of throwing: any same-site host can plant a cookie, the server alone
+decides (by verifying the signature) whether it counts as consent, and
+forwarding garbage would turn a marketing cookie into a 422 on sign-up. The dev host never sees
+a `.mobaide.com` cookie, so the tests pass jar strings. Adding the field
+touched the committed OpenAPI snapshot and generated types (`npm run
+schema:dump && npm run schema:generate`).
+
+**Parity mirror for the in-app conversion.** The mobile apps log a Firebase
+`agent_paired` conversion once per account (docs/app-conversion-measurement.md)
+off two server signals that web mirrors without acting on: the
+`account.first_agent_paired` user event (`firstAgentPairedSchema` in
+`protocol/dto/userEvents.ts`, a pointer rule in `queryBridge.ts` that
+invalidates the agent list — the first agent just appeared — pinned by
+`tests/protocol_fixtures/dto/central/FirstAgentPairedPayload.json`) and
+`GET /api/auth/me` (`authRepository.getMe()`, typed from the generated schema;
+`MeResponse.json` is deferred to `OWNER.generated`). Web carries no analytics
+SDK, so nothing here logs anything.
+
 ## CI — `.github/workflows/web-ci.yml`
 
 Runs on every PR and push to main (no paths filter — schema drift is caused
@@ -1479,7 +1628,9 @@ restart, `--rollback` repoints at the previously-live release. Runbook: the
   tokens **verbatim** (`site.css` stays the source of truth — a token
   change there must be mirrored here), the light block is a derived
   variant that exists only in `theme.css`, and token names follow
-  `site.css` (`--bg`, `--surface`, `--accent`, …). Purple + grey stay the
+  `site.css` (`--bg`, `--surface`, `--accent`, …). The iOS app mirrors
+  **both** blocks in `ios/Mobaide/UI/Theme/Theme.swift` (docs/ios-client.md),
+  so a change to either must be carried there as well. Purple + grey stay the
   identity in both themes: `--brand`/`--brand-2` are theme-invariant
   fills, and the accent is `#d0bcff` on dark / `#6008ac` on light (the
   "brand is never text" rule is a dark-surface contrast rationale;
@@ -1646,7 +1797,9 @@ handler omits `autoscan.list.changed` (CLA-249), and Android's ANSI parser is
 still a 16-colour subset with no fixture consumer (CLA-250).
 
 WEB-08's divergences are all platform-convention exempt: the paste box and
-the `/pair` deep link exist because a desktop browser has no camera, the
+the `/pair` deep link exist because a desktop browser has no camera — as does
+the setup guide's step 2, which reads the printed link where mobile scans the
+QR above it — the
 agent id and version on the card because a browser is the first client that
 can hold more than one agent, and the trust-mismatch copy's final sentence
 because a browser has no "clear app data". The `parse_qr_payload` tightening
@@ -1654,3 +1807,9 @@ went the other way — it moved the agent's Python parser onto the mobile
 clients' stricter contract rather than away from it — and the shared golden
 now pins all four implementations, with the Android arm tracked in CLA-235
 and the duplicated `central_server` encoder in CLA-236.
+
+One item from the setup guide *is* mirrorable rather than exempt: the
+"expired? run `mobaide-agent show-qr` on the host" hint. A stale QR is a real
+failure mode on a phone too, and neither mobile empty state says how to print
+a fresh one. It is called out here rather than filed because Linear issue
+creation has been rejecting new issues since 2026-08-12 (free-plan cap).

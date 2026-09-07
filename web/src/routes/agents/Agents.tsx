@@ -21,6 +21,7 @@ import { useToastStore } from '../../stores/toastStore';
 import { AddAgentDialog } from './AddAgentDialog';
 import { AgentCard } from './AgentCard';
 import { AgentCredentialsPanel } from './AgentCredentialsPanel';
+import { AgentsEmptyState } from './AgentsEmptyState';
 import { InstallCommandsPanel } from './InstallCommandsPanel';
 
 type Panel =
@@ -104,6 +105,7 @@ export function Agents() {
   });
 
   const busy = create.isPending || reregister.isPending || remove.isPending;
+  const isEmpty = agents.data?.length === 0;
 
   return (
     <section className="page">
@@ -112,10 +114,12 @@ export function Agents() {
         <Link to="/">Back to sessions</Link>
       </header>
 
-      <p className="page-note">
-        An agent is the Mobaide process running on a machine you want to work on. Pair
-        one to run sessions on it from this browser.
-      </p>
+      {!isEmpty && (
+        <p className="page-note">
+          An agent is the Mobaide process running on a machine you want to work on.
+          Pair one to run sessions on it from this browser.
+        </p>
+      )}
 
       {agents.isPending && <p className="page-note state-loading">Loading agents…</p>}
       {agents.isError && (
@@ -125,11 +129,12 @@ export function Agents() {
         />
       )}
 
-      {agents.data?.length === 0 && (
-        <p className="empty-state">
-          No agents yet. Install <code>mobaide-agent</code> on a host, then pair it with
-          the code the agent prints.
-        </p>
+      {isEmpty && (
+        <AgentsEmptyState
+          onAddManually={() => {
+            setPanel({ kind: 'add' });
+          }}
+        />
       )}
 
       <ul className="device-list">
@@ -148,32 +153,37 @@ export function Agents() {
         ))}
       </ul>
 
-      <div className="button-row">
-        <Link className="button button-primary" to="/agents/pair">
-          Add an agent
-        </Link>
-        <Link className="button" to="/pair">
-          Pair from a code
-        </Link>
-        <button
-          type="button"
-          className="button"
-          onClick={() => {
-            setPanel({ kind: 'install' });
-          }}
-        >
-          Show install commands
-        </button>
-        <button
-          type="button"
-          className="button"
-          onClick={() => {
-            setPanel({ kind: 'add' });
-          }}
-        >
-          Add manually
-        </button>
-      </div>
+      {/* Suppressed while the guide is up: every one of these actions appears
+          there in an order, and a flat row beside it would undo the ordering
+          that is the whole point of the empty state. */}
+      {!isEmpty && (
+        <div className="button-row">
+          <Link className="button button-primary" to="/agents/pair">
+            Add an agent
+          </Link>
+          <Link className="button" to="/pair">
+            Pair from a code
+          </Link>
+          <button
+            type="button"
+            className="button"
+            onClick={() => {
+              setPanel({ kind: 'install' });
+            }}
+          >
+            Show install commands
+          </button>
+          <button
+            type="button"
+            className="button"
+            onClick={() => {
+              setPanel({ kind: 'add' });
+            }}
+          >
+            Add manually
+          </button>
+        </div>
+      )}
 
       {panel.kind === 'add' && (
         <AddAgentDialog

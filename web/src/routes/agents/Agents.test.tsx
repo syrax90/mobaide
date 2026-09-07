@@ -1,9 +1,16 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation, type Location } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubLocalStorage } from '../../test/localStorageStub';
 import type { Agent, AgentCredentials } from '../../api/agentRepository';
+import {
+  decodePairingFragment,
+  encodePairingFragment,
+} from '../../protocol/pairingPayload';
+import { MALFORMED_PAYLOAD_MESSAGE } from '../pair/pairCopy';
+import { INSTALL_COMMANDS } from './hostOs';
+import { PAIRING_HINT_CODE_LABEL, PAIRING_HINT_LINK_LABEL } from './setupCopy';
 
 const api = vi.hoisted((): {
   agents: Agent[];
@@ -83,14 +90,37 @@ const agent = (agentId: string, name: string): Agent => ({
 
 let client: QueryClient;
 
+/**
+ * Where the router ended up. The guide's paste box pairs by *navigating* to
+ * `/pair#<fragment>`, so the destination — path and fragment both — is the
+ * assertion, and `MemoryRouter` exposes it nowhere else.
+ */
+let location: Location | null = null;
+
+function LocationProbe() {
+  location = useLocation();
+  return null;
+}
+
+const currentLocation = (): Location | null => location;
+
 function renderAgents() {
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/agents']}>
         <Agents />
+        <LocationProbe />
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+/** Fill the guide's paste box and submit it. */
+function paste(text: string) {
+  fireEvent.change(screen.getByLabelText('Pairing code or link'), {
+    target: { value: text },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Pair' }));
 }
 
 beforeEach(() => {
@@ -105,6 +135,7 @@ beforeEach(() => {
   seams.disconnected.length = 0;
   useSelectedAgentStore.setState({ selectedAgentId: null });
   useLastSessionStore.setState({ lastUsedSessionIds: {} });
+  location = null;
 });
 
 afterEach(() => {
@@ -276,15 +307,78 @@ describe('Agents remove', () => {
   });
 });
 
-describe('Agents list', () => {
-  it('points an empty account at the pairing route', async () => {
+describe('Agents setup guide', () => {
+  const renderEmpty = async () => {
     api.agents = [];
-
     renderAgents();
+    await screen.findByRole('heading', { name: 'No agents yet' });
+  };
 
-    expect(await screen.findByText(/No agents yet/)).toBeInTheDocument();
-    expect(
-      screen.getByRole('link', { name: 'Pair from a code' }),
-    ).toHaveAttribute('href', '/pair');
+  it('shows both install one-liners without opening anything', async () => {
+    // The one thing a first-run user can act on, and it used to sit behind the
+    // third of four equally weighted buttons.
+    await renderEmpty();
+
+    for (const entry of INSTALL_COMMANDS) {
+      expect(screen.getByText(entry.command)).toBeInTheDocument();
+    }
+    expect(INSTALL_COMMANDS.length).toBe(2);
+  });
+
+  it('quotes what the agent prints, as an example rather than a control', async () => {
+    await renderEmpty();
+    const sample = screen.getByTestId('setup-example-output');
+
+    expect(sample).toHaveTextContent(PAIRING_HINT_CODE_LABEL);
+    expect(sample).toHaveTextContent(PAIRING_HINT_LINK_LABEL);
+    expect(within(sample).queryByRole('button')).toBeNull();
+  });
+
+  it('hides the flat action row that the ordered steps replace', async () => {
+    await renderEmpty();
+
+    expect(screen.queryByRole('link', { name: 'Pair from a code' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show install commands' })).toBeNull();
+  });
+
+  it('hands a pasted payload to /pair as the fragment the agent would print', async () => {
+    // Navigating rather than pairing here: `/pair` owns the confirm → claim →
+    // wait machine and the trust-pin ordering its tests pin.
+    await renderEmpty();
+    paste(`MOBA1|https://relay.test|nonce-abc|${'f'.repeat(64)}|1900000000`);
+
+    await waitFor(() => {
+      expect(currentLocation()?.pathname).toBe('/pair');
+    });
+    expect(decodePairingFragment(currentLocation()?.hash ?? '')).toBe(
+      `MOBA1|https://relay.test|nonce-abc|${'f'.repeat(64)}|1900000000`,
+    );
+  });
+
+  it('accepts the printed link as readily as the payload', async () => {
+    // Both land on clipboards — the agent prints them on adjacent lines.
+    const payload = `MOBA1|https://relay.test|nonce-abc|${'f'.repeat(64)}|1900000000`;
+    await renderEmpty();
+    paste(`https://app.mobaide.com/pair#${encodePairingFragment(payload)}`);
+
+    await waitFor(() => {
+      expect(currentLocation()?.pathname).toBe('/pair');
+    });
+    expect(decodePairingFragment(currentLocation()?.hash ?? '')).toBe(payload);
+  });
+
+  it('refuses to navigate on input that is not a pairing code', async () => {
+    await renderEmpty();
+    paste('just some words');
+
+    expect(await screen.findByText(MALFORMED_PAYLOAD_MESSAGE)).toBeInTheDocument();
+    expect(currentLocation()?.pathname).toBe('/agents');
+  });
+
+  it('still reaches the manual token path from the guide', async () => {
+    await renderEmpty();
+    fireEvent.click(screen.getByRole('button', { name: 'Add manually with a token' }));
+
+    expect(screen.getByLabelText('Agent name')).toBeInTheDocument();
   });
 });

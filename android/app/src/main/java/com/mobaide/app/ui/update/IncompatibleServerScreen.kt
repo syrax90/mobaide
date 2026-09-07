@@ -9,10 +9,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
+import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -34,7 +34,7 @@ fun IncompatibleServerScreen(
     // attempt a hard update before falling back to the Play Store deep link.
     // Sideloaded builds (Play has no update record) silently no-op.
     LaunchedEffect(Unit) { onImmediateUpdate() }
-    Scaffold { padding ->
+    PixelScaffold { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -61,12 +61,15 @@ fun IncompatibleServerScreen(
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(8.dp))
-            Button(onClick = {
-                openPlayStore(context, state.playStoreUrl, state.playStoreFallbackUrl)
-            }) {
+            PixelButton(
+                onClick = {
+                    openPlayStore(context, state.playStoreUrl, state.playStoreFallbackUrl)
+                },
+                style = PixelButtonStyle.Primary,
+            ) {
                 Text("Update from Play Store")
             }
-            OutlinedButton(onClick = {
+            PixelButton(onClick = {
                 openExternalUrl(
                     context,
                     "https://mobaide.com/docs/protocol",

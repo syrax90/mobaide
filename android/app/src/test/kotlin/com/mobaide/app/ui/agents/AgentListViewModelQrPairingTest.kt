@@ -19,6 +19,7 @@ import io.mockk.just
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -29,6 +30,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.io.IOException
 
 /**
  * Unit tests for the QR pairing orchestration on [AgentListViewModel].
@@ -360,100 +362,57 @@ class AgentListViewModelQrPairingTest {
     }
 
     @Test
-    fun confirmQrClaim_neverComesOnline_transitionsToErrorWithDiagnostic() = runTest {
-        // Primary diagnostic case the watcher exists to surface: claim
-        // succeeded server-side, but the agent never appears online.
-        // The error message must include actionable remediation text so
-        // a Windows operator can act without a docs round-trip.
+    fun confirmQrClaim_neverComesOnline_endsInWaitTimedOut_notError() = runTest {
+        // The claim landed server-side and the agent stays paired; running
+        // out the 60 s budget is "not online yet", never "Pairing failed".
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        val payload = freshPayload()
-        coEvery {
-            fx.trustKeyPinning.verifyOrPin(any(), any())
-        } returns TrustKeyPinning.VerifyResult.Pinned
-        coEvery {
-            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any(), any())
-        } returns PairingClaimResponse(
-            agent_id = "agent-99",
-            agent_friendly_name = "lab-host",
-            ws_delivered = false,
-        )
-
-        vm.onScanResult(Result.success(payload))
-        runCurrent()
-        vm.confirmQrClaim()
-        runCurrent()
-
-        assertTrue(vm.uiState.value.qrPairing is QrPairingState.WaitingForOnline)
-        // Drive the test scheduler past the timeout. The watcher uses
-        // 1-second ticks for WAIT_FOR_ONLINE_TIMEOUT_SECONDS iterations,
-        // so advancing past WAIT_FOR_ONLINE_TIMEOUT_SECONDS seconds runs
-        // the entire loop to the Error transition.
+        enterWaitingForOnline(fx, vm, wsDelivered = false)
+        // 1-second ticks for WAIT_FOR_ONLINE_TIMEOUT_SECONDS iterations, so
+        // advancing past the budget runs the entire loop to its verdict.
         advanceTimeBy((WAIT_FOR_ONLINE_TIMEOUT_SECONDS + 1) * 1000L)
         runCurrent()
 
-        val state = vm.uiState.value.qrPairing
-        assertTrue("expected Error, got $state", state is QrPairingState.Error)
-        val errMsg = (state as QrPairingState.Error).message
-        assertTrue(
-            "error message must mention the agent friendly name: $errMsg",
-            errMsg.contains("lab-host"),
-        )
-        assertTrue(
-            "error message must mention the timeout: $errMsg",
-            errMsg.contains("$WAIT_FOR_ONLINE_TIMEOUT_SECONDS"),
-        )
-        assertTrue(
-            "error message must include remediation guidance: $errMsg",
-            errMsg.contains("show-qr") || errMsg.contains("MobaideAgent"),
-        )
-        // ws_delivered=false → message should mention the "staged" path
-        // (the agent's WS was NOT open at claim time).
-        assertTrue(
-            "error message must reflect ws_delivered=false: $errMsg",
-            errMsg.contains("staged", ignoreCase = true) ||
-                errMsg.contains("not open", ignoreCase = true),
+        assertEquals(
+            QrPairingState.WaitTimedOut(
+                agentId = "agent-99",
+                friendlyName = "lab-host",
+                wsDeliveredAtClaim = false,
+            ),
+            vm.uiState.value.qrPairing,
         )
     }
 
     @Test
-    fun confirmQrClaim_wsDeliveredTrue_errorMentionsRelayClientFailure() = runTest {
-        // When ws_delivered=true the agent received the push but never
-        // came online — the diagnostic should point at the post-claim
-        // relay client / .env write path, not at the dispatch path.
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        runCurrent()
+    fun buildWaitTimeoutMessage_isPlatformNeutral_andSaysTheAgentIsPaired() {
+        val message = buildWaitTimeoutMessage("lab-host", wsDeliveredAtClaim = false)
 
-        val payload = freshPayload()
-        coEvery {
-            fx.trustKeyPinning.verifyOrPin(any(), any())
-        } returns TrustKeyPinning.VerifyResult.Pinned
-        coEvery {
-            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any(), any())
-        } returns PairingClaimResponse(
-            agent_id = "agent-99",
-            agent_friendly_name = "lab-host",
-            ws_delivered = true,
-        )
+        assertTrue(message, message.contains("‘lab-host’ was paired to your account"))
+        assertTrue(message, message.contains("$WAIT_FOR_ONLINE_TIMEOUT_SECONDS s"))
+        assertTrue(message, message.contains("`mobaide-agent show-qr`"))
+        // The phone cannot tell whether the host runs a Windows task, a
+        // systemd unit or a launchd job — no Windows-only remediation.
+        assertFalse(message, message.contains("Get-ScheduledTask"))
+        assertFalse(message, message.contains("ProgramFiles"))
+        assertFalse(message, message.contains("Pairing failed"))
+        assertFalse(message, message.contains("did not come online"))
+    }
 
-        vm.onScanResult(Result.success(payload))
-        runCurrent()
-        vm.confirmQrClaim()
-        runCurrent()
-        advanceTimeBy((WAIT_FOR_ONLINE_TIMEOUT_SECONDS + 1) * 1000L)
-        runCurrent()
+    @Test
+    fun buildWaitTimeoutMessage_wsDeliveredHint_isTriState() {
+        val delivered = buildWaitTimeoutMessage("lab-host", wsDeliveredAtClaim = true)
+        val staged = buildWaitTimeoutMessage("lab-host", wsDeliveredAtClaim = false)
+        val unknown = buildWaitTimeoutMessage("lab-host", wsDeliveredAtClaim = null)
 
-        val state = vm.uiState.value.qrPairing
-        assertTrue(state is QrPairingState.Error)
-        val errMsg = (state as QrPairingState.Error).message
-        assertTrue(
-            "ws_delivered=true error must point at relay client / firewall: $errMsg",
-            errMsg.contains("relay client", ignoreCase = true) ||
-                errMsg.contains("firewall", ignoreCase = true),
-        )
+        assertTrue(delivered, delivered.contains("tunnel"))
+        assertFalse(delivered, delivered.contains("staged"))
+        assertTrue(staged, staged.contains("staged"))
+        assertFalse(staged, staged.contains("tunnel"))
+        // An older relay omits the field: claim nothing about the push.
+        assertFalse(unknown, unknown.contains("tunnel"))
+        assertFalse(unknown, unknown.contains("staged"))
     }
 
     @Test
@@ -645,6 +604,203 @@ class AgentListViewModelQrPairingTest {
 
         vm.dismissQrPairing()
 
+        assertEquals(QrPairingState.Idle, vm.uiState.value.qrPairing)
+    }
+
+    /**
+     * Stub a successful claim for `agent-99` / `lab-host` and drive
+     * scan → confirm → claim with `runCurrent` (no virtual-time advance), so
+     * the watcher is parked on its first 1 s tick when this returns.
+     */
+    private fun TestScope.enterWaitingForOnline(
+        fx: Fixture,
+        vm: AgentListViewModel,
+        wsDelivered: Boolean?,
+    ) {
+        coEvery {
+            fx.trustKeyPinning.verifyOrPin(any(), any())
+        } returns TrustKeyPinning.VerifyResult.Pinned
+        coEvery {
+            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any(), any())
+        } returns PairingClaimResponse(
+            agent_id = "agent-99",
+            agent_friendly_name = "lab-host",
+            ws_delivered = wsDelivered,
+        )
+
+        vm.onScanResult(Result.success(freshPayload()))
+        runCurrent()
+        vm.confirmQrClaim()
+        runCurrent()
+        assertTrue(vm.uiState.value.qrPairing is QrPairingState.WaitingForOnline)
+    }
+
+    /**
+     * Count `refreshAgents()` calls from here on and flip `agent-99` online
+     * in the repository flow on call number [flipOn] — the REST snapshot
+     * arriving with no `agent.status_changed` push ever delivered.
+     */
+    private fun Fixture.countRefreshes(flipOn: Int): () -> Int {
+        var calls = 0
+        coEvery { agentRepository.refreshAgents() } coAnswers {
+            calls += 1
+            if (calls == flipOn) {
+                agentsFlow.value = listOf(agent("agent-99", online = true))
+            }
+        }
+        return { calls }
+    }
+
+    @Test
+    fun watcher_pollsEveryFiveSeconds_andRecoversWhenPushNeverArrives() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        runCurrent() // init-time refresh, not counted below
+        val refreshes = fx.countRefreshes(flipOn = 3)
+        enterWaitingForOnline(fx, vm, wsDelivered = true)
+
+        advanceTimeBy(4_500L)
+        runCurrent()
+
+        assertTrue(vm.uiState.value.qrPairing is QrPairingState.WaitingForOnline)
+        assertEquals("only the pre-loop resync before the 5 s mark", 1, refreshes())
+
+        advanceTimeBy(6_000L) // 10.5 s: polls at 5 s and 10 s
+        runCurrent()
+
+        assertEquals(
+            QrPairingState.Success("agent-99", "lab-host"),
+            vm.uiState.value.qrPairing,
+        )
+        assertEquals(3, refreshes())
+    }
+
+    @Test
+    fun watcher_finalRefetchAtDeadline_turnsIntoSuccessNotTimeout() = runTest {
+        // The deadline tick resyncs before it judges, and the judgement
+        // reads the repository flow — not the ``_uiState.agents`` copy that
+        // a separate collector fills only after this coroutine suspends.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        runCurrent()
+        // pre-loop + 5 s … 55 s (11 polls) + the 60 s deadline poll.
+        val refreshes = fx.countRefreshes(flipOn = 13)
+        enterWaitingForOnline(fx, vm, wsDelivered = false)
+
+        advanceTimeBy(60_500L)
+        runCurrent()
+
+        assertEquals(
+            QrPairingState.Success("agent-99", "lab-host"),
+            vm.uiState.value.qrPairing,
+        )
+        assertEquals(13, refreshes())
+    }
+
+    @Test
+    fun watcher_survivesFailingResync_andStillHonoursPush() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        runCurrent()
+        coEvery { fx.agentRepository.refreshAgents() } throws IOException("relay unreachable")
+        enterWaitingForOnline(fx, vm, wsDelivered = null)
+
+        advanceTimeBy(6_500L) // past the first (failing) 5 s poll
+        runCurrent()
+        val midway = vm.uiState.value.qrPairing
+        assertTrue("expected WaitingForOnline, got $midway", midway is QrPairingState.WaitingForOnline)
+        assertEquals(6, (midway as QrPairingState.WaitingForOnline).elapsedSeconds)
+
+        fx.agentsFlow.value = listOf(agent("agent-99", online = true))
+        advanceTimeBy(1_000L)
+        runCurrent()
+
+        assertEquals(
+            QrPairingState.Success("agent-99", "lab-host"),
+            vm.uiState.value.qrPairing,
+        )
+    }
+
+    @Test
+    fun keepWaiting_fromWaitTimedOut_restartsWatcherWithZeroElapsed() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        runCurrent()
+        enterWaitingForOnline(fx, vm, wsDelivered = true)
+        advanceTimeBy((WAIT_FOR_ONLINE_TIMEOUT_SECONDS + 1) * 1000L)
+        runCurrent()
+        assertTrue(vm.uiState.value.qrPairing is QrPairingState.WaitTimedOut)
+
+        vm.keepWaiting()
+        runCurrent()
+
+        assertEquals(
+            QrPairingState.WaitingForOnline(
+                agentId = "agent-99",
+                friendlyName = "lab-host",
+                elapsedSeconds = 0,
+                wsDeliveredAtClaim = true,
+            ),
+            vm.uiState.value.qrPairing,
+        )
+
+        // A fresh 60 s budget: half-way through it is still counting.
+        advanceTimeBy(30_500L)
+        runCurrent()
+        val midway = vm.uiState.value.qrPairing
+        assertTrue("expected WaitingForOnline, got $midway", midway is QrPairingState.WaitingForOnline)
+        assertEquals(30, (midway as QrPairingState.WaitingForOnline).elapsedSeconds)
+
+        fx.agentsFlow.value = listOf(agent("agent-99", online = true))
+        advanceTimeBy(1_000L)
+        runCurrent()
+        assertEquals(
+            QrPairingState.Success("agent-99", "lab-host"),
+            vm.uiState.value.qrPairing,
+        )
+    }
+
+    @Test
+    fun keepWaiting_outsideWaitTimedOut_isNoOp() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        runCurrent()
+
+        vm.keepWaiting()
+        runCurrent()
+        assertEquals(QrPairingState.Idle, vm.uiState.value.qrPairing)
+
+        // Mid-wait it must not restart the clock either.
+        enterWaitingForOnline(fx, vm, wsDelivered = null)
+        advanceTimeBy(3_500L)
+        runCurrent()
+        vm.keepWaiting()
+        runCurrent()
+        advanceTimeBy(1_000L)
+        runCurrent()
+
+        val state = vm.uiState.value.qrPairing
+        assertTrue("expected WaitingForOnline, got $state", state is QrPairingState.WaitingForOnline)
+        assertEquals(4, (state as QrPairingState.WaitingForOnline).elapsedSeconds)
+    }
+
+    @Test
+    fun dismissQrPairing_fromWaitTimedOut_returnsToIdle_andStaysThere() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        runCurrent()
+        enterWaitingForOnline(fx, vm, wsDelivered = false)
+        advanceTimeBy((WAIT_FOR_ONLINE_TIMEOUT_SECONDS + 1) * 1000L)
+        runCurrent()
+        assertTrue(vm.uiState.value.qrPairing is QrPairingState.WaitTimedOut)
+
+        vm.dismissQrPairing()
+        assertEquals(QrPairingState.Idle, vm.uiState.value.qrPairing)
+
+        // A late push must not resurrect the dialog as Success.
+        fx.agentsFlow.value = listOf(agent("agent-99", online = true))
+        advanceTimeBy(2_000L)
+        runCurrent()
         assertEquals(QrPairingState.Idle, vm.uiState.value.qrPairing)
     }
 }

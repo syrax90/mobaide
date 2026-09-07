@@ -92,6 +92,7 @@ export const COVERED_FIXTURES: readonly string[] = [
   'dto/central/CreateCustomAgentTypeRequest.json',
   'dto/central/CustomAgentTypeDto.json',
   'dto/central/CustomTypeDeletedPayload.json',
+  'dto/central/FirstAgentPairedPayload.json',
   'dto/central/TemplateDeletedPayload.json',
   'dto/central/TemplateDto.json',
 ];
@@ -139,6 +140,7 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/central/ForgotPasswordRequest.json': OWNER.generated,
   'dto/central/ForgotPasswordResponse.json': OWNER.generated,
   'dto/central/GoogleAuthRequest.json': OWNER.generated,
+  'dto/central/MeResponse.json': OWNER.generated,
   'dto/central/MobileTokenRequest.json': OWNER.generated,
   'dto/central/MobileTokenResponse.json': OWNER.generated,
   'dto/central/PairingClaimRequest.json': OWNER.generated,

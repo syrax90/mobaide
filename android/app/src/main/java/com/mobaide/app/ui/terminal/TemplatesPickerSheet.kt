@@ -17,14 +17,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarOutline
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import com.mobaide.app.ui.common.pixel.PixelBottomSheet
+import com.mobaide.app.ui.common.pixel.PixelIconButton
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -35,7 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.data.network.dto.TemplateDto
@@ -89,7 +91,7 @@ fun TemplatesPickerSheet(
     var pendingDelete by remember { mutableStateOf<TemplateDto?>(null) }
     val grouped = remember(templates, query) { groupTemplates(templates, query) }
 
-    ModalBottomSheet(
+    PixelBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
@@ -109,11 +111,10 @@ fun TemplatesPickerSheet(
                     text = "Prompt templates",
                     style = MaterialTheme.typography.titleMedium,
                 )
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, contentDescription = "Close")
-                }
+                PixelIconButton(Icons.Default.Close, "Close", onClick = onDismiss)
             }
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = query,
                 onValueChange = { query = it },
                 modifier = Modifier.fillMaxWidth(),
@@ -127,7 +128,7 @@ fun TemplatesPickerSheet(
                         .padding(vertical = 24.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator()
+                    PixelBlinkCursor()
                 }
             } else if (templates.isEmpty()) {
                 Text(
@@ -198,7 +199,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.sectionItems(
             onToggleFavorite = { onToggleFavorite(template) },
             onLongPress = { onLongPressDelete(template) },
         )
-        HorizontalDivider()
+        HorizontalDivider(thickness = 2.dp)
     }
 }
 
@@ -230,7 +231,7 @@ private fun TemplateRow(
             Text(
                 text = template.body,
                 style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = ChromeFontFamily,
                 ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,

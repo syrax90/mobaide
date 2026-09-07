@@ -30,6 +30,9 @@ of the shape ``{"type": "...", "payload": {...}}``. Current event types:
   purge their local shortcut caches for ``custom_<id>`` on receipt (no
   companion ``shortcut.deleted`` events are sent)
 - ``session.attention`` — payload: attention push mirror (see PROTOCOL.md)
+- ``account.first_agent_paired`` — payload: ``{"agent_id": str}``; sent once
+  per account, when ``_complete_pairing`` stamps ``users.first_paired_at``
+  (the apps log their Firebase ``agent_paired`` conversion off it)
 """
 from __future__ import annotations
 

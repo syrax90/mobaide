@@ -1,6 +1,6 @@
 {
   "mobaide_agent": "0.3.10",
-  "central_server": "0.2.13",
-  "android": "3.6.1",
-  "web": "0.1.4"
+  "central_server": "0.2.15",
+  "android": "3.6.4",
+  "web": "0.1.6"
 }

@@ -14,6 +14,7 @@ from .models import (
     ForgotPasswordRequest,
     ForgotPasswordResponse,
     GoogleAuthRequest,
+    MeResponse,
     ResendVerificationRequest,
     ResendVerificationResponse,
     ResetPasswordRequest,
@@ -137,7 +138,11 @@ async def register(
     auth_service = request.app.state.auth_service
     try:
         result = await auth_service.register_user(
-            body.email, body.password, background_tasks
+            body.email,
+            body.password,
+            background_tasks,
+            ad_attribution=body.ad_attribution,
+            client_ip=request.client.host if request.client else None,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -203,7 +208,9 @@ async def google_auth(
     db = request.app.state.db
     try:
         user_id, role, token, _is_new = await auth_service.google_authenticate(
-            body.id_token
+            body.id_token,
+            ad_attribution=body.ad_attribution,
+            client_ip=request.client.host if request.client else None,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -235,7 +242,10 @@ async def apple_auth(
     db = request.app.state.db
     try:
         user_id, role, token, _is_new = await auth_service.apple_authenticate(
-            body.id_token, nonce=body.nonce
+            body.id_token,
+            nonce=body.nonce,
+            ad_attribution=body.ad_attribution,
+            client_ip=request.client.host if request.client else None,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -505,6 +515,29 @@ async def reset_password(
             detail={"error": "new_password_same_as_old"},
         )
     return ResetPasswordResponse()
+
+
+@router.get("/me", response_model=MeResponse)
+async def get_me(
+    request: Request,
+    user: UserTokenPayload = Depends(get_api_user),
+) -> MeResponse:
+    """Return the calling account's profile, including ``first_paired_at``."""
+    row = await request.app.state.db.get_user_by_id(user.sub)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return MeResponse(
+        user_id=row["id"],
+        email=row["email"],
+        role=row["role"],
+        created_at=row["created_at"],
+        scheduled_deletion_at=row["scheduled_deletion_at"],
+        first_paired_at=row["first_paired_at"],
+    )
 
 
 @router.post(

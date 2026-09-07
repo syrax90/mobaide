@@ -10,18 +10,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
+import com.mobaide.app.ui.common.pixel.PixelRadio
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import com.mobaide.app.ui.theme.pixel
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,7 +68,7 @@ fun DeleteAccountDialog(
     val coroutineScope = rememberCoroutineScope()
     val googleAuthClient = remember(context) { GoogleAuthClient(context) }
 
-    AlertDialog(
+    PixelAlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
@@ -97,13 +101,15 @@ fun DeleteAccountDialog(
             when (state) {
                 is DeleteAccountDialogState.Hidden,
                 is DeleteAccountDialogState.Explain -> Unit
-                is DeleteAccountDialogState.ReAuthPassword -> Button(
+                is DeleteAccountDialogState.ReAuthPassword -> PixelButton(
+                    style = PixelButtonStyle.Primary,
                     onClick = viewModel::confirmPasswordReauth,
                     enabled = !state.submitting,
                 ) {
                     Text("Next")
                 }
-                is DeleteAccountDialogState.ReAuthGoogle -> Button(
+                is DeleteAccountDialogState.ReAuthGoogle -> PixelButton(
+                    style = PixelButtonStyle.Primary,
                     onClick = {
                         viewModel.markGoogleReauthSubmitting()
                         coroutineScope.launch {
@@ -114,41 +120,20 @@ fun DeleteAccountDialog(
                     enabled = !state.submitting,
                 ) {
                     if (state.submitting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.height(18.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            strokeWidth = 2.dp,
-                        )
+                        PixelBlinkCursor(height = 18.dp, color = LocalContentColor.current)
                     } else {
                         Text("Re-verify with Google")
                     }
                 }
                 is DeleteAccountDialogState.ConfirmEmail -> {
                     val isImmediate = state.mode == DeletionMode.Immediate
-                    val container = if (isImmediate) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    }
-                    val onContainer = if (isImmediate) {
-                        MaterialTheme.colorScheme.onError
-                    } else {
-                        MaterialTheme.colorScheme.onPrimary
-                    }
-                    Button(
+                    PixelButton(
+                        style = if (isImmediate) PixelButtonStyle.Danger else PixelButtonStyle.Primary,
                         onClick = { viewModel.submitDelete(onSubmitted) },
                         enabled = !state.submitting && state.typedEmail == state.email,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = container,
-                            contentColor = onContainer,
-                        ),
                     ) {
                         if (state.submitting) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.height(18.dp),
-                                color = onContainer,
-                                strokeWidth = 2.dp,
-                            )
+                            PixelBlinkCursor(height = 18.dp, color = LocalContentColor.current)
                         } else {
                             Text(submitLabelFor(state.mode))
                         }
@@ -157,7 +142,7 @@ fun DeleteAccountDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            PixelTextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
 }
@@ -216,14 +201,15 @@ private fun ExplainBody(
             fontWeight = FontWeight.SemiBold,
         )
         Spacer(Modifier.height(6.dp))
-        Button(
+        PixelButton(
+            style = PixelButtonStyle.Primary,
             onClick = onChoosePassword,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Continue with password")
         }
         Spacer(Modifier.height(8.dp))
-        OutlinedButton(
+        PixelButton(
             onClick = onChooseGoogle,
             modifier = Modifier.fillMaxWidth(),
         ) {
@@ -242,13 +228,20 @@ private fun ModeOption(
 ) {
     val accent = if (danger) MaterialTheme.colorScheme.error
         else MaterialTheme.colorScheme.primary
-    val borderColor = if (selected) accent else MaterialTheme.colorScheme.outlineVariant
+    val borderColor = when {
+        selected && danger -> MaterialTheme.colorScheme.error
+        selected -> MaterialTheme.pixel.brand2
+        else -> MaterialTheme.colorScheme.outlineVariant
+    }
     val textColor = if (selected && danger) accent
         else MaterialTheme.colorScheme.onSurface
     Surface(
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(if (selected) 2.dp else 1.dp, borderColor),
-        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(2.dp, borderColor),
+        color = if (selected) {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        },
         modifier = Modifier
             .fillMaxWidth()
             .selectable(
@@ -261,10 +254,9 @@ private fun ModeOption(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            RadioButton(
+            PixelRadio(
                 selected = selected,
                 onClick = null,
-                colors = RadioButtonDefaults.colors(selectedColor = accent),
             )
             Column(modifier = Modifier.padding(start = 8.dp)) {
                 Text(
@@ -293,6 +285,7 @@ private fun ReAuthPasswordBody(
         Text("Enter your current password to confirm:")
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = state.password,
             onValueChange = onPasswordChange,
             label = { Text("Password") },
@@ -356,6 +349,7 @@ private fun ConfirmEmailBody(
         )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = state.typedEmail,
             onValueChange = onTypedEmailChange,
             label = { Text("Email") },

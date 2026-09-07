@@ -20,15 +20,15 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import com.mobaide.app.ui.common.pixel.PixelFab
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -46,9 +46,9 @@ fun ConnectionsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    Scaffold(
+    PixelScaffold(
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = { Text("Connections") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -58,7 +58,7 @@ fun ConnectionsScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = onAddConnection) {
+            PixelFab(onClick = onAddConnection) {
                 Icon(Icons.Default.Add, contentDescription = "Add connection")
             }
         },
@@ -91,7 +91,7 @@ fun ConnectionsScreen(
                         onClick = { viewModel.switchProfile(profile.id) },
                         onDelete = { viewModel.removeProfile(profile.id) },
                     )
-                    HorizontalDivider()
+                    HorizontalDivider(thickness = 2.dp)
                 }
             }
         }

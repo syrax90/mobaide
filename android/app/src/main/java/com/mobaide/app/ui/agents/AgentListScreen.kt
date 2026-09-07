@@ -5,14 +5,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -26,12 +30,14 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
+import com.mobaide.app.ui.common.pixel.PixelIconButton
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,13 +46,21 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.SnackbarHost
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.FloatingActionButtonDefaults
+import com.mobaide.app.ui.common.pixel.PixelStatusDot
+import com.mobaide.app.ui.common.pixel.hardShadow
+import com.mobaide.app.ui.common.pixel.pressTravel
+import com.mobaide.app.ui.common.pixel.pixelFrame
+import com.mobaide.app.ui.theme.pixel
+import com.mobaide.app.ui.common.pixel.PixelScaffold
+import com.mobaide.app.ui.common.pixel.PixelTextButton
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -57,7 +71,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,8 +79,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.ui.common.CopyableCodeBlock
 import com.mobaide.app.ui.common.GraceBannerSection
-import com.mobaide.app.ui.theme.StateRunning
-import com.mobaide.app.ui.theme.StateStopped
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -102,9 +114,9 @@ fun AgentListScreen(
         }
     }
 
-    Scaffold(
+    PixelScaffold(
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = { Text("My Agents") },
                 actions = {
                     AgentListOverflowMenu(
@@ -112,16 +124,14 @@ fun AgentListScreen(
                         onAddManually = viewModel::showAddDialog,
                         onPairWithCode = viewModel::startDeviceCodePairing,
                     )
-                    IconButton(onClick = onSettingsClick) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
+                    PixelIconButton(Icons.Default.Settings, "Settings", onClick = onSettingsClick)
                 },
             )
         },
         floatingActionButton = {
             ScanQrFab(onClick = viewModel::onScanQrClicked)
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -141,6 +151,7 @@ fun AgentListScreen(
                     EmptyAgentsState(
                         onShowInstallClick = viewModel::showInstallSheet,
                         onScanClick = viewModel::onScanQrClicked,
+                        onPairWithCodeClick = viewModel::startDeviceCodePairing,
                         onAddManuallyClick = viewModel::showAddDialog,
                     )
                 } else {
@@ -172,7 +183,7 @@ fun AgentListScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
-                CircularProgressIndicator()
+                PixelBlinkCursor()
             }
         }
     }
@@ -200,6 +211,7 @@ fun AgentListScreen(
     QrPairingDialogs(
         state = uiState.qrPairing,
         onConfirm = viewModel::confirmQrClaim,
+        onKeepWaiting = viewModel::keepWaiting,
         onDismiss = viewModel::dismissQrPairing,
     )
 
@@ -217,10 +229,17 @@ fun AgentListScreen(
 /** `internal` (vs the screen file's usual `private`) so `AgentListScreenTest` can compose it directly. */
 @Composable
 internal fun ScanQrFab(onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
     ExtendedFloatingActionButton(
         onClick = onClick,
         icon = { Icon(Icons.Default.QrCodeScanner, contentDescription = null) },
         text = { Text("Scan to add") },
+        modifier = Modifier
+            .hardShadow(MaterialTheme.pixel.btnShadow, visible = !pressed)
+            .pressTravel(pressed),
+        elevation = FloatingActionButtonDefaults.elevation(0.dp, 0.dp, 0.dp, 0.dp),
+        interactionSource = source,
     )
 }
 
@@ -233,9 +252,7 @@ internal fun AgentListOverflowMenu(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { menuExpanded = true }) {
-            Icon(Icons.Default.MoreVert, contentDescription = "More options")
-        }
+        PixelIconButton(Icons.Default.MoreVert, "More options", onClick = { menuExpanded = true })
         DropdownMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
@@ -282,24 +299,30 @@ internal fun AgentListOverflowMenu(
 internal fun EmptyAgentsState(
     onShowInstallClick: () -> Unit,
     onScanClick: () -> Unit,
+    onPairWithCodeClick: () -> Unit,
     onAddManuallyClick: () -> Unit,
 ) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
+    // Centered while it fits, scrollable once it does not: in landscape, at
+    // large font scales, or under the grace banner the two steps plus their
+    // fallbacks outgrow the viewport, and a plain Box would clip the last one
+    // out of reach. `heightIn` must precede `padding`, or the 32dp would be
+    // added on top of a full-viewport minimum and the state would always
+    // scroll by 64dp.
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            modifier = Modifier.padding(32.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+            modifier = Modifier
+                .verticalScroll(rememberScrollState())
+                .heightIn(min = maxHeight)
+                .fillMaxWidth()
+                .padding(32.dp),
         ) {
             Box(
                 modifier = Modifier
                     .size(96.dp)
-                    .background(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = CircleShape,
-                    ),
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                    .pixelFrame(MaterialTheme.pixel.rule),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -326,7 +349,8 @@ internal fun EmptyAgentsState(
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(
+            PixelButton(
+                style = PixelButtonStyle.Primary,
                 onClick = onShowInstallClick,
                 contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
             ) {
@@ -342,8 +366,9 @@ internal fun EmptyAgentsState(
                 text = "2. Scan the pairing QR shown after install",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
-            OutlinedButton(
+            PixelButton(
                 onClick = onScanClick,
                 contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
             ) {
@@ -355,7 +380,12 @@ internal fun EmptyAgentsState(
                 Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
                 Text("Scan QR code")
             }
-            TextButton(onClick = onAddManuallyClick) {
+            // The path that works when the host's screen is not somewhere a
+            // camera can see it — an SSH session, a VM console, another room.
+            PixelTextButton(onClick = onPairWithCodeClick) {
+                Text("Pair with a code instead")
+            }
+            PixelTextButton(onClick = onAddManuallyClick) {
                 Text("Add manually instead")
             }
         }
@@ -376,7 +406,7 @@ internal fun DeviceCodePairingDialogs(
 ) {
     when (state) {
         DeviceCodePairingState.Idle -> Unit
-        DeviceCodePairingState.Minting -> AlertDialog(
+        DeviceCodePairingState.Minting -> PixelAlertDialog(
             onDismissRequest = {},
             title = { Text("Getting a code…") },
             text = {
@@ -384,12 +414,12 @@ internal fun DeviceCodePairingDialogs(
                     modifier = Modifier.fillMaxWidth(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator()
+                    PixelBlinkCursor()
                 }
             },
             confirmButton = {},
         )
-        is DeviceCodePairingState.WaitingForHost -> AlertDialog(
+        is DeviceCodePairingState.WaitingForHost -> PixelAlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Add an agent") },
             text = {
@@ -415,7 +445,7 @@ internal fun DeviceCodePairingDialogs(
                         modifier = Modifier.fillMaxWidth(),
                         contentAlignment = Alignment.Center,
                     ) {
-                        CircularProgressIndicator()
+                        PixelBlinkCursor()
                     }
                     Spacer(modifier = Modifier.size(8.dp))
                     Text(
@@ -427,10 +457,10 @@ internal fun DeviceCodePairingDialogs(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                PixelTextButton(onClick = onDismiss) { Text("Cancel") }
             },
         )
-        is DeviceCodePairingState.Confirming -> AlertDialog(
+        is DeviceCodePairingState.Confirming -> PixelAlertDialog(
             onDismissRequest = onDismiss,
             title = {
                 Text(
@@ -479,16 +509,16 @@ internal fun DeviceCodePairingDialogs(
                 }
             },
             confirmButton = {
-                TextButton(
+                PixelTextButton(
                     onClick = onConfirm,
                     enabled = state.blockedReason == null,
                 ) { Text("Pair this machine") }
             },
             dismissButton = {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                PixelTextButton(onClick = onDismiss) { Text("Cancel") }
             },
         )
-        is DeviceCodePairingState.Claiming -> AlertDialog(
+        is DeviceCodePairingState.Claiming -> PixelAlertDialog(
             onDismissRequest = {},
             title = { Text("Pairing…") },
             text = {
@@ -496,17 +526,17 @@ internal fun DeviceCodePairingDialogs(
                     modifier = Modifier.fillMaxWidth(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator()
+                    PixelBlinkCursor()
                 }
             },
             confirmButton = {},
         )
-        is DeviceCodePairingState.Error -> AlertDialog(
+        is DeviceCodePairingState.Error -> PixelAlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Pairing failed") },
             text = { Text(state.message) },
             confirmButton = {
-                OutlinedButton(onClick = onDismiss) { Text("Close") }
+                PixelButton(onClick = onDismiss) { Text("Close") }
             },
         )
     }
@@ -516,11 +546,12 @@ internal fun DeviceCodePairingDialogs(
 private fun QrPairingDialogs(
     state: QrPairingState,
     onConfirm: () -> Unit,
+    onKeepWaiting: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     when (state) {
         QrPairingState.Idle -> Unit
-        is QrPairingState.Confirming -> AlertDialog(
+        is QrPairingState.Confirming -> PixelAlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Pair this agent?") },
             text = {
@@ -531,13 +562,13 @@ private fun QrPairingDialogs(
                 )
             },
             confirmButton = {
-                TextButton(onClick = onConfirm) { Text("Pair") }
+                PixelTextButton(onClick = onConfirm) { Text("Pair") }
             },
             dismissButton = {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                PixelTextButton(onClick = onDismiss) { Text("Cancel") }
             },
         )
-        is QrPairingState.Claiming -> AlertDialog(
+        is QrPairingState.Claiming -> PixelAlertDialog(
             onDismissRequest = {},
             title = { Text("Pairing…") },
             text = {
@@ -545,12 +576,12 @@ private fun QrPairingDialogs(
                     modifier = Modifier.fillMaxWidth(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator()
+                    PixelBlinkCursor()
                 }
             },
             confirmButton = {},
         )
-        is QrPairingState.WaitingForOnline -> AlertDialog(
+        is QrPairingState.WaitingForOnline -> PixelAlertDialog(
             // The watcher coroutine owns the timeout — letting the user
             // dismiss only abandons the wait, it does not cancel the
             // server-side claim (which has already succeeded). The dismiss
@@ -569,7 +600,7 @@ private fun QrPairingDialogs(
                         modifier = Modifier.fillMaxWidth(),
                         contentAlignment = Alignment.Center,
                     ) {
-                        CircularProgressIndicator()
+                        PixelBlinkCursor()
                     }
                     Spacer(modifier = Modifier.size(12.dp))
                     Text(
@@ -582,10 +613,28 @@ private fun QrPairingDialogs(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = onDismiss) { Text("Stop waiting") }
+                PixelTextButton(onClick = onDismiss) { Text("Stop waiting") }
             },
         )
-        is QrPairingState.Success -> AlertDialog(
+        is QrPairingState.WaitTimedOut -> PixelAlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Agent not online yet") },
+            text = {
+                Text(
+                    buildWaitTimeoutMessage(
+                        friendlyName = state.friendlyName,
+                        wsDeliveredAtClaim = state.wsDeliveredAtClaim,
+                    ),
+                )
+            },
+            confirmButton = {
+                PixelButton(onClick = onKeepWaiting) { Text("Keep waiting") }
+            },
+            dismissButton = {
+                PixelTextButton(onClick = onDismiss) { Text("Close") }
+            },
+        )
+        is QrPairingState.Success -> PixelAlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Paired") },
             text = {
@@ -595,15 +644,15 @@ private fun QrPairingDialogs(
                 )
             },
             confirmButton = {
-                TextButton(onClick = onDismiss) { Text("OK") }
+                PixelTextButton(onClick = onDismiss) { Text("OK") }
             },
         )
-        is QrPairingState.Error -> AlertDialog(
+        is QrPairingState.Error -> PixelAlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Pairing failed") },
             text = { Text(state.message) },
             confirmButton = {
-                OutlinedButton(onClick = onDismiss) { Text("Close") }
+                PixelButton(onClick = onDismiss) { Text("Close") }
             },
         )
     }
@@ -624,7 +673,8 @@ private fun AgentCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = !isConnecting) { onClick() },
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(2.dp, MaterialTheme.pixel.surface2),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Row(
             modifier = Modifier
@@ -632,10 +682,8 @@ private fun AgentCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val statusColor = if (agent.online) StateRunning else StateStopped
-            Canvas(modifier = Modifier.size(12.dp)) {
-                drawCircle(color = statusColor)
-            }
+            val statusColor = if (agent.online) MaterialTheme.pixel.statusRunning else MaterialTheme.pixel.statusStopped
+            PixelStatusDot(color = statusColor)
 
             Spacer(modifier = Modifier.width(12.dp))
 
@@ -649,7 +697,7 @@ private fun AgentCard(
                 Text(
                     text = agent.agent_id,
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = ChromeFontFamily,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -657,7 +705,7 @@ private fun AgentCard(
                 Text(
                     text = if (agent.online) "Online" else "Offline",
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (agent.online) StateRunning else StateStopped,
+                    color = if (agent.online) MaterialTheme.pixel.statusRunning else MaterialTheme.pixel.statusStopped,
                 )
             }
 
@@ -665,7 +713,7 @@ private fun AgentCard(
                 Icon(
                     Icons.Default.CheckCircle,
                     contentDescription = "Connected",
-                    tint = StateRunning,
+                    tint = MaterialTheme.pixel.statusRunning,
                     modifier = Modifier.size(24.dp),
                 )
                 Spacer(modifier = Modifier.width(4.dp))

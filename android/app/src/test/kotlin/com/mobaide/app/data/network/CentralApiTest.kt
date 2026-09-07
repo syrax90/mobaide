@@ -13,6 +13,7 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -260,4 +261,59 @@ class CentralApiTest {
         }
     }
 
+
+    // ---- getMe: URL, bearer, nullable decode, error mapping ----------------
+
+    @Test
+    fun getMe_getsApiAuthMe_withBearer_andDecodesNulls() = runTest {
+        val (api, client) = newApi("https://central.example.com/")
+        val captured = stubCall(client) { req ->
+            responseFor(
+                req, 200,
+                """{"user_id":"u-1","email":"alice@example.com","role":"viewer",""" +
+                    """"created_at":"2026-09-01T10:00:00+00:00","scheduled_deletion_at":null,""" +
+                    """"first_paired_at":null}""",
+            )
+        }
+
+        val me = api.getMe("tok-1")
+
+        assertEquals("GET", captured.captured.method)
+        assertEquals("https://central.example.com/api/auth/me", captured.captured.url.toString())
+        assertEquals("Bearer tok-1", captured.captured.header("Authorization"))
+        assertEquals("u-1", me.user_id)
+        assertEquals("2026-09-01T10:00:00+00:00", me.created_at)
+        assertNull(me.scheduled_deletion_at)
+        assertNull(me.first_paired_at)
+    }
+
+    @Test
+    fun getMe_decodesFirstPairedAt_andIgnoresUnknownKeys() = runTest {
+        val (api, client) = newApi()
+        stubCall(client) { req ->
+            responseFor(
+                req, 200,
+                """{"user_id":"u-1","email":"alice@example.com","role":"viewer",""" +
+                    """"created_at":"2026-09-01T10:00:00+00:00",""" +
+                    """"first_paired_at":"2026-09-03T15:07:12.123456+00:00","future":1}""",
+            )
+        }
+
+        val me = api.getMe("tok-1")
+
+        assertEquals("2026-09-03T15:07:12.123456+00:00", me.first_paired_at)
+    }
+
+    @Test
+    fun getMe_401_throwsApiException() = runTest {
+        val (api, client) = newApi()
+        stubCall(client) { req -> responseFor(req, 401, """{"detail":"Invalid token"}""") }
+
+        try {
+            api.getMe("stale")
+            fail("expected ApiException")
+        } catch (e: ApiException) {
+            assertEquals(401, e.code)
+        }
+    }
 }

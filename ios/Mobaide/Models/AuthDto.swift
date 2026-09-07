@@ -272,6 +272,33 @@ extension CancelAccountDeletionResponse {
     }
 }
 
+/// Profile behind `GET /api/auth/me`. `first_paired_at` is the never-cleared
+/// first-pairing stamp the `agent_paired` conversion keys on.
+struct MeResponse: Codable, Equatable, Sendable {
+    let user_id: String
+    let email: String
+    let role: String
+    let created_at: String
+    let scheduled_deletion_at: String?
+    let first_paired_at: String?
+
+    init(
+        user_id: String,
+        email: String,
+        role: String,
+        created_at: String,
+        scheduled_deletion_at: String? = nil,
+        first_paired_at: String? = nil
+    ) {
+        self.user_id = user_id
+        self.email = email
+        self.role = role
+        self.created_at = created_at
+        self.scheduled_deletion_at = scheduled_deletion_at
+        self.first_paired_at = first_paired_at
+    }
+}
+
 struct DeleteAccountReauthDetail: Codable, Equatable, Sendable {
     let error: String
     let message: String

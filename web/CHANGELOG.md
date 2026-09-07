@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.1.6](https://github.com/syrax90/claude_mobile/compare/web-v0.1.5...web-v0.1.6) (2026-09-04)
+
+
+### Features
+
+* in-app "Agent paired" conversion via Firebase Analytics (Stage 5) ([50a74de](https://github.com/syrax90/claude_mobile/commit/50a74dea63f69efbc447dee2252ef22b2b30604e))
+* **server:** upload an "Agent paired" Google Ads conversion on first pairing ([c4514bb](https://github.com/syrax90/claude_mobile/commit/c4514bbadf249cddaf325641981c7e048b55ddb9))
+* **server:** upload an "Agent paired" Google Ads conversion on first pairing ([ba949b0](https://github.com/syrax90/claude_mobile/commit/ba949b0d59d977e53a6f0efc2d76734a566dead9))
+* **web:** create a prompt template from inside a session ([c39f066](https://github.com/syrax90/claude_mobile/commit/c39f0662f6d4eef7583411d8fcd01538b21c3876))
+* **web:** create a prompt template from inside a session ([a98d33e](https://github.com/syrax90/claude_mobile/commit/a98d33e8f7a512e4f8cf40ad812e7728f12d4092))
+* **web:** mirror the first-pairing event and GET /api/auth/me ([6592ba5](https://github.com/syrax90/claude_mobile/commit/6592ba5f526b7a7e6c65f8917def2131938d715e))
+
+
+### Bug Fixes
+
+* **server:** bind ad consent to the visitor's network, revalidate before retries, guard late consent responses ([615d99e](https://github.com/syrax90/claude_mobile/commit/615d99e9983f3c0e573af0c1c8e5d0e197a7c097))
+* **server:** issue the ad-attribution cookie server-side, signed and same-origin only ([22f8818](https://github.com/syrax90/claude_mobile/commit/22f88187875b622d3c54d3079cbc322630056b7e))
+* **server:** propagate consent withdrawal, trust Cloudflare edges, revalidate under the send lock, match the click window ([7c7d30b](https://github.com/syrax90/claude_mobile/commit/7c7d30b54dceaa8fbda04cbeb035207cad800b11))
+* **web:** derive the pairing origin, and keep a paste when storage is denied ([07f2511](https://github.com/syrax90/claude_mobile/commit/07f2511cd3d4b87f2314d87c2f8f2acd7572fb9c))
+* **web:** make the sample payload's relay URL a placeholder too ([b26cac8](https://github.com/syrax90/claude_mobile/commit/b26cac8f8ac4e9ec5acf99143c6d3845874d8f1c))
+* **web:** show the "No agents yet" state as an ordered setup guide ([7e74284](https://github.com/syrax90/claude_mobile/commit/7e742844a732c682b96f87c414adf668411962bf))
+* **web:** show the "No agents yet" state as an ordered setup guide ([7a442e8](https://github.com/syrax90/claude_mobile/commit/7a442e8f9542c44615f8efb42ce0ddc91987b09a))
+
+## [0.1.5](https://github.com/syrax90/claude_mobile/compare/web-v0.1.4...web-v0.1.5) (2026-08-30)
+
+
+### Bug Fixes
+
+* **android,ios,web:** never report a paired, online agent as a failed pairing ([efabb00](https://github.com/syrax90/claude_mobile/commit/efabb00ef2ab51219253b1ee17b71e0d80bbfef2))
+* **android,ios,web:** never report a paired, online agent as a failed pairing ([8e83bfd](https://github.com/syrax90/claude_mobile/commit/8e83bfd82c03fd1cf4594e997afb50c68bc48389))
+
 ## [0.1.4](https://github.com/syrax90/claude_mobile/compare/web-v0.1.3...web-v0.1.4) (2026-08-27)
 
 

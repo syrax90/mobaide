@@ -8,6 +8,7 @@ import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_MAX
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_MIN
 import com.mobaide.app.data.local.TerminalDisplayMode
+import com.mobaide.app.data.local.ThemeMode
 import com.mobaide.app.data.repository.AuthRepository
 import com.mobaide.app.data.repository.DeleteAccountResult
 import com.mobaide.app.data.repository.DeletionMode
@@ -21,6 +22,7 @@ import javax.inject.Inject
 
 data class SettingsUiState(
     val userEmail: String = "",
+    val themeMode: ThemeMode = ThemeMode.Auto,
     val terminalDisplayMode: TerminalDisplayMode = TerminalDisplayMode.Static,
     val terminalStaticColumns: Int = TERMINAL_STATIC_COLUMNS_DEFAULT,
     val deleteDialog: DeleteAccountDialogState = DeleteAccountDialogState.Hidden,
@@ -85,6 +87,11 @@ class SettingsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            preferencesStore.themeMode.collect { mode ->
+                _uiState.update { it.copy(themeMode = mode) }
+            }
+        }
+        viewModelScope.launch {
             preferencesStore.terminalDisplayMode.collect { mode ->
                 _uiState.update { it.copy(terminalDisplayMode = mode) }
             }
@@ -94,6 +101,10 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update { it.copy(terminalStaticColumns = cols) }
             }
         }
+    }
+
+    fun setThemeMode(mode: ThemeMode) {
+        viewModelScope.launch { preferencesStore.setThemeMode(mode) }
     }
 
     fun setTerminalDisplayMode(mode: TerminalDisplayMode) {

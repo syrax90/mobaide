@@ -35,11 +35,14 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
+import com.mobaide.app.ui.common.pixel.PixelButton
+import com.mobaide.app.ui.common.pixel.PixelButtonStyle
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material3.Card
 import androidx.compose.material3.CardColors
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
@@ -55,17 +58,22 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemColors
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import com.mobaide.app.ui.theme.pixel
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
+import com.mobaide.app.ui.common.pixel.PixelScaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.ui.graphics.RectangleShape
+import com.mobaide.app.ui.common.pixel.pixelSegmentedButtonColors
+import com.mobaide.app.ui.common.pixel.pixelSwitchColors
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.SnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import com.mobaide.app.ui.common.pixel.PixelTextButton
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -82,7 +90,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -92,7 +100,6 @@ import com.mobaide.app.ui.common.SecretTextField
 import com.mobaide.app.ui.projects.ProjectFormSheet
 import com.mobaide.app.ui.projects.ProjectsUiEvent
 import com.mobaide.app.ui.projects.ProjectsViewModel
-import com.mobaide.app.ui.theme.WarningYellow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -157,9 +164,9 @@ fun CreateSessionScreen(
         if (state.step == CreateSessionStep.ProjectSelect) onBack() else viewModel.goBack()
     }
 
-    Scaffold(
+    PixelScaffold(
         topBar = {
-            TopAppBar(
+            PixelTopBar(
                 title = {
                     Text(
                         when (state.step) {
@@ -188,7 +195,7 @@ fun CreateSessionScreen(
                 },
             )
         },
-        snackbarHost = { SnackbarHost(snackbar) },
+        snackbarHost = { PixelSnackbarHost(snackbar) },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -349,7 +356,7 @@ private fun DeleteCustomAgentTypeDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    PixelAlertDialog(
         // Ignore back-press / outside-tap while the delete is in flight,
         // matching the disabled Cancel button.
         onDismissRequest = { if (!deleting) onDismiss() },
@@ -361,7 +368,7 @@ private fun DeleteCustomAgentTypeDialog(
             )
         },
         confirmButton = {
-            TextButton(
+            PixelTextButton(
                 onClick = onConfirm,
                 enabled = !deleting,
                 modifier = Modifier.testTag("delete_custom_type_confirm"),
@@ -373,7 +380,7 @@ private fun DeleteCustomAgentTypeDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !deleting) { Text("Cancel") }
+            PixelTextButton(onClick = onDismiss, enabled = !deleting) { Text("Cancel") }
         },
     )
 }
@@ -395,7 +402,7 @@ private fun CodexLoginDialog(
     onSubmit: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    PixelAlertDialog(
         // Ignore back-press / outside-tap while a login is in flight, matching
         // the disabled Cancel button — otherwise dismissing mid-login leaves the
         // coroutine running and it would still retry the session create on success.
@@ -427,12 +434,16 @@ private fun CodexLoginDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onSubmit, enabled = apiKey.isNotBlank() && !submitting) {
+            PixelButton(
+                onClick = onSubmit,
+                style = PixelButtonStyle.Primary,
+                enabled = apiKey.isNotBlank() && !submitting,
+            ) {
                 Text(if (submitting) "Signing in…" else "Sign in")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !submitting) {
+            PixelTextButton(onClick = onDismiss, enabled = !submitting) {
                 Text("Cancel")
             }
         },
@@ -465,6 +476,7 @@ private fun ProjectSelectSection(
         onExpandedChange = { dropdownExpanded = !dropdownExpanded },
     ) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = displayValue,
             onValueChange = {},
             readOnly = true,
@@ -486,7 +498,7 @@ private fun ProjectSelectSection(
                 )
             }
             if (state.projects.isNotEmpty()) {
-                HorizontalDivider()
+                HorizontalDivider(thickness = 2.dp)
             }
             DropdownMenuItem(
                 text = {
@@ -569,7 +581,8 @@ private fun ProjectSelectSection(
             state.customPathDraft.isNotBlank() && state.customPathError == null
         ProjectSelection.None -> false
     }
-    Button(
+    PixelButton(
+        style = PixelButtonStyle.Primary,
         onClick = onContinue,
         enabled = canContinue,
         modifier = Modifier.fillMaxWidth(),
@@ -589,6 +602,7 @@ internal fun CustomPathPanel(
     onRemoveRecent: (String) -> Unit,
 ) {
     OutlinedTextField(
+        colors = PixelTextFieldDefaults.colors(),
         value = state.customPathDraft,
         onValueChange = onDraftChange,
         label = { Text("Absolute path on the agent") },
@@ -687,8 +701,8 @@ private fun ModePickerSection(
         )
     }
 
-    val selectedColors = CardDefaults.elevatedCardColors(
-        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+    val selectedColors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
     )
     // Transparent container so the ElevatedCard (incl. its dimmed disabled
     // colour) shows through; the disabled variant also fades the text to the
@@ -706,7 +720,7 @@ private fun ModePickerSection(
     val disabledReasonList = ListItemDefaults.colors(
         containerColor = Color.Transparent,
         headlineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-        supportingColor = WarningYellow,
+        supportingColor = MaterialTheme.pixel.warning,
         leadingIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
         trailingIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
     )
@@ -720,10 +734,15 @@ private fun ModePickerSection(
         }
     }
 
-    ElevatedCard(
+    Card(
         onClick = { onChooseMode(CreateSessionMode.Standard) },
         enabled = claudeEnabled && !submitting,
-        colors = if (selectedMode == CreateSessionMode.Standard) selectedColors else CardDefaults.elevatedCardColors(),
+        colors = if (selectedMode == CreateSessionMode.Standard) selectedColors else CardDefaults.cardColors(),
+        border = BorderStroke(
+            2.dp,
+            if (selectedMode == CreateSessionMode.Standard) MaterialTheme.pixel.brand2
+            else MaterialTheme.pixel.surface2,
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("mode_card_standard"),
@@ -741,10 +760,15 @@ private fun ModePickerSection(
         )
     }
 
-    ElevatedCard(
+    Card(
         onClick = { onChooseMode(CreateSessionMode.Codex) },
         enabled = codexEnabled && !submitting,
-        colors = if (selectedMode == CreateSessionMode.Codex) selectedColors else CardDefaults.elevatedCardColors(),
+        colors = if (selectedMode == CreateSessionMode.Codex) selectedColors else CardDefaults.cardColors(),
+        border = BorderStroke(
+            2.dp,
+            if (selectedMode == CreateSessionMode.Codex) MaterialTheme.pixel.brand2
+            else MaterialTheme.pixel.surface2,
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("mode_card_codex"),
@@ -762,10 +786,15 @@ private fun ModePickerSection(
         )
     }
 
-    ElevatedCard(
+    Card(
         onClick = { onChooseMode(CreateSessionMode.Antigravity) },
         enabled = antigravityEnabled && !submitting,
-        colors = if (selectedMode == CreateSessionMode.Antigravity) selectedColors else CardDefaults.elevatedCardColors(),
+        colors = if (selectedMode == CreateSessionMode.Antigravity) selectedColors else CardDefaults.cardColors(),
+        border = BorderStroke(
+            2.dp,
+            if (selectedMode == CreateSessionMode.Antigravity) MaterialTheme.pixel.brand2
+            else MaterialTheme.pixel.surface2,
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("mode_card_antigravity"),
@@ -783,10 +812,15 @@ private fun ModePickerSection(
         )
     }
 
-    ElevatedCard(
+    Card(
         onClick = { onChooseMode(CreateSessionMode.AutoScan) },
         enabled = autoScanEnabled && !submitting,
-        colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.elevatedCardColors(),
+        colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.cardColors(),
+        border = BorderStroke(
+            2.dp,
+            if (selectedMode == CreateSessionMode.AutoScan) MaterialTheme.pixel.brand2
+            else MaterialTheme.pixel.surface2,
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("mode_card_autoscan"),
@@ -807,10 +841,15 @@ private fun ModePickerSection(
         )
     }
 
-    ElevatedCard(
+    Card(
         onClick = { onChooseMode(CreateSessionMode.CustomShell) },
         enabled = !submitting,
-        colors = if (selectedMode == CreateSessionMode.CustomShell) selectedColors else CardDefaults.elevatedCardColors(),
+        colors = if (selectedMode == CreateSessionMode.CustomShell) selectedColors else CardDefaults.cardColors(),
+        border = BorderStroke(
+            2.dp,
+            if (selectedMode == CreateSessionMode.CustomShell) MaterialTheme.pixel.brand2
+            else MaterialTheme.pixel.surface2,
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("mode_card_terminal"),
@@ -845,9 +884,10 @@ private fun ModePickerSection(
 
     // Always enabled — the 20-type cap is not gated client-side (the cached
     // list can be stale); the editor surfaces the server's 409 inline instead.
-    ElevatedCard(
+    Card(
         onClick = onAddCustomType,
         enabled = !submitting,
+        border = BorderStroke(2.dp, MaterialTheme.pixel.surface2),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("add_custom_type_card"),
@@ -876,9 +916,8 @@ private fun ModePickerSection(
             horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(20.dp),
-                strokeWidth = 2.dp,
+            PixelBlinkCursor(
+                height = 20.dp,
             )
             Text(
                 text = "Creating session…",
@@ -920,8 +959,12 @@ private fun CustomAgentTypeCard(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box(modifier = Modifier.fillMaxWidth()) {
-        ElevatedCard(
-            colors = if (selected) selectedColors else CardDefaults.elevatedCardColors(),
+        Card(
+            colors = if (selected) selectedColors else CardDefaults.cardColors(),
+            border = BorderStroke(
+                2.dp,
+                if (selected) MaterialTheme.pixel.brand2 else MaterialTheme.pixel.surface2,
+            ),
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("custom_type_card_${type.id}")
@@ -936,7 +979,7 @@ private fun CustomAgentTypeCard(
                 supportingContent = {
                     Text(
                         text = type.command,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = ChromeFontFamily,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -1009,6 +1052,7 @@ private fun StandardConfigSection(
 
         if (state.worktree) {
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = state.branchName,
                 onValueChange = viewModel::setBranchName,
                 label = { Text("Branch name (optional)") },
@@ -1022,7 +1066,8 @@ private fun StandardConfigSection(
         }
     }
 
-    Button(
+    PixelButton(
+        style = PixelButtonStyle.Primary,
         onClick = viewModel::submit,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
@@ -1051,7 +1096,8 @@ private fun CodexConfigSection(
             SegmentedButton(
                 selected = preset == value,
                 onClick = { viewModel.selectCodexPreset(value) },
-                shape = SegmentedButtonDefaults.itemShape(index = index, count = presets.size),
+                shape = RectangleShape,
+                colors = pixelSegmentedButtonColors(),
                 icon = {},
             ) { Text(label) }
         }
@@ -1067,7 +1113,6 @@ private fun CodexConfigSection(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
-    Text("Model", style = MaterialTheme.typography.labelLarge)
     CliModelDropdown(
         models = state.codexModels?.takeIf { it.isNotEmpty() }
             ?: CreateSessionViewModel.CODEX_MODELS,
@@ -1076,7 +1121,6 @@ private fun CodexConfigSection(
         onSelect = viewModel::setCodexModel,
     )
 
-    Text("Reasoning effort", style = MaterialTheme.typography.labelLarge)
     // A dropdown, not the old 4-button segmented row: the agent-advertised
     // per-model sets run to 6 levels (low…ultra), which segments would truncate
     // on phone width.
@@ -1086,7 +1130,7 @@ private fun CodexConfigSection(
     )
 
     var advancedExpanded by remember { mutableStateOf(false) }
-    TextButton(
+    PixelTextButton(
         onClick = { advancedExpanded = !advancedExpanded },
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -1110,7 +1154,8 @@ private fun CodexConfigSection(
                     selected = state.codexSandbox == value,
                     onClick = { viewModel.setCodexSandbox(value) },
                     enabled = !fullAuto,
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = sandboxes.size),
+                    shape = RectangleShape,
+                    colors = pixelSegmentedButtonColors(),
                     icon = {},
                 ) { Text(label) }
             }
@@ -1127,7 +1172,8 @@ private fun CodexConfigSection(
                     selected = state.codexApproval == value,
                     onClick = { viewModel.setCodexApproval(value) },
                     enabled = !fullAuto,
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = approvals.size),
+                    shape = RectangleShape,
+                    colors = pixelSegmentedButtonColors(),
                     icon = {},
                 ) { Text(label) }
             }
@@ -1146,6 +1192,7 @@ private fun CodexConfigSection(
 
         if (state.worktree) {
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = state.branchName,
                 onValueChange = viewModel::setBranchName,
                 label = { Text("Branch name (optional)") },
@@ -1159,7 +1206,8 @@ private fun CodexConfigSection(
         }
     }
 
-    Button(
+    PixelButton(
+        style = PixelButtonStyle.Primary,
         onClick = viewModel::submitCodex,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
@@ -1188,6 +1236,7 @@ private fun CliModelDropdown(
         onExpandedChange = { expanded = !expanded },
     ) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = selected ?: defaultLabel,
             onValueChange = {},
             readOnly = true,
@@ -1226,7 +1275,6 @@ private fun AntigravityConfigSection(
     showWorktreeToggle: Boolean,
     viewModel: CreateSessionViewModel,
 ) {
-    Text("Model", style = MaterialTheme.typography.labelLarge)
     CliModelDropdown(
         models = state.antigravityModels?.takeIf { it.isNotEmpty() }
             ?: CreateSessionViewModel.ANTIGRAVITY_MODELS,
@@ -1263,6 +1311,7 @@ private fun AntigravityConfigSection(
     )
 
     OutlinedTextField(
+        colors = PixelTextFieldDefaults.colors(),
         value = state.antigravityAddDirsDraft,
         onValueChange = viewModel::setAntigravityAddDirsDraft,
         label = { Text("Additional directories (one per line, optional)") },
@@ -1279,6 +1328,7 @@ private fun AntigravityConfigSection(
 
         if (state.worktree) {
             OutlinedTextField(
+                colors = PixelTextFieldDefaults.colors(),
                 value = state.branchName,
                 onValueChange = viewModel::setBranchName,
                 label = { Text("Branch name (optional)") },
@@ -1292,7 +1342,8 @@ private fun AntigravityConfigSection(
         }
     }
 
-    Button(
+    PixelButton(
+        style = PixelButtonStyle.Primary,
         onClick = viewModel::submitAntigravity,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
@@ -1322,7 +1373,6 @@ private fun ClaudeOptionControls(
     onDebugToggle: (Boolean) -> Unit,
     onAppendSystemPromptChange: (String) -> Unit,
 ) {
-    Text("Model", style = MaterialTheme.typography.labelLarge)
     ClaudeModelDropdown(
         selected = model,
         enabled = !fastMode,
@@ -1336,7 +1386,6 @@ private fun ClaudeOptionControls(
         )
     }
 
-    Text("Effort", style = MaterialTheme.typography.labelLarge)
     ClaudeEffortDropdown(
         selected = effort,
         model = model,
@@ -1352,7 +1401,7 @@ private fun ClaudeOptionControls(
     }
 
     var advancedExpanded by remember { mutableStateOf(false) }
-    TextButton(
+    PixelTextButton(
         onClick = { advancedExpanded = !advancedExpanded },
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -1372,6 +1421,7 @@ private fun ClaudeOptionControls(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = appendSystemPrompt,
             onValueChange = onAppendSystemPromptChange,
             label = { Text("Append system prompt (optional)") },
@@ -1399,6 +1449,7 @@ private fun ClaudeModelDropdown(
         onExpandedChange = { if (enabled) expanded = !expanded },
     ) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = selected ?: "Default",
             onValueChange = {},
             readOnly = true,
@@ -1446,6 +1497,7 @@ private fun ClaudeEffortDropdown(
         onExpandedChange = { if (enabled) expanded = !expanded },
     ) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = selected.replaceFirstChar { it.uppercase() },
             onValueChange = {},
             readOnly = true,
@@ -1489,10 +1541,11 @@ private fun CodexEffortDropdown(
         onExpandedChange = { expanded = !expanded },
     ) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = state.codexReasoningEffort.replaceFirstChar { it.uppercase() },
             onValueChange = {},
             readOnly = true,
-            label = { Text("Effort") },
+            label = { Text("Reasoning effort") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier.menuAnchor().fillMaxWidth(),
         )
@@ -1522,6 +1575,7 @@ private fun TerminalConfigSection(
 
     if (state.worktree) {
         OutlinedTextField(
+            colors = PixelTextFieldDefaults.colors(),
             value = state.branchName,
             onValueChange = viewModel::setBranchName,
             label = { Text("Branch name (optional)") },
@@ -1534,7 +1588,8 @@ private fun TerminalConfigSection(
         )
     }
 
-    Button(
+    PixelButton(
+        style = PixelButtonStyle.Primary,
         onClick = viewModel::submitFromTerminalConfig,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
@@ -1577,6 +1632,7 @@ private fun AutoScanConfigSection(
     ToggleRow("No memory", state.autoScanNoMemory, viewModel::toggleAutoScanNoMemory)
 
     OutlinedTextField(
+        colors = PixelTextFieldDefaults.colors(),
         value = state.initialPrompt,
         onValueChange = viewModel::setInitialPrompt,
         label = { Text("Initial prompt (optional)") },
@@ -1589,7 +1645,8 @@ private fun AutoScanConfigSection(
         ),
     )
 
-    Button(
+    PixelButton(
+        style = PixelButtonStyle.Primary,
         onClick = viewModel::submitAutoScan,
         enabled = state.selectedProjectName != null && !state.autoScanStarting,
         modifier = Modifier.fillMaxWidth(),
@@ -1615,6 +1672,11 @@ private fun ToggleRow(
             else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
             modifier = Modifier.weight(1f),
         )
-        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
+        Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            enabled = enabled,
+            colors = pixelSwitchColors(),
+        )
     }
 }

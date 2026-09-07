@@ -117,6 +117,23 @@ function decodeBase64Url(value: string): string | null {
 }
 
 /**
+ * Encode a payload the way the agent's `pairing_qr.format_pairing_link` does:
+ * UTF-8, base64url, padding stripped.
+ *
+ * The inverse of [decodePairingFragment], and the reason the setup guide can
+ * hand a pasted payload to `/pair` by navigating rather than by rebuilding the
+ * pairing machine. Base64url rather than `encodeURIComponent`: the output is
+ * `[A-Za-z0-9_-]` only, so no layer between here and the router can re-encode
+ * it into something the decoder reads back differently.
+ */
+export function encodePairingFragment(payload: string): string {
+  const bytes = new TextEncoder().encode(payload);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+}
+
+/**
  * Recover the payload from a `/pair#…` fragment.
  *
  * The agent base64url-encodes it (`pairing_qr.format_pairing_link`) because a

@@ -3,11 +3,12 @@ package com.mobaide.app.ui.terminal
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -17,7 +18,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.text.font.FontFamily
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.unit.dp
 
 /**
@@ -45,7 +46,7 @@ fun RenameShortcutDialog(
         }
     }
 
-    AlertDialog(
+    PixelAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Rename shortcut") },
         text = {
@@ -53,12 +54,13 @@ fun RenameShortcutDialog(
                 Text(
                     text = shortcut.chord.display(),
                     style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = ChromeFontFamily,
                     ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
                 OutlinedTextField(
+                    colors = PixelTextFieldDefaults.colors(),
                     value = name,
                     onValueChange = { name = it.take(MAX_SHORTCUT_NAME_LENGTH) },
                     modifier = Modifier
@@ -73,10 +75,10 @@ fun RenameShortcutDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onRename(name) }) { Text("Rename") }
+            PixelTextButton(onClick = { onRename(name) }) { Text("Rename") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            PixelTextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
 }

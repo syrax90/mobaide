@@ -1,6 +1,143 @@
 {
   "components": {
     "schemas": {
+      "AdAttribution": {
+        "description": "Google Ads click attribution the web client copies out of the\n``mobaide_ads`` cookie when it creates an account.\n\nThe cookie is minted and HMAC-signed by this server (``ads/consent.py``)\nwhen the visitor accepts the banner on ``mobaide.com``; the client copies\nits fields here verbatim. The signature proves the server minted the\nvalue, and ``network`` \u2014 a keyed fingerprint of the address the Accept\ncame from \u2014 is what binds the *consent* to this visitor: the hashed-email\nfallback is permitted only when the sign-up arrives from that network,\nwhile a click id (no personal data) is kept either way. Anything that\nfails verification is ignored at sign-up, never rejected, so a planted\nor stale cookie cannot cost anyone the account. ``click_id`` /\n``click_id_kind`` are null on a consent-only visit; native clients never\nsend the object.",
+        "properties": {
+          "click_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_-]{1,200}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Click Id"
+          },
+          "click_id_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "gclid",
+                  "wbraid",
+                  "gbraid"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Click Id Kind"
+          },
+          "clicked_at": {
+            "anyOf": [
+              {
+                "maximum": 4102444800.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clicked At"
+          },
+          "network": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Network"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signature"
+          }
+        },
+        "title": "AdAttribution",
+        "type": "object"
+      },
+      "AdsConsentRequest": {
+        "description": "What the landing page knows when the visitor accepts the banner.",
+        "properties": {
+          "arrived_at": {
+            "anyOf": [
+              {
+                "maximum": 4102444800.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arrived At"
+          },
+          "click_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_-]{1,200}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Click Id"
+          },
+          "click_id_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "gclid",
+                  "wbraid",
+                  "gbraid"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Click Id Kind"
+          }
+        },
+        "title": "AdsConsentRequest",
+        "type": "object"
+      },
+      "AdsWithdrawRequest": {
+        "description": "The ``mobaide_ads`` value the page still holds when Decline is pressed.",
+        "properties": {
+          "value": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "AdsWithdrawRequest",
+        "type": "object"
+      },
       "AgentSummary": {
         "description": "Agent listing response \u2014 no token.",
         "properties": {
@@ -67,6 +204,16 @@
       "AppleAuthRequest": {
         "description": "Sign in with Apple identity-token exchange.\n\n``nonce`` is required (unlike the Google mobile path): the iOS client\nalways embeds its generated nonce verbatim in the identity token, so the\nserver can bind the token to this request and reject replays.",
         "properties": {
+          "ad_attribution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdAttribution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id_token": {
             "minLength": 1,
             "title": "Id Token",
@@ -801,6 +948,16 @@
       },
       "GoogleAuthRequest": {
         "properties": {
+          "ad_attribution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdAttribution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id_token": {
             "title": "Id Token",
             "type": "string"
@@ -862,6 +1019,57 @@
           "signature_b64"
         ],
         "title": "ManifestResponse",
+        "type": "object"
+      },
+      "MeResponse": {
+        "description": "Response for ``GET /api/auth/me`` \u2014 the calling account's profile.\n\n``first_paired_at`` (ISO-8601, UTC) is the never-cleared stamp\n``_complete_pairing`` writes when the account pairs its first agent. The\nmobile apps read it to log their Firebase ``agent_paired`` conversion once\nper account, including when the pairing happened while the app was closed.\nField names mirror ``AuthTokenResponse``; the row's secrets and ad\nattribution columns are deliberately not exposed.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "first_paired_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Paired At"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "scheduled_deletion_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Deletion At"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "email",
+          "role",
+          "created_at"
+        ],
+        "title": "MeResponse",
         "type": "object"
       },
       "MobileRefreshRequest": {
@@ -1555,6 +1763,16 @@
       },
       "UserRegisterRequest": {
         "properties": {
+          "ad_attribution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdAttribution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "email": {
             "title": "Email",
             "type": "string"
@@ -1677,6 +1895,76 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/ads/consent": {
+      "post": {
+        "description": "Issue the signed ``mobaide_ads`` cookie after the visitor accepts the\nlanding page's banner. ``t`` is the arrival time the page reports, capped\nat the server clock so a skewed browser cannot post-date a click.",
+        "operationId": "record_ads_consent_api_ads_consent_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdsConsentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Ads Consent",
+        "tags": [
+          "ads"
+        ]
+      }
+    },
+    "/api/ads/consent/withdraw": {
+      "post": {
+        "description": "Decline after an earlier Accept: drop the stored click attribution from\nevery account created with this cookie, and expire the cookie itself.\n\nOnly a value this server signed identifies anything, and withdrawing can\nonly ever remove data, so an invalid value is logged and otherwise\nanswered exactly like a valid one.",
+        "operationId": "withdraw_ads_consent_api_ads_consent_withdraw_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdsWithdrawRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Ads Consent",
+        "tags": [
+          "ads"
+        ]
+      }
+    },
     "/api/agents": {
       "get": {
         "description": "List agents owned by the authenticated user, with online status.",
@@ -2095,6 +2383,28 @@
           }
         },
         "summary": "Logout All",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "description": "Return the calling account's profile, including ``first_paired_at``.",
+        "operationId": "get_me_api_auth_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Me",
         "tags": [
           "auth"
         ]

@@ -8,11 +8,15 @@ import javax.inject.Singleton
 /**
  * Invalidate the local session when the central server rejects the user's dashboard JWT.
  *
- * Scope: the OkHttpClient wired into
- * [com.mobaide.app.data.network.CentralApi] — the user-scoped
- * central-server REST client. This is the only REST client that carries
- * a dashboard JWT; [AuthInterceptor] (on the agent-scoped client) handles
- * mobile-access tokens, which have their own refresh path.
+ * Scope: the two clients that carry a dashboard JWT — the `@Named("central")`
+ * REST client behind [com.mobaide.app.data.network.CentralApi] and the
+ * `@Named("user")` client behind
+ * [com.mobaide.app.data.network.WebSocketManager.createUserConnection]
+ * (`ws/user-events`). On the socket a real 401 upgrade is also seen by
+ * `WebSocketConnection.onFailure`; both paths land in the idempotent
+ * [SessionManager.invalidateUserSession]. [AuthInterceptor] (on the
+ * agent-scoped client) handles mobile-access tokens, which have their own
+ * refresh path.
  *
  * ## Why an interceptor and not ad-hoc catch in each caller
  *

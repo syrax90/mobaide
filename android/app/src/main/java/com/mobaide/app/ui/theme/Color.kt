@@ -32,19 +32,45 @@ val AnsiColors = arrayOf(
     AnsiBrightBlue, AnsiBrightMagenta, AnsiBrightCyan, AnsiBrightWhite,
 )
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+// "Modern pixel" design-system tokens, mirrored from web/src/styles/theme.css
+// (dark values verbatim from central_server/static/site/site.css). Keep hex
+// values in sync token-for-token with the web client.
 
-// Session state colors
-val StateRunning = Color(0xFF4CAF50)
-val StateStopped = Color(0xFF9E9E9E)
-val StateCrashed = Color(0xFFF44336)
-val StateStarting = Color(0xFFFFC107)
-val StateStopping = Color(0xFFFF9800)
+// Theme-invariant. PxBrand and PxBrand2 are FILL AND BORDER colours only —
+// PxBrand2 on PxDarkSurface is ~2.6:1 and fails WCAG AA as text; accent text
+// is PxDarkAccent / PxLightAccent.
+val PxBrand = Color(0xFF6008AC)
+val PxBrand2 = Color(0xFF6650A4)
+val PxBtnShadow = Color(0xFF2B0450)
+val PxDangerFill = Color(0xFF8C1D18)
+val PxDangerFillShadow = Color(0xFF4A0F0C)
+val PxPlate = Color(0xFFF4F4F4)
+val PxModalShadow = Color(0xFF000000)
 
-// Warning colors
-val WarningYellow = Color(0xFFF9A825)
+val PxDarkBg = Color(0xFF121212)
+val PxDarkBg2 = Color(0xFF171717)
+val PxDarkSurface = Color(0xFF1E1E1E)
+val PxDarkSurface2 = Color(0xFF232323)
+val PxDarkAccent = Color(0xFFD0BCFF)
+val PxDarkText = Color(0xFFE9E5EF)
+val PxDarkTextMuted = Color(0xFFCCC2DC)
+val PxDarkGray = Color(0xFF8B8B8B)
+val PxDarkRule = Color(0xFF625B71)
+val PxDarkDanger = Color(0xFFF2B8B5)
+val PxDarkOk = Color(0xFF23D18B)
+val PxDarkWarning = Color(0xFFE3B341)
+val PxDarkScrim = Color(0xB8000000)
+
+val PxLightBg = Color(0xFFF4F4F4)
+val PxLightBg2 = Color(0xFFFDFCFF)
+val PxLightSurface = Color(0xFFEFECF3)
+val PxLightSurface2 = Color(0xFFDCD7E2)
+val PxLightAccent = Color(0xFF6008AC)
+val PxLightText = Color(0xFF1C1B1F)
+val PxLightTextMuted = Color(0xFF49454F)
+val PxLightGray = Color(0xFF666666)
+val PxLightRule = Color(0xFFA099AB)
+val PxLightDanger = Color(0xFF8C1D18)
+val PxLightOk = Color(0xFF116A2E)
+val PxLightWarning = Color(0xFF8A6100)
+val PxLightScrim = Color(0x80000000)

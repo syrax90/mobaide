@@ -10,18 +10,19 @@ struct ProjectCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(project.name)
-                .font(.body.weight(.medium))
+                .font(.body.weight(.semibold))
+                .foregroundStyle(colors.text)
 
             HStack(spacing: 4) {
                 if !project.path_exists {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.caption2)
-                        .foregroundStyle(colors.error)
+                        .foregroundStyle(colors.danger)
                         .accessibilityLabel("Path does not exist")
                 }
                 Text(project.path)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(colors.textMuted)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -34,7 +35,7 @@ struct ProjectCard: View {
                 }
             }
         }
-        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
 
@@ -43,6 +44,7 @@ struct ProjectCard: View {
     }
 }
 
+/// Web `.project-badge`: a muted status chip.
 private struct ProjectChip: View {
     let text: String
     var systemImage: String?
@@ -54,11 +56,11 @@ private struct ProjectChip: View {
             if let systemImage {
                 Image(systemName: systemImage).font(.caption2)
             }
-            Text(text).font(.caption2)
+            Text(text).chromeText()
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .foregroundStyle(colors.onSurfaceVariant)
-        .background(colors.surfaceVariant, in: Capsule())
+        .foregroundStyle(colors.textMuted)
+        .padding(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6))
+        .background(colors.surface)
+        .pixelRing(colors.rule)
     }
 }

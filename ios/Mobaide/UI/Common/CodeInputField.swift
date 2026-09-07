@@ -114,22 +114,22 @@ private struct CodeCell: View {
 
     @Environment(\.mobaideColors) private var colors
 
+    /// Web `.code-input-box`: a `surface` plate whose ring turns `accent`
+    /// once filled (and on the cell the next digit lands in).
     var body: some View {
         Text(character)
             .font(MobaideTypography.otpDigit)
+            .foregroundStyle(colors.text)
             .frame(maxWidth: .infinity)
             .aspectRatio(0.8, contentMode: .fit)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(borderColor, lineWidth: isActive ? 2 : 1)
-            )
+            .background(colors.surface)
+            .pixelRing(ringColor)
             .opacity(enabled ? 1 : 0.5)
     }
 
-    private var borderColor: Color {
-        if isError { return colors.error }
-        if isActive { return colors.primary }
-        if !character.isEmpty { return colors.outline }
-        return colors.outlineVariant
+    private var ringColor: Color {
+        if isError { return colors.danger }
+        if isActive || !character.isEmpty { return colors.accent }
+        return colors.gray
     }
 }

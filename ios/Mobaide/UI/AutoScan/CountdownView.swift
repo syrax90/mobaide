@@ -7,12 +7,14 @@ struct CountdownView: View {
     let nextScanAt: String?
     var prefix = "Next scan in "
 
+    @Environment(\.mobaideColors) private var colors
+
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             Text(label(now: context.date))
                 .font(.caption)
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
+                .foregroundStyle(colors.textMuted)
         }
     }
 

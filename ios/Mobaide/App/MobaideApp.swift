@@ -1,3 +1,4 @@
+import FirebaseCore
 import GoogleSignIn
 import SwiftUI
 
@@ -8,9 +9,22 @@ struct MobaideApp: App {
     @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        // The config file is untracked; without it (worktrees, CI) analytics
+        // stays inert instead of trapping at launch.
+        if let path = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist"),
+           let options = FirebaseOptions(contentsOfFile: path) {
+            FirebaseApp.configure(options: options)
+        }
+        // Before the first NavigationStack exists: the appearance proxy only
+        // reaches bars created after it is set.
+        PixelNavigationBarAppearance.install()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
+                .modifier(ThemePreferenceModifier(themeStore: container.themeStore))
                 .environment(container.router)
                 .environment(container.authStateModel)
                 .environment(container.deepLinkCoordinator)

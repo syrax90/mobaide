@@ -21,6 +21,7 @@ import {
 import {
   customAgentTypeSchema,
   customTypeDeletedSchema,
+  firstAgentPairedSchema,
   templateDeletedSchema,
   templateSchema,
 } from './dto/userEvents';
@@ -49,6 +50,7 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   TemplateDeletedPayload: templateDeletedSchema,
   CustomAgentTypeDto: customAgentTypeSchema,
   CustomTypeDeletedPayload: customTypeDeletedSchema,
+  FirstAgentPairedPayload: firstAgentPairedSchema,
 };
 
 const dtoFiles = COVERED_FIXTURES.filter((path) => path.startsWith('dto/'));

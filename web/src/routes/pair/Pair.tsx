@@ -9,14 +9,10 @@ import { queryKeys } from '../../lib/queryKeys';
 import { decodePairingFragment, type ParsedPairingPayload } from '../../protocol/pairingPayload';
 import { useSelectedAgentStore } from '../../stores/selectedAgentStore';
 import { checkTrustPin, pinTrustKey } from '../../stores/trustPinStore';
-import {
-  WAIT_FOR_ONLINE_TIMEOUT_SECONDS,
-  claimErrorMessage,
-  expiresInMessage,
-  waitTimeoutMessage,
-} from './pairCopy';
+import { WAIT_FOR_ONLINE_TIMEOUT_SECONDS, claimErrorMessage, expiresInMessage } from './pairCopy';
 import { evaluatePairingInput, type PairState } from './pairMachine';
 import { useWaitForOnline } from './useWaitForOnline';
+import { WaitTimedOutPanel } from './WaitTimedOutPanel';
 
 /**
  * Where a deep-linked payload waits out the trip through sign-in.
@@ -40,9 +36,10 @@ function writeHandoff(payload: string): void {
   try {
     sessionStorage.setItem(HANDOFF_KEY, payload);
   } catch {
-    // Storage denied (private mode, partitioned context). The payload is lost
-    // only if the user is signed out and has to bounce through login; a
-    // signed-in tab reads it back out of this render pass instead.
+    // Storage denied (private mode, partitioned context). `handoffRef` carries
+    // the payload for a signed-in visitor, whose capture and consume are two
+    // effects on one mounted component; it is lost only when the visitor is
+    // signed out and the bounce through `/login` unmounts that component.
   }
 }
 
@@ -82,12 +79,23 @@ export function Pair() {
   // empty dependency list because StrictMode double-invokes mount effects, and
   // the second pass would find the hash already scrubbed and clear the stash.
   const captured = useRef(false);
+  // The stash's in-memory arm. The scrub below takes the fragment away whether
+  // or not the `sessionStorage` write landed, so where storage is denied — a
+  // private window, a partitioned context — the payload would otherwise be
+  // destroyed outright and leave the visitor on an empty paste box with a
+  // single-use nonce they can no longer produce. A ref rather than module
+  // state: capture and consume are two effects on one mounted component, which
+  // is exactly the lifetime this needs, and nothing leaks between instances.
+  const handoffRef = useRef<string | null>(null);
   useEffect(() => {
     if (captured.current) return;
     captured.current = true;
     if (location.hash === '') return;
     const payload = decodePairingFragment(location.hash);
-    if (payload !== null) writeHandoff(payload);
+    if (payload !== null) {
+      handoffRef.current = payload;
+      writeHandoff(payload);
+    }
     // `navigate` with `replace`, never `location.hash = ''`: assigning to
     // `location.hash` *pushes* a history entry, so Back would put the nonce
     // right back in the address bar. `replace` is a `replaceState` and keeps
@@ -106,10 +114,12 @@ export function Pair() {
 
   useEffect(() => {
     if (!authenticated || state.kind !== 'idle') return;
-    const stored = readHandoff();
+    const stored = handoffRef.current ?? readHandoff();
     if (stored === null) return;
-    // Consumed on read: a nonce is single-use, so a failed attempt must not be
-    // silently retried on the next mount with copy that no longer matches.
+    // Consumed on read, both arms: a nonce is single-use, so a failed attempt
+    // must not be silently retried on the next mount with copy that no longer
+    // matches.
+    handoffRef.current = null;
     clearHandoff();
     setState(evaluatePairingInput(stored, nowSeconds(), checkTrustPin));
   }, [authenticated, state.kind]);
@@ -131,6 +141,7 @@ export function Pair() {
         agentId: result.agentId,
         friendlyName: result.agentFriendlyName,
         wsDelivered: result.wsDelivered,
+        attempt: 0,
       });
     },
     onError: (error: unknown) => {
@@ -138,7 +149,10 @@ export function Pair() {
     },
   });
 
-  const wait = useWaitForOnline(state.kind === 'waitingForOnline' ? state.agentId : null);
+  const wait = useWaitForOnline(
+    state.kind === 'waitingForOnline' ? state.agentId : null,
+    state.kind === 'waitingForOnline' ? state.attempt : 0,
+  );
 
   useEffect(() => {
     if (state.kind !== 'waitingForOnline') return;
@@ -155,8 +169,11 @@ export function Pair() {
     }
     if (wait.timedOut) {
       setState({
-        kind: 'error',
-        message: waitTimeoutMessage(state.friendlyName, state.wsDelivered),
+        kind: 'waitTimedOut',
+        agentId: state.agentId,
+        friendlyName: state.friendlyName,
+        wsDelivered: state.wsDelivered,
+        attempt: state.attempt,
       });
     }
   }, [state, wait.online, wait.timedOut]);
@@ -287,6 +304,22 @@ export function Pair() {
             </button>
           </div>
         </div>
+      )}
+
+      {state.kind === 'waitTimedOut' && (
+        <WaitTimedOutPanel
+          friendlyName={state.friendlyName}
+          wsDelivered={state.wsDelivered}
+          onKeepWaiting={() => {
+            setState({
+              kind: 'waitingForOnline',
+              agentId: state.agentId,
+              friendlyName: state.friendlyName,
+              wsDelivered: state.wsDelivered,
+              attempt: state.attempt + 1,
+            });
+          }}
+        />
       )}
 
       {state.kind === 'success' && (

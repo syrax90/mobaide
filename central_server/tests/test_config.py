@@ -224,3 +224,101 @@ def test_ws_allowed_origins_parses_csv(monkeypatch, raw, expected):
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
     monkeypatch.setenv("WS_ALLOWED_ORIGINS", raw)
     assert CentralServerConfig.from_env().ws_allowed_origins == expected
+
+
+_GOOGLE_ADS_VARS = (
+    "GOOGLE_ADS_CUSTOMER_ID",
+    "GOOGLE_ADS_LOGIN_CUSTOMER_ID",
+    "GOOGLE_ADS_OAUTH_CLIENT_ID",
+    "GOOGLE_ADS_OAUTH_CLIENT_SECRET",
+    "GOOGLE_ADS_OAUTH_REFRESH_TOKEN",
+    "GOOGLE_ADS_CONVERSION_ACTION_ID",
+)
+_GOOGLE_ADS_REQUIRED = (
+    "GOOGLE_ADS_CUSTOMER_ID",
+    "GOOGLE_ADS_OAUTH_CLIENT_ID",
+    "GOOGLE_ADS_OAUTH_CLIENT_SECRET",
+    "GOOGLE_ADS_OAUTH_REFRESH_TOKEN",
+    "GOOGLE_ADS_CONVERSION_ACTION_ID",
+)
+
+
+def _set_all_google_ads(monkeypatch, **overrides):
+    values = {
+        "GOOGLE_ADS_CUSTOMER_ID": "123-456-7890",
+        "GOOGLE_ADS_LOGIN_CUSTOMER_ID": "987-654-3210",
+        "GOOGLE_ADS_OAUTH_CLIENT_ID": "id.apps.googleusercontent.com",
+        "GOOGLE_ADS_OAUTH_CLIENT_SECRET": "GOCSPX-x",
+        "GOOGLE_ADS_OAUTH_REFRESH_TOKEN": "1//refresh",
+        "GOOGLE_ADS_CONVERSION_ACTION_ID": "987654321",
+    }
+    values.update(overrides)
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_google_ads_defaults_to_unconfigured(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    for var in _GOOGLE_ADS_VARS:
+        monkeypatch.delenv(var, raising=False)
+    config = CentralServerConfig.from_env()
+    assert not hasattr(config, "google_ads_developer_token")
+    assert not hasattr(config, "google_ads_api_version")
+    assert config.google_ads_customer_id is None
+    assert config.google_ads_login_customer_id is None
+    assert config.google_ads_oauth_client_id is None
+    assert config.google_ads_oauth_client_secret is None
+    assert config.google_ads_oauth_refresh_token is None
+    assert config.google_ads_conversion_action_id is None
+    assert config.google_ads_missing == _GOOGLE_ADS_REQUIRED
+    assert config.google_ads_enabled is False
+
+
+def test_google_ads_env_vars_parse(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    _set_all_google_ads(monkeypatch)
+    config = CentralServerConfig.from_env()
+    assert config.google_ads_customer_id == "1234567890"
+    assert config.google_ads_login_customer_id == "9876543210"
+    assert config.google_ads_conversion_action_id == "987654321"
+    assert config.google_ads_missing == ()
+    assert config.google_ads_enabled is True
+
+
+def test_google_ads_partial_set_reports_missing(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    for var in _GOOGLE_ADS_VARS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("GOOGLE_ADS_DEVELOPER_TOKEN", "dev-token")  # retired, ignored
+    monkeypatch.setenv("GOOGLE_ADS_OAUTH_CLIENT_ID", "id")
+    config = CentralServerConfig.from_env()
+    assert config.google_ads_missing == (
+        "GOOGLE_ADS_CUSTOMER_ID",
+        "GOOGLE_ADS_OAUTH_CLIENT_SECRET",
+        "GOOGLE_ADS_OAUTH_REFRESH_TOKEN",
+        "GOOGLE_ADS_CONVERSION_ACTION_ID",
+    )
+    assert config.google_ads_enabled is False
+
+
+@pytest.mark.parametrize("raw", ["12ab", "customers/123", " ", "1 2"])
+def test_google_ads_customer_id_malformed_counts_as_unset(monkeypatch, raw):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    _set_all_google_ads(monkeypatch, GOOGLE_ADS_CUSTOMER_ID=raw)
+    config = CentralServerConfig.from_env()
+    assert config.google_ads_customer_id is None
+    assert "GOOGLE_ADS_CUSTOMER_ID" in config.google_ads_missing
+    assert config.google_ads_enabled is False
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [(None, 90), ("30", 30), ("90", 90), ("200", 90), ("0", 1), ("abc", 90), ("", 90), ("-5", 90)],
+)
+def test_google_ads_click_window_days_parses_and_clamps(monkeypatch, raw, expected):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    if raw is None:
+        monkeypatch.delenv("GOOGLE_ADS_CLICK_WINDOW_DAYS", raising=False)
+    else:
+        monkeypatch.setenv("GOOGLE_ADS_CLICK_WINDOW_DAYS", raw)
+    assert CentralServerConfig.from_env().google_ads_click_window_days == expected
