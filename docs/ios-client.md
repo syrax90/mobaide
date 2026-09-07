@@ -914,10 +914,11 @@ Known deliberate deviations from Android's bytes (server-verified safe):
 Language-neutral goldens every later iOS issue tests against. **The web client
 is a second consumer since WEB-04** — `web/src/protocol/` reads the same JSON
 off disk under Vitest and `protocol-integrity` runs that suite on every PR — and
-**Android is a third since WEB-06**, though only for `keys/`: `KeyChordFixtureTest`
-loads through `android/app/src/test/kotlin/…/testing/ProtocolFixtures.kt`, which
-walks up from the Gradle working directory to find the repo root. Extending that
-loader to the `dto/` tree is CLA-235. A fixture edit has to satisfy every arm
+**Android is a third since WEB-06** — `keys/` via `KeyChordFixtureTest` and,
+since `GitChangesDtoFixtureTest` (its first `dto/` consumer; a bidirectional
+registry gate like iOS's is still CLA-235), the `dto/` tree too — both loading
+through `android/app/src/test/kotlin/…/testing/ProtocolFixtures.kt`, which
+walks up from the Gradle working directory to find the repo root. A fixture edit has to satisfy every arm
 that reads it:
 
 - `dto/{agent,central}/<TypeName>.json` — one file per DTO type:

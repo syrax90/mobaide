@@ -161,7 +161,9 @@ class AgentEventBus @Inject constructor(
                     json.decodeFromJsonElement(ProjectsChangedPayload.serializer(), payload).projects
                 )
                 "git.changed" -> AgentEvent.GitChanged(
-                    payload["project_name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    projectName = payload["project_name"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    toplevel = payload["toplevel"]?.jsonPrimitive?.contentOrNull,
+                    commonDir = payload["common_dir"]?.jsonPrimitive?.contentOrNull,
                 )
                 "autoscan.status" -> AgentEvent.AutoScanStatus(
                     json.decodeFromJsonElement(AutoScanInstanceDto.serializer(), payload)

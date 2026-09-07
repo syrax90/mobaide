@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -97,6 +98,9 @@ class TerminalViewModel @Inject constructor(
     /** This session's terminal is composed on screen. */
     private var screenVisible = false
     private var appForeground = true
+
+    /** A session-scoped child screen (git Changes / Diff) is composed on top. */
+    private var heldByChild = false
 
     /** When the session stopped being read, or null while it is being read. */
     private var unwatchedSinceMs: Long? = null
@@ -169,6 +173,16 @@ class TerminalViewModel @Inject constructor(
             }
         }
 
+        viewModelScope.launch {
+            foregroundSessionTracker.watchHolds
+                .map { holds -> (holds[sessionId] ?: 0) > 0 }
+                .distinctUntilChanged()
+                .collect { held ->
+                    heldByChild = held
+                    syncWatched()
+                }
+        }
+
         // Single consumer drains the send channel on IO, keeping the UI thread free.
         viewModelScope.launch(Dispatchers.IO) {
             for (frame in sendChannel) {
@@ -236,6 +250,14 @@ class TerminalViewModel @Inject constructor(
             sessionHeaderLabel(session, types.associate { "custom_${it.id}" to it.name })
         }
             .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+    /** The directory the session was spawned in; gates the git overflow entry.
+     *  Null until [sessionRow] resolves, or for a session an older agent
+     *  reported without one. */
+    val sessionCwd: StateFlow<String?> =
+        sessionRow
+            .map { it.cwd }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -920,9 +942,17 @@ class TerminalViewModel @Inject constructor(
      * is composed. The two halves are tracked separately because neither
      * implies the other: backgrounding leaves the composable in place, and
      * navigating forward disposes it without backgrounding the app.
+     *
+     * A session-scoped child screen counts as composed: it disposes this
+     * terminal exactly like leaving would, but the user is still inside the
+     * session and comes straight back, so charging that visit with a socket
+     * close and a full ring replay would be the worst trade the governor can
+     * make. The child holds the watch only while it is itself composed (see
+     * [ForegroundSessionTracker.watchHolds]), so the flag cannot outlive it.
+     * Backgrounding still counts — the foreground term is unchanged.
      */
     private fun syncWatched() {
-        if (screenVisible && appForeground) {
+        if ((screenVisible || heldByChild) && appForeground) {
             unwatchedSinceMs = null
             unwatchedBytes = 0
             resumeStream()

@@ -53,6 +53,7 @@ class TerminalViewModelSuspendTest {
 
     private val owner = FakeLifecycleOwner()
     private val appForegroundTracker = AppForegroundTracker()
+    private val foregroundSessionTracker = ForegroundSessionTracker()
 
     private val eventsFlow: MutableSharedFlow<WsEvent> =
         MutableSharedFlow(replay = 1, extraBufferCapacity = 100)
@@ -104,7 +105,7 @@ class TerminalViewModelSuspendTest {
             },
             templatesRepository = mockk(relaxed = true),
             shortcutsRepository = mockk(),
-            foregroundSessionTracker = ForegroundSessionTracker(),
+            foregroundSessionTracker = foregroundSessionTracker,
             appForegroundTracker = appForegroundTracker,
             preferencesStore = preferencesStore,
         )
@@ -210,6 +211,80 @@ class TerminalViewModelSuspendTest {
 
         verify { connection.pause() }
         assertEquals(ConnectionState.Suspended, vm.connectionState.value)
+    }
+
+    @Test
+    fun aChildScreensHold_keepsAHiddenSessionWatched() = runTest(testDispatcher) {
+        // The git Changes screen disposes the terminal exactly like leaving
+        // would, but the user is still inside the session and comes straight
+        // back; its hold must stop the governor from charging that visit.
+        val vm = newViewModel()
+        runCurrent()
+        foregroundSessionTracker.holdWatch("test-session")
+        runCurrent()
+        vm.markScreenHidden()
+
+        eventsFlow.tryEmit(WsEvent.Binary(outputFrame("spending".toByteArray())))
+        runCurrent()
+
+        verify(exactly = 0) { connection.pause() }
+        assertEquals(ConnectionState.Live, vm.connectionState.value)
+    }
+
+    @Test
+    fun releasingTheHold_letsTheNextSpendSuspend() = runTest(testDispatcher) {
+        val vm = newViewModel()
+        runCurrent()
+        foregroundSessionTracker.holdWatch("test-session")
+        runCurrent()
+        vm.markScreenHidden()
+        eventsFlow.tryEmit(WsEvent.Binary(outputFrame("spending".toByteArray())))
+        runCurrent()
+        verify(exactly = 0) { connection.pause() }
+
+        foregroundSessionTracker.releaseWatch("test-session")
+        runCurrent()
+        eventsFlow.tryEmit(WsEvent.Binary(outputFrame("spending".toByteArray())))
+        runCurrent()
+
+        verify { connection.pause() }
+        assertEquals(ConnectionState.Suspended, vm.connectionState.value)
+    }
+
+    @Test
+    fun aHeldSession_stillSuspendsWhenTheAppBackgrounds() = runTest(testDispatcher) {
+        // The hold stands in for "composed", not for "on screen": the
+        // foreground term of the watch gate is unchanged.
+        val vm = newViewModel()
+        runCurrent()
+        foregroundSessionTracker.holdWatch("test-session")
+        runCurrent()
+        vm.markScreenHidden()
+        background()
+        runCurrent()
+
+        eventsFlow.tryEmit(WsEvent.Binary(outputFrame("spending".toByteArray())))
+        runCurrent()
+
+        verify { connection.pause() }
+        assertEquals(ConnectionState.Suspended, vm.connectionState.value)
+    }
+
+    @Test
+    fun aLateHold_reopensASuspendedSocket() = runTest(testDispatcher) {
+        val vm = newViewModel()
+        runCurrent()
+        vm.markScreenHidden()
+        eventsFlow.tryEmit(WsEvent.Binary(outputFrame("spending".toByteArray())))
+        runCurrent()
+        assertEquals(ConnectionState.Suspended, vm.connectionState.value)
+
+        foregroundSessionTracker.holdWatch("test-session")
+        runCurrent()
+
+        // Once from `init`, once from the hold.
+        verify(exactly = 2) { connection.connect() }
+        assertEquals(ConnectionState.Reconnecting, vm.connectionState.value)
     }
 
     @Test

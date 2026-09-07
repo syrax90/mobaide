@@ -11,7 +11,9 @@ import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ForceUpdateResponse
 import com.mobaide.app.data.network.dto.GitDeleteRequest
 import com.mobaide.app.data.network.dto.GitDeleteResponse
+import com.mobaide.app.data.network.dto.GitDiffResponse
 import com.mobaide.app.data.network.dto.GitItemsResponse
+import com.mobaide.app.data.network.dto.GitStatusResponse
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.ProjectOrderRequest
 import com.mobaide.app.data.network.dto.ProjectUpdate
@@ -29,6 +31,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -223,6 +227,39 @@ class RestApi(
             .build()
         return execute(request)
     }
+
+    suspend fun getSessionGitStatus(sessionId: String, etag: String?): GitStatusResponse {
+        val url = sessionGitUrl(sessionId, "status")
+            .apply { if (etag != null) addQueryParameter("etag", etag) }
+            .build()
+        return execute(Request.Builder().url(url).get().build())
+    }
+
+    suspend fun getSessionGitDiff(
+        sessionId: String,
+        path: String,
+        scope: String,
+        context: Int,
+        origPath: String?,
+    ): GitDiffResponse {
+        val url = sessionGitUrl(sessionId, "diff")
+            .addQueryParameter("path", path)
+            .addQueryParameter("scope", scope)
+            .addQueryParameter("context", context.toString())
+            .apply { if (origPath != null) addQueryParameter("orig_path", origPath) }
+            .build()
+        return execute(Request.Builder().url(url).get().build())
+    }
+
+    // HttpUrl.Builder rather than string concatenation: repo-relative paths carry
+    // spaces, `#`, `%` and non-ASCII, and addQueryParameter encodes them all.
+    private fun sessionGitUrl(sessionId: String, leaf: String): HttpUrl.Builder =
+        baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("sessions")
+            .addPathSegment(sessionId)
+            .addPathSegment("git")
+            .addPathSegment(leaf)
 
     suspend fun getAutoScanList(): AutoScanListResponse {
         val request = Request.Builder()
