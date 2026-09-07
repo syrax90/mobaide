@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -197,11 +197,11 @@ private fun ChangesList(
             stickyHeader(key = "section:${section.group}", contentType = "section") {
                 SectionHeader(section)
             }
-            items(
+            itemsIndexed(
                 items = section.entries,
-                key = { "${section.group}:${it.path}" },
-                contentType = { "entry" },
-            ) { entry ->
+                key = { index, _ -> section.keys[index] },
+                contentType = { _, _ -> "entry" },
+            ) { _, entry ->
                 GitChangesRow(entry = entry, onClick = { onEntryClick(entry) })
             }
         }

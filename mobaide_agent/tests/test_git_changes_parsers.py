@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import pytest
 
-from mobaide.agent.git.changes_models import LINE_LIMIT
+from mobaide.agent.git.changes_models import GitStatusEntry, LINE_LIMIT, GitStatusCounts
 from mobaide.agent.git.changes_service import (
+    _RawEntry,
     GitBadRequestError,
     GitCommandError,
     GitTimeoutError,
@@ -122,6 +123,63 @@ class TestParsePorcelainV2:
 
         assert [e.path for e in parsed.entries] == ["ok.txt"]
 
+    def test_limit_keeps_the_smallest_by_group_rank_then_path_and_counts_all(self):
+        hashes = "100644 100644 100644 100644 " + " ".join(c * 40 for c in "abc")
+        parsed = parse_porcelain_v2(_z(
+            "? z.txt",
+            f"1 .M N... {_HASHES} m.txt",
+            f"1 A. N... {_HASHES} b.txt",
+            f"u UU N... {hashes} c.txt",
+            f"1 A. N... {_HASHES} a.txt",
+        ), limit=2)
+
+        assert [(e.group, e.path) for e in parsed.entries] == [
+            ("conflicts", "c.txt"), ("staged", "a.txt"),
+        ]
+        assert parsed.counts == GitStatusCounts(
+            conflicts=1, staged=2, unstaged=1, untracked=1, total=5,
+        )
+
+    def test_without_limit_entries_keep_parse_order_and_counts_are_filled(self):
+        parsed = parse_porcelain_v2(_z(
+            "? z.txt", f"1 MM N... {_HASHES} m.txt", f"1 A. N... {_HASHES} a.txt",
+        ))
+
+        assert [(e.group, e.path) for e in parsed.entries] == [
+            ("untracked", "z.txt"), ("staged", "m.txt"),
+            ("unstaged", "m.txt"), ("staged", "a.txt"),
+        ]
+        assert parsed.counts == GitStatusCounts(
+            conflicts=0, staged=2, unstaged=1, untracked=1, total=4,
+        )
+
+    def test_raw_entry_mirrors_every_model_field(self):
+        assert set(_RawEntry._fields) == set(GitStatusEntry.model_fields)
+
+    def test_limit_above_the_entry_count_returns_everything_sorted(self):
+        parsed = parse_porcelain_v2(_z(
+            "? z.txt", f"1 .M N... {_HASHES} m.txt", f"1 A. N... {_HASHES} a.txt",
+        ), limit=10)
+
+        assert [(e.group, e.path) for e in parsed.entries] == [
+            ("staged", "a.txt"), ("unstaged", "m.txt"), ("untracked", "z.txt"),
+        ]
+        assert parsed.counts.total == 3
+
+    def test_limit_keeps_parse_order_between_equal_keys(self):
+        # Two filenames with different invalid bytes decode to the same path,
+        # so one (group, path) key can repeat; the selection must be stable.
+        hashes = _HASHES.encode("utf-8")
+        parsed = parse_porcelain_v2(
+            b"1 M. N... " + hashes + b" new\xff.txt\0"
+            + b"1 A. N... " + hashes + b" new\xfe.txt\0"
+            + _z("? z.txt"),
+            limit=2,
+        )
+
+        assert [(e.group, e.path, e.code) for e in parsed.entries] == [
+            ("staged", "new�.txt", "M"), ("staged", "new�.txt", "A"),
+        ]
 
 class TestParseUnifiedDiff:
     def test_numbers_lines_and_reads_modes(self):

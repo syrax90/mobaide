@@ -10,14 +10,17 @@ byte-identically.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import heapq
 import os
 import posixpath
 import re
 import stat as statmod
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NamedTuple
 
 from mobaide.core.git_exec import (
     MIN_GIT_VERSION,
@@ -282,6 +285,25 @@ class ParsedStatus:
     ahead: int | None = None
     behind: int | None = None
     entries: list[GitStatusEntry] = field(default_factory=list)
+    counts: GitStatusCounts = field(default_factory=GitStatusCounts)
+
+
+class _RawEntry(NamedTuple):
+    group: str
+    path: str
+    code: str
+    index_status: str
+    worktree_status: str
+    orig_path: str | None = None
+    rename_score: int | None = None
+    submodule: bool = False
+
+    def to_entry(self) -> GitStatusEntry:
+        return GitStatusEntry(**self._asdict())
+
+
+def _entry_rank(entry: _RawEntry) -> tuple[int, str]:
+    return _GROUP_RANK[entry.group], entry.path
 
 
 def _ordinary_entries(
@@ -290,16 +312,16 @@ def _ordinary_entries(
     path: str,
     orig: str | None,
     score: int | None,
-) -> list[GitStatusEntry]:
+) -> list[_RawEntry]:
     if len(xy) < 2:
         return []
     x, y = xy[0], xy[1]
     submodule = sub.startswith("S")
-    out: list[GitStatusEntry] = []
+    out: list[_RawEntry] = []
     if x != ".":
         renamed = x in "RC"
         out.append(
-            GitStatusEntry(
+            _RawEntry(
                 group="staged",
                 path=path,
                 orig_path=orig if renamed else None,
@@ -313,7 +335,7 @@ def _ordinary_entries(
     if y != ".":
         renamed = y in "RC"
         out.append(
-            GitStatusEntry(
+            _RawEntry(
                 group="unstaged",
                 path=path,
                 orig_path=orig if renamed else None,
@@ -334,25 +356,48 @@ def _parse_ab(value: str) -> tuple[int | None, int | None]:
     return int(match.group(1)), int(match.group(2))
 
 
-def parse_porcelain_v2(data: bytes, *, truncated: bool = False) -> ParsedStatus:
+def parse_porcelain_v2(
+    data: bytes, *, truncated: bool = False, limit: int | None = None
+) -> ParsedStatus:
     """Parse ``git status --porcelain=v2 --branch -z`` output.
 
     Records are NUL-terminated; only ``2`` (rename/copy) records span two
     NUL fields (``<path>NUL<origPath>``), which is why this walks tokens
     with an index instead of mapping over ``split``. A truncated stream
     drops its partial tail — including a ``2`` record whose origin token
-    was cut off.
+    was cut off. ``counts`` cover every entry; ``limit`` keeps only the
+    smallest (group rank, path) entries through a bounded heap, because a
+    ``_STATUS_MAX_BYTES`` status can hold hundreds of thousands of untracked
+    paths and only ``ENTRY_LIMIT`` are ever sent.
     """
+    parsed = ParsedStatus()
+    tally = {group: 0 for group in _GROUP_RANK}
+    raw_entries = _walk_porcelain_v2(data, truncated, parsed, tally)
+    if limit is None:
+        parsed.entries = [entry.to_entry() for entry in raw_entries]
+    else:
+        selected = heapq.nsmallest(limit, raw_entries, key=_entry_rank)
+        # nsmallest(0, …) pulls nothing; the header and tally live on the walk
+        for _ in raw_entries:
+            pass
+        parsed.entries = [entry.to_entry() for entry in selected]
+    parsed.counts = GitStatusCounts(**tally, total=sum(tally.values()))
+    return parsed
+
+
+def _walk_porcelain_v2(
+    data: bytes, truncated: bool, parsed: ParsedStatus, tally: dict[str, int]
+) -> Iterator[_RawEntry]:
     tokens = data.split(b"\0")
     if tokens and tokens[-1] == b"":
         tokens.pop()
     elif truncated and tokens:
         tokens.pop()
-    parsed = ParsedStatus()
     i = 0
     while i < len(tokens):
         line = _text(tokens[i])
         i += 1
+        raw_entries: list[_RawEntry]
         if line.startswith("# "):
             key, _, value = line[2:].partition(" ")
             if key == "branch.oid":
@@ -369,13 +414,12 @@ def parse_porcelain_v2(data: bytes, *, truncated: bool = False) -> ParsedStatus:
                 parsed.upstream = value
             elif key == "branch.ab":
                 parsed.ahead, parsed.behind = _parse_ab(value)
+            continue
         elif line.startswith("1 "):
             parts = line.split(" ", 8)
             if len(parts) < 9:
                 continue
-            parsed.entries.extend(
-                _ordinary_entries(parts[1], parts[2], parts[8], None, None)
-            )
+            raw_entries = _ordinary_entries(parts[1], parts[2], parts[8], None, None)
         elif line.startswith("2 "):
             parts = line.split(" ", 9)
             if len(parts) < 10:
@@ -387,16 +431,14 @@ def parse_porcelain_v2(data: bytes, *, truncated: bool = False) -> ParsedStatus:
             score_field = parts[8]
             digits = score_field[1:]
             score = int(digits) if digits.isdigit() else None
-            parsed.entries.extend(
-                _ordinary_entries(parts[1], parts[2], parts[9], orig, score)
-            )
+            raw_entries = _ordinary_entries(parts[1], parts[2], parts[9], orig, score)
         elif line.startswith("u "):
             parts = line.split(" ", 10)
             if len(parts) < 11 or len(parts[1]) < 2:
                 continue
             xy = parts[1]
-            parsed.entries.append(
-                GitStatusEntry(
+            raw_entries = [
+                _RawEntry(
                     group="conflicts",
                     path=parts[10],
                     code=xy,
@@ -404,18 +446,22 @@ def parse_porcelain_v2(data: bytes, *, truncated: bool = False) -> ParsedStatus:
                     worktree_status=xy[1],
                     submodule=parts[2].startswith("S"),
                 )
-            )
+            ]
         elif line.startswith("? "):
-            parsed.entries.append(
-                GitStatusEntry(
+            raw_entries = [
+                _RawEntry(
                     group="untracked",
                     path=line[2:],
                     code="?",
                     index_status="?",
                     worktree_status="?",
                 )
-            )
-    return parsed
+            ]
+        else:
+            continue
+        for entry in raw_entries:
+            tally[entry.group] += 1
+            yield entry
 
 
 def _etag(*parts: bytes | str) -> str:
@@ -472,16 +518,8 @@ async def get_session_git_status(
     if etag and etag == tag:
         return _unchanged(session_id, cwd, tag)
 
-    parsed = parse_porcelain_v2(result.stdout, truncated=result.truncated)
-    entries = sorted(
-        parsed.entries, key=lambda e: (_GROUP_RANK[e.group], e.path)
-    )
-    counts = GitStatusCounts(
-        conflicts=sum(1 for e in entries if e.group == "conflicts"),
-        staged=sum(1 for e in entries if e.group == "staged"),
-        unstaged=sum(1 for e in entries if e.group == "unstaged"),
-        untracked=sum(1 for e in entries if e.group == "untracked"),
-        total=len(entries),
+    parsed = await asyncio.to_thread(
+        parse_porcelain_v2, result.stdout, truncated=result.truncated, limit=ENTRY_LIMIT
     )
     head = GitHead(
         oid=parsed.oid,
@@ -508,9 +546,9 @@ async def get_session_git_status(
             upstream=upstream,
             state=state,
         ),
-        entries=entries[:ENTRY_LIMIT],
-        counts=counts,
-        truncated=result.truncated or len(entries) > ENTRY_LIMIT,
+        entries=parsed.entries,
+        counts=parsed.counts,
+        truncated=result.truncated or parsed.counts.total > ENTRY_LIMIT,
     )
 
 

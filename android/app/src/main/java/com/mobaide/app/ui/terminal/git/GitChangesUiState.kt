@@ -31,7 +31,15 @@ data class GitChangesSection(
     val group: String,
     val title: String,
     val entries: List<GitStatusEntry>,
-)
+) {
+    /**
+     * `LazyColumn` keys, unique even when the agent's lossy decoding of two
+     * POSIX filenames with different invalid bytes yields the same
+     * [GitStatusEntry.path]: `group:occurrence:path`, with the occurrence
+     * ahead of the path so no filename can forge another entry's key.
+     */
+    val keys: List<String> = uniqueKeys(group, entries)
+}
 
 sealed interface GitChangesEvent {
     data class OpenDiff(
@@ -62,6 +70,15 @@ internal fun sectionsFor(status: GitStatusResponse): List<GitChangesSection> {
         .sorted()
         .map { group -> GitChangesSection(group, group.replace('_', ' '), byGroup.getValue(group)) }
     return known + other
+}
+
+private fun uniqueKeys(group: String, entries: List<GitStatusEntry>): List<String> {
+    val seen = mutableMapOf<String, Int>()
+    return entries.map { entry ->
+        val occurrence = (seen[entry.path] ?: 0) + 1
+        seen[entry.path] = occurrence
+        "$group:$occurrence:${entry.path}"
+    }
 }
 
 /** Conflicted files are diffed against HEAD, which the agent serves as `unstaged`. */

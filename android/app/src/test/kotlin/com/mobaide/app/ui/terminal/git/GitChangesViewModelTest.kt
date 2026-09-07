@@ -213,6 +213,24 @@ class GitChangesViewModelTest {
     }
 
     @Test
+    fun sectionKeys_prefixTheGroup_andNumberRepeatedPaths() {
+        // The agent's lossy filename decoding can hand two entries the same
+        // path; LazyColumn needs a distinct key for each row.
+        val twin = entry(GitStatusEntry.GROUP_UNTRACKED, "notes/�.md", "?")
+        val stagedBoth = entry(GitStatusEntry.GROUP_STAGED, unstaged.path, "M")
+
+        val sections = sectionsFor(status(entries = listOf(twin, unstaged, twin, stagedBoth)))
+
+        assertEquals(listOf("Staged", "Changes", "Untracked"), sections.map { it.title })
+        assertEquals(listOf("staged:1:src/both.py"), sections[0].keys)
+        assertEquals(listOf("unstaged:1:src/both.py"), sections[1].keys)
+        assertEquals(
+            listOf("untracked:1:notes/�.md", "untracked:2:notes/�.md"),
+            sections[2].keys,
+        )
+    }
+
+    @Test
     fun anUnavailableReason_becomesUnavailable_withTheCwd() = runTest {
         val f = newFixture()
         subscribe(f.vm)

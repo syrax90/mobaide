@@ -1,8 +1,10 @@
 package com.mobaide.app.ui.terminal.git
 
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -148,6 +150,16 @@ class GitChangesScreenTest {
 
         assertEquals(1, clicked.size)
         assertSame(rename, clicked.single())
+    }
+
+    @Test
+    fun twoRowsSharingAPath_bothRender() {
+        // The agent's lossy filename decoding can hand two entries the same
+        // path; LazyColumn needs a distinct key for each row.
+        val twin = untracked.copy(path = "notes/�.md")
+        setContent(ready(status(entries = listOf(twin, twin))))
+
+        composeRule.onAllNodesWithTag(gitChangesRowTag(twin)).assertCountEquals(2)
     }
 
     @Test
