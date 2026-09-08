@@ -888,13 +888,27 @@ final class TerminalSessionModel {
         }
     }
 
+    /// The "covered by a session-scoped child screen" half of the watch gate
+    /// moved (`ForegroundSessionTracker.holdWatch` / `releaseWatch`).
+    func syncWatchHold() {
+        syncWatched()
+    }
+
     /// A session is watched only while the app is active *and* this terminal is
     /// on screen. The halves are tracked separately because neither implies the
     /// other: backgrounding leaves the view in place, and leaving the screen
     /// does not background the app.
+    ///
+    /// A session-scoped child screen counts as on screen: it hides this
+    /// terminal exactly like leaving would, but the user is still inside the
+    /// session and comes straight back, so charging that visit with a socket
+    /// close and a full ring replay would be the worst trade the governor can
+    /// make. The child holds the watch only while it is itself shown (see
+    /// `ForegroundSessionTracker.holdWatch`), so the hold cannot outlive it.
+    /// Backgrounding still counts — the app-active term is unchanged.
     private func syncWatched() {
         guard !isTornDown else { return }
-        if screenVisible && appActive {
+        if (screenVisible || foregroundSessionTracker.isHeld(sessionId)) && appActive {
             unwatchedSince = nil
             unwatchedBytes = 0
             resumeStream()

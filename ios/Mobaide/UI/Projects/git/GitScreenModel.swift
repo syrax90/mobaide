@@ -99,7 +99,7 @@ final class GitScreenModel {
     /// Re-fetch when the agent reports this project's git tree changed.
     func observeGitChanged() async {
         for await event in agentEventBus.events() {
-            if case .gitChanged(let name) = event, name == projectName {
+            if case .gitChanged(let name, _, _) = event, name == projectName {
                 await load()
             }
         }

@@ -9,7 +9,9 @@ enum AgentEvent: Equatable, Sendable {
     /// `SessionResponse.attention`.
     case sessionAttention(SessionResponse)
     case projectsChanged([ProjectInfo])
-    case gitChanged(projectName: String)
+    /// `toplevel` / `common_dir` (proto-v7 additive keys) let a session match
+    /// a push by repository even when it has no `project_name`.
+    case gitChanged(projectName: String, toplevel: String? = nil, commonDir: String? = nil)
     case autoScanStatus(AutoScanInstanceDto)
     case autoScanListChanged(AutoScanListResponse)
     case autoScanEvent(projectName: String, seq: Int64, ts: String, payload: ScanProgressPayload)
@@ -79,7 +81,11 @@ enum AgentEnvelopeDemux {
             return decode(ProjectsChangedPayload.self, from: envelope).map { .projectsChanged($0.projects) }
         case "git.changed":
             guard let payload = envelope.payloadObject else { return nil }
-            return .gitChanged(projectName: payload["project_name"] as? String ?? "")
+            return .gitChanged(
+                projectName: payload["project_name"] as? String ?? "",
+                toplevel: payload["toplevel"] as? String,
+                commonDir: payload["common_dir"] as? String
+            )
         case "autoscan.status":
             return decode(AutoScanInstanceDto.self, from: envelope).map { .autoScanStatus($0) }
         case "autoscan.list.changed":

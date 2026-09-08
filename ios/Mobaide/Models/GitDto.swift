@@ -231,3 +231,68 @@ struct GitDiffResponse: Codable, Equatable, Sendable {
     let line_limit: Int
     let byte_limit: Int
 }
+
+// Wire enums stay `String` so a future agent value never fails the decode;
+// the constants are the values the screens branch on (Android `GitDto.kt`).
+
+extension GitRepoInfo {
+    static let stateClean = "clean"
+    static let stateMerging = "merging"
+    static let stateRebasing = "rebasing"
+    static let stateCherryPicking = "cherry_picking"
+    static let stateReverting = "reverting"
+    static let stateBisecting = "bisecting"
+}
+
+extension GitStatusEntry {
+    static let groupConflicts = "conflicts"
+    static let groupStaged = "staged"
+    static let groupUnstaged = "unstaged"
+    static let groupUntracked = "untracked"
+
+    /// The last path segment; the whole path when it has no `/`.
+    var fileName: String {
+        guard let slash = path.lastIndex(of: "/") else { return path }
+        return String(path[path.index(after: slash)...])
+    }
+
+    /// Everything before the last `/`, or nil for a top-level file.
+    var directory: String? {
+        guard let slash = path.lastIndex(of: "/") else { return nil }
+        let head = String(path[..<slash])
+        return head.isEmpty ? nil : head
+    }
+}
+
+extension GitStatusResponse {
+    static let unavailableNotARepo = "not_a_repo"
+    static let unavailableBareRepository = "bare_repository"
+    static let unavailableCwdMissing = "cwd_missing"
+    static let unavailableUnsafeDirectory = "unsafe_directory"
+    static let unavailableGitTooOld = "git_too_old"
+}
+
+extension GitDiffLine {
+    static let typeContext = "ctx"
+    static let typeAdd = "add"
+    static let typeDelete = "del"
+}
+
+extension GitDiffResponse {
+    static let scopeStaged = "staged"
+    static let scopeUnstaged = "unstaged"
+    static let scopeUntracked = "untracked"
+
+    static let kindText = "text"
+    static let kindBinary = "binary"
+    static let kindSubmodule = "submodule"
+    static let kindTooLarge = "too_large"
+    static let kindMissing = "missing"
+
+    static let changeModified = "modified"
+    static let changeAdded = "added"
+    static let changeDeleted = "deleted"
+    static let changeRenamed = "renamed"
+    static let changeCopied = "copied"
+    static let changeTypeChanged = "type_changed"
+}

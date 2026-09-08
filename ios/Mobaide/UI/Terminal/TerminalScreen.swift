@@ -146,9 +146,30 @@ private struct TerminalScreenContent: View {
         .navigationTitle(headerLabel)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 PixelStatusSquare(tone: SessionDisplay.stateTone(model.sessionStatus ?? ""), size: 10)
                     .accessibilityLabel(model.sessionStatus ?? "unknown")
+                // Session-scoped git needs a directory to run in, and the row
+                // is nil until it loads (cold-start deep link), so the menu
+                // appears once the cwd is known. Fixed order: a top-bar `Menu`
+                // otherwise renders its sections bottom-up, and the later git
+                // actions (commit, fetch / pull / push, branches, rebase) are
+                // reserved slots under the same heading in that order.
+                if sessionRow?.cwd != nil {
+                    Menu {
+                        Section("Git") {
+                            Button {
+                                router.navigate(to: .sessionGitChanges(sessionId: sessionId))
+                            } label: {
+                                Label("Changes…", systemImage: "arrow.triangle.branch")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuOrder(.fixed)
+                    .accessibilityLabel("More options")
+                }
             }
         }
         .sheet(isPresented: $showTemplates) {

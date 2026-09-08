@@ -97,6 +97,20 @@ final class TerminalSessionStore {
         models.removeValue(forKey: id)?.disconnect()
     }
 
+    /// A session-scoped child screen (git Changes / Diff) keeps the covered
+    /// terminal watched for as long as it is on screen; see
+    /// `ForegroundSessionTracker.holdWatch`. Routed through the store because
+    /// the tracker has no observation channel and the model is main-actor.
+    func holdWatch(sessionId: String) {
+        foregroundSessionTracker.holdWatch(sessionId)
+        models[sessionId]?.syncWatchHold()
+    }
+
+    func releaseWatch(sessionId: String) {
+        foregroundSessionTracker.releaseWatch(sessionId)
+        models[sessionId]?.syncWatchHold()
+    }
+
     /// Publish the app's foreground state to every retained model.
     ///
     /// The models are app-scoped and outlive their views, so without this a

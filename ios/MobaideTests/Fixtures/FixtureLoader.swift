@@ -19,6 +19,7 @@ struct DTOFixtureCase: Decodable, Sendable {
 enum FixtureLoaderError: Error, CustomStringConvertible {
     case rootNotFound
     case fileNotFound(String)
+    case caseNotFound(String)
 
     var description: String {
         switch self {
@@ -26,6 +27,8 @@ enum FixtureLoaderError: Error, CustomStringConvertible {
             return "protocol_fixtures folder missing from test bundle — check the folder reference in project.pbxproj"
         case .fileNotFound(let path):
             return "fixture not found: \(path)"
+        case .caseNotFound(let name):
+            return "fixture case not found: \(name)"
         }
     }
 }
@@ -62,6 +65,21 @@ enum FixtureLoader {
             throw FixtureLoaderError.fileNotFound(path)
         }
         return try load(type, at: url)
+    }
+
+    /// The `wire` JSON of one named case of a DTO fixture file, re-serialised —
+    /// what a stubbed agent answers in a model test.
+    static func wireData(path: String, case name: String) throws -> Data {
+        let file = try load(DTOFixtureFile.self, path: path)
+        guard let fixtureCase = file.cases.first(where: { $0.name == name }) else {
+            throw FixtureLoaderError.caseNotFound("\(path)#\(name)")
+        }
+        return try WireJSON.encoder().encode(fixtureCase.wire)
+    }
+
+    /// One named case of a DTO fixture file decoded as the DTO it pins.
+    static func decodeCase<T: Decodable>(_ type: T.Type, path: String, name: String) throws -> T {
+        try WireJSON.decoder().decode(T.self, from: try wireData(path: path, case: name))
     }
 }
 

@@ -57,6 +57,7 @@ enum TerminalTestSupport {
         harness: SessionHarness = SessionHarness(userLoggedIn: true, agentConnected: true),
         preferencesStore: PreferencesStore? = nil,
         shortcutsRepository: ShortcutsRepository? = nil,
+        foregroundSessionTracker: ForegroundSessionTracker = ForegroundSessionTracker(),
         kindResolver: ((String) async -> SessionKind?)? = nil
     ) -> TerminalSessionModel {
         TerminalSessionModel(
@@ -72,7 +73,7 @@ enum TerminalTestSupport {
             tokenStore: harness.tokenStore,
             centralAPI: CentralAPI(centralServerURL: "https://central.test", sessionInvalidator: StubSessionInvalidator()),
             userTokenProvider: StubUserTokenProvider(),
-            foregroundSessionTracker: ForegroundSessionTracker(),
+            foregroundSessionTracker: foregroundSessionTracker,
             preferencesStore: preferencesStore ?? isolatedPreferencesStore(),
             shortcutsRepository: shortcutsRepository ?? Self.shortcutsRepository(harness: harness),
             kindResolver: kindResolver ?? { _ in nil }

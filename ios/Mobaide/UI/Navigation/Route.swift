@@ -21,6 +21,10 @@ enum Route: Hashable, Sendable {
     case connections
     case projects
     case gitManagement(projectName: String)
+    /// The terminal's `⋯ → Git → Changes…` child screens, scoped to a session
+    /// (Android `SESSION_GIT_CHANGES` / `SESSION_GIT_DIFF`).
+    case sessionGitChanges(sessionId: String)
+    case sessionGitDiff(sessionId: String, path: String, scope: String, origPath: String?)
     case incompatibleServer
     case templates
     case devices

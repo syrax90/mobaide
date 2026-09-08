@@ -94,6 +94,10 @@ struct RootView: View {
             ProjectsScreen()
         case .gitManagement(let projectName):
             GitScreen(projectName: projectName)
+        case .sessionGitChanges(let sessionId):
+            GitChangesScreen(sessionId: sessionId)
+        case .sessionGitDiff(let sessionId, let path, let scope, let origPath):
+            GitDiffScreen(sessionId: sessionId, path: path, scope: scope, origPath: origPath)
         case .incompatibleServer:
             // Rendered outside the stack via the takeover above; the route
             // only exists for Android route-table parity.

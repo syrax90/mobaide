@@ -38,4 +38,24 @@ final class MiscAuthTests: XCTestCase {
         tracker.clearVisible("s1")
         XCTAssertNil(tracker.visibleSessionId)
     }
+
+    func testForegroundSessionTrackerWatchHoldsAreRefCountedAndClampAtZero() {
+        let tracker = ForegroundSessionTracker()
+        XCTAssertFalse(tracker.isHeld("s1"))
+
+        tracker.holdWatch("s1")
+        tracker.holdWatch("s1")
+        tracker.releaseWatch("s1")
+        XCTAssertTrue(tracker.isHeld("s1"), "a Diff pushed over Changes leaves one hold standing")
+
+        tracker.releaseWatch("s1")
+        XCTAssertFalse(tracker.isHeld("s1"))
+        XCTAssertFalse(tracker.isHeld("s2"), "holds are per session")
+
+        tracker.releaseWatch("s1")
+        tracker.holdWatch("s1")
+        XCTAssertTrue(tracker.isHeld("s1"), "a stray release must not go negative and swallow the next hold")
+
+        XCTAssertNil(tracker.visibleSessionId, "holding never transfers visibility")
+    }
 }

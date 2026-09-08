@@ -19,10 +19,11 @@ final class TerminalSessionSuspendTests: XCTestCase {
     /// A watched, connected model: app active and this terminal on screen, the
     /// only state in which the governor is disarmed.
     private func watchedModel(
-        policy: @escaping (TimeInterval, Int) -> Bool = { _, bytes in bytes >= 4 }
+        policy: @escaping (TimeInterval, Int) -> Bool = { _, bytes in bytes >= 4 },
+        tracker: ForegroundSessionTracker = ForegroundSessionTracker()
     ) async throws -> (TerminalSessionModel, FakeWebSocketConnection, FakeWebSocketTransportFactory) {
         let factory = FakeWebSocketTransportFactory()
-        let model = TerminalTestSupport.model(transportFactory: factory)
+        let model = TerminalTestSupport.model(transportFactory: factory, foregroundSessionTracker: tracker)
         model.suspendPolicy = policy
         // Marked watched before `start()` builds a core: `markVisible` on a
         // not-yet-live model force-reconnects, which would close the very
@@ -301,5 +302,102 @@ final class TerminalSessionSuspendTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(250))
 
         XCTAssertEqual(resizeFrames(connection).count, before)
+    }
+
+    // MARK: - Child-screen watch holds
+    //
+    // A session-scoped child screen (git Changes / Diff) hides the terminal
+    // exactly like leaving would; its ref-counted hold on the tracker is what
+    // tells the governor the user is still inside the session.
+
+    func testHiddenButHeldSessionKeepsStreaming() async throws {
+        let tracker = ForegroundSessionTracker()
+        let (model, connection, _) = try await watchedModel(tracker: tracker)
+        tracker.holdWatch("s1")
+        model.markHidden()
+
+        connection.emit(.binary(outputFrame("spending")))
+        await settle()
+
+        XCTAssertEqual(model.connectionState, .live)
+        XCTAssertTrue(connection.closeCalls.isEmpty)
+    }
+
+    func testHoldTakenAfterHidingReWatchesTheSession() async throws {
+        // The tracker has no observation channel, so the store re-evaluates
+        // the model explicitly; `syncWatchHold` is that re-evaluation.
+        let tracker = ForegroundSessionTracker()
+        let (model, connection, _) = try await watchedModel(tracker: tracker)
+        model.markHidden()
+        tracker.holdWatch("s1")
+        model.syncWatchHold()
+
+        connection.emit(.binary(outputFrame("spending")))
+        await settle()
+
+        XCTAssertEqual(model.connectionState, .live)
+    }
+
+    func testReleasingTheHoldReArmsTheUnwatchedClock() async throws {
+        let tracker = ForegroundSessionTracker()
+        let (model, connection, _) = try await watchedModel(tracker: tracker)
+        tracker.holdWatch("s1")
+        model.markHidden()
+        connection.emit(.binary(outputFrame("spending")))
+        await settle()
+        XCTAssertEqual(model.connectionState, .live)
+
+        tracker.releaseWatch("s1")
+        model.syncWatchHold()
+        connection.emit(.binary(outputFrame("spending")))
+        await waitForState(model, .suspended)
+
+        XCTAssertEqual(model.connectionState, .suspended)
+    }
+
+    func testHeldSessionStillSuspendsWhenTheAppBackgrounds() async throws {
+        // The hold stands in for "on screen", never for "app active".
+        let tracker = ForegroundSessionTracker()
+        let (model, connection, _) = try await watchedModel(tracker: tracker)
+        tracker.holdWatch("s1")
+        model.markHidden()
+        model.setAppActive(false)
+
+        connection.emit(.binary(outputFrame("spending")))
+        await waitForState(model, .suspended)
+
+        XCTAssertEqual(model.connectionState, .suspended)
+    }
+
+    func testStoreHoldAndReleaseReEvaluateTheRetainedModel() async throws {
+        // The screens go through the store, which must both count the hold
+        // and wake the model — a model that was never shown is unwatched
+        // from `start()`.
+        let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
+        let factory = FakeWebSocketTransportFactory()
+        let store = TerminalSessionStore(
+            webSocketFactory: WebSocketCoreFactory.live(transportFactory: factory, sleeper: RecordingSleeper()),
+            sessionManager: harness.sessionManager,
+            tokenStore: harness.tokenStore,
+            centralAPI: CentralAPI(centralServerURL: "https://central.test", sessionInvalidator: StubSessionInvalidator()),
+            userTokenProvider: StubUserTokenProvider(),
+            foregroundSessionTracker: ForegroundSessionTracker(),
+            preferencesStore: TerminalTestSupport.isolatedPreferencesStore(),
+            shortcutsRepository: TerminalTestSupport.shortcutsRepository(harness: harness)
+        )
+        let model = store.model(id: "s1", kind: .claude, resolvedKind: .claude, initialStatus: nil)
+        model.suspendPolicy = { _, bytes in bytes >= 4 }
+        let connection = try await factory.connection(1)
+        connection.emit(.opened)
+
+        store.holdWatch(sessionId: "s1")
+        connection.emit(.binary(outputFrame("spending")))
+        await settle()
+        XCTAssertEqual(model.connectionState, .live)
+
+        store.releaseWatch(sessionId: "s1")
+        connection.emit(.binary(outputFrame("spending")))
+        await waitForState(model, .suspended)
+        XCTAssertEqual(model.connectionState, .suspended)
     }
 }
