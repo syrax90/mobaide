@@ -279,8 +279,14 @@ enum GitChangesDisplay {
         return entry.directory
     }
 
+    /// Counts come from the full parse, but when the agent's byte cap hit
+    /// before the entry cap they are a lower bound too — so the shown figure
+    /// is what actually arrived and the total is never claimed exact.
     static func truncatedNotice(_ status: GitStatusResponse) -> String {
-        let total = status.counts.map { String($0.total) } ?? "many"
-        return "Showing the first \(status.entry_limit) of \(total) entries."
+        let shown = status.entries.count
+        if let total = status.counts?.total, total > shown {
+            return "Showing the first \(shown) of at least \(total) entries."
+        }
+        return "List cut short after \(shown) entries."
     }
 }

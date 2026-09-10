@@ -177,14 +177,33 @@ final class GitChangesDisplayTests: XCTestCase {
         XCTAssertNil(GitChangesDisplay.secondaryLabel(initial[0]), "a top-level file has nothing to show")
     }
 
-    func testTruncatedNoticeUsesCountsWhenPresent() throws {
+    func testTruncatedNoticeShowsWhatArrivedAgainstALowerBoundTotal() throws {
+        // The golden case ships 2 entries under a 5000 entry cap with a total
+        // of 6001: the shown figure is what arrived, not the cap.
         XCTAssertEqual(
             GitChangesDisplay.truncatedNotice(try status("truncated_windows")),
-            "Showing the first 5000 of 6001 entries."
+            "Showing the first 2 of at least 6001 entries."
+        )
+    }
+
+    func testTruncatedNoticeWithoutAHigherTotalOnlySaysTheListWasCut() {
+        let two = [
+            entry(group: GitStatusEntry.groupUntracked, path: "a"),
+            entry(group: GitStatusEntry.groupUntracked, path: "b"),
+        ]
+        // The byte cap hit before the entry cap: the count is a lower bound no
+        // higher than the list itself, so no total is claimed.
+        XCTAssertEqual(
+            GitChangesDisplay.truncatedNotice(status(
+                entries: two,
+                counts: GitStatusCounts(conflicts: 0, staged: 0, unstaged: 0, untracked: 2, total: 2),
+                truncated: true
+            )),
+            "List cut short after 2 entries."
         )
         XCTAssertEqual(
             GitChangesDisplay.truncatedNotice(status(entries: [], counts: nil, truncated: true)),
-            "Showing the first 5000 of many entries."
+            "List cut short after 0 entries."
         )
     }
 

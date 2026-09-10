@@ -175,8 +175,7 @@ private fun ChangesList(
         if (state.status.truncated) {
             item(key = "truncated", contentType = "truncated") {
                 Text(
-                    text = "Showing the first ${state.status.entry_limit} of " +
-                        "${state.status.counts?.total ?: "many"} entries.",
+                    text = truncatedNotice(state.status),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.pixel.warning,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),

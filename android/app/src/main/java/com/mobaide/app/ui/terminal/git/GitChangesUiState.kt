@@ -123,6 +123,18 @@ internal fun repoStateLabel(state: String): String? = when (state) {
     else -> state.replace('_', ' ')
 }
 
+/**
+ * Counts come from the full parse, but when the agent's byte cap hit before
+ * the entry cap they are a lower bound too — so the shown figure is what
+ * actually arrived and the total is never claimed exact.
+ */
+internal fun truncatedNotice(status: GitStatusResponse): String {
+    val shown = status.entries.size
+    val total = status.counts?.total
+    return if (total != null && total > shown) "Showing the first $shown of at least $total entries."
+    else "List cut short after $shown entries."
+}
+
 internal fun unavailableCopy(reason: String): Pair<String, String> = when (reason) {
     GitStatusResponse.UNAVAILABLE_NOT_A_REPO ->
         "Not a git repository" to "The session's folder is not inside a git repository."

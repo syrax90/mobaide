@@ -176,7 +176,7 @@ class GitChangesScreenTest {
     fun aTruncatedList_saysHowMuchIsMissing() {
         setContent(ready(status(entries = listOf(untracked), truncated = true)))
 
-        composeRule.onNodeWithText("Showing the first 5000 of 6001 entries.").assertIsDisplayed()
+        composeRule.onNodeWithText("Showing the first 1 of at least 6001 entries.").assertIsDisplayed()
     }
 
     @Test
