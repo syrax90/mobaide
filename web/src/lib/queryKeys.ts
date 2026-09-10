@@ -11,6 +11,15 @@
  * Agent-scoped keys are prefixed so `['agent', id]` invalidates everything
  * belonging to one agent.
  */
+
+/** What identifies one diff request; the object form keeps the key readable. */
+export interface SessionGitDiffKey {
+  path: string;
+  scope: string;
+  context: number;
+  origPath?: string;
+}
+
 export const queryKeys = {
   serverInfo: () => ['server-info'] as const,
   devices: () => ['devices'] as const,
@@ -49,6 +58,25 @@ export const queryKeys = {
    */
   linearMetadata: (agentId: string, projectName: string) =>
     ['agent', agentId, 'linear', projectName] as const,
+  /**
+   * The in-session git Changes viewer: one session's working-tree status and
+   * its per-file diffs.
+   *
+   * Its own segment, not `gitItems`' `['agent', id, 'git', …]`: a session id in
+   * the slot a project name occupies would prefix-collide, and the project
+   * lists' reconnect sweep and `git.changed` invalidations would refetch every
+   * open viewer's poll.
+   */
+  sessionGitRoot: (agentId: string) => ['agent', agentId, 'session-git'] as const,
+  sessionGit: (agentId: string, sessionId: string) =>
+    ['agent', agentId, 'session-git', sessionId] as const,
+  sessionGitStatus: (agentId: string, sessionId: string) =>
+    ['agent', agentId, 'session-git', sessionId, 'status'] as const,
+  /** Every diff of one session — the prefix a moved working tree invalidates. */
+  sessionGitDiffs: (agentId: string, sessionId: string) =>
+    ['agent', agentId, 'session-git', sessionId, 'diff'] as const,
+  sessionGitDiff: (agentId: string, sessionId: string, request: SessionGitDiffKey) =>
+    ['agent', agentId, 'session-git', sessionId, 'diff', request] as const,
   autoscan: (agentId: string) => ['agent', agentId, 'autoscan'] as const,
   /** Which CLIs the agent has installed, and the models each advertises. */
   agentCapabilities: (agentId: string) => ['agent', agentId, 'capabilities'] as const,

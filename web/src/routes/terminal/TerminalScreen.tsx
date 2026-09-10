@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createTemplate } from '../../api/templateRepository';
 import { isApiError } from '../../api/errors';
+import { MenuButton } from '../../components/MenuButton';
 import { writeClipboardText } from '../../lib/clipboard';
 import { queryKeys } from '../../lib/queryKeys';
 import { sessionChannelName } from '../../realtime/channels';
@@ -15,6 +16,7 @@ import {
   setMountedTerminal,
   useTerminalStore,
 } from '../../terminal/terminalStore';
+import type { SessionResponse } from '../../protocol/dto/session';
 import { isSessionRunning } from '../../protocol/dto/terminalState';
 import { useTerminalPrefsStore } from '../../stores/terminalPrefsStore';
 import { useToastStore } from '../../stores/toastStore';
@@ -23,12 +25,14 @@ import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { stripControls } from '../../terminal/terminalPaste';
 import { TemplateEditorDialog } from '../templates/TemplateEditorDialog';
 import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
+import { GitChangesPanel } from './git/GitChangesPanel';
 import { JumpToBottom } from './JumpToBottom';
 import { TemplatesPicker } from './TemplatesPicker';
 import { TerminalScrollbar } from './TerminalScrollbar';
 import { TerminalSurface } from './TerminalSurface';
 import { useSessionGone } from './useSessionGone';
 import { useSessionHeaderLabel } from './useSessionHeaderLabel';
+import { useSessionRow } from './useSessionRow';
 
 export function TerminalScreen() {
   const { agentId, sessionId } = useParams();
@@ -56,6 +60,7 @@ interface TerminalRouteProps {
 function TerminalRoute({ agentId, sessionId }: TerminalRouteProps) {
   useSessionGone(agentId, sessionId);
   const headerLabel = useSessionHeaderLabel(agentId, sessionId);
+  const session = useSessionRow(agentId, sessionId);
   const key = sessionChannelName(agentId, sessionId);
   const model = useTerminalStore((state) => state.models[key]);
 
@@ -96,7 +101,7 @@ function TerminalRoute({ agentId, sessionId }: TerminalRouteProps) {
     return <section className="terminal-page terminal-page-empty">Attaching…</section>;
   }
 
-  return <TerminalView model={model} headerLabel={headerLabel} />;
+  return <TerminalView model={model} headerLabel={headerLabel} session={session} />;
 }
 
 /**
@@ -126,15 +131,22 @@ type TemplatePanel =
 interface TerminalViewProps {
   model: TerminalSessionModel;
   headerLabel: string;
+  /** The session's own row, once the list has synced; `cwd` gates the git menu. */
+  session: SessionResponse | undefined;
 }
 
-function TerminalView({ model, headerLabel }: TerminalViewProps) {
+function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   const view = model.state();
   const passCtrlV = useTerminalPrefsStore((state) => state.passCtrlVToTerminal);
   const setPassCtrlV = useTerminalPrefsStore((state) => state.setPassCtrlVToTerminal);
   const queryClient = useQueryClient();
   const [panel, setPanel] = useState<TemplatePanel>({ kind: 'none' });
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Separate from `panel`: the Changes viewer is non-modal and may stay open
+  // under the template dialogs, and it returns focus to the menu that opened
+  // it rather than to the grid.
+  const [changesOpen, setChangesOpen] = useState(false);
+  const moreRef = useRef<HTMLButtonElement>(null);
   const immersive = useKeyboardLock();
   // Shared with the scrollbar, whose `role="scrollbar"` has to name what it
   // controls.
@@ -269,6 +281,35 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
             {immersive.active ? 'Leave immersive' : 'Immersive'}
           </button>
         )}
+        {/* Only once the row carries a cwd, as on both mobile clients: the
+            git routes answer for the directory the session was spawned in,
+            and a row without one has nothing to show. Later git actions
+            (commit, fetch / pull / push, branches, rebase) are reserved slots
+            under the same heading, in that order. */}
+        {session?.cwd !== undefined && (
+          <MenuButton
+            label="More options"
+            className="button button-icon"
+            triggerRef={moreRef}
+            groups={[
+              {
+                id: 'git',
+                label: 'Git',
+                items: [
+                  {
+                    id: 'changes',
+                    label: 'Changes…',
+                    onSelect: () => {
+                      setChangesOpen(true);
+                    },
+                  },
+                ],
+              },
+            ]}
+          >
+            ⋯
+          </MenuButton>
+        )}
       </header>
 
       <div className="terminal-stage">
@@ -387,6 +428,19 @@ function TerminalView({ model, headerLabel }: TerminalViewProps) {
           onCancel={() => {
             setPanel({ kind: 'none' });
             setSaveError(null);
+          }}
+        />
+      )}
+
+      {changesOpen && (
+        <GitChangesPanel
+          agentId={model.agentId}
+          sessionId={model.sessionId}
+          onClose={() => {
+            setChangesOpen(false);
+            // Back to the menu button, not the grid: the viewer was reached
+            // from the header, and a keyboard user is still up there.
+            moreRef.current?.focus();
           }}
         />
       )}

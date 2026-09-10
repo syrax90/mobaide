@@ -13,27 +13,21 @@
  * unstamped value would name the new terminal after the old one, indefinitely
  * if that agent never syncs.
  *
- * The sessions query is the one `useSessionGone` already runs; TanStack
- * dedupes on the key, so this costs no extra fetch.
+ * The session row comes from `useSessionRow`, which shares the sessions query
+ * `useSessionGone` already runs; TanStack dedupes on the key, so this costs no
+ * extra fetch.
  */
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { listCustomAgentTypes } from '../../api/customAgentTypeRepository';
-import { listSessions } from '../../api/sessionRepository';
 import { queryKeys, wsBackedQueryOptions } from '../../lib/queryKeys';
 import { useSessionsSynced } from '../../realtime';
 import { customTypeNameMap, sessionHeaderLabel } from '../sessions/sessionDisplay';
+import { useSessionRow } from './useSessionRow';
 
 export function useSessionHeaderLabel(agentId: string, sessionId: string): string {
   const synced = useSessionsSynced(agentId);
-  const sessions = useQuery({
-    queryKey: queryKeys.sessions(agentId),
-    queryFn: () => listSessions(agentId),
-    // The relay 503s for an unreachable agent, and the global query-error toast
-    // would fire on it.
-    enabled: synced,
-    ...wsBackedQueryOptions,
-  });
+  const session = useSessionRow(agentId, sessionId);
   // Gated on the same flag: the registry is only ever consulted for a session
   // row, so fetching it before one can resolve buys nothing.
   const customTypes = useQuery({
@@ -43,7 +37,6 @@ export function useSessionHeaderLabel(agentId: string, sessionId: string): strin
     ...wsBackedQueryOptions,
   });
 
-  const session = sessions.data?.find((row) => row.session_id === sessionId);
   const label =
     session === undefined
       ? ''
