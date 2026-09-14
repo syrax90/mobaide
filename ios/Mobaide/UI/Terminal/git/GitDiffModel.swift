@@ -192,30 +192,70 @@ enum GitDiffDisplay {
         return max(2, String(highest).count)
     }
 
-    private static let widthCandidateLimit = 8
+    /// Candidates always measured.
+    static let widthMeasureFloor = 8
+    /// Candidates measured at most.
+    static let widthMeasureLimit = 16
+    private static let cellSample = 100
 
-    /// The lines most likely to be the widest, so only a handful are measured.
-    /// Non-ASCII glyphs usually come from a wider fallback face and count double.
-    static func widthCandidates(_ rows: [DiffRow], limit: Int = widthCandidateLimit) -> [String] {
+    /// A line's estimated width in cells, counted per UTF-16 unit like
+    /// Android: Latin, Greek and Cyrillic, which the code font draws one cell
+    /// wide, count one; every other unit counts two (an emoji pair, four).
+    static func weightedLength(_ text: String) -> Int {
+        text.utf16.reduce(0) { $0 + ($1 <= 0x024F || (0x0370...0x04FF).contains($1) ? 1 : 2) }
+    }
+
+    /// UTF-16 units the code font draws exactly one cell wide: a lower bound on
+    /// a line's width in cells.
+    static func narrowLength(_ text: String) -> Int {
+        text.utf16.reduce(0) { $0 + ((0x20...0x024F).contains($1) || (0x0370...0x04FF).contains($1) ? 1 : 0) }
+    }
+
+    /// The line with the most one-cell units, or nil without line rows.
+    static func narrowCandidate(_ rows: [DiffRow]) -> String? {
+        var best: (text: String, length: Int)?
+        for row in rows {
+            guard case .line(_, _, _, let text) = row.kind else { continue }
+            let length = narrowLength(text)
+            if length > (best?.length ?? -1) { best = (text, length) }
+        }
+        return best?.text
+    }
+
+    /// Line texts, widest estimate first.
+    static func widthCandidates(_ rows: [DiffRow], limit: Int = widthMeasureLimit) -> [String] {
         let texts: [(text: String, weight: Int)] = rows.compactMap { row in
             guard case .line(_, _, _, let text) = row.kind else { return nil }
-            return (text, text.unicodeScalars.reduce(0) { $0 + ($1.value > 0x7F ? 2 : 1) })
+            return (text, weightedLength(text))
         }
         return texts.sorted { $0.weight > $1.weight }.prefix(limit).map(\.text)
     }
 
-    /// The widest candidate plus one cell of slack, as laid out in `font`.
+    /// The widest line plus one cell of slack, as laid out in `font`. The top
+    /// `widthMeasureFloor` candidates are always measured; later ones only
+    /// while their estimate could still beat the widest measured line. The
+    /// `narrowCandidate` is measured as well, so a widest line of Latin, Greek
+    /// or Cyrillic that overweighted scripts pushed out of the candidates is
+    /// never cut.
     static func metrics(
         rows: [DiffRow],
         gutterDigits: Int,
         font: UIFont = MobaideTypography.codeUIFont
     ) -> DiffMetrics {
         func width(_ text: String) -> CGFloat {
-            ceil((text as NSString).size(withAttributes: [.font: font]).width)
+            (text as NSString).size(withAttributes: [.font: font]).width
         }
-        let cell = width("0")
-        let widest = widthCandidates(rows).map(width).max() ?? 0
-        return DiffMetrics(cell: cell, gutterWidth: cell * CGFloat(gutterDigits), textWidth: widest + cell)
+        let exactCell = width(String(repeating: "0", count: cellSample)) / CGFloat(cellSample)
+        var widest: CGFloat = 0
+        for (index, text) in widthCandidates(rows).enumerated() {
+            if index >= widthMeasureFloor, CGFloat(weightedLength(text)) * exactCell <= widest + 0.5 { break }
+            widest = max(widest, width(text))
+        }
+        if let narrow = narrowCandidate(rows) {
+            widest = max(widest, width(narrow))
+        }
+        let cell = ceil(exactCell)
+        return DiffMetrics(cell: cell, gutterWidth: cell * CGFloat(gutterDigits), textWidth: ceil(widest) + cell)
     }
 
     /// `total_lines` is only a lower bound when the agent's byte cap cut git

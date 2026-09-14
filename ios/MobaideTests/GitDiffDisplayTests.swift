@@ -169,10 +169,76 @@ final class GitDiffDisplayTests: XCTestCase {
         XCTAssertEqual(GitDiffDisplay.widthCandidates(rows, limit: 2), ["abcdef", "abcd"])
     }
 
-    func testWidthCandidatesCountANonASCIIScalarAsTwoColumns() {
+    func testWidthCandidatesCountACJKGlyphAsTwoColumns() {
         let rows = [lineRow("l0", "abcde"), lineRow("l1", "日本語")]
 
         XCTAssertEqual(GitDiffDisplay.widthCandidates(rows, limit: 1), ["日本語"], "3 wide glyphs outweigh 5 ASCII ones")
+    }
+
+    func testWidthCandidatesDefaultToTheMeasureLimitWidestEstimateFirst() {
+        let rows = (0..<300).map { lineRow("l\($0)", String(repeating: "x", count: $0 + 1)) }
+
+        let candidates = GitDiffDisplay.widthCandidates(rows)
+
+        XCTAssertEqual(candidates.map(\.count), Array(stride(from: 300, to: 300 - GitDiffDisplay.widthMeasureLimit, by: -1)))
+    }
+
+    // MARK: - weightedLength(_:)
+
+    func testWeightedLengthCountsLatinGreekAndCyrillicOnceAndEveryOtherUTF16UnitTwice() {
+        XCTAssertEqual(GitDiffDisplay.weightedLength(""), 0)
+        XCTAssertEqual(GitDiffDisplay.weightedLength("a\tb ~"), 5)
+        XCTAssertEqual(GitDiffDisplay.weightedLength("\u{E9}"), 1)
+        XCTAssertEqual(GitDiffDisplay.weightedLength("\u{24F}"), 1, "the last Latin Extended-B letter")
+        XCTAssertEqual(GitDiffDisplay.weightedLength("\u{250}"), 2, "IPA extensions are past Latin")
+        XCTAssertEqual(GitDiffDisplay.weightedLength("e\u{301}"), 3, "a combining mark sits between the one-cell ranges")
+        XCTAssertEqual(GitDiffDisplay.weightedLength("\u{36F}\u{370}"), 3, "Greek starts at U+0370")
+        XCTAssertEqual(GitDiffDisplay.weightedLength("\u{4FF}\u{500}"), 3, "Cyrillic ends at U+04FF")
+        XCTAssertEqual(GitDiffDisplay.weightedLength("Привет, x"), 9)
+        XCTAssertEqual(GitDiffDisplay.weightedLength("日本語"), 6)
+        XCTAssertEqual(GitDiffDisplay.weightedLength("✅"), 2)
+        XCTAssertEqual(GitDiffDisplay.weightedLength("🙂"), 4, "a surrogate pair is two units, like Android")
+    }
+
+    // MARK: - narrowLength(_:) and narrowCandidate(_:)
+
+    func testNarrowLengthCountsOnlyTheUTF16UnitsDrawnOneCellWide() {
+        XCTAssertEqual(GitDiffDisplay.narrowLength(""), 0)
+        XCTAssertEqual(GitDiffDisplay.narrowLength("ab ~"), 4)
+        XCTAssertEqual(GitDiffDisplay.narrowLength("a\tb"), 2, "a control char draws no cell")
+        XCTAssertEqual(GitDiffDisplay.narrowLength("\u{1F}\u{20}"), 1, "U+0020 is the first unit counted")
+        XCTAssertEqual(GitDiffDisplay.narrowLength("\u{24F}\u{250}"), 1, "Latin ends at U+024F")
+        XCTAssertEqual(GitDiffDisplay.narrowLength("e\u{301}"), 1, "a combining mark adds no cell")
+        XCTAssertEqual(GitDiffDisplay.narrowLength("\u{36F}\u{370}"), 1, "Greek starts at U+0370")
+        XCTAssertEqual(GitDiffDisplay.narrowLength("\u{4FF}\u{500}"), 1, "Cyrillic ends at U+04FF")
+        XCTAssertEqual(GitDiffDisplay.narrowLength("Привет, x"), 9)
+        XCTAssertEqual(GitDiffDisplay.narrowLength("αβγδ"), 4)
+        XCTAssertEqual(GitDiffDisplay.narrowLength("日本語"), 0)
+        XCTAssertEqual(GitDiffDisplay.narrowLength("नमस्ते"), 0)
+        XCTAssertEqual(GitDiffDisplay.narrowLength("مرحبا"), 0)
+        XCTAssertEqual(GitDiffDisplay.narrowLength("สวัสดี"), 0)
+        XCTAssertEqual(GitDiffDisplay.narrowLength("✅🙂"), 0)
+    }
+
+    func testNarrowCandidateIsTheFirstLineWithTheMostOneCellUnitsNotTheLongest() {
+        let rows = [
+            DiffRow(id: "h0", kind: .hunkHeader(range: "@@ -1,4 +1,4 @@", heading: String(repeating: "h", count: 80))),
+            lineRow("l0", String(repeating: "नमस्ते दुनिया ", count: 4)),
+            lineRow("l1", String(repeating: "e\u{301}", count: 10)),
+            lineRow("l2", "Привет, мир!"),
+            lineRow("l3", "Hello, world"),
+            DiffRow(id: "l3:nn", kind: .noNewline),
+        ]
+
+        XCTAssertEqual(GitDiffDisplay.narrowCandidate(rows), "Привет, мир!", "a header is never the candidate; ties go to the first line")
+    }
+
+    func testNarrowCandidateIsNilWithoutLineRows() {
+        XCTAssertNil(GitDiffDisplay.narrowCandidate([]))
+        XCTAssertNil(GitDiffDisplay.narrowCandidate([
+            DiffRow(id: "h0", kind: .hunkHeader(range: "@@ -1 +1 @@", heading: "heading")),
+            DiffRow(id: "notice", kind: .notice("Binary file — no preview")),
+        ]))
     }
 
     // MARK: - metrics(rows:gutterDigits:font:)
@@ -206,6 +272,73 @@ final class GitDiffDisplayTests: XCTestCase {
 
         let noLines = GitDiffDisplay.metrics(rows: [DiffRow(id: "notice", kind: .notice("Binary file — no preview"))], gutterDigits: 2)
         XCTAssertEqual(noLines.textWidth, noLines.cell)
+    }
+
+    private func measured(_ text: String) -> CGFloat {
+        (text as NSString).size(withAttributes: [.font: MobaideTypography.codeUIFont]).width
+    }
+
+    func testMetricsMeasureALongerASCIILineRankedAboveAScreenfulOfCyrillicProse() {
+        let prose = String(repeating: "Привет, мир! ", count: 6)
+        let url = "https://example.com/" + String(repeating: "a", count: 80)
+        let rows = (0..<GitDiffDisplay.widthMeasureLimit).map { lineRow("p\($0)", prose) } + [lineRow("u", url)]
+        XCTAssertEqual(GitDiffDisplay.widthCandidates(rows).first, url, "premise: Cyrillic weighs one cell, so the longer URL ranks first")
+        XCTAssertGreaterThan(measured(url), measured(prose), "premise: the URL is the widest on screen")
+
+        let metrics = GitDiffDisplay.metrics(rows: rows, gutterDigits: 2)
+
+        XCTAssertEqual(metrics.textWidth, ceil(measured(url)) + metrics.cell)
+    }
+
+    func testMetricsPinAFullFileOfCyrillicProseToItsWidestMeasuredLineNotAnEstimate() {
+        let widest = String(repeating: "ж", count: 120)
+        let rows = [lineRow("l0", widest)] + (1...400).map { lineRow("l\($0)", String(repeating: "ж", count: 60 + $0 % 60)) }
+
+        let metrics = GitDiffDisplay.metrics(rows: rows, gutterDigits: 2)
+
+        XCTAssertEqual(metrics.textWidth, ceil(measured(widest)) + metrics.cell)
+    }
+
+    func testMetricsMeasureEveryFloorCandidateEvenOneEstimatedNarrowerThanTheWidest() {
+        // "✅" is estimated at two cells but drawn wider, so the checks row
+        // ranks below the header yet renders past it.
+        let header = "| build | lint | test | docs | sign | ship | tags | done |"
+        let checks = "| " + Array(repeating: "✅  ", count: 8).joined(separator: " | ") + " |"
+        let rows = [lineRow("h", header), lineRow("c", checks)]
+        XCTAssertEqual(GitDiffDisplay.weightedLength(header), GitDiffDisplay.weightedLength(checks) + 1, "premise: the header ranks first")
+        XCTAssertGreaterThan(measured(checks), measured(header) + 0.5, "premise: the checks row is the widest on screen")
+
+        let metrics = GitDiffDisplay.metrics(rows: rows, gutterDigits: 2)
+
+        XCTAssertEqual(metrics.textWidth, ceil(measured(checks)) + metrics.cell)
+    }
+
+    func testMetricsKeepMeasuringPastTheFloorWhileAnEstimateCouldBeatTheWidest() {
+        // CJK is estimated at two cells a glyph but drawn narrower, so the
+        // candidate after the floor can still be the widest line.
+        let cjk = String(repeating: "日本語", count: 17)
+        let code = String(repeating: "x", count: 96)
+        let rows = (0..<GitDiffDisplay.widthMeasureFloor).map { lineRow("j\($0)", cjk) } + [lineRow("c", code)]
+        XCTAssertEqual(GitDiffDisplay.widthCandidates(rows).firstIndex(of: code), GitDiffDisplay.widthMeasureFloor, "premise: the code line ranks just past the floor")
+        XCTAssertGreaterThan(measured(code), measured(cjk), "premise: the code line is the widest on screen")
+
+        let metrics = GitDiffDisplay.metrics(rows: rows, gutterDigits: 2)
+
+        XCTAssertEqual(metrics.textWidth, ceil(measured(code)) + metrics.cell)
+    }
+
+    func testMetricsMeasureACyrillicLineOutrankedBySixteenHindiLines() {
+        // Devanagari is estimated at two cells a unit but drawn far narrower, so
+        // a screenful of it pushes the widest line out of the candidates.
+        let hindi = String(repeating: "नमस्ते दुनिया ", count: 4)
+        let cyrillic = String(repeating: "ж", count: 100)
+        let rows = (0..<GitDiffDisplay.widthMeasureLimit).map { lineRow("h\($0)", hindi) } + [lineRow("c", cyrillic)]
+        XCTAssertFalse(GitDiffDisplay.widthCandidates(rows).contains(cyrillic), "premise: sixteen Hindi lines outrank the Cyrillic one")
+        XCTAssertLessThan(measured(hindi), measured(cyrillic), "premise: the Hindi lines draw narrower")
+
+        let metrics = GitDiffDisplay.metrics(rows: rows, gutterDigits: 2)
+
+        XCTAssertEqual(metrics.textWidth, ceil(measured(cyrillic)) + metrics.cell)
     }
 
     // MARK: - notices and chips

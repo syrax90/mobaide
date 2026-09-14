@@ -271,6 +271,9 @@ private data class DiffMetrics(val gutterWidth: Dp, val textWidth: Dp)
 /** Well under the 2^18 px `Constraints` ceiling, whatever the font scale. */
 private const val MAX_PINNED_TEXT_PX = 120_000
 
+/** Monospaced cells measured together, so one cell's width carries no rounding. */
+private const val CELL_SAMPLE = 100
+
 /**
  * One row per diff line, every row sharing one horizontal [ScrollState] over a
  * text column pinned to a single measured width. Identical content width plus
@@ -289,15 +292,17 @@ private fun DiffBody(state: GitDiffUiState.Ready, modifier: Modifier = Modifier)
         fontSize = 13.sp,
         lineHeight = 18.sp,
     )
-    val metrics = remember(state.widthCandidates, state.gutterDigits, lineStyle, density) {
-        val cell = textMeasurer
-            .measure(AnnotatedString("0"), style = lineStyle, softWrap = false)
-            .size.width
-        val widest = state.widthCandidates.maxOfOrNull { candidate ->
-            textMeasurer
-                .measure(AnnotatedString(candidate), style = lineStyle, softWrap = false)
-                .size.width
-        } ?: 0
+    val metrics = remember(state.widthCandidates, state.narrowCandidate, state.gutterDigits, lineStyle, density) {
+        fun width(text: String): Int =
+            textMeasurer.measure(AnnotatedString(text), style = lineStyle, softWrap = false).size.width
+        val cell = width("0")
+        val exactCell = width("0".repeat(CELL_SAMPLE)) / CELL_SAMPLE.toFloat()
+        val widest = pinnedTextWidth(
+            candidates = state.widthCandidates,
+            exactCell = exactCell,
+            narrowCandidate = state.narrowCandidate,
+            measure = ::width,
+        )
         with(density) {
             DiffMetrics(
                 gutterWidth = (cell * state.gutterDigits).toDp(),

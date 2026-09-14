@@ -71,6 +71,7 @@ class GitDiffViewModel @Inject constructor(
                 gutterDigits = gutterDigits(diff),
                 widthCandidates = widthCandidates(rows),
                 context = ctx,
+                narrowCandidate = narrowCandidate(rows),
             ).also { lastReady = it }
         } catch (e: CancellationException) {
             throw e

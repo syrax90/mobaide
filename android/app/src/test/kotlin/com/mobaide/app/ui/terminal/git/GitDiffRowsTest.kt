@@ -5,6 +5,7 @@ import com.mobaide.app.data.network.dto.GitDiffLine
 import com.mobaide.app.data.network.dto.GitDiffResponse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -307,18 +308,161 @@ class GitDiffRowsTest {
 
     @Test
     fun widthCandidates_rankLinesByWeightedLength_andHonourTheLimit() {
-        // Non-ASCII glyphs count double: "éé" outranks "abc" despite fewer chars.
+        // CJK glyphs count double: "日日" outranks "abc" despite fewer chars.
         val rows = listOf(
             DiffRow.HunkHeader("h0", "@@ -1,1 +1,1 @@ this header is the longest text of all", ""),
             DiffRow.Line("h0:l0", GitDiffLine.T_CTX, 1, 1, "ab"),
             DiffRow.Line("h0:l1", GitDiffLine.T_CTX, 2, 2, "abcdef"),
-            DiffRow.Line("h0:l2", GitDiffLine.T_CTX, 3, 3, "éé"),
+            DiffRow.Line("h0:l2", GitDiffLine.T_CTX, 3, 3, "日日"),
             DiffRow.Line("h0:l3", GitDiffLine.T_CTX, 4, 4, "abc"),
             DiffRow.NoNewline("h0:l3:nn"),
         )
 
-        assertEquals(listOf("abcdef", "éé", "abc", "ab"), widthCandidates(rows))
-        assertEquals(listOf("abcdef", "éé"), widthCandidates(rows, limit = 2))
+        assertEquals(listOf("abcdef", "日日", "abc", "ab"), widthCandidates(rows))
+        assertEquals(listOf("abcdef", "日日"), widthCandidates(rows, limit = 2))
         assertTrue(widthCandidates(emptyList()).isEmpty())
+    }
+
+    private fun lineRows(texts: List<String>): List<DiffRow> =
+        texts.mapIndexed { i, text -> DiffRow.Line("h0:l$i", GitDiffLine.T_CTX, i + 1, i + 1, text) }
+
+    @Test
+    fun widthCandidates_byDefault_holdTheMeasureLimit_widestEstimateFirst() {
+        val rows = lineRows((1..300).map { "x".repeat(it) })
+
+        assertEquals((300 downTo 301 - WIDTH_MEASURE_LIMIT).map { "x".repeat(it) }, widthCandidates(rows))
+    }
+
+    @Test
+    fun widthCandidates_rankALongerAsciiLine_aboveAScreenfulOfCyrillicProse() {
+        val prose = "Привет, мир! ".repeat(6)
+        val url = "https://example.com/" + "a".repeat(80)
+        val rows = lineRows(List(WIDTH_MEASURE_LIMIT) { prose } + url)
+
+        assertEquals(listOf(url) + List(WIDTH_MEASURE_LIMIT - 1) { prose }, widthCandidates(rows))
+    }
+
+    @Test
+    fun weightedLength_countsLatinGreekAndCyrillicOnce_andEveryOtherCharTwice() {
+        assertEquals(0, weightedLength(""))
+        assertEquals(5, weightedLength("a\tb ~"))
+        assertEquals(1, weightedLength("\u00E9"))
+        assertEquals("the last Latin Extended-B letter", 1, weightedLength("\u024F"))
+        assertEquals("IPA extensions are past Latin", 2, weightedLength("\u0250"))
+        assertEquals("a combining mark sits between the one-cell ranges", 3, weightedLength("e\u0301"))
+        assertEquals("Greek starts at U+0370", 3, weightedLength("\u036F\u0370"))
+        assertEquals("Cyrillic ends at U+04FF", 3, weightedLength("\u04FF\u0500"))
+        assertEquals(9, weightedLength("Привет, x"))
+        assertEquals(6, weightedLength("日本語"))
+        assertEquals(2, weightedLength("✅"))
+        // A surrogate pair is two chars, so an emoji is estimated at four cells.
+        assertEquals(4, weightedLength("🙂"))
+    }
+
+    @Test
+    fun narrowLength_countsOnlyTheCharsDrawnOneCellWide() {
+        assertEquals(0, narrowLength(""))
+        assertEquals(4, narrowLength("ab ~"))
+        assertEquals("a control char draws no cell", 2, narrowLength("a\tb"))
+        assertEquals("U+0020 is the first char counted", 1, narrowLength("\u001F\u0020"))
+        assertEquals("Latin ends at U+024F", 1, narrowLength("\u024F\u0250"))
+        assertEquals("a combining mark adds no cell", 1, narrowLength("e\u0301"))
+        assertEquals("Greek starts at U+0370", 1, narrowLength("\u036F\u0370"))
+        assertEquals("Cyrillic ends at U+04FF", 1, narrowLength("\u04FF\u0500"))
+        assertEquals(9, narrowLength("Привет, x"))
+        assertEquals(4, narrowLength("αβγδ"))
+        assertEquals(0, narrowLength("日本語"))
+        assertEquals(0, narrowLength("नमस्ते"))
+        assertEquals(0, narrowLength("مرحبا"))
+        assertEquals(0, narrowLength("สวัสดี"))
+        assertEquals(0, narrowLength("✅🙂"))
+    }
+
+    @Test
+    fun narrowCandidate_isTheFirstLineWithTheMostOneCellChars_notTheLongest() {
+        val rows = listOf(
+            DiffRow.HunkHeader("h0", "@@ -1,4 +1,4 @@", "a heading longer than every line is never the candidate"),
+            DiffRow.Line("h0:l0", GitDiffLine.T_CTX, 1, 1, "नमस्ते दुनिया ".repeat(4)),
+            DiffRow.Line("h0:l1", GitDiffLine.T_CTX, 2, 2, "e\u0301".repeat(10)),
+            DiffRow.Line("h0:l2", GitDiffLine.T_CTX, 3, 3, "Привет, мир!"),
+            DiffRow.Line("h0:l3", GitDiffLine.T_CTX, 4, 4, "Hello, world"),
+            DiffRow.NoNewline("h0:l3:nn"),
+        )
+
+        assertEquals("Привет, мир!", narrowCandidate(rows))
+    }
+
+    @Test
+    fun narrowCandidate_isNull_withoutLineRows() {
+        assertNull(narrowCandidate(emptyList()))
+        assertNull(narrowCandidate(listOf(DiffRow.HunkHeader("h0", "@@ -1 +1 @@", "heading"), DiffRow.NoNewline("h0:nn"))))
+    }
+
+    @Test
+    fun pinnedTextWidth_measuresTheWholeFloor_evenACandidateEstimatedNarrower() {
+        val wide = "wide" + "y".repeat(6)
+        val candidates = listOf("x".repeat(100)) + List(WIDTH_MEASURE_FLOOR - 2) { "y".repeat(10) } + wide
+        val measure = { text: String -> if (text == wide) 5_000 else text.length * 10 }
+
+        assertEquals(5_000, pinnedTextWidth(candidates, exactCell = 10f, measure = measure))
+        assertEquals(0, pinnedTextWidth(emptyList(), exactCell = 10f, measure = measure))
+    }
+
+    @Test
+    fun pinnedTextWidth_pastTheFloor_stopsAtAnEstimateThatCannotBeatTheWidest() {
+        val floor = List(WIDTH_MEASURE_FLOOR) { "x".repeat(100) }
+        val measure = { text: String -> if (text.startsWith("wide")) 5_000 else text.length * 10 }
+
+        val shorter = floor + ("wide" + "y".repeat(86))
+        assertEquals(1_000, pinnedTextWidth(shorter, exactCell = 10f, measure = measure))
+
+        // A cell measured a hair wide must not turn an equal estimate into a measurement.
+        val tied = floor + ("wide" + "y".repeat(96))
+        assertEquals(1_000, pinnedTextWidth(tied, exactCell = 10.004f, measure = measure))
+    }
+
+    @Test
+    fun pinnedTextWidth_pastTheFloor_keepsMeasuringWhileAnEstimateCouldBeatTheWidest() {
+        // CJK is estimated at two cells a glyph but drawn narrower.
+        val candidates = List(WIDTH_MEASURE_FLOOR) { "日".repeat(50) } + "x".repeat(96) + "x".repeat(60)
+        val measure = { text: String -> if (text.startsWith("日")) 700 else text.length * 10 }
+
+        assertEquals(960, pinnedTextWidth(candidates, exactCell = 10f, measure = measure))
+    }
+
+    @Test
+    fun pinnedTextWidth_ofTheDefaultCandidates_neverMeasuresPastTheLimit() {
+        // Every estimate beats every measurement, so only the limit ends the scan;
+        // the lines ranked past it draw far wider but are never measured.
+        val texts = (120 downTo 101).map { "x".repeat(it) }
+        val measure = { text: String -> if (text.length > 120 - WIDTH_MEASURE_LIMIT) 500 else 9_000 }
+
+        assertEquals(500, pinnedTextWidth(widthCandidates(lineRows(texts)), exactCell = 10f, measure = measure))
+    }
+
+    @Test
+    fun pinnedTextWidth_measuresTheNarrowCandidate_whenOverweightedLinesPushItPastTheLimit() {
+        // Devanagari is estimated at two cells a char but drawn far narrower.
+        val hindi = "नमस्ते दुनिया ".repeat(4)
+        val cyrillic = "ж".repeat(100)
+        val rows = lineRows(List(WIDTH_MEASURE_LIMIT) { hindi } + cyrillic)
+        val candidates = widthCandidates(rows)
+        assertFalse("premise: the Cyrillic line is not a candidate", cyrillic in candidates)
+        val measure = { text: String -> if (text == hindi) 360 else text.length * 10 }
+        assertEquals("premise: without it the line is cut", 360, pinnedTextWidth(candidates, exactCell = 10f, measure = measure))
+
+        assertEquals(
+            1_000,
+            pinnedTextWidth(candidates, exactCell = 10f, narrowCandidate = narrowCandidate(rows), measure = measure),
+        )
+    }
+
+    @Test
+    fun pinnedTextWidth_neverNarrowsToTheNarrowCandidate() {
+        val cjk = "日".repeat(50)
+        val ascii = "x".repeat(40)
+        val measure = { text: String -> if (text == cjk) 800 else text.length * 10 }
+
+        assertEquals(800, pinnedTextWidth(listOf(cjk, ascii), exactCell = 10f, narrowCandidate = ascii, measure = measure))
     }
 }
