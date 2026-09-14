@@ -1,5 +1,25 @@
 # mobaide_agent Changelog
 
+## [0.3.11](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.10...agent-v0.3.11) (2026-09-14)
+
+
+### Features
+
+* **agent,android,ios,web:** raise the diff ceiling and add a Full file switch to Git Changes ([2e9ac53](https://github.com/syrax90/claude_mobile/commit/2e9ac53fcea55d382e6daafffbe984a5adaa9034))
+* **agent,android,ios,web:** raise the diff ceiling and add a Full file switch to Git Changes ([41758ac](https://github.com/syrax90/claude_mobile/commit/41758ac473dec3772ab8c3c32182e2c1d8b33ced))
+* **agent:** add session-scoped read-only git status/diff API ([0f87c33](https://github.com/syrax90/claude_mobile/commit/0f87c338516de5f455c042e4061a717ac1229869))
+* **agent:** add session-scoped read-only git status/diff API ([42d953f](https://github.com/syrax90/claude_mobile/commit/42d953fad3df1e60619018959e3b93eec4ed05ff))
+
+
+### Bug Fixes
+
+* **agent:** address Codex review of the Android git Changes viewer ([f396277](https://github.com/syrax90/claude_mobile/commit/f396277b28723e9851f0b68032c7abbf8cb79900))
+* **agent:** address Codex review on session git status/diff API ([0125ec9](https://github.com/syrax90/claude_mobile/commit/0125ec93c4b59dfa5dba18ecec40e307cf1c0944))
+* **agent:** fix no-newline marker and DU-conflict edge cases in git diff parsing ([bcff490](https://github.com/syrax90/claude_mobile/commit/bcff490466753721b4c85b7516353ce25c88bc04))
+* **agent:** fix trailing-whitespace repo paths and cwd-inside-.git in resolve_repo ([0481741](https://github.com/syrax90/claude_mobile/commit/0481741207304bec9861d4e437775f2b4a8033a1))
+* **agent:** split git output on \n only in session git status/diff service ([b214cd6](https://github.com/syrax90/claude_mobile/commit/b214cd6fe5883c084e2629682404eb615426d41b))
+* bound the status parse and make Changes list keys collision-free ([e92e1b2](https://github.com/syrax90/claude_mobile/commit/e92e1b20bdd057463a712a75c7821ad5be06e970))
+
 ## [0.3.10](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.9...agent-v0.3.10) (2026-08-27)
 
 

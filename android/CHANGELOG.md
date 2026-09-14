@@ -1,5 +1,24 @@
 # Android Changelog
 
+## [3.6.5](https://github.com/syrax90/claude_mobile/compare/android-v3.6.4...android-v3.6.5) (2026-09-14)
+
+
+### Features
+
+* **agent,android,ios,web:** raise the diff ceiling and add a Full file switch to Git Changes ([2e9ac53](https://github.com/syrax90/claude_mobile/commit/2e9ac53fcea55d382e6daafffbe984a5adaa9034))
+* **agent,android,ios,web:** raise the diff ceiling and add a Full file switch to Git Changes ([41758ac](https://github.com/syrax90/claude_mobile/commit/41758ac473dec3772ab8c3c32182e2c1d8b33ced))
+* **agent:** add session-scoped read-only git status/diff API ([0f87c33](https://github.com/syrax90/claude_mobile/commit/0f87c338516de5f455c042e4061a717ac1229869))
+* **android:** add in-session Git Changes and Diff screens behind a terminal overflow menu ([6bfff1c](https://github.com/syrax90/claude_mobile/commit/6bfff1cb01cf165365c30a865b1f664d393f1866))
+
+
+### Bug Fixes
+
+* **agent:** address Codex review of the Android git Changes viewer ([f396277](https://github.com/syrax90/claude_mobile/commit/f396277b28723e9851f0b68032c7abbf8cb79900))
+* **android,ios:** measure the widest diff line for the shared horizontal scroll width ([9232738](https://github.com/syrax90/claude_mobile/commit/9232738ef6fa22984e49671a1d442efe3545a851))
+* **android,ios:** report the shipped entry count in the truncated Changes notice ([6f380e2](https://github.com/syrax90/claude_mobile/commit/6f380e2de4528571aac94b5fabf8358954fabed9))
+* bound the status parse and make Changes list keys collision-free ([e92e1b2](https://github.com/syrax90/claude_mobile/commit/e92e1b20bdd057463a712a75c7821ad5be06e970))
+* **web,android,ios:** hide the diff Context control when it can't change the diff ([ae0633b](https://github.com/syrax90/claude_mobile/commit/ae0633b123a7981fdac0e4ec100b40bc9f487c4e))
+
 ## [3.6.4](https://github.com/syrax90/claude_mobile/compare/android-v3.6.3...android-v3.6.4) (2026-09-04)
 
 

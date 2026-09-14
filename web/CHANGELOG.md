@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.7](https://github.com/syrax90/claude_mobile/compare/web-v0.1.6...web-v0.1.7) (2026-09-14)
+
+
+### Features
+
+* **agent,android,ios,web:** raise the diff ceiling and add a Full file switch to Git Changes ([2e9ac53](https://github.com/syrax90/claude_mobile/commit/2e9ac53fcea55d382e6daafffbe984a5adaa9034))
+* **agent,android,ios,web:** raise the diff ceiling and add a Full file switch to Git Changes ([41758ac](https://github.com/syrax90/claude_mobile/commit/41758ac473dec3772ab8c3c32182e2c1d8b33ced))
+* **agent:** add session-scoped read-only git status/diff API ([0f87c33](https://github.com/syrax90/claude_mobile/commit/0f87c338516de5f455c042e4061a717ac1229869))
+* **web:** add the in-session Git Changes viewer behind a terminal ⋯ menu ([0947270](https://github.com/syrax90/claude_mobile/commit/0947270606ac977b950535a00ac2fdc693c135cd))
+* **web:** create a project from the new-session wizard ([b35034d](https://github.com/syrax90/claude_mobile/commit/b35034d60bdc9c8e72bf6110234e97b09bc6f5bf))
+* **web:** create a project from the new-session wizard ([e163a4d](https://github.com/syrax90/claude_mobile/commit/e163a4d1fad243a538a4acb4fdd4334668e4cccb))
+
+
+### Bug Fixes
+
+* **web,android,ios:** hide the diff Context control when it can't change the diff ([ae0633b](https://github.com/syrax90/claude_mobile/commit/ae0633b123a7981fdac0e4ec100b40bc9f487c4e))
+
 ## [0.1.6](https://github.com/syrax90/claude_mobile/compare/web-v0.1.5...web-v0.1.6) (2026-09-04)
 
 
