@@ -13,7 +13,7 @@
  * refetches stale data on `visibilitychange`, and it would double-fire here.
  */
 import { useSyncExternalStore } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   getSessionGitDiff,
   getSessionGitStatus,
@@ -67,6 +67,11 @@ export function useSessionGitDiff(
       ...(request.origPath === undefined ? {} : { origPath: request.origPath }),
     }),
     queryFn: ({ signal }) => getSessionGitDiff(agentId, sessionId, request, signal),
+    // A context switch keeps the previous diff, and its Context control, on
+    // screen while the new one loads (mobile keeps its last Ready state too).
+    // The pane mounts a fresh observer per session and file, so nothing carries
+    // across either.
+    placeholderData: keepPreviousData,
     meta: { silent: true },
   });
 }

@@ -191,4 +191,41 @@ final class GitDiffDisplayTests: XCTestCase {
         XCTAssertFalse(GitDiffDisplay.showsCounts(try diff("binary")))
         XCTAssertFalse(GitDiffDisplay.showsCounts(try diff("missing")))
     }
+
+    // MARK: - showsContextChoices(_:)
+
+    func testContextChoicesShowForATextDiffWithHunksOfAFileOnBothSides() throws {
+        XCTAssertTrue(GitDiffDisplay.showsContextChoices(try diff("text_modified")))
+        XCTAssertTrue(GitDiffDisplay.showsContextChoices(try diff("renamed_with_heading")))
+        XCTAssertTrue(GitDiffDisplay.showsContextChoices(try diff("truncated")))
+
+        let hunks = [hunk(oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [line("ctx", old: 1, new: 1, text: "a")])]
+        XCTAssertTrue(GitDiffDisplay.showsContextChoices(diff(change: GitDiffResponse.changeCopied, hunks: hunks)))
+    }
+
+    func testContextChoicesHideForAddedDeletedAndTypeChangedFiles() throws {
+        XCTAssertFalse(GitDiffDisplay.showsContextChoices(try diff("no_newline_added")))
+        XCTAssertFalse(GitDiffDisplay.showsContextChoices(try diff("type_changed")))
+
+        let hunks = [hunk(oldStart: 1, oldLines: 1, newStart: 0, newLines: 0, lines: [line("del", old: 1, new: nil, text: "gone")])]
+        XCTAssertFalse(GitDiffDisplay.showsContextChoices(diff(change: GitDiffResponse.changeDeleted, hunks: hunks)))
+    }
+
+    func testContextChoicesHideForEveryNonTextKind() throws {
+        XCTAssertFalse(GitDiffDisplay.showsContextChoices(try diff("submodule")), "a submodule's pointer hunk has no context to widen")
+        XCTAssertFalse(GitDiffDisplay.showsContextChoices(try diff("binary")))
+        XCTAssertFalse(GitDiffDisplay.showsContextChoices(try diff("missing")))
+        XCTAssertFalse(GitDiffDisplay.showsContextChoices(diff(kind: GitDiffResponse.kindTooLarge)))
+    }
+
+    func testContextChoicesHideForATextDiffWithoutHunks() {
+        XCTAssertFalse(GitDiffDisplay.showsContextChoices(diff(change: GitDiffResponse.changeRenamed)), "a pure rename")
+        XCTAssertFalse(GitDiffDisplay.showsContextChoices(diff(oldMode: "100644", newMode: "100755")), "a mode-only change")
+    }
+
+    func testContextChoicesStayForAnAbsentOrUnknownChange() {
+        let hunks = [hunk(oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [line("ctx", old: 1, new: 1, text: "a")])]
+        XCTAssertTrue(GitDiffDisplay.showsContextChoices(diff(change: nil, hunks: hunks)))
+        XCTAssertTrue(GitDiffDisplay.showsContextChoices(diff(change: "merged", hunks: hunks)))
+    }
 }

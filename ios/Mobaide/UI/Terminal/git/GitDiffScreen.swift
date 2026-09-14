@@ -140,15 +140,17 @@ private struct GitDiffContent: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            HStack(spacing: 12) {
-                Text("Context")
-                    .sectionHeading()
-                PixelSegmented(
-                    GitDiffModel.contextChoices.map { ($0, String($0)) },
-                    selection: $model.context,
-                    accessibilityLabel: "Context lines"
-                )
-                .frame(maxWidth: 180)
+            if GitDiffDisplay.showsContextChoices(diff) {
+                HStack(spacing: 12) {
+                    Text("Context")
+                        .sectionHeading()
+                    PixelSegmented(
+                        GitDiffModel.contextChoices.map { ($0, String($0)) },
+                        selection: $model.context,
+                        accessibilityLabel: "Context lines"
+                    )
+                    .frame(maxWidth: 180)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

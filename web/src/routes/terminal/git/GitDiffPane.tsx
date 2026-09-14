@@ -13,6 +13,7 @@ import {
   diffView,
   fileName,
   sessionGitErrorCopy,
+  showsContextChoices,
   type ChangesRow,
   type DiffHunkView,
 } from './sessionGitDisplay';
@@ -41,8 +42,10 @@ export function GitDiffPane({
   }
   return (
     <GitDiffView
-      // A fresh mount per file, so nothing of the previous diff lingers.
-      key={selection.key}
+      // A fresh mount per session and file, so nothing of the previous diff
+      // lingers: the terminal view, and this panel with it, survives a switch
+      // to another already-attached session. JSON, so no id or path can collide.
+      key={JSON.stringify([agentId, sessionId, selection.key])}
       agentId={agentId}
       sessionId={sessionId}
       selection={selection}
@@ -90,29 +93,35 @@ function GitDiffView({
         {origPath !== null && <span className="git-diff-path">from {origPath}</span>}
         <div className="git-diff-meta">
           {diff.data !== undefined && <DiffMeta diff={diff.data} />}
-          <div className="git-diff-context" role="group" aria-label="Context lines">
-            <span className="git-diff-context-label" aria-hidden="true">
-              Context
-            </span>
-            {DIFF_CONTEXT_CHOICES.map((choice) => (
-              <button
-                key={choice}
-                type="button"
-                className="button"
-                aria-pressed={choice === context}
-                onClick={() => {
-                  onContextChange(choice);
-                }}
-              >
-                {choice}
-              </button>
-            ))}
-          </div>
+          {diff.isPlaceholderData && (
+            <span className="state-loading" aria-hidden="true" />
+          )}
+          {diff.data !== undefined && showsContextChoices(diff.data) && (
+            <div className="git-diff-context" role="group" aria-label="Context lines">
+              <span className="git-diff-context-label" aria-hidden="true">
+                Context
+              </span>
+              {DIFF_CONTEXT_CHOICES.map((choice) => (
+                <button
+                  key={choice}
+                  type="button"
+                  className="button"
+                  aria-pressed={choice === context}
+                  onClick={() => {
+                    onContextChange(choice);
+                  }}
+                >
+                  {choice}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
       <DiffBody
         path={entry.path}
         diff={diff.data}
+        busy={diff.isPlaceholderData}
         error={diff.error}
         onRetry={() => {
           void diff.refetch();
@@ -148,6 +157,8 @@ function DiffMeta({ diff }: { diff: SessionGitDiff }) {
 interface DiffBodyProps {
   path: string;
   diff: SessionGitDiff | undefined;
+  /** The shown diff is the previous context's while the new one loads. */
+  busy: boolean;
   error: unknown;
   onRetry: () => void;
 }
@@ -156,7 +167,7 @@ interface DiffBodyProps {
 const ROW_PX = 19;
 const HUNK_HEAD_PX = 28;
 
-function DiffBody({ path, diff, error, onRetry }: DiffBodyProps) {
+function DiffBody({ path, diff, busy, error, onRetry }: DiffBodyProps) {
   if (isTerminalSessionGitError(error) && isSessionGitError(error)) {
     return error.kind === 'agentOutdated' ? (
       <SessionGitState
@@ -182,7 +193,13 @@ function DiffBody({ path, diff, error, onRetry }: DiffBodyProps) {
   const view = diffView(diff);
   const style = { '--git-gutter': `${String(view.gutterDigits + 1)}ch` } as CSSProperties;
   return (
-    <div className="git-diff-body" role="region" aria-label={`Changes to ${path}`} style={style}>
+    <div
+      className="git-diff-body"
+      role="region"
+      aria-label={`Changes to ${path}`}
+      aria-busy={busy}
+      style={style}
+    >
       {error !== undefined && error !== null && (
         <div className="git-changes-stale" role="alert">
           <span>{sessionGitErrorCopy(error)}</span>

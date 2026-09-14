@@ -11,10 +11,18 @@ import type {
 // Both network functions shadowed, as in `useSessionGit.test.tsx`: the status
 // the next poll answers with is whatever `api.status` holds, and every diff
 // request is recorded, because the scope it asks for is what a selection that
-// followed its file across sections must get right.
+// followed its file across sections must get right. A diff answers with the
+// request echoed plus `api.shape` (which also sees the session asked), and
+// while `api.hold` is set it waits in `api.release` so a case can look at the
+// pane mid-load.
 const api = vi.hoisted(() => ({
   status: undefined as SessionGitStatus | undefined,
   diffs: [] as SessionGitDiffRequest[],
+  shape: undefined as
+    | ((request: SessionGitDiffRequest, sessionId: string) => Partial<SessionGitDiff>)
+    | undefined,
+  hold: false,
+  release: [] as (() => void)[],
 }));
 
 vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
@@ -25,9 +33,15 @@ vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
       api.status === undefined
         ? Promise.reject(new Error('no status body staged'))
         : Promise.resolve(api.status),
-    getSessionGitDiff: (_agentId: string, _sessionId: string, request: SessionGitDiffRequest) => {
+    getSessionGitDiff: (_agentId: string, sessionId: string, request: SessionGitDiffRequest) => {
       api.diffs.push(request);
-      return Promise.resolve(diff(request));
+      const body = { ...diff(request), ...api.shape?.(request, sessionId) };
+      if (!api.hold) return Promise.resolve(body);
+      return new Promise<SessionGitDiff>((resolve) => {
+        api.release.push(() => {
+          resolve(body);
+        });
+      });
     },
   };
 });
@@ -80,12 +94,14 @@ const diff = (request: SessionGitDiffRequest): SessionGitDiff => ({
 let client: QueryClient;
 const onClose = vi.fn<() => void>();
 
+const panel = (sessionId = 's1') => (
+  <QueryClientProvider client={client}>
+    <GitChangesPanel agentId="a1" sessionId={sessionId} onClose={onClose} />
+  </QueryClientProvider>
+);
+
 function renderPanel() {
-  return render(
-    <QueryClientProvider client={client}>
-      <GitChangesPanel agentId="a1" sessionId="s1" onClose={onClose} />
-    </QueryClientProvider>,
-  );
+  return render(panel());
 }
 
 /** The one file's row; the badge's tone is part of the accessible name. */
@@ -124,10 +140,52 @@ const selectApp = async (): Promise<void> => {
   });
 };
 
+/** One hunk with an unchanged line naming the file and the context it was asked with. */
+const withHunk =
+  (change: SessionGitDiff['change']) =>
+  (request: SessionGitDiffRequest): Partial<SessionGitDiff> => ({
+    change,
+    hunks: [
+      {
+        old_start: 1,
+        old_lines: 1,
+        new_start: 1,
+        new_lines: 2,
+        heading: '',
+        lines: [
+          {
+            t: 'ctx',
+            old: 1,
+            new: 1,
+            text: `${request.path} at ${String(request.context)}`,
+            no_newline: false,
+          },
+          { t: 'add', old: null, new: 2, text: 'added line', no_newline: false },
+        ],
+      },
+    ],
+  });
+
+const contextGroup = (): HTMLElement | null =>
+  screen.queryByRole('group', { name: 'Context lines' });
+const diffBody = (path = 'src/app.py'): HTMLElement =>
+  screen.getByRole('region', { name: `Changes to ${path}` });
+const metaSpinner = (): Element | null => document.querySelector('.git-diff-meta .state-loading');
+
+const releaseDiffs = async (): Promise<void> => {
+  await act(async () => {
+    for (const release of api.release.splice(0)) release();
+    await Promise.resolve();
+  });
+};
+
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   api.status = undefined;
   api.diffs.length = 0;
+  api.shape = undefined;
+  api.hold = false;
+  api.release.length = 0;
 });
 
 afterEach(() => {
@@ -216,6 +274,117 @@ describe('GitChangesPanel selection across polls', () => {
       });
     });
     expect(appRow()).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+describe('GitChangesPanel diff Context control', () => {
+  it('waits for the diff before offering Context lines for a modified file', async () => {
+    // Whether the choice can matter is read off the response, so there is no
+    // control to show while the first answer is still out.
+    api.shape = withHunk('modified');
+    api.hold = true;
+    await selectApp();
+
+    expect(screen.getByText('Loading diff…')).toBeInTheDocument();
+    expect(contextGroup()).toBeNull();
+
+    await releaseDiffs();
+
+    const group = await screen.findByRole('group', { name: 'Context lines' });
+    expect(within(group).getByRole('button', { name: '3' })).toHaveAttribute('aria-pressed', 'true');
+    expect(diffBody()).toHaveAttribute('aria-busy', 'false');
+  });
+
+  it('offers no Context lines for an added file, which has no unchanged lines to widen', async () => {
+    api.shape = withHunk('added');
+    await selectApp();
+
+    await screen.findByText('src/app.py at 3');
+    expect(contextGroup()).toBeNull();
+  });
+
+  it('keeps the previous diff and its control on screen, marked busy, while a new context loads', async () => {
+    api.shape = withHunk('modified');
+    await selectApp();
+    await screen.findByText('src/app.py at 3');
+
+    const choices = await screen.findByRole('group', { name: 'Context lines' });
+    api.hold = true;
+    fireEvent.click(within(choices).getByRole('button', { name: '10' }));
+    await waitFor(() => {
+      expect(api.diffs.at(-1)).toMatchObject({ path: 'src/app.py', context: 10 });
+    });
+
+    expect(screen.queryByText('Loading diff…')).toBeNull();
+    expect(screen.getByText('src/app.py at 3')).toBeInTheDocument();
+    expect(diffBody()).toHaveAttribute('aria-busy', 'true');
+    expect(metaSpinner()).not.toBeNull();
+    const group = contextGroup();
+    if (group === null) throw new Error('Context control dropped while the new diff loads');
+    expect(within(group).getByRole('button', { name: '10' })).toHaveAttribute('aria-pressed', 'true');
+
+    await releaseDiffs();
+
+    await screen.findByText('src/app.py at 10');
+    expect(screen.queryByText('src/app.py at 3')).toBeNull();
+    expect(diffBody()).toHaveAttribute('aria-busy', 'false');
+    expect(metaSpinner()).toBeNull();
+  });
+
+  it('opens another file on its own loading state, not on the previous file\'s diff', async () => {
+    // Kept-previous data is scoped to one file: the pane remounts per selection.
+    api.shape = withHunk('modified');
+    api.status = status('e1', [entry(), entry({ path: 'src/lib.py' })]);
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: /app\.py/ }));
+    await screen.findByText('src/app.py at 3');
+
+    api.hold = true;
+    fireEvent.click(screen.getByRole('button', { name: /lib\.py/ }));
+    await waitFor(() => {
+      expect(api.diffs.at(-1)).toMatchObject({ path: 'src/lib.py' });
+    });
+
+    expect(screen.getByText('Loading diff…')).toBeInTheDocument();
+    expect(screen.queryByText('src/app.py at 3')).toBeNull();
+    expect(contextGroup()).toBeNull();
+    expect(metaSpinner()).toBeNull();
+
+    await releaseDiffs();
+
+    await screen.findByText('src/lib.py at 3');
+    expect(diffBody('src/lib.py')).toHaveAttribute('aria-busy', 'false');
+  });
+
+  it('opens the same file in another session on its own loading state, not on the previous session\'s diff', async () => {
+    // The terminal view, and the panel with it, survives a route change to an
+    // already-attached session, so the selection carries over; its diff must not.
+    api.shape = (request, sessionId) =>
+      withHunk('modified')({ ...request, path: `${sessionId}/${request.path}` });
+    api.status = status('e1', [entry()]);
+    const view = render(panel('s1'));
+    fireEvent.click(await screen.findByRole('button', { name: /app\.py/ }));
+    await screen.findByText('s1/src/app.py at 3');
+    expect(contextGroup()).not.toBeNull();
+
+    api.hold = true;
+    view.rerender(panel('s2'));
+    await waitFor(() => {
+      expect(api.diffs).toHaveLength(2);
+    });
+
+    expect(api.diffs[1]).toEqual(api.diffs[0]);
+    expect(screen.getByText('Loading diff…')).toBeInTheDocument();
+    expect(screen.queryByText('s1/src/app.py at 3')).toBeNull();
+    expect(contextGroup()).toBeNull();
+    expect(metaSpinner()).toBeNull();
+
+    await releaseDiffs();
+
+    await screen.findByText('s2/src/app.py at 3');
+    expect(screen.queryByText('s1/src/app.py at 3')).toBeNull();
+    expect(diffBody()).toHaveAttribute('aria-busy', 'false');
+    expect(contextGroup()).not.toBeNull();
   });
 });
 

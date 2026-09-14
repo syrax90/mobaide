@@ -4,6 +4,7 @@ import com.mobaide.app.data.network.dto.GitDiffHunk
 import com.mobaide.app.data.network.dto.GitDiffLine
 import com.mobaide.app.data.network.dto.GitDiffResponse
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -37,6 +38,7 @@ class GitDiffRowsTest {
     private fun diff(
         hunks: List<GitDiffHunk> = emptyList(),
         kind: String = GitDiffResponse.KIND_TEXT,
+        change: String? = GitDiffResponse.CHANGE_MODIFIED,
         oldMode: String? = "100644",
         newMode: String? = "100644",
         truncated: Boolean = false,
@@ -45,7 +47,7 @@ class GitDiffRowsTest {
         path = "src/a.py",
         scope = GitDiffResponse.SCOPE_UNSTAGED,
         kind = kind,
-        change = GitDiffResponse.CHANGE_MODIFIED,
+        change = change,
         old_mode = oldMode,
         new_mode = newMode,
         hunks = hunks,
@@ -186,6 +188,52 @@ class GitDiffRowsTest {
 
         assertEquals(3, rows.size)
         assertEquals("Subproject commit 7654", (rows[2] as DiffRow.Line).text)
+    }
+
+    @Test
+    fun showsContextChoices_forATextDiffWithHunks_ofAFileOnBothSides() {
+        for (change in listOf(
+            GitDiffResponse.CHANGE_MODIFIED,
+            GitDiffResponse.CHANGE_RENAMED,
+            GitDiffResponse.CHANGE_COPIED,
+        )) {
+            assertTrue(change, showsContextChoices(diff(hunks = listOf(textHunk), change = change)))
+        }
+    }
+
+    @Test
+    fun showsContextChoices_isOff_forAnAddedDeletedOrTypeChangedFile() {
+        for (change in listOf(
+            GitDiffResponse.CHANGE_ADDED,
+            GitDiffResponse.CHANGE_DELETED,
+            GitDiffResponse.CHANGE_TYPE_CHANGED,
+        )) {
+            assertFalse(change, showsContextChoices(diff(hunks = listOf(textHunk), change = change)))
+        }
+    }
+
+    @Test
+    fun showsContextChoices_isOff_forEveryNonTextKind_evenOneWithHunks() {
+        for (kind in listOf(
+            GitDiffResponse.KIND_BINARY,
+            GitDiffResponse.KIND_SUBMODULE,
+            GitDiffResponse.KIND_TOO_LARGE,
+            GitDiffResponse.KIND_MISSING,
+        )) {
+            assertFalse(kind, showsContextChoices(diff(hunks = listOf(textHunk), kind = kind)))
+        }
+    }
+
+    @Test
+    fun showsContextChoices_isOff_forATextDiffWithoutHunks() {
+        assertFalse(showsContextChoices(diff(change = GitDiffResponse.CHANGE_RENAMED)))
+        assertFalse(showsContextChoices(diff(oldMode = "100644", newMode = "100755")))
+    }
+
+    @Test
+    fun showsContextChoices_staysOn_whenTheChangeIsAbsentOrUnknown() {
+        assertTrue(showsContextChoices(diff(hunks = listOf(textHunk), change = null)))
+        assertTrue(showsContextChoices(diff(hunks = listOf(textHunk), change = "merged")))
     }
 
     @Test

@@ -22,6 +22,19 @@ import {
 export const DIFF_CONTEXT_DEFAULT = 3;
 export const DIFF_CONTEXT_CHOICES: readonly number[] = [3, 10, 25];
 
+const CONTEXTLESS_CHANGES: ReadonlySet<string> = new Set(['added', 'deleted', 'type_changed']);
+
+/**
+ * Whether the context choice can change what is shown: only a text diff with
+ * hunks of a file present on both sides has unchanged lines to widen. An added
+ * or deleted file is one all-add or all-del hunk, and a type change is both.
+ */
+export function showsContextChoices(diff: SessionGitDiff): boolean {
+  if (diff.kind !== 'text' || (diff.hunks ?? []).length === 0) return false;
+  const change = diff.change ?? null;
+  return change === null || !CONTEXTLESS_CHANGES.has(change);
+}
+
 /** Wire groups in display order; the wire's `unstaged` reads as "Changes". */
 const SECTION_ORDER: readonly { group: string; title: string }[] = [
   { group: 'conflicts', title: 'Conflicts' },

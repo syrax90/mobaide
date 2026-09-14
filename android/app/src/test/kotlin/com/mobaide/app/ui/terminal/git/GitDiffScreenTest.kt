@@ -34,13 +34,14 @@ class GitDiffScreenTest {
 
     private fun diff(
         vararg lineTexts: String,
+        change: String = GitDiffResponse.CHANGE_MODIFIED,
         truncated: Boolean = false,
         totalLines: Int = 0,
     ): GitDiffResponse = GitDiffResponse(
         path = "src/minified.js",
         scope = GitDiffResponse.SCOPE_UNSTAGED,
         kind = GitDiffResponse.KIND_TEXT,
-        change = GitDiffResponse.CHANGE_MODIFIED,
+        change = change,
         additions = lineTexts.size,
         hunks = listOf(
             GitDiffHunk(
@@ -88,6 +89,16 @@ class GitDiffScreenTest {
         composeRule.onNodeWithTag(gitDiffContextChipTag(10)).performClick()
 
         assertEquals(listOf(10), chosen)
+    }
+
+    @Test
+    fun anAddedFile_offersNoContextChips() {
+        setContent(ready(diff("first", "second", change = GitDiffResponse.CHANGE_ADDED)))
+
+        composeRule.onNodeWithText("second").assertIsDisplayed()
+        DIFF_CONTEXT_CHOICES.forEach { lines ->
+            composeRule.onNodeWithTag(gitDiffContextChipTag(lines)).assertDoesNotExist()
+        }
     }
 
     @Test

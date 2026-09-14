@@ -227,6 +227,22 @@ enum GitDiffDisplay {
         diff.kind == GitDiffResponse.kindText || diff.kind == GitDiffResponse.kindSubmodule
     }
 
+    private static let contextlessChanges: Set<String> = [
+        GitDiffResponse.changeAdded,
+        GitDiffResponse.changeDeleted,
+        GitDiffResponse.changeTypeChanged,
+    ]
+
+    /// Whether the context choice can change what is shown: only a text diff
+    /// with hunks of a file present on both sides has unchanged lines to widen.
+    /// An added or deleted file is one all-add or all-del hunk, and a type
+    /// change is both.
+    static func showsContextChoices(_ diff: GitDiffResponse) -> Bool {
+        guard diff.kind == GitDiffResponse.kindText, !diff.hunks.isEmpty else { return false }
+        guard let change = diff.change else { return true }
+        return !contextlessChanges.contains(change)
+    }
+
     static func modeChange(_ diff: GitDiffResponse) -> String? {
         guard let old = diff.old_mode, let new = diff.new_mode, old != new else { return nil }
         return "\(old) → \(new)"

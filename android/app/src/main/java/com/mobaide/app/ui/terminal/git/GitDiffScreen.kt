@@ -214,21 +214,23 @@ private fun DiffHeader(diff: GitDiffResponse, context: Int, onSetContext: (Int) 
                     )
                 }
             }
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "Context".chromeCaps(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                DIFF_CONTEXT_CHOICES.forEach { lines ->
-                    ContextChip(
-                        lines = lines,
-                        selected = lines == context,
-                        onClick = { onSetContext(lines) },
+            if (showsContextChoices(diff)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Context".chromeCaps(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    DIFF_CONTEXT_CHOICES.forEach { lines ->
+                        ContextChip(
+                            lines = lines,
+                            selected = lines == context,
+                            onClick = { onSetContext(lines) },
+                        )
+                    }
                 }
             }
         }

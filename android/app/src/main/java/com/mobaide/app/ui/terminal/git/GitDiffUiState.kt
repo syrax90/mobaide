@@ -5,6 +5,22 @@ import com.mobaide.app.data.network.dto.GitDiffResponse
 const val DIFF_CONTEXT_DEFAULT = 3
 val DIFF_CONTEXT_CHOICES: List<Int> = listOf(3, 10, 25)
 
+private val CONTEXTLESS_CHANGES = setOf(
+    GitDiffResponse.CHANGE_ADDED,
+    GitDiffResponse.CHANGE_DELETED,
+    GitDiffResponse.CHANGE_TYPE_CHANGED,
+)
+
+/**
+ * Whether the context choice can change what is shown: only a text diff with
+ * hunks of a file present on both sides has unchanged lines to widen. An added
+ * or deleted file is one all-add or all-del hunk, and a type change is both.
+ */
+internal fun showsContextChoices(diff: GitDiffResponse): Boolean =
+    diff.kind == GitDiffResponse.KIND_TEXT &&
+        diff.hunks.isNotEmpty() &&
+        diff.change !in CONTEXTLESS_CHANGES
+
 /**
  * Columns kept per rendered line. Every diff row is pinned to one shared
  * width, and Compose `Constraints` cannot represent a dimension of 2^18 px or

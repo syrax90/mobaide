@@ -25,6 +25,7 @@ import {
   repoStateLabel,
   sectionsFor,
   sessionGitErrorCopy,
+  showsContextChoices,
   truncatedDiffNotice,
   truncatedEntriesNotice,
   unavailableCopy,
@@ -46,6 +47,10 @@ const entry = (over: Partial<SessionGitEntry> = {}): SessionGitEntry => ({
 /** A group only a newer agent would send; the union is the wire's today. */
 const foreignGroup = (name: string): SessionGitEntry['group'] =>
   name as SessionGitEntry['group'];
+
+/** A change kind only a newer agent would send. */
+const foreignChange = (name: string): SessionGitDiff['change'] =>
+  name as SessionGitDiff['change'];
 
 const repo = (over: Partial<SessionGitRepoInfo> = {}): SessionGitRepoInfo => ({
   toplevel: '/srv/p1',
@@ -412,6 +417,45 @@ describe('diff text', () => {
     expect(hunkHeader(hunk({ old_start: 10, old_lines: 2, new_start: 12, new_lines: 5, heading: 'def main():' }))).toBe(
       '@@ -10,2 +12,5 @@  def main():',
     );
+  });
+});
+
+describe('showsContextChoices', () => {
+  const hunks = [hunk({ lines: [line(), line({ t: 'add', old: null, new: 2, text: 'new' })] })];
+
+  it.each(['modified', 'renamed', 'copied'] as const)(
+    'offers the choice for a %s text diff with hunks',
+    (change) => {
+      expect(showsContextChoices(diff({ change, hunks }))).toBe(true);
+    },
+  );
+
+  it.each(['added', 'deleted', 'type_changed'] as const)(
+    'hides it for a %s file, which has no unchanged lines to widen',
+    (change) => {
+      expect(showsContextChoices(diff({ change, hunks }))).toBe(false);
+    },
+  );
+
+  it.each(['binary', 'submodule', 'too_large', 'missing'] as const)(
+    'hides it for a %s diff, which the context cannot change',
+    (kind) => {
+      // A submodule arrives with its pointer lines as a hunk; still no context.
+      expect(showsContextChoices(diff({ kind, hunks }))).toBe(false);
+    },
+  );
+
+  it('hides it for a text diff with no hunks: a pure rename or a mode-only change', () => {
+    expect(showsContextChoices(diff({ change: 'renamed', hunks: [] }))).toBe(false);
+    expect(
+      showsContextChoices(diff({ old_mode: '100644', new_mode: '100755', hunks: undefined })),
+    ).toBe(false);
+  });
+
+  it('keeps it for a change the agent left out or a newer agent names', () => {
+    expect(showsContextChoices(diff({ change: null, hunks }))).toBe(true);
+    expect(showsContextChoices(diff({ change: undefined, hunks }))).toBe(true);
+    expect(showsContextChoices(diff({ change: foreignChange('merged'), hunks }))).toBe(true);
   });
 });
 

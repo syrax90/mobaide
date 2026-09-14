@@ -45,6 +45,9 @@
   --font-chrome: 'Departure Mono', ui-monospace, SFMono-Regular, Menlo,
     monospace;
   --font-body: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* File contents (the diff viewer): the terminal grid's stack (sessionModel.ts). */
+  --font-code: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+    'Liberation Mono', monospace;
 
   --modal-shadow: #000;
 }

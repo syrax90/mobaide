@@ -3394,7 +3394,6 @@ body:has(dialog[open]) {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  font-family: var(--font-chrome);
   font-size: 0.8rem;
   line-height: 1.45;
   --git-gutter: 3ch;
@@ -3405,8 +3404,10 @@ body:has(dialog[open]) {
    selectable. The placeholder height is set inline per hunk. Sized to its
    content: `content-visibility` brings paint containment, which clips
    overflow at the hunk's own box — a hunk as wide as the pane would swallow
-   the horizontal scroll the long lines rely on. */
+   the horizontal scroll the long lines rely on. The file's own text is set in
+   a system monospace, not the pixel chrome face, which is hard to read as code. */
 .git-hunk {
+  font-family: var(--font-code);
   content-visibility: auto;
   width: max-content;
   min-width: 100%;
