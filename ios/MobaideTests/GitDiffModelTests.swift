@@ -123,4 +123,107 @@ final class GitDiffModelTests: XCTestCase {
         XCTAssertEqual(diff.kind, GitDiffResponse.kindBinary)
         XCTAssertEqual(rows.map(\.kind), [.notice("Binary file — no preview")])
     }
+
+    // MARK: - Stage / Unstage from the review
+
+    private func versionBody(_ git: String) -> String {
+        #"{"name":"mobaide-agent","server_version":"1.4.0","protocol_versions":[7],"min_client_version":1,"capabilities":{"git":\#(git)}}"#
+    }
+
+    /// A model whose agent advertises `stage`, with the probe's traffic already forgotten.
+    private func stagingModel(
+        path: String = "src/a.py",
+        scope: String = GitDiffResponse.scopeUnstaged,
+        origPath: String? = nil
+    ) async -> GitDiffModel {
+        let model = makeModel(path: path, scope: scope, origPath: origPath)
+        StubURLProtocol.enqueue(status: 200, body: versionBody(#"{"changes":true,"stage":true}"#))
+        await model.loadCapabilities()
+        StubURLProtocol.reset()
+        return model
+    }
+
+    func testStageActionFollowsTheRouteScopeOnceTheAgentAdvertisesStage() async {
+        let unstaged = makeModel()
+        XCTAssertNil(unstaged.stageAction, "nothing before the probe")
+        StubURLProtocol.enqueue(status: 200, body: versionBody(#"{"changes":true,"stage":true}"#))
+        await unstaged.loadCapabilities()
+        XCTAssertEqual(requestURLs, ["http://agent.example.com/api/version"])
+        XCTAssertEqual(unstaged.stageAction?.label, "Stage")
+        XCTAssertEqual(unstaged.stageAction?.stage, true)
+
+        let untracked = await stagingModel(scope: GitDiffResponse.scopeUntracked)
+        XCTAssertEqual(untracked.stageAction?.label, "Stage")
+
+        let staged = await stagingModel(path: "src/new.py", scope: GitDiffResponse.scopeStaged, origPath: "src/old.py")
+        XCTAssertEqual(staged.stageAction?.label, "Unstage")
+        XCTAssertEqual(staged.stageAction?.stage, false)
+
+        let odd = await stagingModel(scope: "weird")
+        XCTAssertNil(odd.stageAction)
+    }
+
+    func testStageActionStaysAbsentOnAReadOnlyAgentOrAFailedProbe() async {
+        let readOnly = makeModel()
+        StubURLProtocol.enqueue(status: 200, body: versionBody(#"{"changes":true}"#))
+        await readOnly.loadCapabilities()
+        XCTAssertNil(readOnly.stageAction)
+
+        let offline = makeModel()
+        StubURLProtocol.enqueue(status: 503, body: #"{"detail":"Agent is offline"}"#)
+        await offline.loadCapabilities()
+        XCTAssertNil(offline.stageAction)
+        XCTAssertEqual(offline.capabilities, .none)
+    }
+
+    func testRunStageActionSendsBothSidesOfARenameAndMarksTheMove() async throws {
+        let model = await stagingModel(path: "src/new.py", scope: GitDiffResponse.scopeStaged, origPath: "src/old.py")
+        StubURLProtocol.enqueue(status: 200, body: #"{"ok":true}"#)
+
+        await model.runStageAction()
+
+        XCTAssertEqual(requestURLs, ["http://agent.example.com/api/sessions/s1/git/unstage"])
+        XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "POST")
+        let sent = try JSONDecoder().decode(GitPathsRequest.self, from: try XCTUnwrap(StubURLProtocol.bodies.first))
+        XCTAssertEqual(sent, GitPathsRequest(paths: ["src/new.py", "src/old.py"]))
+        XCTAssertTrue(model.didMove)
+        XCTAssertFalse(model.isMutating)
+        XCTAssertNil(model.toast)
+    }
+
+    func testRunStageActionOnAModifiedFileStagesItsOnePath() async throws {
+        let model = await stagingModel()
+        StubURLProtocol.enqueue(status: 200, body: #"{"ok":true}"#)
+
+        await model.runStageAction()
+
+        XCTAssertEqual(requestURLs, ["http://agent.example.com/api/sessions/s1/git/stage"])
+        let sent = try JSONDecoder().decode(GitPathsRequest.self, from: try XCTUnwrap(StubURLProtocol.bodies.first))
+        XCTAssertEqual(sent, GitPathsRequest(paths: ["src/a.py"]))
+        XCTAssertTrue(model.didMove)
+    }
+
+    func testRunStageActionReportsARefusalAndStaysOnTheFile() async {
+        let model = await stagingModel()
+        StubURLProtocol.enqueue(status: 409, body: #"{"detail":{"code":"pathspec_mismatch","message":"did not match"}}"#)
+
+        await model.runStageAction()
+
+        XCTAssertEqual(model.toast?.text, "That file changed under you — refreshed.")
+        XCTAssertEqual(model.toast?.tone, .danger)
+        XCTAssertFalse(model.didMove)
+        XCTAssertFalse(model.isMutating)
+    }
+
+    func testRunStageActionWithoutAnActionSendsNothing() async {
+        let model = makeModel()
+        StubURLProtocol.enqueue(status: 200, body: versionBody(#"{"changes":true}"#))
+        await model.loadCapabilities()
+        StubURLProtocol.reset()
+
+        await model.runStageAction()
+
+        XCTAssertEqual(requestURLs, [])
+        XCTAssertFalse(model.didMove)
+    }
 }

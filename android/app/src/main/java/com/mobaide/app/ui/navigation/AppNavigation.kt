@@ -289,12 +289,20 @@ fun AppNavigation(
                         navController.navigate(Routes.sessionGitChanges(sessionId))
                     }
                 },
+                onOpenGitCommit = {
+                    entry.arguments?.getString("sessionId")?.let { sessionId ->
+                        navController.navigate(Routes.sessionGitChanges(sessionId, commit = true))
+                    }
+                },
             )
         }
 
         composable(
             route = Routes.SESSION_GIT_CHANGES,
-            arguments = listOf(navArgument("sessionId") { type = NavType.StringType }),
+            arguments = listOf(
+                navArgument("sessionId") { type = NavType.StringType },
+                navArgument("commit") { type = NavType.BoolType; defaultValue = false },
+            ),
         ) {
             GitChangesScreen(
                 viewModel = hiltViewModel(),

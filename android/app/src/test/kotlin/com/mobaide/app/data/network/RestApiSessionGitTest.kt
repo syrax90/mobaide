@@ -1,6 +1,9 @@
 package com.mobaide.app.data.network
 
 import com.mobaide.app.data.auth.TokenStore
+import com.mobaide.app.data.network.dto.GitCommitRequest
+import com.mobaide.app.data.network.dto.GitDiscardRequest
+import com.mobaide.app.data.network.dto.GitPathsRequest
 import io.mockk.CapturingSlot
 import io.mockk.Runs
 import io.mockk.every
@@ -13,6 +16,8 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -30,6 +35,7 @@ import okio.buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.io.IOException
@@ -77,8 +83,31 @@ class RestApiSessionGitTest {
         return f.api to f.captured
     }
 
+    /**
+     * The mutating routes go through the plain `execute` path (a mutation the
+     * agent has started runs to completion either way), stubbed as
+     * `RestApiTest` does.
+     */
+    private fun newExecuteApi(bodyJson: String, code: Int = 200): Pair<RestApi, CapturingSlot<Request>> {
+        val client = mockk<OkHttpClient>()
+        val tokenStore = mockk<TokenStore>()
+        every { tokenStore.getEffectiveBaseUrl() } returns "https://api.example.com"
+        val captured = slot<Request>()
+        val call = mockk<Call>()
+        every { client.newCall(capture(captured)) } returns call
+        every { call.execute() } answers { responseFor(captured.captured, bodyJson, code) }
+        return RestApi(client, tokenStore) to captured
+    }
+
+    private fun Request.bodyJson(): JsonElement {
+        val buffer = Buffer()
+        body!!.writeTo(buffer)
+        return Json.parseToJsonElement(buffer.readUtf8())
+    }
+
     private val statusBody = """{"session_id":"s1","etag":"e1"}"""
     private val diffBody = """{"path":"x","scope":"unstaged","kind":"text"}"""
+    private val okBody = """{"ok":true}"""
 
     @Test
     fun getSessionGitStatus_omitsTheEtagWhenThereIsNone() = runTest {
@@ -201,6 +230,108 @@ class RestApiSessionGitTest {
             fail("expected IOException")
         } catch (e: IOException) {
             assertEquals("stream reset", e.message)
+        }
+    }
+
+    // MARK: - Mutations
+
+    @Test
+    fun stageSessionGit_postsThePaths_asAJsonBody() = runTest {
+        val (api, captured) = newExecuteApi(okBody)
+
+        val resp = api.stageSessionGit("s1", GitPathsRequest(listOf("src/new name.py", "src/old.py")))
+
+        assertTrue(resp.ok)
+        val request = captured.captured
+        assertEquals("POST", request.method)
+        assertEquals("https://api.example.com/api/sessions/s1/git/stage", request.url.toString())
+        assertEquals("application/json", request.body?.contentType()?.toString()?.substringBefore(';'))
+        assertEquals(
+            Json.parseToJsonElement("""{"paths":["src/new name.py","src/old.py"]}"""),
+            request.bodyJson(),
+        )
+    }
+
+    @Test
+    fun unstageSessionGit_postsToItsOwnLeaf() = runTest {
+        val (api, captured) = newExecuteApi(okBody)
+
+        api.unstageSessionGit("s1", GitPathsRequest(listOf("keep.txt")))
+
+        assertEquals("POST", captured.captured.method)
+        assertEquals("https://api.example.com/api/sessions/s1/git/unstage", captured.captured.url.toString())
+        assertEquals(Json.parseToJsonElement("""{"paths":["keep.txt"]}"""), captured.captured.bodyJson())
+    }
+
+    @Test
+    fun discardSessionGit_carriesTheScope() = runTest {
+        val (api, captured) = newExecuteApi(okBody)
+
+        api.discardSessionGit("s1", GitDiscardRequest(listOf("notes.txt"), GitDiscardRequest.SCOPE_UNTRACKED))
+
+        assertEquals("https://api.example.com/api/sessions/s1/git/discard", captured.captured.url.toString())
+        assertEquals(
+            Json.parseToJsonElement("""{"paths":["notes.txt"],"scope":"untracked"}"""),
+            captured.captured.bodyJson(),
+        )
+    }
+
+    @Test
+    fun commitSessionGit_sendsTheFlags_andDecodesTheNewHead() = runTest {
+        val (api, captured) = newExecuteApi(
+            """{"oid":"4890423520f4dcd158b85374f44fc8819a813ac2","short_oid":"4890423","subject":"Fix"}""",
+        )
+
+        val resp = api.commitSessionGit("s1", GitCommitRequest("Fix\n\nWhy.", amend = true, no_verify = true))
+
+        assertEquals("4890423", resp.short_oid)
+        assertEquals("Fix", resp.subject)
+        assertEquals("https://api.example.com/api/sessions/s1/git/commit", captured.captured.url.toString())
+        assertEquals(
+            Json.parseToJsonElement("""{"message":"Fix\n\nWhy.","amend":true,"no_verify":true}"""),
+            captured.captured.bodyJson(),
+        )
+    }
+
+    @Test
+    fun commitSessionGit_leavesDefaultFlagsToTheAgent() = runTest {
+        // The encoder drops defaults; the agent's model defaults both flags to
+        // false, so a plain commit is `{"message": …}` on the wire.
+        val (api, captured) = newExecuteApi("""{"oid":"a","short_oid":"a","subject":"x"}""")
+
+        api.commitSessionGit("s1", GitCommitRequest("x"))
+
+        assertEquals(Json.parseToJsonElement("""{"message":"x"}"""), captured.captured.bodyJson())
+    }
+
+    @Test
+    fun getSessionGitCommitContext_readsTheNestedLeaf() = runTest {
+        val (api, captured) = newApi(
+            """{"author":{"name":"Ada","email":"ada@example.com"},"head":null}""",
+        )
+
+        val context = api.getSessionGitCommitContext("s1")
+
+        assertEquals("GET", captured.captured.method)
+        assertEquals(
+            "https://api.example.com/api/sessions/s1/git/commit/context",
+            captured.captured.url.toString(),
+        )
+        assertEquals("Ada", context.author?.name)
+        assertNull(context.head)
+    }
+
+    @Test
+    fun aRefusal_surfacesAsAnApiException_withThe409Body() = runTest {
+        val body = """{"detail":{"code":"index_locked","message":"index.lock exists"}}"""
+        val (api, _) = newExecuteApi(body, code = 409)
+
+        try {
+            api.stageSessionGit("s1", GitPathsRequest(listOf("a.txt")))
+            fail("expected ApiException")
+        } catch (e: ApiException) {
+            assertEquals(409, e.code)
+            assertEquals(body, e.errorBody)
         }
     }
 }

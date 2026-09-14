@@ -3948,7 +3948,12 @@ class TestProxyVersionCapabilities:
         expected = build_cli_capabilities(mock_app_state.cli_launchers)
         assert result["body"]["capabilities"] == {
             "cli": expected,
-            "git": {"changes": True},
+            "git": {
+                "changes": True,
+                "stage": True,
+                "discard": True,
+                "commit": True,
+            },
         }
 
     async def test_missing_cli_launchers_attr_degrades_to_empty_cli(
@@ -3968,7 +3973,12 @@ class TestProxyVersionCapabilities:
         assert result["status"] == 200
         assert result["body"]["capabilities"] == {
             "cli": {},
-            "git": {"changes": True},
+            "git": {
+                "changes": True,
+                "stage": True,
+                "discard": True,
+                "commit": True,
+            },
         }
 
     async def test_version_body_keeps_core_fields(self, client, mock_app_state):

@@ -1,4 +1,5 @@
-"""Pydantic wire models for the session-scoped read-only git Changes API.
+"""Pydantic wire models for the session-scoped git Changes API (status/diff
+reads and the stage/unstage/discard/commit mutations).
 
 ``GET /api/sessions/{id}/git/status`` and ``.../git/diff`` share one parser
 on the agent so the three clients render dumb, pre-shaped JSON. Every key is
@@ -16,7 +17,15 @@ LINE_LIMIT = 5000
 BYTE_LIMIT = 1024 * 1024
 
 # Advertised as ``capabilities.git`` on ``GET /api/version`` (both transports).
-GIT_CAPABILITIES: dict[str, bool] = {"changes": True}
+# Clients render the Changes viewer on ``changes`` and gate every mutating
+# control on its own key, so an agent without a key degrades to read-only.
+GIT_CAPABILITIES: dict[str, bool] = {
+    "changes": True,
+    "stage": True,
+    "discard": True,
+    "commit": True,
+}
+MESSAGE_LIMIT = 64 * 1024
 
 UnavailableReason = Literal[
     "not_a_repo",
@@ -30,6 +39,7 @@ RepoState = Literal[
 ]
 EntryGroup = Literal["conflicts", "staged", "unstaged", "untracked"]
 DiffScope = Literal["staged", "unstaged", "untracked"]
+DiscardScope = Literal["unstaged", "untracked"]
 DiffKind = Literal["text", "binary", "submodule", "too_large", "missing"]
 DiffChange = Literal[
     "modified", "added", "deleted", "renamed", "copied", "type_changed"
@@ -130,3 +140,51 @@ class GitDiffResponse(BaseModel):
     total_lines: int = 0
     line_limit: int = LINE_LIMIT
     byte_limit: int = BYTE_LIMIT
+
+
+class GitPathsRequest(BaseModel):
+    """Repo-relative paths as ``status`` reported them; a renamed entry lists
+    both ``path`` and ``orig_path``."""
+
+    paths: list[str] = Field(min_length=1, max_length=ENTRY_LIMIT)
+
+
+class GitDiscardRequest(GitPathsRequest):
+    scope: DiscardScope
+
+
+class GitMutationResponse(BaseModel):
+    ok: Literal[True] = True
+
+
+class GitCommitRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=MESSAGE_LIMIT)
+    amend: bool = False
+    no_verify: bool = False
+
+
+class GitCommitResponse(BaseModel):
+    oid: str
+    short_oid: str
+    subject: str
+
+
+class GitCommitAuthor(BaseModel):
+    name: str
+    email: str
+
+
+class GitCommitHead(BaseModel):
+    oid: str
+    short_oid: str
+    subject: str
+    body: str = ""
+
+
+class GitCommitContextResponse(BaseModel):
+    """What the commit sheet needs before the user types: ``author`` is null
+    when git cannot determine an identity (the commit would be refused with
+    ``identity_required``), ``head`` is null on an unborn branch (no amend)."""
+
+    author: GitCommitAuthor | None = None
+    head: GitCommitHead | None = None

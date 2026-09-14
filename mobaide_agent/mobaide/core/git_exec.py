@@ -1,4 +1,5 @@
-"""Hardened ``git`` runner for the read-only session status/diff API.
+"""Hardened ``git`` runner for the session git API (status/diff reads and the
+stage/unstage/discard/commit mutations).
 
 Distinct from :func:`mobaide.linear.worktree._run_git` on purpose: that
 helper's argv and kwargs are pinned by its callers and tests, and it has no
@@ -6,6 +7,9 @@ timeout, no output cap and no environment scrubbing. This runner is the one
 the Changes viewer relies on, so it is bounded on every axis:
 
 * bytes only — text mode would rewrite CRLF inside diff content;
+* an optional ``stdin`` payload is fed by its own writer thread, so a
+  ``--pathspec-from-file=-`` list or a ``commit -F -`` message larger than
+  the pipe buffer cannot deadlock against the readers;
 * two reader threads drain stdout/stderr concurrently (a bare ``read()``
   deadlocks once the other pipe fills);
 * ``max_bytes`` and ``timeout`` are enforced by killing the whole process
@@ -46,7 +50,8 @@ _REAP_TIMEOUT = 10.0
 # ``GIT_COMMON_DIR``/``GIT_OBJECT_DIRECTORY`` redirect the repository,
 # ``GIT_CONFIG_PARAMETERS`` and ``GIT_CONFIG_COUNT``/``KEY_n``/``VALUE_n`` inject
 # config, ``GIT_EXTERNAL_DIFF``/``GIT_PAGER`` run programs and ``GIT_TRACE*``
-# write files. Local read-only status/diff needs none of them.
+# write files. Neither the reads nor the mutations need them; a commit takes
+# its identity from repo/global config (``GIT_AUTHOR_*`` is scrubbed too).
 _SCRUBBED_ENV_PREFIX = "GIT_"
 _FORCED_ENV = {
     "LC_ALL": "C",
@@ -148,6 +153,7 @@ def run_capped(
     timeout: float,
     max_bytes: int,
     env: Mapping[str, str] | None = None,
+    stdin: bytes | None = None,
 ) -> CmdResult:
     """Run ``argv`` with bounded runtime and bounded stdout (blocking).
 
@@ -156,7 +162,7 @@ def run_capped(
     """
     popen_kwargs: dict[str, object] = {
         "cwd": cwd,
-        "stdin": subprocess.DEVNULL,
+        "stdin": subprocess.DEVNULL if stdin is None else subprocess.PIPE,
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
         "env": dict(env) if env is not None else None,
@@ -197,9 +203,27 @@ def run_capped(
         except (OSError, ValueError):
             return
 
+    def write_in() -> None:
+        try:
+            proc.stdin.write(stdin)  # type: ignore[union-attr, arg-type]
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                proc.stdin.close()  # type: ignore[union-attr]
+            except (OSError, ValueError):
+                pass
+
     t_out = threading.Thread(target=read_out, name="git-stdout", daemon=True)
     t_err = threading.Thread(target=read_err, name="git-stderr", daemon=True)
+    t_in = (
+        threading.Thread(target=write_in, name="git-stdin", daemon=True)
+        if stdin is not None
+        else None
+    )
     deadline = time.monotonic() + timeout
+    if t_in is not None:
+        t_in.start()
     t_out.start()
     t_err.start()
 
@@ -218,6 +242,8 @@ def run_capped(
             pass
     t_out.join(_REAP_TIMEOUT)
     t_err.join(_REAP_TIMEOUT)
+    if t_in is not None:
+        t_in.join(_REAP_TIMEOUT)
     for stream in (proc.stdout, proc.stderr):
         try:
             stream.close()
@@ -244,8 +270,10 @@ async def run_git(
     timeout: float,
     max_bytes: int,
     env_extra: Mapping[str, str] | None = None,
+    stdin: bytes | None = None,
 ) -> CmdResult:
-    """Run ``git <prefix> *args`` in ``cwd``; callers put paths after ``--``."""
+    """Run ``git <prefix> *args`` in ``cwd``; callers put paths after ``--``
+    (or feed them NUL-separated through ``stdin`` with ``--pathspec-from-file=-``)."""
     binary = git_binary()
     if binary is None:
         raise GitUnavailableError("git binary not on PATH")
@@ -258,6 +286,7 @@ async def run_git(
             timeout=timeout,
             max_bytes=max_bytes,
             env=git_env(env_extra),
+            stdin=stdin,
         )
     except OSError as exc:
         if not os.path.isdir(cwd):

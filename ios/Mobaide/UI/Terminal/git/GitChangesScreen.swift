@@ -1,26 +1,31 @@
 import SwiftUI
 
 /// Session-scoped working-tree overview (Android `GitChangesScreen`), pushed
-/// from the terminal's `⋯ → Git → Changes…`.
+/// from the terminal's `⋯ → Git → Changes…` (or `Commit…`, which opens the
+/// commit sheet over it).
 struct GitChangesScreen: View {
     let sessionId: String
+    var openCommit = false
     @Environment(\.appContainer) private var container
 
     var body: some View {
         if let container {
-            GitChangesContent(container: container, sessionId: sessionId)
+            GitChangesContent(container: container, sessionId: sessionId, openCommit: openCommit)
         }
     }
 }
 
 private struct GitChangesContent: View {
     @State private var model: GitChangesModel
+    /// Multi-select lives in SwiftUI's edit mode so the `List` draws the
+    /// checkmarks; the model owns the ticked ids.
+    @State private var editMode: EditMode = .inactive
 
     @Environment(Router.self) private var router
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.mobaideColors) private var colors
 
-    init(container: AppContainer, sessionId: String) {
+    init(container: AppContainer, sessionId: String, openCommit: Bool) {
         let sessionRepository = container.sessionRepository
         _model = State(initialValue: GitChangesModel(
             sessionId: sessionId,
@@ -28,14 +33,17 @@ private struct GitChangesContent: View {
             agentEventBus: container.agentEventBus,
             projectName: {
                 sessionRepository.currentSessions.first { $0.session_id == sessionId }?.project_name
-            }
+            },
+            openCommit: openCommit
         ))
     }
 
     var body: some View {
         content
-            .navigationTitle("Changes")
+            .environment(\.editMode, $editMode)
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar { toolbarContent }
             .refreshable { await model.load() }
             // Keyed on `.background` like the terminal's own gate: nobody reads
             // this screen from a backgrounded app, and `.inactive` (Control
@@ -47,7 +55,116 @@ private struct GitChangesContent: View {
                 await model.run()
             }
             .task { await model.observeGitChanged() }
+            .task {
+                await model.loadCapabilities()
+                model.consumeOpenCommit()
+            }
+            .confirmationDialog(
+                model.discardPrompt?.title ?? "Discard?",
+                isPresented: discardPresented,
+                titleVisibility: .visible,
+                presenting: model.discardPrompt
+            ) { _ in
+                Button("Discard", role: .destructive) {
+                    Task {
+                        await model.confirmDiscard()
+                        endSelectionIfEmpty()
+                    }
+                }
+                Button("Cancel", role: .cancel) { model.dismissDiscard() }
+            } message: { prompt in
+                Text(prompt.body)
+            }
+            .sheet(isPresented: commitPresented) {
+                GitCommitSheet(model: model)
+            }
+            .toast($model.toast)
+            .onChange(of: editMode) { _, newValue in
+                if !newValue.isEditing { model.selection = [] }
+            }
+            .onChange(of: model.hasActionableRows) { _, newValue in
+                if !newValue { editMode = .inactive }
+            }
             .holdsSessionWatch(model.sessionId)
+    }
+
+    private var title: String {
+        guard editMode.isEditing else { return "Changes" }
+        return model.selection.isEmpty ? "Select files" : "\(model.selection.count) selected"
+    }
+
+    // Only the prompt: SwiftUI writes this false before the confirm action
+    // runs, and the rows it acts on must survive that write.
+    private var discardPresented: Binding<Bool> {
+        Binding(
+            get: { model.discardPrompt != nil },
+            set: { if !$0 { model.discardPrompt = nil } }
+        )
+    }
+
+    /// Selection mode ends with the last ticked row, as on Android; a partly
+    /// applicable selection keeps it.
+    private func endSelectionIfEmpty() {
+        if editMode.isEditing, model.selection.isEmpty {
+            withAnimation { editMode = .inactive }
+        }
+    }
+
+    private var commitPresented: Binding<Bool> {
+        Binding(
+            get: { model.commitSheet != nil },
+            set: { if !$0 { model.closeCommit() } }
+        )
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            if editMode.isEditing {
+                Button("Done") { withAnimation { editMode = .inactive } }
+            } else {
+                if model.hasActionableRows {
+                    Button("Select") { withAnimation { editMode = .active } }
+                        .disabled(model.isMutating)
+                }
+                if model.capabilities.commit {
+                    Button { model.openCommit() } label: {
+                        Label("Commit…", systemImage: "checkmark.circle")
+                    }
+                    .disabled(model.stagedCount == 0 || model.isMutating)
+                    .accessibilityLabel("Commit")
+                }
+            }
+        }
+        // The selection toolbar: each action acts on the ticked rows it
+        // applies to and is enabled only while that subset is non-empty.
+        if editMode.isEditing {
+            ToolbarItemGroup(placement: .bottomBar) {
+                let subsets = model.selectionSubsets
+                if model.capabilities.stage {
+                    Button("Stage") {
+                        Task {
+                            await model.stage(subsets.stage)
+                            endSelectionIfEmpty()
+                        }
+                    }
+                    .disabled(subsets.stage.isEmpty || model.isMutating)
+                    Spacer()
+                    Button("Unstage") {
+                        Task {
+                            await model.unstage(subsets.unstage)
+                            endSelectionIfEmpty()
+                        }
+                    }
+                    .disabled(subsets.unstage.isEmpty || model.isMutating)
+                }
+                if model.capabilities.discard {
+                    Spacer()
+                    Button("Discard…", role: .destructive) { model.requestDiscard(subsets.discard) }
+                        .disabled(subsets.discard.isEmpty || model.isMutating)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -82,13 +199,15 @@ private struct GitChangesContent: View {
     }
 
     private func changesList(status: GitStatusResponse, repo: GitRepoInfo, sections: [GitChangesSection]) -> some View {
-        List {
+        List(selection: $model.selection) {
             Section {
                 headerCard(repo: repo, cwd: status.cwd)
                     .pixelListRow()
+                    .selectionDisabled()
                 if let staleError = model.staleError {
                     staleBanner(staleError)
                         .pixelListRow()
+                        .selectionDisabled()
                 }
                 if status.truncated {
                     Text(GitChangesDisplay.truncatedNotice(status))
@@ -97,28 +216,96 @@ private struct GitChangesContent: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .pixelInfoBanner()
                         .pixelListRow()
+                        .selectionDisabled()
                 }
                 if sections.isEmpty {
                     PixelEmptyState("Working tree clean", systemImage: "checkmark.circle")
                         .pixelListRow()
+                        .selectionDisabled()
                 }
             }
             ForEach(sections) { section in
                 Section(header: sectionHeader(section)) {
                     ForEach(section.rows) { row in
-                        Button {
-                            router.navigate(to: model.diffRoute(for: row.entry))
-                        } label: {
-                            GitChangesRowView(entry: row.entry)
-                        }
-                        .buttonStyle(.plain)
-                        .pixelCard()
-                        .pixelListRow()
+                        self.row(row)
+                            .pixelCard(selected: editMode.isEditing && model.selection.contains(row.id))
+                            .pixelListRow()
                     }
                 }
             }
         }
         .pixelList()
+    }
+
+    /// A tap opens the diff, a leading swipe stages or unstages (a full swipe
+    /// counts), a trailing swipe offers Discard behind its confirmation, and
+    /// the context menu repeats all three plus Select. In edit mode the row is
+    /// plain content so the `List` owns the tap.
+    @ViewBuilder
+    private func row(_ row: GitChangesRow) -> some View {
+        let actions = GitChangesDisplay.rowActions(row.entry, capabilities: model.capabilities)
+        if editMode.isEditing {
+            if actions.any {
+                GitChangesRowView(entry: row.entry, chevron: false)
+            } else {
+                GitChangesRowView(entry: row.entry, chevron: false)
+                    .selectionDisabled()
+            }
+        } else {
+            Button {
+                router.navigate(to: model.diffRoute(for: row.entry))
+            } label: {
+                GitChangesRowView(entry: row.entry, chevron: true)
+            }
+            .buttonStyle(.plain)
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                if actions.stage {
+                    Button { Task { await model.stage([row]) } } label: {
+                        Label("Stage", systemImage: "plus")
+                    }
+                    .tint(colors.accent)
+                }
+                if actions.unstage {
+                    Button { Task { await model.unstage([row]) } } label: {
+                        Label("Unstage", systemImage: "minus")
+                    }
+                    .tint(colors.accent)
+                }
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                if actions.discard {
+                    Button(role: .destructive) { model.requestDiscard([row]) } label: {
+                        Label("Discard…", systemImage: "trash")
+                    }
+                }
+            }
+            .contextMenu {
+                if actions.stage {
+                    Button { Task { await model.stage([row]) } } label: {
+                        Label("Stage", systemImage: "plus")
+                    }
+                }
+                if actions.unstage {
+                    Button { Task { await model.unstage([row]) } } label: {
+                        Label("Unstage", systemImage: "minus")
+                    }
+                }
+                if actions.discard {
+                    Button(role: .destructive) { model.requestDiscard([row]) } label: {
+                        Label("Discard…", systemImage: "trash")
+                    }
+                }
+                if actions.any {
+                    Button {
+                        model.selection.insert(row.id)
+                        withAnimation { editMode = .active }
+                    } label: {
+                        Label("Select", systemImage: "checkmark.circle")
+                    }
+                }
+            }
+            .disabled(model.isMutating && actions.any)
+        }
     }
 
     private func sectionHeader(_ section: GitChangesSection) -> some View {
@@ -128,6 +315,17 @@ private struct GitChangesContent: View {
             Text("\(section.rows.count)")
                 .chromeText()
                 .foregroundStyle(colors.textMuted)
+            if !editMode.isEditing,
+               let action = GitChangesDisplay.sectionAction(section, capabilities: model.capabilities) {
+                Button(action.label) {
+                    Task {
+                        if action.stage { await model.stage(section.rows) } else { await model.unstage(section.rows) }
+                    }
+                }
+                .buttonStyle(.pixelSmall)
+                .disabled(model.isMutating)
+                .accessibilityLabel("\(action.label) \(section.title)")
+            }
         }
     }
 
@@ -183,6 +381,7 @@ private struct GitChangesContent: View {
 /// rename source or directory, and a submodule marker.
 private struct GitChangesRowView: View {
     let entry: GitStatusEntry
+    var chevron = true
 
     @Environment(\.mobaideColors) private var colors
 
@@ -209,9 +408,11 @@ private struct GitChangesRowView: View {
                 }
             }
             Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(colors.gray)
+            if chevron {
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(colors.gray)
+            }
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)

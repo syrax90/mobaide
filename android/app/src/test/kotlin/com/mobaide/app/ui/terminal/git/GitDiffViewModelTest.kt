@@ -5,13 +5,16 @@ import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.GitDiffHunk
 import com.mobaide.app.data.network.dto.GitDiffLine
 import com.mobaide.app.data.network.dto.GitDiffResponse
+import com.mobaide.app.data.repository.GitCapabilities
 import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.SessionGitException
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
+import app.cash.turbine.test
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -20,6 +23,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -206,5 +210,112 @@ class GitDiffViewModelTest {
         assertTrue(tracker.isHeld("s1"))
         vm.releaseWatch()
         assertFalse(tracker.isHeld("s1"))
+    }
+
+    // MARK: - Stage / Unstage from the review
+
+    private val renameArgs: Map<String, Any?> = mapOf(
+        "sessionId" to "s1", "path" to "src/new.py", "scope" to "staged", "origPath" to "src/old.py",
+    )
+
+    private fun TestScope.subscribeAction(vm: GitDiffViewModel) {
+        backgroundScope.launch { vm.stageAction.collect { } }
+        runCurrent()
+    }
+
+    private fun stagingRepo(): GitRepository = mockk<GitRepository>(relaxed = true) {
+        coEvery { gitCapabilities() } returns GitCapabilities(stage = true)
+    }
+
+    @Test
+    fun stageAction_followsTheRouteScope_onceTheAgentAdvertisesStage() = runTest {
+        val unstaged = newViewModel(stagingRepo())
+        subscribeAction(unstaged)
+        assertEquals(DiffStageAction("Stage", stage = true), unstaged.stageAction.value)
+
+        val untracked = newViewModel(stagingRepo(), routeArgs + ("scope" to "untracked"))
+        subscribeAction(untracked)
+        assertEquals(DiffStageAction("Stage", stage = true), untracked.stageAction.value)
+
+        val staged = newViewModel(stagingRepo(), renameArgs)
+        subscribeAction(staged)
+        assertEquals(DiffStageAction("Unstage", stage = false), staged.stageAction.value)
+    }
+
+    @Test
+    fun stageAction_isAbsent_withoutTheCapability_orForAnUnknownScope() = runTest {
+        val readOnly = newViewModel(mockk(relaxed = true) {
+            coEvery { gitCapabilities() } returns GitCapabilities.NONE
+        })
+        subscribeAction(readOnly)
+        assertNull(readOnly.stageAction.value)
+
+        val odd = newViewModel(stagingRepo(), routeArgs + ("scope" to "weird"))
+        subscribeAction(odd)
+        assertNull(odd.stageAction.value)
+    }
+
+    @Test
+    fun runStageAction_sendsBothSidesOfARename_isBusyMeanwhile_andClosesOnSuccess() = runTest {
+        val repo = stagingRepo()
+        val reply = CompletableDeferred<Unit>()
+        val sent = slot<List<String>>()
+        coEvery { repo.unstageSessionPaths("s1", capture(sent)) } coAnswers { reply.await() }
+        val vm = newViewModel(repo, renameArgs)
+        subscribeAction(vm)
+
+        vm.events.test {
+            vm.runStageAction()
+            runCurrent()
+            assertEquals(true, vm.stageAction.value?.busy)
+            expectNoEvents()
+
+            reply.complete(Unit)
+            runCurrent()
+            assertEquals(GitDiffEvent.Close, awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        assertEquals(listOf("src/new.py", "src/old.py"), sent.captured)
+        assertEquals(false, vm.stageAction.value?.busy)
+    }
+
+    @Test
+    fun runStageAction_reportsARefusal_andStaysOpen() = runTest {
+        val repo = stagingRepo()
+        coEvery { repo.stageSessionPaths("s1", listOf("src/a.py")) } throws
+            SessionGitException.GitError(
+                SessionGitException.CODE_PATHSPEC_MISMATCH, "did not match", ApiException(409, ""),
+            )
+        val vm = newViewModel(repo)
+        subscribeAction(vm)
+
+        vm.events.test {
+            vm.runStageAction()
+            runCurrent()
+
+            assertEquals(
+                GitDiffEvent.ShowMessage("That file changed under you — refreshed."),
+                awaitItem(),
+            )
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(false, vm.stageAction.value?.busy)
+    }
+
+    @Test
+    fun runStageAction_withoutAnAction_doesNothing() = runTest {
+        val repo = mockk<GitRepository>(relaxed = true) {
+            coEvery { gitCapabilities() } returns GitCapabilities.NONE
+        }
+        val vm = newViewModel(repo)
+        subscribeAction(vm)
+
+        vm.runStageAction()
+        runCurrent()
+
+        coVerify(exactly = 0) { repo.stageSessionPaths(any(), any()) }
+        coVerify(exactly = 0) { repo.unstageSessionPaths(any(), any()) }
     }
 }

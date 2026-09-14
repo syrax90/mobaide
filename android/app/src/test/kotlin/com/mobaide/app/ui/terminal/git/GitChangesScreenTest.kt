@@ -3,17 +3,23 @@ package com.mobaide.app.ui.terminal.git
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import com.mobaide.app.data.network.dto.GitHeadInfo
 import com.mobaide.app.data.network.dto.GitRepoInfo
 import com.mobaide.app.data.network.dto.GitStatusCounts
 import com.mobaide.app.data.network.dto.GitStatusEntry
 import com.mobaide.app.data.network.dto.GitStatusResponse
 import com.mobaide.app.data.network.dto.GitUpstreamInfo
+import com.mobaide.app.data.repository.GitCapabilities
 import com.mobaide.app.ui.theme.MobaideTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -77,20 +83,38 @@ class GitChangesScreenTest {
         truncated = truncated,
     )
 
+    private val allCaps = GitCapabilities(stage = true, discard = true, commit = true)
+
     private fun ready(
         status: GitStatusResponse = status(),
         staleError: String? = null,
+        capabilities: GitCapabilities = GitCapabilities.NONE,
+        selectedKeys: Set<String> = emptySet(),
+        busy: Boolean = false,
     ): GitChangesUiState.Ready =
-        GitChangesUiState.Ready(status, status.repo!!, sectionsFor(status), staleError = staleError)
+        GitChangesUiState.Ready(
+            status, status.repo!!, sectionsFor(status), staleError = staleError,
+            capabilities = capabilities, selectedKeys = selectedKeys, busy = busy,
+        )
 
     private fun setContent(
         state: GitChangesUiState,
         onEntryClick: (GitStatusEntry) -> Unit = {},
         onRetry: () -> Unit = {},
+        onEntryLongClick: (GitStatusEntry) -> Unit = {},
+        onStage: (List<GitStatusEntry>) -> Unit = {},
+        onUnstage: (List<GitStatusEntry>) -> Unit = {},
     ) {
         composeRule.setContent {
             MobaideTheme(darkTheme = true) {
-                GitChangesContent(state = state, onEntryClick = onEntryClick, onRetry = onRetry)
+                GitChangesContent(
+                    state = state,
+                    onEntryClick = onEntryClick,
+                    onRetry = onRetry,
+                    onEntryLongClick = onEntryLongClick,
+                    onStage = onStage,
+                    onUnstage = onUnstage,
+                )
             }
         }
     }
@@ -239,5 +263,141 @@ class GitChangesScreenTest {
 
         composeRule.onNodeWithText("Retry").assertIsDisplayed().performClick()
         assertEquals(1, retries)
+    }
+
+    // MARK: - Stage / unstage controls
+
+    @Test
+    fun aReadOnlyAgent_showsNoStageControls() {
+        setContent(ready())
+
+        composeRule.onNodeWithTag(gitChangesStageTag(deleted)).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesUnstageTag(rename)).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesSectionActionTag(GitStatusEntry.GROUP_UNSTAGED)).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesSectionActionTag(GitStatusEntry.GROUP_STAGED)).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesSelectTag(deleted)).assertDoesNotExist()
+    }
+
+    @Test
+    fun rows_offerStageOrUnstage_bySection_andAConflictNothing() {
+        val staged = mutableListOf<List<GitStatusEntry>>()
+        val unstaged = mutableListOf<List<GitStatusEntry>>()
+        setContent(ready(capabilities = allCaps), onStage = { staged += it }, onUnstage = { unstaged += it })
+
+        composeRule.onNodeWithTag(gitChangesStageTag(deleted)).assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag(gitChangesStageTag(untracked)).assertIsDisplayed()
+        composeRule.onNodeWithTag(gitChangesUnstageTag(rename)).assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag(gitChangesUnstageTag(deleted)).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesStageTag(rename)).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesStageTag(conflict)).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesUnstageTag(conflict)).assertDoesNotExist()
+
+        assertEquals(listOf(listOf(deleted)), staged)
+        assertEquals(listOf(listOf(rename)), unstaged)
+    }
+
+    @Test
+    fun sectionHeaders_stageOrUnstageTheirWholeSection() {
+        val staged = mutableListOf<List<GitStatusEntry>>()
+        val unstaged = mutableListOf<List<GitStatusEntry>>()
+        setContent(ready(capabilities = allCaps), onStage = { staged += it }, onUnstage = { unstaged += it })
+
+        composeRule.onNodeWithTag(gitChangesSectionActionTag(GitStatusEntry.GROUP_CONFLICTS)).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesSectionActionTag(GitStatusEntry.GROUP_STAGED))
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithTag(gitChangesSectionActionTag(GitStatusEntry.GROUP_UNSTAGED))
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithTag(gitChangesSectionActionTag(GitStatusEntry.GROUP_UNTRACKED))
+            .assertIsDisplayed()
+            .performClick()
+
+        assertEquals(listOf(listOf(deleted), listOf(untracked)), staged)
+        assertEquals(listOf(listOf(rename, submodule)), unstaged)
+    }
+
+    @Test
+    fun longPressingARow_reportsItsEntry() {
+        val pressed = mutableListOf<GitStatusEntry>()
+        setContent(ready(capabilities = allCaps), onEntryLongClick = { pressed += it })
+
+        composeRule.onNodeWithTag(gitChangesRowTag(deleted)).performTouchInput { longClick() }
+
+        assertEquals(listOf(deleted), pressed)
+    }
+
+    @Test
+    fun selectionMode_showsCheckboxes_andHidesTheRowAndSectionActions() {
+        val clicked = mutableListOf<GitStatusEntry>()
+        val state = ready(capabilities = allCaps, selectedKeys = setOf("unstaged:1:src/gone.py"))
+        setContent(state, onEntryClick = { clicked += it })
+
+        composeRule.onNodeWithTag(gitChangesSelectTag(deleted)).assertIsDisplayed().assertIsOn()
+        composeRule.onNodeWithTag(gitChangesSelectTag(untracked)).assertIsDisplayed()
+        composeRule.onNodeWithTag(gitChangesSelectTag(conflict)).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesStageTag(deleted)).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesUnstageTag(rename)).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesSectionActionTag(GitStatusEntry.GROUP_UNSTAGED)).assertDoesNotExist()
+
+        composeRule.onNodeWithTag(gitChangesSelectTag(untracked)).performClick()
+
+        assertEquals(listOf(untracked), clicked)
+    }
+
+    @Test
+    fun whileAMutationIsInFlight_everyControlWaits() {
+        setContent(ready(capabilities = allCaps, busy = true))
+
+        composeRule.onNodeWithTag(gitChangesStageTag(deleted)).assertIsNotEnabled()
+        composeRule.onNodeWithTag(gitChangesUnstageTag(rename)).assertIsNotEnabled()
+        composeRule.onNodeWithTag(gitChangesSectionActionTag(GitStatusEntry.GROUP_STAGED)).assertIsNotEnabled()
+    }
+
+    // MARK: - Discard confirmation
+
+    @Test
+    fun discardDialog_namesTheFile_andOnlyConfirmDiscards() {
+        var confirmed = 0
+        var dismissed = 0
+        composeRule.setContent {
+            MobaideTheme(darkTheme = true) {
+                GitDiscardDialog(
+                    prompt = DiscardPrompt(listOf(untracked)),
+                    busy = false,
+                    onConfirm = { confirmed++ },
+                    onDismiss = { dismissed++ },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag(GIT_CHANGES_DISCARD_DIALOG_TAG).assertIsDisplayed()
+        composeRule.onNodeWithText("Delete untracked file?").assertIsDisplayed()
+        composeRule.onNodeWithText(
+            "notes/тест.md is not tracked by git and will be deleted. This cannot be undone.",
+        ).assertIsDisplayed()
+
+        composeRule.onNodeWithText("Cancel").performClick()
+        assertEquals(0 to 1, confirmed to dismissed)
+
+        composeRule.onNodeWithText("Discard").assertIsEnabled().performClick()
+        assertEquals(1 to 1, confirmed to dismissed)
+    }
+
+    @Test
+    fun discardDialog_locksConfirmWhileBusy() {
+        composeRule.setContent {
+            MobaideTheme(darkTheme = true) {
+                GitDiscardDialog(
+                    prompt = DiscardPrompt(listOf(deleted, untracked)),
+                    busy = true,
+                    onConfirm = {},
+                    onDismiss = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Discard 2 files?").assertIsDisplayed()
+        composeRule.onNodeWithText("Discard").assertIsNotEnabled()
     }
 }

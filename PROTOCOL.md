@@ -129,6 +129,92 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-09-14, in-session git mutations):
+  **four additive REST routes + one additive read route + three additive
+  capability keys, no version bump.** Building on the 2026-08-27 Changes
+  API, the agent now also mutates the staged set of the directory a session
+  was spawned in (same session-scoped prefix, both transports byte-identical):
+  * ``POST /api/sessions/{session_id}/git/stage`` with ``GitPathsRequest``
+    ``{paths: [..]}`` (1–5 000 repo-relative paths exactly as ``status``
+    reported them; a renamed entry lists both ``path`` and ``orig_path``)
+    runs ``git add -A`` limited to those paths — modifications, deletions,
+    type changes and untracked files alike — and answers
+    ``GitMutationResponse`` ``{ok: true}``.
+  * ``POST …/git/unstage`` (same body) runs ``git reset -q`` on the paths
+    (not ``restore --staged``, which cannot resolve ``HEAD`` on a branch
+    with no commits yet); a staged rename is undone only when both of its
+    paths are sent.
+  * ``POST …/git/discard`` with ``GitDiscardRequest`` ``{paths, scope:
+    "unstaged" | "untracked"}`` throws working-tree changes away:
+    ``unstaged`` → ``git restore --worktree`` (a staged part of the same file
+    survives; a modify-delete is recreated from the index), ``untracked`` →
+    ``git clean -f`` (which can only ever delete untracked, non-ignored
+    files). Clients must confirm before calling it; it is never one tap.
+  * ``GET …/git/commit/context`` → ``GitCommitContextResponse`` ``{author
+    {name, email} | null, head {oid, short_oid, subject, body} | null}``:
+    ``author`` is what ``git var GIT_AUTHOR_IDENT`` resolves under the same
+    strictness ``git commit`` applies (``null`` means the commit would be
+    refused with ``identity_required``); ``head`` is ``null`` on an unborn
+    branch, so the commit sheet can show who is committing, prefill an
+    Amend, and hide Amend when there is nothing to amend.
+  * ``POST …/git/commit`` with ``GitCommitRequest`` ``{message, amend:
+    false, no_verify: false}`` (``message`` non-blank, ≤ 64 KiB, first line
+    is the subject; ``amend`` and ``no_verify`` are optional and default to
+    ``false``, so a client may omit them) commits **the staged set only**
+    (never ``-a``): the
+    message travels on stdin (``-F -``) and is cleaned with
+    ``--cleanup=whitespace`` so a leading ``#`` survives; ``--amend`` /
+    ``--no-verify`` are passed only when asked. Answers
+    ``GitCommitResponse`` ``{oid, short_oid, subject}`` of the new ``HEAD``.
+    Repository hooks (``pre-commit``, ``commit-msg``, …) run on the agent
+    machine under the agent's account — the same trust boundary as the PTY
+    — with the runner's scrubbed environment.
+  * Every mutation resolves the repository first, then runs under a
+    per-toplevel ``asyncio.Lock`` (two clients of one session cannot
+    interleave index writes) and, on success, publishes ``git.changed``
+    ``{"project_name": <session's project or "">, "toplevel", "common_dir"}``
+    so every viewer of that repository — including the caller — refreshes
+    through the etag poll; the reads still take no lock. Pathspecs travel
+    NUL-separated on stdin (``--pathspec-from-file=- --pathspec-file-nul``):
+    no argv limit on Windows, and for ``stage`` / ``discard`` (``add``,
+    ``restore``) one unmatched path fails the whole call before anything is
+    touched; ``unstage`` (``reset``) and an untracked ``discard`` (``clean``)
+    silently skip a path that no longer matches. An empty ``paths`` list is
+    refused by the schema (``422``) and again by the service itself
+    (``400 bad_path``, for any caller that bypasses the schema) — an empty
+    pathspec file would mean "everything" to git. Only ``git clean``
+    lacks the stdin option and takes argv in chunks of 100.
+  * Errors, identical on both transports: ``404`` session / ``503
+    git_unavailable`` / ``504 git_timeout`` / ``500 git_error`` as for the
+    reads; ``400 {"detail": {"code": "bad_path" | "bad_scope" |
+    "cwd_missing" | "empty_message"}}``; ``422`` for a malformed body; and
+    **new** ``409 {"detail": {"code": <refusal>, "message": <≤ 500 chars of
+    git output>}}`` whenever git declines because of the repository's state:
+    ``not_a_repo`` | ``bare_repository`` | ``unsafe_directory`` |
+    ``git_too_old`` (mutations need git ≥ 2.26 for ``--pathspec-from-file``
+    on ``reset``; the reads keep 2.15) | ``pathspec_mismatch`` (``add`` /
+    ``restore`` found no file for a path — git touched nothing, refresh) |
+    ``identity_required`` |
+    ``unmerged`` (a commit is refused while conflicts are unresolved) |
+    ``nothing_to_commit`` | ``no_head`` (amend on an unborn branch) |
+    ``hook_failed`` (exit 1 after the pre-checks — ``message`` is the hook's
+    output) | ``index_locked`` (``index.lock`` exists — another git process is
+    running, retry). Old agents answer ``404`` for the new routes; clients
+    never show a mutating control without the matching capability key.
+  * ``GET /api/version`` ``capabilities.git`` becomes ``{"changes": true,
+    "stage": true, "discard": true, "commit": true}`` (both transports).
+    Clients gate row/section/selection Stage–Unstage on ``stage``, Discard on
+    ``discard``, and the Commit sheet plus the terminal menu's *Commit…*
+    entry on ``commit``; an agent without a key stays read-only.
+  * Timeouts: stage / unstage / discard 15 s, commit 25 s (hooks run inside
+    it and the relay gives a proxied request 30 s), context 5 s. Stdin is
+    fed by a third runner thread so a 5 000-path list or a long message
+    cannot deadlock against the output readers.
+  * Golden fixtures ``tests/protocol_fixtures/dto/agent/{GitPathsRequest,
+    GitDiscardRequest,GitMutationResponse,GitCommitRequest,GitCommitResponse,
+    GitCommitContextResponse}.json`` pin the six shapes on the same three
+    registries as the read fixtures (iOS ``FixtureRegistry``, web coverage
+    manifest, ``mobaide_agent/tests/test_git_fixtures.py``).
 * Additive delta within proto-v7 (2026-08-27, in-session git Changes API):
   **two additive read-only REST routes + one additive capability key + two
   additive event keys, no version bump.** The agent now answers, for the

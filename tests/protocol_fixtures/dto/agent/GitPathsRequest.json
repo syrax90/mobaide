@@ -1,0 +1,22 @@
+{
+  "type": "GitPathsRequest",
+  "cases": [
+    {
+      "name": "single",
+      "wire": {
+        "paths": [
+          "src/app.py"
+        ]
+      }
+    },
+    {
+      "name": "rename_both_paths",
+      "wire": {
+        "paths": [
+          "src/new name.py",
+          "src/old.py"
+        ]
+      }
+    }
+  ]
+}

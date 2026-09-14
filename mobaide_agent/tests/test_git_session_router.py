@@ -1,10 +1,13 @@
-"""``GET /api/sessions/{id}/git/status|diff`` through the FastAPI app and the
+"""``GET /api/sessions/{id}/git/status|diff|commit/context`` and
+``POST .../git/stage|unstage|discard|commit`` through the FastAPI app and the
 relay ``_dispatch_session_git`` dispatcher, asserting both transports answer
 byte-identically for every status code the contract defines."""
 from __future__ import annotations
 
+import os
 import shutil
 import types
+from unittest.mock import MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -18,8 +21,11 @@ from mobaide.relay.client import RelayClient
 
 from .conftest import TEST_JWT_SECRET, TEST_PASSWORD, TEST_USERNAME
 from .git_repo_support import (
+    init_repo,
+    norm_path,
     repo,  # noqa: F401 - pytest fixture
     requires_git,
+    run_git_sync,
     stub_git,
     write_file,
 )
@@ -84,10 +90,11 @@ def session_at(git_app, mock_session_manager, monkeypatch):
     """Register one session whose ``to_info().cwd`` is the given directory on
     both the app's session manager and the relay's stub."""
 
-    def install(cwd: str | None) -> None:
-        session = types.SimpleNamespace(
-            to_info=lambda: types.SimpleNamespace(cwd=cwd)
-        )
+    def install(cwd: str | None, project_name: str | None = None) -> None:
+        info = types.SimpleNamespace(cwd=cwd)
+        if project_name is not None:
+            info.project_name = project_name
+        session = types.SimpleNamespace(to_info=lambda: info)
 
         async def get_session(session_id: str):
             return session if session_id == SESSION_ID else None
@@ -106,11 +113,37 @@ def _diff_url(session_id: str = SESSION_ID) -> str:
     return f"/api/sessions/{session_id}/git/diff"
 
 
+def _git_url(route: str, session_id: str = SESSION_ID) -> str:
+    return f"/api/sessions/{session_id}/git/{route}"
+
+
 async def _assert_parity(http, headers, relay, url, query=None):
     resp = await http.get(url, headers=headers, params=query)
     dispatched = await relay._dispatch_session_git("GET", url, query)
     assert dispatched == {"status": resp.status_code, "body": resp.json()}
     return resp
+
+
+async def _assert_post_parity(http, headers, relay, url, body):
+    """The direct call runs first, the relay's repeats it on the same repo:
+    every mutation but ``commit`` is idempotent, so both answers match."""
+    resp = await http.post(url, headers=headers, json=body)
+    dispatched = await relay._dispatch_session_git("POST", url, None, body)
+    assert dispatched == {"status": resp.status_code, "body": resp.json()}
+    return resp
+
+
+class _FakeEventBus:
+    def __init__(self) -> None:
+        self.published: list[tuple[str, dict]] = []
+
+    def publish(self, event_type: str, payload: dict) -> None:
+        self.published.append((event_type, payload))
+
+
+async def _groups(http, headers) -> list[tuple[str, str]]:
+    resp = await http.get(_status_url(), headers=headers)
+    return [(e["group"], e["path"]) for e in resp.json()["entries"]]
 
 
 class TestAuthAndRouting:
@@ -137,7 +170,12 @@ class TestAuthAndRouting:
         resp = await http.get("/api/version", headers=headers)
 
         assert resp.status_code == 200
-        assert resp.json()["capabilities"]["git"] == {"changes": True}
+        assert resp.json()["capabilities"]["git"] == {
+            "changes": True,
+            "stage": True,
+            "discard": True,
+            "commit": True,
+        }
 
 
 @requires_git
@@ -284,3 +322,247 @@ class TestErrorMapping:
 
         assert resp.status_code == 500
         assert resp.json() == {"detail": {"code": "git_error", "message": "fatal: index corrupt"}}
+
+
+class TestMutationRouting:
+    async def test_mutations_require_auth(self, http):
+        resp = await http.post(_git_url("stage"), json={"paths": ["a.txt"]})
+
+        assert resp.status_code == 401
+
+    async def test_unknown_session_is_404_on_both_transports(
+        self, http, headers, relay, session_at, tmp_path
+    ):
+        session_at(str(tmp_path))
+
+        resp = await _assert_post_parity(
+            http, headers, relay, _git_url("stage", "nope"), {"paths": ["a.txt"]}
+        )
+
+        assert resp.status_code == 404
+        assert resp.json() == {"detail": "Session 'nope' not found"}
+
+    @pytest.mark.parametrize(
+        ("method", "route"),
+        [
+            ("GET", "stage"),
+            ("GET", "unstage"),
+            ("GET", "discard"),
+            ("GET", "commit"),
+            ("POST", "commit/context"),
+            ("POST", "commit/extra"),
+        ],
+    )
+    async def test_relay_ignores_the_wrong_method_per_route(self, relay, method, route):
+        assert await relay._dispatch_session_git(method, _git_url(route), None, {}) is None
+
+    @pytest.mark.parametrize(
+        ("route", "body", "loc"),
+        [
+            ("stage", {}, ["paths"]),
+            ("stage", {"paths": []}, ["paths"]),
+            ("unstage", {"paths": ["a"] * 5001}, ["paths"]),
+            ("discard", {"paths": ["a.txt"]}, ["scope"]),
+            ("discard", {"paths": ["a.txt"], "scope": "staged"}, ["scope"]),
+            ("commit", {"message": ""}, ["message"]),
+            ("commit", {"message": "x" * (64 * 1024 + 1)}, ["message"]),
+            ("commit", {"message": "x", "amend": "maybe"}, ["amend"]),
+        ],
+    )
+    async def test_malformed_body_is_422_on_both_transports(
+        self, http, headers, relay, session_at, tmp_path, route, body, loc
+    ):
+        # Pydantic's records, so the two ``loc`` prefixes differ: FastAPI
+        # names the body, the relay validates the model directly (and hands
+        # the tuple back as is; ``json.dumps`` lists it on the wire).
+        session_at(str(tmp_path))
+
+        resp = await http.post(_git_url(route), headers=headers, json=body)
+        dispatched = await relay._dispatch_session_git("POST", _git_url(route), None, body)
+
+        assert resp.status_code == 422
+        assert dispatched["status"] == 422
+        assert [e["loc"] for e in resp.json()["detail"]] == [["body", *loc]]
+        assert [list(e["loc"]) for e in dispatched["body"]["detail"]] == [loc]
+        assert [e["type"] for e in dispatched["body"]["detail"]] == [
+            e["type"] for e in resp.json()["detail"]]
+
+    async def test_proxy_dispatch_hands_the_body_through(
+        self, http, headers, relay, session_at, repo, mock_app_state
+    ):
+        session_at(repo)
+        write_file(repo, "a.txt", b"a\n")
+
+        result = await relay._dispatch_proxy(
+            "POST", _git_url("stage"), {"paths": ["a.txt"]}, None, MagicMock()
+        )
+
+        assert result == {"status": 200, "body": {"ok": True}}
+        assert await _groups(http, headers) == [("staged", "a.txt")]
+
+
+@requires_git
+class TestMutationRoutes:
+    async def test_stage_matches_and_publishes_the_session_project(
+        self, http, headers, relay, session_at, repo, mock_app_state
+    ):
+        session_at(repo, project_name="proj")
+        bus = _FakeEventBus()
+        mock_app_state.event_bus = bus
+        write_file(repo, "a.txt", b"a\n")
+        write_file(repo, "b.txt", b"b\n")
+
+        resp = await _assert_post_parity(
+            http, headers, relay, _git_url("stage"), {"paths": ["a.txt"]}
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+        assert await _groups(http, headers) == [("staged", "a.txt"), ("untracked", "b.txt")]
+        assert bus.published == [(
+            "git.changed",
+            {"project_name": "proj", "toplevel": norm_path(repo),
+             "common_dir": norm_path(repo) + "/.git"},
+        )]
+
+    async def test_session_without_a_project_publishes_an_empty_name(
+        self, http, headers, relay, session_at, repo, mock_app_state
+    ):
+        session_at(repo)
+        bus = _FakeEventBus()
+        mock_app_state.event_bus = bus
+        write_file(repo, "a.txt", b"a\n")
+
+        await relay._dispatch_session_git("POST", _git_url("stage"), None, {"paths": ["a.txt"]})
+
+        assert [p["project_name"] for _, p in bus.published] == [""]
+
+    async def test_unstage_matches_on_both_transports(
+        self, http, headers, relay, session_at, repo
+    ):
+        session_at(repo)
+        write_file(repo, "keep.txt", b"one\nTWO\nthree\n")
+        run_git_sync(repo, "add", "keep.txt")
+
+        resp = await _assert_post_parity(
+            http, headers, relay, _git_url("unstage"), {"paths": ["keep.txt"]}
+        )
+
+        assert resp.json() == {"ok": True}
+        assert await _groups(http, headers) == [("unstaged", "keep.txt")]
+
+    async def test_discard_matches_on_both_transports(
+        self, http, headers, relay, session_at, repo
+    ):
+        session_at(repo)
+        write_file(repo, "keep.txt", b"one\nTWO\nthree\n")
+        write_file(repo, "junk.txt", b"j\n")
+
+        tracked = await _assert_post_parity(
+            http, headers, relay, _git_url("discard"),
+            {"paths": ["keep.txt"], "scope": "unstaged"},
+        )
+        untracked = await _assert_post_parity(
+            http, headers, relay, _git_url("discard"),
+            {"paths": ["junk.txt"], "scope": "untracked"},
+        )
+
+        assert (tracked.json(), untracked.json()) == ({"ok": True}, {"ok": True})
+        assert await _groups(http, headers) == []
+        assert not os.path.exists(os.path.join(repo, "junk.txt"))
+
+    async def test_commit_context_matches_on_both_transports(
+        self, http, headers, relay, session_at, repo
+    ):
+        session_at(repo)
+
+        resp = await _assert_parity(http, headers, relay, _git_url("commit/context"))
+
+        body = resp.json()
+        assert resp.status_code == 200
+        assert body["author"] == {"name": "Test", "email": "test@example.com"}
+        assert (body["head"]["subject"], body["head"]["body"]) == ("initial", "")
+        assert body["head"]["oid"].startswith(body["head"]["short_oid"])
+
+    async def test_commit_context_on_an_unborn_branch_carries_nulls(
+        self, http, headers, relay, session_at, tmp_path
+    ):
+        session_at(init_repo(str(tmp_path / "unborn"), initial_commit=False))
+
+        resp = await _assert_parity(http, headers, relay, _git_url("commit/context"))
+
+        assert resp.json()["head"] is None
+        assert resp.json()["author"]["name"] == "Test"
+
+    async def test_commit_answers_the_new_head_on_each_transport(
+        self, http, headers, relay, session_at, repo
+    ):
+        session_at(repo)
+        write_file(repo, "a.txt", b"a\n")
+        run_git_sync(repo, "add", "a.txt")
+
+        direct = await http.post(
+            _git_url("commit"), headers=headers, json={"message": "Add a"}
+        )
+        write_file(repo, "b.txt", b"b\n")
+        run_git_sync(repo, "add", "b.txt")
+        relayed = await relay._dispatch_session_git(
+            "POST", _git_url("commit"), None, {"message": "Add b\n\nSecond."}
+        )
+
+        assert direct.status_code == 200
+        assert relayed["status"] == 200
+        assert set(direct.json()) == set(relayed["body"]) == {"oid", "short_oid", "subject"}
+        assert (direct.json()["subject"], relayed["body"]["subject"]) == ("Add a", "Add b")
+        context = await http.get(_git_url("commit/context"), headers=headers)
+        assert context.json()["head"]["oid"] == relayed["body"]["oid"]
+        assert context.json()["head"]["body"] == "Second."
+        assert await _groups(http, headers) == []
+
+    @pytest.mark.parametrize(
+        ("route", "body", "status", "detail"),
+        [
+            ("stage", {"paths": ["../x"]}, 400, {"code": "bad_path"}),
+            ("commit", {"message": "  \n"}, 400, {"code": "empty_message"}),
+            ("commit", {"message": "x"}, 409,
+             {"code": "nothing_to_commit", "message": "no changes added to commit"}),
+            ("stage", {"paths": ["gone.txt"]}, 409, None),
+        ],
+    )
+    async def test_refusals_and_bad_requests_match_on_both_transports(
+        self, http, headers, relay, session_at, repo, route, body, status, detail
+    ):
+        session_at(repo)
+
+        resp = await _assert_post_parity(http, headers, relay, _git_url(route), body)
+
+        assert resp.status_code == status
+        if detail is None:
+            assert resp.json()["detail"]["code"] == "pathspec_mismatch"
+            assert "gone.txt" in resp.json()["detail"]["message"]
+        else:
+            assert resp.json() == {"detail": detail}
+
+    async def test_mutation_outside_a_repo_is_409_not_a_200_condition(
+        self, http, headers, relay, session_at, tmp_path
+    ):
+        session_at(str(tmp_path))
+
+        resp = await _assert_post_parity(
+            http, headers, relay, _git_url("stage"), {"paths": ["a.txt"]}
+        )
+
+        assert resp.status_code == 409
+        assert resp.json() == {"detail": {"code": "not_a_repo", "message": ""}}
+
+    async def test_vanished_cwd_is_400_on_a_mutation(
+        self, http, headers, relay, session_at, tmp_path
+    ):
+        session_at(str(tmp_path / "gone"))
+
+        resp = await _assert_post_parity(
+            http, headers, relay, _git_url("stage"), {"paths": ["a.txt"]}
+        )
+
+        assert resp.status_code == 400
+        assert resp.json() == {"detail": {"code": "cwd_missing"}}

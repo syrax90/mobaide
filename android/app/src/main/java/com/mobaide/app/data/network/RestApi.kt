@@ -5,23 +5,29 @@ import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexLoginRequest
 import com.mobaide.app.data.network.dto.CodexLoginResponse
-import com.mobaide.app.data.network.dto.LinearLabelDto
-import com.mobaide.app.data.network.dto.LinearStateDto
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ForceUpdateResponse
+import com.mobaide.app.data.network.dto.GitCommitContextResponse
+import com.mobaide.app.data.network.dto.GitCommitRequest
+import com.mobaide.app.data.network.dto.GitCommitResponse
 import com.mobaide.app.data.network.dto.GitDeleteRequest
 import com.mobaide.app.data.network.dto.GitDeleteResponse
 import com.mobaide.app.data.network.dto.GitDiffResponse
+import com.mobaide.app.data.network.dto.GitDiscardRequest
 import com.mobaide.app.data.network.dto.GitItemsResponse
+import com.mobaide.app.data.network.dto.GitMutationResponse
+import com.mobaide.app.data.network.dto.GitPathsRequest
 import com.mobaide.app.data.network.dto.GitStatusResponse
+import com.mobaide.app.data.network.dto.LinearLabelDto
+import com.mobaide.app.data.network.dto.LinearStateDto
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.ProjectOrderRequest
 import com.mobaide.app.data.network.dto.ProjectUpdate
 import com.mobaide.app.data.network.dto.ProjectWrite
-import com.mobaide.app.data.network.dto.ScrollbackResponse
-import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.RunNowRequest
 import com.mobaide.app.data.network.dto.RunNowResponse
+import com.mobaide.app.data.network.dto.ScrollbackResponse
+import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.StartScanRequest
 import com.mobaide.app.data.network.dto.StopScanRequest
 import com.mobaide.app.data.network.dto.TokenRequest
@@ -256,6 +262,38 @@ class RestApi(
             .apply { if (origPath != null) addQueryParameter("orig_path", origPath) }
             .build()
         return executeCancellable(Request.Builder().url(url).get().build())
+    }
+
+    suspend fun stageSessionGit(sessionId: String, body: GitPathsRequest): GitMutationResponse =
+        postSessionGit(sessionId, "stage", json.encodeToString(body))
+
+    suspend fun unstageSessionGit(sessionId: String, body: GitPathsRequest): GitMutationResponse =
+        postSessionGit(sessionId, "unstage", json.encodeToString(body))
+
+    suspend fun discardSessionGit(sessionId: String, body: GitDiscardRequest): GitMutationResponse =
+        postSessionGit(sessionId, "discard", json.encodeToString(body))
+
+    suspend fun getSessionGitCommitContext(sessionId: String): GitCommitContextResponse {
+        val url = sessionGitUrl(sessionId, "commit").addPathSegment("context").build()
+        return executeCancellable(Request.Builder().url(url).get().build())
+    }
+
+    suspend fun commitSessionGit(sessionId: String, body: GitCommitRequest): GitCommitResponse =
+        postSessionGit(sessionId, "commit", json.encodeToString(body))
+
+    // Plain `execute`, not the cancellable path: a mutation the agent has
+    // already started runs to completion either way, so an abandoned caller
+    // would only lose the answer, never the effect.
+    private suspend inline fun <reified T> postSessionGit(
+        sessionId: String,
+        leaf: String,
+        payload: String,
+    ): T {
+        val request = Request.Builder()
+            .url(sessionGitUrl(sessionId, leaf).build())
+            .post(payload.toRequestBody(jsonMediaType))
+            .build()
+        return execute(request)
     }
 
     // HttpUrl.Builder rather than string concatenation: repo-relative paths carry

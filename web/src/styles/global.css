@@ -3158,6 +3158,139 @@ body:has(dialog[open]) {
   display: none;
 }
 
+/* Outcome of a stage / discard / commit: the panel's own strip, because the
+   toast viewport paints below the top layer this panel lives on. */
+.git-panel-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 1rem;
+  font-size: 0.85rem;
+  border-bottom: 2px solid var(--surface-2);
+}
+
+.git-panel-notice span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.git-panel-notice[data-tone='ok'] {
+  color: var(--ok);
+}
+
+.git-panel-notice[data-tone='danger'] {
+  color: var(--danger);
+}
+
+.git-selection-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem;
+  background: var(--surface);
+  border-bottom: 2px solid var(--surface-2);
+}
+
+.git-selection-count {
+  flex: 1;
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.git-changes-section h3 .button {
+  margin-left: auto;
+  padding: 0.15rem 0.5rem;
+  min-height: 28px;
+  font-size: var(--pix-sm);
+  letter-spacing: 0.08em;
+}
+
+.git-changes-section h3 .git-changes-count + .button {
+  margin-left: 0.5rem;
+}
+
+.git-changes-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding-right: 0.5rem;
+}
+
+.git-changes-item .git-changes-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.git-changes-select {
+  flex: none;
+  margin: 0 0 0 0.75rem;
+}
+
+/* Quick actions appear on hover or keyboard focus with a pointer; a touch
+   screen has neither, so they stay visible there. */
+.git-changes-row-actions {
+  flex: none;
+  display: flex;
+  gap: 0.25rem;
+  opacity: 0;
+}
+
+.git-changes-item:hover .git-changes-row-actions,
+.git-changes-item:focus-within .git-changes-row-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .git-changes-row-actions {
+    opacity: 1;
+  }
+}
+
+.git-diff-action {
+  margin-left: auto;
+}
+
+.git-commit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: min(32rem, calc(100vw - 4rem));
+}
+
+.git-commit-author {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.git-commit-description {
+  font-family: var(--font-code);
+}
+
+.git-commit-fix,
+.git-commit-output {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  max-height: 12rem;
+  overflow: auto;
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface);
+  border: 2px solid var(--surface-2);
+  user-select: all;
+}
+
 .git-changes-repo {
   display: flex;
   flex-direction: column;

@@ -17,6 +17,7 @@ import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.TemplateDto
+import com.mobaide.app.data.network.dto.gitCapability
 import com.mobaide.app.data.network.dto.wireName
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
@@ -258,6 +259,17 @@ class TerminalViewModel @Inject constructor(
         sessionRow
             .map { it.cwd }
             .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** Whether the `⋯` menu offers Commit…: one `GET /api/version` probe per
+     *  subscription, read as an explicit `capabilities.git.commit == true`;
+     *  an older agent or an unreadable probe hides the entry. */
+    val gitCommitAvailable: StateFlow<Boolean> =
+        flow {
+            emit(
+                runCatching { sessionRepository.getAgentVersion().gitCapability("commit") }
+                    .getOrDefault(false),
+            )
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()

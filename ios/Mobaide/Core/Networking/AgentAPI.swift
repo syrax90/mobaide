@@ -145,6 +145,45 @@ struct AgentAPI: Sendable {
         return try await execute(method: "GET", url: "\(try await base())/api/sessions/\(sessionId)/git/diff\(query)")
     }
 
+    /// `POST /api/sessions/{id}/git/stage` — `git add -A` limited to `paths`.
+    func stageSessionGit(sessionId: String, paths: [String]) async throws {
+        let _: GitMutationResponse = try await execute(
+            method: "POST",
+            url: "\(try await base())/api/sessions/\(sessionId)/git/stage",
+            body: GitPathsRequest(paths: paths)
+        )
+    }
+
+    /// `POST /api/sessions/{id}/git/unstage` — a staged rename needs both its paths.
+    func unstageSessionGit(sessionId: String, paths: [String]) async throws {
+        let _: GitMutationResponse = try await execute(
+            method: "POST",
+            url: "\(try await base())/api/sessions/\(sessionId)/git/unstage",
+            body: GitPathsRequest(paths: paths)
+        )
+    }
+
+    /// `POST /api/sessions/{id}/git/discard` — throws working-tree changes away;
+    /// the caller confirms first.
+    func discardSessionGit(sessionId: String, paths: [String], scope: String) async throws {
+        let _: GitMutationResponse = try await execute(
+            method: "POST",
+            url: "\(try await base())/api/sessions/\(sessionId)/git/discard",
+            body: GitDiscardRequest(paths: paths, scope: scope)
+        )
+    }
+
+    /// `GET /api/sessions/{id}/git/commit/context` — author identity and the
+    /// previous commit for the commit sheet.
+    func getSessionGitCommitContext(sessionId: String) async throws -> GitCommitContextResponse {
+        try await execute(method: "GET", url: "\(try await base())/api/sessions/\(sessionId)/git/commit/context")
+    }
+
+    /// `POST /api/sessions/{id}/git/commit` — commits the staged set only.
+    func commitSessionGit(sessionId: String, request: GitCommitRequest) async throws -> GitCommitResponse {
+        try await execute(method: "POST", url: "\(try await base())/api/sessions/\(sessionId)/git/commit", body: request)
+    }
+
     func getAutoScanList() async throws -> AutoScanListResponse {
         try await execute(method: "GET", url: "\(try await base())/api/autoscan/list")
     }

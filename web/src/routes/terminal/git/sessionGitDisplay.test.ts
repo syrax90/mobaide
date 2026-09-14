@@ -10,22 +10,37 @@ import {
   type SessionGitRepoInfo,
   type SessionGitStatus,
 } from '../../../api/sessionGitRepository';
+import type { GitCapabilities } from '../../../protocol/dto/agentVersion';
 import {
+  IDENTITY_FIX_COMMANDS,
   NETWORK_FAILURE_MESSAGE,
+  authorLine,
   badgeFor,
   changeLabel,
+  commitButtonLabel,
+  commitNotice,
+  composeCommitMessage,
   diffScopeFor,
   diffView,
   directory,
+  discardPrompt,
+  discardScopeFor,
   emptyDiffNotice,
   fileName,
   headLabel,
   hunkHeader,
+  mutationErrorCopy,
+  pathsFor,
+  refusalCopy,
   renderableText,
   repoStateLabel,
+  rowActions,
+  sectionAction,
   sectionsFor,
+  selectionSubsets,
   sessionGitErrorCopy,
   showsContextChoices,
+  splitCommitMessage,
   truncatedDiffNotice,
   truncatedEntriesNotice,
   unavailableCopy,
@@ -569,5 +584,234 @@ describe('diffView', () => {
       diffView(diff({ truncated: true, total_lines: 1, hunks: [hunk({ lines: [line()] })] }))
         .truncated,
     ).toBe('Truncated after 1 lines — the full diff is longer');
+  });
+});
+
+const ALL_GIT: GitCapabilities = { stage: true, discard: true, commit: true };
+const NO_ACTIONS = { stage: false, unstage: false, discard: false };
+
+const staged = (over: Partial<SessionGitEntry> = {}): SessionGitEntry =>
+  entry({ group: 'staged', index_status: 'M', worktree_status: '.', ...over });
+const untracked = (path: string): SessionGitEntry =>
+  entry({ group: 'untracked', path, code: '?', index_status: '?', worktree_status: '?' });
+const conflict = (path: string): SessionGitEntry =>
+  entry({ group: 'conflicts', path, code: 'UU', index_status: 'U', worktree_status: 'U' });
+
+/** The rows the list would build for these entries, flattened in display order. */
+const rowsOf = (...entries: SessionGitEntry[]) =>
+  sectionsFor(status({ entries })).flatMap((section) => section.rows);
+
+describe('refusalCopy', () => {
+  it('phrases each 409 code the mutating routes answer', () => {
+    expect(refusalCopy('identity_required', null)).toBe(
+      "Git doesn't know who you are on the agent machine.",
+    );
+    expect(refusalCopy('unmerged', null)).toBe('Resolve the conflicts first.');
+    expect(refusalCopy('nothing_to_commit', null)).toBe('Nothing is staged.');
+    expect(refusalCopy('no_head', null)).toBe('There is no commit to amend yet.');
+    expect(refusalCopy('hook_failed', 'lint: nope')).toBe('A commit hook rejected the commit.');
+    expect(refusalCopy('index_locked', null)).toBe('Another git process is running — try again.');
+    expect(refusalCopy('pathspec_mismatch', null)).toBe('That file changed under you — refreshed.');
+    expect(refusalCopy('empty_message', null)).toBe('Enter a commit summary.');
+  });
+
+  it('names an unknown code, with the git output when there is any', () => {
+    expect(refusalCopy('rate_limited', null)).toBe('git refused the request (rate_limited).');
+    expect(refusalCopy('rate_limited', 'slow down')).toBe(
+      'git refused the request (rate_limited): slow down',
+    );
+  });
+});
+
+describe('mutationErrorCopy', () => {
+  it('reads git_too_old as the 2.26 floor of the mutating routes, not the 2.15 of the polls', () => {
+    expect(mutationErrorCopy(gitError('git_too_old'))).toBe(
+      'Staging needs git 2.26 or newer on the agent machine.',
+    );
+    expect(sessionGitErrorCopy(gitError('git_too_old'))).toBe(unavailableCopy('git_too_old').body);
+  });
+
+  it('defers to the viewer copy for everything else', () => {
+    expect(mutationErrorCopy(gitError('index_locked'))).toBe(
+      'Another git process is running — try again.',
+    );
+    expect(mutationErrorCopy(gitError('git_timeout'))).toBe('git took too long to answer. Try again.');
+    expect(mutationErrorCopy(new TypeError('Failed to fetch'))).toBe(NETWORK_FAILURE_MESSAGE);
+  });
+
+  it('ships the host-side identity fix verbatim, ready to paste', () => {
+    expect(IDENTITY_FIX_COMMANDS).toEqual([
+      'git config --global user.name "Your Name"',
+      'git config --global user.email "you@example.com"',
+    ]);
+  });
+});
+
+describe('rowActions', () => {
+  it('unstages a staged row, stages or discards a modified or untracked one, and leaves a conflict alone', () => {
+    expect(rowActions(staged(), ALL_GIT)).toEqual({ stage: false, unstage: true, discard: false });
+    expect(rowActions(entry(), ALL_GIT)).toEqual({ stage: true, unstage: false, discard: true });
+    expect(rowActions(untracked('n.txt'), ALL_GIT)).toEqual({
+      stage: true,
+      unstage: false,
+      discard: true,
+    });
+    expect(rowActions(conflict('c.py'), ALL_GIT)).toEqual(NO_ACTIONS);
+    expect(rowActions(entry({ group: foreignGroup('ignored') }), ALL_GIT)).toEqual(NO_ACTIONS);
+  });
+
+  it('gates each action on its own capability', () => {
+    const discardOnly: GitCapabilities = { stage: false, discard: true, commit: true };
+    const stageOnly: GitCapabilities = { stage: true, discard: false, commit: false };
+
+    expect(rowActions(entry(), discardOnly)).toEqual({ stage: false, unstage: false, discard: true });
+    expect(rowActions(staged(), discardOnly)).toEqual(NO_ACTIONS);
+    expect(rowActions(entry(), stageOnly)).toEqual({ stage: true, unstage: false, discard: false });
+    expect(rowActions(staged(), stageOnly)).toEqual({ stage: false, unstage: true, discard: false });
+  });
+});
+
+describe('discardScopeFor', () => {
+  it('sends an untracked row to clean and a tracked one to restore', () => {
+    expect(discardScopeFor(untracked('n.txt'))).toBe('untracked');
+    expect(discardScopeFor(entry())).toBe('unstaged');
+    expect(discardScopeFor(staged())).toBe('unstaged');
+  });
+});
+
+describe('pathsFor', () => {
+  it('names both sides of a rename, each path once', () => {
+    const rows = rowsOf(
+      staged({ code: 'R', index_status: 'R', orig_path: 'src/old.py', rename_score: 90 }),
+      entry({ path: 'src/old.py' }),
+      untracked('notes.txt'),
+    );
+
+    expect(pathsFor(rows)).toEqual(['src/app.py', 'src/old.py', 'notes.txt']);
+  });
+
+  it('is empty for no rows', () => {
+    expect(pathsFor([])).toEqual([]);
+  });
+});
+
+describe('selectionSubsets', () => {
+  const sections = sectionsFor(
+    status({
+      entries: [
+        staged({ path: 's.py' }),
+        entry({ path: 'm.py' }),
+        untracked('u.txt'),
+        conflict('c.py'),
+      ],
+    }),
+  );
+  const paths = (rows: { entry: SessionGitEntry }[]): string[] => rows.map((row) => row.entry.path);
+
+  it('sorts the ticked rows by the action each can take', () => {
+    const everything = new Set(sections.flatMap((section) => section.rows.map((row) => row.key)));
+
+    const subsets = selectionSubsets(sections, everything, ALL_GIT);
+
+    expect(paths(subsets.stage)).toEqual(['m.py', 'u.txt']);
+    expect(paths(subsets.unstage)).toEqual(['s.py']);
+    expect(paths(subsets.discard)).toEqual(['m.py', 'u.txt']);
+  });
+
+  it('ignores rows that are not ticked and actions the agent lacks', () => {
+    const onlyModified = new Set(['unstaged:0:m.py']);
+
+    const subsets = selectionSubsets(sections, onlyModified, { ...ALL_GIT, discard: false });
+
+    expect(paths(subsets.stage)).toEqual(['m.py']);
+    expect(subsets.unstage).toEqual([]);
+    expect(subsets.discard).toEqual([]);
+  });
+});
+
+describe('sectionAction', () => {
+  it('offers Unstage all on Staged, Stage all on Changes and Untracked, nothing elsewhere', () => {
+    const sections = sectionsFor(
+      status({
+        entries: [
+          conflict('c.py'),
+          staged({ path: 's.py' }),
+          entry({ path: 'm.py' }),
+          untracked('u.txt'),
+          entry({ group: foreignGroup('ignored'), path: 'i.txt' }),
+        ],
+      }),
+    );
+
+    const byGroup = Object.fromEntries(
+      sections.map((section) => [section.group, sectionAction(section, ALL_GIT)]),
+    );
+
+    expect(byGroup).toEqual({
+      conflicts: null,
+      staged: { label: 'Unstage all', action: 'unstage' },
+      unstaged: { label: 'Stage all', action: 'stage' },
+      untracked: { label: 'Stage all', action: 'stage' },
+      ignored: null,
+    });
+  });
+
+  it('offers nothing without the stage capability', () => {
+    const [section] = sectionsFor(status({ entries: [staged()] }));
+    if (section === undefined) throw new Error('no section');
+
+    expect(sectionAction(section, { stage: false, discard: true, commit: true })).toBeNull();
+  });
+});
+
+describe('discardPrompt', () => {
+  it('names the one file and says whether it is deleted or reverted', () => {
+    expect(discardPrompt(rowsOf(untracked('notes.txt')))).toEqual({
+      title: 'Delete untracked file?',
+      body: 'notes.txt is not tracked by git and will be deleted. This cannot be undone.',
+    });
+    expect(discardPrompt(rowsOf(entry()))).toEqual({
+      title: 'Discard changes?',
+      body: 'Changes to src/app.py will be thrown away. This cannot be undone.',
+    });
+  });
+
+  it('counts a multi-file discard', () => {
+    expect(discardPrompt(rowsOf(entry(), untracked('notes.txt')))).toEqual({
+      title: 'Discard 2 files?',
+      body:
+        'Their working-tree changes will be thrown away and untracked ones deleted. ' +
+        'This cannot be undone.',
+    });
+  });
+});
+
+describe('commit copy', () => {
+  it('composes subject and body the way git commit -F reads them', () => {
+    expect(composeCommitMessage('  Fix it  ', '')).toBe('Fix it');
+    expect(composeCommitMessage('Fix it', '  \n')).toBe('Fix it');
+    expect(composeCommitMessage('Fix it', '  Why.\n')).toBe('Fix it\n\nWhy.');
+  });
+
+  it('splits the previous commit back into the two fields', () => {
+    expect(
+      splitCommitMessage({ oid: 'abc', short_oid: 'abc', subject: 'Fix it', body: 'Why.' }),
+    ).toEqual({ summary: 'Fix it', description: 'Why.' });
+  });
+
+  it('labels the button by the staged count, or as an amend', () => {
+    expect(commitButtonLabel(0, false)).toBe('Commit 0 files');
+    expect(commitButtonLabel(1, false)).toBe('Commit 1 file');
+    expect(commitButtonLabel(3, false)).toBe('Commit 3 files');
+    expect(commitButtonLabel(3, true)).toBe('Amend commit');
+  });
+
+  it('phrases the result notice and the author line', () => {
+    expect(commitNotice({ oid: 'abc1234def', short_oid: 'abc1234', subject: 'Fix it' })).toBe(
+      'Committed abc1234 · Fix it',
+    );
+    expect(authorLine({ name: 'Ada Lovelace', email: 'ada@example.com' })).toBe(
+      'Committing as Ada Lovelace <ada@example.com>',
+    );
   });
 });

@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
   type RenderResult,
 } from '@testing-library/react';
@@ -149,15 +150,37 @@ const gitStatus = vi.hoisted(
   }),
 );
 
-// Both network calls shadowed, as above; the error mapping stays real.
+// The network calls shadowed, as above; the error mapping stays real. The
+// commit sheet reads its author on open, so that answers too.
 vi.mock('../../api/sessionGitRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/sessionGitRepository')>();
   return {
     ...actual,
     getSessionGitStatus: () => Promise.resolve(gitStatus),
     getSessionGitDiff: () => Promise.reject(new Error('diff is not under test')),
+    getSessionGitCommitContext: () =>
+      Promise.resolve({ author: { name: 'Ada Lovelace', email: 'ada@example.com' }, head: null }),
   };
 });
+
+/** The agent's `GET /api/version`, which gates the menu's *Commit…* entry. */
+const agentVersion = vi.hoisted((): { capabilities: Record<string, unknown>; probes: number } => ({
+  capabilities: {},
+  probes: 0,
+}));
+
+vi.mock('../../api/agentCapabilities', () => ({
+  fetchAgentCapabilities: () => {
+    agentVersion.probes += 1;
+    return Promise.resolve({
+      name: 'mobaide-agent',
+      server_version: '1.4.0',
+      protocol_versions: [7],
+      min_client_version: 1,
+      capabilities: agentVersion.capabilities,
+    });
+  },
+}));
 
 const { sessionChannelName } = await import('../../realtime/channels');
 const { acquireTerminal, evictTerminalSessions, useTerminalStore } = await import(
@@ -197,6 +220,8 @@ afterEach(() => {
   created.calls.length = 0;
   created.error = null;
   sessions.rows = [];
+  agentVersion.capabilities = {};
+  agentVersion.probes = 0;
   resetSessionsSynced();
   for (const model of Object.values(useTerminalStore.getState().models)) {
     model.dispose();
@@ -730,5 +755,55 @@ describe('TerminalScreen git changes', () => {
 
     expect(screen.queryByRole('dialog', { name: 'Git changes' })).toBeNull();
     expect(trigger).toHaveFocus();
+  });
+
+  /** React Query notifies on a timer, so nothing it does lands in this task. */
+  const flush = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+  };
+
+  it('offers Commit… only once the agent advertises capabilities.git.commit', async () => {
+    // Reads the probe once per screen: the entry exists on an explicit true,
+    // so an older agent keeps the menu it had.
+    agentVersion.capabilities = { git: { changes: true } };
+    await renderSynced(row({ cwd: '/srv/p1' }));
+    await waitFor(() => {
+      expect(agentVersion.probes).toBe(1);
+    });
+    await flush();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'More options' }));
+
+    expect(screen.getByRole('menuitem', { name: 'Changes…' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Commit…' })).toBeNull();
+  });
+
+  it('asks the agent nothing while the row names no folder', async () => {
+    // The probe is gated like the menu it feeds: without a cwd there are no
+    // git routes to offer, so the agent is not asked what it could do.
+    agentVersion.capabilities = { git: { commit: true } };
+    await renderSynced(row());
+    await flush();
+
+    expect(agentVersion.probes).toBe(0);
+    expect(more()).toBeNull();
+  });
+
+  it('opens the viewer with the commit sheet already up from Commit…', async () => {
+    agentVersion.capabilities = { git: { changes: true, stage: true, discard: true, commit: true } };
+    await renderSynced(row({ cwd: '/srv/p1' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'More options' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Commit…' }));
+
+    const panel = await screen.findByRole('dialog', { name: 'Git changes' });
+    const sheet = await screen.findByRole('dialog', { name: 'Commit' });
+    expect(
+      await within(sheet).findByText('Committing as Ada Lovelace <ada@example.com>'),
+    ).toBeInTheDocument();
+    expect(await within(panel).findByText('app.py')).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem')).toBeNull();
   });
 });

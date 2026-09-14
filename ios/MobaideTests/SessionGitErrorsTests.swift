@@ -125,7 +125,7 @@ final class SessionGitErrorsTests: XCTestCase {
         )
         XCTAssertEqual(
             SessionGitCopy.errorMessage(for: SessionGitError.git(code: "brand_new", message: "x")),
-            "git refused the request (brand_new)."
+            "git refused the request (brand_new): x"
         )
     }
 
@@ -156,5 +156,65 @@ final class SessionGitErrorsTests: XCTestCase {
         let future = SessionGitCopy.unavailable("shallow_clone")
         XCTAssertEqual(future.title, "Changes unavailable")
         XCTAssertEqual(future.body, "The agent could not read this repository (shallow_clone).")
+    }
+
+    // MARK: - Refusals
+
+    func test409ObjectDetailMapsToGitWithTheRefusalCode() {
+        XCTAssertEqual(
+            mapped(APIError(code: 409, errorBody: #"{"detail":{"code":"index_locked","message":"index.lock exists"}}"#)),
+            .git(code: SessionGitError.codeIndexLocked, message: "index.lock exists")
+        )
+        XCTAssertEqual(
+            mapped(APIError(code: 400, errorBody: #"{"detail":{"code":"empty_message"}}"#)),
+            .git(code: SessionGitError.codeEmptyMessage, message: nil)
+        )
+    }
+
+    func testRefusalCopyPhrasesEach409Code() {
+        XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codeIdentityRequired, message: nil), "Git doesn't know who you are on the agent machine.")
+        XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codeUnmerged, message: nil), "Resolve the conflicts first.")
+        XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codeNothingToCommit, message: nil), "Nothing is staged.")
+        XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codeNoHead, message: nil), "There is no commit to amend yet.")
+        XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codeHookFailed, message: "lint: nope"), "A commit hook rejected the commit.")
+        XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codeIndexLocked, message: nil), "Another git process is running — try again.")
+        XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codePathspecMismatch, message: nil), "That file changed under you — refreshed.")
+        XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codeEmptyMessage, message: nil), "Enter a commit summary.")
+    }
+
+    func testRefusalCopyNamesAnUnknownCodeWithTheGitOutputWhenThereIsAny() {
+        XCTAssertEqual(SessionGitCopy.refusal("rate_limited", message: nil), "git refused the request (rate_limited).")
+        XCTAssertEqual(SessionGitCopy.refusal("rate_limited", message: "slow down"), "git refused the request (rate_limited): slow down")
+        XCTAssertEqual(
+            SessionGitCopy.errorMessage(for: SessionGitError.git(code: SessionGitError.codeIndexLocked, message: "x")),
+            "Another git process is running — try again.",
+            "the viewer copy reaches the refusal vocabulary for a 409"
+        )
+    }
+
+    func testMutationMessageReadsGitTooOldAsTheMutationFloorNotThePollFloor() {
+        XCTAssertEqual(
+            SessionGitCopy.mutationMessage(for: SessionGitError.git(code: SessionGitError.codeGitTooOld, message: nil)),
+            "Staging needs git 2.26 or newer on the agent machine."
+        )
+        XCTAssertEqual(
+            SessionGitCopy.errorMessage(for: SessionGitError.git(code: SessionGitError.codeGitTooOld, message: nil)),
+            "The agent host needs git 2.15 or newer."
+        )
+        XCTAssertEqual(
+            SessionGitCopy.mutationMessage(for: SessionGitError.git(code: SessionGitError.codeIndexLocked, message: nil)),
+            "Another git process is running — try again."
+        )
+        XCTAssertEqual(
+            SessionGitCopy.mutationMessage(for: SessionGitError.network("x")),
+            "Could not reach the agent. Check the connection and try again."
+        )
+    }
+
+    func testIdentityFixCommandsAreVerbatim() {
+        XCTAssertEqual(SessionGitCopy.identityFixCommands, [
+            "git config --global user.name \"Your Name\"",
+            "git config --global user.email \"you@example.com\"",
+        ])
     }
 }

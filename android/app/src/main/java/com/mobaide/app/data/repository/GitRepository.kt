@@ -6,13 +6,19 @@ import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.BusyByResponse
 import com.mobaide.app.data.network.dto.BusyHolder
+import com.mobaide.app.data.network.dto.GitCommitContextResponse
+import com.mobaide.app.data.network.dto.GitCommitRequest
+import com.mobaide.app.data.network.dto.GitCommitResponse
 import com.mobaide.app.data.network.dto.GitDeleteItem
 import com.mobaide.app.data.network.dto.GitDeleteRequest
 import com.mobaide.app.data.network.dto.GitDeleteResponse
 import com.mobaide.app.data.network.dto.GitDiffResponse
+import com.mobaide.app.data.network.dto.GitDiscardRequest
 import com.mobaide.app.data.network.dto.GitItem
+import com.mobaide.app.data.network.dto.GitPathsRequest
 import com.mobaide.app.data.network.dto.GitRepoInfo
 import com.mobaide.app.data.network.dto.GitStatusResponse
+import com.mobaide.app.data.network.dto.gitCapability
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -71,6 +77,20 @@ sealed interface SessionGitStatusLoad {
 
 private enum class PollTrigger { Tick, Push, Manual }
 
+/**
+ * The agent's `capabilities.git` mutation keys. Every mutating control hangs
+ * off an explicit `true`, so an older agent keeps a read-only Changes viewer.
+ */
+data class GitCapabilities(
+    val stage: Boolean = false,
+    val discard: Boolean = false,
+    val commit: Boolean = false,
+) {
+    companion object {
+        val NONE = GitCapabilities()
+    }
+}
+
 class GitRepository(
     private val restApi: RestApi,
     private val eventBus: AgentEventBus,
@@ -112,6 +132,41 @@ class GitRepository(
         origPath: String?,
     ): GitDiffResponse =
         mapSessionGit { restApi.getSessionGitDiff(sessionId, path, scope, context, origPath) }
+
+    /** Fresh per-call probe of `GET /api/version`, like the mode picker's CLI probe. */
+    suspend fun gitCapabilities(): GitCapabilities = mapSessionGit {
+        val info = restApi.getAgentVersion()
+        GitCapabilities(
+            stage = info.gitCapability("stage"),
+            discard = info.gitCapability("discard"),
+            commit = info.gitCapability("commit"),
+        )
+    }
+
+    suspend fun stageSessionPaths(sessionId: String, paths: List<String>) {
+        mapSessionGit { restApi.stageSessionGit(sessionId, GitPathsRequest(paths)) }
+    }
+
+    suspend fun unstageSessionPaths(sessionId: String, paths: List<String>) {
+        mapSessionGit { restApi.unstageSessionGit(sessionId, GitPathsRequest(paths)) }
+    }
+
+    suspend fun discardSessionPaths(sessionId: String, paths: List<String>, scope: String) {
+        mapSessionGit { restApi.discardSessionGit(sessionId, GitDiscardRequest(paths, scope)) }
+    }
+
+    suspend fun sessionCommitContext(sessionId: String): GitCommitContextResponse =
+        mapSessionGit { restApi.getSessionGitCommitContext(sessionId) }
+
+    suspend fun commitSession(
+        sessionId: String,
+        message: String,
+        amend: Boolean,
+        noVerify: Boolean,
+    ): GitCommitResponse =
+        mapSessionGit {
+            restApi.commitSessionGit(sessionId, GitCommitRequest(message, amend, noVerify))
+        }
 
     /**
      * The session Changes feed: a status body per refresh trigger, for as long

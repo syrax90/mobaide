@@ -12,13 +12,22 @@ import Foundation
 enum SessionGitError: Error, Equatable, Sendable {
     case agentOutdated
     case sessionGone
-    /// `{"detail": {"code": …, "message"?: …}}` from 400 / 500 / 503 / 504.
+    /// `{"detail": {"code": …, "message"?: …}}` from 400 / 409 / 500 / 503 / 504.
     case git(code: String, message: String?)
     case network(String)
 
     static let codeGitUnavailable = "git_unavailable"
     static let codeGitTimeout = "git_timeout"
     static let codeGitError = "git_error"
+    static let codeGitTooOld = "git_too_old"
+    static let codeEmptyMessage = "empty_message"
+    static let codeIdentityRequired = "identity_required"
+    static let codeUnmerged = "unmerged"
+    static let codeNothingToCommit = "nothing_to_commit"
+    static let codeNoHead = "no_head"
+    static let codeHookFailed = "hook_failed"
+    static let codeIndexLocked = "index_locked"
+    static let codePathspecMismatch = "pathspec_mismatch"
 
     /// Classify a thrown error; anything unrelated passes through unchanged.
     static func map(_ error: any Error) -> any Error {

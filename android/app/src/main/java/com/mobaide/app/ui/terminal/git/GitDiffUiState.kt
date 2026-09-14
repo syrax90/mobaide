@@ -47,6 +47,16 @@ internal const val WIDTH_MEASURE_FLOOR = 8
 /** Candidates measured at most. */
 internal const val WIDTH_MEASURE_LIMIT = 16
 
+sealed interface GitDiffEvent {
+    /** The shown file moved to another section; the list is the place to see it. */
+    data object Close : GitDiffEvent
+
+    data class ShowMessage(val text: String) : GitDiffEvent
+}
+
+/** The Diff screen's toolbar action: Stage for a modified or untracked file, Unstage for a staged one. */
+data class DiffStageAction(val label: String, val stage: Boolean, val busy: Boolean = false)
+
 /** [context] lives on every variant so the chip selection survives a failed load. */
 sealed interface GitDiffUiState {
     val context: Int

@@ -1,5 +1,6 @@
-"""Python arm of the ``GitStatusResponse`` / ``GitDiffResponse`` golden
-fixtures shared with the iOS, Android and web clients.
+"""Python arm of the session git golden fixtures (status, diff and the
+stage/discard/commit request and response shapes) shared with the iOS,
+Android and web clients.
 
 Every case must survive ``model_validate`` → ``model_dump(mode="json")``
 unchanged, and ``decoded_canonical`` (the shape Swift's ``JSONEncoder``
@@ -13,7 +14,16 @@ from pathlib import Path
 
 import pytest
 
-from mobaide.agent.git.changes_models import GitDiffResponse, GitStatusResponse
+from mobaide.agent.git.changes_models import (
+    GitCommitContextResponse,
+    GitCommitRequest,
+    GitCommitResponse,
+    GitDiffResponse,
+    GitDiscardRequest,
+    GitMutationResponse,
+    GitPathsRequest,
+    GitStatusResponse,
+)
 
 # Resolved from this file, never the CWD: pytest is run from ``mobaide_agent/``
 # so ``import mobaide`` picks up these sources rather than the installed
@@ -21,7 +31,16 @@ from mobaide.agent.git.changes_models import GitDiffResponse, GitStatusResponse
 _FIXTURE_DIR = (
     Path(__file__).resolve().parents[2] / "tests" / "protocol_fixtures" / "dto" / "agent"
 )
-_MODELS = {"GitStatusResponse": GitStatusResponse, "GitDiffResponse": GitDiffResponse}
+_MODELS = {
+    "GitStatusResponse": GitStatusResponse,
+    "GitDiffResponse": GitDiffResponse,
+    "GitPathsRequest": GitPathsRequest,
+    "GitDiscardRequest": GitDiscardRequest,
+    "GitMutationResponse": GitMutationResponse,
+    "GitCommitRequest": GitCommitRequest,
+    "GitCommitResponse": GitCommitResponse,
+    "GitCommitContextResponse": GitCommitContextResponse,
+}
 
 
 def _cases():

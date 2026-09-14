@@ -85,9 +85,11 @@ fun TerminalScreen(
     onBack: () -> Unit,
     onSessionEnded: () -> Unit = onBack,
     onOpenGitChanges: () -> Unit = {},
+    onOpenGitCommit: () -> Unit = {},
 ) {
     val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
     val sessionCwd by viewModel.sessionCwd.collectAsStateWithLifecycle()
+    val gitCommitAvailable by viewModel.gitCommitAvailable.collectAsStateWithLifecycle()
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val followMode by viewModel.followMode.collectAsStateWithLifecycle()
@@ -212,7 +214,11 @@ fun TerminalScreen(
                 },
                 actions = {
                     if (sessionCwd != null) {
-                        TerminalOverflowMenu(onOpenGitChanges = onOpenGitChanges)
+                        TerminalOverflowMenu(
+                            onOpenGitChanges = onOpenGitChanges,
+                            onOpenGitCommit = onOpenGitCommit,
+                            commitAvailable = gitCommitAvailable,
+                        )
                     }
                 },
             )

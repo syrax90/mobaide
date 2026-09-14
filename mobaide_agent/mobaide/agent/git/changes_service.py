@@ -2,11 +2,11 @@
 router and the relay dispatcher.
 
 Runs every git command through :mod:`mobaide.core.git_exec` (timeouts, byte
-caps, scrubbed env, ``--literal-pathspecs``) and never takes the repo's
-per-project lock: ``GIT_OPTIONAL_LOCKS=0`` is what keeps a status poll from
-racing the user's own git in the PTY. Errors are raised as exceptions and
-mapped to HTTP by :func:`http_error_for` so both transports answer
-byte-identically.
+caps, scrubbed env, ``--literal-pathspecs``) and never takes a lock:
+``GIT_OPTIONAL_LOCKS=0`` is what keeps a status poll from racing the user's
+own git in the PTY. Errors are raised as exceptions and mapped to HTTP by
+:func:`http_error_for` so both transports answer byte-identically; the
+mutating routes in :mod:`.changes_mutations` share the same vocabulary.
 """
 from __future__ import annotations
 
@@ -89,6 +89,16 @@ class GitBadRequestError(GitChangesError):
         self.code = code
 
 
+class GitRefusedError(GitChangesError):
+    """Git declined a mutation because of the repository's state (``409``):
+    ``code`` is the client-facing vocabulary, ``message`` the trimmed output."""
+
+    def __init__(self, code: str, message: str = "") -> None:
+        super().__init__(code)
+        self.code = code
+        self.message = message[:_MAX_ERROR_DETAIL]
+
+
 def http_error_for(exc: BaseException) -> tuple[int, dict[str, Any]] | None:
     """Map a service exception to ``(status, body)``; ``None`` if unrelated."""
     if isinstance(exc, GitUnavailableError):
@@ -99,6 +109,8 @@ def http_error_for(exc: BaseException) -> tuple[int, dict[str, Any]] | None:
         return 504, {"detail": {"code": "git_timeout"}}
     if isinstance(exc, GitBadRequestError):
         return 400, {"detail": {"code": exc.code}}
+    if isinstance(exc, GitRefusedError):
+        return 409, {"detail": {"code": exc.code, "message": exc.message}}
     if isinstance(exc, GitCommandError):
         return 500, {"detail": {"code": "git_error", "message": exc.message}}
     return None

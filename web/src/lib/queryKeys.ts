@@ -77,6 +77,9 @@ export const queryKeys = {
     ['agent', agentId, 'session-git', sessionId, 'diff'] as const,
   sessionGitDiff: (agentId: string, sessionId: string, request: SessionGitDiffKey) =>
     ['agent', agentId, 'session-git', sessionId, 'diff', request] as const,
+  /** The commit sheet's author identity and previous commit; under the same prefix so a commit's `git.changed` echo re-reads it. */
+  sessionGitCommitContext: (agentId: string, sessionId: string) =>
+    ['agent', agentId, 'session-git', sessionId, 'commit-context'] as const,
   autoscan: (agentId: string) => ['agent', agentId, 'autoscan'] as const,
   /** Which CLIs the agent has installed, and the models each advertises. */
   agentCapabilities: (agentId: string) => ['agent', agentId, 'capabilities'] as const,

@@ -111,3 +111,17 @@ fun VersionInfoResponse.cliModelDetails(cliId: String): List<CliModelDetail>? = 
         }
         ?.takeIf { it.isNotEmpty() }
 }.getOrNull()
+
+/**
+ * Whether the agent advertises `capabilities.git.<key>` as `true`. The opposite
+ * default from [cliAvailable]: a mutating git control is shown only on an
+ * explicit `true`, so an older agent (or an unreadable probe) keeps the
+ * Changes viewer read-only rather than offering a Stage that would 404.
+ */
+fun VersionInfoResponse.gitCapability(key: String): Boolean = runCatching {
+    capabilities["git"]?.jsonObject
+        ?.get(key)?.jsonPrimitive
+        // A JSON boolean only: `booleanOrNull` would also read the string
+        // "true", which web and iOS reject.
+        ?.let { !it.isString && it.booleanOrNull == true }
+}.getOrNull() == true

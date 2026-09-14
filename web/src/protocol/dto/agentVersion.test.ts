@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  NO_GIT_CAPABILITIES,
   agentVersionSchema,
   cliAvailable,
   cliModelDetails,
   cliModels,
   cliModelsPending,
+  gitCapabilities,
+  gitCapability,
   type AgentVersionInfo,
 } from './agentVersion';
 
@@ -143,5 +146,52 @@ describe('cliModelDetails', () => {
     expect(cliModelDetails(info({ cli: { codex: { available: true } } }), 'codex')).toBeNull();
     expect(cliModelDetails(info({ cli: {} }), 'codex')).toBeNull();
     expect(cliModelDetails(undefined, 'codex')).toBeNull();
+  });
+});
+
+describe('gitCapability', () => {
+  it('reads an explicit true and nothing else', () => {
+    // The opposite default from `cliAvailable`: a control that would 404 on
+    // an older agent must not appear on a guess, so even the stringified form
+    // is not enough here.
+    const probe = info({ git: { changes: true, stage: true, discard: 'true', commit: false } });
+
+    expect(gitCapability(probe, 'changes')).toBe(true);
+    expect(gitCapability(probe, 'stage')).toBe(true);
+    expect(gitCapability(probe, 'discard')).toBe(false);
+    expect(gitCapability(probe, 'commit')).toBe(false);
+  });
+
+  const READ_ONLY: [string, unknown][] = [
+    ['no probe at all', undefined],
+    ['no capabilities', {}],
+    ['a git block of the wrong shape', { git: 'yes' }],
+    ['a git block without the key', { git: { changes: true } }],
+    ['a null flag', { git: { stage: null } }],
+  ];
+
+  it.each(READ_ONLY)('answers false for %s, which keeps the viewer read-only', (_label, capabilities) => {
+    const probe = capabilities === undefined ? undefined : info(capabilities);
+
+    expect(gitCapability(probe, 'stage')).toBe(false);
+  });
+
+  it('does not mistake an inherited object key for a capability', () => {
+    expect(gitCapability(info({ git: {} }), 'constructor')).toBe(false);
+  });
+});
+
+describe('gitCapabilities', () => {
+  it('collects the three mutating flags, each on its own', () => {
+    expect(gitCapabilities(info({ git: { changes: true, stage: true, commit: true } }))).toEqual({
+      stage: true,
+      discard: false,
+      commit: true,
+    });
+  });
+
+  it('is all-off without a probe', () => {
+    expect(gitCapabilities(undefined)).toEqual(NO_GIT_CAPABILITIES);
+    expect(NO_GIT_CAPABILITIES).toEqual({ stage: false, discard: false, commit: false });
   });
 });

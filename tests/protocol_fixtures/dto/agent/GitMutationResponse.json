@@ -1,0 +1,11 @@
+{
+  "type": "GitMutationResponse",
+  "cases": [
+    {
+      "name": "ok",
+      "wire": {
+        "ok": true
+      }
+    }
+  ]
+}

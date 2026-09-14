@@ -21,11 +21,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -54,12 +56,15 @@ import com.mobaide.app.data.network.dto.gitPathFileName
 import com.mobaide.app.ui.common.pixel.PixelCard
 import com.mobaide.app.ui.common.pixel.PixelChip
 import com.mobaide.app.ui.common.pixel.PixelScaffold
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
+import com.mobaide.app.ui.common.pixel.PixelTextButton
 import com.mobaide.app.ui.common.pixel.PixelTopBar
 import com.mobaide.app.ui.common.pixel.pixelChipBorder
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import com.mobaide.app.ui.theme.MobaideTheme
 import com.mobaide.app.ui.theme.chromeCaps
 import com.mobaide.app.ui.theme.pixel
+import kotlinx.coroutines.launch
 
 const val GIT_DIFF_SCREEN_TAG = "git_diff_screen"
 const val GIT_DIFF_LOADING_TAG = "git_diff_loading"
@@ -67,6 +72,7 @@ const val GIT_DIFF_ERROR_TAG = "git_diff_error"
 const val GIT_DIFF_OUTDATED_TAG = "git_diff_outdated"
 const val GIT_DIFF_SESSION_GONE_TAG = "git_diff_session_gone"
 const val GIT_DIFF_LIST_TAG = "git_diff_list"
+const val GIT_DIFF_STAGE_ACTION_TAG = "git_diff_stage_action"
 
 fun gitDiffContextChipTag(lines: Int): String = "git_diff_context_$lines"
 
@@ -77,13 +83,25 @@ fun GitDiffScreen(
     onBack: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val stageAction by viewModel.stageAction.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     DisposableEffect(viewModel) {
         viewModel.holdWatch()
         onDispose { viewModel.releaseWatch() }
     }
 
+    LaunchedEffect(viewModel) {
+        viewModel.events.collect { event ->
+            when (event) {
+                GitDiffEvent.Close -> onBack()
+                is GitDiffEvent.ShowMessage -> launch { snackbarHostState.showSnackbar(event.text) }
+            }
+        }
+    }
+
     PixelScaffold(
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
         topBar = {
             PixelTopBar(
                 title = {
@@ -97,6 +115,15 @@ fun GitDiffScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    stageAction?.let { action ->
+                        PixelTextButton(
+                            onClick = viewModel::runStageAction,
+                            enabled = !action.busy && state is GitDiffUiState.Ready,
+                            modifier = Modifier.testTag(GIT_DIFF_STAGE_ACTION_TAG),
+                        ) { Text(action.label) }
                     }
                 },
             )

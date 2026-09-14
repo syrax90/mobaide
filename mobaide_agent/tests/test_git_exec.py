@@ -129,6 +129,43 @@ class TestRunCapped:
                 cwd=None, timeout=5.0, max_bytes=1024,
             )
 
+    def test_stdin_larger_than_the_pipe_buffer_is_delivered_whole(self):
+        payload = b"p" * 500_000
+
+        result = run_capped(
+            _py("import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"),
+            cwd=None, timeout=30.0, max_bytes=1_000_000, stdin=payload,
+        )
+
+        assert result == CmdResult(rc=0, stdout=payload, stderr=b"")
+
+    def test_no_stdin_is_an_immediate_eof(self):
+        result = run_capped(
+            _py("import sys; sys.stdout.write(repr(sys.stdin.read()))"),
+            cwd=None, timeout=30.0, max_bytes=1024,
+        )
+
+        assert result == CmdResult(rc=0, stdout=b"''", stderr=b"")
+
+    def test_child_that_never_reads_stdin_still_times_out(self):
+        started = time.monotonic()
+
+        result = run_capped(
+            _py("import time; time.sleep(60)"),
+            cwd=None, timeout=0.5, max_bytes=1024, stdin=b"z" * 500_000,
+        )
+
+        assert result.timed_out is True
+        assert time.monotonic() - started < 30
+
+    def test_child_that_exits_before_reading_stdin_is_not_an_error(self):
+        result = run_capped(
+            _py("import sys; sys.exit(4)"),
+            cwd=None, timeout=30.0, max_bytes=1024, stdin=b"z" * 500_000,
+        )
+
+        assert result == CmdResult(rc=4, stdout=b"", stderr=b"")
+
 
 class TestGitEnv:
     def test_scrubs_redirecting_keys_and_forces_locale(self, monkeypatch):
@@ -197,11 +234,21 @@ class TestRunGit:
                 ["status"], cwd=str(tmp_path / "gone"), timeout=5.0, max_bytes=1024
             )
 
+    @requires_git
+    async def test_stdin_reaches_git(self, tmp_path):
+        result = await run_git(
+            ["hash-object", "--stdin"],
+            cwd=str(tmp_path), timeout=5.0, max_bytes=1024, stdin=b"hello\n",
+        )
+
+        assert result.rc == 0
+        assert result.stdout.strip() == b"ce013625030ba8dba906f756967f9e9ca394464a"
+
     async def test_prefixes_argv_and_scrubs_env(self, monkeypatch):
         captured: dict[str, object] = {}
 
-        def fake_run_capped(argv, *, cwd, timeout, max_bytes, env):
-            captured.update(argv=list(argv), cwd=cwd, env=env)
+        def fake_run_capped(argv, *, cwd, timeout, max_bytes, env, stdin=None):
+            captured.update(argv=list(argv), cwd=cwd, env=env, stdin=stdin)
             return CmdResult(rc=0, stdout=b"", stderr=b"")
 
         monkeypatch.setattr(git_exec.shutil, "which", lambda _name: "/opt/git")

@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.Commit
 import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -24,6 +25,7 @@ import com.mobaide.app.ui.theme.MobaideTheme
 import com.mobaide.app.ui.theme.chromeCaps
 
 const val TERMINAL_MENU_GIT_CHANGES_TAG = "terminal_menu_git_changes"
+const val TERMINAL_MENU_GIT_COMMIT_TAG = "terminal_menu_git_commit"
 
 /**
  * The terminal top bar's `⋯` menu. `internal` (vs the screen file's usual
@@ -32,12 +34,15 @@ const val TERMINAL_MENU_GIT_CHANGES_TAG = "terminal_menu_git_changes"
  * The "Git" heading is a hand-rolled, non-clickable label: material3 1.3
  * (Compose BOM 2024.12) predates `MenuDefaults.DropdownMenuGroupLabel`, and
  * this is shaped for a mechanical swap once the BOM moves. Further git actions
- * (commit, fetch/pull/push, branches, rebase) are reserved slots under the
- * same heading.
+ * (fetch/pull/push, branches, rebase) are reserved slots under the same
+ * heading, after Commit…, which exists only on an agent that advertises
+ * `capabilities.git.commit`.
  */
 @Composable
 internal fun TerminalOverflowMenu(
     onOpenGitChanges: () -> Unit,
+    onOpenGitCommit: () -> Unit = {},
+    commitAvailable: Boolean = false,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box {
@@ -53,6 +58,17 @@ internal fun TerminalOverflowMenu(
                 leadingIcon = { Icon(Icons.Outlined.Difference, contentDescription = null) },
                 modifier = Modifier.testTag(TERMINAL_MENU_GIT_CHANGES_TAG),
             )
+            if (commitAvailable) {
+                DropdownMenuItem(
+                    text = { Text("Commit…") },
+                    onClick = {
+                        menuExpanded = false
+                        onOpenGitCommit()
+                    },
+                    leadingIcon = { Icon(Icons.Outlined.Commit, contentDescription = null) },
+                    modifier = Modifier.testTag(TERMINAL_MENU_GIT_COMMIT_TAG),
+                )
+            }
         }
     }
 }
@@ -70,7 +86,7 @@ private fun MenuSectionLabel(text: String) {
 @Preview(name = "Overflow menu dark", showBackground = true, backgroundColor = 0xFF121212)
 @Composable
 private fun TerminalOverflowMenuPreviewDark() {
-    MobaideTheme(darkTheme = true) { TerminalOverflowMenu(onOpenGitChanges = {}) }
+    MobaideTheme(darkTheme = true) { TerminalOverflowMenu(onOpenGitChanges = {}, commitAvailable = true) }
 }
 
 @Preview(name = "Overflow menu light", showBackground = true, backgroundColor = 0xFFF4F4F4)

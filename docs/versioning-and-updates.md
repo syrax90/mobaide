@@ -339,16 +339,19 @@ range is rejected up front.
         ]
       }
     },
-    "git": { "changes": true }
+    "git": { "changes": true, "stage": true, "discard": true, "commit": true }
   },
   "latest_agent_version": "0.1.0"
 }
 ```
 
 (`capabilities.git.changes` — additive, no bump — advertises the session-scoped
-read-only git status/diff routes behind the in-session Changes viewer; an agent
+git status/diff routes behind the in-session Changes viewer; an agent
 without the key answers those routes with 404 and clients render an
-"update your agent" state. `capabilities.cli` carries one `{ "available": <bool> }` entry per managed CLI
+"update your agent" state. `capabilities.git.stage` / `discard` / `commit` —
+also additive — advertise the stage/unstage, discard and commit routes; a
+client shows a mutating control only when its key is `true`, so an older agent
+keeps a read-only viewer. `capabilities.cli` carries one `{ "available": <bool> }` entry per managed CLI
 the agent registers — additive, no `protocol_version` bump — and the Android
 mode-select screen disables a per-CLI button when its binary is absent. The
 client parses it tolerantly: an absent / old-agent / malformed value is treated

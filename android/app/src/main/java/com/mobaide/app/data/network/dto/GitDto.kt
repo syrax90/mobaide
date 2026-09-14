@@ -255,3 +255,54 @@ data class GitDiffResponse(
         const val CHANGE_TYPE_CHANGED = "type_changed"
     }
 }
+
+/** Repo-relative paths as `status` reported them; a renamed entry lists both `path` and `orig_path`. */
+@Serializable
+data class GitPathsRequest(val paths: List<String>)
+
+@Serializable
+data class GitDiscardRequest(val paths: List<String>, val scope: String) {
+    companion object {
+        const val SCOPE_UNSTAGED = "unstaged"
+        const val SCOPE_UNTRACKED = "untracked"
+    }
+}
+
+@Serializable
+data class GitMutationResponse(val ok: Boolean = true)
+
+@Serializable
+data class GitCommitRequest(
+    val message: String,
+    val amend: Boolean = false,
+    val no_verify: Boolean = false,
+)
+
+@Serializable
+data class GitCommitResponse(
+    val oid: String,
+    val short_oid: String,
+    val subject: String,
+)
+
+@Serializable
+data class GitCommitAuthor(val name: String, val email: String)
+
+@Serializable
+data class GitCommitHead(
+    val oid: String,
+    val short_oid: String,
+    val subject: String,
+    val body: String = "",
+)
+
+/**
+ * What the commit sheet needs before the user types: `author` is null when git
+ * cannot determine an identity (the commit would be refused with
+ * `identity_required`), `head` is null on an unborn branch (nothing to amend).
+ */
+@Serializable
+data class GitCommitContextResponse(
+    val author: GitCommitAuthor? = null,
+    val head: GitCommitHead? = null,
+)

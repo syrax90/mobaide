@@ -663,7 +663,17 @@ widest measured line (`GitDiffDisplay.metrics`), so rows scroll sideways
 together up to the 2 000-column cut. The line-number gutters and the
 hunk-header and notice rows stay at the visible leading edge through a
 render-time `visualEffect` offset. SwiftUI has no directional lock, so a
-diagonal drag moves both axes. Both child screens hold a ref-counted watch on
+diagonal drag moves both axes. Stage / Unstage / Discard (Discard always
+behind a confirmation) live per row as swipe actions and a context menu, per
+section as Stage all / Unstage all, and again on the Diff screen's own
+toolbar; a top-bar Select switches the list into `EditMode` with a
+bottom-bar multi-select toolbar — every action gated on the matching
+`capabilities.git` key (`GitChangesModel.capabilities`). The terminal menu's
+`⋯ → Git → Commit…` opens the Changes screen with `GitCommitSheet` presented
+over it (`Route.sessionGitChanges(sessionId:commit:)`); the sheet mirrors
+Android's Summary + Description, author line, Amend prefill from
+`commit/context`, and Skip hooks (`--no-verify`). Both child screens hold a
+ref-counted watch on
 `ForegroundSessionTracker` (`View.holdsSessionWatch`) for exactly as long as
 they are on the stack, so the terminal underneath stays attached and returning
 never costs a ring replay.

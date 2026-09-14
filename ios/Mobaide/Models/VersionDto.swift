@@ -102,6 +102,34 @@ extension VersionInfoResponse {
     }
 }
 
+/// The agent's `capabilities.git` mutation keys. Every mutating control hangs
+/// off an explicit `true`, so an older agent keeps a read-only Changes viewer.
+struct GitCapabilities: Equatable, Sendable {
+    var stage = false
+    var discard = false
+    var commit = false
+
+    static let none = GitCapabilities()
+}
+
+extension VersionInfoResponse {
+    /// Whether the agent advertises `capabilities.git.<key>` as `true`. The
+    /// opposite default from `cliAvailable`: absent or unreadable reads as
+    /// `false`, so no Stage is offered that would 404.
+    func gitCapability(_ key: String) -> Bool {
+        if case .bool(true)? = capabilities["git"]?[key] { return true }
+        return false
+    }
+
+    var gitCapabilities: GitCapabilities {
+        GitCapabilities(
+            stage: gitCapability("stage"),
+            discard: gitCapability("discard"),
+            commit: gitCapability("commit")
+        )
+    }
+}
+
 /// One entry of `capabilities.cli.<id>.model_details`: the reasoning efforts a
 /// model supports and (when the catalog names one) its default effort. Built
 /// only by the loose walk in `cliModelDetails` — never decoded directly.

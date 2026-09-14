@@ -1,7 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, render, waitFor, type RenderResult } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SessionGitStatus } from '../../../api/sessionGitRepository';
+import type {
+  SessionGitCommitResult,
+  SessionGitStatus,
+} from '../../../api/sessionGitRepository';
 import { fakeEventTarget } from '../../../realtime/__testing__/fakeEventTarget';
 import type { FocusWin } from '../../../realtime/windowFocus';
 
@@ -12,6 +15,9 @@ import type { FocusWin } from '../../../realtime/windowFocus';
 const api = vi.hoisted(() => ({
   etags: [] as (string | undefined)[],
   answers: [] as (() => Promise<SessionGitStatus>)[],
+  /** What the next stage request answers; the mutation is only a trigger here. */
+  stage: undefined as (() => Promise<void>) | undefined,
+  commit: undefined as (() => Promise<SessionGitCommitResult>) | undefined,
 }));
 
 vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
@@ -24,6 +30,12 @@ vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
       return next === undefined ? Promise.reject(new Error('unexpected status fetch')) : next();
     },
     getSessionGitDiff: () => Promise.reject(new Error('diff is not under test')),
+    stageSessionGit: () =>
+      api.stage === undefined ? Promise.reject(new Error('stage is not under test')) : api.stage(),
+    commitSessionGit: () =>
+      api.commit === undefined
+        ? Promise.reject(new Error('commit is not under test'))
+        : api.commit(),
   };
 });
 
@@ -32,7 +44,9 @@ const { toSessionGitError } = await import('../../../api/sessionGitRepository');
 const { queryKeys } = await import('../../../lib/queryKeys');
 const { observeTabVisibility } = await import('../../../realtime/tabVisibility');
 const { observeWindowFocus } = await import('../../../realtime/windowFocus');
-const { SESSION_GIT_POLL_MS, useSessionGitStatus } = await import('./useSessionGit');
+const { SESSION_GIT_POLL_MS, useSessionGitMutations, useSessionGitStatus } = await import(
+  './useSessionGit'
+);
 
 const body = (etag: string): SessionGitStatus => ({
   session_id: 's1',
@@ -105,6 +119,7 @@ interface Snapshot {
 
 let client: QueryClient;
 let latest: Snapshot | undefined;
+let latestMutations: ReturnType<typeof useSessionGitMutations> | undefined;
 const uninstallers: (() => void)[] = [];
 
 function Harness({ active }: { active: boolean }) {
@@ -112,6 +127,19 @@ function Harness({ active }: { active: boolean }) {
   latest = { data, error, fetchStatus };
   return null;
 }
+
+/** The poll beside the mutations, as the panel mounts them. */
+function MutationsHarness() {
+  const { data, error, fetchStatus } = useSessionGitStatus('a1', 's1', true);
+  latest = { data, error, fetchStatus };
+  latestMutations = useSessionGitMutations('a1', 's1');
+  return null;
+}
+
+const mutations = (): ReturnType<typeof useSessionGitMutations> => {
+  if (latestMutations === undefined) throw new Error('mutations not rendered');
+  return latestMutations;
+};
 
 const subject = (active: boolean) => (
   <QueryClientProvider client={client}>
@@ -145,8 +173,11 @@ const invalidate = async (): Promise<void> => {
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   latest = undefined;
+  latestMutations = undefined;
   api.etags.length = 0;
   api.answers.length = 0;
+  api.stage = undefined;
+  api.commit = undefined;
 });
 
 afterEach(() => {
@@ -380,5 +411,123 @@ describe('useSessionGitStatus failures', () => {
 
     expect(client.getQueryCache().find({ queryKey: queryKeys.sessionGitStatus('a1', 's1') })?.meta)
       .toEqual({ silent: true });
+  });
+});
+
+describe('useSessionGitMutations', () => {
+  const renderMutations = async (): Promise<void> => {
+    answer(body('e1'));
+    answer(body('e2'));
+    render(
+      <QueryClientProvider client={client}>
+        <MutationsHarness />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(hook().data?.etag).toBe('e1');
+    });
+  };
+
+  it('re-reads the status, carrying its etag, once a mutation has settled', async () => {
+    api.stage = () => Promise.resolve();
+    await renderMutations();
+
+    await act(async () => {
+      await mutations().stage.mutateAsync(['src/app.py']);
+    });
+
+    await waitFor(() => {
+      expect(hook().data?.etag).toBe('e2');
+    });
+    expect(api.etags).toEqual([undefined, 'e1']);
+  });
+
+  it('re-reads after a refusal as well, since the tree may have moved underneath', async () => {
+    api.stage = () => Promise.reject(wireFailure(409, { code: 'pathspec_mismatch', message: 'x' }));
+    await renderMutations();
+
+    await act(async () => {
+      await expect(mutations().stage.mutateAsync(['gone.py'])).rejects.toMatchObject({
+        kind: 'git',
+        code: 'pathspec_mismatch',
+      });
+    });
+
+    await waitFor(() => {
+      expect(hook().data?.etag).toBe('e2');
+    });
+  });
+
+  /** A diff pane and a commit sheet, cached as the panel would have them. */
+  const diffKey = () =>
+    queryKeys.sessionGitDiff('a1', 's1', { path: 'src/app.py', scope: 'unstaged', context: 3 });
+  const contextKey = () => queryKeys.sessionGitCommitContext('a1', 's1');
+  const seedSiblings = (): void => {
+    client.setQueryData(diffKey(), { path: 'src/app.py', scope: 'unstaged' });
+    client.setQueryData(contextKey(), { author: null, head: null });
+  };
+  const invalidated = (queryKey: readonly unknown[]): boolean | undefined =>
+    client.getQueryState(queryKey)?.isInvalidated;
+
+  it('re-reads only the status after a stage: open diffs and the commit context stay fresh', async () => {
+    // The panel's etag effect and the agent's `git.changed` echo already
+    // re-read every open diff once the tree moved; a third `git diff` for the
+    // old scope would only race them.
+    api.stage = () => Promise.resolve();
+    await renderMutations();
+    seedSiblings();
+
+    await act(async () => {
+      await mutations().stage.mutateAsync(['src/app.py']);
+    });
+
+    await waitFor(() => {
+      expect(hook().data?.etag).toBe('e2');
+    });
+    expect(invalidated(diffKey())).toBe(false);
+    expect(invalidated(contextKey())).toBe(false);
+  });
+
+  it('drops the commit context, but still not the diffs, once a commit has settled', async () => {
+    // The previous commit changed, so the sheet's Amend prefill is stale.
+    api.commit = () =>
+      Promise.resolve({ oid: 'abc1234def', short_oid: 'abc1234', subject: 'Smoke' });
+    await renderMutations();
+    seedSiblings();
+
+    await act(async () => {
+      await mutations().commit.mutateAsync({ message: 'Smoke', amend: false, no_verify: false });
+    });
+
+    await waitFor(() => {
+      expect(hook().data?.etag).toBe('e2');
+    });
+    expect(invalidated(contextKey())).toBe(true);
+    expect(invalidated(diffKey())).toBe(false);
+  });
+
+  it('reports one busy flag while any of the mutations is in flight', async () => {
+    let release: (() => void) | undefined;
+    api.stage = () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    await renderMutations();
+    expect(mutations().busy).toBe(false);
+
+    act(() => {
+      void mutations().stage.mutateAsync(['src/app.py']);
+    });
+    await waitFor(() => {
+      expect(mutations().busy).toBe(true);
+    });
+
+    await act(async () => {
+      release?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(mutations().busy).toBe(false);
+    });
   });
 });

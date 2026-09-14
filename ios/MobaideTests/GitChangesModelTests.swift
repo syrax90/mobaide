@@ -19,7 +19,8 @@ final class GitChangesModelTests: XCTestCase {
 
     private func makeModel(
         sleeper: any Sleeper = ManualSleeper(),
-        projectName: String? = "proj"
+        projectName: String? = "proj",
+        openCommit: Bool = false
     ) -> (GitChangesModel, AgentEventBus, FakeWebSocketTransportFactory) {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         let factory = FakeWebSocketTransportFactory()
@@ -39,7 +40,8 @@ final class GitChangesModelTests: XCTestCase {
             agentAPI: agentAPI,
             agentEventBus: bus,
             projectName: { projectName },
-            sleeper: sleeper
+            sleeper: sleeper,
+            openCommit: openCommit
         )
         return (model, bus, factory)
     }
@@ -295,5 +297,344 @@ final class GitChangesModelTests: XCTestCase {
             model.diffRoute(for: entries[5]),
             .sessionGitDiff(sessionId: "s1", path: "notes/тест.md", scope: "untracked", origPath: nil)
         )
+    }
+
+    // MARK: - Capabilities and mutations
+
+    private let versionURL = "http://agent.example.com/api/version"
+    private let ada = GitCommitAuthor(name: "Ada Lovelace", email: "ada@example.com")
+    private let previous = GitCommitHead(
+        oid: "4890423520f4dcd158b85374f44fc8819a813ac2",
+        short_oid: "4890423",
+        subject: "Fix the login redirect",
+        body: "The callback URL was built before the port was known."
+    )
+
+    private func gitURL(_ leaf: String) -> String { "http://agent.example.com/api/sessions/s1/git/\(leaf)" }
+
+    private func versionBody(_ git: String) -> String {
+        #"{"name":"mobaide-agent","server_version":"1.4.0","protocol_versions":[7],"min_client_version":1,"capabilities":{"git":\#(git)}}"#
+    }
+
+    private func contextBody(_ name: String) throws -> String {
+        String(decoding: try FixtureLoader.wireData(path: "dto/agent/GitCommitContextResponse.json", case: name), as: UTF8.self)
+    }
+
+    private func committedBody() throws -> String {
+        String(decoding: try FixtureLoader.wireData(path: "dto/agent/GitCommitResponse.json", case: "committed"), as: UTF8.self)
+    }
+
+    private func sentBody<T: Decodable>(_ type: T.Type, at index: Int) throws -> T {
+        try JSONDecoder().decode(type, from: try XCTUnwrap(StubURLProtocol.bodies[safe: index]))
+    }
+
+    private func row(_ model: GitChangesModel, _ id: String) throws -> GitChangesRow {
+        try XCTUnwrap(model.sections.flatMap(\.rows).first { $0.id == id }, "no row \(id)")
+    }
+
+    /// The full fixture on screen with the given `capabilities.git`, the
+    /// probe's and the load's traffic already forgotten.
+    private func loadedModel(
+        git: String = #"{"changes":true,"stage":true,"discard":true,"commit":true}"#
+    ) async throws -> GitChangesModel {
+        let (model, _, _) = makeModel()
+        StubURLProtocol.enqueue(status: 200, body: versionBody(git))
+        await model.loadCapabilities()
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("linked_worktree_full"))
+        await model.load()
+        StubURLProtocol.reset()
+        return model
+    }
+
+    private let etagStatusURL = "http://agent.example.com/api/sessions/s1/git/status?etag=3f0d4c1e9a7b2c5d6e8f9a0b1c2d3e4f5a6b7c8d"
+
+    func testLoadCapabilitiesReadsTheProbeAndAFailedProbeChangesNothing() async throws {
+        let (model, _, _) = makeModel()
+        XCTAssertEqual(model.capabilities, .none)
+        StubURLProtocol.enqueue(status: 200, body: versionBody(#"{"changes":true,"stage":true,"commit":true}"#))
+
+        await model.loadCapabilities()
+
+        XCTAssertEqual(requestURLs, [versionURL])
+        XCTAssertEqual(model.capabilities, GitCapabilities(stage: true, discard: false, commit: true))
+
+        StubURLProtocol.enqueue(status: 503, body: #"{"detail":"Agent is offline"}"#)
+        await model.loadCapabilities()
+        XCTAssertEqual(model.capabilities, GitCapabilities(stage: true, discard: false, commit: true))
+    }
+
+    func testDerivedCountsRowsAndSubsets() async throws {
+        let model = try await loadedModel()
+
+        XCTAssertEqual(model.stagedCount, 3)
+        XCTAssertTrue(model.hasActionableRows)
+        XCTAssertEqual(model.rows(for: ["unstaged:1:src/both.py", "nope"]).map(\.id), ["unstaged:1:src/both.py"])
+
+        model.selection = ["staged:1:src/new name.py", "unstaged:1:src/both.py", "conflicts:1:src/conflict.py"]
+        XCTAssertEqual(model.selectionSubsets.stage.map(\.id), ["unstaged:1:src/both.py"])
+        XCTAssertEqual(model.selectionSubsets.unstage.map(\.id), ["staged:1:src/new name.py"])
+        XCTAssertEqual(model.selectionSubsets.discard.map(\.id), ["unstaged:1:src/both.py"])
+
+        let readOnly = try await loadedModel(git: #"{"changes":true}"#)
+        XCTAssertFalse(readOnly.hasActionableRows)
+        XCTAssertEqual(readOnly.stagedCount, 3, "the count is the agent's, whatever the agent can do")
+    }
+
+    func testStageSendsThePathThenReloadsAndForgetsTheRow() async throws {
+        let model = try await loadedModel()
+        let both = try row(model, "unstaged:1:src/both.py")
+        model.selection = [both.id, "untracked:1:notes/тест.md"]
+        StubURLProtocol.enqueue(status: 200, body: #"{"ok":true}"#)
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("unchanged"))
+
+        await model.stage([both])
+
+        XCTAssertEqual(requestURLs, [gitURL("stage"), etagStatusURL])
+        XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "POST")
+        XCTAssertEqual(try sentBody(GitPathsRequest.self, at: 0), GitPathsRequest(paths: ["src/both.py"]))
+        XCTAssertEqual(model.selection, ["untracked:1:notes/тест.md"])
+        XCTAssertFalse(model.isMutating)
+        XCTAssertNil(model.toast)
+    }
+
+    func testUnstageNamesBothSidesOfARename() async throws {
+        // `git reset` on the new name alone would leave the deletion staged.
+        let model = try await loadedModel()
+        let rename = try row(model, "staged:1:src/new name.py")
+        StubURLProtocol.enqueue(status: 200, body: #"{"ok":true}"#)
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("unchanged"))
+
+        await model.unstage([rename])
+
+        XCTAssertEqual(requestURLs, [gitURL("unstage"), etagStatusURL])
+        XCTAssertEqual(try sentBody(GitPathsRequest.self, at: 0), GitPathsRequest(paths: ["src/new name.py", "src/old.py"]))
+    }
+
+    func testARefusedMutationRaisesADangerToastKeepsTheSelectionAndStillReloads() async throws {
+        // The tree may have moved under the request, so the list is re-read
+        // even though nothing was staged.
+        let model = try await loadedModel()
+        let both = try row(model, "unstaged:1:src/both.py")
+        model.selection = [both.id]
+        StubURLProtocol.enqueue(status: 409, body: #"{"detail":{"code":"index_locked","message":"index.lock exists"}}"#)
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("unchanged"))
+
+        await model.stage([both])
+
+        XCTAssertEqual(model.toast?.text, "Another git process is running — try again.")
+        XCTAssertEqual(model.toast?.tone, .danger)
+        XCTAssertEqual(requestURLs, [gitURL("stage"), etagStatusURL])
+        XCTAssertEqual(model.selection, [both.id])
+        XCTAssertFalse(model.isMutating)
+
+        StubURLProtocol.enqueue(status: 409, body: #"{"detail":{"code":"git_too_old","message":"git 2.26.0 or newer is required"}}"#)
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("unchanged"))
+        await model.stage([both])
+        XCTAssertEqual(model.toast?.text, "Staging needs git 2.26 or newer on the agent machine.")
+    }
+
+    func testNothingIsSentForNoRows() async throws {
+        let model = try await loadedModel()
+
+        await model.stage([])
+        await model.unstage([])
+
+        XCTAssertEqual(requestURLs, [])
+        XCTAssertFalse(model.isMutating)
+    }
+
+    func testTickedRowsThatVanishWithARefreshAreDropped() async throws {
+        let model = try await loadedModel()
+        model.selection = ["unstaged:1:src/both.py", "untracked:1:notes/тест.md"]
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("upstream_gone"))
+
+        await model.load()
+
+        XCTAssertEqual(model.selection, [])
+        XCTAssertEqual(model.sections.map(\.group), ["unstaged"])
+    }
+
+    // MARK: - Discard
+
+    func testDiscardGoesThroughThePromptThenOneRequestPerScope() async throws {
+        let model = try await loadedModel()
+        let both = try row(model, "unstaged:1:src/both.py")
+        let notes = try row(model, "untracked:1:notes/тест.md")
+
+        model.requestDiscard([])
+        XCTAssertNil(model.discardPrompt)
+
+        model.requestDiscard([both, notes])
+        XCTAssertEqual(model.discardPrompt?.title, "Discard 2 files?")
+        model.dismissDiscard()
+        XCTAssertNil(model.discardPrompt)
+        await model.confirmDiscard()
+        XCTAssertEqual(requestURLs, [], "a dismissed prompt sends nothing")
+
+        model.requestDiscard([both, notes])
+        StubURLProtocol.enqueue(status: 200, body: #"{"ok":true}"#)
+        StubURLProtocol.enqueue(status: 200, body: #"{"ok":true}"#)
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("unchanged"))
+        await model.confirmDiscard()
+
+        XCTAssertNil(model.discardPrompt)
+        XCTAssertEqual(requestURLs, [gitURL("discard"), gitURL("discard"), etagStatusURL])
+        XCTAssertEqual(try sentBody(GitDiscardRequest.self, at: 0), GitDiscardRequest(paths: ["src/both.py"], scope: "unstaged"))
+        XCTAssertEqual(try sentBody(GitDiscardRequest.self, at: 1), GitDiscardRequest(paths: ["notes/тест.md"], scope: "untracked"))
+        XCTAssertFalse(model.isMutating)
+    }
+
+    func testTheConfirmStillHasItsRowsAfterTheDialogBindingClearedThePrompt() async throws {
+        // SwiftUI writes the dialog's `isPresented` false before the confirm
+        // action runs; the rows live beside the prompt, not in it.
+        let model = try await loadedModel()
+        let notes = try row(model, "untracked:1:notes/тест.md")
+        model.requestDiscard([notes])
+        XCTAssertEqual(model.discardPrompt?.title, "Delete untracked file?")
+        model.discardPrompt = nil
+        StubURLProtocol.enqueue(status: 200, body: #"{"ok":true}"#)
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("unchanged"))
+
+        await model.confirmDiscard()
+
+        XCTAssertEqual(requestURLs, [gitURL("discard"), etagStatusURL])
+        XCTAssertEqual(try sentBody(GitDiscardRequest.self, at: 0), GitDiscardRequest(paths: ["notes/тест.md"], scope: "untracked"))
+    }
+
+    // MARK: - Commit
+
+    func testOpenCommitLoadsTheContextIntoTheSheetAndCloseDropsIt() async throws {
+        let model = try await loadedModel()
+        StubURLProtocol.enqueue(status: 200, body: try contextBody("ready"))
+
+        model.openCommit()
+
+        XCTAssertEqual(model.commitSheet, CommitSheetState(), "the sheet is up at once, loading")
+        await waitUntil { model.commitSheet?.context != .loading }
+        XCTAssertEqual(requestURLs, [gitURL("commit/context")])
+        XCTAssertEqual(model.commitSheet?.context, .ready(author: ada, head: previous))
+
+        model.closeCommit()
+        XCTAssertNil(model.commitSheet)
+    }
+
+    func testCommitContextWithoutAnIdentityOrAPreviousCommit() async throws {
+        let model = try await loadedModel()
+        model.commitSheet = CommitSheetState()
+        StubURLProtocol.enqueue(status: 200, body: try contextBody("unborn_no_identity"))
+
+        await model.loadCommitContext()
+
+        XCTAssertEqual(model.commitSheet?.context, .ready(author: nil, head: nil))
+    }
+
+    func testAFailedContextLoadIsReportedInsideTheSheet() async throws {
+        let model = try await loadedModel()
+        model.commitSheet = CommitSheetState()
+        StubURLProtocol.enqueue(status: 503, body: #"{"detail":{"code":"git_unavailable","message":null}}"#)
+
+        await model.loadCommitContext()
+
+        XCTAssertEqual(model.commitSheet?.context, .failed("git is not installed on the agent host."))
+    }
+
+    func testCommitComposesTheMessageClosesTheSheetToastsAndReloads() async throws {
+        let model = try await loadedModel()
+        model.commitSheet = CommitSheetState(context: .ready(author: ada, head: nil))
+        StubURLProtocol.enqueue(status: 200, body: try committedBody())
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("unchanged"))
+
+        await model.commit(summary: "  Fix the login redirect ", description: "Why.\n", amend: false, noVerify: true)
+
+        XCTAssertEqual(requestURLs, [gitURL("commit"), etagStatusURL])
+        XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "POST")
+        XCTAssertEqual(
+            try sentBody(GitCommitRequest.self, at: 0),
+            GitCommitRequest(message: "Fix the login redirect\n\nWhy.", amend: false, no_verify: true)
+        )
+        XCTAssertNil(model.commitSheet)
+        XCTAssertEqual(model.toast?.text, "Committed 4890423 · Fix the login redirect")
+        XCTAssertEqual(model.toast?.tone, .ok)
+        XCTAssertFalse(model.isMutating)
+    }
+
+    func testAnAmendSendsTheFlag() async throws {
+        let model = try await loadedModel()
+        model.commitSheet = CommitSheetState(context: .ready(author: ada, head: previous))
+        StubURLProtocol.enqueue(status: 200, body: try committedBody())
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("unchanged"))
+
+        await model.commit(summary: previous.subject, description: previous.body, amend: true, noVerify: false)
+
+        XCTAssertEqual(
+            try sentBody(GitCommitRequest.self, at: 0),
+            GitCommitRequest(message: "\(previous.subject)\n\n\(previous.body)", amend: true, no_verify: false)
+        )
+    }
+
+    func testABlankMessageOrAClosedSheetSendsNothing() async throws {
+        let model = try await loadedModel()
+        model.commitSheet = CommitSheetState(context: .ready(author: ada, head: nil))
+
+        await model.commit(summary: "   ", description: "\n", amend: false, noVerify: false)
+        XCTAssertEqual(requestURLs, [])
+        XCTAssertNotNil(model.commitSheet)
+
+        model.commitSheet = nil
+        await model.commit(summary: "Add a", description: "", amend: false, noVerify: false)
+        XCTAssertEqual(requestURLs, [])
+    }
+
+    func testAHookRefusalStaysInTheSheetWithTheHookOutput() async throws {
+        let model = try await loadedModel()
+        model.commitSheet = CommitSheetState(context: .ready(author: ada, head: nil))
+        StubURLProtocol.enqueue(status: 409, body: #"{"detail":{"code":"hook_failed","message":"lint: nope"}}"#)
+
+        await model.commit(summary: "hooked", description: "", amend: false, noVerify: false)
+
+        XCTAssertEqual(requestURLs, [gitURL("commit")], "no reload: nothing changed")
+        XCTAssertEqual(model.commitSheet?.isCommitting, false)
+        XCTAssertEqual(model.commitSheet?.error, CommitError(message: "A commit hook rejected the commit.", output: "lint: nope"))
+        XCTAssertNil(model.toast)
+        XCTAssertFalse(model.isMutating)
+
+        StubURLProtocol.enqueue(status: 409, body: #"{"detail":{"code":"identity_required","message":"no identity"}}"#)
+        await model.commit(summary: "who", description: "", amend: false, noVerify: false)
+        XCTAssertEqual(
+            model.commitSheet?.error,
+            CommitError(message: "Git doesn't know who you are on the agent machine.", output: nil),
+            "only a hook's output is worth showing"
+        )
+
+        model.closeCommit()
+        XCTAssertNil(model.commitSheet)
+    }
+
+    func testConsumeOpenCommitOpensTheSheetOnce() async throws {
+        let (model, _, _) = makeModel(openCommit: true)
+        XCTAssertTrue(model.openCommitOnAppear)
+        XCTAssertNil(model.commitSheet)
+        StubURLProtocol.enqueue(status: 200, body: try contextBody("ready"))
+
+        model.consumeOpenCommit()
+
+        XCTAssertNotNil(model.commitSheet)
+        XCTAssertFalse(model.openCommitOnAppear)
+        await waitUntil { model.commitSheet?.context != .loading }
+        XCTAssertEqual(model.commitSheet?.context, .ready(author: ada, head: previous))
+
+        model.closeCommit()
+        model.consumeOpenCommit()
+        XCTAssertNil(model.commitSheet, "the terminal menu's Commit… opens the sheet once")
+
+        let (plain, _, _) = makeModel()
+        plain.consumeOpenCommit()
+        XCTAssertNil(plain.commitSheet)
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }

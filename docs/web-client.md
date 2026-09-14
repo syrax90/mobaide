@@ -883,7 +883,21 @@ line-number gutter and, only where it would change anything (a hunked text
 diff, not added/deleted/type-changed), a *Changes* / *Full file* switch.
 *Changes* is context 3; *Full file* is the agent's 5 000-line ceiling, where an
 untruncated diff is the whole file as one hunk (PROTOCOL.md). The layout is two
-panes from 900 px and stacked below that. The data layer is
+panes from 900 px and stacked below that. #675 turned the viewer into an
+editor: per-row Stage / Unstage / Discard buttons (hover icons) and each
+section's Stage all / Unstage all, a checkbox multi-select with its own
+toolbar, and matching Stage / Unstage buttons on the diff pane too — every one
+gated on the matching `capabilities.git.{stage,discard,commit}` key, with
+Discard always behind a confirmation dialog. The panel header's `Commit…`
+button, and the terminal menu's own `⋯ → Git → Commit…` entry (which bumps a
+`commitRequest` counter so it can open the panel and the dialog together),
+open `GitCommitDialog.tsx`: Summary + Description, the author line and an
+Amend prefill both read from a `commit-context` query, and a Skip hooks
+(`--no-verify`) checkbox, with hook output shown on a `hook_failed` refusal.
+Because a top-layer `<dialog>` still bubbles its `Escape` keydown to this DOM
+parent, the panel's own handler only closes it when neither the commit sheet
+nor the discard confirmation is open, leaving those dialogs to handle their
+own Escape. The data layer is
 `api/sessionGitRepository.ts` on the generated
 client (REST-only shapes, so no Zod mirror — the two golden fixtures stay
 `OWNER.generated`), with the two 404s told apart by FastAPI's `detail` string
@@ -898,7 +912,12 @@ not the `gitItems` prefix; `git.changed` invalidates the viewers whose session
 `project_name`, `repo.toplevel` or `repo.common_dir` matches (the bridge's only
 client-aware lookup), the reconnect sweep covers the root, and `meta.silent`
 keeps their failures out of the global error toast, which paints below the top
-layer anyway. Platform deviations from mobile: no 2 000-column cut (the diff
+layer anyway. The four mutations settle by invalidating only the status key —
+the etag effect above and that same `git.changed` echo already re-read any
+open diff — and a commit also drops the `commit-context` key; their own
+outcome, success or failure, renders in the panel's own notice strip rather
+than a toast, for the same top-layer reason. Platform deviations from mobile:
+no 2 000-column cut (the diff
 pane scrolls on both axes; the mobile cut exists because their layout engines
 cap a pinned row width), gutters as CSS-generated content so a copy takes the
 code alone, and no watch hold — the unwatched-suspend governor below keys on

@@ -23,7 +23,9 @@ enum Route: Hashable, Sendable {
     case gitManagement(projectName: String)
     /// The terminal's `⋯ → Git → Changes…` child screens, scoped to a session
     /// (Android `SESSION_GIT_CHANGES` / `SESSION_GIT_DIFF`).
-    case sessionGitChanges(sessionId: String)
+    /// `commit` presents the commit sheet over the list on arrival (the
+    /// terminal menu's Commit…).
+    case sessionGitChanges(sessionId: String, commit: Bool = false)
     case sessionGitDiff(sessionId: String, path: String, scope: String, origPath: String?)
     case incompatibleServer
     case templates

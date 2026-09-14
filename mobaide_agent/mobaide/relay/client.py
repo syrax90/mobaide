@@ -64,7 +64,19 @@ from mobaide.agent.projects.service import (
     update_project,
 )
 
-from mobaide.agent.git.changes_models import GIT_CAPABILITIES
+from mobaide.agent.git.changes_models import (
+    GIT_CAPABILITIES,
+    GitCommitRequest,
+    GitDiscardRequest,
+    GitPathsRequest,
+)
+from mobaide.agent.git.changes_mutations import (
+    commit_session,
+    discard_session_paths,
+    get_session_commit_context,
+    stage_session_paths,
+    unstage_session_paths,
+)
 from mobaide.agent.git.changes_service import (
     get_session_git_diff,
     get_session_git_status,
@@ -1507,7 +1519,7 @@ class RelayClient:
         if git_resp is not None:
             return git_resp
 
-        session_git_resp = await self._dispatch_session_git(method, path, query)
+        session_git_resp = await self._dispatch_session_git(method, path, query, body)
         if session_git_resp is not None:
             return session_git_resp
 
@@ -1847,34 +1859,79 @@ class RelayClient:
         method: str,
         path: str,
         query: dict | None,
+        body: dict | None = None,
     ) -> dict | None:
-        """Handle ``/api/sessions/{id}/git/status|diff`` through the shared
-        service layer — same 200/400/404/503/504 bodies as the FastAPI
+        """Handle ``/api/sessions/{id}/git/*`` through the shared service
+        layer — same 200/400/404/409/422/503/504 bodies as the FastAPI
         router."""
-        m = re.match(r"^/api/sessions/([^/]+)/git/(status|diff)$", path)
-        if m is None or method != "GET":
+        m = re.match(
+            r"^/api/sessions/([^/]+)/git/"
+            r"(status|diff|stage|unstage|discard|commit|commit/context)$",
+            path,
+        )
+        if m is None:
             return None
         session_id, route = m.group(1), m.group(2)
+        expected = "GET" if route in ("status", "diff", "commit/context") else "POST"
+        if method != expected:
+            return None
         session = await self._session_manager.get_session(session_id)
         if session is None:
             return {
                 "status": 404,
                 "body": {"detail": f"Session '{session_id}' not found"},
             }
-        cwd = session.to_info().cwd
+        info = session.to_info()
+        cwd = info.cwd
+        project_name = getattr(info, "project_name", None)
+        event_bus = getattr(self._app_state, "event_bus", None)
         q = query or {}
+        request_models = {
+            "stage": GitPathsRequest,
+            "unstage": GitPathsRequest,
+            "discard": GitDiscardRequest,
+            "commit": GitCommitRequest,
+        }
+        req = None
+        if route in request_models:
+            try:
+                req = request_models[route].model_validate(body or {})
+            except ValidationError as exc:
+                return {"status": 422, "body": {"detail": _scrub_validation_errors(exc)}}
         try:
             if route == "status":
                 resp = await get_session_git_status(
                     session_id=session_id, cwd=cwd, etag=q.get("etag"),
                 )
-            else:
+            elif route == "diff":
                 resp = await get_session_git_diff(
                     cwd=cwd,
                     path=q.get("path"),
                     scope=q.get("scope"),
                     context=q.get("context", 3),
                     orig_path=q.get("orig_path"),
+                )
+            elif route == "commit/context":
+                resp = await get_session_commit_context(cwd=cwd)
+            elif route == "stage":
+                resp = await stage_session_paths(
+                    cwd=cwd, paths=req.paths, project_name=project_name,
+                    event_bus=event_bus,
+                )
+            elif route == "unstage":
+                resp = await unstage_session_paths(
+                    cwd=cwd, paths=req.paths, project_name=project_name,
+                    event_bus=event_bus,
+                )
+            elif route == "discard":
+                resp = await discard_session_paths(
+                    cwd=cwd, paths=req.paths, scope=req.scope,
+                    project_name=project_name, event_bus=event_bus,
+                )
+            else:
+                resp = await commit_session(
+                    cwd=cwd, request=req, project_name=project_name,
+                    event_bus=event_bus,
                 )
         except Exception as exc:
             mapped = git_changes_http_error_for(exc)

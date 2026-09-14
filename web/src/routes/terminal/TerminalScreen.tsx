@@ -26,6 +26,7 @@ import { stripControls } from '../../terminal/terminalPaste';
 import { TemplateEditorDialog } from '../templates/TemplateEditorDialog';
 import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
 import { GitChangesPanel } from './git/GitChangesPanel';
+import { useSessionGitCapabilities } from './git/useSessionGit';
 import { JumpToBottom } from './JumpToBottom';
 import { TemplatesPicker } from './TemplatesPicker';
 import { TerminalScrollbar } from './TerminalScrollbar';
@@ -146,7 +147,14 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // under the template dialogs, and it returns focus to the menu that opened
   // it rather than to the grid.
   const [changesOpen, setChangesOpen] = useState(false);
+  // A counter, not a flag: the panel may already be open when *Commit…* is
+  // picked again, and only a new value re-opens its dialog.
+  const [commitRequest, setCommitRequest] = useState(0);
   const moreRef = useRef<HTMLButtonElement>(null);
+  // The menu's *Commit…* entry exists only on an agent that advertises
+  // `capabilities.git.commit`; the panel gates its own controls the same way.
+  const canCommit =
+    useSessionGitCapabilities(model.agentId, session?.cwd !== undefined).data?.commit ?? false;
   const immersive = useKeyboardLock();
   // Shared with the scrollbar, whose `role="scrollbar"` has to name what it
   // controls.
@@ -284,8 +292,8 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
         {/* Only once the row carries a cwd, as on both mobile clients: the
             git routes answer for the directory the session was spawned in,
             and a row without one has nothing to show. Later git actions
-            (commit, fetch / pull / push, branches, rebase) are reserved slots
-            under the same heading, in that order. */}
+            (fetch / pull / push, branches, rebase) are reserved slots under
+            the same heading, after Commit…, in that order. */}
         {session?.cwd !== undefined && (
           <MenuButton
             label="More options"
@@ -303,6 +311,18 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
                       setChangesOpen(true);
                     },
                   },
+                  ...(canCommit
+                    ? [
+                        {
+                          id: 'commit',
+                          label: 'Commit…',
+                          onSelect: () => {
+                            setChangesOpen(true);
+                            setCommitRequest((n) => n + 1);
+                          },
+                        },
+                      ]
+                    : []),
                 ],
               },
             ]}
@@ -436,8 +456,10 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
         <GitChangesPanel
           agentId={model.agentId}
           sessionId={model.sessionId}
+          commitRequest={commitRequest}
           onClose={() => {
             setChangesOpen(false);
+            setCommitRequest(0);
             // Back to the menu button, not the grid: the viewer was reached
             // from the header, and a keyboard user is still up there.
             moreRef.current?.focus();

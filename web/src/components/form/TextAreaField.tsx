@@ -8,6 +8,7 @@ interface TextAreaFieldProps {
   placeholder?: string;
   hint?: string;
   error?: string;
+  disabled?: boolean;
   /** Appended to the base classes, for a field that needs its own type styling. */
   className?: string;
   /**
@@ -26,6 +27,7 @@ export function TextAreaField({
   placeholder,
   hint,
   error,
+  disabled,
   className,
   autoCapitalize,
   autoCorrect,
@@ -49,6 +51,7 @@ export function TextAreaField({
         rows={rows}
         value={value}
         placeholder={placeholder}
+        disabled={disabled}
         spellCheck={false}
         autoCapitalize={autoCapitalize}
         autoCorrect={autoCorrect}
