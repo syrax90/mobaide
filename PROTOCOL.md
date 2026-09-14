@@ -187,7 +187,9 @@ cadence; they do **not** gate compatibility.
     ignored (``ls-files --others --exclude-standard``; ``.git/`` and
     gitignored files answer ``kind: missing``); a symlink diffs as its
     target text with mode ``120000``.
-    ``context`` is clamped to 0–50.
+    ``context`` is clamped to 0–5 000 (the line cap). At the cap an
+    untruncated diff is the whole file as one hunk, which is how clients
+    request their *Full file* view.
   * Errors, identical on the direct and relay transports: ``404
     {"detail": "Session '<id>' not found"}``; ``400 {"detail": {"code":
     "bad_scope" | "bad_path" | "<unavailable_reason>"}}`` (``path`` must

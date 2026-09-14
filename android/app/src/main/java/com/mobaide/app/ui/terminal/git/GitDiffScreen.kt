@@ -50,6 +50,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.GitDiffHunk
 import com.mobaide.app.data.network.dto.GitDiffLine
 import com.mobaide.app.data.network.dto.GitDiffResponse
+import com.mobaide.app.data.network.dto.gitPathFileName
 import com.mobaide.app.ui.common.pixel.PixelCard
 import com.mobaide.app.ui.common.pixel.PixelChip
 import com.mobaide.app.ui.common.pixel.PixelScaffold
@@ -87,7 +88,7 @@ fun GitDiffScreen(
             PixelTopBar(
                 title = {
                     Text(
-                        text = viewModel.path?.substringAfterLast('/') ?: "Diff",
+                        text = viewModel.path?.let(::gitPathFileName) ?: "Diff",
                         style = MaterialTheme.typography.titleMedium.copy(fontFamily = ChromeFontFamily),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -219,16 +220,11 @@ private fun DiffHeader(diff: GitDiffResponse, context: Int, onSetContext: (Int) 
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = "Context".chromeCaps(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    DIFF_CONTEXT_CHOICES.forEach { lines ->
+                    DIFF_CONTEXT_CHOICES.forEach { choice ->
                         ContextChip(
-                            lines = lines,
-                            selected = lines == context,
-                            onClick = { onSetContext(lines) },
+                            choice = choice,
+                            selected = choice.lines == context,
+                            onClick = { onSetContext(choice.lines) },
                         )
                     }
                 }
@@ -238,18 +234,18 @@ private fun DiffHeader(diff: GitDiffResponse, context: Int, onSetContext: (Int) 
 }
 
 @Composable
-private fun ContextChip(lines: Int, selected: Boolean, onClick: () -> Unit) {
+private fun ContextChip(choice: DiffContextChoice, selected: Boolean, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         shape = RectangleShape,
         color = if (selected) MaterialTheme.colorScheme.surfaceContainerHighest else Color.Transparent,
         border = pixelChipBorder(selected = selected),
         modifier = Modifier
-            .testTag(gitDiffContextChipTag(lines))
+            .testTag(gitDiffContextChipTag(choice.lines))
             .semantics { this.selected = selected },
     ) {
         Text(
-            text = lines.toString(),
+            text = choice.label.chromeCaps(),
             style = MaterialTheme.typography.labelSmall,
             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
@@ -275,6 +271,9 @@ private data class DiffMetrics(val gutterWidth: Dp, val textWidth: Dp)
 /** Well under the 2^18 px `Constraints` ceiling, whatever the font scale. */
 private const val MAX_PINNED_TEXT_PX = 120_000
 
+/** Monospaced cells measured together, so one cell's width carries no rounding. */
+private const val CELL_SAMPLE = 100
+
 /**
  * One row per diff line, every row sharing one horizontal [ScrollState] over a
  * text column pinned to a single measured width. Identical content width plus
@@ -293,15 +292,17 @@ private fun DiffBody(state: GitDiffUiState.Ready, modifier: Modifier = Modifier)
         fontSize = 13.sp,
         lineHeight = 18.sp,
     )
-    val metrics = remember(state.widthCandidates, state.gutterDigits, lineStyle, density) {
-        val cell = textMeasurer
-            .measure(AnnotatedString("0"), style = lineStyle, softWrap = false)
-            .size.width
-        val widest = state.widthCandidates.maxOfOrNull { candidate ->
-            textMeasurer
-                .measure(AnnotatedString(candidate), style = lineStyle, softWrap = false)
-                .size.width
-        } ?: 0
+    val metrics = remember(state.widthCandidates, state.narrowCandidate, state.gutterDigits, lineStyle, density) {
+        fun width(text: String): Int =
+            textMeasurer.measure(AnnotatedString(text), style = lineStyle, softWrap = false).size.width
+        val cell = width("0")
+        val exactCell = width("0".repeat(CELL_SAMPLE)) / CELL_SAMPLE.toFloat()
+        val widest = pinnedTextWidth(
+            candidates = state.widthCandidates,
+            exactCell = exactCell,
+            narrowCandidate = state.narrowCandidate,
+            measure = ::width,
+        )
         with(density) {
             DiffMetrics(
                 gutterWidth = (cell * state.gutterDigits).toDp(),

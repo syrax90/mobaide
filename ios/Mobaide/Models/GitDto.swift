@@ -250,17 +250,28 @@ extension GitStatusEntry {
     static let groupUnstaged = "unstaged"
     static let groupUntracked = "untracked"
 
-    /// The last path segment; the whole path when it has no `/`.
-    var fileName: String {
-        guard let slash = path.lastIndex(of: "/") else { return path }
+    var fileName: String { Self.fileName(of: path) }
+
+    var directory: String? { Self.directory(of: path) }
+
+    /// The last path segment; the whole path when it has no `/`. Git lists an
+    /// untracked nested repository or worktree as `dir/`, so a trailing slash
+    /// stays on the name instead of leaving it empty.
+    static func fileName(of path: String) -> String {
+        guard let slash = withoutTrailingSlash(path).lastIndex(of: "/") else { return path }
         return String(path[path.index(after: slash)...])
     }
 
-    /// Everything before the last `/`, or nil for a top-level file.
-    var directory: String? {
-        guard let slash = path.lastIndex(of: "/") else { return nil }
-        let head = String(path[..<slash])
+    /// Everything before `fileName(of:)`, or nil for a top-level entry.
+    static func directory(of path: String) -> String? {
+        let trimmed = withoutTrailingSlash(path)
+        guard let slash = trimmed.lastIndex(of: "/") else { return nil }
+        let head = String(trimmed[..<slash])
         return head.isEmpty ? nil : head
+    }
+
+    private static func withoutTrailingSlash(_ path: String) -> Substring {
+        path.hasSuffix("/") ? path.dropLast() : path[...]
     }
 }
 

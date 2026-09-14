@@ -3,7 +3,16 @@ package com.mobaide.app.ui.terminal.git
 import com.mobaide.app.data.network.dto.GitDiffResponse
 
 const val DIFF_CONTEXT_DEFAULT = 3
-val DIFF_CONTEXT_CHOICES: List<Int> = listOf(3, 10, 25)
+
+/** The agent's context ceiling, at which an untruncated diff is the whole file. */
+const val DIFF_CONTEXT_FULL = 5_000
+
+data class DiffContextChoice(val lines: Int, val label: String)
+
+val DIFF_CONTEXT_CHOICES: List<DiffContextChoice> = listOf(
+    DiffContextChoice(DIFF_CONTEXT_DEFAULT, "Changes"),
+    DiffContextChoice(DIFF_CONTEXT_FULL, "Full file"),
+)
 
 private val CONTEXTLESS_CHANGES = setOf(
     GitDiffResponse.CHANGE_ADDED,
@@ -31,7 +40,12 @@ private const val MAX_RENDERED_COLUMNS = 2_000
 private const val LINE_CUT_MARK = "…"
 
 private const val TAB_WIDTH = 4
-private const val WIDTH_CANDIDATES = 8
+
+/** Candidates always measured. */
+internal const val WIDTH_MEASURE_FLOOR = 8
+
+/** Candidates measured at most. */
+internal const val WIDTH_MEASURE_LIMIT = 16
 
 /** [context] lives on every variant so the chip selection survives a failed load. */
 sealed interface GitDiffUiState {
@@ -43,10 +57,12 @@ sealed interface GitDiffUiState {
         val diff: GitDiffResponse,
         val rows: List<DiffRow>,
         val gutterDigits: Int,
-        /** The lines most likely to be the widest, for the shared scroll width. */
+        /** Line texts, widest estimate first, for the shared scroll width. */
         val widthCandidates: List<String>,
         override val context: Int,
         val refreshing: Boolean = false,
+        /** The line with the most one-cell chars, always measured too. */
+        val narrowCandidate: String? = null,
     ) : GitDiffUiState
 
     data class AgentOutdated(override val context: Int) : GitDiffUiState
@@ -133,7 +149,8 @@ internal fun gutterDigits(diff: GitDiffResponse): Int {
     return maxOf(2, max.toString().length)
 }
 
-internal fun widthCandidates(rows: List<DiffRow>, limit: Int = WIDTH_CANDIDATES): List<String> =
+/** Line texts, widest estimate first. */
+internal fun widthCandidates(rows: List<DiffRow>, limit: Int = WIDTH_MEASURE_LIMIT): List<String> =
     rows.asSequence()
         .filterIsInstance<DiffRow.Line>()
         .map { it.text to weightedLength(it.text) }
@@ -142,9 +159,48 @@ internal fun widthCandidates(rows: List<DiffRow>, limit: Int = WIDTH_CANDIDATES)
         .map { it.first }
         .toList()
 
-/** Non-ASCII glyphs usually come from a wider fallback face; count them double. */
-private fun weightedLength(text: String): Int {
+/**
+ * A line's estimated width in cells: Latin, Greek and Cyrillic, which the
+ * monospace face draws one cell wide, count one; every other char counts two
+ * (an emoji surrogate pair, four).
+ */
+internal fun weightedLength(text: String): Int {
     var width = 0
-    for (c in text) width += if (c.code > 0x7F) 2 else 1
+    for (c in text) width += if (c.code <= 0x024F || c.code in 0x0370..0x04FF) 1 else 2
     return width
+}
+
+/** Chars the monospace face draws exactly one cell wide: a lower bound on a line's width in cells. */
+internal fun narrowLength(text: String): Int {
+    var width = 0
+    for (c in text) if (c.code in 0x20..0x024F || c.code in 0x0370..0x04FF) width++
+    return width
+}
+
+/** The line with the most one-cell chars, or null without line rows. */
+internal fun narrowCandidate(rows: List<DiffRow>): String? =
+    rows.asSequence()
+        .filterIsInstance<DiffRow.Line>()
+        .maxByOrNull { narrowLength(it.text) }
+        ?.text
+
+/**
+ * The shared pinned text width in px. The top [WIDTH_MEASURE_FLOOR] candidates
+ * are always measured; later ones only while their estimate could still beat
+ * the widest measured line. [narrowCandidate] is measured as well, so a widest
+ * line of Latin, Greek or Cyrillic that overweighted scripts pushed out of the
+ * candidates is never cut.
+ */
+internal fun pinnedTextWidth(
+    candidates: List<String>,
+    exactCell: Float,
+    narrowCandidate: String? = null,
+    measure: (String) -> Int,
+): Int {
+    var widest = 0
+    for ((index, candidate) in candidates.withIndex()) {
+        if (index >= WIDTH_MEASURE_FLOOR && weightedLength(candidate) * exactCell <= widest + 1f) break
+        widest = maxOf(widest, measure(candidate))
+    }
+    return narrowCandidate?.let { maxOf(widest, measure(it)) } ?: widest
 }

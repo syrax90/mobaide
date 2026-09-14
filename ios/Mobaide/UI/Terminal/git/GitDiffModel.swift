@@ -1,8 +1,9 @@
 import Foundation
 import Observation
+import UIKit
 
 /// One rendered row of the Diff screen; the agent's hunks flattened for a
-/// virtualised `List`.
+/// lazy stack.
 struct DiffRow: Equatable, Identifiable {
     enum Kind: Equatable {
         case hunkHeader(range: String, heading: String)
@@ -16,13 +17,23 @@ struct DiffRow: Equatable, Identifiable {
     let kind: Kind
 }
 
+/// Column widths in points, measured once per load in the code font (Android
+/// `DiffMetrics`).
+struct DiffMetrics: Equatable {
+    /// One monospaced cell.
+    let cell: CGFloat
+    let gutterWidth: CGFloat
+    /// The widest line, shared by every line row so the rows scroll together.
+    let textWidth: CGFloat
+}
+
 /// Per-file diff state (Android `GitDiffViewModel`).
 @MainActor
 @Observable
 final class GitDiffModel {
     enum State: Equatable {
         case loading
-        case ready(diff: GitDiffResponse, rows: [DiffRow], gutterDigits: Int)
+        case ready(diff: GitDiffResponse, rows: [DiffRow], metrics: DiffMetrics)
         case agentOutdated
         case sessionGone
         case error(String)
@@ -36,11 +47,13 @@ final class GitDiffModel {
     }
 
     static let contextDefault = 3
-    static let contextChoices = [3, 10, 25]
+    /// The agent's context ceiling, at which an untruncated diff is the whole
+    /// file.
+    static let contextFull = 5_000
+    static let contextChoices = [(contextDefault, "Changes"), (contextFull, "Full file")]
 
     private(set) var state: State = .loading
     private(set) var isLoading = false
-    var wrapLines = false
     var context = GitDiffModel.contextDefault
     private(set) var reloads = 0
 
@@ -61,10 +74,7 @@ final class GitDiffModel {
 
     var loadKey: LoadKey { LoadKey(context: context, reloads: reloads) }
 
-    var fileName: String {
-        guard let slash = path.lastIndex(of: "/") else { return path }
-        return String(path[path.index(after: slash)...])
-    }
+    var fileName: String { GitStatusEntry.fileName(of: path) }
 
     func retry() {
         reloads += 1
@@ -89,10 +99,11 @@ final class GitDiffModel {
                 origPath: origPath
             )
             guard generation == loadGeneration else { return }
+            let rows = GitDiffDisplay.rows(for: diff)
             state = .ready(
                 diff: diff,
-                rows: GitDiffDisplay.rows(for: diff),
-                gutterDigits: GitDiffDisplay.gutterDigits(for: diff)
+                rows: rows,
+                metrics: GitDiffDisplay.metrics(rows: rows, gutterDigits: GitDiffDisplay.gutterDigits(for: diff))
             )
         } catch {
             guard generation == loadGeneration, !SessionGitError.isCancellation(error) else { return }
@@ -179,6 +190,72 @@ enum GitDiffDisplay {
             highest = max(highest, hunk.old_start + hunk.old_lines, hunk.new_start + hunk.new_lines)
         }
         return max(2, String(highest).count)
+    }
+
+    /// Candidates always measured.
+    static let widthMeasureFloor = 8
+    /// Candidates measured at most.
+    static let widthMeasureLimit = 16
+    private static let cellSample = 100
+
+    /// A line's estimated width in cells, counted per UTF-16 unit like
+    /// Android: Latin, Greek and Cyrillic, which the code font draws one cell
+    /// wide, count one; every other unit counts two (an emoji pair, four).
+    static func weightedLength(_ text: String) -> Int {
+        text.utf16.reduce(0) { $0 + ($1 <= 0x024F || (0x0370...0x04FF).contains($1) ? 1 : 2) }
+    }
+
+    /// UTF-16 units the code font draws exactly one cell wide: a lower bound on
+    /// a line's width in cells.
+    static func narrowLength(_ text: String) -> Int {
+        text.utf16.reduce(0) { $0 + ((0x20...0x024F).contains($1) || (0x0370...0x04FF).contains($1) ? 1 : 0) }
+    }
+
+    /// The line with the most one-cell units, or nil without line rows.
+    static func narrowCandidate(_ rows: [DiffRow]) -> String? {
+        var best: (text: String, length: Int)?
+        for row in rows {
+            guard case .line(_, _, _, let text) = row.kind else { continue }
+            let length = narrowLength(text)
+            if length > (best?.length ?? -1) { best = (text, length) }
+        }
+        return best?.text
+    }
+
+    /// Line texts, widest estimate first.
+    static func widthCandidates(_ rows: [DiffRow], limit: Int = widthMeasureLimit) -> [String] {
+        let texts: [(text: String, weight: Int)] = rows.compactMap { row in
+            guard case .line(_, _, _, let text) = row.kind else { return nil }
+            return (text, weightedLength(text))
+        }
+        return texts.sorted { $0.weight > $1.weight }.prefix(limit).map(\.text)
+    }
+
+    /// The widest line plus one cell of slack, as laid out in `font`. The top
+    /// `widthMeasureFloor` candidates are always measured; later ones only
+    /// while their estimate could still beat the widest measured line. The
+    /// `narrowCandidate` is measured as well, so a widest line of Latin, Greek
+    /// or Cyrillic that overweighted scripts pushed out of the candidates is
+    /// never cut.
+    static func metrics(
+        rows: [DiffRow],
+        gutterDigits: Int,
+        font: UIFont = MobaideTypography.codeUIFont
+    ) -> DiffMetrics {
+        func width(_ text: String) -> CGFloat {
+            (text as NSString).size(withAttributes: [.font: font]).width
+        }
+        let exactCell = width(String(repeating: "0", count: cellSample)) / CGFloat(cellSample)
+        var widest: CGFloat = 0
+        for (index, text) in widthCandidates(rows).enumerated() {
+            if index >= widthMeasureFloor, CGFloat(weightedLength(text)) * exactCell <= widest + 0.5 { break }
+            widest = max(widest, width(text))
+        }
+        if let narrow = narrowCandidate(rows) {
+            widest = max(widest, width(narrow))
+        }
+        let cell = ceil(exactCell)
+        return DiffMetrics(cell: cell, gutterWidth: cell * CGFloat(gutterDigits), textWidth: ceil(widest) + cell)
     }
 
     /// `total_lines` is only a lower bound when the agent's byte cap cut git

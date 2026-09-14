@@ -146,11 +146,22 @@ data class GitStatusEntry(
     }
 
     val fileName: String
-        get() = path.substringAfterLast('/')
+        get() = gitPathFileName(path)
 
     val directory: String?
-        get() = path.substringBeforeLast('/', "").takeIf { it.isNotEmpty() }
+        get() = gitPathDirectory(path)
 }
+
+/**
+ * The last path segment. Git lists an untracked nested repository or worktree
+ * as `dir/`, so a trailing slash stays on the name instead of leaving it empty.
+ */
+fun gitPathFileName(path: String): String =
+    path.substring(path.removeSuffix("/").lastIndexOf('/') + 1)
+
+/** Everything before [gitPathFileName], or null for a top-level entry. */
+fun gitPathDirectory(path: String): String? =
+    path.removeSuffix("/").substringBeforeLast('/', "").takeIf { it.isNotEmpty() }
 
 @Serializable
 data class GitStatusCounts(

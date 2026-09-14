@@ -263,6 +263,13 @@ describe('path labels', () => {
     expect(directory('README')).toBeNull();
     expect(directory('/root')).toBeNull();
   });
+
+  it('keeps the trailing slash on a nested repository git lists as a folder', () => {
+    expect(fileName('mobaide_worktree/claude-session-56a3f247/')).toBe('claude-session-56a3f247/');
+    expect(directory('mobaide_worktree/claude-session-56a3f247/')).toBe('mobaide_worktree');
+    expect(fileName('vendor/')).toBe('vendor/');
+    expect(directory('vendor/')).toBeNull();
+  });
 });
 
 describe('repo header labels', () => {

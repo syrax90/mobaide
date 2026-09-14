@@ -226,4 +226,14 @@ final class GitChangesDisplayTests: XCTestCase {
         XCTAssertEqual(spaced.fileName, "new name.py")
         XCTAssertEqual(spaced.directory, "src")
     }
+
+    func testANestedRepositoryListedAsAFolderKeepsItsSlashOnTheName() {
+        let worktree = entry(group: "untracked", path: "mobaide_worktree/claude-session-56a3f247/", code: "?")
+        XCTAssertEqual(worktree.fileName, "claude-session-56a3f247/")
+        XCTAssertEqual(worktree.directory, "mobaide_worktree")
+
+        let topLevel = entry(group: "untracked", path: "vendor/", code: "?")
+        XCTAssertEqual(topLevel.fileName, "vendor/")
+        XCTAssertNil(topLevel.directory)
+    }
 }

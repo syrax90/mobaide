@@ -80,15 +80,16 @@ class GitDiffScreenTest {
     @Test
     fun theContextChips_showTheSelection_andReportATap() {
         val chosen = mutableListOf<Int>()
-        setContent(ready(diff("short"), context = 3), onSetContext = { chosen += it })
+        setContent(ready(diff("short"), context = DIFF_CONTEXT_DEFAULT), onSetContext = { chosen += it })
 
         composeRule.onNodeWithTag(gitDiffContextChipTag(3)).assertIsDisplayed().assertIsSelected()
-        composeRule.onNodeWithTag(gitDiffContextChipTag(10)).assertIsDisplayed().assertIsNotSelected()
-        composeRule.onNodeWithTag(gitDiffContextChipTag(25)).assertIsDisplayed().assertIsNotSelected()
+        composeRule.onNodeWithTag(gitDiffContextChipTag(5_000)).assertIsDisplayed().assertIsNotSelected()
+        composeRule.onNodeWithText("CHANGES").assertIsDisplayed()
+        composeRule.onNodeWithText("FULL FILE").assertIsDisplayed()
 
-        composeRule.onNodeWithTag(gitDiffContextChipTag(10)).performClick()
+        composeRule.onNodeWithTag(gitDiffContextChipTag(5_000)).performClick()
 
-        assertEquals(listOf(10), chosen)
+        assertEquals(listOf(5_000), chosen)
     }
 
     @Test
@@ -96,8 +97,8 @@ class GitDiffScreenTest {
         setContent(ready(diff("first", "second", change = GitDiffResponse.CHANGE_ADDED)))
 
         composeRule.onNodeWithText("second").assertIsDisplayed()
-        DIFF_CONTEXT_CHOICES.forEach { lines ->
-            composeRule.onNodeWithTag(gitDiffContextChipTag(lines)).assertDoesNotExist()
+        DIFF_CONTEXT_CHOICES.forEach { choice ->
+            composeRule.onNodeWithTag(gitDiffContextChipTag(choice.lines)).assertDoesNotExist()
         }
     }
 

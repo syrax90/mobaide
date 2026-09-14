@@ -134,7 +134,11 @@ test('the ⋯ menu opens the Changes viewer beside a live terminal', async ({ pa
   await panel.getByRole('button', { name: /app\.py/ }).click();
   await expect(panel.getByRole('region', { name: 'Changes to src/app.py' })).toBeVisible();
   await expect(panel.getByText('x = 2', { exact: true })).toBeVisible();
-  await expect(panel.getByRole('button', { name: '10', exact: true })).toHaveAttribute(
+  await expect(panel.getByRole('button', { name: 'Changes', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(panel.getByRole('button', { name: 'Full file', exact: true })).toHaveAttribute(
     'aria-pressed',
     'false',
   );

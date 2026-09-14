@@ -97,21 +97,18 @@ function GitDiffView({
             <span className="state-loading" aria-hidden="true" />
           )}
           {diff.data !== undefined && showsContextChoices(diff.data) && (
-            <div className="git-diff-context" role="group" aria-label="Context lines">
-              <span className="git-diff-context-label" aria-hidden="true">
-                Context
-              </span>
+            <div className="git-diff-context" role="group" aria-label="Diff view">
               {DIFF_CONTEXT_CHOICES.map((choice) => (
                 <button
-                  key={choice}
+                  key={choice.context}
                   type="button"
                   className="button"
-                  aria-pressed={choice === context}
+                  aria-pressed={choice.context === context}
                   onClick={() => {
-                    onContextChange(choice);
+                    onContextChange(choice.context);
                   }}
                 >
-                  {choice}
+                  {choice.label}
                 </button>
               ))}
             </div>

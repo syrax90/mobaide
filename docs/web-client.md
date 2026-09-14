@@ -879,9 +879,11 @@ and its open state is mirrored from `beforetoggle` (synchronous, unlike
 `dialog.show()` is not on the top layer. It is the web mirror of the Android and
 iOS Changes/Diff screens (#669): the repo header, the Conflicts / Staged /
 Changes / Untracked list with status badges, and the diff pane with a
-line-number gutter and, only where widening or narrowing it would change
-anything (a hunked text diff, not added/deleted/type-changed), 3 / 10 / 25
-context, two panes from 900 px and stacked below it. The data layer is
+line-number gutter and, only where it would change anything (a hunked text
+diff, not added/deleted/type-changed), a *Changes* / *Full file* switch.
+*Changes* is context 3; *Full file* is the agent's 5 000-line ceiling, where an
+untruncated diff is the whole file as one hunk (PROTOCOL.md). The layout is two
+panes from 900 px and stacked below that. The data layer is
 `api/sessionGitRepository.ts` on the generated
 client (REST-only shapes, so no Zod mirror — the two golden fixtures stay
 `OWNER.generated`), with the two 404s told apart by FastAPI's `detail` string

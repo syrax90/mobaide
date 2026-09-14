@@ -20,7 +20,12 @@ import {
 } from '../../../api/sessionGitRepository';
 
 export const DIFF_CONTEXT_DEFAULT = 3;
-export const DIFF_CONTEXT_CHOICES: readonly number[] = [3, 10, 25];
+/** The agent's context ceiling, at which an untruncated diff is the whole file. */
+export const DIFF_CONTEXT_FULL = 5000;
+export const DIFF_CONTEXT_CHOICES: readonly { context: number; label: string }[] = [
+  { context: DIFF_CONTEXT_DEFAULT, label: 'Changes' },
+  { context: DIFF_CONTEXT_FULL, label: 'Full file' },
+];
 
 const CONTEXTLESS_CHANGES: ReadonlySet<string> = new Set(['added', 'deleted', 'type_changed']);
 
@@ -118,13 +123,22 @@ export function badgeFor(entry: SessionGitEntry): StatusBadge {
   }
 }
 
+/**
+ * The last path segment. Git lists an untracked nested repository or worktree
+ * as `dir/`, so a trailing slash stays on the name instead of leaving it empty.
+ */
 export function fileName(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1);
+  return path.slice(withoutTrailingSlash(path).lastIndexOf('/') + 1);
 }
 
 export function directory(path: string): string | null {
-  const cut = path.lastIndexOf('/');
-  return cut <= 0 ? null : path.slice(0, cut);
+  const trimmed = withoutTrailingSlash(path);
+  const cut = trimmed.lastIndexOf('/');
+  return cut <= 0 ? null : trimmed.slice(0, cut);
+}
+
+function withoutTrailingSlash(path: string): string {
+  return path.endsWith('/') ? path.slice(0, -1) : path;
 }
 
 export function headLabel(repo: SessionGitRepoInfo): string {

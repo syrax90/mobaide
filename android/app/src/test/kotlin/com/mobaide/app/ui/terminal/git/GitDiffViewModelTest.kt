@@ -84,6 +84,7 @@ class GitDiffViewModelTest {
         assertEquals(buildDiffRows(response), ready.rows)
         assertEquals(2, ready.gutterDigits)
         assertEquals(listOf("    return x", "def foo():"), ready.widthCandidates)
+        assertEquals("    return x", ready.narrowCandidate)
     }
 
     @Test
