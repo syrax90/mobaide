@@ -75,7 +75,10 @@ class GitChangesViewModel @Inject constructor(
             loadCapabilities()
         }
             .onEach { load ->
-                load.cached?.let { lastStatus = it }
+                load.cached?.let { status ->
+                    lastStatus = status
+                    pruneSelection(status)
+                }
                 if (load.manual) manualRefreshing.value = false
             }
             .onCompletion { manualRefreshing.value = false }
@@ -273,6 +276,18 @@ class GitChangesViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Ticked rows that vanished with a refresh are dropped from the source
+     * flow itself, not only from the projected state: a stale key would keep
+     * the selection bar open at "0 selected" after the next action and
+     * re-tick the row if the same key came back (iOS and web prune the same way).
+     */
+    private fun pruneSelection(status: GitStatusResponse) {
+        if (selectedKeys.value.isEmpty()) return
+        val live = sectionsFor(status).flatMapTo(hashSetOf()) { it.keys }
+        selectedKeys.update { keys -> if (keys.all { it in live }) keys else keys.intersect(live) }
+    }
+
     private fun selectionSubsets(): SelectionSubsets {
         val ready = uiState.value as? GitChangesUiState.Ready ?: return SelectionSubsets()
         return selectionSubsets(ready.sections, ready.selectedKeys, ready.capabilities)
@@ -352,7 +367,8 @@ class GitChangesViewModel @Inject constructor(
             )
         }
         val sections = sectionsFor(status)
-        // Ticked rows that vanished with the refresh are dropped.
+        // The source flow is pruned as each body lands (`pruneSelection`); the
+        // intersection here only covers the one emission in between.
         val live = sections.flatMapTo(mutableSetOf()) { it.keys }
         return GitChangesUiState.Ready(
             status = status,
@@ -361,7 +377,7 @@ class GitChangesViewModel @Inject constructor(
             refreshing = refreshing,
             staleError = staleError,
             capabilities = caps,
-            selectedKeys = selected.intersect(live),
+            selectedKeys = if (selected.all { it in live }) selected else selected.intersect(live),
             selecting = entering,
             busy = inFlight,
         )

@@ -738,6 +738,52 @@ class GitChangesViewModelTest {
     }
 
     @Test
+    fun aVanishedRow_isNotReTicked_whenItsKeyComesBack() = runTest {
+        // Committed from the PTY, the file leaves the list; edited again it
+        // returns under the same `group:occurrence:path` key, so a tick left
+        // in the source set would come back with it.
+        val f = loaded()
+        f.vm.onEntryLongClick(unstaged)
+        runCurrent()
+        assertEquals(setOf("unstaged:1:src/both.py"), ready(f.vm).selectedKeys)
+
+        f.loads.emit(SessionGitStatusLoad.Loaded(status("e2", entries = listOf(untracked, staged))))
+        runCurrent()
+        assertFalse(ready(f.vm).inSelectionMode)
+
+        f.loads.emit(SessionGitStatusLoad.Loaded(status("e3")))
+        runCurrent()
+
+        val ready = ready(f.vm)
+        assertEquals(emptySet<String>(), ready.selectedKeys)
+        assertFalse(ready.inSelectionMode)
+    }
+
+    @Test
+    fun aVanishedTick_doesNotHoldSelectionModeOpen_afterTheNextMutation() = runTest {
+        // Select from the top bar, tick a row, lose it to a PTY-side commit,
+        // then stage another row from its own button: the mutation ends
+        // selection mode instead of leaving the bar open at "0 selected".
+        val f = loaded()
+        f.vm.enterSelection()
+        runCurrent()
+        f.vm.onEntryClick(unstaged)
+        runCurrent()
+        assertEquals(setOf("unstaged:1:src/both.py"), ready(f.vm).selectedKeys)
+        coEvery { f.repo.stageSessionPaths("s1", any()) } returns Unit
+
+        f.loads.emit(SessionGitStatusLoad.Loaded(status("e2", entries = listOf(untracked, staged))))
+        runCurrent()
+        f.vm.stage(listOf(untracked))
+        runCurrent()
+
+        val ready = ready(f.vm)
+        assertFalse(ready.selecting)
+        assertFalse(ready.inSelectionMode)
+        assertFalse(ready.busy)
+    }
+
+    @Test
     fun enterSelection_showsTheCheckboxesBeforeAnythingIsTicked_andClearLeaves() = runTest {
         val f = loaded()
 
