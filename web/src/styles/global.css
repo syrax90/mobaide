@@ -3380,13 +3380,6 @@ body:has(dialog[open]) {
   margin-left: auto;
 }
 
-.git-diff-context-label {
-  font-size: var(--pix-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-}
-
 /* The one scroller of the diff: both axes, so a long line is reached by
    scrolling rather than cut (the mobile clients cut at 2 000 columns because
    their layout engines cap a pinned row width; a browser does not). */

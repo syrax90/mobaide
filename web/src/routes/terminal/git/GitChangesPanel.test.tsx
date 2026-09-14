@@ -166,8 +166,7 @@ const withHunk =
     ],
   });
 
-const contextGroup = (): HTMLElement | null =>
-  screen.queryByRole('group', { name: 'Context lines' });
+const contextGroup = (): HTMLElement | null => screen.queryByRole('group', { name: 'Diff view' });
 const diffBody = (path = 'src/app.py'): HTMLElement =>
   screen.getByRole('region', { name: `Changes to ${path}` });
 const metaSpinner = (): Element | null => document.querySelector('.git-diff-meta .state-loading');
@@ -277,8 +276,8 @@ describe('GitChangesPanel selection across polls', () => {
   });
 });
 
-describe('GitChangesPanel diff Context control', () => {
-  it('waits for the diff before offering Context lines for a modified file', async () => {
+describe('GitChangesPanel diff view control', () => {
+  it('waits for the diff before offering Changes / Full file for a modified file', async () => {
     // Whether the choice can matter is read off the response, so there is no
     // control to show while the first answer is still out.
     api.shape = withHunk('modified');
@@ -290,12 +289,19 @@ describe('GitChangesPanel diff Context control', () => {
 
     await releaseDiffs();
 
-    const group = await screen.findByRole('group', { name: 'Context lines' });
-    expect(within(group).getByRole('button', { name: '3' })).toHaveAttribute('aria-pressed', 'true');
+    const group = await screen.findByRole('group', { name: 'Diff view' });
+    expect(within(group).getByRole('button', { name: 'Changes' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(within(group).getByRole('button', { name: 'Full file' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
     expect(diffBody()).toHaveAttribute('aria-busy', 'false');
   });
 
-  it('offers no Context lines for an added file, which has no unchanged lines to widen', async () => {
+  it('offers no diff view choice for an added file, which has no unchanged lines to widen', async () => {
     api.shape = withHunk('added');
     await selectApp();
 
@@ -303,16 +309,16 @@ describe('GitChangesPanel diff Context control', () => {
     expect(contextGroup()).toBeNull();
   });
 
-  it('keeps the previous diff and its control on screen, marked busy, while a new context loads', async () => {
+  it('keeps the previous diff and its control on screen, marked busy, while the full file loads', async () => {
     api.shape = withHunk('modified');
     await selectApp();
     await screen.findByText('src/app.py at 3');
 
-    const choices = await screen.findByRole('group', { name: 'Context lines' });
+    const choices = await screen.findByRole('group', { name: 'Diff view' });
     api.hold = true;
-    fireEvent.click(within(choices).getByRole('button', { name: '10' }));
+    fireEvent.click(within(choices).getByRole('button', { name: 'Full file' }));
     await waitFor(() => {
-      expect(api.diffs.at(-1)).toMatchObject({ path: 'src/app.py', context: 10 });
+      expect(api.diffs.at(-1)).toMatchObject({ path: 'src/app.py', context: 5000 });
     });
 
     expect(screen.queryByText('Loading diff…')).toBeNull();
@@ -320,12 +326,15 @@ describe('GitChangesPanel diff Context control', () => {
     expect(diffBody()).toHaveAttribute('aria-busy', 'true');
     expect(metaSpinner()).not.toBeNull();
     const group = contextGroup();
-    if (group === null) throw new Error('Context control dropped while the new diff loads');
-    expect(within(group).getByRole('button', { name: '10' })).toHaveAttribute('aria-pressed', 'true');
+    if (group === null) throw new Error('Diff view control dropped while the new diff loads');
+    expect(within(group).getByRole('button', { name: 'Full file' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
 
     await releaseDiffs();
 
-    await screen.findByText('src/app.py at 10');
+    await screen.findByText('src/app.py at 5000');
     expect(screen.queryByText('src/app.py at 3')).toBeNull();
     expect(diffBody()).toHaveAttribute('aria-busy', 'false');
     expect(metaSpinner()).toBeNull();

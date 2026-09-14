@@ -150,6 +150,64 @@ final class GitDiffDisplayTests: XCTestCase {
         )
     }
 
+    // MARK: - widthCandidates(_:limit:)
+
+    private func lineRow(_ id: String, _ text: String) -> DiffRow {
+        DiffRow(id: id, kind: .line(type: GitDiffLine.typeContext, old: 1, new: 1, text: text))
+    }
+
+    func testWidthCandidatesAreTheLongestLinesOnly() {
+        let rows = [
+            DiffRow(id: "h0", kind: .hunkHeader(range: "@@ -1,3 +1,3 @@", heading: String(repeating: "h", count: 80))),
+            lineRow("l0", "ab"),
+            lineRow("l1", "abcdef"),
+            lineRow("l2", "abcd"),
+            DiffRow(id: "l2:nn", kind: .noNewline),
+        ]
+
+        XCTAssertEqual(GitDiffDisplay.widthCandidates(rows), ["abcdef", "abcd", "ab"], "a hunk header is never measured")
+        XCTAssertEqual(GitDiffDisplay.widthCandidates(rows, limit: 2), ["abcdef", "abcd"])
+    }
+
+    func testWidthCandidatesCountANonASCIIScalarAsTwoColumns() {
+        let rows = [lineRow("l0", "abcde"), lineRow("l1", "日本語")]
+
+        XCTAssertEqual(GitDiffDisplay.widthCandidates(rows, limit: 1), ["日本語"], "3 wide glyphs outweigh 5 ASCII ones")
+    }
+
+    // MARK: - metrics(rows:gutterDigits:font:)
+
+    func testMetricsSizeGuttersInCellsAndTheTextToTheWidestLine() {
+        let narrow = GitDiffDisplay.metrics(rows: [lineRow("l0", String(repeating: "x", count: 40))], gutterDigits: 4)
+        let wide = GitDiffDisplay.metrics(
+            rows: [lineRow("l0", "short"), lineRow("l1", String(repeating: "x", count: 80)), lineRow("l2", "tiny")],
+            gutterDigits: 2
+        )
+
+        XCTAssertGreaterThan(narrow.cell, 0)
+        XCTAssertEqual(narrow.gutterWidth, narrow.cell * 4)
+        XCTAssertEqual(wide.gutterWidth, wide.cell * 2)
+        XCTAssertEqual(
+            wide.textWidth - wide.cell,
+            2 * (narrow.textWidth - narrow.cell),
+            accuracy: 1,
+            "a monospaced line twice as long measures twice as wide, plus one cell of slack"
+        )
+    }
+
+    func testMetricsIgnoreHeaderTextAndReserveOneCellWithoutLines() {
+        let line = lineRow("l0", "abc")
+        let header = DiffRow(id: "h0", kind: .hunkHeader(range: "@@ -1 +1 @@", heading: String(repeating: "h", count: 200)))
+
+        XCTAssertEqual(
+            GitDiffDisplay.metrics(rows: [header, line], gutterDigits: 2),
+            GitDiffDisplay.metrics(rows: [line], gutterDigits: 2)
+        )
+
+        let noLines = GitDiffDisplay.metrics(rows: [DiffRow(id: "notice", kind: .notice("Binary file — no preview"))], gutterDigits: 2)
+        XCTAssertEqual(noLines.textWidth, noLines.cell)
+    }
+
     // MARK: - notices and chips
 
     func testTruncatedNoticeNeverClaimsAnExactTotal() {

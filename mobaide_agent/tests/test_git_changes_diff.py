@@ -111,6 +111,28 @@ class TestTrackedDiff:
         assert (hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines) == (2, 1, 2, 1)
         assert [l.t for l in hunk.lines] == ["del", "add"]
 
+    async def test_context_at_the_ceiling_is_the_whole_file_as_one_hunk(self, repo):
+        # Two edits far apart: the default context keeps them in separate
+        # hunks, the ceiling ("Full file") joins them with every line between.
+        original = [f"line {n}" for n in range(1, 201)]
+        write_file(repo, "long.txt", "".join(f"{l}\n" for l in original).encode())
+        commit_all(repo, "long")
+        edited = list(original)
+        edited[19] = "LINE 20"
+        edited[179] = "LINE 180"
+        write_file(repo, "long.txt", "".join(f"{l}\n" for l in edited).encode())
+
+        changes = await _diff(repo, "long.txt", "unstaged", context=3)
+        full = await _diff(repo, "long.txt", "unstaged", context="5000")
+
+        assert [(h.old_start, h.old_lines, h.new_start, h.new_lines) for h in changes.hunks] == [
+            (17, 7, 17, 7), (177, 7, 177, 7)]
+        [hunk] = full.hunks
+        assert (hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines) == (1, 200, 1, 200)
+        assert [l.text for l in hunk.lines if l.t != "del"] == edited
+        assert [l.text for l in hunk.lines if l.t != "add"] == original
+        assert full.truncated is False
+
     async def test_crlf_content_is_preserved(self, repo):
         write_file(repo, "dos.txt", b"one\r\ntwo\r\n")
         commit_all(repo, "dos")

@@ -390,7 +390,7 @@ class TestClampContext:
     @pytest.mark.parametrize(
         ("raw", "expected"),
         [("3", 3), (7, 7), (None, 3), ("abc", 3), ("-5", 0), ("0", 0),
-         ("50", 50), ("99", 50)],
+         ("99", 99), ("5000", 5000), ("5001", 5000), (10**9, 5000)],
     )
     def test_clamps_to_range_with_default(self, raw, expected):
         assert clamp_context(raw) == expected

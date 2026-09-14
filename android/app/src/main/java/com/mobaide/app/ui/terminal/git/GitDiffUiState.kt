@@ -3,7 +3,16 @@ package com.mobaide.app.ui.terminal.git
 import com.mobaide.app.data.network.dto.GitDiffResponse
 
 const val DIFF_CONTEXT_DEFAULT = 3
-val DIFF_CONTEXT_CHOICES: List<Int> = listOf(3, 10, 25)
+
+/** The agent's context ceiling, at which an untruncated diff is the whole file. */
+const val DIFF_CONTEXT_FULL = 5_000
+
+data class DiffContextChoice(val lines: Int, val label: String)
+
+val DIFF_CONTEXT_CHOICES: List<DiffContextChoice> = listOf(
+    DiffContextChoice(DIFF_CONTEXT_DEFAULT, "Changes"),
+    DiffContextChoice(DIFF_CONTEXT_FULL, "Full file"),
+)
 
 private val CONTEXTLESS_CHANGES = setOf(
     GitDiffResponse.CHANGE_ADDED,

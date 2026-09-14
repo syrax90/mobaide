@@ -1,8 +1,9 @@
 import Foundation
 import Observation
+import UIKit
 
 /// One rendered row of the Diff screen; the agent's hunks flattened for a
-/// virtualised `List`.
+/// lazy stack.
 struct DiffRow: Equatable, Identifiable {
     enum Kind: Equatable {
         case hunkHeader(range: String, heading: String)
@@ -16,13 +17,23 @@ struct DiffRow: Equatable, Identifiable {
     let kind: Kind
 }
 
+/// Column widths in points, measured once per load in the code font (Android
+/// `DiffMetrics`).
+struct DiffMetrics: Equatable {
+    /// One monospaced cell.
+    let cell: CGFloat
+    let gutterWidth: CGFloat
+    /// The widest line, shared by every line row so the rows scroll together.
+    let textWidth: CGFloat
+}
+
 /// Per-file diff state (Android `GitDiffViewModel`).
 @MainActor
 @Observable
 final class GitDiffModel {
     enum State: Equatable {
         case loading
-        case ready(diff: GitDiffResponse, rows: [DiffRow], gutterDigits: Int)
+        case ready(diff: GitDiffResponse, rows: [DiffRow], metrics: DiffMetrics)
         case agentOutdated
         case sessionGone
         case error(String)
@@ -36,11 +47,13 @@ final class GitDiffModel {
     }
 
     static let contextDefault = 3
-    static let contextChoices = [3, 10, 25]
+    /// The agent's context ceiling, at which an untruncated diff is the whole
+    /// file.
+    static let contextFull = 5_000
+    static let contextChoices = [(contextDefault, "Changes"), (contextFull, "Full file")]
 
     private(set) var state: State = .loading
     private(set) var isLoading = false
-    var wrapLines = false
     var context = GitDiffModel.contextDefault
     private(set) var reloads = 0
 
@@ -61,10 +74,7 @@ final class GitDiffModel {
 
     var loadKey: LoadKey { LoadKey(context: context, reloads: reloads) }
 
-    var fileName: String {
-        guard let slash = path.lastIndex(of: "/") else { return path }
-        return String(path[path.index(after: slash)...])
-    }
+    var fileName: String { GitStatusEntry.fileName(of: path) }
 
     func retry() {
         reloads += 1
@@ -89,10 +99,11 @@ final class GitDiffModel {
                 origPath: origPath
             )
             guard generation == loadGeneration else { return }
+            let rows = GitDiffDisplay.rows(for: diff)
             state = .ready(
                 diff: diff,
-                rows: GitDiffDisplay.rows(for: diff),
-                gutterDigits: GitDiffDisplay.gutterDigits(for: diff)
+                rows: rows,
+                metrics: GitDiffDisplay.metrics(rows: rows, gutterDigits: GitDiffDisplay.gutterDigits(for: diff))
             )
         } catch {
             guard generation == loadGeneration, !SessionGitError.isCancellation(error) else { return }
@@ -179,6 +190,32 @@ enum GitDiffDisplay {
             highest = max(highest, hunk.old_start + hunk.old_lines, hunk.new_start + hunk.new_lines)
         }
         return max(2, String(highest).count)
+    }
+
+    private static let widthCandidateLimit = 8
+
+    /// The lines most likely to be the widest, so only a handful are measured.
+    /// Non-ASCII glyphs usually come from a wider fallback face and count double.
+    static func widthCandidates(_ rows: [DiffRow], limit: Int = widthCandidateLimit) -> [String] {
+        let texts: [(text: String, weight: Int)] = rows.compactMap { row in
+            guard case .line(_, _, _, let text) = row.kind else { return nil }
+            return (text, text.unicodeScalars.reduce(0) { $0 + ($1.value > 0x7F ? 2 : 1) })
+        }
+        return texts.sorted { $0.weight > $1.weight }.prefix(limit).map(\.text)
+    }
+
+    /// The widest candidate plus one cell of slack, as laid out in `font`.
+    static func metrics(
+        rows: [DiffRow],
+        gutterDigits: Int,
+        font: UIFont = MobaideTypography.codeUIFont
+    ) -> DiffMetrics {
+        func width(_ text: String) -> CGFloat {
+            ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        }
+        let cell = width("0")
+        let widest = widthCandidates(rows).map(width).max() ?? 0
+        return DiffMetrics(cell: cell, gutterWidth: cell * CGFloat(gutterDigits), textWidth: widest + cell)
     }
 
     /// `total_lines` is only a lower bound when the agent's byte cap cut git

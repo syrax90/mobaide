@@ -42,12 +42,12 @@ final class GitDiffModelTests: XCTestCase {
         await model.load()
 
         XCTAssertEqual(requestURLs, ["\(diffURL)?path=src%2Fnew%20name.py&scope=staged&context=3&orig_path=src%2Fold.py"])
-        guard case .ready(let diff, let rows, let gutterDigits) = model.state else {
+        guard case .ready(let diff, let rows, let metrics) = model.state else {
             return XCTFail("expected ready, got \(model.state)")
         }
         XCTAssertEqual(diff.change, GitDiffResponse.changeRenamed)
         XCTAssertEqual(rows.map(\.id), ["h0", "h0:l0", "h0:l1", "h0:l2"])
-        XCTAssertEqual(gutterDigits, 2)
+        XCTAssertEqual(metrics.gutterWidth, metrics.cell * 2, "two-digit gutters")
         XCTAssertFalse(model.isLoading)
         XCTAssertEqual(model.fileName, "new name.py")
     }
@@ -61,16 +61,23 @@ final class GitDiffModelTests: XCTestCase {
         XCTAssertEqual(requestURLs, ["\(diffURL)?path=src%2Fa.py&scope=unstaged&context=3"])
     }
 
-    func testContextChangeIsSentAndBumpsTheLoadKey() async throws {
+    func testFullFileIsSentAsTheAgentCeilingAndBumpsTheLoadKey() async throws {
         let model = makeModel()
         XCTAssertEqual(model.loadKey, GitDiffModel.LoadKey(context: 3, reloads: 0))
+        XCTAssertEqual(GitDiffModel.contextChoices.map(\.0), [3, 5000])
+        XCTAssertEqual(GitDiffModel.contextChoices.map(\.1), ["Changes", "Full file"])
 
-        model.context = 25
-        XCTAssertEqual(model.loadKey, GitDiffModel.LoadKey(context: 25, reloads: 0))
+        model.context = GitDiffModel.contextFull
+        XCTAssertEqual(model.loadKey, GitDiffModel.LoadKey(context: 5000, reloads: 0))
         StubURLProtocol.enqueue(status: 200, body: try fixtureBody("text_modified"))
         await model.load()
 
-        XCTAssertEqual(requestURLs, ["\(diffURL)?path=src%2Fa.py&scope=unstaged&context=25"])
+        XCTAssertEqual(requestURLs, ["\(diffURL)?path=src%2Fa.py&scope=unstaged&context=5000"])
+    }
+
+    func testTitleOfANestedRepositoryFolderKeepsItsSlash() {
+        XCTAssertEqual(makeModel(path: "mobaide_worktree/claude-session-56a3f247/").fileName, "claude-session-56a3f247/")
+        XCTAssertEqual(makeModel(path: "vendor/").fileName, "vendor/")
     }
 
     func testRetryBumpsTheLoadKeyWithoutTouchingTheContext() {

@@ -655,11 +655,15 @@ rows on the dot grid. `List`s keep their pull-to-refresh and swipe actions with
 `pixelList()` + per-row `pixelCard()`.
 
 The session-scoped git Changes / Diff screens (terminal `⋯` → Git → Changes…,
-`UI/Terminal/git/`) add two more: the Diff is one `List` row per line and cuts a
-long line to one row with a "Wrap lines" menu action instead of Android's
-shared horizontal scroll (a second scroll axis fights the list, and a per-row
-scroller de-lazifies it), and its whole-screen states are `PixelEmptyState`
-plates. Both child screens hold a ref-counted watch on
+`UI/Terminal/git/`) add one more: their whole-screen states are
+`PixelEmptyState` plates. The Diff itself follows Android's layout. A fixed header
+card (change chip, counts, and the *Changes* / *Full file* switch) sits over a
+`LazyVStack` inside a two-axis `ScrollView`. Every line's text is pinned to the
+widest measured line (`GitDiffDisplay.metrics`), so rows scroll sideways
+together up to the 2 000-column cut. The line-number gutters and the
+hunk-header and notice rows stay at the visible leading edge through a
+render-time `visualEffect` offset. SwiftUI has no directional lock, so a
+diagonal drag moves both axes. Both child screens hold a ref-counted watch on
 `ForegroundSessionTracker` (`View.holdsSessionWatch`) for exactly as long as
 they are on the stack, so the terminal underneath stays attached and returning
 never costs a ring replay.

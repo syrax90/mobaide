@@ -58,7 +58,10 @@ _SMALL_OUTPUT = 64 * 1024
 _BINARY_SNIFF = 8000
 _MAX_ERROR_DETAIL = 500
 _CONTEXT_DEFAULT = 3
-_CONTEXT_MAX = 50
+# At LINE_LIMIT context a file with more than LINE_LIMIT lines on either side
+# already overflows the line cap, so an untruncated diff at this ceiling is
+# always the whole file as one hunk — the clients' "Full file" view.
+_CONTEXT_MAX = LINE_LIMIT
 
 _DIFF_SCOPES: tuple[str, ...] = ("staged", "unstaged", "untracked")
 _GROUP_RANK = {"conflicts": 0, "staged": 1, "unstaged": 2, "untracked": 3}

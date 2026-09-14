@@ -50,6 +50,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.GitDiffHunk
 import com.mobaide.app.data.network.dto.GitDiffLine
 import com.mobaide.app.data.network.dto.GitDiffResponse
+import com.mobaide.app.data.network.dto.gitPathFileName
 import com.mobaide.app.ui.common.pixel.PixelCard
 import com.mobaide.app.ui.common.pixel.PixelChip
 import com.mobaide.app.ui.common.pixel.PixelScaffold
@@ -87,7 +88,7 @@ fun GitDiffScreen(
             PixelTopBar(
                 title = {
                     Text(
-                        text = viewModel.path?.substringAfterLast('/') ?: "Diff",
+                        text = viewModel.path?.let(::gitPathFileName) ?: "Diff",
                         style = MaterialTheme.typography.titleMedium.copy(fontFamily = ChromeFontFamily),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -219,16 +220,11 @@ private fun DiffHeader(diff: GitDiffResponse, context: Int, onSetContext: (Int) 
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = "Context".chromeCaps(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    DIFF_CONTEXT_CHOICES.forEach { lines ->
+                    DIFF_CONTEXT_CHOICES.forEach { choice ->
                         ContextChip(
-                            lines = lines,
-                            selected = lines == context,
-                            onClick = { onSetContext(lines) },
+                            choice = choice,
+                            selected = choice.lines == context,
+                            onClick = { onSetContext(choice.lines) },
                         )
                     }
                 }
@@ -238,18 +234,18 @@ private fun DiffHeader(diff: GitDiffResponse, context: Int, onSetContext: (Int) 
 }
 
 @Composable
-private fun ContextChip(lines: Int, selected: Boolean, onClick: () -> Unit) {
+private fun ContextChip(choice: DiffContextChoice, selected: Boolean, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         shape = RectangleShape,
         color = if (selected) MaterialTheme.colorScheme.surfaceContainerHighest else Color.Transparent,
         border = pixelChipBorder(selected = selected),
         modifier = Modifier
-            .testTag(gitDiffContextChipTag(lines))
+            .testTag(gitDiffContextChipTag(choice.lines))
             .semantics { this.selected = selected },
     ) {
         Text(
-            text = lines.toString(),
+            text = choice.label.chromeCaps(),
             style = MaterialTheme.typography.labelSmall,
             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),

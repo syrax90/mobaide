@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Per-file diff (Android `GitDiffScreen`): the agent's hunks as one `List`
-/// row per line. Long lines are cut at one line rather than scrolled sideways
-/// — a second scroll axis fights the list, and a per-row scroller de-lazifies
-/// it — with a "Wrap lines" menu action for reading them whole.
+/// Per-file diff (Android `GitDiffScreen`): the agent's hunks as one lazy row
+/// per line in a scroller on both axes. Every line's text is pinned to the
+/// widest line, so the rows move sideways together and a long line is scrolled
+/// to rather than cut; the line numbers stay at the visible leading edge.
 struct GitDiffScreen: View {
     let sessionId: String
     let path: String
@@ -37,23 +37,6 @@ private struct GitDiffContent: View {
         content
             .navigationTitle(model.fileName)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        // A `Button`, not a `Toggle`: the theme installs the
-                        // pixel checkbox toggle style app-wide.
-                        Button {
-                            model.wrapLines.toggle()
-                        } label: {
-                            Label("Wrap lines", systemImage: model.wrapLines ? "checkmark.square" : "square")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                    .menuOrder(.fixed)
-                    .accessibilityLabel("More options")
-                }
-            }
             .refreshable { await model.load() }
             .task(id: model.loadKey) { await model.load() }
             .holdsSessionWatch(model.sessionId)
@@ -65,8 +48,13 @@ private struct GitDiffContent: View {
         case .loading:
             LoadingIndicator()
                 .pixelScreenBackground()
-        case .ready(let diff, let rows, let gutterDigits):
-            diffList(diff: diff, rows: rows, gutterDigits: gutterDigits)
+        case .ready(let diff, let rows, let metrics):
+            VStack(spacing: 0) {
+                header(diff)
+                    .padding(PixelMetrics.listRowInsets)
+                diffBody(rows: rows, metrics: metrics)
+            }
+            .pixelScreenBackground()
         case .agentOutdated:
             SessionGitStateView(
                 "Update your agent",
@@ -87,24 +75,22 @@ private struct GitDiffContent: View {
         }
     }
 
-    private func diffList(diff: GitDiffResponse, rows: [DiffRow], gutterDigits: Int) -> some View {
-        List {
-            Section {
-                header(diff)
-                    .pixelListRow()
-            }
-            Section {
-                ForEach(rows) { row in
-                    DiffRowView(row: row, gutterDigits: gutterDigits, wrap: model.wrapLines)
-                        .listRowBackground(rowBackground(row))
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+    private func diffBody(rows: [DiffRow], metrics: DiffMetrics) -> some View {
+        GeometryReader { geometry in
+            let viewportWidth = geometry.size.width
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(rows) { row in
+                        DiffRowView(row: row, metrics: metrics, viewportWidth: viewportWidth)
+                    }
                 }
+                .frame(width: max(viewportWidth, DiffRowView.lineWidth(metrics)), alignment: .leading)
+                .padding(.bottom, 24)
+                // A two-axis scroller centres content smaller than itself.
+                .frame(minHeight: geometry.size.height, alignment: .top)
             }
+            .background(colors.bg2)
         }
-        .pixelList()
-        // Rows are as tall as one code line, not the 44pt list default.
-        .environment(\.defaultMinListRowHeight, 0)
     }
 
     private func header(_ diff: GitDiffResponse) -> some View {
@@ -141,23 +127,106 @@ private struct GitDiffContent: View {
                     .truncationMode(.middle)
             }
             if GitDiffDisplay.showsContextChoices(diff) {
-                HStack(spacing: 12) {
-                    Text("Context")
-                        .sectionHeading()
-                    PixelSegmented(
-                        GitDiffModel.contextChoices.map { ($0, String($0)) },
-                        selection: $model.context,
-                        accessibilityLabel: "Context lines"
-                    )
-                    .frame(maxWidth: 180)
-                }
+                PixelSegmented(
+                    GitDiffModel.contextChoices,
+                    selection: $model.context,
+                    accessibilityLabel: "Diff view"
+                )
+                .frame(maxWidth: 240)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .pixelCard()
     }
+}
 
-    private func rowBackground(_ row: DiffRow) -> some View {
+private struct DiffRowView: View {
+    private static let gutterLeading: CGFloat = 4
+    private static let markerPadding: CGFloat = 6
+    private static let textTrailing: CGFloat = 12
+
+    /// The width of a line row: both gutters, the marker and the pinned text.
+    static func lineWidth(_ metrics: DiffMetrics) -> CGFloat {
+        2 * (gutterLeading + metrics.gutterWidth)
+            + metrics.cell + 2 * markerPadding
+            + metrics.textWidth + textTrailing
+    }
+
+    let row: DiffRow
+    let metrics: DiffMetrics
+    let viewportWidth: CGFloat
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        rowContent
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(background)
+    }
+
+    @ViewBuilder
+    private var rowContent: some View {
+        switch row.kind {
+        case .hunkHeader(let range, let heading):
+            pinnedToViewport(
+                Text(GitDiffDisplay.hunkHeaderText(range: range, heading: heading))
+                    .font(MobaideTypography.code)
+                    .foregroundStyle(colors.accent)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 12)
+            )
+        case .line(let type, let old, let new, let text):
+            let tone = GitDiffDisplay.lineTone(type).map(colors.color)
+            HStack(alignment: .top, spacing: 0) {
+                // Drawn above the text, on the row's own opaque fill, so the
+                // text scrolls underneath the numbers.
+                HStack(alignment: .top, spacing: 0) {
+                    gutter(old)
+                    gutter(new)
+                    Text(GitDiffDisplay.marker(type))
+                        .font(MobaideTypography.code)
+                        .foregroundStyle(tone ?? colors.textMuted)
+                        .frame(width: metrics.cell)
+                        .padding(.horizontal, Self.markerPadding)
+                }
+                .background(background)
+                .stickyLeading()
+                .zIndex(1)
+                Text(text)
+                    .font(MobaideTypography.code)
+                    .foregroundStyle(tone ?? colors.text)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(width: metrics.textWidth, alignment: .leading)
+                    .padding(.trailing, Self.textTrailing)
+            }
+            .padding(.vertical, 1)
+        case .noNewline:
+            pinnedToViewport(
+                Text("\\ No newline at end of file")
+                    .font(MobaideTypography.code)
+                    .foregroundStyle(colors.textMuted)
+                    .padding(.leading, 12)
+                    .padding(.vertical, 1)
+            )
+        case .truncated(let shown, let total):
+            pinnedToViewport(
+                Text(GitDiffDisplay.truncatedNotice(shown: shown, total: total))
+                    .font(.footnote)
+                    .foregroundStyle(colors.warning)
+                    .padding(8)
+            )
+        case .notice(let text):
+            pinnedToViewport(
+                Text(text)
+                    .font(.footnote)
+                    .foregroundStyle(colors.textMuted)
+                    .padding(8)
+            )
+        }
+    }
+
+    private var background: some View {
         let tint: Color? = {
             if case .line(let type, _, _, _) = row.kind, let tone = GitDiffDisplay.lineTone(type) {
                 return colors.color(tone).opacity(0.12)
@@ -169,77 +238,32 @@ private struct GitDiffContent: View {
         }()
         return colors.bg2.overlay(tint ?? Color.clear)
     }
-}
 
-private struct DiffRowView: View {
-    let row: DiffRow
-    let gutterDigits: Int
-    let wrap: Bool
-
-    @Environment(\.mobaideColors) private var colors
-
-    var body: some View {
-        switch row.kind {
-        case .hunkHeader(let range, let heading):
-            Text(GitDiffDisplay.hunkHeaderText(range: range, heading: heading))
-                .font(MobaideTypography.code)
-                .foregroundStyle(colors.accent)
-                .lineLimit(wrap ? nil : 1)
-                .truncationMode(.tail)
-                .padding(.vertical, 6)
-                .padding(.horizontal, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        case .line(let type, let old, let new, let text):
-            let tone = GitDiffDisplay.lineTone(type).map(colors.color)
-            HStack(alignment: .top, spacing: 0) {
-                gutter(old)
-                gutter(new)
-                Text(GitDiffDisplay.marker(type))
-                    .font(MobaideTypography.code)
-                    .foregroundStyle(tone ?? colors.textMuted)
-                    .padding(.horizontal, 6)
-                Text(text)
-                    .font(MobaideTypography.code)
-                    .foregroundStyle(tone ?? colors.text)
-                    .lineLimit(wrap ? nil : 1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.vertical, 1)
-        case .noNewline:
-            Text("\\ No newline at end of file")
-                .font(MobaideTypography.code)
-                .foregroundStyle(colors.textMuted)
-                .padding(.leading, 12)
-                .padding(.vertical, 1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        case .truncated(let shown, let total):
-            Text(GitDiffDisplay.truncatedNotice(shown: shown, total: total))
-                .font(.footnote)
-                .foregroundStyle(colors.warning)
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        case .notice(let text):
-            Text(text)
-                .font(.footnote)
-                .foregroundStyle(colors.textMuted)
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+    /// A non-code row wraps at the screen width and never scrolls out of view.
+    private func pinnedToViewport(_ content: some View) -> some View {
+        content
+            .frame(width: viewportWidth, alignment: .leading)
+            .stickyLeading()
     }
 
-    /// Sized by a hidden run of the widest digit so the column never shifts
-    /// between rows.
     private func gutter(_ number: Int?) -> some View {
-        Text(String(repeating: "8", count: gutterDigits))
+        Text(number.map(String.init) ?? "")
             .font(MobaideTypography.code)
-            .hidden()
-            .overlay(alignment: .trailing) {
-                Text(number.map(String.init) ?? "")
-                    .font(MobaideTypography.code)
-                    .monospacedDigit()
-                    .foregroundStyle(colors.textMuted)
-            }
-            .padding(.leading, 4)
+            .monospacedDigit()
+            .foregroundStyle(colors.textMuted)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(width: metrics.gutterWidth, alignment: .trailing)
+            .padding(.leading, Self.gutterLeading)
+    }
+}
+
+private extension View {
+    /// Holds the view at the scroller's visible leading edge while the diff
+    /// scrolls sideways. A render-time effect: no state changes per frame.
+    func stickyLeading() -> some View {
+        visualEffect { content, proxy in
+            content.offset(x: max(0, -proxy.frame(in: .scrollView).minX))
+        }
     }
 }

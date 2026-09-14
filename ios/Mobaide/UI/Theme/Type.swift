@@ -27,6 +27,8 @@ enum MobaideTypography {
 
     static let terminal = Font.system(.body, design: .monospaced)
     static let code = Font.system(size: 14, design: .monospaced)
+    /// `code` for UIKit text measurement.
+    static var codeUIFont: UIFont { .monospacedSystemFont(ofSize: 14, weight: .regular) }
     static let otpDigit = chrome(22, relativeTo: .title2)
     static let bodyLarge = Font.system(size: 16)
 }
