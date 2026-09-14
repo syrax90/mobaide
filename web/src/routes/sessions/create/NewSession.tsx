@@ -10,7 +10,7 @@ import {
   deleteCustomAgentType,
   listCustomAgentTypes,
 } from '../../../api/customAgentTypeRepository';
-import { listProjects } from '../../../api/projectRepository';
+import { listProjects, type ProjectInfo } from '../../../api/projectRepository';
 import { createSession, type CreateSessionRequest } from '../../../api/sessionRepository';
 import { ErrorState } from '../../../components/ErrorState';
 import { queryKeys, wsBackedQueryOptions } from '../../../lib/queryKeys';
@@ -29,7 +29,9 @@ import {
 } from '../../../stores/recentPaths';
 import { useToastStore } from '../../../stores/toastStore';
 import { useAgentEvents } from '../../../realtime';
+import { upsertProject } from '../../../realtime/projectsCache';
 import { upsertSession } from '../../../realtime/sessionCache';
+import { ProjectFormDialog } from '../../projects/ProjectFormDialog';
 import { terminalPath } from '../terminalPath';
 import { CodexLoginDialog } from './CodexLoginDialog';
 import { ConfigStep } from './ConfigStep';
@@ -135,6 +137,7 @@ export function NewSession() {
   const [codexLoginError, setCodexLoginError] = useState<string | null>(null);
   const [showCodexLogin, setShowCodexLogin] = useState(false);
   const [showAddType, setShowAddType] = useState(false);
+  const [showCreateProject, setShowCreateProject] = useState(false);
   const [typeDialogError, setTypeDialogError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   // The request that hit `codex_auth_required`, re-sent verbatim once the key
@@ -622,6 +625,9 @@ export function NewSession() {
             if (validateCustomPath(trimmed) !== null) return;
             advanceToMode({ kind: 'customPath', path: trimmed });
           }}
+          onCreateProject={() => {
+            setShowCreateProject(true);
+          }}
           // The custom-path field writes the reducer only. Per keystroke it
           // would be a router navigation and a `history.replaceState` per
           // character, which browsers rate-limit (Safari throws past 100 in
@@ -688,6 +694,29 @@ export function NewSession() {
           onCancel={() => {
             setShowCodexLogin(false);
             pendingRequest.current = null;
+          }}
+        />
+      )}
+
+      {showCreateProject && (
+        <ProjectFormDialog
+          agentId={resolvedAgentId}
+          editing={null}
+          onCreated={(created) => {
+            // Seed before advancing: the clamp effect sends a `?project=` the
+            // list does not hold back to step one, and neither the dialog's
+            // refetch nor the `projects.changed` echo is guaranteed to have
+            // landed. Idempotently replaced by whichever arrives next, as the
+            // session seed in `create.onSuccess` is.
+            queryClient.setQueryData<ProjectInfo[]>(
+              queryKeys.projects(resolvedAgentId),
+              (current) => upsertProject(current ?? [], created),
+            );
+            dispatch({ type: 'selectStoredProject', project: created });
+            advanceToMode({ kind: 'stored', name: created.name });
+          }}
+          onClose={() => {
+            setShowCreateProject(false);
           }}
         />
       )}

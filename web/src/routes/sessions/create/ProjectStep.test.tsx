@@ -10,6 +10,7 @@ const forgotten: string[] = [];
 const selected: string[] = [];
 const picked: string[] = [];
 let continued = 0;
+let createOpened = 0;
 
 const project = (name: string): ProjectSummary =>
   projectInfoSchema.parse({ name, path: `/srv/${name}` });
@@ -37,6 +38,9 @@ function renderStep(over: Overrides = {}) {
       onForgetRecent={(path) => forgotten.push(path)}
       onSelectProject={(project) => selected.push(project.name)}
       onSelectRecentPath={(path) => picked.push(path)}
+      onCreateProject={() => {
+        createOpened += 1;
+      }}
       dispatch={(action) => dispatched.push(action)}
       onContinue={() => {
         continued += 1;
@@ -56,6 +60,7 @@ beforeEach(() => {
   selected.length = 0;
   picked.length = 0;
   continued = 0;
+  createOpened = 0;
 });
 
 afterEach(cleanup);
@@ -94,6 +99,47 @@ describe('ProjectStep project rows', () => {
     });
 
     expect(screen.getByRole('button', { name: /beta/ })).toHaveAttribute('aria-pressed', 'false');
+  });
+});
+
+describe('ProjectStep create row', () => {
+  const EMPTY_STATE = 'This agent has no projects yet. Create one, or enter a path below.';
+
+  const listedRows = (): string[] =>
+    [...document.querySelectorAll('.project-list .project-name')].map(
+      (node) => node.textContent ?? '',
+    );
+
+  it('is offered on an agent with no projects at all', () => {
+    // The agent that most needs it: both mobile pickers show the row here too.
+    renderStep({ projects: [] });
+
+    expect(screen.getByText(EMPTY_STATE)).toBeInTheDocument();
+    expect(listedRows()).toEqual(['Create new project…']);
+  });
+
+  it('comes last, after the stored projects, and is not a selectable row', () => {
+    renderStep({
+      projects: [project('alpha'), project('beta')],
+      selection: { kind: 'stored', name: 'beta' },
+    });
+
+    expect(screen.queryByText(EMPTY_STATE)).not.toBeInTheDocument();
+    expect(listedRows()).toEqual(['alpha', 'beta', 'Create new project…']);
+    expect(screen.getByRole('button', { name: /Create new project…/ })).not.toHaveAttribute(
+      'aria-pressed',
+    );
+  });
+
+  it('hands the click to the container without picking or advancing', () => {
+    renderStep({ projects: [project('alpha')] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create new project…/ }));
+
+    expect(createOpened).toBe(1);
+    expect(selected).toEqual([]);
+    expect(dispatched).toEqual([]);
+    expect(continued).toBe(0);
   });
 });
 
