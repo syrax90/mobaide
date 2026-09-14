@@ -375,6 +375,15 @@ carrying nothing the row click has not decided, whereas on a phone the same
 button doubles as the reachable, thumb-sized commit target. The mirrors are
 tracked per platform as #650 (Android) and #651 (iOS).
 
+**Creating a project** is reachable from the same step: the project list
+always ends with a "Create new project…" row, even when the agent has none,
+matching both mobile pickers. It opens the existing WEB-09
+`ProjectFormDialog` over the wizard; saving is treated as picking the
+project, so it advances the step exactly as a row click does. Android and
+iOS instead keep the new project selected but stay on the project step until
+their own Continue — the same divergence tracked as #650 (Android) and #651
+(iOS).
+
 **The wizard opens where the last launch left off** (CLA-232), which is both
 mobile clients' behaviour and the one part of WEB-07 that shipped as defaults
 only. `localStorage` key `mobaide-launch-prefs` holds the four option buckets

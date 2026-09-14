@@ -21,6 +21,14 @@ import { queryKeys } from '../lib/queryKeys';
 import { sortProjects } from '../api/projectRepository';
 import { projectsChangedSchema, type ProjectInfo } from '../protocol/dto/projects';
 
+/** Replace the project with this `name`, or add it, keeping server order. */
+export function upsertProject(
+  list: readonly ProjectInfo[],
+  project: ProjectInfo,
+): ProjectInfo[] {
+  return sortProjects([...list.filter((entry) => entry.name !== project.name), project]);
+}
+
 /**
  * **May seed** a cache entry nothing has fetched: the payload is authoritative,
  * so a list mounting a moment later paints from it with no request at all. The

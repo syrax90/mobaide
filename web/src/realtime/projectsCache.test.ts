@@ -2,7 +2,7 @@ import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { queryKeys } from '../lib/queryKeys';
 import { projectInfoSchema, type ProjectInfo } from '../protocol/dto/projects';
-import { applyProjectsSnapshot } from './projectsCache';
+import { applyProjectsSnapshot, upsertProject } from './projectsCache';
 
 const AGENT = 'agent-1';
 const key = queryKeys.projects(AGENT);
@@ -86,5 +86,24 @@ describe('applyProjectsSnapshot', () => {
     await listed;
 
     expect(cached(client)).toEqual(['fresh']);
+  });
+});
+
+describe('upsertProject', () => {
+  it('adds a project the list does not hold, in server order', () => {
+    const next = upsertProject([project('a', 0), project('c', 2)], project('b', 1));
+
+    expect(next.map((entry) => entry.name)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('replaces the same-named entry instead of listing it twice', () => {
+    // The usual case after a create: the dialog's refetch has already brought
+    // the project in, and the seed must not add a second row under its name.
+    const moved = projectInfoSchema.parse({ name: 'a', path: '/srv/moved', order: 3 });
+
+    const next = upsertProject([project('a', 0), project('b', 1)], moved);
+
+    expect(next.map((entry) => entry.name)).toEqual(['b', 'a']);
+    expect(next.at(1)?.path).toBe('/srv/moved');
   });
 });

@@ -8,7 +8,7 @@
  * one-shot project pre-fill effect.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useEffect } from 'react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -28,10 +28,15 @@ vi.mock('../../../auth/agentTokens', () => ({
 const api = vi.hoisted(
   (): {
     projects: ProjectInfo[];
+    /** How many times the project list was fetched. */
+    projectLists: number;
+    projectWrites: { name: string; path: string }[];
     requests: CreateSessionRequest[];
     create: (request: CreateSessionRequest) => Promise<SessionResponse>;
   } => ({
     projects: [],
+    projectLists: 0,
+    projectWrites: [],
     requests: [],
     create: () => Promise.reject(new Error('createSession is not stubbed')),
   }),
@@ -39,7 +44,22 @@ const api = vi.hoisted(
 
 vi.mock('../../../api/projectRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../api/projectRepository')>();
-  return { ...actual, listProjects: () => Promise.resolve(api.projects) };
+  const { projectInfoSchema } = await import('../../../protocol/dto/projects');
+  return {
+    ...actual,
+    listProjects: () => {
+      api.projectLists += 1;
+      return Promise.resolve(api.projects);
+    },
+    // Deliberately leaves `api.projects` alone: the list the wizard refetches
+    // after a create has not caught up with it yet.
+    createProject: (_agentId: string, body: { name: string; path: string }) => {
+      api.projectWrites.push({ name: body.name, path: body.path });
+      return Promise.resolve(
+        projectInfoSchema.parse({ name: body.name, path: body.path, order: 2 }),
+      );
+    },
+  };
 });
 
 vi.mock('../../../api/sessionRepository', async (importOriginal) => {
@@ -194,6 +214,8 @@ async function renderWizard(search = '') {
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   api.projects = [project('alpha'), project('beta')];
+  api.projectLists = 0;
+  api.projectWrites.length = 0;
   api.requests.length = 0;
   api.create = () => Promise.resolve(session('s-new'));
   visited.length = 0;
@@ -418,6 +440,65 @@ describe('NewSession project step', () => {
 
     expect(screen.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+  });
+});
+
+describe('NewSession create project', () => {
+  const openCreateDialog = (): HTMLElement => {
+    fireEvent.click(screen.getByRole('button', { name: /Create new project…/ }));
+    return screen.getByRole('dialog', { name: 'New project' });
+  };
+
+  function saveProject(dialog: HTMLElement, name: string) {
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: name } });
+    fireEvent.change(within(dialog).getByLabelText('Path'), { target: { value: `/srv/${name}` } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+  }
+
+  it('advances to the agent step with the new project the list has not caught up with', async () => {
+    await renderWizard();
+
+    saveProject(openCreateDialog(), 'gamma');
+
+    expect(await screen.findByRole('heading', { name: 'What should it run?' })).toBeInTheDocument();
+    expect(api.projectWrites).toEqual([{ name: 'gamma', path: '/srv/gamma' }]);
+    // The dialog's refetch has landed and still lacks `gamma`, so only the seed
+    // keeps the clamp from sending an unknown `?project=` back to step one.
+    expect(api.projectLists).toBe(2);
+    expect(
+      client.getQueryData<ProjectInfo[]>(queryKeys.projects('agent-1'))?.map((row) => row.name),
+    ).toEqual(['alpha', 'beta', 'gamma']);
+    expect(currentPath()).toBe('/agents/agent-1/new-session?step=mode&project=gamma');
+    expect(visited).toEqual(['', '?step=mode&project=gamma']);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('drops a half-typed one-off path in favour of the created project', async () => {
+    await renderWizard();
+    fireEvent.change(screen.getByLabelText('Absolute path'), {
+      target: { value: '/srv/typed' },
+    });
+
+    saveProject(openCreateDialog(), 'gamma');
+    await screen.findByRole('heading', { name: 'What should it run?' });
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+
+    // Typing never reached the URL, so no navigation would clear the field:
+    // left behind, it would outrank the created row and be what Continue sends.
+    expect(await screen.findByRole('heading', { name: 'Where should it run?' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Absolute path')).toHaveValue('');
+    expect(screen.getByRole('button', { name: /gamma/ })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('closes on Cancel and leaves the wizard on the project step', async () => {
+    await renderWizard();
+
+    fireEvent.click(within(openCreateDialog()).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Where should it run?' })).toBeInTheDocument();
+    expect(api.projectWrites).toEqual([]);
+    expect(visited).toEqual(['']);
   });
 });
 

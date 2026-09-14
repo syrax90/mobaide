@@ -33,6 +33,8 @@ interface ProjectFormDialogProps {
   agentId: string;
   /** `null` for create, or the live snapshot of the project being edited. */
   editing: ProjectInfo | null;
+  /** Create only: the saved project, called just before `onClose`. */
+  onCreated?: (project: ProjectInfo) => void;
   onClose: () => void;
 }
 
@@ -61,7 +63,12 @@ function seedValues(editing: ProjectInfo | null): ProjectFormValues {
  * arriving mid-edit refreshes what the user is not looking at without ever
  * sending a value they did not type.
  */
-export function ProjectFormDialog({ agentId, editing, onClose }: ProjectFormDialogProps) {
+export function ProjectFormDialog({
+  agentId,
+  editing,
+  onCreated,
+  onClose,
+}: ProjectFormDialogProps) {
   const queryClient = useQueryClient();
   const values = useMemo(() => seedValues(editing), [editing]);
 
@@ -128,10 +135,10 @@ export function ProjectFormDialog({ agentId, editing, onClose }: ProjectFormDial
         filter: submitted.filter,
       };
       if (editing === null) {
-        await createProject(agentId, buildProjectWrite(draft));
-        return;
+        return createProject(agentId, buildProjectWrite(draft));
       }
       await updateProject(agentId, editing.name, buildProjectUpdate(editing, draft));
+      return null;
     },
     // The submitted variables carry the plaintext Linear key, and TanStack keeps
     // them on the mutation entry for `gcTime` after it settles — readable
@@ -143,8 +150,9 @@ export function ProjectFormDialog({ agentId, editing, onClose }: ProjectFormDial
     onSettled: () => {
       save.reset();
     },
-    onSuccess: async () => {
+    onSuccess: async (created) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.projects(agentId) });
+      if (created !== null) onCreated?.(created);
       onClose();
     },
     onError: (error: unknown) => {

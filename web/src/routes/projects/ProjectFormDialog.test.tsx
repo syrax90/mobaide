@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/errors';
 import { projectInfoSchema, type ProjectInfo } from '../../protocol/dto/projects';
 
 vi.mock('../../auth/agentTokens', () => ({
@@ -13,6 +14,9 @@ const project = (over: Record<string, unknown> = {}): ProjectInfo =>
 
 const api = vi.hoisted(() => ({
   updates: [] as { currentName: string; body: Record<string, unknown> }[],
+  creates: [] as { name: string; path: string }[],
+  /** When set, the POST fails with it instead of answering. */
+  createError: null as Error | null,
 }));
 
 vi.mock('../../api/projectRepository', async (importOriginal) => {
@@ -23,7 +27,13 @@ vi.mock('../../api/projectRepository', async (importOriginal) => {
       api.updates.push({ currentName, body });
       return Promise.resolve(project({ name: currentName }));
     },
-    createProject: () => Promise.resolve(project()),
+    // Answers with fields the form never sent, so a caller handed the draft
+    // instead of the server's reply is visible.
+    createProject: (_agentId: string, body: { name: string; path: string }) => {
+      api.creates.push({ name: body.name, path: body.path });
+      if (api.createError !== null) return Promise.reject(api.createError);
+      return Promise.resolve(project({ name: body.name, path: body.path, is_git: true, order: 4 }));
+    },
     listLinearLabels: () => Promise.resolve([]),
     listLinearStates: () => Promise.resolve([]),
   };
@@ -33,18 +43,32 @@ const { ProjectFormDialog } = await import('./ProjectFormDialog');
 
 let client: QueryClient;
 let closed: number;
+/** `onCreated` and `onClose` in the order the dialog called them. */
+const calls: string[] = [];
+const received: ProjectInfo[] = [];
 
-const tree = (editing: ProjectInfo) => (
+const tree = (editing: ProjectInfo | null) => (
   <QueryClientProvider client={client}>
     <ProjectFormDialog
       agentId="agent-1"
       editing={editing}
+      onCreated={(created) => {
+        calls.push('created');
+        received.push(created);
+      }}
       onClose={() => {
+        calls.push('closed');
         closed += 1;
       }}
     />
   </QueryClientProvider>
 );
+
+function fillAndSave(name: string, path: string) {
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: name } });
+  fireEvent.change(screen.getByLabelText('Path'), { target: { value: path } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+}
 
 /** The body of the single PATCH the dialog sent. */
 const sentBody = (): Record<string, unknown> => api.updates.at(0)?.body ?? {};
@@ -52,7 +76,11 @@ const sentBody = (): Record<string, unknown> => api.updates.at(0)?.body ?? {};
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   api.updates.length = 0;
+  api.creates.length = 0;
+  api.createError = null;
   closed = 0;
+  calls.length = 0;
+  received.length = 0;
 });
 
 afterEach(() => {
@@ -94,6 +122,55 @@ describe('ProjectFormDialog against a live snapshot', () => {
     await waitFor(() => {
       expect(closed).toBe(1);
     });
+  });
+});
+
+describe('ProjectFormDialog onCreated', () => {
+  it('hands over the project the agent saved, then closes', async () => {
+    render(tree(null));
+
+    fillAndSave('fresh', '/srv/fresh');
+
+    await waitFor(() => {
+      expect(calls).toEqual(['created', 'closed']);
+    });
+    expect(api.creates).toEqual([{ name: 'fresh', path: '/srv/fresh' }]);
+    expect(received).toEqual([
+      project({ name: 'fresh', path: '/srv/fresh', is_git: true, order: 4 }),
+    ]);
+  });
+
+  it('keeps a duplicate name under Name, without reporting a create or closing', async () => {
+    const message = "Project 'proj' already exists";
+    api.createError = new ApiError({
+      status: 409,
+      message,
+      code: null,
+      retryAfterSeconds: null,
+      detail: message,
+    });
+    render(tree(null));
+
+    fillAndSave('proj', '/srv/proj');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Name')).toHaveAccessibleDescription(message);
+    });
+    expect(api.creates).toHaveLength(1);
+    expect(calls).toEqual([]);
+  });
+
+  it('never reports an edit as a create', async () => {
+    render(tree(project()));
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(calls).toEqual(['closed']);
+    });
+    expect(api.updates).toHaveLength(1);
+    expect(received).toEqual([]);
   });
 });
 
