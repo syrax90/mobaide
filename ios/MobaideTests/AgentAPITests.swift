@@ -175,6 +175,65 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual(request.url?.absoluteString, "http://agent.example.com/api/projects/proj/git/items:delete")
     }
 
+    private let unchangedStatusBody = #"""
+    {"session_id":"s1","cwd":null,"etag":"e","unchanged":true,"unavailable_reason":null,"repo":null,"entries":[],"counts":null,"truncated":false,"entry_limit":5000}
+    """#
+    private let missingDiffBody = #"""
+    {"path":"x","orig_path":null,"scope":"unstaged","kind":"missing","change":null,"old_mode":null,"new_mode":null,"additions":0,"deletions":0,"hunks":[],"truncated":false,"total_lines":0,"line_limit":5000,"byte_limit":1048576}
+    """#
+
+    func testSessionGitStatusAppendsEtagQueryOnlyWhenGiven() async throws {
+        StubURLProtocol.enqueue(status: 200, body: unchangedStatusBody)
+        StubURLProtocol.enqueue(status: 200, body: unchangedStatusBody)
+        let api = makeAPI()
+
+        _ = try await api.getSessionGitStatus(sessionId: "s1")
+        let unchanged = try await api.getSessionGitStatus(sessionId: "s1", etag: "a+b c")
+
+        XCTAssertTrue(unchanged.unchanged)
+        let urls = StubURLProtocol.requests.map(\.url?.absoluteString)
+        XCTAssertEqual(urls[0], "http://agent.example.com/api/sessions/s1/git/status")
+        XCTAssertEqual(urls[1], "http://agent.example.com/api/sessions/s1/git/status?etag=a%2Bb%20c")
+        XCTAssertEqual(StubURLProtocol.requests[1].httpMethod, "GET")
+    }
+
+    func testSessionGitDiffEncodesEveryReservedQueryCharacter() async throws {
+        // A raw `+` reads as a space to Starlette's `parse_qsl`, and `&` / `#`
+        // would end the value or the query — none may survive unencoded.
+        StubURLProtocol.enqueue(status: 200, body: missingDiffBody)
+        _ = try await makeAPI().getSessionGitDiff(
+            sessionId: "s1",
+            path: "dir/a b+c&d#e.txt",
+            scope: "staged",
+            context: 25,
+            origPath: "old+name.txt"
+        )
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "http://agent.example.com/api/sessions/s1/git/diff?path=dir%2Fa%20b%2Bc%26d%23e.txt&scope=staged&context=25&orig_path=old%2Bname.txt"
+        )
+        XCTAssertEqual(request.url?.query()?.components(separatedBy: "&").count, 4, "the encoded & must not split the path")
+    }
+
+    func testSessionGitDiffOmitsOrigPathAndDefaultsContextToThree() async throws {
+        StubURLProtocol.enqueue(status: 200, body: missingDiffBody)
+        _ = try await makeAPI().getSessionGitDiff(sessionId: "s1", path: "a.txt", scope: "untracked")
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "http://agent.example.com/api/sessions/s1/git/diff?path=a.txt&scope=untracked&context=3"
+        )
+    }
+
+    func testEncodeQueryValueKeepsOnlyTheUnreservedSet() {
+        XCTAssertEqual(AgentAPI.encodeQueryValue("a-b_c.d*e9"), "a-b_c.d*e9")
+        XCTAssertEqual(AgentAPI.encodeQueryValue("a b+c/d&e#f?g=h"), "a%20b%2Bc%2Fd%26e%23f%3Fg%3Dh")
+        XCTAssertEqual(AgentAPI.encodeQueryValue("тест"), "%D1%82%D0%B5%D1%81%D1%82")
+    }
+
     func testNon2xxThrowsAPIErrorWithBody() async {
         StubURLProtocol.enqueue(status: 503, body: "claude_cli_missing")
         do {

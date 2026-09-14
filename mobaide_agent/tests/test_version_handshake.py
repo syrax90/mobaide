@@ -31,7 +31,8 @@ async def test_get_version(client) -> None:
             "claude": {"available": True},
             "codex": {"available": True},
             "antigravity": {"available": True},
-        }
+        },
+        "git": {"changes": True},
     }
     # The signed manifest body now travels inline over the relay WebSocket
     # — it is not exposed via this REST surface.

@@ -113,6 +113,8 @@ enum FixtureRegistry {
         "GitDeleteResponse": runner(GitDeleteResponse.self),
         "BusyHolder": runner(BusyHolder.self),
         "BusyByResponse": runner(BusyByResponse.self),
+        "GitStatusResponse": runner(GitStatusResponse.self),
+        "GitDiffResponse": runner(GitDiffResponse.self),
         // PairingDtos.swift
         "PairingClaimRequest": runner(PairingClaimRequest.self),
         "PairingClaimResponse": runner(PairingClaimResponse.self),

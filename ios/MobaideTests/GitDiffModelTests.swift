@@ -1,0 +1,119 @@
+import XCTest
+@testable import Mobaide
+
+/// The per-file Diff model over the real `AgentAPI` (stubbed transport):
+/// what it asks the agent for and which state each answer lands in. Row
+/// derivation itself is covered by `GitDiffDisplayTests`.
+@MainActor
+final class GitDiffModelTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        StubURLProtocol.reset()
+    }
+
+    private func makeModel(
+        path: String = "src/a.py",
+        scope: String = GitDiffResponse.scopeUnstaged,
+        origPath: String? = nil
+    ) -> GitDiffModel {
+        let client = HTTPClient(session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self]))
+        let agentAPI = AgentAPI(
+            baseURL: { "http://agent.example.com" },
+            tokens: FakeAgentTokens(token: AgentToken(value: "tok")),
+            client: client
+        )
+        return GitDiffModel(sessionId: "s1", path: path, scope: scope, origPath: origPath, agentAPI: agentAPI)
+    }
+
+    private func fixtureBody(_ name: String) throws -> String {
+        String(decoding: try FixtureLoader.wireData(path: "dto/agent/GitDiffResponse.json", case: name), as: UTF8.self)
+    }
+
+    private var requestURLs: [String] {
+        StubURLProtocol.requests.compactMap { $0.url?.absoluteString }
+    }
+
+    private let diffURL = "http://agent.example.com/api/sessions/s1/git/diff"
+
+    func testLoadAsksForPathScopeDefaultContextAndRenameSource() async throws {
+        let model = makeModel(path: "src/new name.py", scope: GitDiffResponse.scopeStaged, origPath: "src/old.py")
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("renamed_with_heading"))
+
+        await model.load()
+
+        XCTAssertEqual(requestURLs, ["\(diffURL)?path=src%2Fnew%20name.py&scope=staged&context=3&orig_path=src%2Fold.py"])
+        guard case .ready(let diff, let rows, let gutterDigits) = model.state else {
+            return XCTFail("expected ready, got \(model.state)")
+        }
+        XCTAssertEqual(diff.change, GitDiffResponse.changeRenamed)
+        XCTAssertEqual(rows.map(\.id), ["h0", "h0:l0", "h0:l1", "h0:l2"])
+        XCTAssertEqual(gutterDigits, 2)
+        XCTAssertFalse(model.isLoading)
+        XCTAssertEqual(model.fileName, "new name.py")
+    }
+
+    func testOrigPathIsOmittedWhenThereIsNoRename() async throws {
+        let model = makeModel()
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("text_modified"))
+
+        await model.load()
+
+        XCTAssertEqual(requestURLs, ["\(diffURL)?path=src%2Fa.py&scope=unstaged&context=3"])
+    }
+
+    func testContextChangeIsSentAndBumpsTheLoadKey() async throws {
+        let model = makeModel()
+        XCTAssertEqual(model.loadKey, GitDiffModel.LoadKey(context: 3, reloads: 0))
+
+        model.context = 25
+        XCTAssertEqual(model.loadKey, GitDiffModel.LoadKey(context: 25, reloads: 0))
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("text_modified"))
+        await model.load()
+
+        XCTAssertEqual(requestURLs, ["\(diffURL)?path=src%2Fa.py&scope=unstaged&context=25"])
+    }
+
+    func testRetryBumpsTheLoadKeyWithoutTouchingTheContext() {
+        let model = makeModel()
+        model.context = 10
+
+        model.retry()
+        model.retry()
+
+        XCTAssertEqual(model.loadKey, GitDiffModel.LoadKey(context: 10, reloads: 2))
+    }
+
+    func testEachFailureShapeLandsInItsOwnState() async throws {
+        let outdated = makeModel()
+        StubURLProtocol.enqueue(status: 404, body: #"{"detail":"Not Found"}"#)
+        await outdated.load()
+        XCTAssertEqual(outdated.state, .agentOutdated)
+
+        let gone = makeModel()
+        StubURLProtocol.enqueue(status: 404, body: #"{"detail":"Session 's1' not found"}"#)
+        await gone.load()
+        XCTAssertEqual(gone.state, .sessionGone)
+
+        let refused = makeModel()
+        StubURLProtocol.enqueue(status: 504, body: #"{"detail":{"code":"git_timeout","message":null}}"#)
+        await refused.load()
+        XCTAssertEqual(refused.state, .error("git took too long to answer. Try again."))
+    }
+
+    func testRetryAfterAnErrorRecovers() async throws {
+        let model = makeModel()
+        StubURLProtocol.enqueue(status: 500, body: #"{"detail":{"code":"git_error","message":"boom"}}"#)
+        await model.load()
+        XCTAssertEqual(model.state, .error("git failed: boom"))
+
+        StubURLProtocol.enqueue(status: 200, body: try fixtureBody("binary"))
+        model.retry()
+        await model.load()
+
+        guard case .ready(let diff, let rows, _) = model.state else {
+            return XCTFail("expected ready, got \(model.state)")
+        }
+        XCTAssertEqual(diff.kind, GitDiffResponse.kindBinary)
+        XCTAssertEqual(rows.map(\.kind), [.notice("Binary file — no preview")])
+    }
+}

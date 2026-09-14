@@ -1,5 +1,8 @@
 import { QueryClient, type QueryKey } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SessionGitStatus } from '../api/sessionGitRepository';
+import { queryKeys } from '../lib/queryKeys';
+import { sessionResponseSchema, type SessionResponse } from '../protocol/dto/session';
 import {
   applyAgentEvent,
   applyUserEvent,
@@ -267,6 +270,175 @@ describe('applyAgentEvent', () => {
   });
 });
 
+describe('applyAgentEvent git.changed', () => {
+  // Android `GitRepository.matchesSession`, read off the query cache: a viewer
+  // with no repo answer yet always refreshes; otherwise the event has to name
+  // its session's project, or its resolved toplevel / common dir. Every match
+  // is the viewer's `sessionGit` prefix, so an open diff is re-read with the
+  // list rather than left describing a tree that has moved.
+  const gitStatus = (over: Partial<SessionGitStatus> = {}): SessionGitStatus => ({
+    session_id: 's1',
+    etag: 'e1',
+    unchanged: false,
+    unavailable_reason: null,
+    repo: {
+      toplevel: '/srv/p1',
+      git_dir: '/srv/p1/.git',
+      common_dir: '/srv/p1/.git',
+      head: { branch: 'main', detached: false, initial: false },
+      state: 'clean',
+      is_linked_worktree: false,
+    },
+    entries: [],
+    truncated: false,
+    entry_limit: 5000,
+    ...over,
+  });
+
+  const sessionRow = (sessionId: string, projectName: string): SessionResponse =>
+    sessionResponseSchema.parse({
+      session_id: sessionId,
+      state: 'running',
+      created_at: '2026-08-04T10:00:00Z',
+      project_name: projectName,
+    });
+
+  const viewer = (sessionId: string, status: SessionGitStatus): void => {
+    client.setQueryData(queryKeys.sessionGitStatus('a1', sessionId), status);
+  };
+
+  const projectKey = ['agent', 'a1', 'git', 'p1'];
+  const viewerKey = (sessionId: string): QueryKey => ['agent', 'a1', 'session-git', sessionId];
+
+  it('refreshes a viewer that has no repo answer yet, whatever the event names', () => {
+    // Loaded but unavailable, and still loading: neither can be matched by
+    // repo, and either may be about to become one.
+    viewer('s1', gitStatus({ repo: null, unavailable_reason: 'not_a_repo' }));
+    client.getQueryCache().build(client, { queryKey: queryKeys.sessionGitStatus('a1', 's2') });
+
+    const outcome = applyAgentEvent(
+      client,
+      'a1',
+      frame('git.changed', { project_name: 'p1', toplevel: '/elsewhere', common_dir: null }),
+    );
+
+    expect(outcome).toEqual({
+      kind: 'invalidated',
+      type: 'git.changed',
+      keys: [projectKey, viewerKey('s1'), viewerKey('s2')],
+    });
+    expect(invalidated).toEqual([projectKey, viewerKey('s1'), viewerKey('s2')]);
+  });
+
+  it("matches a viewer by the project's resolved toplevel", () => {
+    viewer('s1', gitStatus());
+
+    applyAgentEvent(
+      client,
+      'a1',
+      frame('git.changed', { project_name: 'p1', toplevel: '/srv/p1' }),
+    );
+
+    expect(invalidated).toEqual([projectKey, viewerKey('s1')]);
+  });
+
+  it('matches a linked worktree by the common dir it shares with its project', () => {
+    viewer(
+      's1',
+      gitStatus({
+        repo: {
+          toplevel: '/wt/feature',
+          git_dir: '/srv/p1/.git/worktrees/feature',
+          common_dir: '/srv/p1/.git',
+          head: { branch: 'feature', detached: false, initial: false },
+          state: 'clean',
+          is_linked_worktree: true,
+        },
+      }),
+    );
+
+    applyAgentEvent(
+      client,
+      'a1',
+      frame('git.changed', {
+        project_name: 'p1',
+        toplevel: '/srv/p1',
+        common_dir: '/srv/p1/.git',
+      }),
+    );
+
+    expect(invalidated).toEqual([projectKey, viewerKey('s1')]);
+  });
+
+  it("matches by the session row's project name when the event carries no paths", () => {
+    client.setQueryData(queryKeys.sessions('a1'), [sessionRow('s1', 'p1')]);
+    viewer('s1', gitStatus({ repo: { ...gitStatus().repo!, toplevel: '/elsewhere' } }));
+
+    applyAgentEvent(client, 'a1', frame('git.changed', { project_name: 'p1' }));
+
+    expect(invalidated).toEqual([projectKey, viewerKey('s1')]);
+  });
+
+  it('leaves a viewer on another repository alone', () => {
+    client.setQueryData(queryKeys.sessions('a1'), [sessionRow('s1', 'p2')]);
+    viewer(
+      's1',
+      gitStatus({
+        repo: { ...gitStatus().repo!, toplevel: '/srv/p2', common_dir: '/srv/p2/.git' },
+      }),
+    );
+
+    const outcome = applyAgentEvent(
+      client,
+      'a1',
+      frame('git.changed', {
+        project_name: 'p1',
+        toplevel: '/srv/p1',
+        common_dir: '/srv/p1/.git',
+      }),
+    );
+
+    expect(outcome).toEqual({ kind: 'invalidated', type: 'git.changed', keys: [projectKey] });
+    expect(invalidated).toEqual([projectKey]);
+  });
+
+  it('does not let a null path on the wire match anything', () => {
+    // `toplevel: null` is "no longer a repo"; only an absent-or-null compare
+    // against a real path could match, and a cached repo always has one.
+    viewer('s1', gitStatus());
+
+    applyAgentEvent(
+      client,
+      'a1',
+      frame('git.changed', { project_name: 'other', toplevel: null, common_dir: null }),
+    );
+
+    expect(invalidated).toEqual([['agent', 'a1', 'git', 'other']]);
+  });
+
+  it('matches on the status poll only, never on a stray cached diff', () => {
+    // A diff left in the cache after its poll was garbage-collected names no
+    // repo; it is refreshed when a live poll matches, not on its own.
+    client.setQueryData(
+      queryKeys.sessionGitDiff('a1', 's1', { path: 'a', scope: 'unstaged', context: 3 }),
+      { path: 'a', scope: 'unstaged', kind: 'text' },
+    );
+
+    applyAgentEvent(client, 'a1', frame('git.changed', { project_name: 'p1' }));
+
+    expect(invalidated).toEqual([projectKey]);
+  });
+
+  it('drops a git.changed that names no project', () => {
+    viewer('s1', gitStatus({ repo: null }));
+
+    const outcome = applyAgentEvent(client, 'a1', frame('git.changed', { toplevel: '/srv/p1' }));
+
+    expect(outcome).toEqual({ kind: 'dropped' });
+    expect(invalidated).toEqual([]);
+  });
+});
+
 describe('refresh on connect', () => {
   it('reconciles the account lists and re-probes the version gate', () => {
     refreshOnUserEventsConnect(client);
@@ -289,10 +461,13 @@ describe('refresh on connect', () => {
     // Git items get no such push at all. Auto Scan gets one on the direct
     // `ws/events` path but *not* through the relay, which is the only path a
     // browser takes (CLA-249) — so it needs reconciling for a different reason.
+    // The in-session Changes viewers are git items' case again: `git.changed`
+    // is their only push and it carries no snapshot.
     refreshOnAgentEventsConnect(client, 'a1');
 
     expect(invalidated).toEqual([
       ['agent', 'a1', 'git'],
+      ['agent', 'a1', 'session-git'],
       ['agent', 'a1', 'autoscan'],
     ]);
   });

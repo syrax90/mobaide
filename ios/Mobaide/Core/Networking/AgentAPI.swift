@@ -119,6 +119,32 @@ struct AgentAPI: Sendable {
         return try await execute(method: "POST", url: "\(try await base())/api/projects/\(name)/git/items:delete", body: request)
     }
 
+    /// `GET /api/sessions/{id}/git/status?etag=` — the session-scoped Changes
+    /// list. A matching `etag` answers `200 {unchanged: true}` (never 304, which
+    /// `execute` would reject as an empty body), so the caller keeps its cached
+    /// body.
+    func getSessionGitStatus(sessionId: String, etag: String? = nil) async throws -> GitStatusResponse {
+        let query = etag.map { "?etag=\(Self.encodeQueryValue($0))" } ?? ""
+        return try await execute(method: "GET", url: "\(try await base())/api/sessions/\(sessionId)/git/status\(query)")
+    }
+
+    /// `GET /api/sessions/{id}/git/diff?path=&scope=&context=&orig_path=`.
+    /// `origPath` is the status entry's rename source; without it a
+    /// pathspec-limited `git diff -M` cannot see the rename.
+    func getSessionGitDiff(
+        sessionId: String,
+        path: String,
+        scope: String,
+        context: Int = 3,
+        origPath: String? = nil
+    ) async throws -> GitDiffResponse {
+        var query = "?path=\(Self.encodeQueryValue(path))&scope=\(Self.encodeQueryValue(scope))&context=\(context)"
+        if let origPath {
+            query += "&orig_path=\(Self.encodeQueryValue(origPath))"
+        }
+        return try await execute(method: "GET", url: "\(try await base())/api/sessions/\(sessionId)/git/diff\(query)")
+    }
+
     func getAutoScanList() async throws -> AutoScanListResponse {
         try await execute(method: "GET", url: "\(try await base())/api/autoscan/list")
     }
@@ -148,6 +174,13 @@ struct AgentAPI: Sendable {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: ".-*_")
         return name.addingPercentEncoding(withAllowedCharacters: allowed) ?? name
+    }
+
+    /// Query values take the same strict set: Starlette's `parse_qsl` reads a
+    /// raw `+` as a space and `&`/`#` end the value, so all of them must
+    /// percent-encode (OkHttp `addQueryParameter` parity on Android).
+    static func encodeQueryValue(_ value: String) -> String {
+        encodePathSegment(value)
     }
 
     private func base() async throws -> String {

@@ -33,6 +33,8 @@ import com.mobaide.app.ui.settings.SettingsScreen
 import com.mobaide.app.ui.support.SupportScreen
 import com.mobaide.app.ui.templates.TemplatesScreen
 import com.mobaide.app.ui.terminal.TerminalScreen
+import com.mobaide.app.ui.terminal.git.GitChangesScreen
+import com.mobaide.app.ui.terminal.git.GitDiffScreen
 import com.mobaide.app.ui.update.IncompatibleServerScreen
 
 @Composable
@@ -267,7 +269,7 @@ fun AppNavigation(
         composable(
             route = Routes.SESSION_DETAIL,
             arguments = listOf(navArgument("sessionId") { type = NavType.StringType }),
-        ) {
+        ) { entry ->
             TerminalScreen(
                 viewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
@@ -282,6 +284,41 @@ fun AppNavigation(
                         }
                     }
                 },
+                onOpenGitChanges = {
+                    entry.arguments?.getString("sessionId")?.let { sessionId ->
+                        navController.navigate(Routes.sessionGitChanges(sessionId))
+                    }
+                },
+            )
+        }
+
+        composable(
+            route = Routes.SESSION_GIT_CHANGES,
+            arguments = listOf(navArgument("sessionId") { type = NavType.StringType }),
+        ) {
+            GitChangesScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() },
+                onOpenDiff = { sessionId, entry, scope ->
+                    navController.navigate(
+                        Routes.sessionGitDiff(sessionId, entry.path, scope, entry.orig_path),
+                    )
+                },
+            )
+        }
+
+        composable(
+            route = Routes.SESSION_GIT_DIFF,
+            arguments = listOf(
+                navArgument("sessionId") { type = NavType.StringType },
+                navArgument("path") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("scope") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("origPath") { type = NavType.StringType; nullable = true; defaultValue = null },
+            ),
+        ) {
+            GitDiffScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() },
             )
         }
 

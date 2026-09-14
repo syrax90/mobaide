@@ -1,0 +1,626 @@
+{
+  "type": "GitDiffResponse",
+  "cases": [
+    {
+      "name": "text_modified",
+      "wire": {
+        "path": "src/a.py",
+        "orig_path": null,
+        "scope": "unstaged",
+        "kind": "text",
+        "change": "modified",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "additions": 2,
+        "deletions": 1,
+        "hunks": [
+          {
+            "old_start": 6,
+            "old_lines": 4,
+            "new_start": 6,
+            "new_lines": 5,
+            "heading": "class Foo:",
+            "lines": [
+              {
+                "t": "ctx",
+                "old": 6,
+                "new": 6,
+                "text": "def foo():",
+                "no_newline": false
+              },
+              {
+                "t": "ctx",
+                "old": 7,
+                "new": 7,
+                "text": "    x = 1\r",
+                "no_newline": false
+              },
+              {
+                "t": "del",
+                "old": 8,
+                "new": null,
+                "text": "    return x",
+                "no_newline": false
+              },
+              {
+                "t": "add",
+                "old": null,
+                "new": 8,
+                "text": "    y = 2",
+                "no_newline": false
+              },
+              {
+                "t": "add",
+                "old": null,
+                "new": 9,
+                "text": "    return x + y",
+                "no_newline": false
+              },
+              {
+                "t": "ctx",
+                "old": 9,
+                "new": 10,
+                "text": "",
+                "no_newline": false
+              }
+            ]
+          }
+        ],
+        "truncated": false,
+        "total_lines": 6,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      },
+      "decoded_canonical": {
+        "path": "src/a.py",
+        "scope": "unstaged",
+        "kind": "text",
+        "change": "modified",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "additions": 2,
+        "deletions": 1,
+        "hunks": [
+          {
+            "old_start": 6,
+            "old_lines": 4,
+            "new_start": 6,
+            "new_lines": 5,
+            "heading": "class Foo:",
+            "lines": [
+              {
+                "t": "ctx",
+                "old": 6,
+                "new": 6,
+                "text": "def foo():",
+                "no_newline": false
+              },
+              {
+                "t": "ctx",
+                "old": 7,
+                "new": 7,
+                "text": "    x = 1\r",
+                "no_newline": false
+              },
+              {
+                "t": "del",
+                "old": 8,
+                "text": "    return x",
+                "no_newline": false
+              },
+              {
+                "t": "add",
+                "new": 8,
+                "text": "    y = 2",
+                "no_newline": false
+              },
+              {
+                "t": "add",
+                "new": 9,
+                "text": "    return x + y",
+                "no_newline": false
+              },
+              {
+                "t": "ctx",
+                "old": 9,
+                "new": 10,
+                "text": "",
+                "no_newline": false
+              }
+            ]
+          }
+        ],
+        "truncated": false,
+        "total_lines": 6,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      }
+    },
+    {
+      "name": "renamed_with_heading",
+      "wire": {
+        "path": "src/new name.py",
+        "orig_path": "src/old.py",
+        "scope": "staged",
+        "kind": "text",
+        "change": "renamed",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "additions": 1,
+        "deletions": 0,
+        "hunks": [
+          {
+            "old_start": 1,
+            "old_lines": 2,
+            "new_start": 1,
+            "new_lines": 3,
+            "heading": "",
+            "lines": [
+              {
+                "t": "ctx",
+                "old": 1,
+                "new": 1,
+                "text": "import os",
+                "no_newline": false
+              },
+              {
+                "t": "add",
+                "old": null,
+                "new": 2,
+                "text": "import sys",
+                "no_newline": false
+              },
+              {
+                "t": "ctx",
+                "old": 2,
+                "new": 3,
+                "text": "",
+                "no_newline": false
+              }
+            ]
+          }
+        ],
+        "truncated": false,
+        "total_lines": 3,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      },
+      "decoded_canonical": {
+        "path": "src/new name.py",
+        "orig_path": "src/old.py",
+        "scope": "staged",
+        "kind": "text",
+        "change": "renamed",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "additions": 1,
+        "deletions": 0,
+        "hunks": [
+          {
+            "old_start": 1,
+            "old_lines": 2,
+            "new_start": 1,
+            "new_lines": 3,
+            "heading": "",
+            "lines": [
+              {
+                "t": "ctx",
+                "old": 1,
+                "new": 1,
+                "text": "import os",
+                "no_newline": false
+              },
+              {
+                "t": "add",
+                "new": 2,
+                "text": "import sys",
+                "no_newline": false
+              },
+              {
+                "t": "ctx",
+                "old": 2,
+                "new": 3,
+                "text": "",
+                "no_newline": false
+              }
+            ]
+          }
+        ],
+        "truncated": false,
+        "total_lines": 3,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      }
+    },
+    {
+      "name": "no_newline_added",
+      "wire": {
+        "path": "notes/todo.txt",
+        "orig_path": null,
+        "scope": "untracked",
+        "kind": "text",
+        "change": "added",
+        "old_mode": null,
+        "new_mode": "100644",
+        "additions": 2,
+        "deletions": 0,
+        "hunks": [
+          {
+            "old_start": 0,
+            "old_lines": 0,
+            "new_start": 1,
+            "new_lines": 2,
+            "heading": "",
+            "lines": [
+              {
+                "t": "add",
+                "old": null,
+                "new": 1,
+                "text": "first",
+                "no_newline": false
+              },
+              {
+                "t": "add",
+                "old": null,
+                "new": 2,
+                "text": "last",
+                "no_newline": true
+              }
+            ]
+          }
+        ],
+        "truncated": false,
+        "total_lines": 2,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      },
+      "decoded_canonical": {
+        "path": "notes/todo.txt",
+        "scope": "untracked",
+        "kind": "text",
+        "change": "added",
+        "new_mode": "100644",
+        "additions": 2,
+        "deletions": 0,
+        "hunks": [
+          {
+            "old_start": 0,
+            "old_lines": 0,
+            "new_start": 1,
+            "new_lines": 2,
+            "heading": "",
+            "lines": [
+              {
+                "t": "add",
+                "new": 1,
+                "text": "first",
+                "no_newline": false
+              },
+              {
+                "t": "add",
+                "new": 2,
+                "text": "last",
+                "no_newline": true
+              }
+            ]
+          }
+        ],
+        "truncated": false,
+        "total_lines": 2,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      }
+    },
+    {
+      "name": "type_changed",
+      "wire": {
+        "path": "link",
+        "orig_path": null,
+        "scope": "unstaged",
+        "kind": "text",
+        "change": "type_changed",
+        "old_mode": "120000",
+        "new_mode": "100644",
+        "additions": 1,
+        "deletions": 1,
+        "hunks": [
+          {
+            "old_start": 1,
+            "old_lines": 1,
+            "new_start": 0,
+            "new_lines": 0,
+            "heading": "",
+            "lines": [
+              {
+                "t": "del",
+                "old": 1,
+                "new": null,
+                "text": "target.txt",
+                "no_newline": true
+              }
+            ]
+          },
+          {
+            "old_start": 0,
+            "old_lines": 0,
+            "new_start": 1,
+            "new_lines": 1,
+            "heading": "",
+            "lines": [
+              {
+                "t": "add",
+                "old": null,
+                "new": 1,
+                "text": "real content",
+                "no_newline": false
+              }
+            ]
+          }
+        ],
+        "truncated": false,
+        "total_lines": 2,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      },
+      "decoded_canonical": {
+        "path": "link",
+        "scope": "unstaged",
+        "kind": "text",
+        "change": "type_changed",
+        "old_mode": "120000",
+        "new_mode": "100644",
+        "additions": 1,
+        "deletions": 1,
+        "hunks": [
+          {
+            "old_start": 1,
+            "old_lines": 1,
+            "new_start": 0,
+            "new_lines": 0,
+            "heading": "",
+            "lines": [
+              {
+                "t": "del",
+                "old": 1,
+                "text": "target.txt",
+                "no_newline": true
+              }
+            ]
+          },
+          {
+            "old_start": 0,
+            "old_lines": 0,
+            "new_start": 1,
+            "new_lines": 1,
+            "heading": "",
+            "lines": [
+              {
+                "t": "add",
+                "new": 1,
+                "text": "real content",
+                "no_newline": false
+              }
+            ]
+          }
+        ],
+        "truncated": false,
+        "total_lines": 2,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      }
+    },
+    {
+      "name": "binary",
+      "wire": {
+        "path": "assets/logo.png",
+        "orig_path": null,
+        "scope": "staged",
+        "kind": "binary",
+        "change": "modified",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "additions": 0,
+        "deletions": 0,
+        "hunks": [],
+        "truncated": false,
+        "total_lines": 0,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      },
+      "decoded_canonical": {
+        "path": "assets/logo.png",
+        "scope": "staged",
+        "kind": "binary",
+        "change": "modified",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "additions": 0,
+        "deletions": 0,
+        "hunks": [],
+        "truncated": false,
+        "total_lines": 0,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      }
+    },
+    {
+      "name": "submodule",
+      "wire": {
+        "path": "vendor/lib",
+        "orig_path": null,
+        "scope": "unstaged",
+        "kind": "submodule",
+        "change": "modified",
+        "old_mode": "160000",
+        "new_mode": "160000",
+        "additions": 1,
+        "deletions": 1,
+        "hunks": [
+          {
+            "old_start": 1,
+            "old_lines": 1,
+            "new_start": 1,
+            "new_lines": 1,
+            "heading": "",
+            "lines": [
+              {
+                "t": "del",
+                "old": 1,
+                "new": null,
+                "text": "Subproject commit 0123456789abcdef0123456789abcdef01234567",
+                "no_newline": false
+              },
+              {
+                "t": "add",
+                "old": null,
+                "new": 1,
+                "text": "Subproject commit 76543210fedcba9876543210fedcba9876543210",
+                "no_newline": false
+              }
+            ]
+          }
+        ],
+        "truncated": false,
+        "total_lines": 2,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      },
+      "decoded_canonical": {
+        "path": "vendor/lib",
+        "scope": "unstaged",
+        "kind": "submodule",
+        "change": "modified",
+        "old_mode": "160000",
+        "new_mode": "160000",
+        "additions": 1,
+        "deletions": 1,
+        "hunks": [
+          {
+            "old_start": 1,
+            "old_lines": 1,
+            "new_start": 1,
+            "new_lines": 1,
+            "heading": "",
+            "lines": [
+              {
+                "t": "del",
+                "old": 1,
+                "text": "Subproject commit 0123456789abcdef0123456789abcdef01234567",
+                "no_newline": false
+              },
+              {
+                "t": "add",
+                "new": 1,
+                "text": "Subproject commit 76543210fedcba9876543210fedcba9876543210",
+                "no_newline": false
+              }
+            ]
+          }
+        ],
+        "truncated": false,
+        "total_lines": 2,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      }
+    },
+    {
+      "name": "truncated",
+      "wire": {
+        "path": "big/generated.json",
+        "orig_path": null,
+        "scope": "unstaged",
+        "kind": "text",
+        "change": "modified",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "additions": 9000,
+        "deletions": 3345,
+        "hunks": [
+          {
+            "old_start": 1,
+            "old_lines": 3,
+            "new_start": 1,
+            "new_lines": 3,
+            "heading": "",
+            "lines": [
+              {
+                "t": "ctx",
+                "old": 1,
+                "new": 1,
+                "text": "{",
+                "no_newline": false
+              }
+            ]
+          }
+        ],
+        "truncated": true,
+        "total_lines": 12345,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      },
+      "decoded_canonical": {
+        "path": "big/generated.json",
+        "scope": "unstaged",
+        "kind": "text",
+        "change": "modified",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "additions": 9000,
+        "deletions": 3345,
+        "hunks": [
+          {
+            "old_start": 1,
+            "old_lines": 3,
+            "new_start": 1,
+            "new_lines": 3,
+            "heading": "",
+            "lines": [
+              {
+                "t": "ctx",
+                "old": 1,
+                "new": 1,
+                "text": "{",
+                "no_newline": false
+              }
+            ]
+          }
+        ],
+        "truncated": true,
+        "total_lines": 12345,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      }
+    },
+    {
+      "name": "missing",
+      "wire": {
+        "path": "gone.txt",
+        "orig_path": null,
+        "scope": "untracked",
+        "kind": "missing",
+        "change": null,
+        "old_mode": null,
+        "new_mode": null,
+        "additions": 0,
+        "deletions": 0,
+        "hunks": [],
+        "truncated": false,
+        "total_lines": 0,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      },
+      "decoded_canonical": {
+        "path": "gone.txt",
+        "scope": "untracked",
+        "kind": "missing",
+        "additions": 0,
+        "deletions": 0,
+        "hunks": [],
+        "truncated": false,
+        "total_lines": 0,
+        "line_limit": 5000,
+        "byte_limit": 1048576
+      }
+    }
+  ]
+}

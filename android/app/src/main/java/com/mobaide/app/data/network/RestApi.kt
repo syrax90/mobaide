@@ -11,7 +11,9 @@ import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ForceUpdateResponse
 import com.mobaide.app.data.network.dto.GitDeleteRequest
 import com.mobaide.app.data.network.dto.GitDeleteResponse
+import com.mobaide.app.data.network.dto.GitDiffResponse
 import com.mobaide.app.data.network.dto.GitItemsResponse
+import com.mobaide.app.data.network.dto.GitStatusResponse
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.ProjectOrderRequest
 import com.mobaide.app.data.network.dto.ProjectUpdate
@@ -26,14 +28,23 @@ import com.mobaide.app.data.network.dto.TokenRequest
 import com.mobaide.app.data.network.dto.TokenResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
 import java.net.URLEncoder
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 class RestApi(
     private val client: OkHttpClient,
@@ -224,6 +235,39 @@ class RestApi(
         return execute(request)
     }
 
+    suspend fun getSessionGitStatus(sessionId: String, etag: String?): GitStatusResponse {
+        val url = sessionGitUrl(sessionId, "status")
+            .apply { if (etag != null) addQueryParameter("etag", etag) }
+            .build()
+        return executeCancellable(Request.Builder().url(url).get().build())
+    }
+
+    suspend fun getSessionGitDiff(
+        sessionId: String,
+        path: String,
+        scope: String,
+        context: Int,
+        origPath: String?,
+    ): GitDiffResponse {
+        val url = sessionGitUrl(sessionId, "diff")
+            .addQueryParameter("path", path)
+            .addQueryParameter("scope", scope)
+            .addQueryParameter("context", context.toString())
+            .apply { if (origPath != null) addQueryParameter("orig_path", origPath) }
+            .build()
+        return executeCancellable(Request.Builder().url(url).get().build())
+    }
+
+    // HttpUrl.Builder rather than string concatenation: repo-relative paths carry
+    // spaces, `#`, `%` and non-ASCII, and addQueryParameter encodes them all.
+    private fun sessionGitUrl(sessionId: String, leaf: String): HttpUrl.Builder =
+        baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("sessions")
+            .addPathSegment(sessionId)
+            .addPathSegment("git")
+            .addPathSegment(leaf)
+
     suspend fun getAutoScanList(): AutoScanListResponse {
         val request = Request.Builder()
             .url("${baseUrl()}/api/autoscan/list")
@@ -264,15 +308,47 @@ class RestApi(
 
     private suspend inline fun <reified T> execute(request: Request): T =
         withContext(Dispatchers.IO) {
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val errorBody = response.body?.string() ?: ""
-                    throw ApiException(response.code, errorBody)
+            client.newCall(request).execute().use { decodeBody<T>(it) }
+        }
+
+    /**
+     * [execute] for callers that supersede requests (`transformLatest`,
+     * `WhileSubscribed` restarts): the blocking `Call.execute` ignores coroutine
+     * cancellation, so an obsolete git diff would otherwise be downloaded and
+     * decoded in full — and the caller made to wait for it — before the
+     * replacement could start. Cancelling the coroutine now cancels the call,
+     * an in-progress body read included, because the body is consumed on
+     * OkHttp's thread inside the callback rather than handed across a
+     * dispatcher hop where a cancellation could strand it unclosed.
+     */
+    private suspend inline fun <reified T> executeCancellable(request: Request): T =
+        client.newCall(request).await { decodeBody<T>(it) }
+
+    private inline fun <reified T> decodeBody(response: Response): T {
+        if (!response.isSuccessful) {
+            val errorBody = response.body?.string() ?: ""
+            throw ApiException(response.code, errorBody)
+        }
+        val body = response.body?.string()
+            ?: throw ApiException(response.code, "Empty response body")
+        return json.decodeFromString<T>(body)
+    }
+
+    private suspend fun <T> Call.await(transform: (Response) -> T): T =
+        suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation { cancel() }
+            enqueue(object : Callback {
+                override fun onResponse(call: Call, response: Response) {
+                    runCatching { response.use(transform) }.fold(
+                        onSuccess = { cont.resume(it) },
+                        onFailure = { if (!cont.isCancelled) cont.resumeWithException(it) },
+                    )
                 }
-                val body = response.body?.string()
-                    ?: throw ApiException(response.code, "Empty response body")
-                json.decodeFromString<T>(body)
-            }
+
+                override fun onFailure(call: Call, e: IOException) {
+                    if (!cont.isCancelled) cont.resumeWithException(e)
+                }
+            })
         }
 
     private suspend fun executeRaw(request: Request) = withContext(Dispatchers.IO) {

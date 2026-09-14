@@ -856,6 +856,44 @@ cache synchronously from the create response before navigating, so the gap
 before the agent's own `sessions.changed` echo cannot read as the brand new
 session already being gone.
 
+**In-session Git (`⋯` → Git → Changes…).** The header's `⋯` "More options"
+button (`components/MenuButton.tsx`, shown once the session row carries a
+`cwd`) is an APG menu button on the Popover API: `popover="auto"` puts the menu
+on the top layer, which is what lets it sit above xterm's canvases and outside
+the header's horizontal scroll clip with no portal, and gives light dismiss;
+roles, focus-on-open, the arrow-key walk and Escape are the component's own,
+and its open state is mirrored from `beforetoggle` (synchronous, unlike
+`toggle`) so a light dismiss or a modal dialog opening over it cannot desync
+`aria-expanded`. "Changes…" opens `routes/terminal/git/GitChangesPanel.tsx`, a
+`popover="manual"` slide-over (`role="dialog" aria-modal="false"`) — not a
+`<dialog>`, because the terminal must stay live underneath and a non-modal
+`dialog.show()` is not on the top layer. It is the web mirror of the Android and
+iOS Changes/Diff screens (#669): the repo header, the Conflicts / Staged /
+Changes / Untracked list with status badges, and the diff pane with a
+line-number gutter and, only where widening or narrowing it would change
+anything (a hunked text diff, not added/deleted/type-changed), 3 / 10 / 25
+context, two panes from 900 px and stacked below it. The data layer is
+`api/sessionGitRepository.ts` on the generated
+client (REST-only shapes, so no Zod mirror — the two golden fixtures stay
+`OWNER.generated`), with the two 404s told apart by FastAPI's `detail` string
+exactly as on mobile. Polling is one `enabled` gate on
+`useSessionGitStatus`: the 10 s interval runs only while the panel is open, the
+tab visible and the window focused, and re-enabling refetches because the data
+is kept always-stale — refresh on open, on focus (side-by-side windows too,
+which `visibilitychange` never reports) and silence when hidden, in one place;
+each poll carries the last `etag` and an `unchanged` answer hands the cached
+body back. Those queries live under `['agent', id, 'session-git', …]`, deliberately
+not the `gitItems` prefix; `git.changed` invalidates the viewers whose session
+`project_name`, `repo.toplevel` or `repo.common_dir` matches (the bridge's only
+client-aware lookup), the reconnect sweep covers the root, and `meta.silent`
+keeps their failures out of the global error toast, which paints below the top
+layer anyway. Platform deviations from mobile: no 2 000-column cut (the diff
+pane scrolls on both axes; the mobile cut exists because their layout engines
+cap a pinned row width), gutters as CSS-generated content so a copy takes the
+code alone, and no watch hold — the unwatched-suspend governor below keys on
+`document.hidden` and the mounted-terminal pointer only, and the terminal stays
+mounted under the panel.
+
 **Replay** follows the mobile state machine exactly: `'b'` feeds
 `ESC[H ESC[2J ESC[3J` **into the write stream** (never `Terminal.reset()`,
 which executes immediately, jumps queued writes and clears the program's

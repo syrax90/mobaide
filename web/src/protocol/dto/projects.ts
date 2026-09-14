@@ -83,7 +83,16 @@ export const projectsChangedSchema = z.looseObject({
  * `git.changed` — a pointer, not a payload. The agent names the project whose
  * branch/worktree tree changed and the client re-reads `…/git/items`; there is
  * no snapshot to write.
+ *
+ * `toplevel` / `common_dir` are the project's resolved repository root and
+ * common git dir (`null` once it is no longer a repo), so a session-scoped
+ * Changes viewer whose repo matches either can drop its cache even when the
+ * session carries no `project_name` — a linked worktree shares the common dir.
  */
 export const gitChangedSchema = z.looseObject({
   project_name: z.string(),
+  toplevel: optionalWireString(),
+  common_dir: optionalWireString(),
 });
+
+export type GitChanged = z.infer<typeof gitChangedSchema>;

@@ -135,3 +135,164 @@ struct BusyHolder: Codable, Equatable, Sendable {
 struct BusyByResponse: Codable, Equatable, Sendable {
     let busy_by: [BusyHolder]
 }
+
+// MARK: - Session-scoped read-only Changes API
+//
+// Wire-key-verbatim mirrors of the agent's `GitStatusResponse` /
+// `GitDiffResponse` pydantic models. The agent always emits every key
+// (nulls included), so only the nullable fields are optionals here.
+
+struct GitHead: Codable, Equatable, Sendable {
+    let oid: String?
+    let short_oid: String?
+    let branch: String?
+    let detached: Bool
+    let initial: Bool
+}
+
+struct GitUpstream: Codable, Equatable, Sendable {
+    let ref: String
+    let ahead: Int?
+    let behind: Int?
+}
+
+struct GitRepoInfo: Codable, Equatable, Sendable {
+    let toplevel: String
+    let git_dir: String
+    let common_dir: String
+    let is_linked_worktree: Bool
+    let head: GitHead
+    let upstream: GitUpstream?
+    let state: String
+}
+
+struct GitStatusEntry: Codable, Equatable, Sendable {
+    let group: String
+    let path: String
+    let orig_path: String?
+    let code: String
+    let index_status: String
+    let worktree_status: String
+    let rename_score: Int?
+    let submodule: Bool
+}
+
+struct GitStatusCounts: Codable, Equatable, Sendable {
+    let conflicts: Int
+    let staged: Int
+    let unstaged: Int
+    let untracked: Int
+    let total: Int
+}
+
+struct GitStatusResponse: Codable, Equatable, Sendable {
+    let session_id: String
+    let cwd: String?
+    let etag: String
+    let unchanged: Bool
+    let unavailable_reason: String?
+    let repo: GitRepoInfo?
+    let entries: [GitStatusEntry]
+    let counts: GitStatusCounts?
+    let truncated: Bool
+    let entry_limit: Int
+}
+
+struct GitDiffLine: Codable, Equatable, Sendable {
+    let t: String
+    let old: Int?
+    let new: Int?
+    let text: String
+    let no_newline: Bool
+}
+
+struct GitDiffHunk: Codable, Equatable, Sendable {
+    let old_start: Int
+    let old_lines: Int
+    let new_start: Int
+    let new_lines: Int
+    let heading: String
+    let lines: [GitDiffLine]
+}
+
+struct GitDiffResponse: Codable, Equatable, Sendable {
+    let path: String
+    let orig_path: String?
+    let scope: String
+    let kind: String
+    let change: String?
+    let old_mode: String?
+    let new_mode: String?
+    let additions: Int
+    let deletions: Int
+    let hunks: [GitDiffHunk]
+    let truncated: Bool
+    let total_lines: Int
+    let line_limit: Int
+    let byte_limit: Int
+}
+
+// Wire enums stay `String` so a future agent value never fails the decode;
+// the constants are the values the screens branch on (Android `GitDto.kt`).
+
+extension GitRepoInfo {
+    static let stateClean = "clean"
+    static let stateMerging = "merging"
+    static let stateRebasing = "rebasing"
+    static let stateCherryPicking = "cherry_picking"
+    static let stateReverting = "reverting"
+    static let stateBisecting = "bisecting"
+}
+
+extension GitStatusEntry {
+    static let groupConflicts = "conflicts"
+    static let groupStaged = "staged"
+    static let groupUnstaged = "unstaged"
+    static let groupUntracked = "untracked"
+
+    /// The last path segment; the whole path when it has no `/`.
+    var fileName: String {
+        guard let slash = path.lastIndex(of: "/") else { return path }
+        return String(path[path.index(after: slash)...])
+    }
+
+    /// Everything before the last `/`, or nil for a top-level file.
+    var directory: String? {
+        guard let slash = path.lastIndex(of: "/") else { return nil }
+        let head = String(path[..<slash])
+        return head.isEmpty ? nil : head
+    }
+}
+
+extension GitStatusResponse {
+    static let unavailableNotARepo = "not_a_repo"
+    static let unavailableBareRepository = "bare_repository"
+    static let unavailableCwdMissing = "cwd_missing"
+    static let unavailableUnsafeDirectory = "unsafe_directory"
+    static let unavailableGitTooOld = "git_too_old"
+}
+
+extension GitDiffLine {
+    static let typeContext = "ctx"
+    static let typeAdd = "add"
+    static let typeDelete = "del"
+}
+
+extension GitDiffResponse {
+    static let scopeStaged = "staged"
+    static let scopeUnstaged = "unstaged"
+    static let scopeUntracked = "untracked"
+
+    static let kindText = "text"
+    static let kindBinary = "binary"
+    static let kindSubmodule = "submodule"
+    static let kindTooLarge = "too_large"
+    static let kindMissing = "missing"
+
+    static let changeModified = "modified"
+    static let changeAdded = "added"
+    static let changeDeleted = "deleted"
+    static let changeRenamed = "renamed"
+    static let changeCopied = "copied"
+    static let changeTypeChanged = "type_changed"
+}

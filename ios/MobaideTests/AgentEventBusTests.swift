@@ -91,6 +91,27 @@ final class AgentEventBusTests: XCTestCase {
         XCTAssertEqual(missingName, .gitChanged(projectName: ""))
     }
 
+    func testGitChangedDemuxCarriesToplevelAndCommonDir() {
+        let event = AgentEnvelopeDemux.demux(
+            #"{"type":"git.changed","payload":{"project_name":"demo","toplevel":"/repo/wt","common_dir":"/repo/.git"}}"#
+        )
+        XCTAssertEqual(event, .gitChanged(projectName: "demo", toplevel: "/repo/wt", commonDir: "/repo/.git"))
+
+        let nameless = AgentEnvelopeDemux.demux(
+            #"{"type":"git.changed","payload":{"toplevel":"/repo/wt","common_dir":"/repo/.git"}}"#
+        )
+        XCTAssertEqual(
+            nameless,
+            .gitChanged(projectName: "", toplevel: "/repo/wt", commonDir: "/repo/.git"),
+            "a session without a project still gets the repository keys"
+        )
+
+        let wrongTypes = AgentEnvelopeDemux.demux(
+            #"{"type":"git.changed","payload":{"project_name":"demo","toplevel":7,"common_dir":null}}"#
+        )
+        XCTAssertEqual(wrongTypes, .gitChanged(projectName: "demo"), "non-string values are dropped, not coerced")
+    }
+
     func testAutoScanEventDemux() {
         let text = """
         {"type":"autoscan.event","payload":{"project_name":"demo","event":\

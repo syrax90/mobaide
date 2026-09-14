@@ -24,6 +24,52 @@ if (typeof HTMLDialogElement !== 'undefined') {
     };
   }
 
+  // jsdom (30.x) has no Popover API either: `showPopover` and friends are
+  // missing, `:popover-open` never matches, and its UA sheet still hides every
+  // `[popover]` — so `getByRole` would treat an open menu or panel as
+  // inaccessible. The stand-in drives an inline `display` and fires the
+  // `beforetoggle` / `toggle` pair synchronously with the `oldState` /
+  // `newState` React's synthetic event copies (the real events do not bubble).
+  if (typeof HTMLElement.prototype.showPopover !== 'function') {
+    const toggle = (
+      element: HTMLElement,
+      type: 'beforetoggle' | 'toggle',
+      oldState: string,
+      newState: string,
+    ): void => {
+      element.dispatchEvent(
+        Object.assign(new Event(type, { cancelable: type === 'beforetoggle' }), {
+          oldState,
+          newState,
+        }),
+      );
+    };
+    const isOpen = (element: HTMLElement): boolean => element.dataset['popoverOpen'] === '1';
+    HTMLElement.prototype.showPopover = function showPopover(this: HTMLElement) {
+      if (isOpen(this)) return;
+      toggle(this, 'beforetoggle', 'closed', 'open');
+      this.dataset['popoverOpen'] = '1';
+      this.style.display = 'block';
+      toggle(this, 'toggle', 'closed', 'open');
+    };
+    HTMLElement.prototype.hidePopover = function hidePopover(this: HTMLElement) {
+      if (!isOpen(this)) return;
+      toggle(this, 'beforetoggle', 'open', 'closed');
+      delete this.dataset['popoverOpen'];
+      this.style.removeProperty('display');
+      toggle(this, 'toggle', 'open', 'closed');
+    };
+    HTMLElement.prototype.togglePopover = function togglePopover(
+      this: HTMLElement,
+      force?: boolean,
+    ): boolean {
+      const open = isOpen(this);
+      if (force === true || (force === undefined && !open)) this.showPopover();
+      else this.hidePopover();
+      return isOpen(this);
+    };
+  }
+
   // jsdom implements neither matchMedia (used for the reduced-motion check)
   // nor scrollIntoView (AgentCredentialsPanel scrolls itself into view on
   // mount).

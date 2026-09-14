@@ -1,18 +1,8 @@
 import { useCallback, useRef, type CSSProperties, type PointerEvent } from 'react';
 import type { KeyboardEvent, WheelEvent } from 'react';
+import { isPrimaryPress } from '../../lib/pointer';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { offsetFromDrag } from '../../terminal/terminalScrollbar';
-
-/**
- * A pointerdown this control acts on: the primary pointer's primary button.
- *
- * Without it a right-click would open the context menu *and* start a drag, a
- * middle-click would page, and a second finger landing during a drag would
- * fight the first for the thumb.
- */
-function isPrimaryPress(event: PointerEvent<HTMLElement>): boolean {
-  return event.isPrimary && event.button === 0;
-}
 
 /** Seek drag: absolute, so it measures the track once and maps into it. */
 interface SeekDrag {

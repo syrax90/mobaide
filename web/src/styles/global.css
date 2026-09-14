@@ -1078,7 +1078,9 @@ input[type='radio']:checked {
   font-size: 0.9rem;
 }
 
-.terminal-bar .button {
+/* Shared with the Changes viewer's chrome, which sits beside this bar. */
+.terminal-bar .button,
+.git-panel .button {
   flex: none;
   padding: 5px 11px;
   font-family: var(--font-chrome);
@@ -1088,7 +1090,8 @@ input[type='radio']:checked {
   white-space: nowrap;
 }
 
-.terminal-bar .button[aria-pressed='true'] {
+.terminal-bar .button[aria-pressed='true'],
+.git-panel .button[aria-pressed='true'] {
   color: var(--text);
   box-shadow: inset 0 0 0 2px var(--accent),
     var(--px) var(--px) 0 0 var(--btn-shadow);
@@ -3018,11 +3021,509 @@ body:has(dialog[open]) {
 
 /* endregion */
 
+/* region in-session git (WEB-05): the ⋯ menu and the Changes slide-over */
+
+/*
+ * A popover lives on the top layer, so it escapes the terminal bar's
+ * horizontal scroll clip and xterm's canvases without a portal. The UA sheet
+ * centres it with `inset: 0; margin: auto` and paints it in system colours;
+ * every one of those is reset here. Positioned by MenuButton from the
+ * trigger's rect, as CSS anchor positioning is not yet in every engine.
+ */
+.menu[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  border: 0;
+  padding: 4px;
+  min-width: 12rem;
+  overflow: visible;
+  color: var(--text);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2),
+    var(--px) var(--px) 0 0 var(--modal-shadow);
+}
+
+.menu-group-label {
+  padding: 6px 10px 2px;
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.menu-item {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.menu-item:hover:not(:disabled),
+.menu-item:focus-visible {
+  background: var(--surface);
+  outline-offset: -3px;
+}
+
+.menu-item:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.menu-separator {
+  height: 2px;
+  margin: 4px 0;
+  background: var(--surface-2);
+}
+
+/* Right-anchored, full height; the panes inside scroll, never the panel. */
+.git-panel[popover] {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(60rem, 100vw);
+  height: auto;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--text);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2),
+    calc(-1 * var(--px)) 0 0 0 var(--modal-shadow);
+}
+
+/* Scoped to the open state: an unconditional `display` would beat the UA's
+   `display: none` for a closed popover. */
+.git-panel:popover-open {
+  display: flex;
+  flex-direction: column;
+  animation: git-panel-in 160ms steps(4);
+}
+
+@keyframes git-panel-in {
+  from {
+    transform: translateX(100%);
+  }
+
+  to {
+    transform: none;
+  }
+}
+
+.git-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 48px;
+  padding: 0.5rem 1rem;
+  border-bottom: 2px solid var(--surface-2);
+}
+
+.git-panel-head h2 {
+  flex: 1;
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: 1.1rem;
+  color: var(--accent);
+}
+
+.git-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(16rem, 20rem) 1fr;
+}
+
+.git-panel-list {
+  min-height: 0;
+  overflow: auto;
+  border-right: 2px solid var(--surface-2);
+}
+
+.git-panel-diff {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Stacked layout only (see the 900px block below). */
+.git-panel-back {
+  display: none;
+}
+
+.git-changes-repo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 2px solid var(--surface-2);
+}
+
+.git-changes-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.git-changes-branch {
+  font-family: var(--font-chrome);
+  overflow-wrap: anywhere;
+}
+
+.git-changes-upstream {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.git-changes-cwd,
+.git-state-detail {
+  font-family: var(--font-chrome);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.git-changes-notice {
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  color: var(--warning);
+}
+
+.git-changes-stale {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  color: var(--danger);
+}
+
+.git-changes-stale span {
+  flex: 1;
+}
+
+.git-changes-section h3 {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.75rem 1rem 0.25rem;
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.git-changes-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.git-changes-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  min-height: 44px;
+  padding: 0.5rem 1rem;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.git-changes-row:hover {
+  background: var(--surface);
+}
+
+.git-changes-row[aria-pressed='true'] {
+  background: var(--surface);
+  box-shadow: inset 4px 0 0 0 var(--accent);
+}
+
+.git-changes-row:focus-visible {
+  outline-offset: -3px;
+}
+
+.git-badge {
+  flex: none;
+  min-width: 28px;
+  padding: 2px 4px;
+  box-shadow: inset 0 0 0 2px currentColor;
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-align: center;
+}
+
+.git-badge-added {
+  color: var(--ok);
+}
+
+.git-badge-deleted,
+.git-badge-conflict {
+  color: var(--danger);
+}
+
+.git-badge-modified {
+  color: var(--warning);
+}
+
+.git-badge-renamed {
+  color: var(--accent);
+}
+
+.git-badge-untracked {
+  color: var(--gray);
+}
+
+.git-changes-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.git-changes-name {
+  font-family: var(--font-chrome);
+  overflow-wrap: anywhere;
+}
+
+.git-changes-dir {
+  font-family: var(--font-chrome);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.git-state {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.5rem 1rem;
+}
+
+.git-state h3 {
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: 1rem;
+  color: var(--accent);
+}
+
+.git-state p {
+  color: var(--text-muted);
+}
+
+.git-diff-placeholder {
+  padding: 1.5rem 1rem;
+}
+
+.git-diff-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 2px solid var(--surface-2);
+}
+
+.git-diff-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.git-diff-title h3 {
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.git-diff-path {
+  font-family: var(--font-chrome);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.git-diff-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-family: var(--font-chrome);
+  font-size: 0.8rem;
+}
+
+.git-diff-stat-add {
+  color: var(--ok);
+}
+
+.git-diff-stat-del {
+  color: var(--danger);
+}
+
+.git-diff-context {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+.git-diff-context-label {
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+/* The one scroller of the diff: both axes, so a long line is reached by
+   scrolling rather than cut (the mobile clients cut at 2 000 columns because
+   their layout engines cap a pinned row width; a browser does not). */
+.git-diff-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  --git-gutter: 3ch;
+}
+
+/* What replaces a virtualiser here, as for the Auto Scan log: off-screen
+   hunks skip layout and paint but stay in the DOM, so the whole diff remains
+   selectable. The placeholder height is set inline per hunk. Sized to its
+   content: `content-visibility` brings paint containment, which clips
+   overflow at the hunk's own box — a hunk as wide as the pane would swallow
+   the horizontal scroll the long lines rely on. The file's own text is set in
+   a system monospace, not the pixel chrome face, which is hard to read as code. */
+.git-hunk {
+  font-family: var(--font-code);
+  content-visibility: auto;
+  width: max-content;
+  min-width: 100%;
+}
+
+.git-hunk-head {
+  padding: 0.35rem 0.75rem;
+  background: var(--surface);
+  color: var(--text-muted);
+  white-space: pre;
+}
+
+/* A block per row (a flex row would drop the newline from a copied
+   selection); it fills the hunk, so the tint spans the whole scrolled width. */
+.git-line {
+  display: block;
+  min-width: 100%;
+  white-space: pre;
+}
+
+.git-line-add {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+
+.git-line-del {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+/* Gutters and the marker paint from data attributes: generated content is
+   never part of a selection range, so a copy takes the code alone. */
+.git-gutter,
+.git-marker {
+  display: inline-block;
+  user-select: none;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.git-gutter {
+  width: var(--git-gutter);
+  padding-right: 0.5ch;
+  text-align: right;
+}
+
+.git-gutter::before {
+  content: attr(data-ln);
+}
+
+.git-marker {
+  width: 1.5ch;
+  text-align: center;
+}
+
+.git-marker::before {
+  content: attr(data-mark);
+}
+
+.git-line-add .git-marker {
+  color: var(--ok);
+}
+
+.git-line-del .git-marker {
+  color: var(--danger);
+}
+
+.git-text {
+  white-space: pre;
+}
+
+/* Git's own marker, as its own row (as on mobile); a copy leaves it out. */
+.git-line-nonl {
+  padding-left: calc(2 * var(--git-gutter) + 1.5ch);
+  color: var(--text-muted);
+  font-style: italic;
+  user-select: none;
+}
+
+.git-diff-notice {
+  padding: 1rem;
+  color: var(--text-muted);
+}
+
+.git-diff-truncated {
+  padding: 0.75rem 1rem;
+  color: var(--warning);
+}
+
+/* endregion */
+
 /* region responsive — the system's only two breakpoints; do not add a third */
 
 @media (max-width: 900px) {
   .app-main {
     padding: 1.25rem 1rem;
+  }
+
+  /* The Changes viewer stacks: list or diff, with a back button. */
+  .git-panel[popover] {
+    width: 100vw;
+  }
+
+  .git-panel-body {
+    grid-template-columns: 1fr;
+  }
+
+  .git-panel-body[data-view='list'] .git-panel-diff,
+  .git-panel-body[data-view='diff'] .git-panel-list {
+    display: none;
+  }
+
+  .git-panel-list {
+    border-right: 0;
+  }
+
+  .git-panel-back {
+    display: inline-block;
   }
 }
 

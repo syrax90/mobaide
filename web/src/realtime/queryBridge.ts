@@ -43,9 +43,11 @@
  */
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import type { z } from 'zod';
+import type { SessionGitStatus } from '../api/sessionGitRepository';
 import { queryKeys } from '../lib/queryKeys';
 import { decodeEventEnvelope, type EventEnvelope } from '../protocol/dto/envelope';
-import { gitChangedSchema } from '../protocol/dto/projects';
+import { gitChangedSchema, type GitChanged } from '../protocol/dto/projects';
+import type { SessionResponse } from '../protocol/dto/session';
 import { applyAutoScanSnapshot, applyAutoScanStatus } from './autoscanCache';
 import { applyProjectsSnapshot } from './projectsCache';
 import { applySessionsSnapshot, applySessionUpsert } from './sessionCache';
@@ -126,25 +128,38 @@ const USER_EVENT_RULES: Readonly<Record<string, UserEventRule>> = {
 };
 
 /**
- * `null` means "not ours"; an empty array means "ours, but the payload named no
- * cache" — a `git.changed` whose `project_name` failed its schema, say, which is
- * a drop rather than a silent no-op invalidation.
+ * Which in-session Changes viewers a `git.changed` touches, as their
+ * `sessionGit` prefixes (the status poll and any open diff alike).
+ *
+ * Android `GitRepository.matchesSession`: a viewer that has no repo answer yet
+ * always refreshes; otherwise its session's `project_name`, or its resolved
+ * `toplevel` / `common_dir` (a linked worktree shares the common dir with the
+ * project it was cut from), has to match the event. Read from the cache rather
+ * than tracked by the viewers, so this stays a pure function of what is cached.
  */
-function agentEventKeys(
+function sessionGitKeysFor(
+  client: QueryClient,
   agentId: string,
-  type: string,
-  payload: unknown,
-): readonly QueryKey[] | null {
-  switch (type) {
-    case 'git.changed': {
-      // Per project, not the whole agent: the payload names exactly one, and
-      // invalidating the others would refetch every open Git screen's list.
-      const decoded = gitChangedSchema.safeParse(payload);
-      return decoded.success ? [queryKeys.gitItems(agentId, decoded.data.project_name)] : [];
-    }
-    default:
-      return null;
+  event: GitChanged,
+): readonly QueryKey[] {
+  const sessions = client.getQueryData<SessionResponse[]>(queryKeys.sessions(agentId));
+  const keys: QueryKey[] = [];
+  for (const query of client.getQueryCache().findAll({
+    queryKey: queryKeys.sessionGitRoot(agentId),
+  })) {
+    const sessionId = query.queryKey[3];
+    if (query.queryKey[4] !== 'status' || typeof sessionId !== 'string') continue;
+    const status = query.state.data as SessionGitStatus | undefined;
+    const repo = status?.repo ?? null;
+    const projectName = sessions?.find((row) => row.session_id === sessionId)?.project_name;
+    const matches =
+      repo === null ||
+      (projectName !== undefined && projectName === event.project_name) ||
+      (event.toplevel !== undefined && event.toplevel === repo.toplevel) ||
+      (event.common_dir !== undefined && event.common_dir === repo.common_dir);
+    if (matches) keys.push(queryKeys.sessionGit(agentId, sessionId));
   }
+  return keys;
 }
 
 function invalidate(client: QueryClient, keys: readonly QueryKey[]): void {
@@ -263,13 +278,21 @@ export function applyAgentEventEnvelope(
     // this bridge did before WEB-10, cost a `/proxy` GET per line of output.
     case 'autoscan.event':
       return { kind: 'ignored', type: envelope.type };
-    default: {
-      const keys = agentEventKeys(agentId, envelope.type, envelope.payload);
-      if (keys === null) return { kind: 'ignored', type: envelope.type };
-      if (keys.length === 0) return { kind: 'dropped' };
+    case 'git.changed': {
+      // Per project, not the whole agent: the payload names exactly one, and
+      // invalidating the others would refetch every open Git screen's list.
+      // The in-session viewers it touches are found by repo, not by project.
+      const decoded = gitChangedSchema.safeParse(envelope.payload);
+      if (!decoded.success) return { kind: 'dropped' };
+      const keys = [
+        queryKeys.gitItems(agentId, decoded.data.project_name),
+        ...sessionGitKeysFor(client, agentId, decoded.data),
+      ];
       invalidate(client, keys);
       return { kind: 'invalidated', type: envelope.type, keys };
     }
+    default:
+      return { kind: 'ignored', type: envelope.type };
   }
 }
 
@@ -314,7 +337,15 @@ export function refreshOnUserEventsConnect(client: QueryClient): void {
  * projects and stops there, and the relay is the only path a browser takes
  * (CLA-249). Without this, a scan started while the socket was down stays
  * invisible until the next start or stop.
+ *
+ * The in-session Changes viewers are git items' case again: `git.changed` is
+ * their only push and it carries no snapshot, so a status polled before the
+ * socket dropped cannot be trusted either.
  */
 export function refreshOnAgentEventsConnect(client: QueryClient, agentId: string): void {
-  invalidate(client, [queryKeys.gitItemsRoot(agentId), queryKeys.autoscan(agentId)]);
+  invalidate(client, [
+    queryKeys.gitItemsRoot(agentId),
+    queryKeys.sessionGitRoot(agentId),
+    queryKeys.autoscan(agentId),
+  ]);
 }

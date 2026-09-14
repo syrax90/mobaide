@@ -19,9 +19,25 @@ function shouldRetry(failureCount: number, error: unknown): boolean {
   return failureCount < 1;
 }
 
+declare module '@tanstack/react-query' {
+  interface Register {
+    queryMeta: QueryMetaExtension;
+  }
+}
+
+/**
+ * `meta: { silent: true }` opts a query out of the global error toast below —
+ * for a screen that renders its own failure state inline, or one whose errors
+ * surface under the top layer where a toast cannot be seen.
+ */
+export interface QueryMetaExtension extends Record<string, unknown> {
+  silent?: boolean;
+}
+
 export const queryClient = new QueryClient({
   queryCache: new QueryCache({
-    onError: (error) => {
+    onError: (error, query) => {
+      if (query.meta?.silent === true) return;
       // Auth failures already produce a teardown and a redirect to login; a
       // toast on top of that is just noise on the way out.
       if (isAuthError(error)) return;

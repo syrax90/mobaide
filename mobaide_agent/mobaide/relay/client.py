@@ -64,6 +64,14 @@ from mobaide.agent.projects.service import (
     update_project,
 )
 
+from mobaide.agent.git.changes_models import GIT_CAPABILITIES
+from mobaide.agent.git.changes_service import (
+    get_session_git_diff,
+    get_session_git_status,
+)
+from mobaide.agent.git.changes_service import (
+    http_error_for as git_changes_http_error_for,
+)
 from mobaide.agent.git.models import (
     BusyByResponse,
     GitDeleteRequest,
@@ -1322,7 +1330,8 @@ class RelayClient:
                             getattr(self._app_state, "cli_launchers", {}),
                             models_pending=warm_task is not None
                             and not warm_task.done(),
-                        )
+                        ),
+                        "git": GIT_CAPABILITIES,
                     },
                     "latest_agent_version": (manifest or {}).get("version"),
                 },
@@ -1497,6 +1506,10 @@ class RelayClient:
         git_resp = await self._dispatch_git(method, path, body)
         if git_resp is not None:
             return git_resp
+
+        session_git_resp = await self._dispatch_session_git(method, path, query)
+        if session_git_resp is not None:
+            return session_git_resp
 
         linear_resp = await self._dispatch_linear_discovery(method, path)
         if linear_resp is not None:
@@ -1828,6 +1841,47 @@ class RelayClient:
             return {"status": 200, "body": resp.model_dump()}
 
         return None
+
+    async def _dispatch_session_git(
+        self,
+        method: str,
+        path: str,
+        query: dict | None,
+    ) -> dict | None:
+        """Handle ``/api/sessions/{id}/git/status|diff`` through the shared
+        service layer — same 200/400/404/503/504 bodies as the FastAPI
+        router."""
+        m = re.match(r"^/api/sessions/([^/]+)/git/(status|diff)$", path)
+        if m is None or method != "GET":
+            return None
+        session_id, route = m.group(1), m.group(2)
+        session = await self._session_manager.get_session(session_id)
+        if session is None:
+            return {
+                "status": 404,
+                "body": {"detail": f"Session '{session_id}' not found"},
+            }
+        cwd = session.to_info().cwd
+        q = query or {}
+        try:
+            if route == "status":
+                resp = await get_session_git_status(
+                    session_id=session_id, cwd=cwd, etag=q.get("etag"),
+                )
+            else:
+                resp = await get_session_git_diff(
+                    cwd=cwd,
+                    path=q.get("path"),
+                    scope=q.get("scope"),
+                    context=q.get("context", 3),
+                    orig_path=q.get("orig_path"),
+                )
+        except Exception as exc:
+            mapped = git_changes_http_error_for(exc)
+            if mapped is None:
+                raise
+            return {"status": mapped[0], "body": mapped[1]}
+        return {"status": 200, "body": resp.model_dump(mode="json")}
 
     async def _dispatch_linear_discovery(
         self,

@@ -424,6 +424,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/git/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Session Git Diff */
+        get: operations["session_git_diff_api_sessions__session_id__git_diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Session Git Status */
+        get: operations["session_git_status_api_sessions__session_id__git_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/scrollback": {
         parameters: {
             query?: never;
@@ -875,6 +909,117 @@ export interface components {
             /** Target */
             target: string;
         };
+        /** GitDiffHunk */
+        GitDiffHunk: {
+            /**
+             * Heading
+             * @default
+             */
+            heading: string;
+            /** Lines */
+            lines?: components["schemas"]["GitDiffLine"][];
+            /** New Lines */
+            new_lines: number;
+            /** New Start */
+            new_start: number;
+            /** Old Lines */
+            old_lines: number;
+            /** Old Start */
+            old_start: number;
+        };
+        /** GitDiffLine */
+        GitDiffLine: {
+            /** New */
+            new?: number | null;
+            /**
+             * No Newline
+             * @default false
+             */
+            no_newline: boolean;
+            /** Old */
+            old?: number | null;
+            /**
+             * T
+             * @enum {string}
+             */
+            t: "ctx" | "add" | "del";
+            /** Text */
+            text: string;
+        };
+        /** GitDiffResponse */
+        GitDiffResponse: {
+            /**
+             * Additions
+             * @default 0
+             */
+            additions: number;
+            /**
+             * Byte Limit
+             * @default 1048576
+             */
+            byte_limit: number;
+            /** Change */
+            change?: ("modified" | "added" | "deleted" | "renamed" | "copied" | "type_changed") | null;
+            /**
+             * Deletions
+             * @default 0
+             */
+            deletions: number;
+            /** Hunks */
+            hunks?: components["schemas"]["GitDiffHunk"][];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "text" | "binary" | "submodule" | "too_large" | "missing";
+            /**
+             * Line Limit
+             * @default 5000
+             */
+            line_limit: number;
+            /** New Mode */
+            new_mode?: string | null;
+            /** Old Mode */
+            old_mode?: string | null;
+            /** Orig Path */
+            orig_path?: string | null;
+            /** Path */
+            path: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "staged" | "unstaged" | "untracked";
+            /**
+             * Total Lines
+             * @default 0
+             */
+            total_lines: number;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /** GitHead */
+        GitHead: {
+            /** Branch */
+            branch?: string | null;
+            /**
+             * Detached
+             * @default false
+             */
+            detached: boolean;
+            /**
+             * Initial
+             * @default false
+             */
+            initial: boolean;
+            /** Oid */
+            oid?: string | null;
+            /** Short Oid */
+            short_oid?: string | null;
+        };
         /**
          * GitItemRead
          * @description One row in the unified git management list.
@@ -937,6 +1082,127 @@ export interface components {
         GitItemsResponse: {
             /** Items */
             items: components["schemas"]["GitItemRead"][];
+        };
+        /** GitRepoInfo */
+        GitRepoInfo: {
+            /** Common Dir */
+            common_dir: string;
+            /** Git Dir */
+            git_dir: string;
+            head: components["schemas"]["GitHead"];
+            /**
+             * Is Linked Worktree
+             * @default false
+             */
+            is_linked_worktree: boolean;
+            /**
+             * State
+             * @default clean
+             * @enum {string}
+             */
+            state: "clean" | "merging" | "rebasing" | "cherry_picking" | "reverting" | "bisecting";
+            /** Toplevel */
+            toplevel: string;
+            upstream?: components["schemas"]["GitUpstream"] | null;
+        };
+        /** GitStatusCounts */
+        GitStatusCounts: {
+            /**
+             * Conflicts
+             * @default 0
+             */
+            conflicts: number;
+            /**
+             * Staged
+             * @default 0
+             */
+            staged: number;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /**
+             * Unstaged
+             * @default 0
+             */
+            unstaged: number;
+            /**
+             * Untracked
+             * @default 0
+             */
+            untracked: number;
+        };
+        /**
+         * GitStatusEntry
+         * @description One row of the Changes list; a file that is both staged and modified
+         *     yields one entry per group.
+         */
+        GitStatusEntry: {
+            /** Code */
+            code: string;
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "conflicts" | "staged" | "unstaged" | "untracked";
+            /** Index Status */
+            index_status: string;
+            /** Orig Path */
+            orig_path?: string | null;
+            /** Path */
+            path: string;
+            /** Rename Score */
+            rename_score?: number | null;
+            /**
+             * Submodule
+             * @default false
+             */
+            submodule: boolean;
+            /** Worktree Status */
+            worktree_status: string;
+        };
+        /** GitStatusResponse */
+        GitStatusResponse: {
+            counts?: components["schemas"]["GitStatusCounts"] | null;
+            /** Cwd */
+            cwd?: string | null;
+            /** Entries */
+            entries?: components["schemas"]["GitStatusEntry"][];
+            /**
+             * Entry Limit
+             * @default 5000
+             */
+            entry_limit: number;
+            /** Etag */
+            etag: string;
+            repo?: components["schemas"]["GitRepoInfo"] | null;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+            /** Unavailable Reason */
+            unavailable_reason?: ("not_a_repo" | "bare_repository" | "cwd_missing" | "unsafe_directory" | "git_too_old") | null;
+            /**
+             * Unchanged
+             * @default false
+             */
+            unchanged: boolean;
+        };
+        /**
+         * GitUpstream
+         * @description ``ahead``/``behind`` are null when the upstream ref no longer exists.
+         */
+        GitUpstream: {
+            /** Ahead */
+            ahead?: number | null;
+            /** Behind */
+            behind?: number | null;
+            /** Ref */
+            ref: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1821,6 +2087,75 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_diff_api_sessions__session_id__git_diff_get: {
+        parameters: {
+            query?: {
+                path?: string | null;
+                scope?: string | null;
+                context?: string;
+                orig_path?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitDiffResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_status_api_sessions__session_id__git_status_get: {
+        parameters: {
+            query?: {
+                etag?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitStatusResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

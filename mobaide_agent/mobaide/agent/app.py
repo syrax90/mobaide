@@ -49,7 +49,9 @@ from .autoscan.router import router as autoscan_router
 from .autoscan.router import ws_router as autoscan_ws_router
 from .codex.router import router as codex_router
 from .config import AgentConfig
+from .git.changes_models import GIT_CAPABILITIES
 from .git.router import router as git_router
+from .git.session_router import router as session_git_router
 from .hooks.router import router as hooks_router
 from .install_paths import (
     default_prefix,
@@ -804,6 +806,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.include_router(hooks_router)
     app.include_router(projects_router)
     app.include_router(git_router)
+    app.include_router(session_git_router)
     app.include_router(ws_session_io_router)
     app.include_router(ws_session_list_router)
     app.include_router(ws_events_router)
@@ -856,7 +859,8 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                     build_cli_capabilities,
                     app.state.cli_launchers,
                     models_pending=warm_task is not None and not warm_task.done(),
-                )
+                ),
+                "git": GIT_CAPABILITIES,
             },
             "latest_agent_version": (manifest or {}).get("version"),
         }

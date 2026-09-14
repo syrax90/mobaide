@@ -1,0 +1,84 @@
+package com.mobaide.app.data.repository
+
+import com.mobaide.app.data.network.ApiException
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import java.io.IOException
+
+/**
+ * Failures of the session-scoped git Changes routes, typed so the screens can
+ * tell "update your agent" from "session ended" from "git itself refused".
+ *
+ * The two 404s share a status code and differ only in FastAPI's `detail`: the
+ * agent answers a session lookup miss with the string `Session '<id>' not found`,
+ * whereas an agent that predates the routes answers a relay `Unknown proxy route`
+ * or FastAPI's plain `Not Found` — so the string is the discriminator.
+ */
+sealed class SessionGitException(message: String, cause: Throwable? = null) :
+    Exception(message, cause) {
+
+    class AgentOutdated(cause: ApiException) :
+        SessionGitException("The agent does not serve the git Changes API", cause)
+
+    class SessionGone(cause: ApiException) :
+        SessionGitException("Session not found", cause)
+
+    /** `{"detail": {"code": …, "message"?: …}}` from 400 / 500 / 503 / 504. */
+    class GitError(val code: String, val detailMessage: String?, cause: ApiException) :
+        SessionGitException("git: $code", cause)
+
+    class Network(cause: Throwable) :
+        SessionGitException(cause.message ?: "Network error", cause)
+
+    companion object {
+        const val CODE_GIT_UNAVAILABLE = "git_unavailable"
+        const val CODE_GIT_TIMEOUT = "git_timeout"
+        const val CODE_GIT_ERROR = "git_error"
+        const val CODE_BAD_PATH = "bad_path"
+        const val CODE_BAD_SCOPE = "bad_scope"
+    }
+}
+
+internal val lenientDetailJson = Json { ignoreUnknownKeys = true; isLenient = true }
+
+private val sessionNotFound = Regex("^Session '.*' not found$")
+
+/** FastAPI's `detail` is a string for 404s and an object for the git errors. */
+internal fun extractDetail(body: String): Any? {
+    if (body.isBlank()) return null
+    val root = runCatching { lenientDetailJson.parseToJsonElement(body) }.getOrNull() as? JsonObject
+        ?: return null
+    return when (val detail = root["detail"]) {
+        is JsonPrimitive -> detail.contentOrNull
+        is JsonObject -> detail
+        else -> null
+    }
+}
+
+internal fun mapSessionGitError(t: Throwable): Throwable = when (t) {
+    is SessionGitException -> t
+    is ApiException -> {
+        val detail = extractDetail(t.errorBody)
+        when {
+            t.code == 404 && detail is String && sessionNotFound.matches(detail) ->
+                SessionGitException.SessionGone(t)
+            t.code == 404 -> SessionGitException.AgentOutdated(t)
+            detail is JsonObject -> {
+                val code = detail["code"]?.jsonPrimitive?.contentOrNull
+                if (code == null) t
+                else SessionGitException.GitError(
+                    code = code,
+                    detailMessage = detail["message"]?.jsonPrimitive?.contentOrNull,
+                    cause = t,
+                )
+            }
+            else -> t
+        }
+    }
+    is IOException, is SerializationException -> SessionGitException.Network(t)
+    else -> t
+}

@@ -57,10 +57,11 @@ final class DTOFixtureTests: XCTestCase {
     }
 
     func testVersionCapabilitiesHelpersNeverThrow() throws {
-        let file = try FixtureLoader.load(DTOFixtureFile.self, path: "dto/agent/VersionInfoResponse.json")
-        let fullCase = try XCTUnwrap(file.cases.first { $0.name == "full_heterogeneous_capabilities" })
-        let data = try WireJSON.encoder().encode(fullCase.wire)
-        let version = try WireJSON.decoder().decode(VersionInfoResponse.self, from: data)
+        let version = try FixtureLoader.decodeCase(
+            VersionInfoResponse.self,
+            path: "dto/agent/VersionInfoResponse.json",
+            name: "full_heterogeneous_capabilities"
+        )
 
         XCTAssertEqual(version.cliAvailable("claude"), true)
         XCTAssertEqual(version.cliAvailable("codex"), false)
@@ -90,5 +91,40 @@ final class DTOFixtureTests: XCTestCase {
         XCTAssertNil(empty.cliModels("claude"))
         XCTAssertNil(empty.cliModelDetails("codex"))
         XCTAssertFalse(empty.cliModelsPending("codex"))
+    }
+
+    func testWireDataServesTheWireFormNotTheCanonicalOne() throws {
+        // A stubbed agent must answer with the bytes as they travel, not with
+        // the materialized defaults `decoded_canonical` pins after decoding.
+        let data = try FixtureLoader.wireData(
+            path: "dto/agent/VersionInfoResponse.json",
+            case: "missing_capabilities_defaults_to_empty_object"
+        )
+        let tree = try WireJSON.decoder().decode(JSONValue.self, from: data)
+        XCTAssertNil(tree["capabilities"], "wireData must not materialize decoded_canonical defaults")
+        XCTAssertEqual(tree["name"], .string("central"))
+    }
+
+    func testCaseHelpersThrowCaseNotFoundForUnknownName() throws {
+        XCTAssertThrowsError(
+            try FixtureLoader.wireData(path: "dto/agent/VersionInfoResponse.json", case: "no_such_case")
+        ) { error in
+            guard case .caseNotFound(let name)? = error as? FixtureLoaderError else {
+                return XCTFail("expected caseNotFound, got \(error)")
+            }
+            XCTAssertEqual(name, "dto/agent/VersionInfoResponse.json#no_such_case")
+        }
+
+        XCTAssertThrowsError(
+            try FixtureLoader.decodeCase(
+                VersionInfoResponse.self,
+                path: "dto/agent/VersionInfoResponse.json",
+                name: "no_such_case"
+            )
+        ) { error in
+            guard case .caseNotFound? = error as? FixtureLoaderError else {
+                return XCTFail("decodeCase must surface caseNotFound unchanged, got \(error)")
+            }
+        }
     }
 }

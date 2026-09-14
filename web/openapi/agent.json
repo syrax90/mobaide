@@ -797,6 +797,269 @@
         "title": "GitDeleteResultItem",
         "type": "object"
       },
+      "GitDiffHunk": {
+        "properties": {
+          "heading": {
+            "default": "",
+            "title": "Heading",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/GitDiffLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "new_lines": {
+            "title": "New Lines",
+            "type": "integer"
+          },
+          "new_start": {
+            "title": "New Start",
+            "type": "integer"
+          },
+          "old_lines": {
+            "title": "Old Lines",
+            "type": "integer"
+          },
+          "old_start": {
+            "title": "Old Start",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "old_start",
+          "old_lines",
+          "new_start",
+          "new_lines"
+        ],
+        "title": "GitDiffHunk",
+        "type": "object"
+      },
+      "GitDiffLine": {
+        "properties": {
+          "new": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New"
+          },
+          "no_newline": {
+            "default": false,
+            "title": "No Newline",
+            "type": "boolean"
+          },
+          "old": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old"
+          },
+          "t": {
+            "enum": [
+              "ctx",
+              "add",
+              "del"
+            ],
+            "title": "T",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "t",
+          "text"
+        ],
+        "title": "GitDiffLine",
+        "type": "object"
+      },
+      "GitDiffResponse": {
+        "properties": {
+          "additions": {
+            "default": 0,
+            "title": "Additions",
+            "type": "integer"
+          },
+          "byte_limit": {
+            "default": 1048576,
+            "title": "Byte Limit",
+            "type": "integer"
+          },
+          "change": {
+            "anyOf": [
+              {
+                "enum": [
+                  "modified",
+                  "added",
+                  "deleted",
+                  "renamed",
+                  "copied",
+                  "type_changed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change"
+          },
+          "deletions": {
+            "default": 0,
+            "title": "Deletions",
+            "type": "integer"
+          },
+          "hunks": {
+            "items": {
+              "$ref": "#/components/schemas/GitDiffHunk"
+            },
+            "title": "Hunks",
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "text",
+              "binary",
+              "submodule",
+              "too_large",
+              "missing"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "line_limit": {
+            "default": 5000,
+            "title": "Line Limit",
+            "type": "integer"
+          },
+          "new_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Mode"
+          },
+          "old_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old Mode"
+          },
+          "orig_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orig Path"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "staged",
+              "unstaged",
+              "untracked"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "total_lines": {
+            "default": 0,
+            "title": "Total Lines",
+            "type": "integer"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "scope",
+          "kind"
+        ],
+        "title": "GitDiffResponse",
+        "type": "object"
+      },
+      "GitHead": {
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch"
+          },
+          "detached": {
+            "default": false,
+            "title": "Detached",
+            "type": "boolean"
+          },
+          "initial": {
+            "default": false,
+            "title": "Initial",
+            "type": "boolean"
+          },
+          "oid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oid"
+          },
+          "short_oid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Oid"
+          }
+        },
+        "title": "GitHead",
+        "type": "object"
+      },
       "GitItemRead": {
         "description": "One row in the unified git management list.\n\n``branch`` is set for ``branch_*`` kinds; ``worktree_path`` is set for\n``branch_with_worktree`` and ``orphan_worktree``. Status fields apply\nwhere relevant; clients should ignore irrelevant fields.",
         "properties": {
@@ -909,6 +1172,284 @@
           "items"
         ],
         "title": "GitItemsResponse",
+        "type": "object"
+      },
+      "GitRepoInfo": {
+        "properties": {
+          "common_dir": {
+            "title": "Common Dir",
+            "type": "string"
+          },
+          "git_dir": {
+            "title": "Git Dir",
+            "type": "string"
+          },
+          "head": {
+            "$ref": "#/components/schemas/GitHead"
+          },
+          "is_linked_worktree": {
+            "default": false,
+            "title": "Is Linked Worktree",
+            "type": "boolean"
+          },
+          "state": {
+            "default": "clean",
+            "enum": [
+              "clean",
+              "merging",
+              "rebasing",
+              "cherry_picking",
+              "reverting",
+              "bisecting"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "toplevel": {
+            "title": "Toplevel",
+            "type": "string"
+          },
+          "upstream": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitUpstream"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "toplevel",
+          "git_dir",
+          "common_dir",
+          "head"
+        ],
+        "title": "GitRepoInfo",
+        "type": "object"
+      },
+      "GitStatusCounts": {
+        "properties": {
+          "conflicts": {
+            "default": 0,
+            "title": "Conflicts",
+            "type": "integer"
+          },
+          "staged": {
+            "default": 0,
+            "title": "Staged",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "unstaged": {
+            "default": 0,
+            "title": "Unstaged",
+            "type": "integer"
+          },
+          "untracked": {
+            "default": 0,
+            "title": "Untracked",
+            "type": "integer"
+          }
+        },
+        "title": "GitStatusCounts",
+        "type": "object"
+      },
+      "GitStatusEntry": {
+        "description": "One row of the Changes list; a file that is both staged and modified\nyields one entry per group.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "group": {
+            "enum": [
+              "conflicts",
+              "staged",
+              "unstaged",
+              "untracked"
+            ],
+            "title": "Group",
+            "type": "string"
+          },
+          "index_status": {
+            "title": "Index Status",
+            "type": "string"
+          },
+          "orig_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orig Path"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "rename_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rename Score"
+          },
+          "submodule": {
+            "default": false,
+            "title": "Submodule",
+            "type": "boolean"
+          },
+          "worktree_status": {
+            "title": "Worktree Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group",
+          "path",
+          "code",
+          "index_status",
+          "worktree_status"
+        ],
+        "title": "GitStatusEntry",
+        "type": "object"
+      },
+      "GitStatusResponse": {
+        "properties": {
+          "counts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitStatusCounts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwd"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/GitStatusEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "entry_limit": {
+            "default": 5000,
+            "title": "Entry Limit",
+            "type": "integer"
+          },
+          "etag": {
+            "title": "Etag",
+            "type": "string"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitRepoInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_a_repo",
+                  "bare_repository",
+                  "cwd_missing",
+                  "unsafe_directory",
+                  "git_too_old"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          },
+          "unchanged": {
+            "default": false,
+            "title": "Unchanged",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id",
+          "etag"
+        ],
+        "title": "GitStatusResponse",
+        "type": "object"
+      },
+      "GitUpstream": {
+        "description": "``ahead``/``behind`` are null when the upstream ref no longer exists.",
+        "properties": {
+          "ahead": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ahead"
+          },
+          "behind": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Behind"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "title": "GitUpstream",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -2414,6 +2955,164 @@
         "summary": "Stop Session",
         "tags": [
           "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/diff": {
+      "get": {
+        "operationId": "session_git_diff_api_sessions__session_id__git_diff_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Path"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
+          {
+            "in": "query",
+            "name": "context",
+            "required": false,
+            "schema": {
+              "default": "3",
+              "title": "Context",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "orig_path",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Orig Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitDiffResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Diff",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/status": {
+      "get": {
+        "operationId": "session_git_status_api_sessions__session_id__git_status_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "etag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Etag"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Status",
+        "tags": [
+          "git"
         ]
       }
     },

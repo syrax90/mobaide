@@ -14,6 +14,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PromptTemplate } from '../../api/templateRepository';
 import { recordingClipboard, refusingClipboard } from '../../test/clipboardStub';
 import { ApiError } from '../../api/errors';
+import type { SessionGitStatus } from '../../api/sessionGitRepository';
+import type { SessionResponse } from '../../protocol/dto/session';
 
 // The real model is the point — where the screen mounts the toolbar is a
 // property of the tree it builds around it — so only the two things a model
@@ -100,12 +102,73 @@ vi.mock('../../api/templateRepository', async (importOriginal) => {
   };
 });
 
+/** The synced session list; a row's `cwd` is what gates the ⋯ menu. */
+const sessions = vi.hoisted(() => ({ rows: [] as SessionResponse[] }));
+
+vi.mock('../../api/sessionRepository', () => ({
+  listSessions: () => Promise.resolve(sessions.rows),
+}));
+
+// Consulted by the header label once the list is synced; nothing here reads it.
+vi.mock('../../api/customAgentTypeRepository', () => ({
+  listCustomAgentTypes: () => Promise.resolve([]),
+}));
+
+/** One modified file under a clean `main`, enough to see the viewer render. */
+const gitStatus = vi.hoisted(
+  (): SessionGitStatus => ({
+    session_id: 's1',
+    cwd: '/srv/p1',
+    etag: 'e1',
+    unchanged: false,
+    unavailable_reason: null,
+    repo: {
+      toplevel: '/srv/p1',
+      git_dir: '/srv/p1/.git',
+      common_dir: '/srv/p1/.git',
+      head: { oid: 'abc1234def', short_oid: 'abc1234', branch: 'main', detached: false, initial: false },
+      upstream: null,
+      state: 'clean',
+      is_linked_worktree: false,
+    },
+    entries: [
+      {
+        group: 'unstaged',
+        path: 'src/app.py',
+        orig_path: null,
+        code: 'M',
+        index_status: '.',
+        worktree_status: 'M',
+        rename_score: null,
+        submodule: false,
+      },
+    ],
+    counts: { conflicts: 0, staged: 0, unstaged: 1, untracked: 0, total: 1 },
+    truncated: false,
+    entry_limit: 5000,
+  }),
+);
+
+// Both network calls shadowed, as above; the error mapping stays real.
+vi.mock('../../api/sessionGitRepository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/sessionGitRepository')>();
+  return {
+    ...actual,
+    getSessionGitStatus: () => Promise.resolve(gitStatus),
+    getSessionGitDiff: () => Promise.reject(new Error('diff is not under test')),
+  };
+});
+
 const { sessionChannelName } = await import('../../realtime/channels');
 const { acquireTerminal, evictTerminalSessions, useTerminalStore } = await import(
   '../../terminal/terminalStore'
 );
 const { useToastStore } = await import('../../stores/toastStore');
 const { TerminalScreen } = await import('./TerminalScreen');
+const { sessionResponseSchema } = await import('../../protocol/dto/session');
+const { markSessionsSynced, resetSessionsSynced } = await import(
+  '../../realtime/__testing__/sessionsSynced'
+);
 
 const toastKinds = (): string[] =>
   useToastStore.getState().toasts.map((toast) => toast.kind);
@@ -133,6 +196,8 @@ afterEach(() => {
   cleanup();
   created.calls.length = 0;
   created.error = null;
+  sessions.rows = [];
+  resetSessionsSynced();
   for (const model of Object.values(useTerminalStore.getState().models)) {
     model.dispose();
   }
@@ -598,5 +663,72 @@ describe('TerminalScreen template creation', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(created.calls).toEqual([]);
     expect(focus.mock.calls.length).toBeGreaterThan(before);
+  });
+});
+
+describe('TerminalScreen git changes', () => {
+  const row = (over: Record<string, unknown> = {}): SessionResponse =>
+    sessionResponseSchema.parse({
+      session_id: 's1',
+      state: 'running',
+      created_at: '2026-08-04T10:00:00Z',
+      ...over,
+    });
+
+  const more = (): HTMLElement | null =>
+    screen.queryByRole('button', { name: 'More options' });
+
+  /** The synced list and the terminal; the kind label proves the row landed. */
+  const renderSynced = async (...rows: SessionResponse[]): Promise<void> => {
+    markSessionsSynced('a1');
+    sessions.rows = rows;
+    acquireTerminal('a1', 's1');
+    renderTerminal();
+    await screen.findByText('Claude Code');
+  };
+
+  /** Walk the ⋯ menu into the viewer. */
+  const openChanges = async (): Promise<{ trigger: HTMLElement; panel: HTMLElement }> => {
+    const trigger = await screen.findByRole('button', { name: 'More options' });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Changes…' }));
+    const panel = await screen.findByRole('dialog', { name: 'Git changes' });
+    return { trigger, panel };
+  };
+
+  it('offers no git menu for a session whose row names no folder', async () => {
+    // Both mobile clients gate on `cwd`: the git routes answer for the
+    // directory the session was spawned in, and a row without one has nothing
+    // to show. The label is the proof that the row itself did arrive.
+    await renderSynced(row());
+
+    expect(more()).toBeNull();
+  });
+
+  it('opens the Changes viewer from the ⋯ menu once the row names a folder', async () => {
+    await renderSynced(row({ cwd: '/srv/p1', project_name: 'p1' }));
+
+    const { panel } = await openChanges();
+
+    // The menu is gone with the pick, and the viewer is non-modal: the
+    // terminal underneath stays live, which is the point of a viewer next to
+    // the PTY producing the changes.
+    expect(screen.queryByRole('menuitem')).toBeNull();
+    expect(panel).toHaveAttribute('aria-modal', 'false');
+    expect(await within(panel).findByText('app.py')).toBeInTheDocument();
+    expect(within(panel).getByText('main')).toBeInTheDocument();
+  });
+
+  it('closes the viewer on Escape and hands focus back to the ⋯ button', async () => {
+    // Back to the menu button, not the grid: the viewer was reached from the
+    // header, and a keyboard user is still up there.
+    await renderSynced(row({ cwd: '/srv/p1' }));
+    const { trigger, panel } = await openChanges();
+    await within(panel).findByText('app.py');
+
+    fireEvent.keyDown(panel, { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog', { name: 'Git changes' })).toBeNull();
+    expect(trigger).toHaveFocus();
   });
 });
