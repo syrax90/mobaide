@@ -1,0 +1,13 @@
+{
+  "type": "GitCommitResponse",
+  "cases": [
+    {
+      "name": "committed",
+      "wire": {
+        "oid": "4890423520f4dcd158b85374f44fc8819a813ac2",
+        "short_oid": "4890423",
+        "subject": "Fix the login redirect"
+      }
+    }
+  ]
+}

@@ -45,4 +45,33 @@ class TerminalOverflowMenuTest {
         composeRule.onNodeWithTag(TERMINAL_MENU_GIT_CHANGES_TAG).assertIsDisplayed()
         composeRule.onNodeWithText("Changes…").assertIsDisplayed()
     }
+
+    @Test
+    fun commit_isAbsent_untilTheAgentAdvertisesIt() {
+        composeRule.setContent {
+            MobaideTheme(darkTheme = true) {
+                TerminalOverflowMenu(onOpenGitChanges = {}, commitAvailable = false)
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("More options").performClick()
+
+        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_CHANGES_TAG).assertIsDisplayed()
+        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_COMMIT_TAG).assertDoesNotExist()
+        composeRule.onNodeWithText("Commit…").assertDoesNotExist()
+    }
+
+    @Test
+    fun commit_followsChanges_onAnAgentThatAdvertisesIt() {
+        composeRule.setContent {
+            MobaideTheme(darkTheme = true) {
+                TerminalOverflowMenu(onOpenGitChanges = {}, onOpenGitCommit = {}, commitAvailable = true)
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("More options").performClick()
+
+        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_COMMIT_TAG).assertIsDisplayed()
+        composeRule.onNodeWithText("Commit…").assertIsDisplayed()
+    }
 }

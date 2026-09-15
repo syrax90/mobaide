@@ -236,4 +236,140 @@ final class GitChangesDisplayTests: XCTestCase {
         XCTAssertEqual(topLevel.fileName, "vendor/")
         XCTAssertNil(topLevel.directory)
     }
+
+    // MARK: - Row and section actions
+
+    private let allCaps = GitCapabilities(stage: true, discard: true, commit: true)
+
+    private var staged: GitStatusEntry { entry(group: GitStatusEntry.groupStaged, path: "src/new name.py", code: "R", origPath: "src/old.py") }
+    private var modified: GitStatusEntry { entry(group: GitStatusEntry.groupUnstaged, path: "m.py") }
+    private var untracked: GitStatusEntry { entry(group: GitStatusEntry.groupUntracked, path: "notes.txt", code: "?") }
+    private var conflict: GitStatusEntry { entry(group: GitStatusEntry.groupConflicts, path: "c.py", code: "UU") }
+
+    private func rows(_ entries: [GitStatusEntry]) -> [GitChangesRow] {
+        GitChangesDisplay.sections(for: status(entries: entries)).flatMap(\.rows)
+    }
+
+    func testRowActionsUnstageAStagedRowStageOrDiscardTheRestAndLeaveAConflictAlone() {
+        XCTAssertEqual(GitChangesDisplay.rowActions(staged, capabilities: allCaps), GitChangesDisplay.RowActions(unstage: true))
+        XCTAssertEqual(GitChangesDisplay.rowActions(modified, capabilities: allCaps), GitChangesDisplay.RowActions(stage: true, discard: true))
+        XCTAssertEqual(GitChangesDisplay.rowActions(untracked, capabilities: allCaps), GitChangesDisplay.RowActions(stage: true, discard: true))
+        XCTAssertEqual(GitChangesDisplay.rowActions(conflict, capabilities: allCaps), .none)
+        XCTAssertEqual(GitChangesDisplay.rowActions(entry(group: "future", path: "f"), capabilities: allCaps), .none)
+        XCTAssertTrue(GitChangesDisplay.RowActions(discard: true).any)
+        XCTAssertFalse(GitChangesDisplay.RowActions.none.any)
+    }
+
+    func testRowActionsGateEachActionOnItsOwnCapability() {
+        let discardOnly = GitCapabilities(stage: false, discard: true, commit: true)
+        let stageOnly = GitCapabilities(stage: true, discard: false, commit: false)
+
+        XCTAssertEqual(GitChangesDisplay.rowActions(modified, capabilities: discardOnly), GitChangesDisplay.RowActions(discard: true))
+        XCTAssertEqual(GitChangesDisplay.rowActions(staged, capabilities: discardOnly), .none)
+        XCTAssertEqual(GitChangesDisplay.rowActions(modified, capabilities: stageOnly), GitChangesDisplay.RowActions(stage: true))
+        XCTAssertEqual(GitChangesDisplay.rowActions(staged, capabilities: stageOnly), GitChangesDisplay.RowActions(unstage: true))
+        XCTAssertEqual(GitChangesDisplay.rowActions(modified, capabilities: .none), .none)
+    }
+
+    func testDiscardScopeSendsUntrackedToCleanAndTrackedToRestore() {
+        XCTAssertEqual(GitChangesDisplay.discardScope(for: untracked), "untracked")
+        XCTAssertEqual(GitChangesDisplay.discardScope(for: modified), "unstaged")
+        XCTAssertEqual(GitChangesDisplay.discardScope(for: staged), "unstaged")
+    }
+
+    func testPathsNameBothSidesOfARenameEachOnce() {
+        // `git reset` on the new name alone would leave the deletion staged.
+        let alsoOld = entry(group: GitStatusEntry.groupUnstaged, path: "src/old.py")
+
+        XCTAssertEqual(
+            GitChangesDisplay.paths(for: rows([staged, alsoOld, untracked])),
+            ["src/new name.py", "src/old.py", "notes.txt"]
+        )
+        XCTAssertEqual(GitChangesDisplay.paths(for: []), [])
+    }
+
+    func testSelectionSubsetsSortTheTickedRowsByTheActionEachCanTake() {
+        let sections = GitChangesDisplay.sections(for: status(entries: [staged, modified, untracked, conflict]))
+        let everything = Set(sections.flatMap(\.rows).map(\.id))
+
+        let subsets = GitChangesDisplay.selectionSubsets(sections, selection: everything, capabilities: allCaps)
+
+        XCTAssertEqual(subsets.stage.map(\.id), ["unstaged:1:m.py", "untracked:1:notes.txt"])
+        XCTAssertEqual(subsets.unstage.map(\.id), ["staged:1:src/new name.py"])
+        XCTAssertEqual(subsets.discard.map(\.id), ["unstaged:1:m.py", "untracked:1:notes.txt"])
+    }
+
+    func testSelectionSubsetsIgnoreUntickedRowsAndActionsTheAgentLacks() {
+        let sections = GitChangesDisplay.sections(for: status(entries: [staged, modified, untracked]))
+        var caps = allCaps
+        caps.discard = false
+
+        let subsets = GitChangesDisplay.selectionSubsets(sections, selection: ["unstaged:1:m.py"], capabilities: caps)
+
+        XCTAssertEqual(subsets.stage.map(\.id), ["unstaged:1:m.py"])
+        XCTAssertEqual(subsets.unstage, [])
+        XCTAssertEqual(subsets.discard, [])
+    }
+
+    func testSectionActionOffersUnstageAllOnStagedStageAllOnChangesAndUntrackedNothingElsewhere() {
+        let sections = GitChangesDisplay.sections(for: status(entries: [
+            conflict, staged, modified, untracked, entry(group: "ignored", path: "i.txt"),
+        ]))
+
+        let byGroup = Dictionary(uniqueKeysWithValues: sections.map { ($0.group, GitChangesDisplay.sectionAction($0, capabilities: allCaps)) })
+
+        XCTAssertEqual(byGroup["conflicts"], .some(nil))
+        XCTAssertEqual(byGroup["staged"], GitChangesDisplay.SectionAction(label: "Unstage all", stage: false))
+        XCTAssertEqual(byGroup["unstaged"], GitChangesDisplay.SectionAction(label: "Stage all", stage: true))
+        XCTAssertEqual(byGroup["untracked"], GitChangesDisplay.SectionAction(label: "Stage all", stage: true))
+        XCTAssertEqual(byGroup["ignored"], .some(nil))
+        XCTAssertNil(GitChangesDisplay.sectionAction(sections[1], capabilities: GitCapabilities(stage: false, discard: true, commit: true)))
+    }
+
+    // MARK: - Discard prompt
+
+    func testDiscardPromptNamesTheOneFileAndSaysWhetherItIsDeletedOrReverted() {
+        let untrackedPrompt = GitChangesDisplay.discardPrompt(for: rows([untracked]))
+        XCTAssertEqual(untrackedPrompt.title, "Delete untracked file?")
+        XCTAssertEqual(untrackedPrompt.body, "notes.txt is not tracked by git and will be deleted. This cannot be undone.")
+        XCTAssertEqual(untrackedPrompt.rows.map(\.id), ["untracked:1:notes.txt"])
+
+        let trackedPrompt = GitChangesDisplay.discardPrompt(for: rows([modified]))
+        XCTAssertEqual(trackedPrompt.title, "Discard changes?")
+        XCTAssertEqual(trackedPrompt.body, "Changes to m.py will be thrown away. This cannot be undone.")
+    }
+
+    func testDiscardPromptCountsAMultiFileDiscard() {
+        let prompt = GitChangesDisplay.discardPrompt(for: rows([modified, untracked]))
+
+        XCTAssertEqual(prompt.title, "Discard 2 files?")
+        XCTAssertEqual(prompt.body, "Their working-tree changes will be thrown away and untracked ones deleted. This cannot be undone.")
+    }
+
+    // MARK: - Commit copy
+
+    func testComposeCommitMessageJoinsSubjectAndBodyTheWayGitCommitReadsThem() {
+        XCTAssertEqual(GitChangesDisplay.composeCommitMessage(summary: "  Fix it  ", description: ""), "Fix it")
+        XCTAssertEqual(GitChangesDisplay.composeCommitMessage(summary: "Fix it", description: "  \n"), "Fix it")
+        XCTAssertEqual(GitChangesDisplay.composeCommitMessage(summary: "Fix it", description: "  Why.\n"), "Fix it\n\nWhy.")
+        XCTAssertEqual(GitChangesDisplay.composeCommitMessage(summary: "   ", description: "Why."), "\n\nWhy.", "a blank summary is the model's guard, not the composer's")
+    }
+
+    func testCommitButtonLabelCountsTheStagedFilesOrReadsAsAnAmend() {
+        XCTAssertEqual(GitChangesDisplay.commitButtonLabel(stagedCount: 0, amend: false), "Commit 0 files")
+        XCTAssertEqual(GitChangesDisplay.commitButtonLabel(stagedCount: 1, amend: false), "Commit 1 file")
+        XCTAssertEqual(GitChangesDisplay.commitButtonLabel(stagedCount: 3, amend: false), "Commit 3 files")
+        XCTAssertEqual(GitChangesDisplay.commitButtonLabel(stagedCount: 3, amend: true), "Amend commit")
+    }
+
+    func testCommitNoticeAndAuthorLineMatchTheOtherClients() {
+        XCTAssertEqual(
+            GitChangesDisplay.commitNotice(GitCommitResponse(oid: "abc1234def", short_oid: "abc1234", subject: "Fix it")),
+            "Committed abc1234 · Fix it"
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.authorLine(GitCommitAuthor(name: "Ada Lovelace", email: "ada@example.com")),
+            "Committing as Ada Lovelace <ada@example.com>"
+        )
+    }
 }

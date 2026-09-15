@@ -2,19 +2,33 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
+  SessionGitCommitContext,
+  SessionGitCommitRequest,
+  SessionGitCommitResult,
   SessionGitDiff,
   SessionGitDiffRequest,
+  SessionGitDiscardScope,
   SessionGitEntry,
   SessionGitStatus,
 } from '../../../api/sessionGitRepository';
+import type { AgentVersionInfo } from '../../../protocol/dto/agentVersion';
 
-// Both network functions shadowed, as in `useSessionGit.test.tsx`: the status
+/** One mutating request as the panel issued it. */
+type MutationCall =
+  | { kind: 'stage' | 'unstage'; paths: string[] }
+  | { kind: 'discard'; paths: string[]; scope: SessionGitDiscardScope }
+  | { kind: 'commit'; request: SessionGitCommitRequest };
+
+// The network functions shadowed, as in `useSessionGit.test.tsx`: the status
 // the next poll answers with is whatever `api.status` holds, and every diff
 // request is recorded, because the scope it asks for is what a selection that
 // followed its file across sections must get right. A diff answers with the
 // request echoed plus `api.shape` (which also sees the session asked), and
 // while `api.hold` is set it waits in `api.release` so a case can look at the
-// pane mid-load.
+// pane mid-load. Every mutation is recorded in `api.mutations` and succeeds
+// unless `api.refuse` names a failure for its kind; the commit sheet reads
+// `api.commitContext` on open. `api.version` is the agent's version probe,
+// whose `capabilities.git` gates every mutating control.
 const api = vi.hoisted(() => ({
   status: undefined as SessionGitStatus | undefined,
   diffs: [] as SessionGitDiffRequest[],
@@ -23,10 +37,21 @@ const api = vi.hoisted(() => ({
     | undefined,
   hold: false,
   release: [] as (() => void)[],
+  version: undefined as AgentVersionInfo | undefined,
+  mutations: [] as MutationCall[],
+  refuse: undefined as ((kind: MutationCall['kind']) => unknown) | undefined,
+  commitContext: undefined as SessionGitCommitContext | undefined,
+  commitResult: undefined as SessionGitCommitResult | undefined,
 }));
 
 vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../api/sessionGitRepository')>();
+  const mutate = <T,>(call: MutationCall, result: () => T): Promise<T> => {
+    api.mutations.push(call);
+    const refusal = api.refuse?.(call.kind);
+    if (refusal === undefined) return Promise.resolve(result());
+    return Promise.reject(refusal instanceof Error ? refusal : new Error('refused'));
+  };
   return {
     ...actual,
     getSessionGitStatus: () =>
@@ -43,10 +68,39 @@ vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
         });
       });
     },
+    stageSessionGit: (_agentId: string, _sessionId: string, paths: readonly string[]) =>
+      mutate({ kind: 'stage', paths: [...paths] }, () => undefined),
+    unstageSessionGit: (_agentId: string, _sessionId: string, paths: readonly string[]) =>
+      mutate({ kind: 'unstage', paths: [...paths] }, () => undefined),
+    discardSessionGit: (
+      _agentId: string,
+      _sessionId: string,
+      paths: readonly string[],
+      scope: SessionGitDiscardScope,
+    ) => mutate({ kind: 'discard', paths: [...paths], scope }, () => undefined),
+    getSessionGitCommitContext: () =>
+      api.commitContext === undefined
+        ? Promise.reject(new Error('no commit context staged'))
+        : Promise.resolve(api.commitContext),
+    commitSessionGit: (_agentId: string, _sessionId: string, request: SessionGitCommitRequest) =>
+      mutate({ kind: 'commit', request }, () => {
+        if (api.commitResult === undefined) throw new Error('no commit result staged');
+        return api.commitResult;
+      }),
   };
 });
 
+vi.mock('../../../api/agentCapabilities', () => ({
+  fetchAgentCapabilities: () =>
+    api.version === undefined
+      ? Promise.reject(new Error('no version staged'))
+      : Promise.resolve(api.version),
+}));
+
+const { toApiError } = await import('../../../api/errors');
+const { toSessionGitError } = await import('../../../api/sessionGitRepository');
 const { queryKeys } = await import('../../../lib/queryKeys');
+const { agentVersionSchema } = await import('../../../protocol/dto/agentVersion');
 const { GitChangesPanel } = await import('./GitChangesPanel');
 
 const entry = (over: Partial<SessionGitEntry> = {}): SessionGitEntry => ({
@@ -91,12 +145,32 @@ const diff = (request: SessionGitDiffRequest): SessionGitDiff => ({
   byte_limit: 1048576,
 });
 
+const agentVersion = (git: Record<string, unknown>): AgentVersionInfo =>
+  agentVersionSchema.parse({
+    name: 'mobaide-agent',
+    server_version: '1.4.0',
+    protocol_versions: [7],
+    min_client_version: 1,
+    capabilities: { git },
+  });
+
+const ALL_GIT = { changes: true, stage: true, discard: true, commit: true };
+
+/** A failure as the repository throws it off the wire. */
+const wireFailure = (httpStatus: number, detail: unknown): unknown =>
+  toSessionGitError(toApiError(new Response(null, { status: httpStatus }), { detail }));
+
 let client: QueryClient;
 const onClose = vi.fn<() => void>();
 
-const panel = (sessionId = 's1') => (
+const panel = (sessionId = 's1', commitRequest = 0) => (
   <QueryClientProvider client={client}>
-    <GitChangesPanel agentId="a1" sessionId={sessionId} onClose={onClose} />
+    <GitChangesPanel
+      agentId="a1"
+      sessionId={sessionId}
+      commitRequest={commitRequest}
+      onClose={onClose}
+    />
   </QueryClientProvider>
 );
 
@@ -185,6 +259,12 @@ beforeEach(() => {
   api.shape = undefined;
   api.hold = false;
   api.release.length = 0;
+  // The read-only agent of #669 unless a case says otherwise.
+  api.version = agentVersion({ changes: true });
+  api.mutations.length = 0;
+  api.refuse = undefined;
+  api.commitContext = undefined;
+  api.commitResult = undefined;
 });
 
 afterEach(() => {
@@ -434,5 +514,455 @@ describe('GitChangesPanel diff invalidation', () => {
     });
     expect(api.diffs[1]).toEqual(api.diffs[0]);
     expect(appRow()).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+const staged = (over: Partial<SessionGitEntry> = {}): SessionGitEntry =>
+  entry({ group: 'staged', index_status: 'M', worktree_status: '.', ...over });
+const untracked = (path: string): SessionGitEntry =>
+  entry({ group: 'untracked', path, code: '?', index_status: '?', worktree_status: '?' });
+
+/** A status whose counts match its entries, as the agent tallies them. */
+const counted = (etag: string, entries: SessionGitEntry[]): SessionGitStatus => {
+  const tally = { conflicts: 0, staged: 0, unstaged: 0, untracked: 0 };
+  for (const item of entries) {
+    if (item.group in tally) tally[item.group] += 1;
+  }
+  return { ...status(etag, entries), counts: { ...tally, total: entries.length } };
+};
+
+const capabilitiesSettled = async (): Promise<void> => {
+  await waitFor(() => {
+    expect(client.getQueryState(queryKeys.agentCapabilities('a1'))?.status).toBe('success');
+  });
+};
+
+const toolbar = (): HTMLElement => screen.getByRole('toolbar', { name: 'Selected files' });
+const tick = (path: string): void => {
+  fireEvent.click(screen.getByRole('checkbox', { name: `Select ${path}` }));
+};
+
+describe('GitChangesPanel mutating controls', () => {
+  it('shows none of them on an agent that only serves the read-only viewer', async () => {
+    api.status = status('e1', [entry(), staged({ path: 'src/lib.py' })]);
+    renderPanel();
+    await screen.findByRole('button', { name: /app\.py/ });
+    await capabilitiesSettled();
+
+    expect(screen.queryByRole('button', { name: /^(Stage|Unstage|Discard) / })).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: /all$/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Commit…' })).toBeNull();
+  });
+
+  it('offers each row what its section allows, and a conflict nothing', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = status('e1', [
+      entry(),
+      staged({ path: 'src/lib.py' }),
+      untracked('notes.txt'),
+      entry({ group: 'conflicts', path: 'c.py', code: 'UU', index_status: 'U', worktree_status: 'U' }),
+    ]);
+    renderPanel();
+
+    expect(await screen.findByRole('button', { name: 'Stage src/app.py' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Discard src/app.py' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Unstage src/app.py' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Unstage src/lib.py' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Discard src/lib.py' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Stage notes.txt' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Stage c.py' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Discard c.py' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'Select c.py' })).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Stage all' })).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Unstage all' })).toBeInTheDocument();
+    expect(screen.getAllByRole('checkbox').map((box) => box.getAttribute('aria-label'))).toEqual([
+      'Select src/lib.py',
+      'Select src/app.py',
+      'Select notes.txt',
+    ]);
+  });
+
+  it('keeps Discard and Commit off an agent that advertises only stage', async () => {
+    api.version = agentVersion({ changes: true, stage: true });
+    api.status = status('e1', [entry()]);
+    renderPanel();
+
+    expect(await screen.findByRole('button', { name: 'Stage src/app.py' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Discard src/app.py' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Commit…' })).toBeNull();
+  });
+});
+
+describe('GitChangesPanel stage and unstage', () => {
+  it('stages a row from its button and re-reads the tree', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = status('e1', [entry()]);
+    renderPanel();
+    const stage = await screen.findByRole('button', { name: 'Stage src/app.py' });
+
+    api.status = status('e2', [staged()]);
+    fireEvent.click(stage);
+
+    await waitFor(() => {
+      expect(api.mutations).toEqual([{ kind: 'stage', paths: ['src/app.py'] }]);
+    });
+    expect(await screen.findByRole('button', { name: 'Unstage src/app.py' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('names both sides of a rename when unstaging it', async () => {
+    // `git reset` on the new name alone would leave the deletion staged.
+    api.version = agentVersion(ALL_GIT);
+    api.status = status('e1', [
+      staged({ code: 'R', index_status: 'R', orig_path: 'src/old.py', rename_score: 90 }),
+    ]);
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Unstage src/app.py' }));
+
+    await waitFor(() => {
+      expect(api.mutations).toEqual([{ kind: 'unstage', paths: ['src/app.py', 'src/old.py'] }]);
+    });
+  });
+
+  it('stages a whole section from its header, and only that section', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = status('e1', [entry(), entry({ path: 'src/lib.py' }), untracked('notes.txt')]);
+    renderPanel();
+    const heading = await screen.findByRole('heading', { level: 3, name: /^Changes/ });
+
+    fireEvent.click(within(sectionOf(heading)).getByRole('button', { name: 'Stage all' }));
+
+    await waitFor(() => {
+      expect(api.mutations).toEqual([{ kind: 'stage', paths: ['src/app.py', 'src/lib.py'] }]);
+    });
+  });
+
+  it('reports a refusal inline, keeps the list and lets the notice be dismissed', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = status('e1', [entry()]);
+    api.refuse = (kind) =>
+      kind === 'stage'
+        ? wireFailure(409, { code: 'index_locked', message: 'index.lock exists' })
+        : undefined;
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Stage src/app.py' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Another git process is running — try again.');
+    expect(screen.getByRole('button', { name: 'Stage src/app.py' })).toBeEnabled();
+
+    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }));
+
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('GitChangesPanel discard', () => {
+  it('asks first, with Cancel focused, then sends the scope of the row', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = status('e1', [untracked('notes.txt')]);
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard notes.txt' }));
+
+    const confirm = screen.getByRole('alertdialog', { name: 'Delete untracked file?' });
+    expect(within(confirm).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    expect(confirm).toHaveTextContent('notes.txt is not tracked by git and will be deleted.');
+    expect(api.mutations).toEqual([]);
+
+    api.status = status('e2', []);
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Discard' }));
+
+    await waitFor(() => {
+      expect(api.mutations).toEqual([{ kind: 'discard', paths: ['notes.txt'], scope: 'untracked' }]);
+    });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(await screen.findByText('Working tree clean')).toBeInTheDocument();
+  });
+
+  it('cancels without a request', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = status('e1', [entry()]);
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard src/app.py' }));
+    const confirm = screen.getByRole('alertdialog', { name: 'Discard changes?' });
+
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(api.mutations).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Discard src/app.py' })).toBeInTheDocument();
+  });
+
+  it('discards a mixed selection with one request per scope and clears it', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = status('e1', [entry(), untracked('notes.txt')]);
+    renderPanel();
+    await screen.findByRole('checkbox', { name: 'Select src/app.py' });
+    tick('src/app.py');
+    tick('notes.txt');
+    expect(toolbar()).toHaveTextContent('2 selected');
+
+    fireEvent.click(within(toolbar()).getByRole('button', { name: 'Discard…' }));
+    const confirm = screen.getByRole('alertdialog', { name: 'Discard 2 files?' });
+    api.status = status('e2', []);
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Discard' }));
+
+    await waitFor(() => {
+      expect(api.mutations).toEqual([
+        { kind: 'discard', paths: ['src/app.py'], scope: 'unstaged' },
+        { kind: 'discard', paths: ['notes.txt'], scope: 'untracked' },
+      ]);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('toolbar')).toBeNull();
+    });
+  });
+});
+
+describe('GitChangesPanel selection toolbar', () => {
+  it('enables each action for the ticked rows it applies to and forgets the rows it acted on', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = status('e1', [staged({ path: 'src/lib.py' }), entry()]);
+    renderPanel();
+    await screen.findByRole('checkbox', { name: 'Select src/lib.py' });
+
+    tick('src/lib.py');
+
+    expect(toolbar()).toHaveTextContent('1 selected');
+    expect(within(toolbar()).getByRole('button', { name: 'Stage' })).toBeDisabled();
+    expect(within(toolbar()).getByRole('button', { name: 'Unstage' })).toBeEnabled();
+    expect(within(toolbar()).getByRole('button', { name: 'Discard…' })).toBeDisabled();
+
+    tick('src/app.py');
+
+    expect(toolbar()).toHaveTextContent('2 selected');
+    expect(within(toolbar()).getByRole('button', { name: 'Stage' })).toBeEnabled();
+    expect(within(toolbar()).getByRole('button', { name: 'Discard…' })).toBeEnabled();
+
+    api.status = status('e2', [entry({ path: 'src/lib.py' }), entry()]);
+    fireEvent.click(within(toolbar()).getByRole('button', { name: 'Unstage' }));
+
+    await waitFor(() => {
+      expect(api.mutations).toEqual([{ kind: 'unstage', paths: ['src/lib.py'] }]);
+    });
+    await waitFor(() => {
+      expect(toolbar()).toHaveTextContent('1 selected');
+    });
+    expect(screen.getByRole('checkbox', { name: 'Select src/app.py' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select src/lib.py' })).not.toBeChecked();
+  });
+
+  it('clears the selection from the toolbar', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = status('e1', [entry()]);
+    renderPanel();
+    await screen.findByRole('checkbox', { name: 'Select src/app.py' });
+    tick('src/app.py');
+
+    fireEvent.click(within(toolbar()).getByRole('button', { name: 'Clear selection' }));
+
+    expect(screen.queryByRole('toolbar')).toBeNull();
+    expect(screen.getByRole('checkbox', { name: 'Select src/app.py' })).not.toBeChecked();
+  });
+});
+
+describe('GitChangesPanel commit', () => {
+  const ready: SessionGitCommitContext = {
+    author: { name: 'Ada Lovelace', email: 'ada@example.com' },
+    head: {
+      oid: '4890423520f4dcd158b85374f44fc8819a813ac2',
+      short_oid: '4890423',
+      subject: 'Fix the login redirect',
+      body: 'The callback URL was built before the port was known.',
+    },
+  };
+  const committed: SessionGitCommitResult = {
+    oid: 'abc1234def5678abc1234def5678abc1234def56',
+    short_oid: 'abc1234',
+    subject: 'Add a',
+  };
+
+  const summary = (dialog: HTMLElement): HTMLElement => within(dialog).getByLabelText('Summary');
+  const description = (dialog: HTMLElement): HTMLElement =>
+    within(dialog).getByLabelText('Description');
+  const type = (field: HTMLElement, value: string): void => {
+    fireEvent.change(field, { target: { value } });
+  };
+
+  /** The panel over a staged file, then the sheet through the head button. */
+  const openCommit = async (
+    entries: SessionGitEntry[] = [staged()],
+    context: SessionGitCommitContext = ready,
+  ): Promise<HTMLElement> => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = counted('e1', entries);
+    api.commitContext = context;
+    api.commitResult = committed;
+    renderPanel();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Commit…' })).toBeEnabled();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Commit…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Commit' });
+    await within(dialog).findByText('Committing as Ada Lovelace <ada@example.com>');
+    return dialog;
+  };
+
+  it('is disabled while nothing is staged', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = counted('e1', [entry()]);
+    renderPanel();
+    await screen.findByRole('button', { name: 'Stage src/app.py' });
+
+    const button = screen.getByRole('button', { name: 'Commit…' });
+
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('title', 'Stage files to commit them');
+  });
+
+  it('commits the summary and description as one message and reports the new head', async () => {
+    const dialog = await openCommit();
+    const submit = within(dialog).getByRole('button', { name: 'Commit 1 file' });
+    expect(submit).toBeDisabled();
+
+    type(summary(dialog), 'Add a');
+    type(description(dialog), 'Why.\n');
+    fireEvent.click(within(dialog).getByLabelText('Skip hooks (--no-verify)'));
+    expect(submit).toBeEnabled();
+    api.status = counted('e2', []);
+    fireEvent.click(submit);
+
+    await waitFor(() => {
+      expect(api.mutations).toEqual([
+        { kind: 'commit', request: { message: 'Add a\n\nWhy.', amend: false, no_verify: true } },
+      ]);
+    });
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent('Committed abc1234 · Add a');
+    expect(screen.queryByRole('dialog', { name: 'Commit' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+    expect(await screen.findByText('Working tree clean')).toBeInTheDocument();
+  });
+
+  it('submits from the description on Ctrl+Enter', async () => {
+    const dialog = await openCommit();
+    type(summary(dialog), 'Add a');
+
+    fireEvent.keyDown(description(dialog), { key: 'Enter', ctrlKey: true });
+
+    await waitFor(() => {
+      expect(api.mutations).toEqual([
+        { kind: 'commit', request: { message: 'Add a', amend: false, no_verify: false } },
+      ]);
+    });
+  });
+
+  it('prefills Amend from the previous commit and takes the prefill back when untoggled untouched', async () => {
+    const dialog = await openCommit();
+    const amend = within(dialog).getByLabelText('Amend previous commit');
+
+    fireEvent.click(amend);
+
+    expect(summary(dialog)).toHaveValue('Fix the login redirect');
+    expect(description(dialog)).toHaveValue(
+      'The callback URL was built before the port was known.',
+    );
+    expect(screen.getByRole('dialog', { name: 'Amend commit' })).toBe(dialog);
+    expect(within(dialog).getByRole('button', { name: 'Amend commit' })).toBeEnabled();
+
+    fireEvent.click(amend);
+
+    expect(summary(dialog)).toHaveValue('');
+    expect(description(dialog)).toHaveValue('');
+    expect(within(dialog).getByRole('button', { name: 'Commit 1 file' })).toBeDisabled();
+
+    fireEvent.click(amend);
+    type(summary(dialog), 'Fix the login redirect for real');
+    fireEvent.click(amend);
+
+    expect(summary(dialog)).toHaveValue('Fix the login redirect for real');
+    expect(description(dialog)).toHaveValue(
+      'The callback URL was built before the port was known.',
+    );
+  });
+
+  it('lets an amend through with nothing staged and opens straight from the terminal menu', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = counted('e1', [entry()]);
+    api.commitContext = ready;
+    api.commitResult = { ...committed, subject: 'Fix the login redirect' };
+    render(panel('s1', 1));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Commit' });
+    await within(dialog).findByText('Committing as Ada Lovelace <ada@example.com>');
+    expect(
+      within(dialog).getByText(
+        'Nothing is staged. Stage files first, or amend the previous commit.',
+      ),
+    ).toBeInTheDocument();
+    type(summary(dialog), 'Nothing to commit');
+    expect(within(dialog).getByRole('button', { name: 'Commit 0 files' })).toBeDisabled();
+
+    type(summary(dialog), '');
+    fireEvent.click(within(dialog).getByLabelText('Amend previous commit'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Amend commit' }));
+
+    await waitFor(() => {
+      expect(api.mutations).toEqual([
+        {
+          kind: 'commit',
+          request: {
+            message:
+              'Fix the login redirect\n\nThe callback URL was built before the port was known.',
+            amend: true,
+            no_verify: false,
+          },
+        },
+      ]);
+    });
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Committed abc1234 · Fix the login redirect',
+    );
+  });
+
+  it('shows the host-side fix and refuses to submit when git has no identity', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = counted('e1', [staged()]);
+    api.commitContext = { author: null, head: null };
+    renderPanel();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Commit…' })).toBeEnabled();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Commit…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Commit' });
+
+    const alert = await within(dialog).findByRole('alert');
+
+    expect(alert).toHaveTextContent("Git doesn't know who you are on the agent machine.");
+    expect(alert).toHaveTextContent('git config --global user.name "Your Name"');
+    expect(alert).toHaveTextContent('git config --global user.email "you@example.com"');
+    expect(within(dialog).queryByLabelText('Amend previous commit')).toBeNull();
+    type(summary(dialog), 'Who am I');
+    expect(within(dialog).getByRole('button', { name: 'Commit 1 file' })).toBeDisabled();
+  });
+
+  it('keeps a hook refusal inline with the hook output and the typed message', async () => {
+    api.refuse = (kind) =>
+      kind === 'commit' ? wireFailure(409, { code: 'hook_failed', message: 'lint: nope' }) : undefined;
+    const dialog = await openCommit();
+    type(summary(dialog), 'Add a');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Commit 1 file' }));
+
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent('A commit hook rejected the commit.');
+    expect(alert.querySelector('pre')).toHaveTextContent('lint: nope');
+    expect(screen.getByRole('dialog', { name: 'Commit' })).toBeInTheDocument();
+    expect(summary(dialog)).toHaveValue('Add a');
+    expect(screen.queryByRole('status')).toBeNull();
   });
 });

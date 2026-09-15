@@ -671,6 +671,127 @@
         "title": "CreateSessionRequest",
         "type": "object"
       },
+      "GitCommitAuthor": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "email"
+        ],
+        "title": "GitCommitAuthor",
+        "type": "object"
+      },
+      "GitCommitContextResponse": {
+        "description": "What the commit sheet needs before the user types: ``author`` is null\nwhen git cannot determine an identity (the commit would be refused with\n``identity_required``), ``head`` is null on an unborn branch (no amend).",
+        "properties": {
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitCommitAuthor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "head": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitCommitHead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "GitCommitContextResponse",
+        "type": "object"
+      },
+      "GitCommitHead": {
+        "properties": {
+          "body": {
+            "default": "",
+            "title": "Body",
+            "type": "string"
+          },
+          "oid": {
+            "title": "Oid",
+            "type": "string"
+          },
+          "short_oid": {
+            "title": "Short Oid",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "oid",
+          "short_oid",
+          "subject"
+        ],
+        "title": "GitCommitHead",
+        "type": "object"
+      },
+      "GitCommitRequest": {
+        "properties": {
+          "amend": {
+            "default": false,
+            "title": "Amend",
+            "type": "boolean"
+          },
+          "message": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "no_verify": {
+            "default": false,
+            "title": "No Verify",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "GitCommitRequest",
+        "type": "object"
+      },
+      "GitCommitResponse": {
+        "properties": {
+          "oid": {
+            "title": "Oid",
+            "type": "string"
+          },
+          "short_oid": {
+            "title": "Short Oid",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "oid",
+          "short_oid",
+          "subject"
+        ],
+        "title": "GitCommitResponse",
+        "type": "object"
+      },
       "GitDeleteItem": {
         "description": "One item in a delete request.\n\nThe wire shape mirrors :class:`GitItemRead`'s discriminator \u2014 clients\necho back the ``kind`` and the appropriate identifier (``branch`` for\nbranch kinds, ``worktree_path`` for worktree kinds; both for combined\ndeletions). ``force`` upgrades a branch delete from ``-d`` to ``-D`` and\nadds ``--force`` to a worktree removal so a worktree holding\nmodified/untracked files is deleted instead of refused.",
         "properties": {
@@ -1011,6 +1132,33 @@
         "title": "GitDiffResponse",
         "type": "object"
       },
+      "GitDiscardRequest": {
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Paths",
+            "type": "array"
+          },
+          "scope": {
+            "enum": [
+              "unstaged",
+              "untracked"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "paths",
+          "scope"
+        ],
+        "title": "GitDiscardRequest",
+        "type": "object"
+      },
       "GitHead": {
         "properties": {
           "branch": {
@@ -1172,6 +1320,37 @@
           "items"
         ],
         "title": "GitItemsResponse",
+        "type": "object"
+      },
+      "GitMutationResponse": {
+        "properties": {
+          "ok": {
+            "const": true,
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "title": "GitMutationResponse",
+        "type": "object"
+      },
+      "GitPathsRequest": {
+        "description": "Repo-relative paths as ``status`` reported them; a renamed entry lists\nboth ``path`` and ``orig_path``.",
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Paths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "title": "GitPathsRequest",
         "type": "object"
       },
       "GitRepoInfo": {
@@ -2958,6 +3137,100 @@
         ]
       }
     },
+    "/api/sessions/{session_id}/git/commit": {
+      "post": {
+        "operationId": "session_git_commit_api_sessions__session_id__git_commit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitCommitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitCommitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Commit",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/commit/context": {
+      "get": {
+        "operationId": "session_git_commit_context_api_sessions__session_id__git_commit_context_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitCommitContextResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Commit Context",
+        "tags": [
+          "git"
+        ]
+      }
+    },
     "/api/sessions/{session_id}/git/diff": {
       "get": {
         "operationId": "session_git_diff_api_sessions__session_id__git_diff_get",
@@ -3058,6 +3331,110 @@
         ]
       }
     },
+    "/api/sessions/{session_id}/git/discard": {
+      "post": {
+        "operationId": "session_git_discard_api_sessions__session_id__git_discard_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitDiscardRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Discard",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/stage": {
+      "post": {
+        "operationId": "session_git_stage_api_sessions__session_id__git_stage_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitPathsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Stage",
+        "tags": [
+          "git"
+        ]
+      }
+    },
     "/api/sessions/{session_id}/git/status": {
       "get": {
         "operationId": "session_git_status_api_sessions__session_id__git_status_get",
@@ -3111,6 +3488,58 @@
           }
         },
         "summary": "Session Git Status",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/unstage": {
+      "post": {
+        "operationId": "session_git_unstage_api_sessions__session_id__git_unstage_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitPathsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Unstage",
         "tags": [
           "git"
         ]

@@ -1,5 +1,6 @@
 package com.mobaide.app.ui.terminal.git
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -9,22 +10,31 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.outlined.Commit
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -38,16 +48,21 @@ import com.mobaide.app.data.network.dto.GitStatusCounts
 import com.mobaide.app.data.network.dto.GitStatusEntry
 import com.mobaide.app.data.network.dto.GitStatusResponse
 import com.mobaide.app.data.network.dto.GitUpstreamInfo
+import com.mobaide.app.data.repository.GitCapabilities
+import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import com.mobaide.app.ui.common.pixel.PixelCard
 import com.mobaide.app.ui.common.pixel.PixelChip
 import com.mobaide.app.ui.common.pixel.PixelEmptyState
+import com.mobaide.app.ui.common.pixel.PixelIconButton
 import com.mobaide.app.ui.common.pixel.PixelScaffold
+import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import com.mobaide.app.ui.common.pixel.PixelTextButton
 import com.mobaide.app.ui.common.pixel.PixelTopBar
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import com.mobaide.app.ui.theme.MobaideTheme
 import com.mobaide.app.ui.theme.chromeCaps
 import com.mobaide.app.ui.theme.pixel
+import kotlinx.coroutines.launch
 
 const val GIT_CHANGES_SCREEN_TAG = "git_changes_screen"
 const val GIT_CHANGES_LOADING_TAG = "git_changes_loading"
@@ -57,6 +72,14 @@ const val GIT_CHANGES_OUTDATED_TAG = "git_changes_outdated"
 const val GIT_CHANGES_UNAVAILABLE_TAG = "git_changes_unavailable"
 const val GIT_CHANGES_SESSION_GONE_TAG = "git_changes_session_gone"
 const val GIT_CHANGES_STALE_TAG = "git_changes_stale"
+const val GIT_CHANGES_COMMIT_TAG = "git_changes_commit"
+const val GIT_CHANGES_SELECT_TAG = "git_changes_select"
+const val GIT_CHANGES_SELECTION_STAGE_TAG = "git_changes_selection_stage"
+const val GIT_CHANGES_SELECTION_UNSTAGE_TAG = "git_changes_selection_unstage"
+const val GIT_CHANGES_SELECTION_DISCARD_TAG = "git_changes_selection_discard"
+const val GIT_CHANGES_DISCARD_DIALOG_TAG = "git_changes_discard_dialog"
+
+fun gitChangesSectionActionTag(group: String): String = "git_changes_section_action_$group"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,6 +89,9 @@ fun GitChangesScreen(
     onOpenDiff: (sessionId: String, entry: GitStatusEntry, scope: String) -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val discardPrompt by viewModel.discardPrompt.collectAsStateWithLifecycle()
+    val commitSheet by viewModel.commitSheet.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // Keeps the covered terminal's socket attached for exactly as long as this
     // screen is composed.
@@ -78,24 +104,62 @@ fun GitChangesScreen(
         viewModel.events.collect { event ->
             when (event) {
                 is GitChangesEvent.OpenDiff -> onOpenDiff(event.sessionId, event.entry, event.scope)
+                // Its own coroutine: `showSnackbar` suspends for the snackbar's
+                // lifetime and must not hold up the next navigation event.
+                is GitChangesEvent.ShowMessage -> launch { snackbarHostState.showSnackbar(event.text) }
             }
         }
     }
 
+    val ready = state as? GitChangesUiState.Ready
+    val inSelectionMode = ready?.inSelectionMode == true
+    BackHandler(enabled = inSelectionMode) { viewModel.clearSelection() }
+
     PixelScaffold(
         topBar = {
-            PixelTopBar(
-                title = { Text("Changes") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-            )
+            if (ready != null && inSelectionMode) {
+                SelectionTopBar(
+                    state = ready,
+                    onClose = viewModel::clearSelection,
+                    onStage = viewModel::stageSelection,
+                    onUnstage = viewModel::unstageSelection,
+                    onDiscard = viewModel::discardSelection,
+                )
+            } else {
+                PixelTopBar(
+                    title = { Text("Changes") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    actions = {
+                        if (ready != null && ready.hasActionableRows) {
+                            PixelIconButton(
+                                imageVector = Icons.Default.Checklist,
+                                contentDescription = "Select files",
+                                onClick = viewModel::enterSelection,
+                                enabled = !ready.busy,
+                                modifier = Modifier.testTag(GIT_CHANGES_SELECT_TAG),
+                            )
+                        }
+                        if (ready != null && ready.capabilities.commit) {
+                            PixelIconButton(
+                                imageVector = Icons.Outlined.Commit,
+                                contentDescription = "Commit",
+                                onClick = viewModel::openCommit,
+                                enabled = ready.stagedCount > 0 && !ready.busy,
+                                modifier = Modifier.testTag(GIT_CHANGES_COMMIT_TAG),
+                            )
+                        }
+                    },
+                )
+            }
         },
+        snackbarHost = { PixelSnackbarHost(snackbarHostState) },
     ) { padding ->
         PullToRefreshBox(
-            isRefreshing = (state as? GitChangesUiState.Ready)?.refreshing == true,
+            isRefreshing = ready?.refreshing == true,
             onRefresh = viewModel::refresh,
             modifier = Modifier
                 .fillMaxSize()
@@ -106,9 +170,103 @@ fun GitChangesScreen(
                 state = state,
                 onEntryClick = viewModel::onEntryClick,
                 onRetry = viewModel::refresh,
+                onEntryLongClick = viewModel::onEntryLongClick,
+                onStage = viewModel::stage,
+                onUnstage = viewModel::unstage,
+                onDiscard = viewModel::requestDiscard,
             )
         }
     }
+
+    discardPrompt?.let { prompt ->
+        GitDiscardDialog(
+            prompt = prompt,
+            busy = ready?.busy == true,
+            onConfirm = viewModel::confirmDiscard,
+            onDismiss = viewModel::dismissDiscard,
+        )
+    }
+
+    commitSheet?.let { sheet ->
+        GitCommitSheet(
+            state = sheet,
+            stagedCount = ready?.stagedCount ?: 0,
+            onDismiss = viewModel::closeCommit,
+            onCommit = viewModel::commit,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SelectionTopBar(
+    state: GitChangesUiState.Ready,
+    onClose: () -> Unit,
+    onStage: () -> Unit,
+    onUnstage: () -> Unit,
+    onDiscard: () -> Unit,
+) {
+    val subsets = selectionSubsets(state.sections, state.selectedKeys, state.capabilities)
+    PixelTopBar(
+        title = {
+            Text(if (state.selectedKeys.isEmpty()) "Select files" else "${state.selectedKeys.size} selected")
+        },
+        navigationIcon = {
+            IconButton(onClick = onClose) {
+                Icon(Icons.Default.Close, contentDescription = "Exit selection")
+            }
+        },
+        actions = {
+            if (state.capabilities.stage) {
+                PixelIconButton(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Stage selected",
+                    onClick = onStage,
+                    enabled = subsets.stage.isNotEmpty() && !state.busy,
+                    modifier = Modifier.testTag(GIT_CHANGES_SELECTION_STAGE_TAG),
+                )
+                PixelIconButton(
+                    imageVector = Icons.Default.Remove,
+                    contentDescription = "Unstage selected",
+                    onClick = onUnstage,
+                    enabled = subsets.unstage.isNotEmpty() && !state.busy,
+                    modifier = Modifier.testTag(GIT_CHANGES_SELECTION_UNSTAGE_TAG),
+                )
+            }
+            if (state.capabilities.discard) {
+                PixelIconButton(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Discard selected",
+                    onClick = onDiscard,
+                    enabled = subsets.discard.isNotEmpty() && !state.busy,
+                    modifier = Modifier.testTag(GIT_CHANGES_SELECTION_DISCARD_TAG),
+                )
+            }
+        },
+    )
+}
+
+@Composable
+internal fun GitDiscardDialog(
+    prompt: DiscardPrompt,
+    busy: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    PixelAlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag(GIT_CHANGES_DISCARD_DIALOG_TAG),
+        title = { Text(prompt.title) },
+        text = { Text(prompt.body) },
+        confirmButton = {
+            PixelTextButton(onClick = onConfirm, enabled = !busy) {
+                Text("Discard", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            PixelTextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 /** `internal` so a test can compose every state without a ViewModel. */
@@ -118,10 +276,23 @@ internal fun GitChangesContent(
     onEntryClick: (GitStatusEntry) -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    onEntryLongClick: (GitStatusEntry) -> Unit = {},
+    onStage: (List<GitStatusEntry>) -> Unit = {},
+    onUnstage: (List<GitStatusEntry>) -> Unit = {},
+    onDiscard: (List<GitStatusEntry>) -> Unit = {},
 ) {
     when (state) {
         GitChangesUiState.Loading -> GitStateLoading(GIT_CHANGES_LOADING_TAG, modifier)
-        is GitChangesUiState.Ready -> ChangesList(state, onEntryClick, onRetry, modifier)
+        is GitChangesUiState.Ready -> ChangesList(
+            state = state,
+            onEntryClick = onEntryClick,
+            onRetry = onRetry,
+            onEntryLongClick = onEntryLongClick,
+            onStage = onStage,
+            onUnstage = onUnstage,
+            onDiscard = onDiscard,
+            modifier = modifier,
+        )
         is GitChangesUiState.Unavailable -> {
             val (title, body) = unavailableCopy(state.reason)
             GitStateMessage(
@@ -162,6 +333,10 @@ private fun ChangesList(
     state: GitChangesUiState.Ready,
     onEntryClick: (GitStatusEntry) -> Unit,
     onRetry: () -> Unit,
+    onEntryLongClick: (GitStatusEntry) -> Unit,
+    onStage: (List<GitStatusEntry>) -> Unit,
+    onUnstage: (List<GitStatusEntry>) -> Unit,
+    onDiscard: (List<GitStatusEntry>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -194,14 +369,33 @@ private fun ChangesList(
         }
         state.sections.forEach { section ->
             stickyHeader(key = "section:${section.group}", contentType = "section") {
-                SectionHeader(section)
+                SectionHeader(
+                    section = section,
+                    action = sectionAction(section, state.capabilities)
+                        ?.takeUnless { state.inSelectionMode },
+                    enabled = !state.busy,
+                    onAction = { stage ->
+                        if (stage) onStage(section.entries) else onUnstage(section.entries)
+                    },
+                )
             }
             itemsIndexed(
                 items = section.entries,
                 key = { index, _ -> section.keys[index] },
                 contentType = { _, _ -> "entry" },
-            ) { _, entry ->
-                GitChangesRow(entry = entry, onClick = { onEntryClick(entry) })
+            ) { index, entry ->
+                GitChangesRow(
+                    entry = entry,
+                    onClick = { onEntryClick(entry) },
+                    actions = rowActions(entry, state.capabilities),
+                    inSelectionMode = state.inSelectionMode,
+                    selected = section.keys[index] in state.selectedKeys,
+                    busy = state.busy,
+                    onLongClick = { onEntryLongClick(entry) },
+                    onStage = { onStage(listOf(entry)) },
+                    onUnstage = { onUnstage(listOf(entry)) },
+                    onDiscard = { onDiscard(listOf(entry)) },
+                )
             }
         }
     }
@@ -257,12 +451,18 @@ private fun RepoHeader(status: GitStatusResponse, repo: GitRepoInfo) {
 }
 
 @Composable
-private fun SectionHeader(section: GitChangesSection) {
+private fun SectionHeader(
+    section: GitChangesSection,
+    action: SectionAction? = null,
+    enabled: Boolean = true,
+    onAction: (stage: Boolean) -> Unit = {},
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(start = 16.dp, end = if (action == null) 16.dp else 4.dp, top = 4.dp, bottom = 4.dp)
+            .heightIn(min = 40.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -276,6 +476,14 @@ private fun SectionHeader(section: GitChangesSection) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (action != null) {
+            Spacer(Modifier.width(8.dp))
+            PixelTextButton(
+                onClick = { onAction(action.stage) },
+                enabled = enabled,
+                modifier = Modifier.testTag(gitChangesSectionActionTag(section.group)),
+            ) { Text(action.label) }
+        }
     }
 }
 
@@ -341,7 +549,12 @@ internal fun previewGitStatus(): GitStatusResponse = GitStatusResponse(
 private fun GitChangesPreviewContent() {
     val status = previewGitStatus()
     GitChangesContent(
-        state = GitChangesUiState.Ready(status, status.repo!!, sectionsFor(status)),
+        state = GitChangesUiState.Ready(
+            status = status,
+            repo = status.repo!!,
+            sections = sectionsFor(status),
+            capabilities = GitCapabilities(stage = true, discard = true, commit = true),
+        ),
         onEntryClick = {},
         onRetry = {},
     )

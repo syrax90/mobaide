@@ -18,6 +18,31 @@ struct GitChangesRow: Equatable, Identifiable {
     let entry: GitStatusEntry
 }
 
+/// The confirmation Discard always goes through; never one tap.
+struct DiscardPrompt: Equatable {
+    let rows: [GitChangesRow]
+    let title: String
+    let body: String
+}
+
+enum CommitContextState: Equatable {
+    case loading
+    /// `author` nil: git cannot say who commits; `head` nil: nothing to amend.
+    case ready(author: GitCommitAuthor?, head: GitCommitHead?)
+    case failed(String)
+}
+
+struct CommitError: Equatable {
+    let message: String
+    let output: String?
+}
+
+struct CommitSheetState: Equatable {
+    var context: CommitContextState = .loading
+    var isCommitting = false
+    var error: CommitError?
+}
+
 /// Session-scoped Changes screen state (Android `GitChangesViewModel` +
 /// `GitRepository.observeSessionGitStatus`).
 ///
@@ -47,6 +72,18 @@ final class GitChangesModel {
     /// A failed refresh over content already shown; cleared by the next success.
     private(set) var staleError: String?
     private(set) var isLoading = false
+    /// Which mutating controls the agent advertises; none for an older agent.
+    private(set) var capabilities = GitCapabilities.none
+    /// Row ids ticked in edit mode, bound to the `List` selection.
+    var selection: Set<String> = []
+    /// A mutation is in flight: every control that would start another waits.
+    private(set) var isMutating = false
+    var discardPrompt: DiscardPrompt?
+    var commitSheet: CommitSheetState?
+    var toast: ToastMessage?
+    /// Consumed by the screen's first `.task`: the terminal menu's Commit…
+    /// lands here with the sheet already up.
+    private(set) var openCommitOnAppear: Bool
 
     let sessionId: String
     private let agentAPI: AgentAPI
@@ -58,19 +95,46 @@ final class GitChangesModel {
     /// so a return from the Diff screen costs an `unchanged` round trip.
     private var cached: GitStatusResponse?
     private var loadGeneration = 0
+    /// The rows a confirmation dialog acts on, kept apart from `discardPrompt`:
+    /// SwiftUI writes the dialog's `isPresented` binding on dismissal, which
+    /// can clear the prompt before the confirm action runs.
+    private var pendingDiscard: [GitChangesRow] = []
 
     init(
         sessionId: String,
         agentAPI: AgentAPI,
         agentEventBus: AgentEventBus,
         projectName: @escaping @MainActor () -> String?,
-        sleeper: any Sleeper = ContinuousSleeper()
+        sleeper: any Sleeper = ContinuousSleeper(),
+        openCommit: Bool = false
     ) {
         self.sessionId = sessionId
         self.agentAPI = agentAPI
         self.agentEventBus = agentEventBus
         self.projectName = projectName
         self.sleeper = sleeper
+        self.openCommitOnAppear = openCommit
+    }
+
+    var sections: [GitChangesSection] {
+        if case .ready(_, _, let sections) = state { return sections }
+        return []
+    }
+
+    var stagedCount: Int {
+        if case .ready(let status, _, _) = state { return status.counts?.staged ?? 0 }
+        return 0
+    }
+
+    /// Whether any shown row has a Stage / Unstage / Discard to offer.
+    var hasActionableRows: Bool {
+        sections.contains { section in
+            section.rows.contains { GitChangesDisplay.rowActions($0.entry, capabilities: capabilities).any }
+        }
+    }
+
+    var selectionSubsets: GitChangesDisplay.SelectionSubsets {
+        GitChangesDisplay.selectionSubsets(sections, selection: selection, capabilities: capabilities)
     }
 
     /// Neither 404 can change, so polling stops here.
@@ -123,6 +187,9 @@ final class GitChangesModel {
             cached = body
             staleError = nil
             state = Self.state(for: body)
+            // Ticked rows that vanished with the refresh are dropped.
+            let live = Set(sections.flatMap(\.rows).map(\.id))
+            selection.formIntersection(live)
         } catch {
             guard generation == loadGeneration, !SessionGitError.isCancellation(error) else { return }
             apply(SessionGitError.map(error))
@@ -149,6 +216,136 @@ final class GitChangesModel {
             scope: GitChangesDisplay.diffScope(for: entry),
             origPath: entry.orig_path
         )
+    }
+
+    /// One `GET /api/version` per screen visit, from the screen's own task so
+    /// the poll's request sequence stays exactly the reads. An unreadable probe
+    /// keeps the read-only viewer.
+    func loadCapabilities() async {
+        guard let info = try? await agentAPI.getAgentVersion() else { return }
+        capabilities = info.gitCapabilities
+    }
+
+    /// The terminal menu's Commit…, once.
+    func consumeOpenCommit() {
+        guard openCommitOnAppear else { return }
+        openCommitOnAppear = false
+        openCommit()
+    }
+
+    func rows(for ids: Set<String>) -> [GitChangesRow] {
+        sections.flatMap(\.rows).filter { ids.contains($0.id) }
+    }
+
+    func stage(_ rows: [GitChangesRow]) async {
+        await mutate(rows) { [self] in
+            try await agentAPI.stageSessionGit(sessionId: sessionId, paths: GitChangesDisplay.paths(for: rows))
+        }
+    }
+
+    func unstage(_ rows: [GitChangesRow]) async {
+        await mutate(rows) { [self] in
+            try await agentAPI.unstageSessionGit(sessionId: sessionId, paths: GitChangesDisplay.paths(for: rows))
+        }
+    }
+
+    func requestDiscard(_ rows: [GitChangesRow]) {
+        guard !rows.isEmpty else { return }
+        pendingDiscard = rows
+        discardPrompt = GitChangesDisplay.discardPrompt(for: rows)
+    }
+
+    /// The dialog went away without a choice (Cancel, or a tap outside): the
+    /// `isPresented` binding must not call this — SwiftUI writes it false
+    /// before the confirm action runs, which would empty the rows underneath
+    /// `confirmDiscard`. It clears `discardPrompt` alone.
+    func dismissDiscard() {
+        discardPrompt = nil
+        pendingDiscard = []
+    }
+
+    /// One request per scope: a selection can mix modified and untracked
+    /// files, and the route takes one scope at a time.
+    func confirmDiscard() async {
+        let rows = pendingDiscard
+        pendingDiscard = []
+        discardPrompt = nil
+        await mutate(rows) { [self] in
+            let byScope = Dictionary(grouping: rows) { GitChangesDisplay.discardScope(for: $0.entry) }
+            for (scope, scoped) in byScope.sorted(by: { $0.key < $1.key }) {
+                try await agentAPI.discardSessionGit(
+                    sessionId: sessionId,
+                    paths: GitChangesDisplay.paths(for: scoped),
+                    scope: scope
+                )
+            }
+        }
+    }
+
+    func openCommit() {
+        commitSheet = CommitSheetState()
+        Task { await loadCommitContext() }
+    }
+
+    func closeCommit() {
+        guard commitSheet?.isCommitting != true else { return }
+        commitSheet = nil
+    }
+
+    func loadCommitContext() async {
+        guard commitSheet != nil else { return }
+        do {
+            let response = try await agentAPI.getSessionGitCommitContext(sessionId: sessionId)
+            commitSheet?.context = .ready(author: response.author, head: response.head)
+        } catch {
+            guard !SessionGitError.isCancellation(error) else { return }
+            commitSheet?.context = .failed(SessionGitCopy.mutationMessage(for: SessionGitError.map(error)))
+        }
+    }
+
+    func commit(summary: String, description: String, amend: Bool, noVerify: Bool) async {
+        guard !isMutating, commitSheet != nil else { return }
+        let message = GitChangesDisplay.composeCommitMessage(summary: summary, description: description)
+        guard !message.isEmpty else { return }
+        isMutating = true
+        commitSheet?.isCommitting = true
+        commitSheet?.error = nil
+        defer { isMutating = false }
+        do {
+            let result = try await agentAPI.commitSessionGit(
+                sessionId: sessionId,
+                request: GitCommitRequest(message: message, amend: amend, no_verify: noVerify)
+            )
+            commitSheet = nil
+            toast = ToastMessage(text: GitChangesDisplay.commitNotice(result), tone: .ok)
+            await load()
+        } catch {
+            guard !SessionGitError.isCancellation(error) else { return }
+            let mapped = SessionGitError.map(error)
+            var output: String?
+            if case .git(let code, let detail)? = mapped as? SessionGitError, code == SessionGitError.codeHookFailed {
+                output = detail
+            }
+            commitSheet?.isCommitting = false
+            commitSheet?.error = CommitError(message: SessionGitCopy.mutationMessage(for: mapped), output: output)
+        }
+    }
+
+    /// One mutation at a time; on success the ticked rows are forgotten and
+    /// the list re-reads the working tree at once — the agent's `git.changed`
+    /// echo would do the same a moment later through the etag path.
+    private func mutate(_ rows: [GitChangesRow], _ body: () async throws -> Void) async {
+        guard !rows.isEmpty, !isMutating else { return }
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            try await body()
+            selection.subtract(rows.map(\.id))
+        } catch {
+            guard !SessionGitError.isCancellation(error) else { return }
+            toast = ToastMessage(text: SessionGitCopy.mutationMessage(for: SessionGitError.map(error)), tone: .danger)
+        }
+        await load()
     }
 
     private func matches(projectName eventProject: String, toplevel: String?, commonDir: String?) -> Bool {
@@ -288,5 +485,128 @@ enum GitChangesDisplay {
             return "Showing the first \(shown) of at least \(total) entries."
         }
         return "List cut short after \(shown) entries."
+    }
+
+    /// What a row can do: a staged entry is unstaged, a modified or untracked
+    /// one is staged or discarded, a conflict is resolved in the terminal
+    /// (marking it resolved from a phone would stage the markers). Each gated
+    /// on its capability, so an older agent shows no control that would 404.
+    struct RowActions: Equatable {
+        var stage = false
+        var unstage = false
+        var discard = false
+
+        var any: Bool { stage || unstage || discard }
+        static let none = RowActions()
+    }
+
+    static func rowActions(_ entry: GitStatusEntry, capabilities: GitCapabilities) -> RowActions {
+        switch entry.group {
+        case GitStatusEntry.groupStaged:
+            return RowActions(unstage: capabilities.stage)
+        case GitStatusEntry.groupUnstaged, GitStatusEntry.groupUntracked:
+            return RowActions(stage: capabilities.stage, discard: capabilities.discard)
+        default:
+            return .none
+        }
+    }
+
+    /// The discard route's scope for an entry; conflicts never reach it.
+    static func discardScope(for entry: GitStatusEntry) -> String {
+        entry.group == GitStatusEntry.groupUntracked
+            ? GitDiscardRequest.scopeUntracked
+            : GitDiscardRequest.scopeUnstaged
+    }
+
+    /// The paths a request names for these rows: a rename needs both its
+    /// sides (`git reset` on the new name alone leaves the deletion staged).
+    static func paths(for rows: [GitChangesRow]) -> [String] {
+        var seen: Set<String> = []
+        var out: [String] = []
+        for row in rows {
+            for path in [row.entry.path, row.entry.orig_path].compactMap({ $0 }) where seen.insert(path).inserted {
+                out.append(path)
+            }
+        }
+        return out
+    }
+
+    /// The selected rows each toolbar action applies to; a button is enabled
+    /// when its list is non-empty.
+    struct SelectionSubsets: Equatable {
+        var stage: [GitChangesRow] = []
+        var unstage: [GitChangesRow] = []
+        var discard: [GitChangesRow] = []
+    }
+
+    static func selectionSubsets(
+        _ sections: [GitChangesSection],
+        selection: Set<String>,
+        capabilities: GitCapabilities
+    ) -> SelectionSubsets {
+        var subsets = SelectionSubsets()
+        for row in sections.flatMap(\.rows) where selection.contains(row.id) {
+            let actions = rowActions(row.entry, capabilities: capabilities)
+            if actions.stage { subsets.stage.append(row) }
+            if actions.unstage { subsets.unstage.append(row) }
+            if actions.discard { subsets.discard.append(row) }
+        }
+        return subsets
+    }
+
+    /// A section header's whole-section action; nil for Conflicts and unknown groups.
+    struct SectionAction: Equatable {
+        let label: String
+        let stage: Bool
+    }
+
+    static func sectionAction(_ section: GitChangesSection, capabilities: GitCapabilities) -> SectionAction? {
+        guard capabilities.stage else { return nil }
+        switch section.group {
+        case GitStatusEntry.groupStaged:
+            return SectionAction(label: "Unstage all", stage: false)
+        case GitStatusEntry.groupUnstaged, GitStatusEntry.groupUntracked:
+            return SectionAction(label: "Stage all", stage: true)
+        default:
+            return nil
+        }
+    }
+
+    static func discardPrompt(for rows: [GitChangesRow]) -> DiscardPrompt {
+        if rows.count == 1, let only = rows.first {
+            let untracked = only.entry.group == GitStatusEntry.groupUntracked
+            return DiscardPrompt(
+                rows: rows,
+                title: untracked ? "Delete untracked file?" : "Discard changes?",
+                body: untracked
+                    ? "\(only.entry.path) is not tracked by git and will be deleted. This cannot be undone."
+                    : "Changes to \(only.entry.path) will be thrown away. This cannot be undone."
+            )
+        }
+        return DiscardPrompt(
+            rows: rows,
+            title: "Discard \(rows.count) files?",
+            body: "Their working-tree changes will be thrown away and untracked ones deleted. This cannot be undone."
+        )
+    }
+
+    /// `subject\n\nbody` — the shape `git commit -F` reads.
+    static func composeCommitMessage(summary: String, description: String) -> String {
+        let subject = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        return body.isEmpty ? subject : "\(subject)\n\n\(body)"
+    }
+
+    static func commitButtonLabel(stagedCount: Int, amend: Bool) -> String {
+        if amend { return "Amend commit" }
+        return stagedCount == 1 ? "Commit 1 file" : "Commit \(stagedCount) files"
+    }
+
+    static func commitNotice(_ result: GitCommitResponse) -> String {
+        "Committed \(result.short_oid) · \(result.subject)"
+    }
+
+    static func authorLine(_ author: GitCommitAuthor) -> String {
+        "Committing as \(author.name) <\(author.email)>"
     }
 }

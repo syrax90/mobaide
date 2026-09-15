@@ -6,18 +6,31 @@
  */
 import { isApiError } from '../../../api/errors';
 import {
+  GIT_CODE_EMPTY_MESSAGE,
   GIT_CODE_ERROR,
+  GIT_CODE_HOOK_FAILED,
+  GIT_CODE_IDENTITY_REQUIRED,
+  GIT_CODE_INDEX_LOCKED,
+  GIT_CODE_NO_HEAD,
+  GIT_CODE_NOTHING_TO_COMMIT,
+  GIT_CODE_PATHSPEC_MISMATCH,
   GIT_CODE_TIMEOUT,
+  GIT_CODE_TOO_OLD,
   GIT_CODE_UNAVAILABLE,
+  GIT_CODE_UNMERGED,
   isSessionGitError,
+  type SessionGitCommitHead,
+  type SessionGitCommitResult,
   type SessionGitDiff,
   type SessionGitDiffScope,
+  type SessionGitDiscardScope,
   type SessionGitEntry,
   type SessionGitHunk,
   type SessionGitRepoInfo,
   type SessionGitStatus,
   type SessionGitUpstream,
 } from '../../../api/sessionGitRepository';
+import type { GitCapabilities } from '../../../protocol/dto/agentVersion';
 
 export const DIFF_CONTEXT_DEFAULT = 3;
 /** The agent's context ceiling, at which an untruncated diff is the whole file. */
@@ -225,7 +238,7 @@ export function sessionGitErrorCopy(error: unknown): string {
             : `git failed: ${error.detailMessage}`;
         }
         if (UNAVAILABLE_REASONS.has(code)) return unavailableCopy(code).body;
-        return `git refused the request (${code}).`;
+        return refusalCopy(code, error.detailMessage);
       }
     }
   }
@@ -374,4 +387,187 @@ function gutterDigits(diff: SessionGitDiff): number {
     widest = Math.max(widest, hunk.old_start + hunk.old_lines, hunk.new_start + hunk.new_lines);
   }
   return Math.max(2, String(widest).length);
+}
+
+/**
+ * The mutating routes' `409` vocabulary, one line each; the same strings as
+ * Android `refusalCopy` and iOS `SessionGitCopy.refusal`.
+ */
+export function refusalCopy(code: string, detailMessage: string | null): string {
+  switch (code) {
+    case GIT_CODE_IDENTITY_REQUIRED:
+      return "Git doesn't know who you are on the agent machine.";
+    case GIT_CODE_UNMERGED:
+      return 'Resolve the conflicts first.';
+    case GIT_CODE_NOTHING_TO_COMMIT:
+      return 'Nothing is staged.';
+    case GIT_CODE_NO_HEAD:
+      return 'There is no commit to amend yet.';
+    case GIT_CODE_HOOK_FAILED:
+      return 'A commit hook rejected the commit.';
+    case GIT_CODE_INDEX_LOCKED:
+      return 'Another git process is running — try again.';
+    case GIT_CODE_PATHSPEC_MISMATCH:
+      return 'That file changed under you — refreshed.';
+    case GIT_CODE_EMPTY_MESSAGE:
+      return 'Enter a commit summary.';
+    default:
+      return detailMessage === null
+        ? `git refused the request (${code}).`
+        : `git refused the request (${code}): ${detailMessage}`;
+  }
+}
+
+/**
+ * Copy for a failed stage / unstage / discard / commit. One code reads
+ * differently from the polls: the mutating routes need git 2.26, the reads
+ * 2.15, and the agent answers `git_too_old` for both.
+ */
+export function mutationErrorCopy(error: unknown): string {
+  if (isSessionGitError(error) && error.kind === 'git' && error.code === GIT_CODE_TOO_OLD) {
+    return 'Staging needs git 2.26 or newer on the agent machine.';
+  }
+  return sessionGitErrorCopy(error);
+}
+
+/** The host-side fix shown with `identity_required`, verbatim for copying. */
+export const IDENTITY_FIX_COMMANDS: readonly string[] = [
+  'git config --global user.name "Your Name"',
+  'git config --global user.email "you@example.com"',
+];
+
+export type RowAction = 'stage' | 'unstage' | 'discard';
+
+export interface RowActions {
+  stage: boolean;
+  unstage: boolean;
+  discard: boolean;
+}
+
+const NO_ACTIONS: RowActions = { stage: false, unstage: false, discard: false };
+
+/**
+ * What a row can do: a staged entry is unstaged, a modified or untracked one
+ * is staged or discarded, a conflict is resolved in the terminal (marking it
+ * resolved from a phone would stage the markers). Each gated on its
+ * capability, so an older agent shows no control that would 404.
+ */
+export function rowActions(entry: SessionGitEntry, capabilities: GitCapabilities): RowActions {
+  switch (entry.group) {
+    case 'staged':
+      return { ...NO_ACTIONS, unstage: capabilities.stage };
+    case 'unstaged':
+    case 'untracked':
+      return { ...NO_ACTIONS, stage: capabilities.stage, discard: capabilities.discard };
+    default:
+      return NO_ACTIONS;
+  }
+}
+
+/** The discard route's scope for a row; conflicts never reach it. */
+export function discardScopeFor(entry: SessionGitEntry): SessionGitDiscardScope {
+  return entry.group === 'untracked' ? 'untracked' : 'unstaged';
+}
+
+/**
+ * The paths a request names for these rows: a rename needs both its sides
+ * (`git reset` on the new name alone leaves the deletion staged).
+ */
+export function pathsFor(rows: readonly ChangesRow[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const { entry } of rows) {
+    for (const path of [entry.path, entry.orig_path ?? null]) {
+      if (path === null || seen.has(path)) continue;
+      seen.add(path);
+      out.push(path);
+    }
+  }
+  return out;
+}
+
+export interface SelectionSubsets {
+  stage: ChangesRow[];
+  unstage: ChangesRow[];
+  discard: ChangesRow[];
+}
+
+/** The selected rows each toolbar action applies to; a button is enabled when its subset is non-empty. */
+export function selectionSubsets(
+  sections: readonly ChangesSection[],
+  selectedKeys: ReadonlySet<string>,
+  capabilities: GitCapabilities,
+): SelectionSubsets {
+  const subsets: SelectionSubsets = { stage: [], unstage: [], discard: [] };
+  for (const section of sections) {
+    for (const row of section.rows) {
+      if (!selectedKeys.has(row.key)) continue;
+      const actions = rowActions(row.entry, capabilities);
+      if (actions.stage) subsets.stage.push(row);
+      if (actions.unstage) subsets.unstage.push(row);
+      if (actions.discard) subsets.discard.push(row);
+    }
+  }
+  return subsets;
+}
+
+/** The whole-section action of a header, or none for Conflicts and unknown groups. */
+export function sectionAction(
+  section: ChangesSection,
+  capabilities: GitCapabilities,
+): { label: string; action: 'stage' | 'unstage' } | null {
+  if (!capabilities.stage) return null;
+  if (section.group === 'staged') return { label: 'Unstage all', action: 'unstage' };
+  if (section.group === 'unstaged' || section.group === 'untracked') {
+    return { label: 'Stage all', action: 'stage' };
+  }
+  return null;
+}
+
+export function discardPrompt(rows: readonly ChangesRow[]): { title: string; body: string } {
+  const only = rows.length === 1 ? rows[0] : undefined;
+  if (only !== undefined) {
+    const entry = only.entry;
+    const untracked = entry.group === 'untracked';
+    return {
+      title: untracked ? 'Delete untracked file?' : 'Discard changes?',
+      body: untracked
+        ? `${entry.path} is not tracked by git and will be deleted. This cannot be undone.`
+        : `Changes to ${entry.path} will be thrown away. This cannot be undone.`,
+    };
+  }
+  return {
+    title: `Discard ${String(rows.length)} files?`,
+    body:
+      'Their working-tree changes will be thrown away and untracked ones deleted. ' +
+      'This cannot be undone.',
+  };
+}
+
+export function commitNotice(result: SessionGitCommitResult): string {
+  return `Committed ${result.short_oid} · ${result.subject}`;
+}
+
+export function authorLine(author: { name: string; email: string }): string {
+  return `Committing as ${author.name} <${author.email}>`;
+}
+
+/** `subject\n\nbody` — the shape `git commit -F` reads. */
+export function composeCommitMessage(summary: string, description: string): string {
+  const subject = summary.trim();
+  const body = description.trim();
+  return body === '' ? subject : `${subject}\n\n${body}`;
+}
+
+export function splitCommitMessage(head: SessionGitCommitHead): {
+  summary: string;
+  description: string;
+} {
+  return { summary: head.subject, description: head.body };
+}
+
+export function commitButtonLabel(stagedCount: number, amend: boolean): string {
+  if (amend) return 'Amend commit';
+  if (stagedCount === 1) return 'Commit 1 file';
+  return `Commit ${String(stagedCount)} files`;
 }

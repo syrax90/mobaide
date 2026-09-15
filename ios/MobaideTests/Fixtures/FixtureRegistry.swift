@@ -115,6 +115,12 @@ enum FixtureRegistry {
         "BusyByResponse": runner(BusyByResponse.self),
         "GitStatusResponse": runner(GitStatusResponse.self),
         "GitDiffResponse": runner(GitDiffResponse.self),
+        "GitPathsRequest": runner(GitPathsRequest.self),
+        "GitDiscardRequest": runner(GitDiscardRequest.self),
+        "GitMutationResponse": runner(GitMutationResponse.self),
+        "GitCommitRequest": runner(GitCommitRequest.self),
+        "GitCommitResponse": runner(GitCommitResponse.self),
+        "GitCommitContextResponse": runner(GitCommitContextResponse.self),
         // PairingDtos.swift
         "PairingClaimRequest": runner(PairingClaimRequest.self),
         "PairingClaimResponse": runner(PairingClaimResponse.self),

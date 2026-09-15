@@ -5,6 +5,7 @@ import {
   type SessionGitDiff,
   type SessionGitDiffRequest,
 } from '../../../api/sessionGitRepository';
+import type { GitCapabilities } from '../../../protocol/dto/agentVersion';
 import { SessionGitState } from './SessionGitState';
 import {
   DIFF_CONTEXT_CHOICES,
@@ -12,10 +13,12 @@ import {
   diffScopeFor,
   diffView,
   fileName,
+  rowActions,
   sessionGitErrorCopy,
   showsContextChoices,
   type ChangesRow,
   type DiffHunkView,
+  type RowAction,
 } from './sessionGitDisplay';
 import { useSessionGitDiff } from './useSessionGit';
 
@@ -27,6 +30,10 @@ interface GitDiffPaneProps {
   onContextChange: (context: number) => void;
   /** Stacked layout only: back to the file list. */
   onBack: () => void;
+  capabilities: GitCapabilities;
+  busy: boolean;
+  /** Stage or unstage the shown file from the review; the panel re-targets the selection. */
+  onAction: (action: RowAction, rows: readonly ChangesRow[]) => void;
 }
 
 export function GitDiffPane({
@@ -36,6 +43,9 @@ export function GitDiffPane({
   context,
   onContextChange,
   onBack,
+  capabilities,
+  busy,
+  onAction,
 }: GitDiffPaneProps) {
   if (selection === null) {
     return <p className="git-diff-placeholder empty-state">Select a file to see its changes</p>;
@@ -52,6 +62,9 @@ export function GitDiffPane({
       context={context}
       onContextChange={onContextChange}
       onBack={onBack}
+      capabilities={capabilities}
+      busy={busy}
+      onAction={onAction}
     />
   );
 }
@@ -67,8 +80,12 @@ function GitDiffView({
   context,
   onContextChange,
   onBack,
+  capabilities,
+  busy,
+  onAction,
 }: GitDiffViewProps) {
   const entry = selection.entry;
+  const actions = rowActions(entry, capabilities);
   const request: SessionGitDiffRequest = {
     path: entry.path,
     scope: diffScopeFor(entry),
@@ -88,6 +105,18 @@ function GitDiffView({
             ← Changes
           </button>
           <h3>{fileName(entry.path)}</h3>
+          {(actions.stage || actions.unstage) && (
+            <button
+              type="button"
+              className="button git-diff-action"
+              disabled={busy}
+              onClick={() => {
+                onAction(actions.stage ? 'stage' : 'unstage', [selection]);
+              }}
+            >
+              {actions.stage ? 'Stage' : 'Unstage'}
+            </button>
+          )}
         </div>
         <span className="git-diff-path">{entry.path}</span>
         {origPath !== null && <span className="git-diff-path">from {origPath}</span>}

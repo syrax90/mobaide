@@ -47,7 +47,7 @@ enum SessionGitCopy {
                 default:
                     return unavailableReasons.contains(code)
                         ? unavailable(code).body
-                        : "git refused the request (\(code))."
+                        : refusal(code, message: message)
                 }
             case .network:
                 return "Could not reach the agent. Check the connection and try again."
@@ -62,4 +62,48 @@ enum SessionGitCopy {
             return error.localizedDescription
         }
     }
+}
+
+extension SessionGitCopy {
+    /// The mutating routes' `409` vocabulary, one line each; the same strings
+    /// as Android `refusalCopy` and the web.
+    static func refusal(_ code: String, message: String?) -> String {
+        switch code {
+        case SessionGitError.codeIdentityRequired:
+            return "Git doesn't know who you are on the agent machine."
+        case SessionGitError.codeUnmerged:
+            return "Resolve the conflicts first."
+        case SessionGitError.codeNothingToCommit:
+            return "Nothing is staged."
+        case SessionGitError.codeNoHead:
+            return "There is no commit to amend yet."
+        case SessionGitError.codeHookFailed:
+            return "A commit hook rejected the commit."
+        case SessionGitError.codeIndexLocked:
+            return "Another git process is running — try again."
+        case SessionGitError.codePathspecMismatch:
+            return "That file changed under you — refreshed."
+        case SessionGitError.codeEmptyMessage:
+            return "Enter a commit summary."
+        default:
+            return message.map { "git refused the request (\(code)): \($0)" }
+                ?? "git refused the request (\(code))."
+        }
+    }
+
+    /// Copy for a failed stage / unstage / discard / commit. One code reads
+    /// differently from the polls: the mutating routes need git 2.26, the
+    /// reads 2.15, and the agent answers `git_too_old` for both.
+    static func mutationMessage(for error: any Error) -> String {
+        if case .git(let code, _)? = error as? SessionGitError, code == SessionGitError.codeGitTooOld {
+            return "Staging needs git 2.26 or newer on the agent machine."
+        }
+        return errorMessage(for: error)
+    }
+
+    /// The host-side fix shown with `identity_required`, verbatim for copying.
+    static let identityFixCommands: [String] = [
+        "git config --global user.name \"Your Name\"",
+        "git config --global user.email \"you@example.com\"",
+    ]
 }

@@ -139,3 +139,33 @@ export function cliModelDetails(
   }
   return parsed.length > 0 ? parsed : null;
 }
+
+export interface GitCapabilities {
+  stage: boolean;
+  discard: boolean;
+  commit: boolean;
+}
+
+export const NO_GIT_CAPABILITIES: GitCapabilities = { stage: false, discard: false, commit: false };
+
+/**
+ * Whether the agent advertises one `capabilities.git.<key>` as `true`.
+ *
+ * The opposite default from `cliAvailable`: a mutating control is shown only
+ * on an explicit `true`, so an older agent (or an unreadable probe) keeps the
+ * Changes viewer read-only rather than offering a Stage that would 404.
+ */
+export function gitCapability(info: AgentVersionInfo | undefined, key: string): boolean {
+  if (info === undefined) return false;
+  const git = info.capabilities.git;
+  if (typeof git !== 'object' || git === null) return false;
+  return Object.hasOwn(git, key) && (git as Record<string, unknown>)[key] === true;
+}
+
+export function gitCapabilities(info: AgentVersionInfo | undefined): GitCapabilities {
+  return {
+    stage: gitCapability(info, 'stage'),
+    discard: gitCapability(info, 'discard'),
+    commit: gitCapability(info, 'commit'),
+  };
+}

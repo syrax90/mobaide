@@ -4,6 +4,7 @@ import {
   type SessionGitEntry,
   type SessionGitStatus,
 } from '../../../api/sessionGitRepository';
+import type { GitCapabilities } from '../../../protocol/dto/agentVersion';
 import { SessionGitState } from './SessionGitState';
 import {
   badgeFor,
@@ -11,12 +12,18 @@ import {
   fileName,
   headLabel,
   repoStateLabel,
+  rowActions,
+  sectionAction,
   sectionsFor,
+  selectionSubsets,
   sessionGitErrorCopy,
   truncatedEntriesNotice,
   unavailableCopy,
   upstreamLabel,
   type ChangesRow,
+  type ChangesSection,
+  type RowAction,
+  type RowActions,
 } from './sessionGitDisplay';
 
 interface GitChangesListProps {
@@ -25,14 +32,39 @@ interface GitChangesListProps {
   selectedKey: string | null;
   onSelect: (row: ChangesRow) => void;
   onRetry: () => void;
+  capabilities: GitCapabilities;
+  /** A mutation is in flight: every control that would start another waits. */
+  busy: boolean;
+  /** Keys of the rows ticked for the selection toolbar. */
+  selectedKeys: ReadonlySet<string>;
+  onToggleRow: (row: ChangesRow, selected: boolean) => void;
+  onClearSelection: () => void;
+  onAction: (action: RowAction, rows: readonly ChangesRow[]) => void;
 }
 
 /**
  * The repo header and the grouped file list, with every state the #669
  * contract names. A failed poll over a cached body keeps the body on screen
  * and reports the failure above it, as both mobile clients do.
+ *
+ * Every mutating control — the per-row buttons, the section headers'
+ * Stage all / Unstage all, the checkboxes and the selection toolbar — exists
+ * only when the agent advertises the matching `capabilities.git` key; an
+ * older agent gets the read-only list of #669.
  */
-export function GitChangesList({ status, error, selectedKey, onSelect, onRetry }: GitChangesListProps) {
+export function GitChangesList({
+  status,
+  error,
+  selectedKey,
+  onSelect,
+  onRetry,
+  capabilities,
+  busy,
+  selectedKeys,
+  onToggleRow,
+  onClearSelection,
+  onAction,
+}: GitChangesListProps) {
   if (isTerminalSessionGitError(error) && isSessionGitError(error)) {
     return error.kind === 'agentOutdated' ? (
       <SessionGitState
@@ -70,6 +102,7 @@ export function GitChangesList({ status, error, selectedKey, onSelect, onRetry }
 
   const sections = sectionsFor(status);
   const truncated = truncatedEntriesNotice(status);
+  const selectable = capabilities.stage || capabilities.discard;
   return (
     <>
       {status.repo !== undefined && status.repo !== null && (
@@ -84,32 +117,160 @@ export function GitChangesList({ status, error, selectedKey, onSelect, onRetry }
         </div>
       )}
       {truncated !== null && <p className="git-changes-notice">{truncated}</p>}
+      {selectable && selectedKeys.size > 0 && (
+        <SelectionBar
+          sections={sections}
+          selectedKeys={selectedKeys}
+          capabilities={capabilities}
+          busy={busy}
+          onAction={onAction}
+          onClear={onClearSelection}
+        />
+      )}
       {sections.length === 0 ? (
         <p className="empty-state">Working tree clean</p>
       ) : (
-        sections.map((section) => (
-          <section key={section.group} className="git-changes-section">
-            <h3>
-              <span>{section.title}</span>
-              <span className="git-changes-count">{section.rows.length}</span>
-            </h3>
-            <ul className="git-changes-rows">
-              {section.rows.map((row) => (
-                <li key={row.key}>
-                  <EntryRow
-                    entry={row.entry}
-                    selected={row.key === selectedKey}
+        sections.map((section) => {
+          const bulk = sectionAction(section, capabilities);
+          return (
+            <section key={section.group} className="git-changes-section">
+              <h3>
+                <span>{section.title}</span>
+                <span className="git-changes-count">{section.rows.length}</span>
+                {bulk !== null && (
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={busy}
                     onClick={() => {
-                      onSelect(row);
+                      onAction(bulk.action, section.rows);
                     }}
-                  />
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))
+                  >
+                    {bulk.label}
+                  </button>
+                )}
+              </h3>
+              <ul className="git-changes-rows">
+                {section.rows.map((row) => {
+                  const actions = rowActions(row.entry, capabilities);
+                  const hasActions = actions.stage || actions.unstage || actions.discard;
+                  return (
+                    <li key={row.key} className="git-changes-item">
+                      {/* A conflict has no checkbox rather than a disabled one: no
+                          toolbar action can apply to it, so a control would be noise. */}
+                      {selectable && hasActions && (
+                        <input
+                          type="checkbox"
+                          className="git-changes-select"
+                          checked={selectedKeys.has(row.key)}
+                          disabled={busy}
+                          aria-label={`Select ${row.entry.path}`}
+                          onChange={(event) => {
+                            onToggleRow(row, event.target.checked);
+                          }}
+                        />
+                      )}
+                      <EntryRow
+                        entry={row.entry}
+                        selected={row.key === selectedKey}
+                        onClick={() => {
+                          onSelect(row);
+                        }}
+                      />
+                      {hasActions && (
+                        <RowActionButtons
+                          entry={row.entry}
+                          actions={actions}
+                          busy={busy}
+                          onAction={(action) => {
+                            onAction(action, [row]);
+                          }}
+                        />
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          );
+        })
       )}
     </>
+  );
+}
+
+interface SelectionBarProps {
+  sections: readonly ChangesSection[];
+  selectedKeys: ReadonlySet<string>;
+  capabilities: GitCapabilities;
+  busy: boolean;
+  onAction: (action: RowAction, rows: readonly ChangesRow[]) => void;
+  onClear: () => void;
+}
+
+/**
+ * The multi-select toolbar: each action acts on the ticked rows it applies
+ * to — Stage on modified and untracked ones, Unstage on staged ones, Discard on
+ * the first two — and is enabled only while that subset is non-empty.
+ */
+function SelectionBar({
+  sections,
+  selectedKeys,
+  capabilities,
+  busy,
+  onAction,
+  onClear,
+}: SelectionBarProps) {
+  const subsets = selectionSubsets(sections, selectedKeys, capabilities);
+  return (
+    <div className="git-selection-bar" role="toolbar" aria-label="Selected files">
+      <span className="git-selection-count">{selectedKeys.size} selected</span>
+      {capabilities.stage && (
+        <button
+          type="button"
+          className="button"
+          disabled={busy || subsets.stage.length === 0}
+          onClick={() => {
+            onAction('stage', subsets.stage);
+          }}
+        >
+          Stage
+        </button>
+      )}
+      {capabilities.stage && (
+        <button
+          type="button"
+          className="button"
+          disabled={busy || subsets.unstage.length === 0}
+          onClick={() => {
+            onAction('unstage', subsets.unstage);
+          }}
+        >
+          Unstage
+        </button>
+      )}
+      {capabilities.discard && (
+        <button
+          type="button"
+          className="button button-danger"
+          disabled={busy || subsets.discard.length === 0}
+          onClick={() => {
+            onAction('discard', subsets.discard);
+          }}
+        >
+          Discard…
+        </button>
+      )}
+      <button
+        type="button"
+        className="button button-icon"
+        aria-label="Clear selection"
+        title="Clear selection"
+        onClick={onClear}
+      >
+        ✕
+      </button>
+    </div>
   );
 }
 
@@ -154,5 +315,66 @@ function EntryRow({ entry, selected, onClick }: EntryRowProps) {
       </span>
       {entry.submodule && <span className="git-chip git-chip-muted">submodule</span>}
     </button>
+  );
+}
+
+interface RowActionButtonsProps {
+  entry: SessionGitEntry;
+  actions: RowActions;
+  busy: boolean;
+  onAction: (action: RowAction) => void;
+}
+
+/**
+ * The quick actions beside a row: shown on hover or keyboard focus with a
+ * pointer, always on a touch screen (`global.css`). Discard is two steps — the
+ * button only opens the confirmation.
+ */
+function RowActionButtons({ entry, actions, busy, onAction }: RowActionButtonsProps) {
+  return (
+    <span className="git-changes-row-actions">
+      {actions.stage && (
+        <button
+          type="button"
+          className="button button-icon"
+          disabled={busy}
+          aria-label={`Stage ${entry.path}`}
+          title="Stage"
+          onClick={() => {
+            onAction('stage');
+          }}
+        >
+          +
+        </button>
+      )}
+      {actions.unstage && (
+        <button
+          type="button"
+          className="button button-icon"
+          disabled={busy}
+          aria-label={`Unstage ${entry.path}`}
+          title="Unstage"
+          onClick={() => {
+            onAction('unstage');
+          }}
+        >
+          −
+        </button>
+      )}
+      {actions.discard && (
+        <button
+          type="button"
+          className="button button-icon button-danger"
+          disabled={busy}
+          aria-label={`Discard ${entry.path}`}
+          title="Discard…"
+          onClick={() => {
+            onAction('discard');
+          }}
+        >
+          ✕
+        </button>
+      )}
+    </span>
   );
 }

@@ -307,3 +307,53 @@ extension GitDiffResponse {
     static let changeCopied = "copied"
     static let changeTypeChanged = "type_changed"
 }
+
+/// Repo-relative paths as `status` reported them; a renamed entry lists both
+/// `path` and `orig_path`.
+struct GitPathsRequest: Codable, Equatable, Sendable {
+    let paths: [String]
+}
+
+struct GitDiscardRequest: Codable, Equatable, Sendable {
+    let paths: [String]
+    let scope: String
+
+    static let scopeUnstaged = "unstaged"
+    static let scopeUntracked = "untracked"
+}
+
+struct GitMutationResponse: Codable, Equatable, Sendable {
+    let ok: Bool
+}
+
+struct GitCommitRequest: Codable, Equatable, Sendable {
+    let message: String
+    let amend: Bool
+    let no_verify: Bool
+}
+
+struct GitCommitResponse: Codable, Equatable, Sendable {
+    let oid: String
+    let short_oid: String
+    let subject: String
+}
+
+struct GitCommitAuthor: Codable, Equatable, Sendable {
+    let name: String
+    let email: String
+}
+
+struct GitCommitHead: Codable, Equatable, Sendable {
+    let oid: String
+    let short_oid: String
+    let subject: String
+    let body: String
+}
+
+/// What the commit sheet needs before the user types: `author` is nil when git
+/// cannot determine an identity (the commit would be refused with
+/// `identity_required`), `head` is nil on an unborn branch (nothing to amend).
+struct GitCommitContextResponse: Codable, Equatable, Sendable {
+    let author: GitCommitAuthor?
+    let head: GitCommitHead?
+}

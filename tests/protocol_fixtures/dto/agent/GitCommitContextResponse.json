@@ -1,0 +1,28 @@
+{
+  "type": "GitCommitContextResponse",
+  "cases": [
+    {
+      "name": "ready",
+      "wire": {
+        "author": {
+          "name": "Ada Lovelace",
+          "email": "ada@example.com"
+        },
+        "head": {
+          "oid": "4890423520f4dcd158b85374f44fc8819a813ac2",
+          "short_oid": "4890423",
+          "subject": "Fix the login redirect",
+          "body": "The callback URL was built before the port was known."
+        }
+      }
+    },
+    {
+      "name": "unborn_no_identity",
+      "wire": {
+        "author": null,
+        "head": null
+      },
+      "decoded_canonical": {}
+    }
+  ]
+}

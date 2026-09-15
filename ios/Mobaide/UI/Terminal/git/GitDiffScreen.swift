@@ -22,6 +22,7 @@ private struct GitDiffContent: View {
     @State private var model: GitDiffModel
 
     @Environment(\.mobaideColors) private var colors
+    @Environment(\.dismiss) private var dismiss
 
     init(container: AppContainer, sessionId: String, path: String, scope: String, origPath: String?) {
         _model = State(initialValue: GitDiffModel(
@@ -37,9 +38,29 @@ private struct GitDiffContent: View {
         content
             .navigationTitle(model.fileName)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if let action = model.stageAction {
+                        Button(action.label) { Task { await model.runStageAction() } }
+                            .disabled(model.isMutating || !isReady)
+                            .accessibilityIdentifier("git-diff-stage-action")
+                    }
+                }
+            }
             .refreshable { await model.load() }
             .task(id: model.loadKey) { await model.load() }
+            .task { await model.loadCapabilities() }
+            .toast($model.toast)
+            // The file moved to another section; the list is where to see it.
+            .onChange(of: model.didMove) { _, moved in
+                if moved { dismiss() }
+            }
             .holdsSessionWatch(model.sessionId)
+    }
+
+    private var isReady: Bool {
+        if case .ready = model.state { return true }
+        return false
     }
 
     @ViewBuilder

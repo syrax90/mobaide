@@ -83,10 +83,27 @@ class RoutesGitDiffArgsTest {
 
     @Test
     fun theChangesRoute_matchesItsPattern() {
-        assertEquals("session_git_changes/abc-123", Routes.sessionGitChanges("abc-123"))
+        assertEquals("session_git_changes/abc-123?commit=false", Routes.sessionGitChanges("abc-123"))
         assertEquals(
             Routes.SESSION_GIT_CHANGES.substringBefore('{'),
             Routes.sessionGitChanges("abc-123").substringBefore("abc-123"),
+        )
+    }
+
+    @Test
+    fun theChangesRoute_carriesTheCommitFlag_asAQueryArg() {
+        // `commit=true` is the terminal menu's Commit…: the screen opens with
+        // the sheet already up. Every caller writes the flag so the pattern's
+        // `{commit}` placeholder is always filled.
+        assertEquals("session_git_changes/abc-123?commit=false", Routes.sessionGitChanges("abc-123"))
+        assertEquals(
+            "session_git_changes/abc-123?commit=true",
+            Routes.sessionGitChanges("abc-123", commit = true),
+        )
+        assertEquals("session_git_changes/{sessionId}?commit={commit}", Routes.SESSION_GIT_CHANGES)
+        assertEquals(
+            "true",
+            Uri.parse(Routes.sessionGitChanges("abc-123", commit = true)).getQueryParameter("commit"),
         )
     }
 }

@@ -424,6 +424,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/git/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Commit */
+        post: operations["session_git_commit_api_sessions__session_id__git_commit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/commit/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Session Git Commit Context */
+        get: operations["session_git_commit_context_api_sessions__session_id__git_commit_context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/git/diff": {
         parameters: {
             query?: never;
@@ -441,6 +475,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/git/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Discard */
+        post: operations["session_git_discard_api_sessions__session_id__git_discard_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/stage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Stage */
+        post: operations["session_git_stage_api_sessions__session_id__git_stage_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/git/status": {
         parameters: {
             query?: never;
@@ -452,6 +520,23 @@ export interface paths {
         get: operations["session_git_status_api_sessions__session_id__git_status_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/unstage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Unstage */
+        post: operations["session_git_unstage_api_sessions__session_id__git_unstage_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -845,6 +930,61 @@ export interface components {
              */
             worktree: boolean;
         };
+        /** GitCommitAuthor */
+        GitCommitAuthor: {
+            /** Email */
+            email: string;
+            /** Name */
+            name: string;
+        };
+        /**
+         * GitCommitContextResponse
+         * @description What the commit sheet needs before the user types: ``author`` is null
+         *     when git cannot determine an identity (the commit would be refused with
+         *     ``identity_required``), ``head`` is null on an unborn branch (no amend).
+         */
+        GitCommitContextResponse: {
+            author?: components["schemas"]["GitCommitAuthor"] | null;
+            head?: components["schemas"]["GitCommitHead"] | null;
+        };
+        /** GitCommitHead */
+        GitCommitHead: {
+            /**
+             * Body
+             * @default
+             */
+            body: string;
+            /** Oid */
+            oid: string;
+            /** Short Oid */
+            short_oid: string;
+            /** Subject */
+            subject: string;
+        };
+        /** GitCommitRequest */
+        GitCommitRequest: {
+            /**
+             * Amend
+             * @default false
+             */
+            amend: boolean;
+            /** Message */
+            message: string;
+            /**
+             * No Verify
+             * @default false
+             */
+            no_verify: boolean;
+        };
+        /** GitCommitResponse */
+        GitCommitResponse: {
+            /** Oid */
+            oid: string;
+            /** Short Oid */
+            short_oid: string;
+            /** Subject */
+            subject: string;
+        };
         /**
          * GitDeleteItem
          * @description One item in a delete request.
@@ -1001,6 +1141,16 @@ export interface components {
              */
             truncated: boolean;
         };
+        /** GitDiscardRequest */
+        GitDiscardRequest: {
+            /** Paths */
+            paths: string[];
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "unstaged" | "untracked";
+        };
         /** GitHead */
         GitHead: {
             /** Branch */
@@ -1082,6 +1232,24 @@ export interface components {
         GitItemsResponse: {
             /** Items */
             items: components["schemas"]["GitItemRead"][];
+        };
+        /** GitMutationResponse */
+        GitMutationResponse: {
+            /**
+             * Ok
+             * @default true
+             * @constant
+             */
+            ok: true;
+        };
+        /**
+         * GitPathsRequest
+         * @description Repo-relative paths as ``status`` reported them; a renamed entry lists
+         *     both ``path`` and ``orig_path``.
+         */
+        GitPathsRequest: {
+            /** Paths */
+            paths: string[];
         };
         /** GitRepoInfo */
         GitRepoInfo: {
@@ -2099,6 +2267,72 @@ export interface operations {
             };
         };
     };
+    session_git_commit_api_sessions__session_id__git_commit_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitCommitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCommitResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_commit_context_api_sessions__session_id__git_commit_context_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCommitContextResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     session_git_diff_api_sessions__session_id__git_diff_get: {
         parameters: {
             query?: {
@@ -2135,6 +2369,76 @@ export interface operations {
             };
         };
     };
+    session_git_discard_api_sessions__session_id__git_discard_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitDiscardRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_stage_api_sessions__session_id__git_stage_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitPathsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     session_git_status_api_sessions__session_id__git_status_get: {
         parameters: {
             query?: {
@@ -2155,6 +2459,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_unstage_api_sessions__session_id__git_unstage_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitPathsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitMutationResponse"];
                 };
             };
             /** @description Validation Error */

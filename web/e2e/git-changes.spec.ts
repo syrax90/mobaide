@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { json, signIn, stubRelay } from './fixtures';
 
 const AGENT_ID = 'agent-00000001';
@@ -19,6 +19,18 @@ const SESSION_ROW = {
   exit_reason: null,
 };
 
+/** One modified, unstaged file: the row the tests stage. */
+const MODIFIED_ENTRY = {
+  group: 'unstaged',
+  path: 'src/app.py',
+  orig_path: null,
+  code: 'M',
+  index_status: '.',
+  worktree_status: 'M',
+  rename_score: null,
+  submodule: false,
+};
+
 /** `GitStatusResponse`, shaped like the `linked_worktree_full` golden case. */
 const STATUS = {
   session_id: 's1',
@@ -35,21 +47,28 @@ const STATUS = {
     state: 'clean',
     is_linked_worktree: false,
   },
-  entries: [
-    {
-      group: 'unstaged',
-      path: 'src/app.py',
-      orig_path: null,
-      code: 'M',
-      index_status: '.',
-      worktree_status: 'M',
-      rename_score: null,
-      submodule: false,
-    },
-  ],
+  entries: [MODIFIED_ENTRY],
   counts: { conflicts: 0, staged: 0, unstaged: 1, untracked: 0, total: 1 },
   truncated: false,
   entry_limit: 5000,
+};
+
+/** `STATUS` once the row was staged: the entry moved and the counts followed. */
+const STAGED_STATUS = {
+  ...STATUS,
+  etag: '4a1e5d2f0b8c3d6e7f9a0b1c2d3e4f5a6b7c8d9e',
+  entries: [{ ...MODIFIED_ENTRY, group: 'staged', index_status: 'M', worktree_status: '.' }],
+  counts: { conflicts: 0, staged: 1, unstaged: 0, untracked: 0, total: 1 },
+};
+
+/** The agent's `GET /api/version` advertising every git mutation. */
+const AGENT_VERSION = {
+  name: 'mobaide-agent',
+  server_version: '1.4.0',
+  protocol_versions: [7],
+  min_client_version: 1,
+  capabilities: { git: { changes: true, stage: true, discard: true, commit: true } },
+  latest_agent_version: null,
 };
 
 /** `GitDiffResponse`, shaped like the `text_modified` golden case. */
@@ -86,14 +105,18 @@ const DIFF = {
   byte_limit: 1048576,
 };
 
-test('the ⋯ menu opens the Changes viewer beside a live terminal', async ({ page }) => {
+/**
+ * The relay, one running session with a cwd, and the agent's read routes. The
+ * status body is read per request, so a test can move the tree between polls.
+ */
+async function stubTerminal(page: Page, status: () => unknown): Promise<void> {
   await stubRelay(page);
   // Registered after `stubRelay`, so these win over its empty session list.
   // Regexes rather than globs: a glob `*` stops at `/`, and the status URL
   // carries `?etag=` from the second poll on.
   await page.route('**/proxy/*/api/sessions', (route) => route.fulfill(json([SESSION_ROW])));
   await page.route(/\/proxy\/[^/]+\/api\/sessions\/[^/]+\/git\/status(\?.*)?$/, (route) =>
-    route.fulfill(json(STATUS)),
+    route.fulfill(json(status())),
   );
   await page.route(/\/proxy\/[^/]+\/api\/sessions\/[^/]+\/git\/diff\?/, (route) =>
     route.fulfill(json(DIFF)),
@@ -112,7 +135,10 @@ test('the ⋯ menu opens the Changes viewer beside a live terminal', async ({ pa
   // A mocked PTY socket that never answers: the header renders regardless,
   // and it keeps the reconnect loop off the log.
   await page.routeWebSocket(/\/relay\/ws\/session\//, () => undefined);
+}
 
+/** Sign in, land on the session and walk the ⋯ menu into the viewer. */
+async function openChanges(page: Page): Promise<Locator> {
   await page.goto('/login');
   await signIn(page);
   await expect(page).toHaveURL(/:\d+\/$/);
@@ -127,6 +153,13 @@ test('the ⋯ menu opens the Changes viewer beside a live terminal', async ({ pa
 
   const panel = page.getByRole('dialog', { name: 'Git changes' });
   await expect(panel).toBeVisible();
+  return panel;
+}
+
+test('the ⋯ menu opens the Changes viewer beside a live terminal', async ({ page }) => {
+  await stubTerminal(page, () => STATUS);
+
+  const panel = await openChanges(page);
   await expect(panel.getByRole('button', { name: 'Close' })).toBeFocused();
   await expect(panel.getByText('main', { exact: true })).toBeVisible();
   await expect(panel.getByText('↑1 ↓0 · origin/main')).toBeVisible();
@@ -159,4 +192,52 @@ test('the ⋯ menu opens the Changes viewer beside a live terminal', async ({ pa
   await page.keyboard.press('Escape');
   await expect(panel).toBeHidden();
   await expect(page.getByRole('button', { name: 'More options' })).toBeFocused();
+});
+
+test('stages a row and commits the staged set, reporting the new head inline', async ({
+  page,
+}) => {
+  // The tree moves with the stage: the status poll that follows is what puts
+  // the row under Staged and enables Commit…, exactly as the agent answers.
+  let staged = false;
+  await stubTerminal(page, () => (staged ? STAGED_STATUS : STATUS));
+  // `stubRelay`'s `**/api/version` glob also matches the agent's probe, which
+  // is where `capabilities.git` lives; registered later, this one wins for it.
+  await page.route('**/proxy/*/api/version', (route) => route.fulfill(json(AGENT_VERSION)));
+  await page.route(/\/proxy\/[^/]+\/api\/sessions\/[^/]+\/git\/stage$/, (route) => {
+    staged = true;
+    return route.fulfill(json({ ok: true }));
+  });
+  await page.route(/\/proxy\/[^/]+\/api\/sessions\/[^/]+\/git\/commit\/context$/, (route) =>
+    route.fulfill(json({ author: { name: 'Ada', email: 'ada@example.com' }, head: null })),
+  );
+  await page.route(/\/proxy\/[^/]+\/api\/sessions\/[^/]+\/git\/commit$/, (route) =>
+    route.fulfill(
+      json({
+        oid: 'abc1234abc1234abc1234abc1234abc1234abc12',
+        short_oid: 'abc1234',
+        subject: 'Smoke',
+      }),
+    ),
+  );
+
+  const panel = await openChanges(page);
+  await expect(panel.getByRole('heading', { level: 3, name: /^Changes/ })).toBeVisible();
+  // Nothing staged yet: the button is there (the agent can commit) but inert.
+  await expect(panel.getByRole('button', { name: 'Commit…' })).toBeDisabled();
+
+  await panel.getByRole('button', { name: 'Stage src/app.py' }).click();
+
+  await expect(panel.getByRole('heading', { level: 3, name: /^Staged/ })).toBeVisible();
+  await expect(panel.getByRole('heading', { level: 3, name: /^Changes/ })).toBeHidden();
+
+  await panel.getByRole('button', { name: 'Commit…' }).click();
+  const sheet = page.getByRole('dialog', { name: 'Commit', exact: true });
+  await expect(sheet.getByText('Committing as Ada <ada@example.com>')).toBeVisible();
+  await sheet.getByLabel('Summary').fill('Smoke');
+  await sheet.getByRole('button', { name: 'Commit 1 file' }).click();
+
+  // Inline, not a toast: the panel sits on the top layer, above the toasts.
+  await expect(sheet).toBeHidden();
+  await expect(panel.getByRole('status')).toContainText('Committed abc1234 · Smoke');
 });

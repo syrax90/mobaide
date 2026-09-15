@@ -1,0 +1,24 @@
+{
+  "type": "GitDiscardRequest",
+  "cases": [
+    {
+      "name": "unstaged",
+      "wire": {
+        "paths": [
+          "src/app.py",
+          "docs/README.md"
+        ],
+        "scope": "unstaged"
+      }
+    },
+    {
+      "name": "untracked",
+      "wire": {
+        "paths": [
+          "notes.txt"
+        ],
+        "scope": "untracked"
+      }
+    }
+  ]
+}

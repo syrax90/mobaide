@@ -1,0 +1,21 @@
+{
+  "type": "GitCommitRequest",
+  "cases": [
+    {
+      "name": "subject_only",
+      "wire": {
+        "message": "Fix the login redirect",
+        "amend": false,
+        "no_verify": false
+      }
+    },
+    {
+      "name": "amend_no_verify",
+      "wire": {
+        "message": "Fix the login redirect\n\nThe callback URL was built before the port was known.",
+        "amend": true,
+        "no_verify": true
+      }
+    }
+  ]
+}

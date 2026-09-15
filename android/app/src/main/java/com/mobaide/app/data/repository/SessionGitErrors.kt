@@ -27,7 +27,7 @@ sealed class SessionGitException(message: String, cause: Throwable? = null) :
     class SessionGone(cause: ApiException) :
         SessionGitException("Session not found", cause)
 
-    /** `{"detail": {"code": …, "message"?: …}}` from 400 / 500 / 503 / 504. */
+    /** `{"detail": {"code": …, "message"?: …}}` from 400 / 409 / 500 / 503 / 504. */
     class GitError(val code: String, val detailMessage: String?, cause: ApiException) :
         SessionGitException("git: $code", cause)
 
@@ -40,6 +40,15 @@ sealed class SessionGitException(message: String, cause: Throwable? = null) :
         const val CODE_GIT_ERROR = "git_error"
         const val CODE_BAD_PATH = "bad_path"
         const val CODE_BAD_SCOPE = "bad_scope"
+        const val CODE_EMPTY_MESSAGE = "empty_message"
+        const val CODE_IDENTITY_REQUIRED = "identity_required"
+        const val CODE_UNMERGED = "unmerged"
+        const val CODE_NOTHING_TO_COMMIT = "nothing_to_commit"
+        const val CODE_NO_HEAD = "no_head"
+        const val CODE_HOOK_FAILED = "hook_failed"
+        const val CODE_INDEX_LOCKED = "index_locked"
+        const val CODE_PATHSPEC_MISMATCH = "pathspec_mismatch"
+        const val CODE_GIT_TOO_OLD = "git_too_old"
     }
 }
 

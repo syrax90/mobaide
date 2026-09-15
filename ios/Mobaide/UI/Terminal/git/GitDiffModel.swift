@@ -56,6 +56,12 @@ final class GitDiffModel {
     private(set) var isLoading = false
     var context = GitDiffModel.contextDefault
     private(set) var reloads = 0
+    private(set) var capabilities = GitCapabilities.none
+    private(set) var isMutating = false
+    /// Set once the shown file was staged or unstaged: it now lives in another
+    /// section, so the screen pops back to the list.
+    private(set) var didMove = false
+    var toast: ToastMessage?
 
     let sessionId: String
     let path: String
@@ -75,6 +81,43 @@ final class GitDiffModel {
     var loadKey: LoadKey { LoadKey(context: context, reloads: reloads) }
 
     var fileName: String { GitStatusEntry.fileName(of: path) }
+
+    /// The toolbar's Stage / Unstage, from the route's scope: nil while the
+    /// agent advertises no `stage` capability or the scope is unknown.
+    var stageAction: (label: String, stage: Bool)? {
+        guard capabilities.stage else { return nil }
+        switch scope {
+        case GitDiffResponse.scopeStaged: return ("Unstage", false)
+        case GitDiffResponse.scopeUnstaged, GitDiffResponse.scopeUntracked: return ("Stage", true)
+        default: return nil
+        }
+    }
+
+    /// One `GET /api/version` per screen visit, from the screen's own task so
+    /// the load's request sequence stays exactly the read.
+    func loadCapabilities() async {
+        guard let info = try? await agentAPI.getAgentVersion() else { return }
+        capabilities = info.gitCapabilities
+    }
+
+    /// Review-then-stage; a rename sends both of its paths.
+    func runStageAction() async {
+        guard let action = stageAction, !isMutating else { return }
+        isMutating = true
+        defer { isMutating = false }
+        let paths = [path, origPath].compactMap { $0 }
+        do {
+            if action.stage {
+                try await agentAPI.stageSessionGit(sessionId: sessionId, paths: paths)
+            } else {
+                try await agentAPI.unstageSessionGit(sessionId: sessionId, paths: paths)
+            }
+            didMove = true
+        } catch {
+            guard !SessionGitError.isCancellation(error) else { return }
+            toast = ToastMessage(text: SessionGitCopy.mutationMessage(for: SessionGitError.map(error)), tone: .danger)
+        }
+    }
 
     func retry() {
         reloads += 1

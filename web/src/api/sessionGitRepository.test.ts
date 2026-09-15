@@ -7,27 +7,33 @@ import type { ApiError } from './errors';
 // is the repository's own request shape and error mapping.
 const agent = vi.hoisted(() => ({
   results: [] as { data?: unknown; error?: unknown; response: Response }[],
-  requests: [] as { agentId: string; path: string; init: unknown }[],
+  requests: [] as { agentId: string; method: 'GET' | 'POST'; path: string; init: unknown }[],
 }));
 
 vi.mock('./clients', () => ({
-  createAgentClient: (agentId: string) => ({
-    GET: (path: string, init: unknown) => {
-      agent.requests.push({ agentId, path, init });
+  createAgentClient: (agentId: string) => {
+    const call = (method: 'GET' | 'POST') => (path: string, init: unknown) => {
+      agent.requests.push({ agentId, method, path, init });
       const next = agent.results.shift();
-      if (next === undefined) return Promise.reject(new Error(`unexpected GET ${path}`));
+      if (next === undefined) return Promise.reject(new Error(`unexpected ${method} ${path}`));
       return Promise.resolve(next);
-    },
-  }),
+    };
+    return { GET: call('GET'), POST: call('POST') };
+  },
 }));
 
 const {
   SessionGitError,
+  commitSessionGit,
+  discardSessionGit,
+  getSessionGitCommitContext,
   getSessionGitDiff,
   getSessionGitStatus,
   isSessionGitError,
   isTerminalSessionGitError,
+  stageSessionGit,
   toSessionGitError,
+  unstageSessionGit,
 } = await import('./sessionGitRepository');
 const { toApiError } = await import('./errors');
 
@@ -40,9 +46,19 @@ afterEach(() => {
 const apiError = (status: number, body: unknown): ApiError =>
   toApiError(new Response(null, { status }), body);
 
-/** What the last GET carried, typed loosely: the shape is the assertion. */
+/** What the last request carried, typed loosely: the shape is the assertion. */
 const lastParams = (): { path?: unknown; query?: unknown } =>
   (agent.requests.at(-1)?.init as { params: { path?: unknown; query?: unknown } }).params;
+
+const lastBody = (): unknown => (agent.requests.at(-1)?.init as { body?: unknown }).body;
+
+const ok = (data: unknown): void => {
+  agent.results.push({ data, response: new Response(null, { status: 200 }) });
+};
+
+const refuse = (status: number, detail: unknown): void => {
+  agent.results.push({ error: { detail }, response: new Response(null, { status }) });
+};
 
 describe('toSessionGitError', () => {
   it('reads a session lookup miss off the 404 string FastAPI sends', () => {
@@ -217,5 +233,122 @@ describe('getSessionGitDiff', () => {
     await expect(
       getSessionGitDiff('a1', 's1', { path: 'src/app.py', scope: 'unstaged', context: 3 }),
     ).rejects.toMatchObject({ name: 'SessionGitError', kind: 'git', code: 'git_timeout' });
+  });
+});
+
+describe('stageSessionGit / unstageSessionGit', () => {
+  it.each([
+    ['stage', stageSessionGit],
+    ['unstage', unstageSessionGit],
+  ] as const)('POSTs the paths to %s and resolves to nothing', async (leaf, call) => {
+    ok({ ok: true });
+
+    await expect(call('a1', 's1', ['src/new.py', 'src/old.py'])).resolves.toBeUndefined();
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      agentId: 'a1',
+      method: 'POST',
+      path: `/api/sessions/{session_id}/git/${leaf}`,
+    });
+    expect(lastParams()).toEqual({ path: { session_id: 's1' } });
+    expect(lastBody()).toEqual({ paths: ['src/new.py', 'src/old.py'] });
+  });
+
+  it('types a 409 refusal with its code and the git output', async () => {
+    refuse(409, { code: 'pathspec_mismatch', message: "fatal: pathspec 'x' did not match" });
+
+    await expect(stageSessionGit('a1', 's1', ['x'])).rejects.toMatchObject({
+      name: 'SessionGitError',
+      kind: 'git',
+      code: 'pathspec_mismatch',
+      detailMessage: "fatal: pathspec 'x' did not match",
+    });
+  });
+
+  it('types the old-agent 404 so the panel can hide what it cannot do', async () => {
+    refuse(404, 'Unknown proxy route');
+
+    await expect(unstageSessionGit('a1', 's1', ['x'])).rejects.toMatchObject({
+      kind: 'agentOutdated',
+    });
+  });
+});
+
+describe('discardSessionGit', () => {
+  it('sends the paths with the scope git needs to pick restore or clean', async () => {
+    ok({ ok: true });
+
+    await expect(discardSessionGit('a1', 's1', ['notes.txt'], 'untracked')).resolves.toBeUndefined();
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      method: 'POST',
+      path: '/api/sessions/{session_id}/git/discard',
+    });
+    expect(lastParams()).toEqual({ path: { session_id: 's1' } });
+    expect(lastBody()).toEqual({ paths: ['notes.txt'], scope: 'untracked' });
+  });
+});
+
+describe('getSessionGitCommitContext', () => {
+  it('reads the author and previous commit of the session', async () => {
+    const body = { author: { name: 'Ada', email: 'ada@example.com' }, head: null };
+    ok(body);
+
+    await expect(getSessionGitCommitContext('a1', 's1')).resolves.toEqual(body);
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      agentId: 'a1',
+      method: 'GET',
+      path: '/api/sessions/{session_id}/git/commit/context',
+    });
+    expect(lastParams()).toEqual({ path: { session_id: 's1' } });
+  });
+
+  it('surfaces a refusal typed for the sheet', async () => {
+    refuse(409, { code: 'not_a_repo', message: '' });
+
+    await expect(getSessionGitCommitContext('a1', 's1')).rejects.toMatchObject({
+      kind: 'git',
+      code: 'not_a_repo',
+      detailMessage: '',
+    });
+  });
+});
+
+describe('commitSessionGit', () => {
+  const head = {
+    oid: '4890423520f4dcd158b85374f44fc8819a813ac2',
+    short_oid: '4890423',
+    subject: 'Fix the login redirect',
+  };
+
+  it('POSTs the request as is and resolves to the new head', async () => {
+    ok(head);
+    const request = { message: 'Fix the login redirect\n\nWhy.', amend: true, no_verify: false };
+
+    await expect(commitSessionGit('a1', 's1', request)).resolves.toEqual(head);
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      method: 'POST',
+      path: '/api/sessions/{session_id}/git/commit',
+    });
+    expect(lastParams()).toEqual({ path: { session_id: 's1' } });
+    expect(lastBody()).toEqual(request);
+  });
+
+  it('types a hook refusal with the hook output', async () => {
+    refuse(409, { code: 'hook_failed', message: 'lint: nope' });
+
+    await expect(
+      commitSessionGit('a1', 's1', { message: 'x', amend: false, no_verify: false }),
+    ).rejects.toMatchObject({ kind: 'git', code: 'hook_failed', detailMessage: 'lint: nope' });
+  });
+
+  it('types the blank-message 400 like any other coded failure', async () => {
+    refuse(400, { code: 'empty_message' });
+
+    await expect(
+      commitSessionGit('a1', 's1', { message: ' ', amend: false, no_verify: false }),
+    ).rejects.toMatchObject({ kind: 'git', code: 'empty_message', detailMessage: null });
   });
 });
