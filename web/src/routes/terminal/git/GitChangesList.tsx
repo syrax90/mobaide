@@ -40,6 +40,8 @@ interface GitChangesListProps {
   onToggleRow: (row: ChangesRow, selected: boolean) => void;
   onClearSelection: () => void;
   onAction: (action: RowAction, rows: readonly ChangesRow[]) => void;
+  /** Opens the Fetch / Pull / Push sheet; absent on an agent without the jobs. */
+  onSync?: (() => void) | undefined;
 }
 
 /**
@@ -64,6 +66,7 @@ export function GitChangesList({
   onToggleRow,
   onClearSelection,
   onAction,
+  onSync,
 }: GitChangesListProps) {
   if (isTerminalSessionGitError(error) && isSessionGitError(error)) {
     return error.kind === 'agentOutdated' ? (
@@ -106,7 +109,7 @@ export function GitChangesList({
   return (
     <>
       {status.repo !== undefined && status.repo !== null && (
-        <RepoHeader status={status} />
+        <RepoHeader status={status} onSync={onSync} />
       )}
       {error !== undefined && error !== null && (
         <div className="git-changes-stale" role="alert">
@@ -274,7 +277,13 @@ function SelectionBar({
   );
 }
 
-function RepoHeader({ status }: { status: SessionGitStatus }) {
+function RepoHeader({
+  status,
+  onSync,
+}: {
+  status: SessionGitStatus;
+  onSync?: (() => void) | undefined;
+}) {
   const repo = status.repo;
   if (repo === undefined || repo === null) return null;
   const state = repoStateLabel(repo.state);
@@ -286,7 +295,21 @@ function RepoHeader({ status }: { status: SessionGitStatus }) {
         {state !== null && <span className="git-chip git-chip-danger">{state}</span>}
         {repo.is_linked_worktree && <span className="git-chip git-chip-muted">worktree</span>}
       </div>
-      {upstream !== null && <span className="git-changes-upstream">{upstream}</span>}
+      {/* The ahead/behind counts are what a fetch, pull or push acts on, so
+          the line itself opens the sheet once the agent can run them. */}
+      {upstream !== null &&
+        (onSync === undefined ? (
+          <span className="git-changes-upstream">{upstream}</span>
+        ) : (
+          <button
+            type="button"
+            className="git-changes-upstream git-changes-upstream-button"
+            title="Fetch, pull or push"
+            onClick={onSync}
+          >
+            {upstream}
+          </button>
+        ))}
       {status.cwd !== undefined && status.cwd !== null && (
         <span className="git-changes-cwd">{status.cwd}</span>
       )}

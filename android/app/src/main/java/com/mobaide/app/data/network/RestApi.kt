@@ -15,8 +15,11 @@ import com.mobaide.app.data.network.dto.GitDeleteResponse
 import com.mobaide.app.data.network.dto.GitDiffResponse
 import com.mobaide.app.data.network.dto.GitDiscardRequest
 import com.mobaide.app.data.network.dto.GitItemsResponse
+import com.mobaide.app.data.network.dto.GitJobResponse
 import com.mobaide.app.data.network.dto.GitMutationResponse
 import com.mobaide.app.data.network.dto.GitPathsRequest
+import com.mobaide.app.data.network.dto.GitPullRequest
+import com.mobaide.app.data.network.dto.GitPushRequest
 import com.mobaide.app.data.network.dto.GitStatusResponse
 import com.mobaide.app.data.network.dto.LinearLabelDto
 import com.mobaide.app.data.network.dto.LinearStateDto
@@ -281,6 +284,28 @@ class RestApi(
     suspend fun commitSessionGit(sessionId: String, body: GitCommitRequest): GitCommitResponse =
         postSessionGit(sessionId, "commit", json.encodeToString(body))
 
+    suspend fun fetchSessionGit(sessionId: String): GitJobResponse =
+        postSessionGit(sessionId, "fetch", "{}")
+
+    suspend fun pullSessionGit(sessionId: String, body: GitPullRequest): GitJobResponse =
+        postSessionGit(sessionId, "pull", json.encodeToString(body))
+
+    suspend fun pushSessionGit(sessionId: String, body: GitPushRequest): GitJobResponse =
+        postSessionGit(sessionId, "push", json.encodeToString(body))
+
+    suspend fun getSessionGitJob(sessionId: String, jobId: String): GitJobResponse {
+        val url = sessionGitUrl(sessionId, "jobs").addPathSegment(jobId).build()
+        return executeCancellable(Request.Builder().url(url).get().build())
+    }
+
+    suspend fun cancelSessionGitJob(sessionId: String, jobId: String): GitJobResponse {
+        val url = sessionGitUrl(sessionId, "jobs")
+            .addPathSegment(jobId)
+            .addPathSegment("cancel")
+            .build()
+        return postJson(url, "{}")
+    }
+
     // Plain `execute`, not the cancellable path: a mutation the agent has
     // already started runs to completion either way, so an abandoned caller
     // would only lose the answer, never the effect.
@@ -288,9 +313,11 @@ class RestApi(
         sessionId: String,
         leaf: String,
         payload: String,
-    ): T {
+    ): T = postJson(sessionGitUrl(sessionId, leaf).build(), payload)
+
+    private suspend inline fun <reified T> postJson(url: HttpUrl, payload: String): T {
         val request = Request.Builder()
-            .url(sessionGitUrl(sessionId, leaf).build())
+            .url(url)
             .post(payload.toRequestBody(jsonMediaType))
             .build()
         return execute(request)

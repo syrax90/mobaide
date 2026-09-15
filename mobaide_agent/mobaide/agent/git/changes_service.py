@@ -99,6 +99,15 @@ class GitRefusedError(GitChangesError):
         self.message = message[:_MAX_ERROR_DETAIL]
 
 
+class GitNotFoundError(GitChangesError):
+    """A job id nobody knows (``404`` with a coded detail, unlike the string
+    detail a missing session answers)."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
 def http_error_for(exc: BaseException) -> tuple[int, dict[str, Any]] | None:
     """Map a service exception to ``(status, body)``; ``None`` if unrelated."""
     if isinstance(exc, GitUnavailableError):
@@ -109,6 +118,8 @@ def http_error_for(exc: BaseException) -> tuple[int, dict[str, Any]] | None:
         return 504, {"detail": {"code": "git_timeout"}}
     if isinstance(exc, GitBadRequestError):
         return 400, {"detail": {"code": exc.code}}
+    if isinstance(exc, GitNotFoundError):
+        return 404, {"detail": {"code": exc.code}}
     if isinstance(exc, GitRefusedError):
         return 409, {"detail": {"code": exc.code, "message": exc.message}}
     if isinstance(exc, GitCommandError):
@@ -227,6 +238,42 @@ async def resolve_repo(cwd: str | None) -> RepoProbe:
             ),
         ),
     )
+
+
+# ``--pathspec-from-file`` reached ``reset`` in 2.26 (``add``/``restore``/
+# ``commit`` had it since 2.25); the read routes keep their 2.15 floor and
+# the fetch/pull/push jobs share this one.
+MIN_GIT_VERSION_MUTATE: tuple[int, int, int] = (2, 26, 0)
+
+_repo_locks: dict[str, asyncio.Lock] = {}
+
+
+def _lock_for(toplevel: str) -> asyncio.Lock:
+    """Per-toplevel lock shared by the mutations and the jobs so index and
+    worktree writes never interleave (git's own ``index.lock`` would turn
+    the loser into a spurious failure)."""
+    key = os.path.normcase(toplevel)
+    lock = _repo_locks.get(key)
+    if lock is None:
+        lock = _repo_locks[key] = asyncio.Lock()
+    return lock
+
+
+async def _mutable_repo(cwd: str | None) -> ResolvedRepo:
+    """Resolve ``cwd`` for a write: repo conditions become ``409`` refusals
+    (there is no partial answer to give) and the git floor is the mutation
+    one."""
+    probe = await resolve_repo(cwd)
+    if probe.repo is None:
+        reason = probe.reason or "not_a_repo"
+        if reason == "cwd_missing":
+            raise GitCwdMissingError(cwd or "")
+        raise GitRefusedError(reason)
+    version = await git_version()
+    if version is None or version < MIN_GIT_VERSION_MUTATE:
+        floor = ".".join(str(part) for part in MIN_GIT_VERSION_MUTATE)
+        raise GitRefusedError("git_too_old", f"git {floor} or newer is required")
+    return probe.repo
 
 
 async def resolve_repo_dirs(cwd: str | None) -> tuple[str | None, str | None]:

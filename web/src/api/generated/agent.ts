@@ -492,6 +492,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/git/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Fetch */
+        post: operations["session_git_fetch_api_sessions__session_id__git_fetch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Session Git Job */
+        get: operations["session_git_job_api_sessions__session_id__git_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/jobs/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Job Cancel */
+        post: operations["session_git_job_cancel_api_sessions__session_id__git_jobs__job_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Pull */
+        post: operations["session_git_pull_api_sessions__session_id__git_pull_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/push": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Push */
+        post: operations["session_git_push_api_sessions__session_id__git_push_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/git/stage": {
         parameters: {
             query?: never;
@@ -1233,6 +1318,49 @@ export interface components {
             /** Items */
             items: components["schemas"]["GitItemRead"][];
         };
+        /**
+         * GitJobResponse
+         * @description One fetch/pull/push job: the body every job route answers and the
+         *     payload of both ``git.job.progress`` and ``git.job.done``. Every key is
+         *     always present; ``phase``/``percent``/``line`` mirror git's own
+         *     ``--progress`` output, ``ok``/``error_code``/``message`` are null until
+         *     ``status`` is ``done``. ``error_code`` is an open vocabulary (clients
+         *     render unknown codes from ``message``): ``cancelled`` | ``git_timeout``
+         *     | ``auth_required`` | ``network`` | ``remote_not_found`` | ``rejected``
+         *     | ``not_fast_forward`` | ``conflicts`` | ``dirty_worktree`` |
+         *     ``unmerged`` | ``operation_in_progress`` | ``no_upstream`` |
+         *     ``no_remote`` | ``detached_head`` | ``no_head`` | ``hook_failed`` |
+         *     ``index_locked`` | ``git_error``.
+         */
+        GitJobResponse: {
+            /** Error Code */
+            error_code?: string | null;
+            /** Job Id */
+            job_id: string;
+            /** Line */
+            line?: string | null;
+            /** Message */
+            message?: string | null;
+            /** Ok */
+            ok?: boolean | null;
+            /**
+             * Op
+             * @enum {string}
+             */
+            op: "fetch" | "pull" | "push";
+            /** Percent */
+            percent?: number | null;
+            /** Phase */
+            phase?: string | null;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Status
+             * @default running
+             * @enum {string}
+             */
+            status: "running" | "done";
+        };
         /** GitMutationResponse */
         GitMutationResponse: {
             /**
@@ -1250,6 +1378,23 @@ export interface components {
         GitPathsRequest: {
             /** Paths */
             paths: string[];
+        };
+        /** GitPullRequest */
+        GitPullRequest: {
+            /**
+             * Mode
+             * @default ff_only
+             * @enum {string}
+             */
+            mode: "ff_only" | "rebase" | "merge";
+        };
+        /** GitPushRequest */
+        GitPushRequest: {
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
         };
         /** GitRepoInfo */
         GitRepoInfo: {
@@ -2391,6 +2536,171 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_fetch_api_sessions__session_id__git_fetch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_job_api_sessions__session_id__git_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_job_cancel_api_sessions__session_id__git_jobs__job_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_pull_api_sessions__session_id__git_pull_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["GitPullRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_push_api_sessions__session_id__git_push_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["GitPushRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitJobResponse"];
                 };
             };
             /** @description Validation Error */

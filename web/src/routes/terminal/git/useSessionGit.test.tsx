@@ -3,8 +3,10 @@ import { act, cleanup, render, waitFor, type RenderResult } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   SessionGitCommitResult,
+  SessionGitJob,
   SessionGitStatus,
 } from '../../../api/sessionGitRepository';
+import type { SessionGitLatestJob } from '../../../realtime/sessionGitJobCache';
 import { fakeEventTarget } from '../../../realtime/__testing__/fakeEventTarget';
 import type { FocusWin } from '../../../realtime/windowFocus';
 
@@ -18,6 +20,11 @@ const api = vi.hoisted(() => ({
   /** What the next stage request answers; the mutation is only a trigger here. */
   stage: undefined as (() => Promise<void>) | undefined,
   commit: undefined as (() => Promise<SessionGitCommitResult>) | undefined,
+  /** What each reconcile poll of a job answers, and the ids it was asked for. */
+  jobs: [] as (() => Promise<SessionGitJob>)[],
+  jobPolls: [] as string[],
+  startJob: undefined as (() => Promise<SessionGitJob>) | undefined,
+  cancelJob: undefined as (() => Promise<SessionGitJob>) | undefined,
 }));
 
 vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
@@ -36,17 +43,39 @@ vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
       api.commit === undefined
         ? Promise.reject(new Error('commit is not under test'))
         : api.commit(),
+    getSessionGitJob: (_agentId: string, _sessionId: string, jobId: string) => {
+      api.jobPolls.push(jobId);
+      const next = api.jobs.shift();
+      return next === undefined ? Promise.reject(new Error('unexpected job poll')) : next();
+    },
+    startSessionGitJob: () =>
+      api.startJob === undefined
+        ? Promise.reject(new Error('start is not under test'))
+        : api.startJob(),
+    cancelSessionGitJob: () =>
+      api.cancelJob === undefined
+        ? Promise.reject(new Error('cancel is not under test'))
+        : api.cancelJob(),
   };
 });
 
 const { toApiError } = await import('../../../api/errors');
-const { toSessionGitError } = await import('../../../api/sessionGitRepository');
+const { isSessionGitJobLost, toSessionGitError } = await import(
+  '../../../api/sessionGitRepository'
+);
+const { applySessionGitJob } = await import('../../../realtime/sessionGitJobCache');
 const { queryKeys } = await import('../../../lib/queryKeys');
 const { observeTabVisibility } = await import('../../../realtime/tabVisibility');
 const { observeWindowFocus } = await import('../../../realtime/windowFocus');
-const { SESSION_GIT_POLL_MS, useSessionGitMutations, useSessionGitStatus } = await import(
-  './useSessionGit'
-);
+const {
+  SESSION_GIT_JOB_POLL_MS,
+  SESSION_GIT_POLL_MS,
+  useSessionGitJob,
+  useSessionGitLatestJob,
+  useSessionGitMutations,
+  useSessionGitStatus,
+  useSessionGitSync,
+} = await import('./useSessionGit');
 
 const body = (etag: string): SessionGitStatus => ({
   session_id: 's1',
@@ -117,9 +146,18 @@ interface Snapshot {
   fetchStatus: 'fetching' | 'paused' | 'idle';
 }
 
+interface JobSnapshot {
+  data: SessionGitJob | undefined;
+  error: unknown;
+  fetchStatus: 'fetching' | 'paused' | 'idle';
+}
+
 let client: QueryClient;
 let latest: Snapshot | undefined;
 let latestMutations: ReturnType<typeof useSessionGitMutations> | undefined;
+let latestJob: JobSnapshot | undefined;
+let latestPointer: SessionGitLatestJob | undefined;
+let latestSync: ReturnType<typeof useSessionGitSync> | undefined;
 const uninstallers: (() => void)[] = [];
 
 function Harness({ active }: { active: boolean }) {
@@ -178,6 +216,13 @@ beforeEach(() => {
   api.answers.length = 0;
   api.stage = undefined;
   api.commit = undefined;
+  api.jobs.length = 0;
+  api.jobPolls.length = 0;
+  api.startJob = undefined;
+  api.cancelJob = undefined;
+  latestJob = undefined;
+  latestPointer = undefined;
+  latestSync = undefined;
 });
 
 afterEach(() => {
@@ -529,5 +574,311 @@ describe('useSessionGitMutations', () => {
     await waitFor(() => {
       expect(mutations().busy).toBe(false);
     });
+  });
+});
+
+/** The job poll beside the socket pointer and the start / cancel pair, as the panel mounts them. */
+function JobHarness({ jobId }: { jobId: string | null }) {
+  const { data, error, fetchStatus } = useSessionGitJob('a1', 's1', jobId);
+  latestJob = { data, error, fetchStatus };
+  latestPointer = useSessionGitLatestJob('a1', 's1').data;
+  latestSync = useSessionGitSync('a1', 's1');
+  return null;
+}
+
+const jobSubject = (jobId: string | null) => (
+  <QueryClientProvider client={client}>
+    <JobHarness jobId={jobId} />
+  </QueryClientProvider>
+);
+
+const jobHook = (): JobSnapshot => {
+  if (latestJob === undefined) throw new Error('job hook not rendered');
+  return latestJob;
+};
+
+const sync = (): ReturnType<typeof useSessionGitSync> => {
+  if (latestSync === undefined) throw new Error('sync not rendered');
+  return latestSync;
+};
+
+const snapshot = (over: Partial<SessionGitJob> = {}): SessionGitJob => ({
+  job_id: 'j1',
+  session_id: 's1',
+  op: 'push',
+  status: 'running',
+  phase: null,
+  percent: null,
+  line: null,
+  ok: null,
+  error_code: null,
+  message: null,
+  ...over,
+});
+
+const answerJob = (job: SessionGitJob): void => {
+  api.jobs.push(() => Promise.resolve(job));
+};
+
+const failJob = (error: Error): void => {
+  api.jobs.push(() => Promise.reject(error));
+};
+
+/** The `git.changed` that follows every job invalidates the whole session prefix. */
+const invalidateSession = async (): Promise<void> => {
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: queryKeys.sessionGit('a1', 's1') });
+  });
+};
+
+describe('useSessionGitJob', () => {
+  it('asks nothing without a job id', async () => {
+    render(jobSubject(null));
+    await flush();
+
+    expect(api.jobPolls).toEqual([]);
+    expect(jobHook().fetchStatus).toBe('idle');
+    expect(jobHook().data).toBeUndefined();
+  });
+
+  it('polls every 3 s while the job runs and stops once it is done', async () => {
+    vi.useFakeTimers();
+    answerJob(snapshot({ percent: 10 }));
+    answerJob(snapshot({ percent: 60 }));
+    answerJob(snapshot({ status: 'done', ok: true, message: 'main -> main' }));
+    render(jobSubject('j1'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(api.jobPolls).toEqual(['j1']);
+    expect(jobHook().data?.percent).toBe(10);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SESSION_GIT_JOB_POLL_MS + 5);
+    });
+    expect(api.jobPolls).toHaveLength(2);
+    expect(jobHook().data?.percent).toBe(60);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SESSION_GIT_JOB_POLL_MS + 5);
+    });
+    expect(jobHook().data?.status).toBe('done');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SESSION_GIT_JOB_POLL_MS * 3);
+    });
+    expect(api.jobPolls).toHaveLength(3);
+    expect(jobHook().fetchStatus).toBe('idle');
+  });
+
+  it('stops polling as soon as a socket frame says done, even mid-interval', async () => {
+    vi.useFakeTimers();
+    answerJob(snapshot({ percent: 10 }));
+    render(jobSubject('j1'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    act(() => {
+      applySessionGitJob(client, 'a1', snapshot({ status: 'done', ok: true }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SESSION_GIT_JOB_POLL_MS * 3);
+    });
+
+    expect(api.jobPolls).toEqual(['j1']);
+    expect(jobHook().data?.status).toBe('done');
+  });
+
+  it('keeps the done frame when a poll it overtook answers running afterwards', async () => {
+    // Disabling the query does not abort a fetch already in flight: a poll the
+    // agent answered just before the job finished lands after `git.job.done`
+    // and must not put the banner back to "Pushing…".
+    vi.useFakeTimers();
+    let release: ((job: SessionGitJob) => void) | undefined;
+    api.jobs.push(
+      () =>
+        new Promise<SessionGitJob>((resolve) => {
+          release = resolve;
+        }),
+    );
+    render(jobSubject('j1'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(api.jobPolls).toEqual(['j1']);
+    expect(jobHook().data).toBeUndefined();
+
+    act(() => {
+      applySessionGitJob(
+        client,
+        'a1',
+        snapshot({ status: 'done', ok: true, message: 'main -> main' }),
+      );
+    });
+    await act(async () => {
+      release?.(snapshot({ phase: 'Writing objects', percent: 99 }));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    expect(jobHook().data).toMatchObject({ status: 'done', ok: true, message: 'main -> main' });
+    expect(jobHook().data?.percent).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SESSION_GIT_JOB_POLL_MS * 3);
+    });
+    expect(api.jobPolls).toEqual(['j1']);
+    expect(jobHook().fetchStatus).toBe('idle');
+  });
+
+  it('does not refetch a done job on the git.changed invalidation that follows it', async () => {
+    // The agent forgets a finished job after ten minutes; a refetch then would
+    // answer `job_not_found` and read as a lost job for a result already shown.
+    answerJob(snapshot({ status: 'done', ok: true }));
+    render(jobSubject('j1'));
+    await waitFor(() => {
+      expect(jobHook().data?.status).toBe('done');
+    });
+
+    await invalidateSession();
+    await flush();
+
+    expect(api.jobPolls).toEqual(['j1']);
+    expect(jobHook().fetchStatus).toBe('idle');
+  });
+
+  it('stops on job_not_found and reports the job as lost', async () => {
+    failJob(wireFailure(404, { code: 'job_not_found' }));
+    render(jobSubject('j1'));
+    await waitFor(() => {
+      expect(jobHook().error).toMatchObject({ kind: 'git', code: 'job_not_found' });
+    });
+
+    await invalidateSession();
+    await flush();
+
+    expect(api.jobPolls).toEqual(['j1']);
+    expect(jobHook().fetchStatus).toBe('idle');
+    expect(isSessionGitJobLost(jobHook().error)).toBe(true);
+  });
+
+  it('keeps polling after a transient failure', async () => {
+    vi.useFakeTimers();
+    failJob(new TypeError('Failed to fetch'));
+    answerJob(snapshot({ percent: 10 }));
+    render(jobSubject('j1'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(jobHook().error).toBeInstanceOf(TypeError);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SESSION_GIT_JOB_POLL_MS + 5);
+    });
+
+    expect(api.jobPolls).toEqual(['j1', 'j1']);
+    expect(jobHook().data?.percent).toBe(10);
+    expect(jobHook().error).toBeNull();
+  });
+
+  it('pauses while the tab is hidden and re-reads at once when it is shown again', async () => {
+    const doc = fakeEventTarget();
+    uninstallers.push(observeTabVisibility(doc));
+    answerJob(snapshot({ percent: 10 }));
+    answerJob(snapshot({ percent: 20 }));
+    render(jobSubject('j1'));
+    await waitFor(() => {
+      expect(jobHook().data?.percent).toBe(10);
+    });
+
+    act(() => {
+      doc.hidden = true;
+      doc.fire('visibilitychange');
+    });
+    await invalidateSession();
+    await flush();
+    expect(api.jobPolls).toHaveLength(1);
+
+    act(() => {
+      doc.hidden = false;
+      doc.fire('visibilitychange');
+    });
+
+    await waitFor(() => {
+      expect(jobHook().data?.percent).toBe(20);
+    });
+  });
+
+  it('opts the poll out of the global error toast', async () => {
+    failJob(new TypeError('Failed to fetch'));
+    render(jobSubject('j1'));
+    await waitFor(() => {
+      expect(jobHook().error).not.toBeNull();
+    });
+
+    expect(
+      client.getQueryCache().find({ queryKey: queryKeys.sessionGitJob('a1', 's1', 'j1') })?.meta,
+    ).toEqual({ silent: true });
+  });
+});
+
+describe('useSessionGitLatestJob', () => {
+  it('never fetches and reads what the socket wrote', async () => {
+    render(jobSubject(null));
+    await flush();
+    expect(latestPointer).toBeUndefined();
+
+    act(() => {
+      applySessionGitJob(client, 'a1', snapshot({ job_id: 'j7', op: 'fetch' }));
+    });
+
+    await waitFor(() => {
+      expect(latestPointer).toEqual({ jobId: 'j7' });
+    });
+    expect(api.jobPolls).toEqual([]);
+  });
+});
+
+describe('useSessionGitSync', () => {
+  it('writes the started job and the session pointer into the cache', async () => {
+    api.startJob = () => Promise.resolve(snapshot({ job_id: 'j3', op: 'fetch' }));
+    render(jobSubject(null));
+    await flush();
+
+    await act(async () => {
+      await sync().start.mutateAsync({ op: 'fetch' });
+    });
+
+    expect(client.getQueryData(queryKeys.sessionGitJob('a1', 's1', 'j3'))).toMatchObject({
+      job_id: 'j3',
+      op: 'fetch',
+      status: 'running',
+    });
+    await waitFor(() => {
+      expect(latestPointer).toEqual({ jobId: 'j3' });
+    });
+    expect(api.jobPolls).toEqual([]);
+  });
+
+  it('writes the cancel answer over the running snapshot without another poll', async () => {
+    answerJob(snapshot({ percent: 10 }));
+    api.cancelJob = () =>
+      Promise.resolve(
+        snapshot({ status: 'done', ok: false, error_code: 'cancelled', message: 'cancelled' }),
+      );
+    render(jobSubject('j1'));
+    await waitFor(() => {
+      expect(jobHook().data?.percent).toBe(10);
+    });
+
+    await act(async () => {
+      await sync().cancel.mutateAsync('j1');
+    });
+
+    await waitFor(() => {
+      expect(jobHook().data).toMatchObject({ status: 'done', ok: false, error_code: 'cancelled' });
+    });
+    expect(jobHook().fetchStatus).toBe('idle');
+    expect(api.jobPolls).toEqual(['j1']);
   });
 });

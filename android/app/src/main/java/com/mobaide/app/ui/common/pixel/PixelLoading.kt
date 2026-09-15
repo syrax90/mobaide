@@ -6,6 +6,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -60,6 +62,38 @@ fun PixelBlinkCursor(
             .graphicsLayer { this.alpha = alpha }
             .background(color),
     )
+}
+
+/**
+ * A two-rectangle determinate bar; `null` is the indeterminate state, drawn as
+ * the blink cursor. No width animation: git's per-phase percentage restarts at
+ * every phase and an animated fill would run backwards each time.
+ */
+@Composable
+fun PixelProgressBar(
+    progress: Float?,
+    modifier: Modifier = Modifier,
+    height: Dp = 6.dp,
+) {
+    if (progress == null) {
+        PixelBlinkCursor(modifier = modifier, height = 12.dp)
+        return
+    }
+    val clamped = progress.coerceIn(0f, 1f)
+    Box(
+        modifier = modifier
+            .semantics { progressBarRangeInfo = ProgressBarRangeInfo(clamped, 0f..1f) }
+            .fillMaxWidth()
+            .height(height)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(clamped)
+                .fillMaxHeight()
+                .background(MaterialTheme.colorScheme.primary),
+        )
+    }
 }
 
 @Preview(name = "Blink cursor dark", showBackground = true, backgroundColor = 0xFF121212)

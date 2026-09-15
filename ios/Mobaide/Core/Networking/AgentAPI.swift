@@ -184,6 +184,39 @@ struct AgentAPI: Sendable {
         try await execute(method: "POST", url: "\(try await base())/api/sessions/\(sessionId)/git/commit", body: request)
     }
 
+    /// `POST /api/sessions/{id}/git/fetch|pull|push` — starts a job; the answer
+    /// is its first snapshot, not its result.
+    func startSessionGitJob(
+        sessionId: String,
+        op: String,
+        pullMode: String = GitPullRequest.modeFFOnly,
+        force: Bool = false
+    ) async throws -> GitJobResponse {
+        let prefix = "\(try await base())/api/sessions/\(sessionId)/git"
+        switch op {
+        case GitJobResponse.opFetch:
+            return try await execute(method: "POST", url: "\(prefix)/fetch", rawBody: Data())
+        case GitJobResponse.opPull:
+            return try await execute(method: "POST", url: "\(prefix)/pull", body: GitPullRequest(mode: pullMode))
+        default:
+            return try await execute(method: "POST", url: "\(prefix)/push", body: GitPushRequest(force: force))
+        }
+    }
+
+    /// `GET /api/sessions/{id}/git/jobs/{job_id}` — the reconcile poll's snapshot.
+    func getSessionGitJob(sessionId: String, jobId: String) async throws -> GitJobResponse {
+        try await execute(method: "GET", url: "\(try await base())/api/sessions/\(sessionId)/git/jobs/\(jobId)")
+    }
+
+    /// `POST /api/sessions/{id}/git/jobs/{job_id}/cancel` — kills the job's git tree.
+    func cancelSessionGitJob(sessionId: String, jobId: String) async throws -> GitJobResponse {
+        try await execute(
+            method: "POST",
+            url: "\(try await base())/api/sessions/\(sessionId)/git/jobs/\(jobId)/cancel",
+            rawBody: Data()
+        )
+    }
+
     func getAutoScanList() async throws -> AutoScanListResponse {
         try await execute(method: "GET", url: "\(try await base())/api/autoscan/list")
     }

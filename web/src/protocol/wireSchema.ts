@@ -50,6 +50,14 @@ export function optionalWireNumber() {
     .transform((value) => value ?? undefined);
 }
 
+/** An optional wire boolean: absent or explicitly null both become `undefined`. */
+export function optionalWireBoolean() {
+  return z
+    .boolean()
+    .nullish()
+    .transform((value) => value ?? undefined);
+}
+
 /**
  * An open session-kind field. Unknown strings survive verbatim; only an
  * explicit `null` (or an absent key) becomes the default.

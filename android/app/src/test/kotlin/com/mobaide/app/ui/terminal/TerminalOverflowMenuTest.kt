@@ -75,3 +75,47 @@ class TerminalOverflowMenuTest {
         composeRule.onNodeWithText("Commit…").assertIsDisplayed()
     }
 }
+
+/** The *Fetch / Pull / Push…* entry, gated on any of the three job capabilities. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33], qualifiers = "w360dp-h800dp-xxhdpi")
+class TerminalOverflowMenuSyncTest {
+
+    @get:Rule
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    @Test
+    fun sync_isAbsent_untilTheAgentAdvertisesAJob() {
+        composeRule.setContent {
+            MobaideTheme(darkTheme = true) {
+                TerminalOverflowMenu(onOpenGitChanges = {}, commitAvailable = true, syncAvailable = false)
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("More options").performClick()
+
+        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_COMMIT_TAG).assertIsDisplayed()
+        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_SYNC_TAG).assertDoesNotExist()
+        composeRule.onNodeWithText("Fetch / Pull / Push…").assertDoesNotExist()
+    }
+
+    @Test
+    fun sync_followsCommit_onAnAgentThatAdvertisesAJob() {
+        composeRule.setContent {
+            MobaideTheme(darkTheme = true) {
+                TerminalOverflowMenu(
+                    onOpenGitChanges = {},
+                    onOpenGitSync = {},
+                    commitAvailable = false,
+                    syncAvailable = true,
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("More options").performClick()
+
+        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_SYNC_TAG).assertIsDisplayed()
+        composeRule.onNodeWithText("Fetch / Pull / Push…").assertIsDisplayed()
+        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_COMMIT_TAG).assertDoesNotExist()
+    }
+}

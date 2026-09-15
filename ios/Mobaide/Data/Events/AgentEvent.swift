@@ -12,6 +12,11 @@ enum AgentEvent: Equatable, Sendable {
     /// `toplevel` / `common_dir` (proto-v7 additive keys) let a session match
     /// a push by repository even when it has no `project_name`.
     case gitChanged(projectName: String, toplevel: String? = nil, commonDir: String? = nil)
+    /// A running fetch / pull / push as a whole snapshot: at most four a second
+    /// per job, newest counters winning, so a dropped one costs nothing.
+    case gitJobProgress(GitJobResponse)
+    /// The same job's final snapshot, once; a `git.changed` follows it.
+    case gitJobDone(GitJobResponse)
     case autoScanStatus(AutoScanInstanceDto)
     case autoScanListChanged(AutoScanListResponse)
     case autoScanEvent(projectName: String, seq: Int64, ts: String, payload: ScanProgressPayload)
@@ -86,6 +91,10 @@ enum AgentEnvelopeDemux {
                 toplevel: payload["toplevel"] as? String,
                 commonDir: payload["common_dir"] as? String
             )
+        case "git.job.progress":
+            return decode(GitJobResponse.self, from: envelope).map { .gitJobProgress($0) }
+        case "git.job.done":
+            return decode(GitJobResponse.self, from: envelope).map { .gitJobDone($0) }
         case "autoscan.status":
             return decode(AutoScanInstanceDto.self, from: envelope).map { .autoScanStatus($0) }
         case "autoscan.list.changed":

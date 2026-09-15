@@ -1,17 +1,20 @@
 /**
  * The session-scoped git Changes routes — the agent's working-tree status and
- * per-file diff for the directory a session was spawned in, and the
- * stage / unstage / discard / commit mutations of its staged set.
+ * per-file diff for the directory a session was spawned in, the
+ * stage / unstage / discard / commit mutations of its staged set, and the
+ * fetch / pull / push jobs with their snapshot and cancel routes.
  *
  * REST-only shapes, so the types come straight from the generated schema like
  * `gitRepository`'s (the `OWNER.generated` policy in
- * `protocol/__fixtures__/coverage.ts`). The one hand-parsed body is the error
- * `detail`, which no schema documents: the two 404s share a status code and
- * differ only in FastAPI's string — a session lookup miss answers
- * `Session '<id>' not found`, while an agent that predates the routes answers
- * the relay's `Unknown proxy route` or a plain `Not Found` — and the git
- * failures carry `{"detail": {"code": …}}`. Android `SessionGitErrors.kt` and
- * iOS `SessionGitErrors.swift` draw the same lines.
+ * `protocol/__fixtures__/coverage.ts`); `GitJobResponse` also rides the agent
+ * events channel and has its Zod mirror in `protocol/dto/gitJob.ts`. The one
+ * hand-parsed body is the error `detail`, which no schema documents: the
+ * git failures carry `{"detail": {"code": …}}` on any status — a `404` with
+ * a coded detail is an unknown job, never an old agent — while the two
+ * string-detail 404s differ only in FastAPI's text: a session lookup miss
+ * answers `Session '<id>' not found`, an agent that predates the routes the
+ * relay's `Unknown proxy route` or a plain `Not Found`. Android
+ * `SessionGitErrors.kt` and iOS `SessionGitErrors.swift` draw the same lines.
  */
 import { createAgentClient } from './clients';
 import { isApiError, toApiError, type ApiError } from './errors';
@@ -30,6 +33,15 @@ export type SessionGitCommitRequest = components['schemas']['GitCommitRequest'];
 export type SessionGitCommitResult = components['schemas']['GitCommitResponse'];
 export type SessionGitCommitContext = components['schemas']['GitCommitContextResponse'];
 export type SessionGitCommitHead = components['schemas']['GitCommitHead'];
+export type SessionGitJob = components['schemas']['GitJobResponse'];
+export type SessionGitJobOp = SessionGitJob['op'];
+export type SessionGitPullMode = NonNullable<components['schemas']['GitPullRequest']['mode']>;
+
+/** What one of the three start routes is asked to do. */
+export type SessionGitSyncRequest =
+  | { op: 'fetch' }
+  | { op: 'pull'; mode: SessionGitPullMode }
+  | { op: 'push'; force: boolean };
 
 export const GIT_CODE_UNAVAILABLE = 'git_unavailable';
 export const GIT_CODE_TIMEOUT = 'git_timeout';
@@ -44,6 +56,23 @@ export const GIT_CODE_HOOK_FAILED = 'hook_failed';
 export const GIT_CODE_INDEX_LOCKED = 'index_locked';
 export const GIT_CODE_PATHSPEC_MISMATCH = 'pathspec_mismatch';
 export const GIT_CODE_EMPTY_MESSAGE = 'empty_message';
+/** Another fetch / pull / push owns the repository; `detailMessage` is its job id. */
+export const GIT_CODE_JOB_RUNNING = 'job_running';
+/** The `404` a job route answers for an id the agent no longer (or never) knew. */
+export const GIT_CODE_JOB_NOT_FOUND = 'job_not_found';
+/** The job outcomes a client offers a follow-up for (PROTOCOL.md). */
+export const GIT_JOB_CODE_CANCELLED = 'cancelled';
+export const GIT_JOB_CODE_AUTH_REQUIRED = 'auth_required';
+export const GIT_JOB_CODE_NETWORK = 'network';
+export const GIT_JOB_CODE_REMOTE_NOT_FOUND = 'remote_not_found';
+export const GIT_JOB_CODE_REJECTED = 'rejected';
+export const GIT_JOB_CODE_NOT_FAST_FORWARD = 'not_fast_forward';
+export const GIT_JOB_CODE_CONFLICTS = 'conflicts';
+export const GIT_JOB_CODE_DIRTY_WORKTREE = 'dirty_worktree';
+export const GIT_JOB_CODE_OPERATION_IN_PROGRESS = 'operation_in_progress';
+export const GIT_JOB_CODE_NO_UPSTREAM = 'no_upstream';
+export const GIT_JOB_CODE_NO_REMOTE = 'no_remote';
+export const GIT_JOB_CODE_DETACHED_HEAD = 'detached_head';
 
 export type SessionGitErrorKind = 'agentOutdated' | 'sessionGone' | 'git';
 
@@ -89,6 +118,12 @@ const SESSION_NOT_FOUND = /^Session '.*' not found$/;
 /** Wrap the failures this surface understands; anything else passes through. */
 export function toSessionGitError(error: unknown): unknown {
   if (!isApiError(error)) return error;
+  // A coded detail first, whatever the status: the job routes' `404
+  // job_not_found` must not read as an old agent, which would end the poll.
+  if (typeof error.detail === 'object' && error.detail !== null) {
+    const code = (error.detail as { code?: unknown }).code;
+    if (typeof code === 'string') return new SessionGitError('git', error, code);
+  }
   if (error.status === 404) {
     const detail = typeof error.detail === 'string' ? error.detail : null;
     return new SessionGitError(
@@ -96,11 +131,12 @@ export function toSessionGitError(error: unknown): unknown {
       error,
     );
   }
-  if (typeof error.detail === 'object' && error.detail !== null) {
-    const code = (error.detail as { code?: unknown }).code;
-    if (typeof code === 'string') return new SessionGitError('git', error, code);
-  }
   return error;
+}
+
+/** The reconcile poll's "nobody knows this job" answer. */
+export function isSessionGitJobLost(error: unknown): boolean {
+  return isSessionGitError(error) && error.kind === 'git' && error.code === GIT_CODE_JOB_NOT_FOUND;
 }
 
 export async function getSessionGitStatus(
@@ -224,6 +260,58 @@ export async function commitSessionGit(
   const { data, error, response } = await createAgentClient(agentId).POST(
     '/api/sessions/{session_id}/git/commit',
     { params: { path: { session_id: sessionId } }, body: request },
+  );
+  if (error !== undefined || data === undefined) throwSessionGitError(response, error);
+  return data;
+}
+
+/** Start a fetch, pull or push; the answer is the job's first snapshot, not its result. */
+export async function startSessionGitJob(
+  agentId: string,
+  sessionId: string,
+  request: SessionGitSyncRequest,
+): Promise<SessionGitJob> {
+  const client = createAgentClient(agentId);
+  const params = { path: { session_id: sessionId } };
+  const result =
+    request.op === 'fetch'
+      ? await client.POST('/api/sessions/{session_id}/git/fetch', { params })
+      : request.op === 'pull'
+        ? await client.POST('/api/sessions/{session_id}/git/pull', {
+            params,
+            body: { mode: request.mode },
+          })
+        : await client.POST('/api/sessions/{session_id}/git/push', {
+            params,
+            body: { force: request.force },
+          });
+  const { data, error, response } = result;
+  if (error !== undefined || data === undefined) throwSessionGitError(response, error);
+  return data;
+}
+
+export async function getSessionGitJob(
+  agentId: string,
+  sessionId: string,
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<SessionGitJob> {
+  const { data, error, response } = await createAgentClient(agentId).GET(
+    '/api/sessions/{session_id}/git/jobs/{job_id}',
+    { params: { path: { session_id: sessionId, job_id: jobId } }, signal },
+  );
+  if (error !== undefined || data === undefined) throwSessionGitError(response, error);
+  return data;
+}
+
+export async function cancelSessionGitJob(
+  agentId: string,
+  sessionId: string,
+  jobId: string,
+): Promise<SessionGitJob> {
+  const { data, error, response } = await createAgentClient(agentId).POST(
+    '/api/sessions/{session_id}/git/jobs/{job_id}/cancel',
+    { params: { path: { session_id: sessionId, job_id: jobId } } },
   );
   if (error !== undefined || data === undefined) throwSessionGitError(response, error);
   return data;

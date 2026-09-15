@@ -26,6 +26,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -119,5 +120,90 @@ class TerminalViewModelGitCommitAvailableTest {
         runCurrent()
 
         assertFalse(vm.gitCommitAvailable.value)
+    }
+}
+
+/** [TerminalViewModel.gitSyncAvailable] — *Fetch / Pull / Push…* on any of the three job keys. */
+@OptIn(ExperimentalCoroutinesApi::class)
+class TerminalViewModelGitSyncAvailableTest {
+
+    private val testDispatcher = StandardTestDispatcher()
+
+    @get:Rule
+    val mainDispatcherRule = MainDispatcherRule(testDispatcher)
+
+    private val connection: WebSocketConnection = mockk(relaxed = true) {
+        every { events } returns MutableSharedFlow(replay = 1, extraBufferCapacity = 100)
+    }
+
+    private val preferencesStore = mockk<PreferencesStore> {
+        every { terminalDisplayMode } returns flowOf(TerminalDisplayMode.Full)
+        every { terminalStaticColumns } returns flowOf(TERMINAL_STATIC_COLUMNS_DEFAULT)
+    }
+
+    private fun version(capabilities: String) = VersionInfoResponse(
+        name = "mobaide-agent",
+        server_version = "1.4.0",
+        protocol_versions = listOf(7),
+        min_client_version = 1,
+        capabilities = Json.parseToJsonElement(capabilities).jsonObject,
+    )
+
+    private fun newViewModel(probe: suspend () -> VersionInfoResponse): TerminalViewModel {
+        val repo = mockk<SessionRepository> {
+            every { createSessionIoConnection("test-session") } returns connection
+            every { observeSessionList() } returns MutableStateFlow(emptyList<SessionResponse>())
+            every { observeSessionsSynced() } returns MutableStateFlow(false)
+            coEvery { listSessions() } returns emptyList()
+            coEvery { getAgentVersion() } coAnswers { probe() }
+        }
+        val typesRepo = mockk<CustomAgentTypesRepository> {
+            every { observeTypes() } returns MutableStateFlow(emptyList<CustomAgentTypeDto>())
+        }
+        return TerminalViewModel(
+            savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
+            sessionRepository = repo,
+            customAgentTypesRepository = typesRepo,
+            templatesRepository = mockk(relaxed = true),
+            shortcutsRepository = mockk(),
+            foregroundSessionTracker = ForegroundSessionTracker(),
+            appForegroundTracker = AppForegroundTracker(),
+            preferencesStore = preferencesStore,
+        )
+    }
+
+    @Test
+    fun gitSyncAvailable_isTrue_onAnyJobKey_withoutCommit() = runTest(testDispatcher) {
+        val vm = newViewModel { version("""{"git":{"changes":true,"push":true}}""") }
+        backgroundScope.launch { vm.gitSyncAvailable.collect { } }
+        backgroundScope.launch { vm.gitCommitAvailable.collect { } }
+        runCurrent()
+
+        assertTrue(vm.gitSyncAvailable.value)
+        assertFalse(vm.gitCommitAvailable.value)
+    }
+
+    @Test
+    fun gitSyncAvailable_isFalse_forAnAgentThatOnlyStagesAndCommits() = runTest(testDispatcher) {
+        val vm = newViewModel { version("""{"git":{"changes":true,"stage":true,"discard":true,"commit":true}}""") }
+        backgroundScope.launch { vm.gitSyncAvailable.collect { } }
+        backgroundScope.launch { vm.gitCommitAvailable.collect { } }
+        runCurrent()
+
+        assertFalse(vm.gitSyncAvailable.value)
+        assertTrue(vm.gitCommitAvailable.value)
+    }
+
+    @Test
+    fun oneProbe_feedsBothFlags() = runTest(testDispatcher) {
+        var probes = 0
+        val vm = newViewModel { probes += 1; version("""{"git":{"commit":true,"fetch":true}}""") }
+        backgroundScope.launch { vm.gitSyncAvailable.collect { } }
+        backgroundScope.launch { vm.gitCommitAvailable.collect { } }
+        runCurrent()
+
+        assertTrue(vm.gitSyncAvailable.value)
+        assertTrue(vm.gitCommitAvailable.value)
+        assertEquals(1, probes)
     }
 }

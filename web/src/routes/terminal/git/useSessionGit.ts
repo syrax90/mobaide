@@ -16,25 +16,41 @@ import { useSyncExternalStore } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchAgentCapabilities } from '../../../api/agentCapabilities';
 import {
+  cancelSessionGitJob,
   commitSessionGit,
   discardSessionGit,
   getSessionGitCommitContext,
   getSessionGitDiff,
+  getSessionGitJob,
   getSessionGitStatus,
+  isSessionGitJobLost,
   isTerminalSessionGitError,
   stageSessionGit,
+  startSessionGitJob,
   unstageSessionGit,
   type SessionGitCommitRequest,
   type SessionGitDiffRequest,
   type SessionGitDiscardScope,
+  type SessionGitJob,
   type SessionGitStatus,
+  type SessionGitSyncRequest,
 } from '../../../api/sessionGitRepository';
 import { queryKeys } from '../../../lib/queryKeys';
 import { gitCapabilities } from '../../../protocol/dto/agentVersion';
+import {
+  applySessionGitJob,
+  type SessionGitLatestJob,
+} from '../../../realtime/sessionGitJobCache';
 import { onTabVisibility, tabHidden } from '../../../realtime/tabVisibility';
 import { onWindowFocus, windowFocused } from '../../../realtime/windowFocus';
 
 export const SESSION_GIT_POLL_MS = 10_000;
+/**
+ * The reconcile cadence of a running fetch / pull / push. The socket frames
+ * are the fast path; this is what survives a dropped `git.job.done`, a tab
+ * that was hidden while the job ran, or a job another client started.
+ */
+export const SESSION_GIT_JOB_POLL_MS = 3_000;
 
 export function useSessionGitStatus(agentId: string, sessionId: string, active: boolean) {
   const focused = useSyncExternalStore(onWindowFocus, windowFocused);
@@ -162,4 +178,74 @@ export function useSessionGitMutations(agentId: string, sessionId: string) {
   });
   const busy = stage.isPending || unstage.isPending || discard.isPending || commit.isPending;
   return { stage, unstage, discard, commit, busy };
+}
+
+/**
+ * The newest fetch / pull / push job the socket reported for one session.
+ * Never fetched: the frames write it (`sessionGitJobCache.ts`), so a panel
+ * that opens mid-job, or a second tab, adopts the job from here.
+ */
+export function useSessionGitLatestJob(agentId: string, sessionId: string) {
+  return useQuery<SessionGitLatestJob>({
+    queryKey: queryKeys.sessionGitLatestJob(agentId, sessionId),
+    queryFn: () => Promise.reject(new Error('written by the socket, never fetched')),
+    enabled: false,
+    staleTime: Infinity,
+    meta: { silent: true },
+  });
+}
+
+/**
+ * One job's snapshot, polled every 3 s while it runs and the panel is in a
+ * visible, focused tab — the same gate as the status poll — and left alone
+ * once it is `done` (or the agent has forgotten it), so the `git.changed`
+ * invalidation that follows every job never refetches a finished one into a
+ * 404 after the agent's retention window.
+ */
+export function useSessionGitJob(agentId: string, sessionId: string, jobId: string | null) {
+  const focused = useSyncExternalStore(onWindowFocus, windowFocused);
+  const hidden = useSyncExternalStore(onTabVisibility, tabHidden);
+  const queryKey = queryKeys.sessionGitJob(agentId, sessionId, jobId ?? '');
+  return useQuery({
+    queryKey,
+    // Monotonic like the socket path: a poll the agent answered just before
+    // the job finished can land after the `done` frame, and disabling the
+    // query does not abort a fetch already in flight.
+    queryFn: async ({ client, signal }) => {
+      const fresh = await getSessionGitJob(agentId, sessionId, jobId ?? '', signal);
+      const cached = client.getQueryData<SessionGitJob>(queryKey);
+      return cached?.status === 'done' && fresh.status !== 'done' ? cached : fresh;
+    },
+    enabled: (query) =>
+      jobId !== null &&
+      focused &&
+      !hidden &&
+      query.state.data?.status !== 'done' &&
+      !isSessionGitJobLost(query.state.error) &&
+      !isTerminalSessionGitError(query.state.error),
+    refetchInterval: SESSION_GIT_JOB_POLL_MS,
+    staleTime: 0,
+    meta: { silent: true },
+  });
+}
+
+/**
+ * Start and cancel. Each answer is a job snapshot and is written into the
+ * cache at once, so the panel's banner appears without waiting for the first
+ * socket frame; the job's outcome arrives through the frames and the poll.
+ */
+export function useSessionGitSync(agentId: string, sessionId: string) {
+  const queryClient = useQueryClient();
+  const adopt = (job: SessionGitJob): void => {
+    applySessionGitJob(queryClient, agentId, job);
+  };
+  const start = useMutation({
+    mutationFn: (request: SessionGitSyncRequest) => startSessionGitJob(agentId, sessionId, request),
+    onSuccess: adopt,
+  });
+  const cancel = useMutation({
+    mutationFn: (jobId: string) => cancelSessionGitJob(agentId, sessionId, jobId),
+    onSuccess: adopt,
+  });
+  return { start, cancel };
 }

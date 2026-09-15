@@ -1,0 +1,155 @@
+{
+  "type": "GitJobResponse",
+  "cases": [
+    {
+      "name": "running_start",
+      "wire": {
+        "job_id": "3f9c2b7e1d4a4c0f9b8e7d6c5a4b3c2d",
+        "session_id": "sess-42",
+        "op": "push",
+        "status": "running",
+        "phase": null,
+        "percent": null,
+        "line": null,
+        "ok": null,
+        "error_code": null,
+        "message": null
+      },
+      "decoded_canonical": {
+        "job_id": "3f9c2b7e1d4a4c0f9b8e7d6c5a4b3c2d",
+        "session_id": "sess-42",
+        "op": "push",
+        "status": "running"
+      }
+    },
+    {
+      "name": "running_progress",
+      "wire": {
+        "job_id": "3f9c2b7e1d4a4c0f9b8e7d6c5a4b3c2d",
+        "session_id": "sess-42",
+        "op": "push",
+        "status": "running",
+        "phase": "Writing objects",
+        "percent": 45,
+        "line": "Writing objects:  45% (14/32)",
+        "ok": null,
+        "error_code": null,
+        "message": null
+      },
+      "decoded_canonical": {
+        "job_id": "3f9c2b7e1d4a4c0f9b8e7d6c5a4b3c2d",
+        "session_id": "sess-42",
+        "op": "push",
+        "status": "running",
+        "phase": "Writing objects",
+        "percent": 45,
+        "line": "Writing objects:  45% (14/32)"
+      }
+    },
+    {
+      "name": "done_ok",
+      "wire": {
+        "job_id": "3f9c2b7e1d4a4c0f9b8e7d6c5a4b3c2d",
+        "session_id": "sess-42",
+        "op": "push",
+        "status": "done",
+        "phase": "Writing objects",
+        "percent": 100,
+        "line": "Writing objects: 100% (32/32), 587.39 KiB | 26.70 MiB/s, done.",
+        "ok": true,
+        "error_code": null,
+        "message": "443f30d..9419146 main -> main"
+      },
+      "decoded_canonical": {
+        "job_id": "3f9c2b7e1d4a4c0f9b8e7d6c5a4b3c2d",
+        "session_id": "sess-42",
+        "op": "push",
+        "status": "done",
+        "phase": "Writing objects",
+        "percent": 100,
+        "line": "Writing objects: 100% (32/32), 587.39 KiB | 26.70 MiB/s, done.",
+        "ok": true,
+        "message": "443f30d..9419146 main -> main"
+      }
+    },
+    {
+      "name": "done_rejected",
+      "wire": {
+        "job_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "session_id": "sess-42",
+        "op": "push",
+        "status": "done",
+        "phase": null,
+        "percent": null,
+        "line": "hint: See the 'Note about fast-forwards' in 'git push --help' for details.",
+        "ok": false,
+        "error_code": "rejected",
+        "message": "! [rejected] HEAD -> main (stale info)\nerror: failed to push some refs to '/srv/git/app.git'"
+      },
+      "decoded_canonical": {
+        "job_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "session_id": "sess-42",
+        "op": "push",
+        "status": "done",
+        "line": "hint: See the 'Note about fast-forwards' in 'git push --help' for details.",
+        "ok": false,
+        "error_code": "rejected",
+        "message": "! [rejected] HEAD -> main (stale info)\nerror: failed to push some refs to '/srv/git/app.git'"
+      }
+    },
+    {
+      "name": "done_cancelled_fetch",
+      "wire": {
+        "job_id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+        "session_id": "sess-42",
+        "op": "fetch",
+        "status": "done",
+        "phase": "Receiving objects",
+        "percent": 12,
+        "line": "Receiving objects:  12% (120/1000)",
+        "ok": false,
+        "error_code": "cancelled",
+        "message": "cancelled"
+      },
+      "decoded_canonical": {
+        "job_id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+        "session_id": "sess-42",
+        "op": "fetch",
+        "status": "done",
+        "phase": "Receiving objects",
+        "percent": 12,
+        "line": "Receiving objects:  12% (120/1000)",
+        "ok": false,
+        "error_code": "cancelled",
+        "message": "cancelled"
+      }
+    },
+    {
+      "name": "done_pull_conflicts",
+      "wire": {
+        "job_id": "9e8d7c6b5a4f30211203f4a5b6c7d8e9",
+        "session_id": "sess-42",
+        "op": "pull",
+        "status": "done",
+        "phase": "Rebasing",
+        "percent": 100,
+        "line": "Could not apply 3e2d223... ours",
+        "ok": false,
+        "error_code": "conflicts",
+        "message": "CONFLICT (add/add): Merge conflict in shared.txt\nerror: could not apply 3e2d223... ours"
+      },
+      "decoded_canonical": {
+        "job_id": "9e8d7c6b5a4f30211203f4a5b6c7d8e9",
+        "session_id": "sess-42",
+        "op": "pull",
+        "status": "done",
+        "phase": "Rebasing",
+        "percent": 100,
+        "line": "Could not apply 3e2d223... ours",
+        "ok": false,
+        "error_code": "conflicts",
+        "message": "CONFLICT (add/add): Merge conflict in shared.txt\nerror: could not apply 3e2d223... ours"
+      }
+    }
+  ]
+}

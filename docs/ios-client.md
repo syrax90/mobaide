@@ -672,7 +672,30 @@ bottom-bar multi-select toolbar — every action gated on the matching
 `⋯ → Git → Commit…` opens the Changes screen with `GitCommitSheet` presented
 over it (`Route.sessionGitChanges(sessionId:commit:)`); the sheet mirrors
 Android's Summary + Description, author line, Amend prefill from
-`commit/context`, and Skip hooks (`--no-verify`). Both child screens hold a
+`commit/context`, and Skip hooks (`--no-verify`). #676 adds the network
+operations as agent-side jobs: the menu's `⋯ → Git → Fetch / Pull / Push…`
+(`Route.sessionGitChanges(sessionId:commit:sync:)`), the Changes toolbar's
+Sync button and the header's tappable `↑n ↓m` line all present
+`GitSyncSheet` — three rows (Fetch always, Pull when behind, Push when ahead
+or *Publish branch* without an upstream) with the disabled reason under
+each, then the running job's `phase` / `percent` on a `PixelProgressBar`
+(two rectangles, no width animation — git's percentage restarts per
+phase) with Cancel, or the outcome with its confirmed follow-ups (Pull
+with rebase / merge after `not_fast_forward`, Force push (with lease)
+after `rejected` or a non-fast-forward push; the `confirmationDialog` is
+attached to the sheet, not
+the screen, so it can present over it, and its `isPresented` setter
+clears only `syncPrompt` while `pendingFollowUp` survives, the same split
+as Discard). The list shows the job as a banner until its result is
+dismissed (a success clears itself after 6 s). `GitChangesModel.job` is
+fed by `observeGitJobFrames()` (adopting any job the socket reports for
+the session, another client's included) and by `runJobReconcile()`, a
+3 s `GET …/git/jobs/{id}` loop keyed by `.task(id:)` on the job and the
+scene phase, with a `running` snapshot never overwriting a `done` one;
+`isBusy` (a mutation or a running job) gates every staged-set write
+because the agent answers `job_running` meanwhile. `SessionGitError.map`
+reads a coded `detail` before the 404 branches, so `job_not_found` is a
+lost job rather than an outdated agent. Both child screens hold a
 ref-counted watch on
 `ForegroundSessionTracker` (`View.holdsSessionWatch`) for exactly as long as
 they are on the stack, so the terminal underneath stays attached and returning

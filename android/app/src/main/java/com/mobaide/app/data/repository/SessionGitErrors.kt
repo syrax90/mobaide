@@ -13,10 +13,12 @@ import java.io.IOException
  * Failures of the session-scoped git Changes routes, typed so the screens can
  * tell "update your agent" from "session ended" from "git itself refused".
  *
- * The two 404s share a status code and differ only in FastAPI's `detail`: the
- * agent answers a session lookup miss with the string `Session '<id>' not found`,
- * whereas an agent that predates the routes answers a relay `Unknown proxy route`
- * or FastAPI's plain `Not Found` — so the string is the discriminator.
+ * A coded `detail` object is a git answer whatever the status — the job routes'
+ * `404 job_not_found` included, which must not read as an old agent. The two
+ * string-detail 404s differ only in FastAPI's text: the agent answers a session
+ * lookup miss with `Session '<id>' not found`, whereas an agent that predates
+ * the routes answers a relay `Unknown proxy route` or FastAPI's plain
+ * `Not Found` — so the string is the discriminator.
  */
 sealed class SessionGitException(message: String, cause: Throwable? = null) :
     Exception(message, cause) {
@@ -49,6 +51,9 @@ sealed class SessionGitException(message: String, cause: Throwable? = null) :
         const val CODE_INDEX_LOCKED = "index_locked"
         const val CODE_PATHSPEC_MISMATCH = "pathspec_mismatch"
         const val CODE_GIT_TOO_OLD = "git_too_old"
+        /** Another fetch / pull / push owns the repository; [GitError.detailMessage] is its job id. */
+        const val CODE_JOB_RUNNING = "job_running"
+        const val CODE_JOB_NOT_FOUND = "job_not_found"
     }
 }
 
@@ -72,19 +77,16 @@ internal fun mapSessionGitError(t: Throwable): Throwable = when (t) {
     is SessionGitException -> t
     is ApiException -> {
         val detail = extractDetail(t.errorBody)
+        val code = (detail as? JsonObject)?.get("code")?.jsonPrimitive?.contentOrNull
         when {
+            code != null -> SessionGitException.GitError(
+                code = code,
+                detailMessage = (detail as JsonObject)["message"]?.jsonPrimitive?.contentOrNull,
+                cause = t,
+            )
             t.code == 404 && detail is String && sessionNotFound.matches(detail) ->
                 SessionGitException.SessionGone(t)
             t.code == 404 -> SessionGitException.AgentOutdated(t)
-            detail is JsonObject -> {
-                val code = detail["code"]?.jsonPrimitive?.contentOrNull
-                if (code == null) t
-                else SessionGitException.GitError(
-                    code = code,
-                    detailMessage = detail["message"]?.jsonPrimitive?.contentOrNull,
-                    cause = t,
-                )
-            }
             else -> t
         }
     }

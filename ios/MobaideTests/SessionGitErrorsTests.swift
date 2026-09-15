@@ -218,3 +218,53 @@ final class SessionGitErrorsTests: XCTestCase {
         ])
     }
 }
+
+/// The job routes' answers: a coded `detail` wins over the 404 branches, a
+/// `job_running` refusal names the job to follow, and both have their copy.
+final class SessionGitErrorsJobRoutesTests: XCTestCase {
+    private func mapped(_ error: any Error) -> SessionGitError? {
+        SessionGitError.map(error) as? SessionGitError
+    }
+
+    func testACoded404IsAGitErrorNeverAnOutdatedAgent() {
+        // `GET …/git/jobs/{id}` answers `{"detail":{"code":"job_not_found"}}`;
+        // read as `.agentOutdated` it would end the status feed and hide every
+        // mutating control, so the object shape is classified first.
+        XCTAssertEqual(
+            mapped(APIError(code: 404, errorBody: #"{"detail":{"code":"job_not_found"}}"#)),
+            .git(code: SessionGitError.codeJobNotFound, message: nil)
+        )
+        XCTAssertEqual(
+            mapped(APIError(code: 404, errorBody: #"{"detail":{"code":"job_not_found","message":null}}"#)),
+            .git(code: SessionGitError.codeJobNotFound, message: nil)
+        )
+    }
+
+    func testTheString404sStillReadAsBefore() {
+        XCTAssertEqual(mapped(APIError(code: 404, errorBody: #"{"detail":"Session 's1' not found"}"#)), .sessionGone)
+        XCTAssertEqual(mapped(APIError(code: 404, errorBody: #"{"detail":"Not Found"}"#)), .agentOutdated)
+    }
+
+    func testJobRunning409CarriesTheActiveJobId() {
+        XCTAssertEqual(
+            mapped(APIError(code: 409, errorBody: #"{"detail":{"code":"job_running","message":"ab12cd34"}}"#)),
+            .git(code: SessionGitError.codeJobRunning, message: "ab12cd34")
+        )
+    }
+
+    func testRefusalCopyPhrasesTheTwoJobRefusals() {
+        XCTAssertEqual(
+            SessionGitCopy.refusal(SessionGitError.codeJobRunning, message: "ab12cd34"),
+            "Another fetch, pull or push is still running."
+        )
+        XCTAssertEqual(
+            SessionGitCopy.refusal(SessionGitError.codeJobNotFound, message: nil),
+            "Lost track of the job — refresh to see the result."
+        )
+        XCTAssertEqual(
+            SessionGitCopy.mutationMessage(for: SessionGitError.git(code: SessionGitError.codeJobRunning, message: "j9")),
+            "Another fetch, pull or push is still running.",
+            "the start path reaches the refusal vocabulary through the mutation copy"
+        )
+    }
+}

@@ -8,6 +8,7 @@ import {
   cliModelsPending,
   gitCapabilities,
   gitCapability,
+  hasGitSync,
   type AgentVersionInfo,
 } from './agentVersion';
 
@@ -187,11 +188,36 @@ describe('gitCapabilities', () => {
       stage: true,
       discard: false,
       commit: true,
+      fetch: false,
+      pull: false,
+      push: false,
     });
   });
 
   it('is all-off without a probe', () => {
     expect(gitCapabilities(undefined)).toEqual(NO_GIT_CAPABILITIES);
-    expect(NO_GIT_CAPABILITIES).toEqual({ stage: false, discard: false, commit: false });
+    expect(NO_GIT_CAPABILITIES).toEqual({
+      stage: false,
+      discard: false,
+      commit: false,
+      fetch: false,
+      pull: false,
+      push: false,
+    });
+  });
+});
+
+describe('hasGitSync', () => {
+  it('is true on any of the three job keys, each on its own', () => {
+    // The menu entry and the Sync button show on any key; each sheet row
+    // gates itself on its own key.
+    expect(hasGitSync(gitCapabilities(info({ git: { changes: true, fetch: true } })))).toBe(true);
+    expect(hasGitSync(gitCapabilities(info({ git: { pull: true } })))).toBe(true);
+    expect(hasGitSync(gitCapabilities(info({ git: { push: true } })))).toBe(true);
+  });
+
+  it('is false for an agent that only stages and commits', () => {
+    expect(hasGitSync(gitCapabilities(info({ git: { changes: true, stage: true, discard: true, commit: true } })))).toBe(false);
+    expect(hasGitSync(NO_GIT_CAPABILITIES)).toBe(false);
   });
 });

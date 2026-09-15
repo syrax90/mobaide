@@ -15,9 +15,13 @@ import com.mobaide.app.data.network.dto.GitDeleteResponse
 import com.mobaide.app.data.network.dto.GitDiffResponse
 import com.mobaide.app.data.network.dto.GitDiscardRequest
 import com.mobaide.app.data.network.dto.GitItem
+import com.mobaide.app.data.network.dto.GitJobResponse
 import com.mobaide.app.data.network.dto.GitPathsRequest
+import com.mobaide.app.data.network.dto.GitPullRequest
+import com.mobaide.app.data.network.dto.GitPushRequest
 import com.mobaide.app.data.network.dto.GitRepoInfo
 import com.mobaide.app.data.network.dto.GitStatusResponse
+import com.mobaide.app.data.network.dto.VersionInfoResponse
 import com.mobaide.app.data.network.dto.gitCapability
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -39,6 +43,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -78,6 +83,22 @@ sealed interface SessionGitStatusLoad {
 private enum class PollTrigger { Tick, Push, Manual }
 
 /**
+ * One answer of a fetch / pull / push job's feed: a snapshot from a socket
+ * frame or the reconcile poll, a transient poll failure with the last snapshot
+ * kept, or the agent no longer knowing the job at all.
+ */
+sealed interface SessionGitJobLoad {
+    data class Loaded(val job: GitJobResponse) : SessionGitJobLoad
+    data class Failed(val cached: GitJobResponse?, val error: Throwable) : SessionGitJobLoad
+    data object Lost : SessionGitJobLoad
+}
+
+private sealed interface JobSignal {
+    data object Tick : JobSignal
+    data class Frame(val job: GitJobResponse) : JobSignal
+}
+
+/**
  * The agent's `capabilities.git` mutation keys. Every mutating control hangs
  * off an explicit `true`, so an older agent keeps a read-only Changes viewer.
  */
@@ -85,11 +106,26 @@ data class GitCapabilities(
     val stage: Boolean = false,
     val discard: Boolean = false,
     val commit: Boolean = false,
+    val fetch: Boolean = false,
+    val pull: Boolean = false,
+    val push: Boolean = false,
 ) {
+    /** The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three. */
+    val hasSync: Boolean get() = fetch || pull || push
+
     companion object {
         val NONE = GitCapabilities()
     }
 }
+
+fun VersionInfoResponse.toGitCapabilities(): GitCapabilities = GitCapabilities(
+    stage = gitCapability("stage"),
+    discard = gitCapability("discard"),
+    commit = gitCapability("commit"),
+    fetch = gitCapability("fetch"),
+    pull = gitCapability("pull"),
+    push = gitCapability("push"),
+)
 
 class GitRepository(
     private val restApi: RestApi,
@@ -135,13 +171,104 @@ class GitRepository(
 
     /** Fresh per-call probe of `GET /api/version`, like the mode picker's CLI probe. */
     suspend fun gitCapabilities(): GitCapabilities = mapSessionGit {
-        val info = restApi.getAgentVersion()
-        GitCapabilities(
-            stage = info.gitCapability("stage"),
-            discard = info.gitCapability("discard"),
-            commit = info.gitCapability("commit"),
+        restApi.getAgentVersion().toGitCapabilities()
+    }
+
+    /** Start a fetch, pull or push; the answer is the job's first snapshot, not its result. */
+    suspend fun startSessionGitJob(
+        sessionId: String,
+        op: String,
+        pullMode: String = GitPullRequest.MODE_FF_ONLY,
+        force: Boolean = false,
+    ): GitJobResponse = mapSessionGit {
+        when (op) {
+            GitJobResponse.OP_FETCH -> restApi.fetchSessionGit(sessionId)
+            GitJobResponse.OP_PULL -> restApi.pullSessionGit(sessionId, GitPullRequest(pullMode))
+            else -> restApi.pushSessionGit(sessionId, GitPushRequest(force))
+        }
+    }
+
+    suspend fun sessionGitJob(sessionId: String, jobId: String): GitJobResponse =
+        mapSessionGit { restApi.getSessionGitJob(sessionId, jobId) }
+
+    suspend fun cancelSessionGitJob(sessionId: String, jobId: String): GitJobResponse =
+        mapSessionGit { restApi.cancelSessionGitJob(sessionId, jobId) }
+
+    /**
+     * Every job the agent reports for [sessionId], as the socket frames arrive —
+     * how a screen adopts a job another client started, and how the starter
+     * sees its own job before the HTTP answer lands (the first frame goes out
+     * before the response).
+     */
+    fun observeSessionGitJobFrames(sessionId: String): Flow<GitJobResponse> =
+        merge(
+            eventBus.stream<AgentEvent.GitJobProgress>().map { it.job },
+            eventBus.stream<AgentEvent.GitJobDone>().map { it.job },
+        ).filter { it.session_id == sessionId }
+
+    /**
+     * One job's feed: its socket frames as they arrive, plus a reconcile poll
+     * every [interval] while the app is foregrounded — the frames are the fast
+     * path, the poll is what survives a dropped `git.job.done`, a background
+     * stretch, or a job started before this screen subscribed. A `running`
+     * snapshot never overwrites a `done` one (a poll issued just before the
+     * terminal frame can answer after it). Ends once the job is done, the
+     * agent has forgotten it, or the session is gone.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun observeSessionGitJob(
+        sessionId: String,
+        jobId: String,
+        foreground: Flow<Boolean>,
+        initial: () -> GitJobResponse? = { null },
+        interval: Duration = SESSION_GIT_JOB_POLL_INTERVAL,
+    ): Flow<SessionGitJobLoad> = flow {
+        var latest = initial()
+        val ticks = foreground.distinctUntilChanged().flatMapLatest { inForeground ->
+            if (inForeground) ticker(interval) else emptyFlow()
+        }.map<Unit, JobSignal> { JobSignal.Tick }
+        val frames = merge(
+            eventBus.stream<AgentEvent.GitJobProgress>().map { it.job },
+            eventBus.stream<AgentEvent.GitJobDone>().map { it.job },
+        ).filter { it.job_id == jobId }.map<GitJobResponse, JobSignal> { JobSignal.Frame(it) }
+        emitAll(
+            merge(ticks, frames)
+                .conflate()
+                .map { signal ->
+                    when (signal) {
+                        is JobSignal.Frame -> {
+                            latest = newer(latest, signal.job)
+                            SessionGitJobLoad.Loaded(latest!!)
+                        }
+                        JobSignal.Tick -> try {
+                            latest = newer(latest, sessionGitJob(sessionId, jobId))
+                            SessionGitJobLoad.Loaded(latest!!)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            if (isJobLost(e)) SessionGitJobLoad.Lost
+                            else SessionGitJobLoad.Failed(latest, e)
+                        }
+                    }
+                }
+                .onStart { latest?.let { emit(SessionGitJobLoad.Loaded(it)) } }
+                .transformWhile { load ->
+                    emit(load)
+                    when (load) {
+                        is SessionGitJobLoad.Loaded -> load.job.running
+                        is SessionGitJobLoad.Failed -> !isTerminal(load.error)
+                        SessionGitJobLoad.Lost -> false
+                    }
+                },
         )
     }
+
+    private fun newer(current: GitJobResponse?, incoming: GitJobResponse): GitJobResponse =
+        if (current != null && !current.running && incoming.running) current else incoming
+
+    private fun isJobLost(error: Throwable): Boolean =
+        error is SessionGitException.GitError &&
+            error.code == SessionGitException.CODE_JOB_NOT_FOUND
 
     suspend fun stageSessionPaths(sessionId: String, paths: List<String>) {
         mapSessionGit { restApi.stageSessionGit(sessionId, GitPathsRequest(paths)) }
@@ -285,5 +412,6 @@ class GitRepository(
 
     companion object {
         val SESSION_GIT_POLL_INTERVAL: Duration = 10.seconds
+        val SESSION_GIT_JOB_POLL_INTERVAL: Duration = 3.seconds
     }
 }

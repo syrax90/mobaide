@@ -1,5 +1,6 @@
 """Pydantic wire models for the session-scoped git Changes API (status/diff
-reads and the stage/unstage/discard/commit mutations).
+reads, the stage/unstage/discard/commit mutations and the fetch/pull/push
+jobs).
 
 ``GET /api/sessions/{id}/git/status`` and ``.../git/diff`` share one parser
 on the agent so the three clients render dumb, pre-shaped JSON. Every key is
@@ -24,8 +25,13 @@ GIT_CAPABILITIES: dict[str, bool] = {
     "stage": True,
     "discard": True,
     "commit": True,
+    "fetch": True,
+    "pull": True,
+    "push": True,
 }
 MESSAGE_LIMIT = 64 * 1024
+JOB_LINE_LIMIT = 200
+JOB_MESSAGE_LIMIT = 500
 
 UnavailableReason = Literal[
     "not_a_repo",
@@ -45,6 +51,9 @@ DiffChange = Literal[
     "modified", "added", "deleted", "renamed", "copied", "type_changed"
 ]
 DiffLineType = Literal["ctx", "add", "del"]
+GitJobOp = Literal["fetch", "pull", "push"]
+GitJobStatus = Literal["running", "done"]
+GitPullMode = Literal["ff_only", "rebase", "merge"]
 
 
 class GitHead(BaseModel):
@@ -188,3 +197,36 @@ class GitCommitContextResponse(BaseModel):
 
     author: GitCommitAuthor | None = None
     head: GitCommitHead | None = None
+
+
+class GitPullRequest(BaseModel):
+    mode: GitPullMode = "ff_only"
+
+
+class GitPushRequest(BaseModel):
+    force: bool = False
+
+
+class GitJobResponse(BaseModel):
+    """One fetch/pull/push job: the body every job route answers and the
+    payload of both ``git.job.progress`` and ``git.job.done``. Every key is
+    always present; ``phase``/``percent``/``line`` mirror git's own
+    ``--progress`` output, ``ok``/``error_code``/``message`` are null until
+    ``status`` is ``done``. ``error_code`` is an open vocabulary (clients
+    render unknown codes from ``message``): ``cancelled`` | ``git_timeout``
+    | ``auth_required`` | ``network`` | ``remote_not_found`` | ``rejected``
+    | ``not_fast_forward`` | ``conflicts`` | ``dirty_worktree`` |
+    ``unmerged`` | ``operation_in_progress`` | ``no_upstream`` |
+    ``no_remote`` | ``detached_head`` | ``no_head`` | ``hook_failed`` |
+    ``index_locked`` | ``git_error``."""
+
+    job_id: str
+    session_id: str
+    op: GitJobOp
+    status: GitJobStatus = "running"
+    phase: str | None = None
+    percent: int | None = None
+    line: str | None = None
+    ok: bool | None = None
+    error_code: str | None = None
+    message: str | None = None

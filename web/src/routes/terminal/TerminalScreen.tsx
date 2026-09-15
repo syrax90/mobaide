@@ -26,6 +26,7 @@ import { stripControls } from '../../terminal/terminalPaste';
 import { TemplateEditorDialog } from '../templates/TemplateEditorDialog';
 import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
 import { GitChangesPanel } from './git/GitChangesPanel';
+import { NO_GIT_CAPABILITIES, hasGitSync } from '../../protocol/dto/agentVersion';
 import { useSessionGitCapabilities } from './git/useSessionGit';
 import { JumpToBottom } from './JumpToBottom';
 import { TemplatesPicker } from './TemplatesPicker';
@@ -150,11 +151,16 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // A counter, not a flag: the panel may already be open when *Commit…* is
   // picked again, and only a new value re-opens its dialog.
   const [commitRequest, setCommitRequest] = useState(0);
+  const [syncRequest, setSyncRequest] = useState(0);
   const moreRef = useRef<HTMLButtonElement>(null);
   // The menu's *Commit…* entry exists only on an agent that advertises
-  // `capabilities.git.commit`; the panel gates its own controls the same way.
-  const canCommit =
-    useSessionGitCapabilities(model.agentId, session?.cwd !== undefined).data?.commit ?? false;
+  // `capabilities.git.commit`, *Fetch / Pull / Push…* on any of the three
+  // job keys; the panel gates its own controls the same way.
+  const gitCapabilities =
+    useSessionGitCapabilities(model.agentId, session?.cwd !== undefined).data ??
+    NO_GIT_CAPABILITIES;
+  const canCommit = gitCapabilities.commit;
+  const canSync = hasGitSync(gitCapabilities);
   const immersive = useKeyboardLock();
   // Shared with the scrollbar, whose `role="scrollbar"` has to name what it
   // controls.
@@ -323,6 +329,18 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
                         },
                       ]
                     : []),
+                  ...(canSync
+                    ? [
+                        {
+                          id: 'sync',
+                          label: 'Fetch / Pull / Push…',
+                          onSelect: () => {
+                            setChangesOpen(true);
+                            setSyncRequest((n) => n + 1);
+                          },
+                        },
+                      ]
+                    : []),
                 ],
               },
             ]}
@@ -457,9 +475,11 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
           agentId={model.agentId}
           sessionId={model.sessionId}
           commitRequest={commitRequest}
+          syncRequest={syncRequest}
           onClose={() => {
             setChangesOpen(false);
             setCommitRequest(0);
+            setSyncRequest(0);
             // Back to the menu button, not the grid: the viewer was reached
             // from the header, and a keyboard user is still up there.
             moreRef.current?.focus();

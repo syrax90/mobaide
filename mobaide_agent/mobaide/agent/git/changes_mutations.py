@@ -16,14 +16,13 @@ clients render; unexpected failures stay ``git_error`` (``500``).
 """
 from __future__ import annotations
 
-import asyncio
-import os
 import re
 from collections.abc import Sequence
 from typing import Any
 
-from mobaide.core.git_exec import CmdResult, GitCwdMissingError, git_version, run_git
+from mobaide.core.git_exec import CmdResult, run_git
 
+from .changes_jobs import job_registry
 from .changes_models import (
     BYTE_LIMIT,
     MESSAGE_LIMIT,
@@ -35,6 +34,7 @@ from .changes_models import (
     GitMutationResponse,
 )
 from .changes_service import (
+    MIN_GIT_VERSION_MUTATE,
     GitBadRequestError,
     GitCommandError,
     GitRefusedError,
@@ -42,15 +42,21 @@ from .changes_service import (
     _check_result,
     _fail,
     _lines,
+    _lock_for,
+    _mutable_repo,
     _text,
-    resolve_repo,
     validate_repo_path,
 )
 from .service import _publish_git_changed
 
-# ``--pathspec-from-file`` reached ``reset`` in 2.26 (``add``/``restore``/
-# ``commit`` had it since 2.25); the read routes keep their 2.15 floor.
-MIN_GIT_VERSION_MUTATE: tuple[int, int, int] = (2, 26, 0)
+__all__ = [
+    "MIN_GIT_VERSION_MUTATE",
+    "commit_session",
+    "discard_session_paths",
+    "get_session_commit_context",
+    "stage_session_paths",
+    "unstage_session_paths",
+]
 
 _QUICK_TIMEOUT = 5.0
 _MUTATE_TIMEOUT = 15.0
@@ -60,16 +66,6 @@ _SMALL_OUTPUT = 64 * 1024
 _CLEAN_CHUNK = 100
 _PATHSPEC_FROM_STDIN = ("--pathspec-from-file=-", "--pathspec-file-nul")
 _IDENT_RE = re.compile(r"^(.*?) <([^>]*)> \d+ [+-]\d{4}$")
-
-_repo_locks: dict[str, asyncio.Lock] = {}
-
-
-def _lock_for(toplevel: str) -> asyncio.Lock:
-    key = os.path.normcase(toplevel)
-    lock = _repo_locks.get(key)
-    if lock is None:
-        lock = _repo_locks[key] = asyncio.Lock()
-    return lock
 
 
 def _normalise_paths(paths: Sequence[str]) -> list[str]:
@@ -118,18 +114,15 @@ def _classify(result: CmdResult, fallback: str) -> GitRefusedError | GitCommandE
     return _fail(result, fallback)
 
 
-async def _mutable_repo(cwd: str | None) -> ResolvedRepo:
-    probe = await resolve_repo(cwd)
-    if probe.repo is None:
-        reason = probe.reason or "not_a_repo"
-        if reason == "cwd_missing":
-            raise GitCwdMissingError(cwd or "")
-        raise GitRefusedError(reason)
-    version = await git_version()
-    if version is None or version < MIN_GIT_VERSION_MUTATE:
-        floor = ".".join(str(part) for part in MIN_GIT_VERSION_MUTATE)
-        raise GitRefusedError("git_too_old", f"git {floor} or newer is required")
-    return probe.repo
+async def _writable_repo(cwd: str | None) -> ResolvedRepo:
+    """A write is refused outright while a fetch/pull/push job owns the
+    repository: queuing behind its 120 s budget would only turn into a relay
+    timeout, and the job publishes ``git.changed`` when it is done."""
+    repo = await _mutable_repo(cwd)
+    active = job_registry.active_job_id(repo.toplevel)
+    if active is not None:
+        raise GitRefusedError("job_running", active)
+    return repo
 
 
 async def _run(
@@ -169,7 +162,7 @@ async def stage_session_paths(
     """``git add -A`` limited to ``paths``: stages modifications, deletions,
     type changes and untracked files alike."""
     rel = _normalise_paths(paths)
-    repo = await _mutable_repo(cwd)
+    repo = await _writable_repo(cwd)
     async with _lock_for(repo.toplevel):
         await _run(
             ["add", "-A", *_PATHSPEC_FROM_STDIN],
@@ -191,7 +184,7 @@ async def unstage_session_paths(
     """``git reset -q -- paths``: unlike ``restore --staged`` it also works
     on a branch with no commits yet."""
     rel = _normalise_paths(paths)
-    repo = await _mutable_repo(cwd)
+    repo = await _writable_repo(cwd)
     async with _lock_for(repo.toplevel):
         await _run(
             ["reset", "-q", *_PATHSPEC_FROM_STDIN],
@@ -216,7 +209,7 @@ async def discard_session_paths(
     if scope not in ("unstaged", "untracked"):
         raise GitBadRequestError("bad_scope")
     rel = _normalise_paths(paths)
-    repo = await _mutable_repo(cwd)
+    repo = await _writable_repo(cwd)
     async with _lock_for(repo.toplevel):
         if scope == "unstaged":
             await _run(
@@ -369,7 +362,7 @@ async def commit_session(
     survives. Hooks run unless ``no_verify`` asks otherwise."""
     if not request.message.strip():
         raise GitBadRequestError("empty_message")
-    repo = await _mutable_repo(cwd)
+    repo = await _writable_repo(cwd)
     toplevel = repo.toplevel
     async with _lock_for(toplevel):
         if await _author_identity(toplevel) is None:

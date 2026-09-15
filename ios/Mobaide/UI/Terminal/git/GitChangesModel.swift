@@ -43,6 +43,42 @@ struct CommitSheetState: Equatable {
     var error: CommitError?
 }
 
+/// The fetch / pull / push this screen follows: `job` is the latest snapshot
+/// (nil until the first one lands), `lost` that the agent no longer knows the
+/// id.
+struct GitJobBanner: Equatable {
+    let jobId: String
+    var job: GitJobResponse?
+    var lost = false
+
+    var running: Bool { !lost && (job?.running ?? true) }
+    var failed: Bool { lost || job?.ok == false }
+
+    var text: String {
+        if lost { return GitChangesDisplay.jobLostCopy }
+        guard let job else { return "Syncing…" }
+        return GitChangesDisplay.jobNotice(job)
+    }
+}
+
+struct SyncSheetState: Equatable {
+    /// The start request is in flight — the one moment the sheet cannot be dismissed.
+    var isStarting = false
+    var error: String?
+}
+
+enum SyncFollowUp: Equatable {
+    case pullRebase, pullMerge, forcePush
+}
+
+/// The confirmation every follow-up goes through.
+struct SyncPrompt: Equatable {
+    let followUp: SyncFollowUp
+    let title: String
+    let body: String
+    let confirm: String
+}
+
 /// Session-scoped Changes screen state (Android `GitChangesViewModel` +
 /// `GitRepository.observeSessionGitStatus`).
 ///
@@ -67,6 +103,12 @@ final class GitChangesModel {
     }
 
     static let pollInterval: Duration = .seconds(10)
+    /// The reconcile cadence of a running fetch / pull / push: the socket
+    /// frames are the fast path, this is what survives a dropped
+    /// `git.job.done`, a background stretch, or a job another client started.
+    static let jobPollInterval: Duration = .seconds(3)
+    /// How long a successful job's banner stays before it clears itself.
+    static let jobResultDismissDelay: Duration = .seconds(6)
 
     private(set) var state: State = .loading
     /// A failed refresh over content already shown; cleared by the next success.
@@ -80,10 +122,20 @@ final class GitChangesModel {
     private(set) var isMutating = false
     var discardPrompt: DiscardPrompt?
     var commitSheet: CommitSheetState?
+    var syncSheet: SyncSheetState?
+    /// The follow-up confirmation; its `isPresented` setter clears only this.
+    var syncPrompt: SyncPrompt?
     var toast: ToastMessage?
+    /// The fetch / pull / push this screen follows, until its result is
+    /// dismissed. Adopted from wherever it surfaces — this screen's own start,
+    /// a socket frame for a job another client started, or the id a
+    /// `409 job_running` names.
+    private(set) var job: GitJobBanner?
     /// Consumed by the screen's first `.task`: the terminal menu's Commit…
     /// lands here with the sheet already up.
     private(set) var openCommitOnAppear: Bool
+    /// The same for the menu's Fetch / Pull / Push….
+    private(set) var openSyncOnAppear: Bool
 
     let sessionId: String
     private let agentAPI: AgentAPI
@@ -99,6 +151,11 @@ final class GitChangesModel {
     /// SwiftUI writes the dialog's `isPresented` binding on dismissal, which
     /// can clear the prompt before the confirm action runs.
     private var pendingDiscard: [GitChangesRow] = []
+    /// The follow-up a confirmation acts on, kept apart from `syncPrompt` for
+    /// the same reason.
+    private var pendingFollowUp: SyncFollowUp?
+    /// A dismissed job's id, so a late frame does not re-adopt it.
+    private var dismissedJobId: String?
 
     init(
         sessionId: String,
@@ -106,7 +163,8 @@ final class GitChangesModel {
         agentEventBus: AgentEventBus,
         projectName: @escaping @MainActor () -> String?,
         sleeper: any Sleeper = ContinuousSleeper(),
-        openCommit: Bool = false
+        openCommit: Bool = false,
+        openSync: Bool = false
     ) {
         self.sessionId = sessionId
         self.agentAPI = agentAPI
@@ -114,6 +172,23 @@ final class GitChangesModel {
         self.projectName = projectName
         self.sleeper = sleeper
         self.openCommitOnAppear = openCommit
+        self.openSyncOnAppear = openSync
+    }
+
+    var repo: GitRepoInfo? {
+        if case .ready(_, let repo, _) = state { return repo }
+        return nil
+    }
+
+    /// A mutation is in flight, or a fetch / pull / push owns the repository
+    /// (the agent answers `job_running` to every write meanwhile); Cancel,
+    /// refresh and the Sync button stay live.
+    var isBusy: Bool { isMutating || job?.running == true }
+
+    /// The `.task(id:)` key of the reconcile loop: it restarts when the job
+    /// changes or finishes and when the app leaves the background.
+    func jobReconcileKey(active: Bool) -> String {
+        "\(job?.jobId ?? "")|\(job?.running == true)|\(active)"
     }
 
     var sections: [GitChangesSection] {
@@ -231,6 +306,180 @@ final class GitChangesModel {
         guard openCommitOnAppear else { return }
         openCommitOnAppear = false
         openCommit()
+    }
+
+    /// The terminal menu's Fetch / Pull / Push…, once.
+    func consumeOpenSync() {
+        guard openSyncOnAppear else { return }
+        openSyncOnAppear = false
+        openSync()
+    }
+
+    /// Every job the agent reports for this session, as the socket frames
+    /// arrive: how the screen adopts a job another client started, and how
+    /// the starter sees its own job before the HTTP answer lands (the first
+    /// frame goes out before the response).
+    func observeGitJobFrames() async {
+        for await event in agentEventBus.events() {
+            let frame: GitJobResponse
+            switch event {
+            case .gitJobProgress(let job), .gitJobDone(let job):
+                frame = job
+            default:
+                continue
+            }
+            guard frame.session_id == sessionId, frame.job_id != dismissedJobId else { continue }
+            if job?.jobId == frame.job_id {
+                apply(frame)
+            } else {
+                job = GitJobBanner(jobId: frame.job_id, job: frame)
+                scheduleAutoDismissIfDone(frame)
+            }
+        }
+    }
+
+    /// The reconcile poll: a snapshot at once, then one per interval while the
+    /// job runs and the app is not in the background. Restarted by the
+    /// screen's `.task(id:)` whenever the job changes.
+    func runJobReconcile() async {
+        while !Task.isCancelled {
+            guard let banner = job, banner.running else { return }
+            await pollJob(banner.jobId)
+            guard job?.running == true else { return }
+            do {
+                try await sleeper.sleep(for: Self.jobPollInterval)
+            } catch {
+                return
+            }
+        }
+    }
+
+    func openSync() {
+        syncSheet = SyncSheetState()
+    }
+
+    func closeSync() {
+        guard syncSheet?.isStarting != true else { return }
+        syncSheet = nil
+    }
+
+    /// The sheet's plain rows: fetch, a fast-forward pull, a push without force.
+    func startSync(op: String) async {
+        await launchSync(op: op, pullMode: GitPullRequest.modeFFOnly, force: false)
+    }
+
+    func requestFollowUp(_ followUp: SyncFollowUp) {
+        pendingFollowUp = followUp
+        syncPrompt = GitChangesDisplay.followUpPrompt(followUp, repo: repo)
+    }
+
+    /// The dialog went away without a choice: clears the prompt and the
+    /// follow-up together (the `isPresented` binding must not call this).
+    func dismissFollowUp() {
+        syncPrompt = nil
+        pendingFollowUp = nil
+    }
+
+    func confirmFollowUp() async {
+        guard let followUp = pendingFollowUp else { return }
+        pendingFollowUp = nil
+        syncPrompt = nil
+        switch followUp {
+        case .pullRebase:
+            await launchSync(op: GitJobResponse.opPull, pullMode: GitPullRequest.modeRebase, force: false)
+        case .pullMerge:
+            await launchSync(op: GitJobResponse.opPull, pullMode: GitPullRequest.modeMerge, force: false)
+        case .forcePush:
+            await launchSync(op: GitJobResponse.opPush, pullMode: GitPullRequest.modeFFOnly, force: true)
+        }
+    }
+
+    func cancelSync() async {
+        guard let banner = job, banner.running else { return }
+        do {
+            let fresh = try await agentAPI.cancelSessionGitJob(sessionId: sessionId, jobId: banner.jobId)
+            apply(fresh)
+        } catch {
+            guard !SessionGitError.isCancellation(error) else { return }
+            toast = ToastMessage(text: SessionGitCopy.mutationMessage(for: SessionGitError.map(error)), tone: .danger)
+        }
+    }
+
+    func dismissJobResult() {
+        dismissedJobId = job?.jobId
+        job = nil
+    }
+
+    private func launchSync(op: String, pullMode: String, force: Bool) async {
+        guard syncSheet?.isStarting != true else { return }
+        syncSheet?.isStarting = true
+        syncSheet?.error = nil
+        defer { syncSheet?.isStarting = false }
+        do {
+            let started = try await agentAPI.startSessionGitJob(
+                sessionId: sessionId, op: op, pullMode: pullMode, force: force
+            )
+            dismissedJobId = nil
+            job = GitJobBanner(jobId: started.job_id, job: started)
+            scheduleAutoDismissIfDone(started)
+        } catch {
+            guard !SessionGitError.isCancellation(error) else { return }
+            let mapped = SessionGitError.map(error)
+            // Another client got there first: follow its job instead of failing.
+            if case .git(let code, let id?)? = mapped as? SessionGitError,
+               code == SessionGitError.codeJobRunning, !id.isEmpty {
+                dismissedJobId = nil
+                job = GitJobBanner(jobId: id, job: nil)
+            }
+            let copy = SessionGitCopy.mutationMessage(for: mapped)
+            if syncSheet != nil {
+                syncSheet?.error = copy
+            } else {
+                toast = ToastMessage(text: copy, tone: .danger)
+            }
+        }
+    }
+
+    private func pollJob(_ jobId: String) async {
+        do {
+            let fresh = try await agentAPI.getSessionGitJob(sessionId: sessionId, jobId: jobId)
+            apply(fresh)
+        } catch {
+            guard !SessionGitError.isCancellation(error), job?.jobId == jobId else { return }
+            // A forgotten job, a gone session or an outdated agent: nothing
+            // left to poll (Android's feed and the web query stop the same way).
+            switch SessionGitError.map(error) as? SessionGitError {
+            case .git(let code, _)? where code == SessionGitError.codeJobNotFound:
+                job?.lost = true
+            case .agentOutdated?, .sessionGone?:
+                job?.lost = true
+            default:
+                break
+            }
+        }
+    }
+
+    /// Monotonic: a `running` snapshot never overwrites a `done` one — a poll
+    /// issued just before the terminal frame can answer after it.
+    private func apply(_ fresh: GitJobResponse) {
+        guard var banner = job, banner.jobId == fresh.job_id else { return }
+        if let current = banner.job, !current.running, fresh.running { return }
+        banner.job = fresh
+        banner.lost = false
+        job = banner
+        scheduleAutoDismissIfDone(fresh)
+    }
+
+    /// A successful job clears its own banner; a failure stays until dismissed,
+    /// because its follow-ups live behind it.
+    private func scheduleAutoDismissIfDone(_ snapshot: GitJobResponse) {
+        guard !snapshot.running, snapshot.ok == true else { return }
+        let jobId = snapshot.job_id
+        Task { [weak self] in
+            guard let self else { return }
+            try? await sleeper.sleep(for: Self.jobResultDismissDelay)
+            if job?.jobId == jobId { dismissJobResult() }
+        }
     }
 
     func rows(for ids: Set<String>) -> [GitChangesRow] {
@@ -608,5 +857,206 @@ enum GitChangesDisplay {
 
     static func authorLine(_ author: GitCommitAuthor) -> String {
         "Committing as \(author.name) <\(author.email)>"
+    }
+
+    static let jobLostCopy = "Lost track of the job — refresh to see the result."
+
+    /// One of the Sync sheet's three actions and whether it can run right now.
+    struct SyncRow: Equatable {
+        let op: String
+        let label: String
+        let detail: String
+        let enabled: Bool
+    }
+
+    /// The Sync sheet's rows from the same status the header renders; the copy
+    /// is shared with Android `syncRows` and web `syncRows`. A row exists only
+    /// when the agent advertises its capability; Fetch is always possible,
+    /// Pull needs something to pull, Push something to push — or a branch with
+    /// no upstream yet, which it publishes.
+    static func syncRows(_ repo: GitRepoInfo?, capabilities: GitCapabilities) -> [SyncRow] {
+        var rows: [SyncRow] = []
+        let head = repo?.head
+        let upstream = repo?.upstream
+        let ref = upstream?.ref
+        let blocked: String?
+        if let head {
+            blocked = head.initial ? "No commits yet" : head.detached ? "Detached HEAD" : nil
+        } else {
+            blocked = "Repository unavailable"
+        }
+        if capabilities.fetch {
+            rows.append(SyncRow(
+                op: GitJobResponse.opFetch, label: "Fetch", detail: "Update remote-tracking branches", enabled: true
+            ))
+        }
+        if capabilities.pull {
+            if let blocked {
+                rows.append(SyncRow(op: GitJobResponse.opPull, label: "Pull", detail: blocked, enabled: false))
+            } else if let upstream {
+                if let behind = upstream.behind {
+                    if behind == 0 {
+                        rows.append(SyncRow(op: GitJobResponse.opPull, label: "Pull", detail: "Nothing to pull", enabled: false))
+                    } else {
+                        rows.append(SyncRow(
+                            op: GitJobResponse.opPull,
+                            label: "Pull",
+                            detail: "Fast-forward \(behind) \(behind == 1 ? "commit" : "commits") from \(ref ?? "upstream")",
+                            enabled: true
+                        ))
+                    }
+                } else {
+                    rows.append(SyncRow(op: GitJobResponse.opPull, label: "Pull", detail: "Upstream gone", enabled: false))
+                }
+            } else {
+                rows.append(SyncRow(op: GitJobResponse.opPull, label: "Pull", detail: "No upstream", enabled: false))
+            }
+        }
+        if capabilities.push {
+            if let blocked {
+                rows.append(SyncRow(op: GitJobResponse.opPush, label: "Push", detail: blocked, enabled: false))
+            } else if let upstream {
+                if let ahead = upstream.ahead {
+                    if ahead == 0 {
+                        rows.append(SyncRow(op: GitJobResponse.opPush, label: "Push", detail: "Nothing to push", enabled: false))
+                    } else {
+                        rows.append(SyncRow(
+                            op: GitJobResponse.opPush,
+                            label: "Push",
+                            detail: "\(ahead) \(ahead == 1 ? "commit" : "commits") to \(ref ?? "upstream")",
+                            enabled: true
+                        ))
+                    }
+                } else {
+                    rows.append(SyncRow(
+                        op: GitJobResponse.opPush, label: "Push", detail: "Recreate \(ref ?? "the upstream")", enabled: true
+                    ))
+                }
+            } else {
+                rows.append(SyncRow(
+                    op: GitJobResponse.opPush, label: "Publish branch", detail: "Push and set the upstream", enabled: true
+                ))
+            }
+        }
+        return rows
+    }
+
+    static func jobTitle(_ op: String) -> String {
+        switch op {
+        case GitJobResponse.opFetch: return "Fetching…"
+        case GitJobResponse.opPull: return "Pulling…"
+        default: return "Pushing…"
+        }
+    }
+
+    static func jobDoneTitle(_ op: String, ok: Bool) -> String {
+        switch op {
+        case GitJobResponse.opFetch: return ok ? "Fetched" : "Fetch failed"
+        case GitJobResponse.opPull: return ok ? "Pulled" : "Pull failed"
+        default: return ok ? "Pushed" : "Push failed"
+        }
+    }
+
+    /// One line per job `error_code`, identical on the three clients. `message`
+    /// is git's own explanation and is rendered beside it in monospace, so only
+    /// an unknown code falls back to it here.
+    static func jobErrorCopy(_ code: String?, message: String?) -> String {
+        switch code ?? "" {
+        case GitJobResponse.codeCancelled: return "Cancelled."
+        case SessionGitError.codeGitTimeout: return "git took too long to answer. Try again."
+        case GitJobResponse.codeAuthRequired:
+            return "No credentials for this remote. Configure a credential helper or SSH agent on the agent host."
+        case GitJobResponse.codeNetwork: return "Couldn't reach the remote."
+        case GitJobResponse.codeRemoteNotFound: return "The remote doesn't exist."
+        case GitJobResponse.codeRejected: return "The remote rejected the push."
+        case GitJobResponse.codeNotFastForward: return "Your branch is behind the remote."
+        case GitJobResponse.codeConflicts: return "Stopped on conflicts — resolve them in the terminal."
+        case GitJobResponse.codeDirtyWorktree: return "Commit or stash your changes first."
+        case SessionGitError.codeUnmerged: return "Resolve the conflicts first."
+        case GitJobResponse.codeOperationInProgress: return "A rebase or merge is already in progress."
+        case GitJobResponse.codeNoUpstream: return "This branch has no upstream."
+        case GitJobResponse.codeNoRemote: return "This repository has no remote."
+        case GitJobResponse.codeDetachedHead: return "Detached HEAD — check out a branch first."
+        case SessionGitError.codeNoHead: return "No commits yet."
+        case SessionGitError.codeHookFailed: return "A pre-push hook rejected the push."
+        case SessionGitError.codeIndexLocked: return "Another git process is running — try again."
+        default:
+            if let message, !message.isEmpty { return message }
+            return "git failed."
+        }
+    }
+
+    /// The banner's one line: the title plus git's summary, or the title plus
+    /// the failure copy.
+    static func jobNotice(_ job: GitJobResponse) -> String {
+        if job.running { return jobTitle(job.op) }
+        let ok = job.ok == true
+        let title = jobDoneTitle(job.op, ok: ok)
+        if ok {
+            if let message = job.message, !message.isEmpty { return "\(title) · \(message)" }
+            return title
+        }
+        return "\(title): \(jobErrorCopy(job.error_code, message: job.message))"
+    }
+
+    /// Whether the failure's `message` adds anything the copy did not already say.
+    static func showsJobOutput(_ job: GitJobResponse) -> Bool {
+        guard job.ok == false, let message = job.message, !message.isEmpty else { return false }
+        return jobErrorCopy(job.error_code, message: job.message) != message
+    }
+
+    /// What a failed job can be retried as: a pull that could not fast-forward
+    /// as a rebase or a merge, a rejected push as a push with lease. Each
+    /// rewrites history somewhere, so every one is confirmed first.
+    static func jobFollowUps(_ job: GitJobResponse) -> [SyncFollowUp] {
+        guard !job.running, job.ok == false else { return [] }
+        // Behind the remote: integrate first, whichever way the user prefers;
+        // a push may also mean a deliberate rewrite, so the lease push stays
+        // offered.
+        if job.error_code == GitJobResponse.codeNotFastForward {
+            return job.op == GitJobResponse.opPush
+                ? [.pullRebase, .pullMerge, .forcePush]
+                : [.pullRebase, .pullMerge]
+        }
+        if job.op == GitJobResponse.opPush, job.error_code == GitJobResponse.codeRejected {
+            return [.forcePush]
+        }
+        return []
+    }
+
+    static func followUpLabel(_ followUp: SyncFollowUp) -> String {
+        switch followUp {
+        case .pullRebase: return "Pull with rebase…"
+        case .pullMerge: return "Pull with merge…"
+        case .forcePush: return "Force push (with lease)…"
+        }
+    }
+
+    static func followUpPrompt(_ followUp: SyncFollowUp, repo: GitRepoInfo?) -> SyncPrompt {
+        let ref = repo?.upstream?.ref ?? "the upstream"
+        let branch = repo?.head.branch ?? "your branch"
+        switch followUp {
+        case .pullRebase:
+            return SyncPrompt(
+                followUp: followUp,
+                title: "Pull with rebase?",
+                body: "Replays your commits on top of \(ref).",
+                confirm: "Rebase"
+            )
+        case .pullMerge:
+            return SyncPrompt(
+                followUp: followUp,
+                title: "Pull with merge?",
+                body: "Merges \(ref) into \(branch).",
+                confirm: "Merge"
+            )
+        case .forcePush:
+            return SyncPrompt(
+                followUp: followUp,
+                title: "Force push?",
+                body: "Overwrites \(ref) with your branch. Proceeds only if the remote hasn't moved since your last fetch.",
+                confirm: "Force push"
+            )
+        }
     }
 }

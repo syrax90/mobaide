@@ -11,6 +11,8 @@ import {
   GIT_CODE_HOOK_FAILED,
   GIT_CODE_IDENTITY_REQUIRED,
   GIT_CODE_INDEX_LOCKED,
+  GIT_CODE_JOB_NOT_FOUND,
+  GIT_CODE_JOB_RUNNING,
   GIT_CODE_NO_HEAD,
   GIT_CODE_NOTHING_TO_COMMIT,
   GIT_CODE_PATHSPEC_MISMATCH,
@@ -18,6 +20,18 @@ import {
   GIT_CODE_TOO_OLD,
   GIT_CODE_UNAVAILABLE,
   GIT_CODE_UNMERGED,
+  GIT_JOB_CODE_AUTH_REQUIRED,
+  GIT_JOB_CODE_CANCELLED,
+  GIT_JOB_CODE_CONFLICTS,
+  GIT_JOB_CODE_DETACHED_HEAD,
+  GIT_JOB_CODE_DIRTY_WORKTREE,
+  GIT_JOB_CODE_NETWORK,
+  GIT_JOB_CODE_NO_REMOTE,
+  GIT_JOB_CODE_NO_UPSTREAM,
+  GIT_JOB_CODE_NOT_FAST_FORWARD,
+  GIT_JOB_CODE_OPERATION_IN_PROGRESS,
+  GIT_JOB_CODE_REJECTED,
+  GIT_JOB_CODE_REMOTE_NOT_FOUND,
   isSessionGitError,
   type SessionGitCommitHead,
   type SessionGitCommitResult,
@@ -26,8 +40,11 @@ import {
   type SessionGitDiscardScope,
   type SessionGitEntry,
   type SessionGitHunk,
+  type SessionGitJob,
+  type SessionGitJobOp,
   type SessionGitRepoInfo,
   type SessionGitStatus,
+  type SessionGitSyncRequest,
   type SessionGitUpstream,
 } from '../../../api/sessionGitRepository';
 import type { GitCapabilities } from '../../../protocol/dto/agentVersion';
@@ -411,6 +428,10 @@ export function refusalCopy(code: string, detailMessage: string | null): string 
       return 'That file changed under you — refreshed.';
     case GIT_CODE_EMPTY_MESSAGE:
       return 'Enter a commit summary.';
+    case GIT_CODE_JOB_RUNNING:
+      return 'Another fetch, pull or push is still running.';
+    case GIT_CODE_JOB_NOT_FOUND:
+      return JOB_LOST_COPY;
     default:
       return detailMessage === null
         ? `git refused the request (${code}).`
@@ -570,4 +591,231 @@ export function commitButtonLabel(stagedCount: number, amend: boolean): string {
   if (amend) return 'Amend commit';
   if (stagedCount === 1) return 'Commit 1 file';
   return `Commit ${String(stagedCount)} files`;
+}
+
+/** How long a successful job's banner stays before it clears itself. */
+export const JOB_RESULT_DISMISS_MS = 6_000;
+
+/** The reconcile poll's `404 job_not_found`, wherever a job is shown. */
+export const JOB_LOST_COPY = 'Lost track of the job — refresh to see the result.';
+
+export interface SyncRow {
+  op: SessionGitJobOp;
+  label: string;
+  /** What the row will do, or why it cannot. */
+  detail: string;
+  enabled: boolean;
+}
+
+/**
+ * The Sync sheet's three rows, from the same status the header renders; the
+ * copy is shared with Android `syncRows` and iOS `GitChangesDisplay.syncRows`.
+ * A row exists only when the agent advertises its capability; Fetch is always
+ * possible, Pull needs something to pull, Push something to push — or a
+ * branch that has no upstream yet, which it publishes.
+ */
+export function syncRows(
+  repo: SessionGitRepoInfo | null | undefined,
+  capabilities: GitCapabilities,
+): SyncRow[] {
+  const rows: SyncRow[] = [];
+  const head = repo?.head;
+  const upstream = repo?.upstream ?? null;
+  const ref = upstream?.ref;
+  const blocked =
+    head === undefined
+      ? 'Repository unavailable'
+      : head.initial
+        ? 'No commits yet'
+        : head.detached
+          ? 'Detached HEAD'
+          : null;
+  if (capabilities.fetch) {
+    rows.push({ op: 'fetch', label: 'Fetch', detail: 'Update remote-tracking branches', enabled: true });
+  }
+  if (capabilities.pull) {
+    if (blocked !== null) {
+      rows.push({ op: 'pull', label: 'Pull', detail: blocked, enabled: false });
+    } else if (upstream === null) {
+      rows.push({ op: 'pull', label: 'Pull', detail: 'No upstream', enabled: false });
+    } else if (upstream.behind === null || upstream.behind === undefined) {
+      rows.push({ op: 'pull', label: 'Pull', detail: 'Upstream gone', enabled: false });
+    } else if (upstream.behind === 0) {
+      rows.push({ op: 'pull', label: 'Pull', detail: 'Nothing to pull', enabled: false });
+    } else {
+      rows.push({
+        op: 'pull',
+        label: 'Pull',
+        detail: `Fast-forward ${String(upstream.behind)} ${upstream.behind === 1 ? 'commit' : 'commits'} from ${ref ?? 'upstream'}`,
+        enabled: true,
+      });
+    }
+  }
+  if (capabilities.push) {
+    if (blocked !== null) {
+      rows.push({ op: 'push', label: 'Push', detail: blocked, enabled: false });
+    } else if (upstream === null) {
+      rows.push({
+        op: 'push',
+        label: 'Publish branch',
+        detail: 'Push and set the upstream',
+        enabled: true,
+      });
+    } else if (upstream.ahead === null || upstream.ahead === undefined) {
+      rows.push({ op: 'push', label: 'Push', detail: `Recreate ${ref ?? 'the upstream'}`, enabled: true });
+    } else if (upstream.ahead === 0) {
+      rows.push({ op: 'push', label: 'Push', detail: 'Nothing to push', enabled: false });
+    } else {
+      rows.push({
+        op: 'push',
+        label: 'Push',
+        detail: `${String(upstream.ahead)} ${upstream.ahead === 1 ? 'commit' : 'commits'} to ${ref ?? 'upstream'}`,
+        enabled: true,
+      });
+    }
+  }
+  return rows;
+}
+
+export function syncRequestFor(op: SessionGitJobOp): SessionGitSyncRequest {
+  if (op === 'fetch') return { op };
+  if (op === 'pull') return { op, mode: 'ff_only' };
+  return { op, force: false };
+}
+
+export function jobTitle(op: SessionGitJobOp): string {
+  if (op === 'fetch') return 'Fetching…';
+  if (op === 'pull') return 'Pulling…';
+  return 'Pushing…';
+}
+
+export function jobDoneTitle(op: SessionGitJobOp, ok: boolean): string {
+  if (op === 'fetch') return ok ? 'Fetched' : 'Fetch failed';
+  if (op === 'pull') return ok ? 'Pulled' : 'Pull failed';
+  return ok ? 'Pushed' : 'Push failed';
+}
+
+/**
+ * One line per job `error_code`, identical on the three clients. `message` is
+ * git's own explanation and is rendered beside it in monospace, so only an
+ * unknown code falls back to it here.
+ */
+export function jobErrorCopy(code: string | null | undefined, message: string | null | undefined): string {
+  switch (code ?? '') {
+    case GIT_JOB_CODE_CANCELLED:
+      return 'Cancelled.';
+    case GIT_CODE_TIMEOUT:
+      return 'git took too long to answer. Try again.';
+    case GIT_JOB_CODE_AUTH_REQUIRED:
+      return 'No credentials for this remote. Configure a credential helper or SSH agent on the agent host.';
+    case GIT_JOB_CODE_NETWORK:
+      return "Couldn't reach the remote.";
+    case GIT_JOB_CODE_REMOTE_NOT_FOUND:
+      return "The remote doesn't exist.";
+    case GIT_JOB_CODE_REJECTED:
+      return 'The remote rejected the push.';
+    case GIT_JOB_CODE_NOT_FAST_FORWARD:
+      return 'Your branch is behind the remote.';
+    case GIT_JOB_CODE_CONFLICTS:
+      return 'Stopped on conflicts — resolve them in the terminal.';
+    case GIT_JOB_CODE_DIRTY_WORKTREE:
+      return 'Commit or stash your changes first.';
+    case GIT_CODE_UNMERGED:
+      return 'Resolve the conflicts first.';
+    case GIT_JOB_CODE_OPERATION_IN_PROGRESS:
+      return 'A rebase or merge is already in progress.';
+    case GIT_JOB_CODE_NO_UPSTREAM:
+      return 'This branch has no upstream.';
+    case GIT_JOB_CODE_NO_REMOTE:
+      return 'This repository has no remote.';
+    case GIT_JOB_CODE_DETACHED_HEAD:
+      return 'Detached HEAD — check out a branch first.';
+    case GIT_CODE_NO_HEAD:
+      return 'No commits yet.';
+    case GIT_CODE_HOOK_FAILED:
+      return 'A pre-push hook rejected the push.';
+    case GIT_CODE_INDEX_LOCKED:
+      return 'Another git process is running — try again.';
+    default:
+      return message === null || message === undefined || message === '' ? 'git failed.' : message;
+  }
+}
+
+/** The banner's one line: title plus git's summary, or title plus the failure copy. */
+export function jobNotice(job: SessionGitJob): string {
+  if (job.status !== 'done') return jobTitle(job.op);
+  const ok = job.ok === true;
+  const title = jobDoneTitle(job.op, ok);
+  if (ok) {
+    return job.message === null || job.message === undefined || job.message === ''
+      ? title
+      : `${title} · ${job.message}`;
+  }
+  return `${title}: ${jobErrorCopy(job.error_code, job.message)}`;
+}
+
+/** Whether the failure's `message` adds anything the copy did not already say. */
+export function showsJobOutput(job: SessionGitJob): boolean {
+  if (job.ok !== false) return false;
+  const message = job.message ?? '';
+  return message !== '' && jobErrorCopy(job.error_code, job.message) !== message;
+}
+
+export type SyncFollowUp = 'pull_rebase' | 'pull_merge' | 'force_push';
+
+/**
+ * What a failed job can be retried as: a pull that could not fast-forward as
+ * a rebase or a merge, a rejected push as a push with lease. Each rewrites
+ * history somewhere, so every one is confirmed first.
+ */
+export function jobFollowUps(job: SessionGitJob): SyncFollowUp[] {
+  if (job.status !== 'done' || job.ok !== false) return [];
+  // Behind the remote: integrate first, whichever way the user prefers; a
+  // push may also mean a deliberate rewrite, so the lease push stays offered.
+  if (job.error_code === GIT_JOB_CODE_NOT_FAST_FORWARD) {
+    return job.op === 'push'
+      ? ['pull_rebase', 'pull_merge', 'force_push']
+      : ['pull_rebase', 'pull_merge'];
+  }
+  if (job.op === 'push' && job.error_code === GIT_JOB_CODE_REJECTED) return ['force_push'];
+  return [];
+}
+
+export function followUpLabel(followUp: SyncFollowUp): string {
+  if (followUp === 'pull_rebase') return 'Pull with rebase…';
+  if (followUp === 'pull_merge') return 'Pull with merge…';
+  return 'Force push (with lease)…';
+}
+
+export function followUpRequest(followUp: SyncFollowUp): SessionGitSyncRequest {
+  if (followUp === 'pull_rebase') return { op: 'pull', mode: 'rebase' };
+  if (followUp === 'pull_merge') return { op: 'pull', mode: 'merge' };
+  return { op: 'push', force: true };
+}
+
+export function followUpPrompt(
+  followUp: SyncFollowUp,
+  repo: SessionGitRepoInfo | null | undefined,
+): { title: string; body: string; confirm: string } {
+  const ref = repo?.upstream?.ref ?? 'the upstream';
+  const branch = repo?.head.branch ?? 'your branch';
+  if (followUp === 'pull_rebase') {
+    return {
+      title: 'Pull with rebase?',
+      body: `Replays your commits on top of ${ref}.`,
+      confirm: 'Rebase',
+    };
+  }
+  if (followUp === 'pull_merge') {
+    return {
+      title: 'Pull with merge?',
+      body: `Merges ${ref} into ${branch}.`,
+      confirm: 'Merge',
+    };
+  }
+  return {
+    title: 'Force push?',
+    body: `Overwrites ${ref} with your branch. Proceeds only if the remote hasn't moved since your last fetch.`,
+    confirm: 'Force push',
+  };
 }

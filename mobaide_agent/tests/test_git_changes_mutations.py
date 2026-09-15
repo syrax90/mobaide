@@ -9,7 +9,7 @@ import subprocess
 
 import pytest
 
-from mobaide.agent.git import changes_mutations
+from mobaide.agent.git import changes_mutations, changes_service
 from mobaide.agent.git.changes_models import MESSAGE_LIMIT, GitCommitRequest
 from mobaide.agent.git.changes_mutations import (
     commit_session,
@@ -221,7 +221,7 @@ class TestStage:
         async def old_git():
             return (2, 25, 9)
 
-        monkeypatch.setattr(changes_mutations, "git_version", old_git)
+        monkeypatch.setattr(changes_service, "git_version", old_git)
         write_file(repo, "a.txt", b"a\n")
 
         with pytest.raises(GitRefusedError) as info:

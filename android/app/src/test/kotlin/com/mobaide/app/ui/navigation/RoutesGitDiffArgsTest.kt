@@ -107,3 +107,27 @@ class RoutesGitDiffArgsTest {
         )
     }
 }
+
+/** The `sync` flag the terminal menu's *Fetch / Pull / Push…* sets on the Changes route. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
+class RoutesGitChangesSyncArgTest {
+
+    @Test
+    fun theChangesRoute_carriesTheSyncFlag_asAQueryArg_besideCommit() {
+        val route = Routes.sessionGitChanges("s1", sync = true)
+        val uri = Uri.parse(route)
+
+        assertEquals("session_git_changes/s1", route.substringBefore('?'))
+        assertEquals("true", uri.getQueryParameter("sync"))
+        assertEquals("false", uri.getQueryParameter("commit"))
+        assertEquals(setOf("commit", "sync"), uri.queryParameterNames)
+    }
+
+    @Test
+    fun theSyncFlag_defaultsToFalse_andThePatternNamesIt() {
+        assertEquals("false", Uri.parse(Routes.sessionGitChanges("s1")).getQueryParameter("sync"))
+        assertEquals("true", Uri.parse(Routes.sessionGitChanges("s1", commit = true)).getQueryParameter("commit"))
+        assertEquals("session_git_changes/{sessionId}?commit={commit}&sync={sync}", Routes.SESSION_GIT_CHANGES)
+    }
+}

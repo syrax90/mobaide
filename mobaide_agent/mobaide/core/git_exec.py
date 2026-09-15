@@ -1,5 +1,5 @@
-"""Hardened ``git`` runner for the session git API (status/diff reads and the
-stage/unstage/discard/commit mutations).
+"""Hardened ``git`` runner for the session git API (status/diff reads, the
+stage/unstage/discard/commit mutations and the fetch/pull/push jobs).
 
 Distinct from :func:`mobaide.linear.worktree._run_git` on purpose: that
 helper's argv and kwargs are pinned by its callers and tests, and it has no
@@ -17,7 +17,9 @@ the Changes viewer relies on, so it is bounded on every axis:
   ``cmd\\git.exe`` wrapper, which spawns the real ``git.exe`` and waits, so
   ``Popen.kill()`` alone would orphan a child that keeps the pipes open;
 * the environment is copied from the agent with every inherited ``GIT_*``
-  variable removed.
+  variable removed;
+* a long-running job can watch stderr as it arrives (``on_stderr``) and be
+  killed from the event loop through a :class:`ProcessHandle`.
 
 ``asyncio.create_subprocess_exec`` is never used: it raises under the
 ``WindowsSelectorEventLoop`` the agent runs on.
@@ -33,7 +35,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 # Suppress the transient ``git`` console window the Scheduled-Task-spawned
@@ -146,6 +148,35 @@ def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
         pass
 
 
+class ProcessHandle:
+    """Cancellation seam for a background git job.
+
+    ``cancel()`` may arrive before the process exists (the job is still
+    waiting for its repository lock) or after it exited; both are safe. On
+    Windows the tree kill blocks in ``taskkill`` for up to ``_REAP_TIMEOUT``,
+    so event-loop callers run ``cancel()`` in a thread.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._proc: subprocess.Popen[bytes] | None = None
+        self.cancelled = False
+
+    def attach(self, proc: subprocess.Popen[bytes]) -> None:
+        with self._lock:
+            self._proc = proc
+            kill_now = self.cancelled
+        if kill_now:
+            _kill_tree(proc)
+
+    def cancel(self) -> None:
+        with self._lock:
+            self.cancelled = True
+            proc = self._proc
+        if proc is not None:
+            _kill_tree(proc)
+
+
 def run_capped(
     argv: Sequence[str],
     *,
@@ -154,8 +185,15 @@ def run_capped(
     max_bytes: int,
     env: Mapping[str, str] | None = None,
     stdin: bytes | None = None,
+    on_stderr: Callable[[bytes], None] | None = None,
+    handle: ProcessHandle | None = None,
 ) -> CmdResult:
     """Run ``argv`` with bounded runtime and bounded stdout (blocking).
+
+    ``on_stderr`` sees every stderr chunk on the reader thread, including
+    the ones past the retained cap — progress output easily exceeds it and
+    the lines that explain a failure come last. ``handle`` receives the
+    process as soon as it exists so a caller can kill it.
 
     Raises ``OSError`` when the process cannot be spawned (missing binary,
     missing cwd) — callers translate that into their own error vocabulary.
@@ -172,6 +210,8 @@ def run_capped(
         popen_kwargs["start_new_session"] = True
     proc = subprocess.Popen(list(argv), **popen_kwargs)  # type: ignore[call-overload]
     assert proc.stdout is not None and proc.stderr is not None
+    if handle is not None:
+        handle.attach(proc)
 
     out_chunks: list[bytes] = []
     err_chunks: list[bytes] = []
@@ -197,6 +237,11 @@ def run_capped(
                 chunk = proc.stderr.read1(_CHUNK)  # type: ignore[union-attr]
                 if not chunk:
                     return
+                if on_stderr is not None:
+                    try:
+                        on_stderr(chunk)
+                    except Exception:
+                        pass
                 if state["err"] < _STDERR_CAP:
                     err_chunks.append(chunk)
                     state["err"] += len(chunk)
@@ -271,6 +316,8 @@ async def run_git(
     max_bytes: int,
     env_extra: Mapping[str, str] | None = None,
     stdin: bytes | None = None,
+    on_stderr: Callable[[bytes], None] | None = None,
+    handle: ProcessHandle | None = None,
 ) -> CmdResult:
     """Run ``git <prefix> *args`` in ``cwd``; callers put paths after ``--``
     (or feed them NUL-separated through ``stdin`` with ``--pathspec-from-file=-``)."""
@@ -287,6 +334,8 @@ async def run_git(
             max_bytes=max_bytes,
             env=git_env(env_extra),
             stdin=stdin,
+            on_stderr=on_stderr,
+            handle=handle,
         )
     except OSError as exc:
         if not os.path.isdir(cwd):

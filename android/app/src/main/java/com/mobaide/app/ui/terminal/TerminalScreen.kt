@@ -86,10 +86,12 @@ fun TerminalScreen(
     onSessionEnded: () -> Unit = onBack,
     onOpenGitChanges: () -> Unit = {},
     onOpenGitCommit: () -> Unit = {},
+    onOpenGitSync: () -> Unit = {},
 ) {
     val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
     val sessionCwd by viewModel.sessionCwd.collectAsStateWithLifecycle()
     val gitCommitAvailable by viewModel.gitCommitAvailable.collectAsStateWithLifecycle()
+    val gitSyncAvailable by viewModel.gitSyncAvailable.collectAsStateWithLifecycle()
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val followMode by viewModel.followMode.collectAsStateWithLifecycle()
@@ -218,6 +220,8 @@ fun TerminalScreen(
                             onOpenGitChanges = onOpenGitChanges,
                             onOpenGitCommit = onOpenGitCommit,
                             commitAvailable = gitCommitAvailable,
+                            onOpenGitSync = onOpenGitSync,
+                            syncAvailable = gitSyncAvailable,
                         )
                     }
                 },

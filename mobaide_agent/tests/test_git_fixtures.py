@@ -1,6 +1,6 @@
-"""Python arm of the session git golden fixtures (status, diff and the
-stage/discard/commit request and response shapes) shared with the iOS,
-Android and web clients.
+"""Python arm of the session git golden fixtures (status, diff, the
+stage/discard/commit request and response shapes and the fetch/pull/push
+job shapes) shared with the iOS, Android and web clients.
 
 Every case must survive ``model_validate`` → ``model_dump(mode="json")``
 unchanged, and ``decoded_canonical`` (the shape Swift's ``JSONEncoder``
@@ -20,8 +20,11 @@ from mobaide.agent.git.changes_models import (
     GitCommitResponse,
     GitDiffResponse,
     GitDiscardRequest,
+    GitJobResponse,
     GitMutationResponse,
     GitPathsRequest,
+    GitPullRequest,
+    GitPushRequest,
     GitStatusResponse,
 )
 
@@ -40,6 +43,9 @@ _MODELS = {
     "GitCommitRequest": GitCommitRequest,
     "GitCommitResponse": GitCommitResponse,
     "GitCommitContextResponse": GitCommitContextResponse,
+    "GitPullRequest": GitPullRequest,
+    "GitPushRequest": GitPushRequest,
+    "GitJobResponse": GitJobResponse,
 }
 
 

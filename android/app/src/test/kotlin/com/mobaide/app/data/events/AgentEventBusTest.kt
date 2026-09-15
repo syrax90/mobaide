@@ -7,6 +7,7 @@ import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
+import com.mobaide.app.data.network.dto.GitJobResponse
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
 import io.mockk.every
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.runTest
 import okio.ByteString
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -705,6 +707,110 @@ class AgentEventBusTest {
                 ),
                 evt.list,
             )
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        bus.stop()
+    }
+}
+
+/** The two job frames: each is a whole `GitJobResponse`, decoded as is. */
+class AgentEventBusGitJobTest {
+
+    private fun newBus(): Triple<AgentEventBus, MutableSharedFlow<WsEvent>, WebSocketConnection> {
+        val connEvents = MutableSharedFlow<WsEvent>(replay = 0, extraBufferCapacity = 64)
+        val conn = mockk<WebSocketConnection>(relaxed = true)
+        every { conn.events } returns connEvents
+        val wsm = mockk<WebSocketManager>()
+        every { wsm.createConnection("ws/events") } returns conn
+        val sessionManager = mockk<SessionManager>(relaxed = true)
+        every { sessionManager.authState } returns
+            MutableStateFlow<SessionManager.AuthState>(SessionManager.AuthState.FullyConnected)
+        every { sessionManager.isLoggedIn() } returns true
+        return Triple(AgentEventBus(wsm, sessionManager), connEvents, conn)
+    }
+
+    private val progressFrame = """
+        {
+          "type": "git.job.progress",
+          "payload": {
+            "job_id": "3f9c2b7e1d4a4c0f9b8e7d6c5a4b3c2d",
+            "session_id": "sess-42",
+            "op": "push",
+            "status": "running",
+            "phase": "Writing objects",
+            "percent": 45,
+            "line": "Writing objects:  45% (14/32)",
+            "ok": null,
+            "error_code": null,
+            "message": null
+          }
+        }
+    """.trimIndent()
+
+    private val doneFrame = """
+        {
+          "type": "git.job.done",
+          "payload": {
+            "job_id": "3f9c2b7e1d4a4c0f9b8e7d6c5a4b3c2d",
+            "session_id": "sess-42",
+            "op": "push",
+            "status": "done",
+            "phase": "Writing objects",
+            "percent": 100,
+            "line": "Writing objects: 100% (32/32), 587.39 KiB | 26.70 MiB/s, done.",
+            "ok": true,
+            "error_code": null,
+            "message": "443f30d..9419146 main -> main"
+          }
+        }
+    """.trimIndent()
+
+    @Test
+    fun message_gitJobProgressAndDone_carryTheWholeSnapshot() = runTest {
+        val (bus, connEvents, _) = newBus()
+        bus.start()
+
+        bus.events.test {
+            connEvents.emit(WsEvent.Message(progressFrame))
+            val progress = awaitItem() as AgentEvent.GitJobProgress
+            assertEquals(
+                GitJobResponse(
+                    job_id = "3f9c2b7e1d4a4c0f9b8e7d6c5a4b3c2d",
+                    session_id = "sess-42",
+                    op = "push",
+                    status = "running",
+                    phase = "Writing objects",
+                    percent = 45,
+                    line = "Writing objects:  45% (14/32)",
+                ),
+                progress.job,
+            )
+            assertTrue(progress.job.running)
+
+            connEvents.emit(WsEvent.Message(doneFrame))
+            val done = awaitItem() as AgentEvent.GitJobDone
+            assertFalse(done.job.running)
+            assertEquals(true, done.job.ok)
+            assertEquals(100, done.job.percent)
+            assertEquals("443f30d..9419146 main -> main", done.job.message)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_gitJobWithoutAnId_isSkipped_andTheNextFrameStillArrives() = runTest {
+        val (bus, connEvents, _) = newBus()
+        bus.start()
+
+        bus.events.test {
+            connEvents.emit(
+                WsEvent.Message("""{"type":"git.job.progress","payload":{"session_id":"sess-42","op":"push"}}"""),
+            )
+            connEvents.emit(WsEvent.Message(doneFrame))
+            assertTrue(awaitItem() is AgentEvent.GitJobDone)
             cancelAndIgnoreRemainingEvents()
         }
 

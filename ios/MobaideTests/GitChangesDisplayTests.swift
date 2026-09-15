@@ -373,3 +373,248 @@ final class GitChangesDisplayTests: XCTestCase {
         )
     }
 }
+
+/// The pure half of the Sync sheet and the job banner: the three rows and
+/// their reasons, the job copy shared byte-for-byte with Android and the web,
+/// the follow-ups a failure allows, and what `GitJobBanner` derives.
+final class GitChangesDisplaySyncTests: XCTestCase {
+    private let syncCaps = GitCapabilities(stage: true, discard: true, commit: true, fetch: true, pull: true, push: true)
+    private let noSync = GitCapabilities(stage: true, discard: true, commit: true)
+
+    private func status(_ name: String) throws -> GitStatusResponse {
+        try FixtureLoader.decodeCase(GitStatusResponse.self, path: "dto/agent/GitStatusResponse.json", name: name)
+    }
+
+    private func jobCase(_ name: String) throws -> GitJobResponse {
+        try FixtureLoader.decodeCase(GitJobResponse.self, path: "dto/agent/GitJobResponse.json", name: name)
+    }
+
+    private func repo(
+        upstream: GitUpstream? = nil,
+        head: GitHead = GitHead(oid: "abc1234def", short_oid: "abc1234", branch: "main", detached: false, initial: false)
+    ) -> GitRepoInfo {
+        GitRepoInfo(
+            toplevel: "/repo", git_dir: "/repo/.git", common_dir: "/repo/.git", is_linked_worktree: false,
+            head: head, upstream: upstream, state: "clean"
+        )
+    }
+
+    private func tracking(_ ahead: Int?, _ behind: Int?) -> GitRepoInfo {
+        repo(upstream: GitUpstream(ref: "origin/main", ahead: ahead, behind: behind))
+    }
+
+    private func job(
+        op: String = GitJobResponse.opPush,
+        status: String = GitJobResponse.statusRunning,
+        ok: Bool? = nil,
+        errorCode: String? = nil,
+        message: String? = nil
+    ) -> GitJobResponse {
+        GitJobResponse(
+            job_id: "j1", session_id: "s1", op: op, status: status,
+            phase: nil, percent: nil, line: nil, ok: ok, error_code: errorCode, message: message
+        )
+    }
+
+    private func done(op: String = GitJobResponse.opPush, message: String? = "main -> main") -> GitJobResponse {
+        job(op: op, status: GitJobResponse.statusDone, ok: true, message: message)
+    }
+
+    private func failed(_ code: String, op: String = GitJobResponse.opPush, message: String? = nil) -> GitJobResponse {
+        job(op: op, status: GitJobResponse.statusDone, ok: false, errorCode: code, message: message)
+    }
+
+    private func pull(_ repo: GitRepoInfo?) -> GitChangesDisplay.SyncRow? {
+        GitChangesDisplay.syncRows(repo, capabilities: syncCaps).first { $0.op == GitJobResponse.opPull }
+    }
+
+    private func push(_ repo: GitRepoInfo?) -> GitChangesDisplay.SyncRow? {
+        GitChangesDisplay.syncRows(repo, capabilities: syncCaps).first { $0.op == GitJobResponse.opPush }
+    }
+
+    func testSyncRowsExistOnlyForTheCapabilitiesTheAgentAdvertises() {
+        XCTAssertEqual(GitChangesDisplay.syncRows(tracking(1, 1), capabilities: noSync), [])
+        XCTAssertEqual(
+            GitChangesDisplay.syncRows(tracking(1, 1), capabilities: GitCapabilities(fetch: true)).map(\.op),
+            ["fetch"]
+        )
+        XCTAssertEqual(GitChangesDisplay.syncRows(tracking(1, 1), capabilities: syncCaps).map(\.op), ["fetch", "pull", "push"])
+    }
+
+    func testSyncRowsAlwaysLetAFetchThrough() {
+        XCTAssertEqual(
+            GitChangesDisplay.syncRows(repo(), capabilities: syncCaps).first,
+            GitChangesDisplay.SyncRow(op: "fetch", label: "Fetch", detail: "Update remote-tracking branches", enabled: true)
+        )
+    }
+
+    func testSyncRowsEnablePullOnlyWithCommitsBehindAndSayWhyNotOtherwise() {
+        XCTAssertEqual(
+            pull(tracking(0, 2)),
+            GitChangesDisplay.SyncRow(op: "pull", label: "Pull", detail: "Fast-forward 2 commits from origin/main", enabled: true)
+        )
+        XCTAssertEqual(pull(tracking(0, 1))?.detail, "Fast-forward 1 commit from origin/main")
+        XCTAssertEqual(pull(tracking(3, 0)), GitChangesDisplay.SyncRow(op: "pull", label: "Pull", detail: "Nothing to pull", enabled: false))
+        XCTAssertEqual(pull(repo()), GitChangesDisplay.SyncRow(op: "pull", label: "Pull", detail: "No upstream", enabled: false))
+        XCTAssertEqual(pull(tracking(nil, nil)), GitChangesDisplay.SyncRow(op: "pull", label: "Pull", detail: "Upstream gone", enabled: false))
+    }
+
+    func testSyncRowsOfferPublishBranchWithoutAnUpstreamAndPushOnlyWithCommitsAhead() {
+        XCTAssertEqual(
+            push(repo()),
+            GitChangesDisplay.SyncRow(op: "push", label: "Publish branch", detail: "Push and set the upstream", enabled: true)
+        )
+        XCTAssertEqual(push(tracking(3, 0)), GitChangesDisplay.SyncRow(op: "push", label: "Push", detail: "3 commits to origin/main", enabled: true))
+        XCTAssertEqual(push(tracking(1, 2))?.detail, "1 commit to origin/main")
+        XCTAssertEqual(push(tracking(0, 2)), GitChangesDisplay.SyncRow(op: "push", label: "Push", detail: "Nothing to push", enabled: false))
+        XCTAssertEqual(push(tracking(nil, nil)), GitChangesDisplay.SyncRow(op: "push", label: "Push", detail: "Recreate origin/main", enabled: true))
+    }
+
+    func testSyncRowsBlockPullAndPushNeverFetchOnADetachedOrUnbornHeadAndWithoutARepo() throws {
+        let detached = try XCTUnwrap(try status("detached_head").repo)
+        let initial = try XCTUnwrap(try status("initial_repo_no_upstream").repo)
+
+        XCTAssertEqual(
+            GitChangesDisplay.syncRows(detached, capabilities: syncCaps).map { "\($0.op):\($0.enabled):\($0.detail)" },
+            ["fetch:true:Update remote-tracking branches", "pull:false:Detached HEAD", "push:false:Detached HEAD"]
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.syncRows(initial, capabilities: syncCaps).dropFirst().map(\.detail),
+            ["No commits yet", "No commits yet"]
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.syncRows(nil, capabilities: syncCaps).map { "\($0.enabled):\($0.detail)" },
+            ["true:Update remote-tracking branches", "false:Repository unavailable", "false:Repository unavailable"]
+        )
+    }
+
+    func testSyncRowsFromTheTrackedFixtureOfferAPushOfTwo() throws {
+        let tracked = try XCTUnwrap(try status("linked_worktree_full").repo)
+
+        XCTAssertEqual(push(tracked)?.detail, "2 commits to origin/feature/x")
+        XCTAssertEqual(pull(tracked)?.detail, "Nothing to pull")
+    }
+
+    func testJobTitlesPerOpRunningAndFinished() {
+        XCTAssertEqual(["fetch", "pull", "push"].map(GitChangesDisplay.jobTitle), ["Fetching…", "Pulling…", "Pushing…"])
+        XCTAssertEqual(GitChangesDisplay.jobDoneTitle("fetch", ok: true), "Fetched")
+        XCTAssertEqual(GitChangesDisplay.jobDoneTitle("pull", ok: true), "Pulled")
+        XCTAssertEqual(GitChangesDisplay.jobDoneTitle("push", ok: true), "Pushed")
+        XCTAssertEqual(GitChangesDisplay.jobDoneTitle("fetch", ok: false), "Fetch failed")
+        XCTAssertEqual(GitChangesDisplay.jobDoneTitle("pull", ok: false), "Pull failed")
+        XCTAssertEqual(GitChangesDisplay.jobDoneTitle("push", ok: false), "Push failed")
+    }
+
+    func testJobErrorCopyPhrasesEveryCodeIdenticallyToTheOtherClients() {
+        let copy = { (code: String) in GitChangesDisplay.jobErrorCopy(code, message: nil) }
+        XCTAssertEqual(copy("cancelled"), "Cancelled.")
+        XCTAssertEqual(copy("git_timeout"), "git took too long to answer. Try again.")
+        XCTAssertEqual(copy("auth_required"), "No credentials for this remote. Configure a credential helper or SSH agent on the agent host.")
+        XCTAssertEqual(copy("network"), "Couldn't reach the remote.")
+        XCTAssertEqual(copy("remote_not_found"), "The remote doesn't exist.")
+        XCTAssertEqual(copy("rejected"), "The remote rejected the push.")
+        XCTAssertEqual(copy("not_fast_forward"), "Your branch is behind the remote.")
+        XCTAssertEqual(copy("conflicts"), "Stopped on conflicts — resolve them in the terminal.")
+        XCTAssertEqual(copy("dirty_worktree"), "Commit or stash your changes first.")
+        XCTAssertEqual(copy("unmerged"), "Resolve the conflicts first.")
+        XCTAssertEqual(copy("operation_in_progress"), "A rebase or merge is already in progress.")
+        XCTAssertEqual(copy("no_upstream"), "This branch has no upstream.")
+        XCTAssertEqual(copy("no_remote"), "This repository has no remote.")
+        XCTAssertEqual(copy("detached_head"), "Detached HEAD — check out a branch first.")
+        XCTAssertEqual(copy("no_head"), "No commits yet.")
+        XCTAssertEqual(copy("hook_failed"), "A pre-push hook rejected the push.")
+        XCTAssertEqual(copy("index_locked"), "Another git process is running — try again.")
+    }
+
+    func testJobErrorCopyFallsBackToTheMessageForGitErrorAndUnknownCodes() {
+        XCTAssertEqual(GitChangesDisplay.jobErrorCopy("git_error", message: "fatal: boom"), "fatal: boom")
+        XCTAssertEqual(GitChangesDisplay.jobErrorCopy("git_error", message: nil), "git failed.")
+        XCTAssertEqual(GitChangesDisplay.jobErrorCopy("something_new", message: "details"), "details")
+        XCTAssertEqual(GitChangesDisplay.jobErrorCopy("something_new", message: ""), "git failed.")
+        XCTAssertEqual(GitChangesDisplay.jobErrorCopy(nil, message: nil), "git failed.")
+    }
+
+    func testJobNoticeIsTheTitleTheSummaryOrTheFailureCopy() throws {
+        XCTAssertEqual(GitChangesDisplay.jobNotice(job()), "Pushing…")
+        XCTAssertEqual(GitChangesDisplay.jobNotice(try jobCase("running_progress")), "Pushing…")
+        XCTAssertEqual(GitChangesDisplay.jobNotice(try jobCase("done_ok")), "Pushed · 443f30d..9419146 main -> main")
+        XCTAssertEqual(GitChangesDisplay.jobNotice(done(message: nil)), "Pushed")
+        XCTAssertEqual(GitChangesDisplay.jobNotice(done(op: "pull", message: "")), "Pulled")
+        XCTAssertEqual(GitChangesDisplay.jobNotice(try jobCase("done_rejected")), "Push failed: The remote rejected the push.")
+        XCTAssertEqual(GitChangesDisplay.jobNotice(try jobCase("done_cancelled_fetch")), "Fetch failed: Cancelled.")
+        XCTAssertEqual(
+            GitChangesDisplay.jobNotice(try jobCase("done_pull_conflicts")),
+            "Pull failed: Stopped on conflicts — resolve them in the terminal."
+        )
+        XCTAssertEqual(GitChangesDisplay.jobNotice(failed("git_error", op: "fetch", message: "fatal: boom")), "Fetch failed: fatal: boom")
+    }
+
+    func testShowsJobOutputOnlyWhenTheCopyDidNotAlreadySayIt() throws {
+        XCTAssertTrue(GitChangesDisplay.showsJobOutput(try jobCase("done_rejected")))
+        XCTAssertFalse(GitChangesDisplay.showsJobOutput(failed("git_error", message: "fatal: boom")))
+        XCTAssertTrue(GitChangesDisplay.showsJobOutput(try jobCase("done_cancelled_fetch")))
+        XCTAssertFalse(GitChangesDisplay.showsJobOutput(failed("no_remote", message: nil)))
+        XCTAssertFalse(GitChangesDisplay.showsJobOutput(try jobCase("done_ok")))
+        XCTAssertFalse(GitChangesDisplay.showsJobOutput(job(message: "x")))
+    }
+
+    func testJobFollowUpsRebaseOrMergeBehindTheRemoteLeaseTooAfterAPushLeaseAloneAfterARejection() throws {
+        XCTAssertEqual(GitChangesDisplay.jobFollowUps(failed("not_fast_forward", op: "pull")), [.pullRebase, .pullMerge])
+        XCTAssertEqual(GitChangesDisplay.jobFollowUps(failed("not_fast_forward", op: "push")), [.pullRebase, .pullMerge, .forcePush])
+        XCTAssertEqual(GitChangesDisplay.jobFollowUps(try jobCase("done_rejected")), [.forcePush])
+        XCTAssertEqual(GitChangesDisplay.jobFollowUps(failed("rejected", op: "pull")), [])
+        XCTAssertEqual(GitChangesDisplay.jobFollowUps(try jobCase("done_pull_conflicts")), [])
+        XCTAssertEqual(GitChangesDisplay.jobFollowUps(try jobCase("done_ok")), [])
+        XCTAssertEqual(GitChangesDisplay.jobFollowUps(try jobCase("running_progress")), [])
+    }
+
+    func testFollowUpsAreLabelledAndConfirmedNamingTheUpstreamAndBranchWhenKnown() {
+        XCTAssertEqual(GitChangesDisplay.followUpLabel(.pullRebase), "Pull with rebase…")
+        XCTAssertEqual(GitChangesDisplay.followUpLabel(.pullMerge), "Pull with merge…")
+        XCTAssertEqual(GitChangesDisplay.followUpLabel(.forcePush), "Force push (with lease)…")
+        XCTAssertEqual(
+            GitChangesDisplay.followUpPrompt(.pullRebase, repo: tracking(1, 1)),
+            SyncPrompt(followUp: .pullRebase, title: "Pull with rebase?", body: "Replays your commits on top of origin/main.", confirm: "Rebase")
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.followUpPrompt(.pullMerge, repo: tracking(1, 1)),
+            SyncPrompt(followUp: .pullMerge, title: "Pull with merge?", body: "Merges origin/main into main.", confirm: "Merge")
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.followUpPrompt(.forcePush, repo: tracking(1, 1)),
+            SyncPrompt(
+                followUp: .forcePush,
+                title: "Force push?",
+                body: "Overwrites origin/main with your branch. Proceeds only if the remote hasn't moved since your last fetch.",
+                confirm: "Force push"
+            )
+        )
+        XCTAssertEqual(GitChangesDisplay.followUpPrompt(.pullMerge, repo: nil).body, "Merges the upstream into your branch.")
+    }
+
+    func testGitJobBannerDerivesRunningFailedAndTextAndALostJobHoldsNothing() {
+        let running = GitJobBanner(jobId: "j1", job: job())
+        XCTAssertTrue(running.running)
+        XCTAssertFalse(running.failed)
+        XCTAssertEqual(running.text, "Pushing…")
+
+        let waiting = GitJobBanner(jobId: "j1", job: nil)
+        XCTAssertTrue(waiting.running)
+        XCTAssertEqual(waiting.text, "Syncing…")
+
+        let ok = GitJobBanner(jobId: "j1", job: done())
+        XCTAssertFalse(ok.running)
+        XCTAssertFalse(ok.failed)
+        XCTAssertEqual(ok.text, "Pushed · main -> main")
+
+        let rejected = GitJobBanner(jobId: "j1", job: failed("rejected"))
+        XCTAssertFalse(rejected.running)
+        XCTAssertTrue(rejected.failed)
+
+        let lost = GitJobBanner(jobId: "j1", job: job(), lost: true)
+        XCTAssertFalse(lost.running)
+        XCTAssertTrue(lost.failed)
+        XCTAssertEqual(lost.text, "Lost track of the job — refresh to see the result.")
+        XCTAssertEqual(GitChangesDisplay.jobLostCopy, "Lost track of the job — refresh to see the result.")
+    }
+}

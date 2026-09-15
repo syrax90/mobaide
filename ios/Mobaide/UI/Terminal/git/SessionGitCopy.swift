@@ -85,6 +85,10 @@ extension SessionGitCopy {
             return "That file changed under you — refreshed."
         case SessionGitError.codeEmptyMessage:
             return "Enter a commit summary."
+        case SessionGitError.codeJobRunning:
+            return "Another fetch, pull or push is still running."
+        case SessionGitError.codeJobNotFound:
+            return GitChangesDisplay.jobLostCopy
         default:
             return message.map { "git refused the request (\(code)): \($0)" }
                 ?? "git refused the request (\(code))."

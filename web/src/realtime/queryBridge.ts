@@ -23,7 +23,8 @@
  * **invalidated** — and a pointer event's query must not pin
  * `staleTime: Infinity`, because an invalidation landing during a cold fetch is
  * deduped into that fetch and leaves the stale result pinned (CLA-234).
- * `git.changed` is the pointer case.
+ * `git.changed` is the pointer case; `git.job.progress` / `git.job.done` carry
+ * a whole `GitJobResponse` each and are written (`sessionGitJobCache.ts`).
  *
  * WEB-10 judged the three `autoscan.*` types by the same rule and none of them
  * is an invalidation: `autoscan.list.changed` and `autoscan.status` carry full
@@ -51,6 +52,7 @@ import type { SessionResponse } from '../protocol/dto/session';
 import { applyAutoScanSnapshot, applyAutoScanStatus } from './autoscanCache';
 import { applyProjectsSnapshot } from './projectsCache';
 import { applySessionsSnapshot, applySessionUpsert } from './sessionCache';
+import { applySessionGitJobEvent } from './sessionGitJobCache';
 import { markSessionsSnapshotApplied } from './sessionsSyncStore';
 import {
   agentStatusChangedSchema,
@@ -290,6 +292,21 @@ export function applyAgentEventEnvelope(
       ];
       invalidate(client, keys);
       return { kind: 'invalidated', type: envelope.type, keys };
+    }
+    // A whole job snapshot per frame — written, like the autoscan pair, and
+    // for the same reason: the agent emits up to four a second while a push
+    // runs, and a `/proxy` GET per frame is exactly the storm the throttle
+    // exists to prevent.
+    case 'git.job.progress':
+    case 'git.job.done': {
+      const outcome = applySessionGitJobEvent(client, agentId, envelope.payload);
+      if (outcome === 'dropped') return { kind: 'dropped' };
+      const job = envelope.payload as { session_id: string; job_id: string };
+      return {
+        kind: 'patched',
+        type: envelope.type,
+        keys: [queryKeys.sessionGitJob(agentId, job.session_id, job.job_id)],
+      };
     }
     default:
       return { kind: 'ignored', type: envelope.type };

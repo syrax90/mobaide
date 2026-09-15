@@ -6,6 +6,7 @@ import com.mobaide.app.data.network.dto.GitCommitHead
 import com.mobaide.app.data.network.dto.GitCommitResponse
 import com.mobaide.app.data.network.dto.GitDiffResponse
 import com.mobaide.app.data.network.dto.GitDiscardRequest
+import com.mobaide.app.data.network.dto.GitJobResponse
 import com.mobaide.app.data.network.dto.GitRepoInfo
 import com.mobaide.app.data.network.dto.GitStatusEntry
 import com.mobaide.app.data.network.dto.GitStatusResponse
@@ -30,8 +31,11 @@ sealed interface GitChangesUiState {
         val selectedKeys: Set<String> = emptySet(),
         /** Selection mode entered from the top bar while nothing is ticked yet. */
         val selecting: Boolean = false,
-        /** A mutation is in flight: every control that would start another waits. */
+        /** A mutation is in flight, or a fetch / pull / push owns the repository:
+         *  every control that would write the staged set waits. */
         val busy: Boolean = false,
+        /** The fetch / pull / push this screen follows, until its result is dismissed. */
+        val job: GitJobBanner? = null,
     ) : GitChangesUiState {
         val inSelectionMode: Boolean get() = selecting || selectedKeys.isNotEmpty()
         val stagedCount: Int get() = status.counts?.staged ?: 0
@@ -365,6 +369,199 @@ internal fun refusalCopy(code: String, detailMessage: String?): String = when (c
     SessionGitException.CODE_INDEX_LOCKED -> "Another git process is running — try again."
     SessionGitException.CODE_PATHSPEC_MISMATCH -> "That file changed under you — refreshed."
     SessionGitException.CODE_EMPTY_MESSAGE -> "Enter a commit summary."
+    SessionGitException.CODE_JOB_RUNNING -> "Another fetch, pull or push is still running."
+    SessionGitException.CODE_JOB_NOT_FOUND -> JOB_LOST_COPY
     else -> detailMessage?.let { "git refused the request ($code): $it" }
         ?: "git refused the request ($code)."
 }
+
+/** How long a successful job's banner stays before it clears itself. */
+const val JOB_RESULT_DISMISS_MS = 6_000L
+
+internal const val JOB_LOST_COPY = "Lost track of the job — refresh to see the result."
+
+/** One of the Sync sheet's three actions and whether it can run right now. */
+data class SyncRow(val op: String, val label: String, val detail: String, val enabled: Boolean)
+
+/**
+ * The Sync sheet's rows from the same status the header renders; the copy is
+ * shared with iOS `GitChangesDisplay.syncRows` and web `syncRows`. A row exists
+ * only when the agent advertises its capability; Fetch is always possible,
+ * Pull needs something to pull, Push something to push — or a branch with no
+ * upstream yet, which it publishes.
+ */
+internal fun syncRows(repo: GitRepoInfo?, capabilities: GitCapabilities): List<SyncRow> {
+    val rows = mutableListOf<SyncRow>()
+    val head = repo?.head
+    val upstream = repo?.upstream
+    val ref = upstream?.ref
+    val blocked = when {
+        head == null -> "Repository unavailable"
+        head.initial -> "No commits yet"
+        head.detached -> "Detached HEAD"
+        else -> null
+    }
+    if (capabilities.fetch) {
+        rows += SyncRow(GitJobResponse.OP_FETCH, "Fetch", "Update remote-tracking branches", enabled = true)
+    }
+    if (capabilities.pull) {
+        val behind = upstream?.behind
+        rows += when {
+            blocked != null -> SyncRow(GitJobResponse.OP_PULL, "Pull", blocked, enabled = false)
+            upstream == null -> SyncRow(GitJobResponse.OP_PULL, "Pull", "No upstream", enabled = false)
+            behind == null -> SyncRow(GitJobResponse.OP_PULL, "Pull", "Upstream gone", enabled = false)
+            behind == 0 -> SyncRow(GitJobResponse.OP_PULL, "Pull", "Nothing to pull", enabled = false)
+            else -> SyncRow(
+                GitJobResponse.OP_PULL,
+                "Pull",
+                "Fast-forward $behind ${if (behind == 1) "commit" else "commits"} from ${ref ?: "upstream"}",
+                enabled = true,
+            )
+        }
+    }
+    if (capabilities.push) {
+        val ahead = upstream?.ahead
+        rows += when {
+            blocked != null -> SyncRow(GitJobResponse.OP_PUSH, "Push", blocked, enabled = false)
+            upstream == null ->
+                SyncRow(GitJobResponse.OP_PUSH, "Publish branch", "Push and set the upstream", enabled = true)
+            ahead == null ->
+                SyncRow(GitJobResponse.OP_PUSH, "Push", "Recreate ${ref ?: "the upstream"}", enabled = true)
+            ahead == 0 -> SyncRow(GitJobResponse.OP_PUSH, "Push", "Nothing to push", enabled = false)
+            else -> SyncRow(
+                GitJobResponse.OP_PUSH,
+                "Push",
+                "$ahead ${if (ahead == 1) "commit" else "commits"} to ${ref ?: "upstream"}",
+                enabled = true,
+            )
+        }
+    }
+    return rows
+}
+
+internal fun jobTitle(op: String): String = when (op) {
+    GitJobResponse.OP_FETCH -> "Fetching…"
+    GitJobResponse.OP_PULL -> "Pulling…"
+    else -> "Pushing…"
+}
+
+internal fun jobDoneTitle(op: String, ok: Boolean): String = when (op) {
+    GitJobResponse.OP_FETCH -> if (ok) "Fetched" else "Fetch failed"
+    GitJobResponse.OP_PULL -> if (ok) "Pulled" else "Pull failed"
+    else -> if (ok) "Pushed" else "Push failed"
+}
+
+/**
+ * One line per job `error_code`, identical on the three clients. `message` is
+ * git's own explanation and is rendered beside it in monospace, so only an
+ * unknown code falls back to it here.
+ */
+internal fun jobErrorCopy(code: String?, message: String?): String = when (code) {
+    GitJobResponse.CODE_CANCELLED -> "Cancelled."
+    SessionGitException.CODE_GIT_TIMEOUT -> "git took too long to answer. Try again."
+    GitJobResponse.CODE_AUTH_REQUIRED ->
+        "No credentials for this remote. Configure a credential helper or SSH agent on the agent host."
+    GitJobResponse.CODE_NETWORK -> "Couldn't reach the remote."
+    GitJobResponse.CODE_REMOTE_NOT_FOUND -> "The remote doesn't exist."
+    GitJobResponse.CODE_REJECTED -> "The remote rejected the push."
+    GitJobResponse.CODE_NOT_FAST_FORWARD -> "Your branch is behind the remote."
+    GitJobResponse.CODE_CONFLICTS -> "Stopped on conflicts — resolve them in the terminal."
+    GitJobResponse.CODE_DIRTY_WORKTREE -> "Commit or stash your changes first."
+    SessionGitException.CODE_UNMERGED -> "Resolve the conflicts first."
+    GitJobResponse.CODE_OPERATION_IN_PROGRESS -> "A rebase or merge is already in progress."
+    GitJobResponse.CODE_NO_UPSTREAM -> "This branch has no upstream."
+    GitJobResponse.CODE_NO_REMOTE -> "This repository has no remote."
+    GitJobResponse.CODE_DETACHED_HEAD -> "Detached HEAD — check out a branch first."
+    SessionGitException.CODE_NO_HEAD -> "No commits yet."
+    SessionGitException.CODE_HOOK_FAILED -> "A pre-push hook rejected the push."
+    SessionGitException.CODE_INDEX_LOCKED -> "Another git process is running — try again."
+    else -> message?.takeIf { it.isNotEmpty() } ?: "git failed."
+}
+
+/** The banner's one line: the title plus git's summary, or the title plus the failure copy. */
+internal fun jobNotice(job: GitJobResponse): String {
+    if (job.running) return jobTitle(job.op)
+    val ok = job.ok == true
+    val title = jobDoneTitle(job.op, ok)
+    if (ok) return job.message?.takeIf { it.isNotEmpty() }?.let { "$title · $it" } ?: title
+    return "$title: ${jobErrorCopy(job.error_code, job.message)}"
+}
+
+/** Whether the failure's `message` adds anything the copy did not already say. */
+internal fun showsJobOutput(job: GitJobResponse): Boolean {
+    if (job.ok != false) return false
+    val message = job.message.orEmpty()
+    return message.isNotEmpty() && jobErrorCopy(job.error_code, job.message) != message
+}
+
+enum class SyncFollowUp { PullRebase, PullMerge, ForcePush }
+
+/**
+ * What a failed job can be retried as: a pull that could not fast-forward as
+ * a rebase or a merge, a rejected push as a push with lease. Each rewrites
+ * history somewhere, so every one is confirmed first.
+ */
+internal fun jobFollowUps(job: GitJobResponse): List<SyncFollowUp> {
+    if (job.running || job.ok != false) return emptyList()
+    // Behind the remote: integrate first, whichever way the user prefers; a
+    // push may also mean a deliberate rewrite, so the lease push stays offered.
+    return when {
+        job.error_code == GitJobResponse.CODE_NOT_FAST_FORWARD ->
+            if (job.op == GitJobResponse.OP_PUSH) {
+                listOf(SyncFollowUp.PullRebase, SyncFollowUp.PullMerge, SyncFollowUp.ForcePush)
+            } else {
+                listOf(SyncFollowUp.PullRebase, SyncFollowUp.PullMerge)
+            }
+        job.op == GitJobResponse.OP_PUSH && job.error_code == GitJobResponse.CODE_REJECTED ->
+            listOf(SyncFollowUp.ForcePush)
+        else -> emptyList()
+    }
+}
+
+internal fun followUpLabel(followUp: SyncFollowUp): String = when (followUp) {
+    SyncFollowUp.PullRebase -> "Pull with rebase…"
+    SyncFollowUp.PullMerge -> "Pull with merge…"
+    SyncFollowUp.ForcePush -> "Force push (with lease)…"
+}
+
+/** The confirmation every follow-up goes through. */
+data class SyncPrompt(val title: String, val body: String, val confirm: String)
+
+internal fun followUpPrompt(followUp: SyncFollowUp, repo: GitRepoInfo?): SyncPrompt {
+    val ref = repo?.upstream?.ref ?: "the upstream"
+    val branch = repo?.head?.branch ?: "your branch"
+    return when (followUp) {
+        SyncFollowUp.PullRebase ->
+            SyncPrompt("Pull with rebase?", "Replays your commits on top of $ref.", "Rebase")
+        SyncFollowUp.PullMerge ->
+            SyncPrompt("Pull with merge?", "Merges $ref into $branch.", "Merge")
+        SyncFollowUp.ForcePush -> SyncPrompt(
+            "Force push?",
+            "Overwrites $ref with your branch. Proceeds only if the remote hasn't moved since your last fetch.",
+            "Force push",
+        )
+    }
+}
+
+/**
+ * The job this screen follows: [job] is the latest snapshot (null until the
+ * first one lands), [lost] that the agent no longer knows the id.
+ */
+data class GitJobBanner(val jobId: String, val job: GitJobResponse?, val lost: Boolean = false) {
+    val running: Boolean get() = !lost && (job == null || job.running)
+    val failed: Boolean get() = lost || job?.ok == false
+    val text: String
+        get() = when {
+            lost -> JOB_LOST_COPY
+            job == null -> "Syncing…"
+            else -> jobNotice(job)
+        }
+}
+
+data class SyncSheetState(
+    /** The start request is in flight — the one moment the sheet cannot be dismissed. */
+    val starting: Boolean = false,
+    val error: String? = null,
+    /** A follow-up waiting for its confirmation. */
+    val pendingFollowUp: SyncFollowUp? = null,
+)

@@ -1322,6 +1322,110 @@
         "title": "GitItemsResponse",
         "type": "object"
       },
+      "GitJobResponse": {
+        "description": "One fetch/pull/push job: the body every job route answers and the\npayload of both ``git.job.progress`` and ``git.job.done``. Every key is\nalways present; ``phase``/``percent``/``line`` mirror git's own\n``--progress`` output, ``ok``/``error_code``/``message`` are null until\n``status`` is ``done``. ``error_code`` is an open vocabulary (clients\nrender unknown codes from ``message``): ``cancelled`` | ``git_timeout``\n| ``auth_required`` | ``network`` | ``remote_not_found`` | ``rejected``\n| ``not_fast_forward`` | ``conflicts`` | ``dirty_worktree`` |\n``unmerged`` | ``operation_in_progress`` | ``no_upstream`` |\n``no_remote`` | ``detached_head`` | ``no_head`` | ``hook_failed`` |\n``index_locked`` | ``git_error``.",
+        "properties": {
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          },
+          "op": {
+            "enum": [
+              "fetch",
+              "pull",
+              "push"
+            ],
+            "title": "Op",
+            "type": "string"
+          },
+          "percent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percent"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "status": {
+            "default": "running",
+            "enum": [
+              "running",
+              "done"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "session_id",
+          "op"
+        ],
+        "title": "GitJobResponse",
+        "type": "object"
+      },
       "GitMutationResponse": {
         "properties": {
           "ok": {
@@ -1351,6 +1455,33 @@
           "paths"
         ],
         "title": "GitPathsRequest",
+        "type": "object"
+      },
+      "GitPullRequest": {
+        "properties": {
+          "mode": {
+            "default": "ff_only",
+            "enum": [
+              "ff_only",
+              "rebase",
+              "merge"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "GitPullRequest",
+        "type": "object"
+      },
+      "GitPushRequest": {
+        "properties": {
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          }
+        },
+        "title": "GitPushRequest",
         "type": "object"
       },
       "GitRepoInfo": {
@@ -3378,6 +3509,268 @@
           }
         },
         "summary": "Session Git Discard",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/fetch": {
+      "post": {
+        "operationId": "session_git_fetch_api_sessions__session_id__git_fetch_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Fetch",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/jobs/{job_id}": {
+      "get": {
+        "operationId": "session_git_job_api_sessions__session_id__git_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Job",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/jobs/{job_id}/cancel": {
+      "post": {
+        "operationId": "session_git_job_cancel_api_sessions__session_id__git_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Job Cancel",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/pull": {
+      "post": {
+        "operationId": "session_git_pull_api_sessions__session_id__git_pull_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/GitPullRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Pull",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/push": {
+      "post": {
+        "operationId": "session_git_push_api_sessions__session_id__git_push_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/GitPushRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Push",
         "tags": [
           "git"
         ]

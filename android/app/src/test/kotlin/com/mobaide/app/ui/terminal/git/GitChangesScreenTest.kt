@@ -2,6 +2,8 @@ package com.mobaide.app.ui.terminal.git
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -14,6 +16,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import com.mobaide.app.data.network.dto.GitHeadInfo
+import com.mobaide.app.data.network.dto.GitJobResponse
 import com.mobaide.app.data.network.dto.GitRepoInfo
 import com.mobaide.app.data.network.dto.GitStatusCounts
 import com.mobaide.app.data.network.dto.GitStatusEntry
@@ -91,10 +94,11 @@ class GitChangesScreenTest {
         capabilities: GitCapabilities = GitCapabilities.NONE,
         selectedKeys: Set<String> = emptySet(),
         busy: Boolean = false,
+        job: GitJobBanner? = null,
     ): GitChangesUiState.Ready =
         GitChangesUiState.Ready(
             status, status.repo!!, sectionsFor(status), staleError = staleError,
-            capabilities = capabilities, selectedKeys = selectedKeys, busy = busy,
+            capabilities = capabilities, selectedKeys = selectedKeys, busy = busy, job = job,
         )
 
     private fun setContent(
@@ -104,6 +108,9 @@ class GitChangesScreenTest {
         onEntryLongClick: (GitStatusEntry) -> Unit = {},
         onStage: (List<GitStatusEntry>) -> Unit = {},
         onUnstage: (List<GitStatusEntry>) -> Unit = {},
+        onSync: (() -> Unit)? = null,
+        onCancelJob: () -> Unit = {},
+        onDismissJob: () -> Unit = {},
     ) {
         composeRule.setContent {
             MobaideTheme(darkTheme = true) {
@@ -114,9 +121,132 @@ class GitChangesScreenTest {
                     onEntryLongClick = onEntryLongClick,
                     onStage = onStage,
                     onUnstage = onUnstage,
+                    onSync = onSync,
+                    onCancelJob = onCancelJob,
+                    onDismissJob = onDismissJob,
                 )
             }
         }
+    }
+
+    private val syncCaps = GitCapabilities(
+        stage = true, discard = true, commit = true, fetch = true, pull = true, push = true,
+    )
+
+    private fun job(
+        status: String = GitJobResponse.STATUS_RUNNING,
+        phase: String? = null,
+        percent: Int? = null,
+        line: String? = null,
+        ok: Boolean? = null,
+        errorCode: String? = null,
+        message: String? = null,
+    ) = GitJobResponse(
+        job_id = "j1", session_id = "s1", op = GitJobResponse.OP_PUSH, status = status,
+        phase = phase, percent = percent, line = line,
+        ok = ok, error_code = errorCode, message = message,
+    )
+
+    @Test
+    fun theUpstreamLine_isPlainText_untilTheAgentCanSync() {
+        setContent(ready(capabilities = allCaps))
+
+        composeRule.onNodeWithTag(GIT_CHANGES_UPSTREAM_TAG).assertIsDisplayed().assertHasNoClickAction()
+        composeRule.onNodeWithTag(GIT_CHANGES_JOB_TAG).assertDoesNotExist()
+    }
+
+    @Test
+    fun theUpstreamLine_opensTheSheet_onceTheAgentCanSync() {
+        var opened = 0
+        setContent(ready(capabilities = syncCaps), onSync = { opened += 1 })
+
+        composeRule.onNodeWithTag(GIT_CHANGES_UPSTREAM_TAG).assertHasClickAction().performClick()
+
+        assertEquals(1, opened)
+    }
+
+    @Test
+    fun aRunningJob_bannersAboveTheList_withItsLineAndCancel() {
+        var cancels = 0
+        setContent(
+            ready(
+                capabilities = syncCaps,
+                busy = true,
+                job = GitJobBanner(
+                    "j1",
+                    job(phase = "Writing objects", percent = 45, line = "Writing objects:  45% (14/32)"),
+                ),
+            ),
+            onSync = {},
+            onCancelJob = { cancels += 1 },
+        )
+
+        composeRule.onNodeWithTag(GIT_CHANGES_JOB_TAG).assertIsDisplayed()
+        composeRule.onNodeWithText("Pushing…").assertIsDisplayed()
+        composeRule.onNodeWithText("Writing objects:  45% (14/32)").assertIsDisplayed()
+        composeRule.onNodeWithTag(GIT_CHANGES_JOB_OPTIONS_TAG).assertDoesNotExist()
+        composeRule.onNodeWithTag(GIT_CHANGES_JOB_DISMISS_TAG).assertDoesNotExist()
+
+        composeRule.onNodeWithTag(GIT_CHANGES_JOB_CANCEL_TAG).performClick()
+
+        assertEquals(1, cancels)
+    }
+
+    @Test
+    fun aFailedJob_offersOptionsBackToTheSheet_andDismiss() {
+        var opened = 0
+        var dismissed = 0
+        setContent(
+            ready(
+                capabilities = syncCaps,
+                job = GitJobBanner(
+                    "j1",
+                    job(
+                        status = GitJobResponse.STATUS_DONE, ok = false, errorCode = "rejected",
+                        message = "! [rejected] main -> main (fetch first)",
+                    ),
+                ),
+            ),
+            onSync = { opened += 1 },
+            onDismissJob = { dismissed += 1 },
+        )
+
+        composeRule.onNodeWithText("Push failed: The remote rejected the push.").assertIsDisplayed()
+        composeRule.onNodeWithTag(GIT_CHANGES_JOB_CANCEL_TAG).assertDoesNotExist()
+
+        composeRule.onNodeWithTag(GIT_CHANGES_JOB_OPTIONS_TAG).performClick()
+        composeRule.onNodeWithTag(GIT_CHANGES_JOB_DISMISS_TAG).performClick()
+
+        assertEquals(1, opened)
+        assertEquals(1, dismissed)
+    }
+
+    @Test
+    fun aSuccessfulJob_offersOnlyDismiss() {
+        setContent(
+            ready(
+                capabilities = syncCaps,
+                job = GitJobBanner("j1", job(status = GitJobResponse.STATUS_DONE, ok = true, message = "main -> main")),
+            ),
+            onSync = {},
+        )
+
+        composeRule.onNodeWithText("Pushed · main -> main").assertIsDisplayed()
+        composeRule.onNodeWithTag(GIT_CHANGES_JOB_OPTIONS_TAG).assertDoesNotExist()
+        composeRule.onNodeWithTag(GIT_CHANGES_JOB_CANCEL_TAG).assertDoesNotExist()
+        composeRule.onNodeWithTag(GIT_CHANGES_JOB_DISMISS_TAG).assertIsDisplayed()
+    }
+
+    @Test
+    fun aLostJob_saysSo_andCanBeDismissed_notCancelled() {
+        setContent(
+            ready(capabilities = syncCaps, job = GitJobBanner("j1", null, lost = true)),
+            onSync = {},
+        )
+
+        composeRule.onNodeWithText("Lost track of the job — refresh to see the result.").assertIsDisplayed()
+        composeRule.onNodeWithTag(GIT_CHANGES_JOB_CANCEL_TAG).assertDoesNotExist()
+        composeRule.onNodeWithTag(GIT_CHANGES_JOB_DISMISS_TAG).assertIsDisplayed()
     }
 
     @Test

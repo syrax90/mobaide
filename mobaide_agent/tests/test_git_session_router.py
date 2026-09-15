@@ -5,6 +5,7 @@ byte-identically for every status code the contract defines."""
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import types
 from unittest.mock import MagicMock
@@ -15,17 +16,22 @@ from httpx import ASGITransport, AsyncClient
 from mobaide.agent.app import create_app
 from mobaide.agent.config import AgentConfig
 from mobaide.agent.git import changes_service
+from mobaide.agent.git.changes_jobs import job_registry
 from mobaide.core import git_exec
 from mobaide.core.git_exec import CmdResult, reset_caches
 from mobaide.relay.client import RelayClient
 
 from .conftest import TEST_JWT_SECRET, TEST_PASSWORD, TEST_USERNAME
 from .git_repo_support import (
+    clone_repo,
+    commit_all,
     init_repo,
     norm_path,
+    posix_only,
     repo,  # noqa: F401 - pytest fixture
     requires_git,
     run_git_sync,
+    seed_remote,
     stub_git,
     write_file,
 )
@@ -175,6 +181,9 @@ class TestAuthAndRouting:
             "stage": True,
             "discard": True,
             "commit": True,
+            "fetch": True,
+            "pull": True,
+            "push": True,
         }
 
 
@@ -566,3 +575,241 @@ class TestMutationRoutes:
 
         assert resp.status_code == 400
         assert resp.json() == {"detail": {"code": "cwd_missing"}}
+
+
+@pytest.fixture(autouse=True)
+async def _fresh_job_registry():
+    job_registry.reset()
+    yield
+    await job_registry.shutdown()
+    job_registry.reset()
+
+
+@pytest.fixture
+def local(tmp_path) -> str:
+    """A clone of a seeded local bare remote, ``main`` tracking ``origin/main``."""
+    return clone_repo(seed_remote(str(tmp_path)), str(tmp_path / "local"))
+
+
+def _job_url(job_id: str, session_id: str = SESSION_ID) -> str:
+    return _git_url(f"jobs/{job_id}", session_id)
+
+
+async def _await_job(job_id: str) -> None:
+    task = job_registry._jobs[job_id].task
+    if task is not None:
+        await task
+
+
+def _without_id(body: dict) -> dict:
+    return {k: v for k, v in body.items() if k != "job_id"}
+
+
+def _install_sleeping_pre_push(repo_dir: str) -> None:
+    run_git_sync(repo_dir, "config", "core.hooksPath", ".git/hooks")
+    hook = write_file(repo_dir, ".git/hooks/pre-push", b"#!/bin/sh\nsleep 30\n")
+    os.chmod(hook, 0o755)
+
+
+class TestJobRouting:
+    async def test_job_routes_require_auth(self, http):
+        resp = await http.post(_git_url("fetch"))
+
+        assert resp.status_code == 401
+
+    @pytest.mark.parametrize(
+        ("method", "route"),
+        [
+            ("GET", "fetch"),
+            ("GET", "pull"),
+            ("GET", "push"),
+            ("POST", "jobs/abc"),
+            ("GET", "jobs/abc/cancel"),
+            ("GET", "jobs/"),
+            ("POST", "jobs/abc/extra"),
+        ],
+    )
+    async def test_relay_ignores_the_wrong_method_per_job_route(self, relay, method, route):
+        assert await relay._dispatch_session_git(method, _git_url(route), None, {}) is None
+
+    @pytest.mark.parametrize(
+        ("method", "route"),
+        [
+            ("POST", "fetch"),
+            ("POST", "pull"),
+            ("POST", "push"),
+            ("GET", "jobs/abc"),
+            ("POST", "jobs/abc/cancel"),
+        ],
+    )
+    async def test_unknown_session_is_404_on_both_transports(
+        self, http, headers, relay, session_at, tmp_path, method, route
+    ):
+        session_at(str(tmp_path))
+        url = _git_url(route, "nope")
+
+        resp = await http.request(method, url, headers=headers)
+        dispatched = await relay._dispatch_session_git(method, url, None, None)
+
+        assert resp.status_code == 404
+        assert resp.json() == {"detail": "Session 'nope' not found"}
+        assert dispatched == {"status": 404, "body": resp.json()}
+
+    @pytest.mark.parametrize(
+        ("route", "body", "loc"),
+        [
+            ("pull", {"mode": "fast"}, ["mode"]),
+            ("push", {"force": "maybe"}, ["force"]),
+        ],
+    )
+    async def test_malformed_job_body_is_422_on_both_transports(
+        self, http, headers, relay, session_at, tmp_path, route, body, loc
+    ):
+        session_at(str(tmp_path))
+
+        resp = await http.post(_git_url(route), headers=headers, json=body)
+        dispatched = await relay._dispatch_session_git("POST", _git_url(route), None, body)
+
+        assert resp.status_code == 422
+        assert dispatched["status"] == 422
+        assert [e["loc"] for e in resp.json()["detail"]] == [["body", *loc]]
+        assert [list(e["loc"]) for e in dispatched["body"]["detail"]] == [loc]
+
+    async def test_unknown_job_is_404_with_a_coded_detail_on_both_transports(
+        self, http, headers, relay, session_at, tmp_path
+    ):
+        session_at(str(tmp_path))
+
+        got = await _assert_parity(http, headers, relay, _job_url("deadbeef"))
+        cancelled = await _assert_post_parity(
+            http, headers, relay, _job_url("deadbeef") + "/cancel", None
+        )
+
+        assert got.status_code == 404
+        assert got.json() == {"detail": {"code": "job_not_found"}}
+        assert cancelled.status_code == 404
+        assert cancelled.json() == {"detail": {"code": "job_not_found"}}
+
+    async def test_job_start_outside_a_repo_is_409_on_both_transports(
+        self, http, headers, relay, session_at, tmp_path
+    ):
+        session_at(str(tmp_path))
+
+        resp = await _assert_post_parity(http, headers, relay, _git_url("fetch"), None)
+
+        assert resp.status_code == 409
+        assert resp.json() == {"detail": {"code": "not_a_repo", "message": ""}}
+
+
+@requires_git
+class TestJobRoutes:
+    async def test_fetch_answers_the_first_snapshot_then_the_finished_one_on_each_transport(
+        self, http, headers, relay, session_at, local
+    ):
+        session_at(local)
+
+        direct = await http.post(_git_url("fetch"), headers=headers)
+        await _await_job(direct.json()["job_id"])
+        relayed = await relay._dispatch_session_git("POST", _git_url("fetch"), None, None)
+        await _await_job(relayed["body"]["job_id"])
+
+        assert direct.status_code == 200
+        assert relayed["status"] == 200
+        assert re.fullmatch(r"[0-9a-f]{32}", direct.json()["job_id"])
+        assert direct.json()["job_id"] != relayed["body"]["job_id"]
+        assert _without_id(direct.json()) == {
+            "session_id": SESSION_ID,
+            "op": "fetch",
+            "status": "running",
+            "phase": None,
+            "percent": None,
+            "line": None,
+            "ok": None,
+            "error_code": None,
+            "message": None,
+        }
+        assert _without_id(relayed["body"]) == _without_id(direct.json())
+        finished = await _assert_parity(
+            http, headers, relay, _job_url(relayed["body"]["job_id"])
+        )
+        assert finished.status_code == 200
+        assert (finished.json()["status"], finished.json()["ok"]) == ("done", True)
+        assert finished.json()["error_code"] is None
+
+    async def test_pull_and_push_accept_an_absent_or_empty_body(
+        self, http, headers, relay, session_at, local
+    ):
+        session_at(local)
+
+        pulled = await http.post(_git_url("pull"), headers=headers)
+        await _await_job(pulled.json()["job_id"])
+        relayed_pull = await relay._dispatch_session_git("POST", _git_url("pull"), None, None)
+        await _await_job(relayed_pull["body"]["job_id"])
+        pushed = await http.post(_git_url("push"), headers=headers, json={})
+        await _await_job(pushed.json()["job_id"])
+        relayed_push = await relay._dispatch_session_git("POST", _git_url("push"), None, {})
+        await _await_job(relayed_push["body"]["job_id"])
+
+        assert (pulled.status_code, pulled.json()["op"]) == (200, "pull")
+        assert (relayed_pull["status"], relayed_pull["body"]["op"]) == (200, "pull")
+        assert (pushed.status_code, pushed.json()["op"]) == (200, "push")
+        assert (relayed_push["status"], relayed_push["body"]["op"]) == (200, "push")
+        for job_id in (
+            pulled.json()["job_id"], relayed_pull["body"]["job_id"],
+            pushed.json()["job_id"], relayed_push["body"]["job_id"],
+        ):
+            assert job_registry.get(job_id).ok is True
+
+    async def test_cancel_of_a_finished_job_is_idempotent_on_both_transports(
+        self, http, headers, relay, session_at, local
+    ):
+        session_at(local)
+        started = await http.post(_git_url("fetch"), headers=headers)
+        job_id = started.json()["job_id"]
+        await _await_job(job_id)
+
+        cancelled = await _assert_post_parity(
+            http, headers, relay, _job_url(job_id) + "/cancel", None
+        )
+
+        assert cancelled.status_code == 200
+        assert (cancelled.json()["status"], cancelled.json()["ok"]) == ("done", True)
+        current = await http.get(_job_url(job_id), headers=headers)
+        assert cancelled.json() == current.json()
+
+    @posix_only
+    async def test_second_job_on_the_repo_is_409_until_cancel_ends_the_first(
+        self, http, headers, relay, session_at, git_app, mock_app_state, local
+    ):
+        session_at(local, project_name="proj")
+        bus = _FakeEventBus()
+        git_app.state.event_bus = bus
+        mock_app_state.event_bus = bus
+        _install_sleeping_pre_push(local)
+        write_file(local, "a.txt", b"a\n")
+        commit_all(local, "add a")
+
+        started = await http.post(_git_url("push"), headers=headers, json={"force": False})
+        job_id = started.json()["job_id"]
+        refused = await _assert_post_parity(http, headers, relay, _git_url("fetch"), None)
+        cancelled = await _assert_post_parity(
+            http, headers, relay, _job_url(job_id) + "/cancel", None
+        )
+
+        assert started.status_code == 200
+        assert refused.status_code == 409
+        assert refused.json() == {"detail": {"code": "job_running", "message": job_id}}
+        assert cancelled.status_code == 200
+        assert (
+            cancelled.json()["status"], cancelled.json()["ok"], cancelled.json()["error_code"]
+        ) == ("done", False, "cancelled")
+        types = [event_type for event_type, _ in bus.published]
+        assert types[0] == "git.job.progress"
+        assert types.count("git.job.done") == 1
+        assert types[-2:] == ["git.job.done", "git.changed"]
+        assert bus.published[-2][1] == cancelled.json()
+        assert bus.published[-1] == (
+            "git.changed",
+            {"project_name": "proj", "toplevel": norm_path(local),
+             "common_dir": norm_path(local) + "/.git"},
+        )

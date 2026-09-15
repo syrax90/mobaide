@@ -1,7 +1,9 @@
 """Session-scoped git endpoints backing the in-session Changes viewer:
-``GET /api/sessions/{session_id}/git/status`` and ``.../git/diff`` read, and
+``GET /api/sessions/{session_id}/git/status`` and ``.../git/diff`` read,
 ``POST .../git/stage|unstage|discard|commit`` plus ``GET .../git/commit/context``
-mutate the staged set.
+mutate the staged set, and ``POST .../git/fetch|pull|push`` start background
+jobs that ``GET .../git/jobs/{job_id}`` and ``POST .../git/jobs/{job_id}/cancel``
+follow.
 
 The directory is the session's own spawn cwd (project root or linked
 worktree) — clients never send a path to run in. For the reads, repo
@@ -15,14 +17,18 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from ..auth.dependencies import get_current_user
+from .changes_jobs import job_registry
 from .changes_models import (
     GitCommitContextResponse,
     GitCommitRequest,
     GitCommitResponse,
     GitDiffResponse,
     GitDiscardRequest,
+    GitJobResponse,
     GitMutationResponse,
     GitPathsRequest,
+    GitPullRequest,
+    GitPushRequest,
     GitStatusResponse,
 )
 from .changes_mutations import (
@@ -191,6 +197,82 @@ async def session_git_commit(
             project_name=project_name,
             event_bus=_event_bus(request),
         )
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.post("/fetch", response_model=GitJobResponse)
+async def session_git_fetch(session_id: str, request: Request) -> GitJobResponse:
+    cwd, project_name = await _session_target(request, session_id)
+    try:
+        return await job_registry.start(
+            "fetch",
+            cwd=cwd,
+            session_id=session_id,
+            project_name=project_name,
+            event_bus=_event_bus(request),
+        )
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.post("/pull", response_model=GitJobResponse)
+async def session_git_pull(
+    session_id: str, request: Request, body: GitPullRequest | None = None
+) -> GitJobResponse:
+    cwd, project_name = await _session_target(request, session_id)
+    try:
+        return await job_registry.start(
+            "pull",
+            cwd=cwd,
+            session_id=session_id,
+            project_name=project_name,
+            event_bus=_event_bus(request),
+            pull_mode=(body or GitPullRequest()).mode,
+        )
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.post("/push", response_model=GitJobResponse)
+async def session_git_push(
+    session_id: str, request: Request, body: GitPushRequest | None = None
+) -> GitJobResponse:
+    cwd, project_name = await _session_target(request, session_id)
+    try:
+        return await job_registry.start(
+            "push",
+            cwd=cwd,
+            session_id=session_id,
+            project_name=project_name,
+            event_bus=_event_bus(request),
+            force=(body or GitPushRequest()).force,
+        )
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.get("/jobs/{job_id}", response_model=GitJobResponse)
+async def session_git_job(session_id: str, job_id: str, request: Request) -> GitJobResponse:
+    await _session_target(request, session_id)
+    try:
+        return job_registry.get(job_id)
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=GitJobResponse)
+async def session_git_job_cancel(
+    session_id: str, job_id: str, request: Request
+) -> GitJobResponse:
+    await _session_target(request, session_id)
+    try:
+        return await job_registry.cancel(job_id)
     except Exception as exc:
         _raise_mapped(exc)
         raise

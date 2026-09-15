@@ -129,6 +129,113 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-09-15, in-session git fetch/pull/push
+  jobs): **five additive REST routes + two additive event types + three
+  additive capability keys, no version bump.** Network git operations can
+  outlast the relay's 30 s proxied-request budget and need progress, so —
+  unlike the 2026-09-14 mutations — they run as agent-side **jobs**: the
+  route answers at once with a snapshot and the work continues in a
+  background task that reports over the agent events channel. Same
+  session-scoped prefix, both transports byte-identical:
+  * ``POST /api/sessions/{session_id}/git/fetch`` (no body) runs
+    ``git fetch --progress --prune <remote>`` — the branch's upstream remote,
+    else ``origin``, else the only (first listed) remote.
+  * ``POST …/git/pull`` with ``GitPullRequest`` ``{mode: "ff_only" |
+    "rebase" | "merge"}`` (optional, default ``ff_only``; an empty body is
+    accepted) runs ``git pull --progress --no-stat`` plus ``--ff-only`` /
+    ``--rebase`` / ``--no-rebase --no-edit``. Clients start with
+    ``ff_only`` and offer the two history-rewriting modes only as a
+    confirmed follow-up to ``not_fast_forward``.
+  * ``POST …/git/push`` with ``GitPushRequest`` ``{force: false}``
+    (optional) runs ``git push --progress``, with ``--force-with-lease``
+    only when ``force`` is true (clients confirm first, and offer it only
+    as a follow-up to a push that failed with ``not_fast_forward`` or
+    ``rejected``) and ``--set-upstream <remote> <branch>`` when the
+    branch has no upstream yet (remote = ``branch.<name>.pushRemote`` /
+    ``remote.pushDefault`` / ``branch.<name>.remote``, else ``origin``, else
+    the only remote). Plain ``git push`` is never used to publish a branch.
+  * Every start route answers ``200`` ``GitJobResponse`` ``{job_id,
+    session_id, op: fetch | pull | push, status: running | done, phase,
+    percent, line, ok, error_code, message}`` — every key always present.
+    ``phase`` is git's own progress label with any ``remote: `` prefix
+    stripped (``Counting objects``, ``Writing objects``, ``Receiving
+    objects``, ``Resolving deltas``, ``Rebasing``…), ``percent`` the
+    per-phase 0–100 (it resets at each phase — clients label the bar with
+    ``phase`` and never animate the width), ``line`` the latest stderr line
+    (≤ 200 chars); ``ok`` / ``error_code`` / ``message`` stay ``null``
+    until ``status`` is ``done``. ``message`` (≤ 500 chars) is the last
+    meaningful output line on success (``443f30d..9419146 main -> main``,
+    ``Everything up-to-date``, ``Fast-forward``, ``Already up to date.``)
+    and git's own error line(s) on failure. ``error_code`` is an **open**
+    vocabulary (clients render an unknown code from ``message``):
+    ``cancelled`` | ``git_timeout`` | ``auth_required`` (git could not
+    obtain credentials — ``GIT_TERMINAL_PROMPT=0``, ``GIT_ASKPASS=""``,
+    ``SSH_ASKPASS_REQUIRE=never`` and ``GCM_INTERACTIVE=never`` guarantee
+    nothing ever waits for a person at the host; a credential helper or
+    ``ssh-agent`` there is the only fix) | ``network`` | ``remote_not_found``
+    | ``not_fast_forward`` (the branch is behind the remote: an ``ff_only``
+    pull on diverged branches, or a push the remote refused as
+    ``non-fast-forward`` / ``fetch first`` — clients offer *Pull with
+    rebase* / *Pull with merge*, and after a push also *Force push (with
+    lease)*) | ``rejected`` (any other push refusal — a stale lease,
+    ``[remote rejected]`` — clients offer only the lease push) | ``conflicts`` (the merge or rebase stopped; the repository
+    is now ``merging`` / ``rebasing`` and the Changes list shows the
+    conflicts group) | ``dirty_worktree`` | ``unmerged`` |
+    ``operation_in_progress`` | ``no_upstream`` | ``no_remote`` |
+    ``detached_head`` | ``no_head`` (no commits yet) | ``hook_failed`` |
+    ``index_locked`` | ``git_error``.
+  * ``GET …/git/jobs/{job_id}`` → the current ``GitJobResponse`` (finished
+    jobs stay readable for 10 minutes, at most 100 of them); ``POST
+    …/git/jobs/{job_id}/cancel`` kills the whole git process tree and
+    answers the snapshot once the job settled (``error_code: cancelled``;
+    a no-op on a finished job). Both answer ``404 {"detail": {"code":
+    "job_not_found"}}`` for an unknown id — a coded detail, unlike the
+    string detail of a missing session — and the id is looked up
+    agent-wide (any session may read a job it learned of through
+    ``job_running``).
+  * Events on the agent events channel (both transports; the relay stays
+    opaque): ``git.job.progress`` carries the full ``GitJobResponse`` with
+    ``status: running`` — once immediately when the job is accepted (even
+    before the HTTP answer reaches the caller, so every viewer of the
+    session can adopt a job another client started), then at most **four
+    per second per job**, newest counters winning; because every frame is
+    the whole state a client that misses one loses nothing.
+    ``git.job.done`` carries the final snapshot exactly once, and is
+    followed by ``git.changed`` ``{project_name, toplevel, common_dir}``
+    after **every** job, successful or not (refs and worktree may have
+    moved either way). Clients treat the events as the fast path and
+    ``GET …/jobs/{job_id}`` as the source of truth: while a job is active
+    and the screen is visible they poll it every 3 s, and a ``running``
+    snapshot never overwrites a ``done`` one.
+  * One job per repository toplevel: a second start answers ``409
+    {"detail": {"code": "job_running", "message": "<active job id>"}}``, and
+    so do ``stage`` / ``unstage`` / ``discard`` / ``commit`` while a job
+    owns that toplevel (the job holds the per-toplevel lock for its whole
+    run, so a commit that already held it finishes first, and a write
+    that arrives later is refused rather than queued behind the job's 120 s
+    budget). The other start-time refusals are the mutation ones —
+    ``404`` session / ``503 git_unavailable`` / ``400 cwd_missing`` /
+    ``422`` / ``409 not_a_repo | bare_repository | unsafe_directory |
+    git_too_old`` — everything after acceptance is reported through the
+    job's ``error_code``.
+  * ``GET /api/version`` ``capabilities.git`` becomes ``{"changes": true,
+    "stage": true, "discard": true, "commit": true, "fetch": true, "pull":
+    true, "push": true}`` (both transports). Clients show the terminal
+    menu's *Fetch / Pull / Push…* entry and the Changes screen's Sync
+    button when any of the three keys is true and gate each action on its
+    own key.
+  * Bounds: the network command has 120 s and a 1 MiB stdout cap
+    (``--no-stat`` keeps a pull's output small; progress is on stderr and
+    is streamed, not retained — the runner keeps the first 64 KiB of stderr
+    and the classifier reads the job's own tail of the last 50 ordinary
+    lines, because the lines that explain a failure come last). The
+    pre-steps (``symbolic-ref``, ``rev-parse``, ``remote``,
+    ``for-each-ref``) have 5 s each. The agent's shutdown cancels running
+    jobs.
+  * Golden fixtures ``tests/protocol_fixtures/dto/agent/{GitPullRequest,
+    GitPushRequest,GitJobResponse}.json`` pin the three shapes on the same
+    registries as the mutation fixtures; ``GitJobResponse`` carries
+    ``decoded_canonical`` cases because its wire always includes nulls.
 * Additive delta within proto-v7 (2026-09-14, in-session git mutations):
   **four additive REST routes + one additive read route + three additive
   capability keys, no version bump.** Building on the 2026-08-27 Changes

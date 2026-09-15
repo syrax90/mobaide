@@ -16,7 +16,7 @@ object Routes {
     const val CONNECTIONS = "connections"
     const val PROJECTS = "projects"
     const val GIT_MANAGEMENT = "git/{projectName}"
-    const val SESSION_GIT_CHANGES = "session_git_changes/{sessionId}?commit={commit}"
+    const val SESSION_GIT_CHANGES = "session_git_changes/{sessionId}?commit={commit}&sync={sync}"
     const val SESSION_GIT_DIFF =
         "session_git_diff/{sessionId}?path={path}&scope={scope}&origPath={origPath}"
     const val INCOMPATIBLE_SERVER = "incompatible_server"
@@ -32,9 +32,10 @@ object Routes {
     fun verifyEmail(email: String) = "verify_email/${Uri.encode(email)}"
     fun resetPassword(email: String) = "reset_password/${Uri.encode(email)}"
     fun gitManagement(projectName: String) = "git/${Uri.encode(projectName)}"
-    /** [commit] presents the commit sheet over the list on arrival (the terminal menu's Commit…). */
-    fun sessionGitChanges(sessionId: String, commit: Boolean = false) =
-        "session_git_changes/$sessionId?commit=$commit"
+    /** [commit] presents the commit sheet over the list on arrival (the terminal
+     *  menu's Commit…), [sync] the Fetch / Pull / Push sheet (its Fetch / Pull / Push…). */
+    fun sessionGitChanges(sessionId: String, commit: Boolean = false, sync: Boolean = false) =
+        "session_git_changes/$sessionId?commit=$commit&sync=$sync"
 
     // Query args, not path segments: a repo-relative path carries `/`, spaces
     // and `#`. Uri.encode leaves no raw `+`, so the navigation library's single

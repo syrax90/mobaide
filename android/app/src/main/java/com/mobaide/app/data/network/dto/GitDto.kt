@@ -306,3 +306,58 @@ data class GitCommitContextResponse(
     val author: GitCommitAuthor? = null,
     val head: GitCommitHead? = null,
 )
+
+@Serializable
+data class GitPullRequest(val mode: String = MODE_FF_ONLY) {
+    companion object {
+        const val MODE_FF_ONLY = "ff_only"
+        const val MODE_REBASE = "rebase"
+        const val MODE_MERGE = "merge"
+    }
+}
+
+@Serializable
+data class GitPushRequest(val force: Boolean = false)
+
+/**
+ * One fetch / pull / push job: the body every job route answers and the
+ * payload of `git.job.progress` / `git.job.done`. `phase` / `percent` /
+ * `line` mirror git's own `--progress` output; `ok` / `error_code` /
+ * `message` stay null until `status` is `done`. `error_code` is an open
+ * vocabulary — an unknown code renders from `message`.
+ */
+@Serializable
+data class GitJobResponse(
+    val job_id: String,
+    val session_id: String,
+    val op: String,
+    val status: String = STATUS_RUNNING,
+    val phase: String? = null,
+    val percent: Int? = null,
+    val line: String? = null,
+    val ok: Boolean? = null,
+    val error_code: String? = null,
+    val message: String? = null,
+) {
+    val running: Boolean get() = status != STATUS_DONE
+
+    companion object {
+        const val OP_FETCH = "fetch"
+        const val OP_PULL = "pull"
+        const val OP_PUSH = "push"
+        const val STATUS_RUNNING = "running"
+        const val STATUS_DONE = "done"
+        const val CODE_CANCELLED = "cancelled"
+        const val CODE_AUTH_REQUIRED = "auth_required"
+        const val CODE_NETWORK = "network"
+        const val CODE_REMOTE_NOT_FOUND = "remote_not_found"
+        const val CODE_REJECTED = "rejected"
+        const val CODE_NOT_FAST_FORWARD = "not_fast_forward"
+        const val CODE_CONFLICTS = "conflicts"
+        const val CODE_DIRTY_WORKTREE = "dirty_worktree"
+        const val CODE_OPERATION_IN_PROGRESS = "operation_in_progress"
+        const val CODE_NO_UPSTREAM = "no_upstream"
+        const val CODE_NO_REMOTE = "no_remote"
+        const val CODE_DETACHED_HEAD = "detached_head"
+    }
+}

@@ -80,6 +80,17 @@ export const queryKeys = {
   /** The commit sheet's author identity and previous commit; under the same prefix so a commit's `git.changed` echo re-reads it. */
   sessionGitCommitContext: (agentId: string, sessionId: string) =>
     ['agent', agentId, 'session-git', sessionId, 'commit-context'] as const,
+  /**
+   * One fetch / pull / push job's snapshot: written by the socket frames,
+   * polled while it runs. Under the session prefix on purpose — the `git.changed`
+   * that follows every job and the reconnect sweep both re-read a running one,
+   * and a finished one is disabled, so neither can turn its expiry into a 404.
+   */
+  sessionGitJob: (agentId: string, sessionId: string, jobId: string) =>
+    ['agent', agentId, 'session-git', sessionId, 'job', jobId] as const,
+  /** The newest job of one session, as the socket frames report it — never fetched. */
+  sessionGitLatestJob: (agentId: string, sessionId: string) =>
+    ['agent', agentId, 'session-git', sessionId, 'latest-job'] as const,
   autoscan: (agentId: string) => ['agent', agentId, 'autoscan'] as const,
   /** Which CLIs the agent has installed, and the models each advertises. */
   agentCapabilities: (agentId: string) => ['agent', agentId, 'capabilities'] as const,
