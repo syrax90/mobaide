@@ -538,8 +538,17 @@ class GitJobRegistry:
             if job.force:
                 argv.append("--force-with-lease")
             if await self._upstream_error(toplevel) is not None:
-                remote = await self._remote_for(toplevel, "push", remotes)
-                argv += ["--set-upstream", "--", remote, str(branch)]
+                configured = await self._configured_upstream(toplevel, str(branch), remotes)
+                if configured is None:
+                    remote = await self._remote_for(toplevel, "push", remotes)
+                    argv += ["--set-upstream", "--", remote, _short_branch(str(branch))]
+                else:
+                    # The upstream is configured but its tracking ref is gone
+                    # (the remote branch was deleted, then pruned): recreate
+                    # that branch, as the Sync row promises, rather than
+                    # publish a new one and rewrite branch.<name>.merge.
+                    remote, merge_ref = configured
+                    argv += ["--", remote, f"{branch}:{merge_ref}"]
         job.checkpoint()
         result = await run_git(
             argv,
@@ -575,7 +584,10 @@ class GitJobRegistry:
         return result.rc, _text(result.stdout), _text(result.stderr)
 
     async def _current_branch(self, toplevel: str) -> str | None:
-        rc, out, err = await self._quick(toplevel, ["symbolic-ref", "-q", "--short", "HEAD"])
+        """The full ref HEAD points at (``refs/heads/<name>``), ``None`` when
+        detached. Never ``--short``: a tag of the same name shortens it to
+        ``heads/<name>``, which no ref lookup or refspec would resolve."""
+        rc, out, err = await self._quick(toplevel, ["symbolic-ref", "-q", "HEAD"])
         if rc == 0:
             return out.strip("\n") or None
         if rc == 1:
@@ -601,6 +613,28 @@ class GitJobRegistry:
             return None
         return _squash(err) or "the branch has no upstream"
 
+    async def _configured_upstream(
+        self, toplevel: str, ref: str, remotes: Sequence[str]
+    ) -> tuple[str, str] | None:
+        """``(remote, merge ref)`` from ``branch.<name>.remote`` / ``.merge``
+        when both are set and the remote is listed — resolved from the
+        configuration alone, so unlike ``@{upstream}`` it survives a pruned
+        remote-tracking ref."""
+        rc, out, _ = await self._quick(
+            toplevel,
+            [
+                "for-each-ref",
+                "--format=%(upstream:remotename)%0a%(upstream:remoteref)",
+                ref,
+            ],
+        )
+        if rc != 0:
+            return None
+        remote, _, merge_ref = out.strip("\n").partition("\n")
+        if remote in remotes and merge_ref.startswith("refs/"):
+            return remote, merge_ref
+        return None
+
     async def _remote_for(self, toplevel: str, kind: str, remotes: Sequence[str]) -> str:
         """The remote git itself would use (``%(upstream:remotename)`` /
         ``%(push:remotename)`` honour ``branch.<name>.remote``,
@@ -620,6 +654,10 @@ class GitJobRegistry:
         if "origin" in remotes:
             return "origin"
         return remotes[0]
+
+
+def _short_branch(ref: str) -> str:
+    return ref.removeprefix("refs/heads/")
 
 
 job_registry = GitJobRegistry()

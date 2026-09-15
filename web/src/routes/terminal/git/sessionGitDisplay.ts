@@ -766,16 +766,24 @@ export type SyncFollowUp = 'pull_rebase' | 'pull_merge' | 'force_push';
 /**
  * What a failed job can be retried as: a pull that could not fast-forward as
  * a rebase or a merge, a rejected push as a push with lease. Each rewrites
- * history somewhere, so every one is confirmed first.
+ * history somewhere, so every one is confirmed first. A refused publish
+ * installs no upstream and a pruned one cannot be pulled until the next
+ * fetch, so — like the Pull row — the pulls are dropped when the status says
+ * so, never when it is unavailable.
  */
-export function jobFollowUps(job: SessionGitJob): SyncFollowUp[] {
+export function jobFollowUps(
+  job: SessionGitJob,
+  repo?: SessionGitRepoInfo | null,
+): SyncFollowUp[] {
   if (job.status !== 'done' || job.ok !== false) return [];
+  const pulls: SyncFollowUp[] =
+    repo !== null && repo !== undefined && (repo.upstream?.behind ?? null) === null
+      ? []
+      : ['pull_rebase', 'pull_merge'];
   // Behind the remote: integrate first, whichever way the user prefers; a
   // push may also mean a deliberate rewrite, so the lease push stays offered.
   if (job.error_code === GIT_JOB_CODE_NOT_FAST_FORWARD) {
-    return job.op === 'push'
-      ? ['pull_rebase', 'pull_merge', 'force_push']
-      : ['pull_rebase', 'pull_merge'];
+    return job.op === 'push' ? [...pulls, 'force_push'] : pulls;
   }
   if (job.op === 'push' && job.error_code === GIT_JOB_CODE_REJECTED) return ['force_push'];
   return [];

@@ -167,7 +167,7 @@ struct GitSyncSheet: View {
                         .frame(maxHeight: 160)
                         .pixelCodePlate()
                     }
-                    let followUps = GitChangesDisplay.jobFollowUps(job)
+                    let followUps = GitChangesDisplay.jobFollowUps(job, repo: model.repo)
                     if !followUps.isEmpty {
                         HStack(spacing: 12) {
                             ForEach(followUps, id: \.self) { followUp in

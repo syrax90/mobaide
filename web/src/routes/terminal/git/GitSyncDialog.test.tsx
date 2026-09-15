@@ -287,6 +287,24 @@ describe('GitSyncDialog once a job is done', () => {
     expect(onStart).toHaveBeenCalledWith({ op: 'pull', mode: 'rebase' });
   });
 
+  it('offers only the lease push after a refused publish, since the branch has no upstream to pull', () => {
+    renderDialog({
+      repo: repo({ upstream: null }),
+      job: job({
+        status: 'done',
+        ok: false,
+        error_code: 'not_fast_forward',
+        message: '! [rejected] main -> main (fetch first)',
+      }),
+    });
+
+    const result = within(dialog()).getByRole('alert');
+    expect(result).toHaveTextContent('Push failed');
+    expect(within(result).getByRole('button', { name: 'Force push (with lease)…' })).toBeInTheDocument();
+    expect(within(result).queryByRole('button', { name: 'Pull with rebase…' })).toBeNull();
+    expect(within(result).queryByRole('button', { name: 'Pull with merge…' })).toBeNull();
+  });
+
   it('shows no follow-up and no duplicate output when the copy already says it all', () => {
     renderDialog({
       job: job({

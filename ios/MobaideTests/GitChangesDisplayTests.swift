@@ -568,6 +568,26 @@ final class GitChangesDisplaySyncTests: XCTestCase {
         XCTAssertEqual(GitChangesDisplay.jobFollowUps(try jobCase("running_progress")), [])
     }
 
+    func testJobFollowUpsDropThePullsWhenTheStatusSaysNoUpstreamNeverWhenItIsUnavailable() {
+        XCTAssertEqual(GitChangesDisplay.jobFollowUps(failed("not_fast_forward", op: "push"), repo: repo()), [.forcePush])
+        XCTAssertEqual(GitChangesDisplay.jobFollowUps(failed("not_fast_forward", op: "pull"), repo: repo()), [])
+        XCTAssertEqual(GitChangesDisplay.jobFollowUps(failed("rejected", op: "push"), repo: repo()), [.forcePush])
+        XCTAssertEqual(GitChangesDisplay.jobFollowUps(failed("not_fast_forward", op: "push"), repo: tracking(nil, nil)), [.forcePush])
+        XCTAssertEqual(GitChangesDisplay.jobFollowUps(failed("not_fast_forward", op: "pull"), repo: tracking(nil, nil)), [])
+        XCTAssertEqual(
+            GitChangesDisplay.jobFollowUps(failed("not_fast_forward", op: "push"), repo: tracking(1, 1)),
+            [.pullRebase, .pullMerge, .forcePush]
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.jobFollowUps(failed("not_fast_forward", op: "pull"), repo: tracking(0, 1)),
+            [.pullRebase, .pullMerge]
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.jobFollowUps(failed("not_fast_forward", op: "push"), repo: nil),
+            [.pullRebase, .pullMerge, .forcePush]
+        )
+    }
+
     func testFollowUpsAreLabelledAndConfirmedNamingTheUpstreamAndBranchWhenKnown() {
         XCTAssertEqual(GitChangesDisplay.followUpLabel(.pullRebase), "Pull with rebase…")
         XCTAssertEqual(GitChangesDisplay.followUpLabel(.pullMerge), "Pull with merge…")

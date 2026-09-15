@@ -155,7 +155,7 @@ internal fun GitSyncForm(
             if (banner.running) {
                 JobProgress(banner, onCancelJob)
             } else {
-                JobResult(banner, locked, onFollowUp)
+                JobResult(banner, repo, locked, onFollowUp)
             }
         }
         Row(
@@ -213,7 +213,12 @@ private fun JobProgress(banner: GitJobBanner, onCancelJob: () -> Unit) {
 }
 
 @Composable
-private fun JobResult(banner: GitJobBanner, locked: Boolean, onFollowUp: (SyncFollowUp) -> Unit) {
+private fun JobResult(
+    banner: GitJobBanner,
+    repo: GitRepoInfo?,
+    locked: Boolean,
+    onFollowUp: (SyncFollowUp) -> Unit,
+) {
     val job = banner.job
     val ok = !banner.failed
     Column(
@@ -255,7 +260,7 @@ private fun JobResult(banner: GitJobBanner, locked: Boolean, onFollowUp: (SyncFo
                         modifier = Modifier.heightIn(max = 160.dp),
                     )
                 }
-                val followUps = jobFollowUps(job)
+                val followUps = jobFollowUps(job, repo)
                 if (followUps.isNotEmpty()) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),

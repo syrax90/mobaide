@@ -903,8 +903,8 @@ without an upstream) with the disabled reason under each, then the running
 job's `phase` / `percent` on a two-rectangle `.git-sync-bar` (no width
 transition: git's percentage restarts per phase) with Cancel, or the
 outcome with its follow-ups (Pull with rebase / merge after
-`not_fast_forward`, Force push (with lease) after `rejected` or a
-non-fast-forward push), each behind a
+`not_fast_forward` when the branch still has a live upstream, Force push
+(with lease) after `rejected` or a non-fast-forward push), each behind a
 nested `alertdialog` whose initial focus sits on Cancel. The panel shows
 the same job as a `busy`-toned notice strip until its result is dismissed
 (a success clears itself after 6 s). Job state is one holder per panel

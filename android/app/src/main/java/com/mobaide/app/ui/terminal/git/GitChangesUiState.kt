@@ -499,19 +499,23 @@ enum class SyncFollowUp { PullRebase, PullMerge, ForcePush }
 /**
  * What a failed job can be retried as: a pull that could not fast-forward as
  * a rebase or a merge, a rejected push as a push with lease. Each rewrites
- * history somewhere, so every one is confirmed first.
+ * history somewhere, so every one is confirmed first. A refused publish
+ * installs no upstream and a pruned one cannot be pulled until the next
+ * fetch, so — like the Pull row — the pulls are dropped when the status says
+ * so, never when it is unavailable.
  */
-internal fun jobFollowUps(job: GitJobResponse): List<SyncFollowUp> {
+internal fun jobFollowUps(job: GitJobResponse, repo: GitRepoInfo? = null): List<SyncFollowUp> {
     if (job.running || job.ok != false) return emptyList()
+    val pulls = if (repo != null && repo.upstream?.behind == null) {
+        emptyList()
+    } else {
+        listOf(SyncFollowUp.PullRebase, SyncFollowUp.PullMerge)
+    }
     // Behind the remote: integrate first, whichever way the user prefers; a
     // push may also mean a deliberate rewrite, so the lease push stays offered.
     return when {
         job.error_code == GitJobResponse.CODE_NOT_FAST_FORWARD ->
-            if (job.op == GitJobResponse.OP_PUSH) {
-                listOf(SyncFollowUp.PullRebase, SyncFollowUp.PullMerge, SyncFollowUp.ForcePush)
-            } else {
-                listOf(SyncFollowUp.PullRebase, SyncFollowUp.PullMerge)
-            }
+            if (job.op == GitJobResponse.OP_PUSH) pulls + SyncFollowUp.ForcePush else pulls
         job.op == GitJobResponse.OP_PUSH && job.error_code == GitJobResponse.CODE_REJECTED ->
             listOf(SyncFollowUp.ForcePush)
         else -> emptyList()

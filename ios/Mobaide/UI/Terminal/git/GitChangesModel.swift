@@ -1007,16 +1007,23 @@ enum GitChangesDisplay {
 
     /// What a failed job can be retried as: a pull that could not fast-forward
     /// as a rebase or a merge, a rejected push as a push with lease. Each
-    /// rewrites history somewhere, so every one is confirmed first.
-    static func jobFollowUps(_ job: GitJobResponse) -> [SyncFollowUp] {
+    /// rewrites history somewhere, so every one is confirmed first. A refused
+    /// publish installs no upstream and a pruned one cannot be pulled until
+    /// the next fetch, so — like the Pull row — the pulls are dropped when the
+    /// status says so, never when it is unavailable.
+    static func jobFollowUps(_ job: GitJobResponse, repo: GitRepoInfo? = nil) -> [SyncFollowUp] {
         guard !job.running, job.ok == false else { return [] }
+        let pulls: [SyncFollowUp]
+        if let repo, repo.upstream?.behind == nil {
+            pulls = []
+        } else {
+            pulls = [.pullRebase, .pullMerge]
+        }
         // Behind the remote: integrate first, whichever way the user prefers;
         // a push may also mean a deliberate rewrite, so the lease push stays
         // offered.
         if job.error_code == GitJobResponse.codeNotFastForward {
-            return job.op == GitJobResponse.opPush
-                ? [.pullRebase, .pullMerge, .forcePush]
-                : [.pullRebase, .pullMerge]
+            return job.op == GitJobResponse.opPush ? pulls + [.forcePush] : pulls
         }
         if job.op == GitJobResponse.opPush, job.error_code == GitJobResponse.codeRejected {
             return [.forcePush]

@@ -200,6 +200,25 @@ class GitSyncFormTest {
     }
 
     @Test
+    fun aRefusedPublish_offersOnlyTheLeaseFollowUp_sinceTheBranchHasNoUpstreamToPull() {
+        setContent(
+            repo = repo(upstream = null),
+            banner = GitJobBanner(
+                "j1",
+                job(
+                    status = GitJobResponse.STATUS_DONE, ok = false, errorCode = "not_fast_forward",
+                    message = "! [rejected] main -> main (fetch first)",
+                ),
+            ),
+        )
+
+        composeRule.onNodeWithText("Push failed").assertIsDisplayed()
+        composeRule.onNodeWithTag(gitSyncFollowUpTag(SyncFollowUp.ForcePush)).assertIsDisplayed()
+        composeRule.onNodeWithTag(gitSyncFollowUpTag(SyncFollowUp.PullRebase)).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitSyncFollowUpTag(SyncFollowUp.PullMerge)).assertDoesNotExist()
+    }
+
+    @Test
     fun aPullThatCouldNotFastForward_offersRebaseAndMerge() {
         setContent(
             banner = GitJobBanner(

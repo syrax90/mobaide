@@ -146,9 +146,9 @@ export function GitSyncDialog({
               {showsJobOutput(job) && <pre className="git-commit-output">{job.message}</pre>}
             </>
           )}
-          {jobFollowUps(job).length > 0 && (
+          {jobFollowUps(job, repo).length > 0 && (
             <div className="button-row">
-              {jobFollowUps(job).map((followUp) => (
+              {jobFollowUps(job, repo).map((followUp) => (
                 <button
                   key={followUp}
                   type="button"

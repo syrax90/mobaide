@@ -151,9 +151,14 @@ cadence; they do **not** gate compatibility.
     only when ``force`` is true (clients confirm first, and offer it only
     as a follow-up to a push that failed with ``not_fast_forward`` or
     ``rejected``) and ``--set-upstream <remote> <branch>`` when the
-    branch has no upstream yet (remote = ``branch.<name>.pushRemote`` /
-    ``remote.pushDefault`` / ``branch.<name>.remote``, else ``origin``, else
-    the only remote). Plain ``git push`` is never used to publish a branch.
+    branch has no upstream configured (remote = ``branch.<name>.pushRemote``
+    / ``remote.pushDefault`` / ``branch.<name>.remote``, else ``origin``,
+    else the only remote). A branch whose upstream is configured but whose
+    remote-tracking ref is gone (the remote branch was deleted, then pruned;
+    the status reports ``upstream`` without ``ahead``/``behind``) is pushed
+    as ``<remote> refs/heads/<branch>:<branch.<name>.merge>``, recreating
+    that branch — never as a new one. Plain ``git push`` is never used to
+    publish a branch.
   * Every start route answers ``200`` ``GitJobResponse`` ``{job_id,
     session_id, op: fetch | pull | push, status: running | done, phase,
     percent, line, ok, error_code, message}`` — every key always present.

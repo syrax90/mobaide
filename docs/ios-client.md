@@ -681,10 +681,10 @@ or *Publish branch* without an upstream) with the disabled reason under
 each, then the running job's `phase` / `percent` on a `PixelProgressBar`
 (two rectangles, no width animation — git's percentage restarts per
 phase) with Cancel, or the outcome with its confirmed follow-ups (Pull
-with rebase / merge after `not_fast_forward`, Force push (with lease)
-after `rejected` or a non-fast-forward push; the `confirmationDialog` is
-attached to the sheet, not
-the screen, so it can present over it, and its `isPresented` setter
+with rebase / merge after `not_fast_forward` when the branch still has a
+live upstream, Force push (with lease) after `rejected` or a
+non-fast-forward push; the `confirmationDialog` is attached to the sheet,
+not the screen, so it can present over it, and its `isPresented` setter
 clears only `syncPrompt` while `pendingFollowUp` survives, the same split
 as Discard). The list shows the job as a banner until its result is
 dismissed (a success clears itself after 6 s). `GitChangesModel.job` is

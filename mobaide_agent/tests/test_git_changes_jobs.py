@@ -695,6 +695,124 @@ class TestJobRegistry:
         assert _git_out(local, "rev-parse", "--abbrev-ref", "@{upstream}") == "origin/-foo"
         assert _git_out(remote, "rev-parse", "--verify", "refs/heads/-foo")
 
+    @pytest.mark.parametrize(
+        ("force", "lease"), [(False, []), (True, ["--force-with-lease"])]
+    )
+    async def test_push_recreates_a_pruned_upstream_instead_of_publishing_a_new_branch(
+        self, local, other, remote, monkeypatch, force, lease
+    ):
+        real_run_git = changes_jobs.run_git
+        calls: list[list[str]] = []
+
+        async def record(args, **kwargs):
+            if args[0] == "push":
+                calls.append(list(args))
+            return await real_run_git(args, **kwargs)
+
+        monkeypatch.setattr(changes_jobs, "run_git", record)
+        run_git_sync(local, "checkout", "-q", "-b", "topic")
+        run_git_sync(local, "push", "-q", "origin", "HEAD:refs/heads/release")
+        run_git_sync(local, "branch", "--set-upstream-to=origin/release", "topic")
+        write_file(local, "a.txt", b"a\n")
+        commit_all(local, "add a")
+        run_git_sync(other, "push", "-q", "origin", "--delete", "release")
+        run_git_sync(local, "fetch", "-q", "--prune")
+
+        done = await _run("push", local, force=force)
+
+        assert calls == [
+            ["push", "--progress", *lease, "--", "origin", "refs/heads/topic:refs/heads/release"]
+        ]
+        assert (done.ok, done.error_code) == (True, None)
+        assert done.message == "* [new branch] topic -> release"
+        assert _git_out(
+            remote, "for-each-ref", "--format=%(refname:short)", "refs/heads/"
+        ) == "main\nrelease"
+        assert _git_out(remote, "rev-parse", "release") == _git_out(local, "rev-parse", "HEAD")
+        assert _git_out(local, "config", "branch.topic.merge") == "refs/heads/release"
+        upstream = (await _status(local)).repo.upstream
+        assert (upstream.ref, upstream.ahead, upstream.behind) == ("origin/release", 0, 0)
+
+    async def test_push_recreates_a_pruned_upstream_when_a_tag_shadows_the_branch(
+        self, local, other, remote, monkeypatch
+    ):
+        real_run_git = changes_jobs.run_git
+        calls: list[list[str]] = []
+
+        async def record(args, **kwargs):
+            if args[0] == "push":
+                calls.append(list(args))
+            return await real_run_git(args, **kwargs)
+
+        monkeypatch.setattr(changes_jobs, "run_git", record)
+        run_git_sync(local, "checkout", "-q", "-b", "topic")
+        run_git_sync(local, "push", "-q", "origin", "HEAD:refs/heads/release")
+        run_git_sync(local, "branch", "--set-upstream-to=origin/release", "topic")
+        write_file(local, "a.txt", b"a\n")
+        commit_all(local, "add a")
+        run_git_sync(other, "push", "-q", "origin", "--delete", "release")
+        run_git_sync(local, "fetch", "-q", "--prune")
+        run_git_sync(local, "tag", "topic")
+
+        done = await _run("push", local)
+
+        assert calls == [
+            ["push", "--progress", "--", "origin", "refs/heads/topic:refs/heads/release"]
+        ]
+        assert (done.ok, done.error_code) == (True, None)
+        assert done.message == "* [new branch] topic -> release"
+        assert _git_out(
+            remote, "for-each-ref", "--format=%(refname:short)", "refs/heads/"
+        ) == "main\nrelease"
+        assert _git_out(remote, "rev-parse", "release") == _git_out(local, "rev-parse", "HEAD")
+        assert _git_out(local, "config", "branch.topic.merge") == "refs/heads/release"
+        upstream = (await _status(local)).repo.upstream
+        assert (upstream.ref, upstream.ahead, upstream.behind) == ("origin/release", 0, 0)
+
+    async def test_publish_of_a_tag_shadowed_branch_names_the_branch_not_heads_slash(
+        self, local, monkeypatch
+    ):
+        real_run_git = changes_jobs.run_git
+        calls: list[list[str]] = []
+
+        async def record(args, **kwargs):
+            if args[0] != "push":
+                return await real_run_git(args, **kwargs)
+            calls.append(list(args))
+            return CmdResult(rc=0, stdout=b"", stderr=b"")
+
+        monkeypatch.setattr(changes_jobs, "run_git", record)
+        run_git_sync(local, "checkout", "-q", "-b", "topic")
+        run_git_sync(local, "tag", "topic")
+
+        done = await _run("push", local)
+
+        assert calls == [["push", "--progress", "--set-upstream", "--", "origin", "topic"]]
+        assert (done.ok, done.error_code) == (True, None)
+
+    async def test_publish_ignores_an_upstream_on_a_remote_that_is_not_listed(
+        self, local, remote, monkeypatch
+    ):
+        real_run_git = changes_jobs.run_git
+        calls: list[list[str]] = []
+
+        async def record(args, **kwargs):
+            if args[0] == "push":
+                calls.append(list(args))
+            return await real_run_git(args, **kwargs)
+
+        monkeypatch.setattr(changes_jobs, "run_git", record)
+        run_git_sync(local, "checkout", "-q", "-b", "topic")
+        run_git_sync(local, "config", "branch.topic.remote", "gone")
+        run_git_sync(local, "config", "branch.topic.merge", "refs/heads/release")
+
+        done = await _run("push", local)
+
+        assert calls == [["push", "--progress", "--set-upstream", "--", "origin", "topic"]]
+        assert (done.ok, done.error_code) == (True, None)
+        assert _git_out(local, "rev-parse", "--abbrev-ref", "@{upstream}") == "origin/topic"
+        assert _git_out(remote, "rev-parse", "--verify", "refs/heads/topic")
+
     async def test_push_behind_the_remote_is_not_fast_forward(self, local, other):
         _diverge(local, other)
 

@@ -548,6 +548,36 @@ class GitChangesUiStateSyncTest {
     }
 
     @Test
+    fun jobFollowUps_dropThePulls_whenTheStatusSaysNoUpstream_neverWhenItIsUnavailable() {
+        assertEquals(
+            listOf(SyncFollowUp.ForcePush),
+            jobFollowUps(failed("not_fast_forward", op = "push"), repo()),
+        )
+        assertEquals(emptyList<SyncFollowUp>(), jobFollowUps(failed("not_fast_forward", op = "pull"), repo()))
+        assertEquals(listOf(SyncFollowUp.ForcePush), jobFollowUps(failed("rejected", op = "push"), repo()))
+        assertEquals(
+            listOf(SyncFollowUp.ForcePush),
+            jobFollowUps(failed("not_fast_forward", op = "push"), tracking(null, null)),
+        )
+        assertEquals(
+            emptyList<SyncFollowUp>(),
+            jobFollowUps(failed("not_fast_forward", op = "pull"), tracking(null, null)),
+        )
+        assertEquals(
+            listOf(SyncFollowUp.PullRebase, SyncFollowUp.PullMerge, SyncFollowUp.ForcePush),
+            jobFollowUps(failed("not_fast_forward", op = "push"), tracking(1, 1)),
+        )
+        assertEquals(
+            listOf(SyncFollowUp.PullRebase, SyncFollowUp.PullMerge),
+            jobFollowUps(failed("not_fast_forward", op = "pull"), tracking(0, 1)),
+        )
+        assertEquals(
+            listOf(SyncFollowUp.PullRebase, SyncFollowUp.PullMerge, SyncFollowUp.ForcePush),
+            jobFollowUps(failed("not_fast_forward", op = "push"), null),
+        )
+    }
+
+    @Test
     fun followUps_areLabelledAndConfirmed_namingTheUpstreamAndBranchWhenKnown() {
         assertEquals("Pull with rebase…", followUpLabel(SyncFollowUp.PullRebase))
         assertEquals("Pull with merge…", followUpLabel(SyncFollowUp.PullMerge))

@@ -1078,6 +1078,34 @@ describe('job copy', () => {
     expect(jobFollowUps(job())).toEqual([]);
   });
 
+  it('drops the pulls when the status says the upstream is missing or gone, never when it is unavailable', () => {
+    const gone = repo({ upstream: { ref: 'origin/main', ahead: null, behind: null } });
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'push' }), repo())).toEqual(['force_push']);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'pull' }), repo())).toEqual([]);
+    expect(jobFollowUps(failedJob('rejected', { op: 'push' }), repo())).toEqual(['force_push']);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'push' }), gone)).toEqual(['force_push']);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'pull' }), gone)).toEqual([]);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'push' }), tracking(1, 1))).toEqual([
+      'pull_rebase',
+      'pull_merge',
+      'force_push',
+    ]);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'pull' }), tracking(0, 1))).toEqual([
+      'pull_rebase',
+      'pull_merge',
+    ]);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'push' }), null)).toEqual([
+      'pull_rebase',
+      'pull_merge',
+      'force_push',
+    ]);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'push' }), undefined)).toEqual([
+      'pull_rebase',
+      'pull_merge',
+      'force_push',
+    ]);
+  });
+
   it('labels and confirms each follow-up, naming the upstream and branch when known', () => {
     expect(followUpLabel('pull_rebase')).toBe('Pull with rebase…');
     expect(followUpLabel('pull_merge')).toBe('Pull with merge…');
