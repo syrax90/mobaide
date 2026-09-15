@@ -6,6 +6,7 @@ remote — one job per repository, cancel and timeout through a sleeping
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import subprocess
@@ -39,7 +40,7 @@ from mobaide.agent.git.changes_service import (
     get_session_git_status,
     http_error_for,
 )
-from mobaide.core.git_exec import GitCwdMissingError, reset_caches
+from mobaide.core.git_exec import CmdResult, GitCwdMissingError, reset_caches
 
 from .git_repo_support import (
     GIT_BIN,
@@ -959,6 +960,35 @@ class TestJobRegistry:
         assert (done.ok, done.error_code) == (False, "git_timeout")
         assert done.message.startswith("git push exceeded")
         assert job_registry.active_job_id(norm_path(local)) is None
+
+    @pytest.mark.parametrize(("op", "step"), [("fetch", "remote"), ("push", "symbolic-ref")])
+    async def test_preflight_timeout_reports_git_timeout_without_spawning_the_network_command(
+        self, local, monkeypatch, caplog, op, step
+    ):
+        real_run_git = changes_jobs.run_git
+        spawned: list[list[str]] = []
+
+        async def stall(args, **kwargs):
+            spawned.append(list(args))
+            if args[0] == step:
+                return CmdResult(rc=-1, stdout=b"", stderr=b"", timed_out=True)
+            return await real_run_git(args, **kwargs)
+
+        monkeypatch.setattr(changes_jobs, "run_git", stall)
+        bus = FakeEventBus()
+
+        with caplog.at_level(logging.ERROR, logger=changes_jobs.logger.name):
+            done = await _run(op, local, bus=bus)
+
+        assert (done.status, done.ok, done.error_code) == ("done", False, "git_timeout")
+        assert done.message == f"git {op} preflight exceeded 5 s"
+        assert [argv[0] for argv in spawned] == [step]
+        assert bus.types().count("git.job.done") == 1
+        assert bus.types()[-2:] == ["git.job.done", "git.changed"]
+        assert bus.published[-2][1] == done.model_dump(mode="json")
+        assert bus.published[-1] == _changed(local, "proj")
+        assert job_registry.active_job_id(norm_path(local)) is None
+        assert [r.getMessage() for r in caplog.records if r.name == changes_jobs.logger.name] == []
 
     @posix_only
     async def test_shutdown_cancels_running_jobs(self, local):

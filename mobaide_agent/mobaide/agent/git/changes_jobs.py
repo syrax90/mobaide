@@ -43,6 +43,7 @@ from .changes_service import (
     _SMALL_OUTPUT,
     GitNotFoundError,
     GitRefusedError,
+    GitTimeoutError,
     ResolvedRepo,
     _check_result,
     _lines,
@@ -484,6 +485,11 @@ class GitJobRegistry:
                 await self._execute(job)
         except _JobFailure as exc:
             job.ok, job.error_code, job.message = False, exc.code, exc.message
+        except GitTimeoutError:
+            # A pre-step past _QUICK_TIMEOUT is the same outcome as the network
+            # command past JOB_TIMEOUT, only sooner.
+            job.ok, job.error_code = False, "git_timeout"
+            job.message = f"git {job.op} preflight exceeded {_QUICK_TIMEOUT:.0f} s"
         except asyncio.CancelledError:
             job.ok, job.error_code, job.message = False, "cancelled", "agent shutting down"
         except Exception as exc:
