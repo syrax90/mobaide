@@ -924,6 +924,52 @@ class TestJobRegistry:
         assert bus.types()[-2:] == ["git.job.done", "git.changed"]
         assert (await _start("fetch", local)).op == "fetch"
 
+    async def test_cancel_landing_after_git_exited_reports_the_real_outcome(
+        self, local, remote, monkeypatch
+    ):
+        real_run_git = changes_jobs.run_git
+
+        async def cancel_after_exit(args, **kwargs):
+            result = await real_run_git(args, **kwargs)
+            if args[0] == "push":
+                kwargs["handle"].cancel()
+            return result
+
+        monkeypatch.setattr(changes_jobs, "run_git", cancel_after_exit)
+        write_file(local, "a.txt", b"a\n")
+        commit_all(local, "add a")
+        bus = FakeEventBus()
+
+        done = await _run("push", local, bus=bus)
+
+        assert (done.status, done.ok, done.error_code) == ("done", True, None)
+        assert done.message.endswith("main -> main")
+        assert _git_out(remote, "rev-parse", "main") == _git_out(local, "rev-parse", "HEAD")
+        assert job_registry.active_job_id(norm_path(local)) is None
+        assert bus.types()[-2:] == ["git.job.done", "git.changed"]
+
+    @pytest.mark.parametrize("rc", [-9, 1])
+    async def test_cancel_that_killed_git_is_cancelled_whatever_the_exit_code(
+        self, local, monkeypatch, rc
+    ):
+        real_run_git = changes_jobs.run_git
+
+        async def killed(args, **kwargs):
+            if args[0] != "push":
+                return await real_run_git(args, **kwargs)
+            kwargs["handle"].cancel()
+            return CmdResult(rc=rc, stdout=b"", stderr=b"", timed_out=False)
+
+        monkeypatch.setattr(changes_jobs, "run_git", killed)
+        write_file(local, "a.txt", b"a\n")
+        commit_all(local, "add a")
+
+        done = await _run("push", local)
+
+        assert (done.status, done.ok, done.error_code, done.message) == (
+            "done", False, "cancelled", "cancelled")
+        assert job_registry.active_job_id(norm_path(local)) is None
+
     async def test_cancel_while_waiting_for_the_repo_lock_never_spawns_git(
         self, local, monkeypatch
     ):

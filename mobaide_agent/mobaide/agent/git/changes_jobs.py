@@ -551,7 +551,11 @@ class GitJobRegistry:
             on_stderr=job.stderr_callback(asyncio.get_running_loop()),
         )
         job.tracker.flush()
-        if job.handle.cancelled:
+        # A cancel that lands after git already exited killed nothing, and the
+        # remote or worktree may have moved; a killed process never exits 0
+        # (killpg gives a negative rc, taskkill 1), so rc 0 means git finished
+        # and the real outcome is reported.
+        if job.handle.cancelled and result.rc != 0:
             raise _JobFailure("cancelled", "cancelled")
         if result.timed_out:
             raise _JobFailure("git_timeout", f"git {job.op} exceeded {JOB_TIMEOUT:.0f} s")

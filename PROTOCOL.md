@@ -187,8 +187,11 @@ cadence; they do **not** gate compatibility.
   * ``GET …/git/jobs/{job_id}`` → the current ``GitJobResponse`` (finished
     jobs stay readable for 10 minutes, at most 100 of them); ``POST
     …/git/jobs/{job_id}/cancel`` kills the whole git process tree and
-    answers the snapshot once the job settled (``error_code: cancelled``;
-    a no-op on a finished job). Both answer ``404 {"detail": {"code":
+    answers the snapshot once the job settled: ``error_code: cancelled``
+    unless git had already finished successfully before the cancel
+    arrived, in which case the real outcome (``ok: true`` and git's
+    summary) is reported because the remote or worktree may already have
+    moved; a no-op on a finished job. Both answer ``404 {"detail": {"code":
     "job_not_found"}}`` for an unknown id — a coded detail, unlike the
     string detail of a missing session — and the id is looked up
     agent-wide (any session may read a job it learned of through
