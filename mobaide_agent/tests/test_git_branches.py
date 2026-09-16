@@ -133,6 +133,19 @@ def _publish_remote_only(local: str, name: str, message: str) -> None:
     run_git_sync(local, "branch", "-q", "-D", name)
 
 
+def _fetch_as_ghost(local: str) -> None:
+    """``ghost/*`` remote-tracking refs of every ``origin`` branch with no
+    ``ghost`` remote configured: what an ad-hoc ``git fetch <url>`` or an
+    interrupted ``git remote rename`` leaves behind."""
+    run_git_sync(
+        local,
+        "fetch",
+        "-q",
+        _git_out(local, "remote", "get-url", "origin"),
+        "refs/heads/*:refs/remotes/ghost/*",
+    )
+
+
 def _add_linked_worktree(local: str, branch: str) -> str:
     """``<local>/wt/<branch>`` checked out on ``branch`` (created here)."""
     run_git_sync(local, "branch", branch)
@@ -240,6 +253,15 @@ class TestListRemoteBranches:
             ("origin/main", "origin"),
             ("up/stream/main", "up/stream"),
         }
+
+    async def test_a_ref_under_no_configured_remote_is_not_offered(self, local):
+        _fetch_as_ghost(local)
+        assert _rev(local, "refs/remotes/ghost/main") == _rev(local, "origin/main")
+
+        items = await list_git_items(local, _manager(), remote=True)
+
+        assert [(i.branch, i.remote) for i in items if i.kind == "remote_branch"] == [
+            ("origin/main", "origin")]
 
     async def test_tip_lookup_failure_degrades_locally_but_surfaces_with_remote(
         self, local, monkeypatch
@@ -396,6 +418,29 @@ class TestCheckoutRef:
 
         assert info.value.code == "ref_not_found"
         assert _head(local) == "main"
+
+    async def test_a_ref_under_no_configured_remote_is_not_found(self, local):
+        _publish_remote_only(local, "feature/x", "feature work")
+        _fetch_as_ghost(local)
+
+        with pytest.raises(GitNotFoundError) as info:
+            await _checkout(local, "ghost/feature/x")
+
+        assert info.value.code == "ref_not_found"
+        assert _head(local) == "main"
+        assert _local_branches(local) == ["main"]
+
+    async def test_a_ghost_ref_never_stands_in_for_the_local_branch_of_its_short_name(
+        self, local
+    ):
+        _fetch_as_ghost(local)
+        run_git_sync(local, "switch", "-q", "-c", "topic")
+
+        with pytest.raises(GitNotFoundError) as info:
+            await _checkout(local, "ghost/main")
+
+        assert info.value.code == "ref_not_found"
+        assert _head(local) == "topic"
 
     async def test_a_tag_is_not_found_because_detached_checkouts_are_out_of_scope(self, local):
         run_git_sync(local, "tag", "v1")

@@ -143,7 +143,8 @@ cadence; they do **not** gate compatibility.
     commit) and, with ``remote=true``, the remote-tracking branches follow
     the local rows as ``{"kind": "remote_branch", "branch":
     "<remote>/<name>", "remote": "<remote>", "is_current": false, …}``
-    (``<remote>/HEAD`` symrefs skipped; ``remote`` resolved by the longest
+    (``<remote>/HEAD`` symrefs skipped, as are refs under a name that
+    matches no configured remote; ``remote`` resolved by the longest
     configured remote name because both halves may contain ``/``). The
     flag exists so clients that predate the kind never receive a row they
     would offer for delete; the new clients always send it and an older

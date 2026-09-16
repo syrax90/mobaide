@@ -268,12 +268,17 @@ async def list_git_items(
     for refname in remote_refs:
         short = refname[len(_REFS_REMOTES):]
         split = _split_remote_ref(short, remotes)
+        # A ref under a name that matches no configured remote (an ad-hoc
+        # fetch, an interrupted remote rename) cannot be checked out with
+        # tracking, so it is not offered.
+        if split is None:
+            continue
         tip = tips[refname]
         items.append(
             GitItemRead(
                 kind="remote_branch",
                 branch=short,
-                remote=split[0] if split else None,
+                remote=split[0],
                 subject=tip.subject,
                 committed_at=tip.committed_at,
             )
@@ -617,9 +622,9 @@ async def _resolve_checkout(project_root: str, ref: str) -> tuple[str, str | Non
     if not await _ref_exists(project_root, _REFS_REMOTES + ref):
         raise GitNotFoundError("ref_not_found")
     split = _split_remote_ref(ref, await _remote_names(project_root))
-    short = split[1] if split else ref.partition("/")[2]
-    if not short:
+    if split is None:
         raise GitNotFoundError("ref_not_found")
+    short = split[1]
     if await _ref_exists(project_root, _REFS_HEADS + short):
         return short, None
     return short, ref
