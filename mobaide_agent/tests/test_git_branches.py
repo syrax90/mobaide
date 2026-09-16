@@ -263,6 +263,52 @@ class TestListRemoteBranches:
         assert [(i.branch, i.remote) for i in items if i.kind == "remote_branch"] == [
             ("origin/main", "origin")]
 
+    async def test_a_capped_listing_keeps_the_whole_records_and_drops_the_cut_one(
+        self, local, monkeypatch
+    ):
+        _publish_remote_only(local, "feature/x", "feature work")
+        real_run_git = service.run_git
+
+        async def cut_listing(args, **kwargs):
+            result = await real_run_git(args, **kwargs)
+            if args[0] != "for-each-ref":
+                return result
+            return CmdResult(rc=-9, stdout=result.stdout[:-6], stderr=b"", truncated=True)
+
+        monkeypatch.setattr(service, "run_git", cut_listing)
+
+        items = await list_git_items(local, _manager(), remote=True)
+
+        assert [(i.kind, i.branch, i.remote, i.subject) for i in items] == [
+            ("branch_with_worktree", "main", None, "initial"),
+            ("remote_branch", "origin/feature/x", "origin", "feature work"),
+        ]
+        assert all(_ISO_STRICT.match(i.committed_at or "") for i in items)
+
+    async def test_a_listing_cut_exactly_on_a_record_boundary_keeps_every_record(
+        self, local, monkeypatch
+    ):
+        _publish_remote_only(local, "feature/x", "feature work")
+        real_run_git = service.run_git
+
+        async def cut_on_boundary(args, **kwargs):
+            result = await real_run_git(args, **kwargs)
+            if args[0] != "for-each-ref":
+                return result
+            assert result.stdout.endswith(b"\n")
+            return CmdResult(rc=-9, stdout=result.stdout, stderr=b"", truncated=True)
+
+        monkeypatch.setattr(service, "run_git", cut_on_boundary)
+
+        items = await list_git_items(local, _manager(), remote=True)
+
+        assert [(i.kind, i.branch, i.remote, i.subject) for i in items] == [
+            ("branch_with_worktree", "main", None, "initial"),
+            ("remote_branch", "origin/feature/x", "origin", "feature work"),
+            ("remote_branch", "origin/main", "origin", "initial"),
+        ]
+        assert all(_ISO_STRICT.match(i.committed_at or "") for i in items)
+
     async def test_tip_lookup_failure_degrades_locally_but_surfaces_with_remote(
         self, local, monkeypatch
     ):
@@ -276,6 +322,24 @@ class TestListRemoteBranches:
 
         with pytest.raises(GitCommandError):
             await list_git_items(local, _manager(), remote=True)
+
+    async def test_a_failed_listing_that_was_not_cut_short_still_fails(
+        self, local, monkeypatch
+    ):
+        real_run_git = service.run_git
+
+        async def failed_listing(args, **kwargs):
+            if args[0] != "for-each-ref":
+                return await real_run_git(args, **kwargs)
+            return CmdResult(rc=128, stdout=b"", stderr=b"fatal: x\n", truncated=False)
+
+        monkeypatch.setattr(service, "run_git", failed_listing)
+
+        with pytest.raises(GitCommandError, match=r"^fatal: x$"):
+            await list_git_items(local, _manager(), remote=True)
+
+        items = await list_git_items(local, _manager())
+        assert [(i.branch, i.subject, i.committed_at) for i in items] == [("main", None, None)]
 
 
 class TestSplitRemoteRef:

@@ -196,10 +196,10 @@ async def _ref_tips(project_root: str) -> tuple[dict[str, _Tip], list[str]]:
         max_bytes=_STATUS_MAX_BYTES,
     )
     _check_result(result)
-    if result.rc != 0:
+    if result.rc != 0 and not result.truncated:
         raise _fail(result, "git for-each-ref failed")
-    lines = _lines(result.stdout)
-    if result.truncated and lines:
+    lines = _text(result.stdout).split("\n")
+    if result.truncated or (lines and lines[-1] == ""):
         lines.pop()
     tips: dict[str, _Tip] = {}
     remote_refs: list[str] = []
