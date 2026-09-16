@@ -46,7 +46,9 @@ const OWNER = {
    * WEB-10 moved the Auto Scan request bodies and the Linear filter-picker
    * responses here on the same test, and kept Zod mirrors only for
    * `AutoScanInstanceDto` and `AutoScanListResponse` — the two that also arrive
-   * over the agent channel and the `ws/autoscan` snapshot.
+   * over the agent channel and the `ws/autoscan` snapshot. #676's
+   * `GitPullRequest` / `GitPushRequest` follow them here; `GitJobResponse`
+   * rides `git.job.progress` / `git.job.done` and keeps its mirror.
    */
   generated: 'shipped — typed by the generated OpenAPI schema',
   /** Editing a custom agent type on web: CLA-231. */
@@ -85,6 +87,7 @@ export const COVERED_FIXTURES: readonly string[] = [
   'dto/agent/ClaudeOptionsModel.json',
   'dto/agent/CodexOptionsModel.json',
   'dto/agent/CreateSessionRequest.json',
+  'dto/agent/GitJobResponse.json',
   'dto/agent/ProjectInfo.json',
   'dto/agent/SessionKind.json',
   'dto/agent/SessionResponse.json',
@@ -115,6 +118,8 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/GitItemsResponse.json': OWNER.generated,
   'dto/agent/GitMutationResponse.json': OWNER.generated,
   'dto/agent/GitPathsRequest.json': OWNER.generated,
+  'dto/agent/GitPullRequest.json': OWNER.generated,
+  'dto/agent/GitPushRequest.json': OWNER.generated,
   'dto/agent/GitStatusResponse.json': OWNER.generated,
   'dto/agent/LinearLabelDto.json': OWNER.generated,
   'dto/agent/LinearStateDto.json': OWNER.generated,

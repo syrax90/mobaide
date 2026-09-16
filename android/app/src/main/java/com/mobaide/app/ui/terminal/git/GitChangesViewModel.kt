@@ -3,27 +3,35 @@ package com.mobaide.app.ui.terminal.git
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mobaide.app.data.network.dto.GitJobResponse
+import com.mobaide.app.data.network.dto.GitPullRequest
 import com.mobaide.app.data.network.dto.GitStatusEntry
 import com.mobaide.app.data.network.dto.GitStatusResponse
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.GitCapabilities
 import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.SessionGitException
+import com.mobaide.app.data.repository.SessionGitJobLoad
 import com.mobaide.app.data.repository.SessionGitStatusLoad
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
@@ -86,10 +94,47 @@ class GitChangesViewModel @Inject constructor(
     private val selection: Flow<Pair<Set<String>, Boolean>> =
         combine(selectedKeys, selecting) { keys, entering -> keys to entering }
 
+    // The fetch / pull / push this screen follows. Adopted from wherever it
+    // surfaces — this screen's own start, a socket frame for a job another
+    // client started, or the id a `409 job_running` names — and let go of by
+    // dismissing its result; the dismissed id is remembered so a late frame
+    // does not re-adopt it. Shared eagerly: the poll it drives is bounded by
+    // the job's own lifetime and gated on the app being foregrounded, and the
+    // auto-dismiss below needs the same feed without starting a second poll.
+    private val activeJobId = MutableStateFlow<String?>(null)
+    private var dismissedJobId: String? = null
+    private var startingSync = false
+    /** The start answer, so the feed's first frame costs no request. */
+    private var seededJob: GitJobResponse? = null
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val jobBanner: StateFlow<GitJobBanner?> =
+        activeJobId.flatMapLatest { jobId ->
+            if (jobId == null) {
+                flowOf(null)
+            } else {
+                gitRepository.observeSessionGitJob(
+                    sessionId = sessionId,
+                    jobId = jobId,
+                    foreground = appForegroundTracker.isForeground,
+                    initial = { seededJob?.takeIf { it.job_id == jobId } },
+                ).map { load ->
+                    when (load) {
+                        is SessionGitJobLoad.Loaded -> GitJobBanner(jobId, load.job)
+                        is SessionGitJobLoad.Failed -> GitJobBanner(jobId, load.cached)
+                        SessionGitJobLoad.Lost -> GitJobBanner(jobId, null, lost = true)
+                    }
+                }.onStart { emit(GitJobBanner(jobId, seededJob?.takeIf { it.job_id == jobId })) }
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    private val activity: Flow<Pair<Boolean, GitJobBanner?>> =
+        combine(busy, jobBanner) { inFlight, banner -> inFlight to banner }
+
     val uiState: StateFlow<GitChangesUiState> =
-        combine(loads, manualRefreshing, capabilities, selection, busy) {
-            load, refreshing, caps, (selected, entering), inFlight ->
-            toUiState(load, refreshing, caps, selected, entering, inFlight)
+        combine(loads, manualRefreshing, capabilities, selection, activity) {
+            load, refreshing, caps, (selected, entering), (inFlight, banner) ->
+            toUiState(load, refreshing, caps, selected, entering, inFlight, banner)
         }.stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5_000),
@@ -102,15 +147,131 @@ class GitChangesViewModel @Inject constructor(
     private val _commitSheet = MutableStateFlow<CommitSheetState?>(null)
     val commitSheet: StateFlow<CommitSheetState?> = _commitSheet.asStateFlow()
 
+    private val _syncSheet = MutableStateFlow<SyncSheetState?>(null)
+    val syncSheet: StateFlow<SyncSheetState?> = _syncSheet.asStateFlow()
+
     private val _events = Channel<GitChangesEvent>(Channel.BUFFERED)
     val events: Flow<GitChangesEvent> = _events.receiveAsFlow()
 
     init {
-        // Entered from the terminal menu's Commit…: the sheet opens over the
-        // list. Consumed once, so a restored screen does not reopen it.
+        // Entered from the terminal menu's Commit… or Fetch / Pull / Push…: the
+        // sheet opens over the list. Consumed once, so a restored screen does
+        // not reopen it.
         if (savedStateHandle.get<Boolean>("commit") == true) {
             savedStateHandle["commit"] = false
             openCommit()
+        }
+        if (savedStateHandle.get<Boolean>("sync") == true) {
+            savedStateHandle["sync"] = false
+            openSync()
+        }
+        viewModelScope.launch {
+            gitRepository.observeSessionGitJobFrames(sessionId).collect { job ->
+                if (job.job_id != dismissedJobId && job.job_id != activeJobId.value) {
+                    seededJob = job
+                    activeJobId.value = job.job_id
+                }
+            }
+        }
+        // A successful job clears its own banner; a failure stays until
+        // dismissed, because its follow-ups live behind it.
+        viewModelScope.launch {
+            jobBanner.collectLatest { banner ->
+                val job = banner?.job ?: return@collectLatest
+                if (job.running || job.ok != true) return@collectLatest
+                delay(JOB_RESULT_DISMISS_MS)
+                if (activeJobId.value == banner.jobId) dismissJobResult()
+            }
+        }
+    }
+
+    fun openSync() {
+        _syncSheet.value = SyncSheetState()
+    }
+
+    fun closeSync() {
+        if (_syncSheet.value?.starting == true) return
+        _syncSheet.value = null
+    }
+
+    /** The sheet's plain rows: fetch, a fast-forward pull, a push without force. */
+    fun startSync(op: String) = launchSync(op, GitPullRequest.MODE_FF_ONLY, force = false)
+
+    fun requestFollowUp(followUp: SyncFollowUp) {
+        _syncSheet.update { it?.copy(pendingFollowUp = followUp) }
+    }
+
+    fun dismissFollowUp() {
+        _syncSheet.update { it?.copy(pendingFollowUp = null) }
+    }
+
+    fun confirmFollowUp() {
+        val followUp = _syncSheet.value?.pendingFollowUp ?: return
+        _syncSheet.update { it?.copy(pendingFollowUp = null) }
+        when (followUp) {
+            SyncFollowUp.PullRebase ->
+                launchSync(GitJobResponse.OP_PULL, GitPullRequest.MODE_REBASE, force = false)
+            SyncFollowUp.PullMerge ->
+                launchSync(GitJobResponse.OP_PULL, GitPullRequest.MODE_MERGE, force = false)
+            SyncFollowUp.ForcePush ->
+                launchSync(GitJobResponse.OP_PUSH, GitPullRequest.MODE_FF_ONLY, force = true)
+        }
+    }
+
+    fun cancelSync() {
+        val jobId = activeJobId.value ?: return
+        viewModelScope.launch {
+            try {
+                gitRepository.cancelSessionGitJob(sessionId, jobId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _events.send(GitChangesEvent.ShowMessage(mutationErrorCopy(e)))
+            }
+        }
+    }
+
+    fun dismissJobResult() {
+        dismissedJobId = activeJobId.value
+        activeJobId.value = null
+    }
+
+    // Guarded synchronously, before the coroutine: two taps in one frame would
+    // otherwise both pass and the second answers `job_running` for the user's
+    // own job.
+    private fun launchSync(op: String, pullMode: String, force: Boolean) {
+        if (startingSync) return
+        startingSync = true
+        _syncSheet.update { it?.copy(starting = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val job = gitRepository.startSessionGitJob(sessionId, op, pullMode, force)
+                seededJob = job
+                dismissedJobId = null
+                activeJobId.value = job.job_id
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Another client got there first: follow its job instead of failing.
+                val running = (e as? SessionGitException.GitError)
+                    ?.takeIf { it.code == SessionGitException.CODE_JOB_RUNNING }
+                    ?.detailMessage
+                    ?.takeIf { it.isNotEmpty() }
+                if (running != null) {
+                    seededJob = null
+                    dismissedJobId = null
+                    activeJobId.value = running
+                }
+                val copy = mutationErrorCopy(e)
+                if (_syncSheet.value != null) {
+                    _syncSheet.update { it?.copy(error = copy) }
+                } else {
+                    _events.send(GitChangesEvent.ShowMessage(copy))
+                }
+            } finally {
+                startingSync = false
+                _syncSheet.update { it?.copy(starting = false) }
+            }
         }
     }
 
@@ -321,10 +482,11 @@ class GitChangesViewModel @Inject constructor(
         selected: Set<String>,
         entering: Boolean,
         inFlight: Boolean,
+        banner: GitJobBanner?,
     ): GitChangesUiState =
         when (load) {
             is SessionGitStatusLoad.Loaded ->
-                fromStatus(load.status, refreshing, null, caps, selected, entering, inFlight)
+                fromStatus(load.status, refreshing, null, caps, selected, entering, inFlight, banner)
             is SessionGitStatusLoad.Failed -> when (val error = load.error) {
                 is SessionGitException.AgentOutdated -> GitChangesUiState.AgentOutdated
                 is SessionGitException.SessionGone -> GitChangesUiState.SessionGone
@@ -343,6 +505,7 @@ class GitChangesViewModel @Inject constructor(
                             selected = selected,
                             entering = entering,
                             inFlight = inFlight,
+                            banner = banner,
                         )
                     }
                 }
@@ -357,6 +520,7 @@ class GitChangesViewModel @Inject constructor(
         selected: Set<String>,
         entering: Boolean,
         inFlight: Boolean,
+        banner: GitJobBanner?,
     ): GitChangesUiState {
         val repo = status.repo
         val reason = status.unavailable_reason
@@ -379,7 +543,10 @@ class GitChangesViewModel @Inject constructor(
             capabilities = caps,
             selectedKeys = if (selected.all { it in live }) selected else selected.intersect(live),
             selecting = entering,
-            busy = inFlight,
+            // While a job owns the repository the agent answers `job_running`
+            // to every write; Cancel, refresh and the Sync button stay live.
+            busy = inFlight || banner?.running == true,
+            job = banner,
         )
     }
 }

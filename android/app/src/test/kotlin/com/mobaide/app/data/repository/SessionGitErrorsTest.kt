@@ -118,3 +118,34 @@ class SessionGitErrorsTest {
         assertNull(extractDetail("""{"detail":null}"""))
     }
 }
+
+class SessionGitErrorsJobRoutesTest {
+
+    private fun api(code: Int, body: String) = ApiException(code, body)
+
+    @Test
+    fun aCoded404_isAGitError_neverAnOutdatedAgent() {
+        // `GET …/git/jobs/{id}` answers `{"detail":{"code":"job_not_found"}}`;
+        // read as AgentOutdated it would end the status feed and hide every
+        // mutating control, so the coded object wins over the 404 branches.
+        val mapped = mapSessionGitError(api(404, """{"detail":{"code":"job_not_found"}}"""))
+            as SessionGitException.GitError
+        assertEquals(SessionGitException.CODE_JOB_NOT_FOUND, mapped.code)
+        assertNull(mapped.detailMessage)
+    }
+
+    @Test
+    fun jobRunning409_carriesTheActiveJobId() {
+        val mapped = mapSessionGitError(
+            api(409, """{"detail":{"code":"job_running","message":"ab12cd34"}}"""),
+        ) as SessionGitException.GitError
+        assertEquals(SessionGitException.CODE_JOB_RUNNING, mapped.code)
+        assertEquals("ab12cd34", mapped.detailMessage)
+    }
+
+    @Test
+    fun aCoded404WithoutAString_stillNeverReadsAsSessionGone() {
+        val mapped = mapSessionGitError(api(404, """{"detail":{"code":"job_not_found","message":null}}"""))
+        assertTrue(mapped is SessionGitException.GitError)
+    }
+}

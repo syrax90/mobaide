@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.dto.GitCommitHead
 import com.mobaide.app.data.network.dto.GitCommitResponse
 import com.mobaide.app.data.network.dto.GitDiffResponse
 import com.mobaide.app.data.network.dto.GitHeadInfo
+import com.mobaide.app.data.network.dto.GitJobResponse
 import com.mobaide.app.data.network.dto.GitRepoInfo
 import com.mobaide.app.data.network.dto.GitStatusCounts
 import com.mobaide.app.data.network.dto.GitStatusEntry
@@ -17,12 +18,14 @@ import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.GitCapabilities
 import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.SessionGitException
+import com.mobaide.app.data.repository.SessionGitJobLoad
 import com.mobaide.app.data.repository.SessionGitStatusLoad
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -35,6 +38,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -70,16 +74,42 @@ class GitChangesViewModelTest {
         val tracker: ForegroundSessionTracker,
         val projectName: () -> String?,
         val initial: () -> GitStatusResponse?,
+        /** Every job frame of the session, as the repository would surface them. */
+        val frames: MutableSharedFlow<GitJobResponse>,
+        /** The feed of whichever job is being followed; one flow stands in for every id. */
+        val jobLoads: MutableSharedFlow<SessionGitJobLoad>,
+        /** The ids the ViewModel asked the repository to follow, in order. */
+        val observedJobIds: MutableList<String>,
+        /** The seed the ViewModel handed the latest job feed. */
+        val jobInitial: () -> GitJobResponse?,
     )
 
     private fun newFixture(
         projectName: String? = "alpha",
         capabilities: GitCapabilities = GitCapabilities.NONE,
         commit: Boolean = false,
+        sync: Boolean = false,
     ): Fixture {
         val repo = mockk<GitRepository>(relaxed = true)
         coEvery { repo.gitCapabilities() } returns capabilities
         val loads = MutableSharedFlow<SessionGitStatusLoad>(replay = 0, extraBufferCapacity = 8)
+        val frames = MutableSharedFlow<GitJobResponse>(replay = 0, extraBufferCapacity = 8)
+        val jobLoads = MutableSharedFlow<SessionGitJobLoad>(replay = 0, extraBufferCapacity = 8)
+        val observedJobIds = mutableListOf<String>()
+        val jobInitialSlot = slot<() -> GitJobResponse?>()
+        every { repo.observeSessionGitJobFrames("s1") } returns frames
+        every {
+            repo.observeSessionGitJob(
+                sessionId = "s1",
+                jobId = any(),
+                foreground = any(),
+                initial = capture(jobInitialSlot),
+                interval = any(),
+            )
+        } answers {
+            observedJobIds += secondArg<String>()
+            jobLoads
+        }
         val projectNameSlot = slot<() -> String?>()
         val refreshSlot = slot<Flow<Unit>>()
         val initialSlot = slot<() -> GitStatusResponse?>()
@@ -107,7 +137,7 @@ class GitChangesViewModelTest {
             )
         }
         val tracker = ForegroundSessionTracker()
-        val handle = SavedStateHandle(mapOf("sessionId" to "s1", "commit" to commit))
+        val handle = SavedStateHandle(mapOf("sessionId" to "s1", "commit" to commit, "sync" to sync))
         val vm = GitChangesViewModel(
             savedStateHandle = handle,
             gitRepository = repo,
@@ -124,6 +154,10 @@ class GitChangesViewModelTest {
             tracker = tracker,
             projectName = { projectNameSlot.captured() },
             initial = { initialSlot.captured() },
+            frames = frames,
+            jobLoads = jobLoads,
+            observedJobIds = observedJobIds,
+            jobInitial = { jobInitialSlot.captured() },
         )
     }
 
@@ -1028,5 +1062,342 @@ class GitChangesViewModelTest {
         runCurrent()
 
         assertEquals(2, ready(f.vm).stagedCount)
+    }
+
+    // MARK: - Fetch / pull / push jobs
+
+    private val syncCaps = GitCapabilities(
+        stage = true, discard = true, commit = true, fetch = true, pull = true, push = true,
+    )
+
+    private fun job(
+        id: String = "j1",
+        op: String = GitJobResponse.OP_PUSH,
+        status: String = GitJobResponse.STATUS_RUNNING,
+        percent: Int? = null,
+        ok: Boolean? = null,
+        errorCode: String? = null,
+        message: String? = null,
+    ) = GitJobResponse(
+        job_id = id, session_id = "s1", op = op, status = status,
+        percent = percent, ok = ok, error_code = errorCode, message = message,
+    )
+
+    private fun doneJob(id: String = "j1", message: String? = "main -> main") =
+        job(id = id, status = GitJobResponse.STATUS_DONE, ok = true, message = message)
+
+    private fun failedJob(id: String = "j1", code: String = "rejected") =
+        job(id = id, status = GitJobResponse.STATUS_DONE, ok = false, errorCode = code, message = "! [rejected]")
+
+    @Test
+    fun startSync_marksTheSheetStarting_thenFollowsTheJob_seededFromTheAnswer() = runTest {
+        val f = loaded(capabilities = syncCaps)
+        val reply = CompletableDeferred<GitJobResponse>()
+        coEvery { f.repo.startSessionGitJob("s1", "push", "ff_only", false) } coAnswers { reply.await() }
+
+        f.vm.openSync()
+        f.vm.startSync("push")
+        runCurrent()
+        assertEquals(SyncSheetState(starting = true), f.vm.syncSheet.value)
+        assertNull(ready(f.vm).job)
+        assertFalse(ready(f.vm).busy)
+
+        reply.complete(job())
+        runCurrent()
+
+        assertEquals(SyncSheetState(), f.vm.syncSheet.value)
+        assertEquals(listOf("j1"), f.observedJobIds)
+        assertEquals(job(), f.jobInitial())
+        val banner = ready(f.vm).job
+        assertEquals("j1", banner?.jobId)
+        assertTrue(banner!!.running)
+        assertTrue(ready(f.vm).busy)
+
+        f.jobLoads.emit(SessionGitJobLoad.Loaded(job(percent = 45)))
+        runCurrent()
+        assertEquals(45, ready(f.vm).job?.job?.percent)
+    }
+
+    @Test
+    fun aSecondStartWhileOneIsInFlight_isDropped() = runTest {
+        val f = loaded(capabilities = syncCaps)
+        val reply = CompletableDeferred<GitJobResponse>()
+        coEvery { f.repo.startSessionGitJob("s1", any(), any(), any()) } coAnswers { reply.await() }
+        f.vm.openSync()
+
+        f.vm.startSync("fetch")
+        f.vm.startSync("push")
+        runCurrent()
+        reply.complete(job(op = "fetch"))
+        runCurrent()
+
+        coVerify(exactly = 1) { f.repo.startSessionGitJob("s1", any(), any(), any()) }
+    }
+
+    @Test
+    fun aFrameForAnUnknownJob_isAdopted_andADismissedOneIsNot() = runTest {
+        val f = loaded(capabilities = syncCaps)
+
+        f.frames.emit(job(id = "j5", op = "pull"))
+        runCurrent()
+
+        assertEquals("j5", ready(f.vm).job?.jobId)
+        assertEquals(listOf("j5"), f.observedJobIds)
+        assertEquals(job(id = "j5", op = "pull"), f.jobInitial())
+        assertTrue(ready(f.vm).busy)
+
+        f.vm.dismissJobResult()
+        runCurrent()
+        assertNull(ready(f.vm).job)
+        assertFalse(ready(f.vm).busy)
+
+        f.frames.emit(job(id = "j5", op = "pull", percent = 50))
+        runCurrent()
+        assertNull(ready(f.vm).job)
+        assertEquals(listOf("j5"), f.observedJobIds)
+    }
+
+    @Test
+    fun aFrameForTheFollowedJob_doesNotRestartItsFeed() = runTest {
+        val f = loaded(capabilities = syncCaps)
+        f.frames.emit(job())
+        runCurrent()
+
+        f.frames.emit(job(percent = 60))
+        runCurrent()
+
+        assertEquals(listOf("j1"), f.observedJobIds)
+    }
+
+    @Test
+    fun aJobRunningRefusal_adoptsTheJobItNames_andReportsInTheSheet() = runTest {
+        val f = loaded(capabilities = syncCaps)
+        coEvery { f.repo.startSessionGitJob("s1", "fetch", any(), any()) } throws
+            gitError("job_running", "j9")
+
+        f.vm.openSync()
+        f.vm.startSync("fetch")
+        runCurrent()
+
+        assertEquals(
+            SyncSheetState(error = "Another fetch, pull or push is still running."),
+            f.vm.syncSheet.value,
+        )
+        assertEquals("j9", ready(f.vm).job?.jobId)
+        assertEquals(listOf("j9"), f.observedJobIds)
+        assertNull(f.jobInitial())
+    }
+
+    @Test
+    fun aStartFailure_withTheSheetClosed_isAToast() = runTest {
+        val f = loaded(capabilities = syncCaps)
+        coEvery { f.repo.startSessionGitJob("s1", "fetch", any(), any()) } throws
+            SessionGitException.Network(IOException("down"))
+
+        f.vm.events.test {
+            f.vm.startSync("fetch")
+            runCurrent()
+
+            assertEquals(
+                GitChangesEvent.ShowMessage("Could not reach the agent. Check the connection and try again."),
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertNull(f.vm.syncSheet.value)
+        assertNull(ready(f.vm).job)
+    }
+
+    @Test
+    fun aSuccessfulJob_freesTheWrites_andClearsItsBannerAfterSixSeconds() = runTest {
+        val f = loaded(capabilities = syncCaps)
+        f.frames.emit(job())
+        runCurrent()
+        assertTrue(ready(f.vm).busy)
+
+        f.jobLoads.emit(SessionGitJobLoad.Loaded(doneJob()))
+        runCurrent()
+
+        assertEquals("Pushed · main -> main", ready(f.vm).job?.text)
+        assertFalse(ready(f.vm).busy)
+
+        advanceTimeBy(JOB_RESULT_DISMISS_MS - 1)
+        runCurrent()
+        assertNotNull(ready(f.vm).job)
+
+        advanceTimeBy(2)
+        runCurrent()
+        assertNull(ready(f.vm).job)
+    }
+
+    @Test
+    fun aFailedJob_staysUntilDismissed() = runTest {
+        val f = loaded(capabilities = syncCaps)
+        f.frames.emit(job())
+        runCurrent()
+
+        f.jobLoads.emit(SessionGitJobLoad.Loaded(failedJob()))
+        runCurrent()
+        advanceTimeBy(JOB_RESULT_DISMISS_MS * 2)
+        runCurrent()
+
+        val banner = ready(f.vm).job
+        assertEquals("j1", banner?.jobId)
+        assertTrue(banner!!.failed)
+        assertEquals("Push failed: The remote rejected the push.", banner.text)
+        assertFalse(ready(f.vm).busy)
+
+        f.vm.dismissJobResult()
+        runCurrent()
+        assertNull(ready(f.vm).job)
+    }
+
+    @Test
+    fun aDoneSnapshot_isNeverOverwrittenByALateRunningFrame() = runTest {
+        // The feed itself is monotonic, but the banner's seed comes from the
+        // ViewModel: a running frame that arrives after `done` must neither
+        // re-adopt the job nor re-seed a feed that has ended.
+        val f = loaded(capabilities = syncCaps)
+        f.frames.emit(job())
+        runCurrent()
+        f.jobLoads.emit(SessionGitJobLoad.Loaded(doneJob()))
+        runCurrent()
+
+        f.frames.emit(job(percent = 99))
+        runCurrent()
+
+        assertEquals("Pushed · main -> main", ready(f.vm).job?.text)
+        assertEquals(listOf("j1"), f.observedJobIds)
+    }
+
+    @Test
+    fun aLostJob_showsTheLostCopy_andFreesTheWrites() = runTest {
+        val f = loaded(capabilities = syncCaps)
+        f.frames.emit(job())
+        runCurrent()
+        assertTrue(ready(f.vm).busy)
+
+        f.jobLoads.emit(SessionGitJobLoad.Lost)
+        runCurrent()
+
+        val banner = ready(f.vm).job
+        assertEquals(JOB_LOST_COPY, banner?.text)
+        assertTrue(banner!!.failed)
+        assertFalse(ready(f.vm).busy)
+    }
+
+    @Test
+    fun aTransientPollFailure_keepsTheLastSnapshotOnTheBanner() = runTest {
+        val f = loaded(capabilities = syncCaps)
+        f.frames.emit(job(percent = 30))
+        runCurrent()
+
+        f.jobLoads.emit(SessionGitJobLoad.Failed(job(percent = 30), SessionGitException.Network(IOException("down"))))
+        runCurrent()
+
+        assertEquals(30, ready(f.vm).job?.job?.percent)
+        assertTrue(ready(f.vm).busy)
+    }
+
+    @Test
+    fun cancelSync_asksTheAgent_onlyWhileAJobIsFollowed() = runTest {
+        val f = loaded(capabilities = syncCaps)
+        coEvery { f.repo.cancelSessionGitJob("s1", "j1") } returns
+            job(status = GitJobResponse.STATUS_DONE, ok = false, errorCode = "cancelled")
+
+        f.vm.cancelSync()
+        runCurrent()
+        coVerify(exactly = 0) { f.repo.cancelSessionGitJob(any(), any()) }
+
+        f.frames.emit(job())
+        runCurrent()
+        f.vm.cancelSync()
+        runCurrent()
+
+        coVerify(exactly = 1) { f.repo.cancelSessionGitJob("s1", "j1") }
+    }
+
+    @Test
+    fun aFailedCancel_isAToast() = runTest {
+        val f = loaded(capabilities = syncCaps)
+        coEvery { f.repo.cancelSessionGitJob("s1", "j1") } throws
+            SessionGitException.Network(IOException("down"))
+        f.frames.emit(job())
+        runCurrent()
+
+        f.vm.events.test {
+            f.vm.cancelSync()
+            runCurrent()
+
+            assertEquals(
+                GitChangesEvent.ShowMessage("Could not reach the agent. Check the connection and try again."),
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun followUps_goThroughThePrompt_andEachLaunchesItsOwnRequest() = runTest {
+        val f = loaded(capabilities = syncCaps)
+        coEvery { f.repo.startSessionGitJob("s1", any(), any(), any()) } answers {
+            job(op = secondArg())
+        }
+        f.vm.openSync()
+
+        f.vm.requestFollowUp(SyncFollowUp.PullRebase)
+        assertEquals(SyncFollowUp.PullRebase, f.vm.syncSheet.value?.pendingFollowUp)
+        f.vm.dismissFollowUp()
+        runCurrent()
+        assertNull(f.vm.syncSheet.value?.pendingFollowUp)
+        coVerify(exactly = 0) { f.repo.startSessionGitJob(any(), any(), any(), any()) }
+
+        f.vm.requestFollowUp(SyncFollowUp.PullRebase)
+        f.vm.confirmFollowUp()
+        runCurrent()
+        f.vm.dismissJobResult()
+        f.vm.requestFollowUp(SyncFollowUp.PullMerge)
+        f.vm.confirmFollowUp()
+        runCurrent()
+        f.vm.dismissJobResult()
+        f.vm.requestFollowUp(SyncFollowUp.ForcePush)
+        f.vm.confirmFollowUp()
+        runCurrent()
+
+        assertNull(f.vm.syncSheet.value?.pendingFollowUp)
+        coVerify(exactly = 1) { f.repo.startSessionGitJob("s1", "pull", "rebase", false) }
+        coVerify(exactly = 1) { f.repo.startSessionGitJob("s1", "pull", "merge", false) }
+        coVerify(exactly = 1) { f.repo.startSessionGitJob("s1", "push", "ff_only", true) }
+    }
+
+    @Test
+    fun closeSync_isRefusedWhileStarting_andDropsTheSheetOtherwise() = runTest {
+        val f = loaded(capabilities = syncCaps)
+        val reply = CompletableDeferred<GitJobResponse>()
+        coEvery { f.repo.startSessionGitJob("s1", "fetch", any(), any()) } coAnswers { reply.await() }
+        f.vm.openSync()
+        f.vm.startSync("fetch")
+        runCurrent()
+
+        f.vm.closeSync()
+        assertNotNull(f.vm.syncSheet.value)
+
+        reply.complete(job(op = "fetch"))
+        runCurrent()
+        f.vm.closeSync()
+
+        assertNull(f.vm.syncSheet.value)
+        assertEquals("j1", ready(f.vm).job?.jobId)
+    }
+
+    @Test
+    fun theSyncRouteArg_opensTheSheetOnce_andIsConsumed() = runTest {
+        val f = newFixture(capabilities = syncCaps, sync = true)
+
+        assertEquals(SyncSheetState(), f.vm.syncSheet.value)
+        assertEquals(false, f.handle.get<Boolean>("sync"))
+
+        val plain = newFixture(capabilities = syncCaps)
+        assertNull(plain.vm.syncSheet.value)
     }
 }

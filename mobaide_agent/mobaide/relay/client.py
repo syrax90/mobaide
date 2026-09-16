@@ -64,11 +64,14 @@ from mobaide.agent.projects.service import (
     update_project,
 )
 
+from mobaide.agent.git.changes_jobs import job_registry
 from mobaide.agent.git.changes_models import (
     GIT_CAPABILITIES,
     GitCommitRequest,
     GitDiscardRequest,
     GitPathsRequest,
+    GitPullRequest,
+    GitPushRequest,
 )
 from mobaide.agent.git.changes_mutations import (
     commit_session,
@@ -1866,13 +1869,19 @@ class RelayClient:
         router."""
         m = re.match(
             r"^/api/sessions/([^/]+)/git/"
-            r"(status|diff|stage|unstage|discard|commit|commit/context)$",
+            r"(status|diff|stage|unstage|discard|commit|commit/context"
+            r"|fetch|pull|push|jobs/([^/]+)|jobs/([^/]+)/cancel)$",
             path,
         )
         if m is None:
             return None
         session_id, route = m.group(1), m.group(2)
-        expected = "GET" if route in ("status", "diff", "commit/context") else "POST"
+        job_id = m.group(3) or m.group(4)
+        if job_id is not None:
+            route = "jobs/cancel" if route.endswith("/cancel") else "jobs"
+        expected = (
+            "GET" if route in ("status", "diff", "commit/context", "jobs") else "POST"
+        )
         if method != expected:
             return None
         session = await self._session_manager.get_session(session_id)
@@ -1891,6 +1900,8 @@ class RelayClient:
             "unstage": GitPathsRequest,
             "discard": GitDiscardRequest,
             "commit": GitCommitRequest,
+            "pull": GitPullRequest,
+            "push": GitPushRequest,
         }
         req = None
         if route in request_models:
@@ -1899,7 +1910,28 @@ class RelayClient:
             except ValidationError as exc:
                 return {"status": 422, "body": {"detail": _scrub_validation_errors(exc)}}
         try:
-            if route == "status":
+            if route == "fetch":
+                resp = await job_registry.start(
+                    "fetch", cwd=cwd, session_id=session_id,
+                    project_name=project_name, event_bus=event_bus,
+                )
+            elif route == "pull":
+                resp = await job_registry.start(
+                    "pull", cwd=cwd, session_id=session_id,
+                    project_name=project_name, event_bus=event_bus,
+                    pull_mode=req.mode,
+                )
+            elif route == "push":
+                resp = await job_registry.start(
+                    "push", cwd=cwd, session_id=session_id,
+                    project_name=project_name, event_bus=event_bus,
+                    force=req.force,
+                )
+            elif route == "jobs":
+                resp = job_registry.get(str(job_id))
+            elif route == "jobs/cancel":
+                resp = await job_registry.cancel(str(job_id))
+            elif route == "status":
                 resp = await get_session_git_status(
                     session_id=session_id, cwd=cwd, etag=q.get("etag"),
                 )

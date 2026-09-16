@@ -357,3 +357,53 @@ struct GitCommitContextResponse: Codable, Equatable, Sendable {
     let author: GitCommitAuthor?
     let head: GitCommitHead?
 }
+
+struct GitPullRequest: Codable, Equatable, Sendable {
+    let mode: String
+
+    static let modeFFOnly = "ff_only"
+    static let modeRebase = "rebase"
+    static let modeMerge = "merge"
+}
+
+struct GitPushRequest: Codable, Equatable, Sendable {
+    let force: Bool
+}
+
+/// One fetch / pull / push job: the body every job route answers and the
+/// payload of `git.job.progress` / `git.job.done`. `phase` / `percent` /
+/// `line` mirror git's own `--progress` output; `ok` / `error_code` /
+/// `message` stay nil until `status` is `done`. `error_code` is an open
+/// vocabulary — an unknown code renders from `message`.
+struct GitJobResponse: Codable, Equatable, Sendable {
+    let job_id: String
+    let session_id: String
+    let op: String
+    let status: String
+    let phase: String?
+    let percent: Int?
+    let line: String?
+    let ok: Bool?
+    let error_code: String?
+    let message: String?
+
+    var running: Bool { status != Self.statusDone }
+
+    static let opFetch = "fetch"
+    static let opPull = "pull"
+    static let opPush = "push"
+    static let statusRunning = "running"
+    static let statusDone = "done"
+    static let codeCancelled = "cancelled"
+    static let codeAuthRequired = "auth_required"
+    static let codeNetwork = "network"
+    static let codeRemoteNotFound = "remote_not_found"
+    static let codeRejected = "rejected"
+    static let codeNotFastForward = "not_fast_forward"
+    static let codeConflicts = "conflicts"
+    static let codeDirtyWorktree = "dirty_worktree"
+    static let codeOperationInProgress = "operation_in_progress"
+    static let codeNoUpstream = "no_upstream"
+    static let codeNoRemote = "no_remote"
+    static let codeDetachedHead = "detached_head"
+}

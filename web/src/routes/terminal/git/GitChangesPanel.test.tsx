@@ -9,7 +9,9 @@ import type {
   SessionGitDiffRequest,
   SessionGitDiscardScope,
   SessionGitEntry,
+  SessionGitJob,
   SessionGitStatus,
+  SessionGitSyncRequest,
 } from '../../../api/sessionGitRepository';
 import type { AgentVersionInfo } from '../../../protocol/dto/agentVersion';
 
@@ -42,6 +44,22 @@ const api = vi.hoisted(() => ({
   refuse: undefined as ((kind: MutationCall['kind']) => unknown) | undefined,
   commitContext: undefined as SessionGitCommitContext | undefined,
   commitResult: undefined as SessionGitCommitResult | undefined,
+  /**
+   * The fetch / pull / push jobs: every start is recorded and answers
+   * `startResult` (or rejects with `refuseStart`); the reconcile poll answers
+   * `job` (or rejects with `jobError`) and records the ids it was asked for;
+   * cancel records the id and answers the job as cancelled.
+   */
+  starts: [] as SessionGitSyncRequest[],
+  startResult: undefined as SessionGitJob | undefined,
+  refuseStart: undefined as Error | undefined,
+  /** Hold every start until `releaseStart` is drained, as `hold` does for diffs. */
+  holdStart: false,
+  releaseStart: [] as (() => void)[],
+  job: undefined as SessionGitJob | undefined,
+  jobError: undefined as Error | undefined,
+  jobPolls: [] as string[],
+  cancels: [] as string[],
 }));
 
 vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
@@ -87,6 +105,36 @@ vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
         if (api.commitResult === undefined) throw new Error('no commit result staged');
         return api.commitResult;
       }),
+    startSessionGitJob: (_agentId: string, _sessionId: string, request: SessionGitSyncRequest) => {
+      api.starts.push(request);
+      if (api.refuseStart !== undefined) return Promise.reject(api.refuseStart);
+      const started = api.startResult;
+      if (started === undefined) return Promise.reject(new Error('no job staged'));
+      if (!api.holdStart) return Promise.resolve(started);
+      return new Promise<SessionGitJob>((resolve) => {
+        api.releaseStart.push(() => {
+          resolve(started);
+        });
+      });
+    },
+    getSessionGitJob: (_agentId: string, _sessionId: string, jobId: string) => {
+      api.jobPolls.push(jobId);
+      if (api.jobError !== undefined) return Promise.reject(api.jobError);
+      return api.job === undefined
+        ? Promise.reject(new Error('no job staged'))
+        : Promise.resolve(api.job);
+    },
+    cancelSessionGitJob: (_agentId: string, _sessionId: string, jobId: string) => {
+      api.cancels.push(jobId);
+      if (api.job === undefined) return Promise.reject(new Error('no job staged'));
+      return Promise.resolve({
+        ...api.job,
+        status: 'done' as const,
+        ok: false,
+        error_code: 'cancelled',
+        message: 'cancelled',
+      });
+    },
   };
 });
 
@@ -101,6 +149,8 @@ const { toApiError } = await import('../../../api/errors');
 const { toSessionGitError } = await import('../../../api/sessionGitRepository');
 const { queryKeys } = await import('../../../lib/queryKeys');
 const { agentVersionSchema } = await import('../../../protocol/dto/agentVersion');
+const { applySessionGitJob } = await import('../../../realtime/sessionGitJobCache');
+const { JOB_RESULT_DISMISS_MS } = await import('./sessionGitDisplay');
 const { GitChangesPanel } = await import('./GitChangesPanel');
 
 const entry = (over: Partial<SessionGitEntry> = {}): SessionGitEntry => ({
@@ -163,12 +213,13 @@ const wireFailure = (httpStatus: number, detail: unknown): unknown =>
 let client: QueryClient;
 const onClose = vi.fn<() => void>();
 
-const panel = (sessionId = 's1', commitRequest = 0) => (
+const panel = (sessionId = 's1', commitRequest = 0, syncRequest = 0) => (
   <QueryClientProvider client={client}>
     <GitChangesPanel
       agentId="a1"
       sessionId={sessionId}
       commitRequest={commitRequest}
+      syncRequest={syncRequest}
       onClose={onClose}
     />
   </QueryClientProvider>
@@ -265,12 +316,22 @@ beforeEach(() => {
   api.refuse = undefined;
   api.commitContext = undefined;
   api.commitResult = undefined;
+  api.starts.length = 0;
+  api.startResult = undefined;
+  api.refuseStart = undefined;
+  api.holdStart = false;
+  api.releaseStart.length = 0;
+  api.job = undefined;
+  api.jobError = undefined;
+  api.jobPolls.length = 0;
+  api.cancels.length = 0;
 });
 
 afterEach(() => {
   cleanup();
   client.clear();
   onClose.mockClear();
+  vi.useRealTimers();
 });
 
 describe('GitChangesPanel selection across polls', () => {
@@ -964,5 +1025,321 @@ describe('GitChangesPanel commit', () => {
     expect(screen.getByRole('dialog', { name: 'Commit' })).toBeInTheDocument();
     expect(summary(dialog)).toHaveValue('Add a');
     expect(screen.queryByRole('status')).toBeNull();
+  });
+});
+
+describe('GitChangesPanel sync', () => {
+  const ALL_SYNC = { ...ALL_GIT, fetch: true, pull: true, push: true };
+  const UPSTREAM = '↑1 ↓0 · origin/main';
+
+  /** A status with a repo on `main`, one commit ahead of `origin/main`. */
+  const tracked = (etag: string, entries: SessionGitEntry[]): SessionGitStatus => ({
+    ...counted(etag, entries),
+    repo: {
+      toplevel: '/srv/p1',
+      git_dir: '/srv/p1/.git',
+      common_dir: '/srv/p1/.git',
+      head: { oid: 'abc1234def', short_oid: 'abc1234', branch: 'main', detached: false, initial: false },
+      upstream: { ref: 'origin/main', ahead: 1, behind: 0 },
+      state: 'clean',
+      is_linked_worktree: false,
+    },
+  });
+
+  const running = (over: Partial<SessionGitJob> = {}): SessionGitJob => ({
+    job_id: 'j1',
+    session_id: 's1',
+    op: 'push',
+    status: 'running',
+    phase: null,
+    percent: null,
+    line: null,
+    ok: null,
+    error_code: null,
+    message: null,
+    ...over,
+  });
+
+  const sheet = (): HTMLElement => screen.getByRole('dialog', { name: 'Fetch / Pull / Push' });
+  const sheetRow = (label: string): HTMLElement => {
+    const button = within(sheet())
+      .getByText(label, { selector: '.git-sync-row-label' })
+      .closest('button');
+    if (button === null) throw new Error(`no row labelled ${label}`);
+    return button;
+  };
+  const banner = (): HTMLElement | null => document.querySelector<HTMLElement>('.git-panel-job');
+  /** A job-route failure as the repository throws it, typed for the mock's reject. */
+  const jobFailure = (httpStatus: number, detail: unknown): Error => {
+    const error = wireFailure(httpStatus, detail);
+    if (!(error instanceof Error)) throw new Error('expected an Error off the wire');
+    return error;
+  };
+  const shownBanner = (): HTMLElement => {
+    const strip = banner();
+    if (strip === null) throw new Error('no job banner');
+    return strip;
+  };
+
+  /** The panel over a tracked repo on a sync-capable agent, Sync… ready. */
+  const renderSync = async (syncRequest = 0): Promise<void> => {
+    api.version = agentVersion(ALL_SYNC);
+    api.status = tracked('e1', [entry()]);
+    render(panel('s1', 0, syncRequest));
+    await screen.findByRole('button', { name: 'Sync…' });
+  };
+
+  /** Open the sheet, start a push from it and wait for the request to leave. */
+  const startPush = async (): Promise<void> => {
+    fireEvent.click(screen.getByRole('button', { name: 'Sync…' }));
+    fireEvent.click(sheetRow('Push'));
+    await waitFor(() => {
+      expect(api.starts).toEqual([{ op: 'push', force: false }]);
+    });
+  };
+
+  it('offers Sync… and the tappable upstream only once the agent advertises a job', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = tracked('e1', [entry()]);
+    renderPanel();
+    await screen.findByRole('button', { name: 'Stage src/app.py' });
+    await capabilitiesSettled();
+
+    expect(screen.queryByRole('button', { name: 'Sync…' })).toBeNull();
+    expect(screen.queryByRole('button', { name: UPSTREAM })).toBeNull();
+    expect(screen.getByText(UPSTREAM)).toBeInTheDocument();
+  });
+
+  it('opens the sheet from the upstream line and hands focus to Close when it shuts', async () => {
+    await renderSync();
+
+    fireEvent.click(screen.getByRole('button', { name: UPSTREAM }));
+
+    expect(within(sheet()).getByText(UPSTREAM)).toBeInTheDocument();
+    expect(sheetRow('Push')).toHaveTextContent('1 commit to origin/main');
+    expect(sheetRow('Pull')).toBeDisabled();
+
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Close' }));
+
+    expect(screen.queryByRole('dialog', { name: 'Fetch / Pull / Push' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+    expect(api.starts).toEqual([]);
+  });
+
+  it('opens the sheet straight from the terminal menu', async () => {
+    await renderSync(1);
+
+    expect(screen.getByRole('dialog', { name: 'Fetch / Pull / Push' })).toBeInTheDocument();
+  });
+
+  it('keeps Escape for the sheet while it is open', async () => {
+    await renderSync();
+    fireEvent.click(screen.getByRole('button', { name: 'Sync…' }));
+
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Git changes' }), { key: 'Escape' });
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('starts a push, shows the banner from the first snapshot and follows the poll', async () => {
+    await renderSync();
+    api.startResult = running();
+    api.job = running({
+      phase: 'Writing objects',
+      percent: 45,
+      line: 'Writing objects:  45% (14/32)',
+    });
+
+    await startPush();
+
+    await waitFor(() => {
+      expect(shownBanner()).toHaveTextContent('Pushing…');
+    });
+    await waitFor(() => {
+      expect(within(shownBanner()).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '45');
+    });
+    expect(api.jobPolls).toEqual(['j1']);
+    expect(shownBanner()).toHaveAttribute('data-tone', 'busy');
+    expect(within(shownBanner()).getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    expect(within(shownBanner()).queryByRole('button', { name: 'Dismiss' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Stage src/app.py' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+    expect(within(sheet()).getByRole('status')).toHaveTextContent('Writing objects 45%');
+
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Close' }));
+
+    expect(screen.queryByRole('dialog', { name: 'Fetch / Pull / Push' })).toBeNull();
+    expect(shownBanner()).toHaveTextContent('Pushing…');
+  });
+
+  it('keeps the staged set off limits from the start request until its answer', async () => {
+    await renderSync();
+    api.holdStart = true;
+    api.startResult = running({ status: 'done', ok: true, message: 'Everything up-to-date' });
+    fireEvent.click(screen.getByRole('button', { name: 'Sync…' }));
+    fireEvent.click(sheetRow('Push'));
+    await waitFor(() => {
+      expect(api.starts).toEqual([{ op: 'push', force: false }]);
+    });
+
+    expect(banner()).toBeNull();
+    expect(screen.getByRole('button', { name: 'Stage src/app.py' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+
+    await act(async () => {
+      for (const release of api.releaseStart.splice(0)) release();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(shownBanner()).toHaveTextContent('Pushed · Everything up-to-date');
+    });
+    expect(api.jobPolls).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Stage src/app.py' })).toBeEnabled();
+  });
+
+  it('applies a socket frame to the banner and lets a success clear itself after six seconds', async () => {
+    await renderSync();
+    api.startResult = running();
+    api.job = running();
+    await startPush();
+    await waitFor(() => {
+      expect(shownBanner()).toHaveTextContent('Pushing…');
+    });
+    vi.useFakeTimers();
+
+    act(() => {
+      applySessionGitJob(
+        client,
+        'a1',
+        running({ status: 'done', ok: true, percent: 100, message: 'abc1234..def5678 main -> main' }),
+      );
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    expect(shownBanner()).toHaveTextContent('Pushed · abc1234..def5678 main -> main');
+    expect(shownBanner()).toHaveAttribute('data-tone', 'ok');
+    expect(screen.getByRole('button', { name: 'Stage src/app.py' })).toBeEnabled();
+    expect(within(shownBanner()).getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(JOB_RESULT_DISMISS_MS + 5);
+    });
+
+    expect(banner()).toBeNull();
+    expect(api.jobPolls).toEqual(['j1']);
+  });
+
+  it('keeps a failed job on screen with Options… back to the sheet and its follow-up', async () => {
+    await renderSync();
+    api.startResult = running();
+    api.job = running({
+      status: 'done',
+      ok: false,
+      error_code: 'rejected',
+      message: '! [rejected] main -> main (fetch first)',
+    });
+    await startPush();
+    await waitFor(() => {
+      expect(shownBanner()).toHaveTextContent('Push failed: The remote rejected the push.');
+    });
+    expect(shownBanner()).toHaveAttribute('data-tone', 'danger');
+    expect(shownBanner()).toHaveAttribute('role', 'alert');
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Close' }));
+
+    fireEvent.click(within(shownBanner()).getByRole('button', { name: 'Options…' }));
+
+    expect(
+      within(sheet()).getByRole('button', { name: 'Force push (with lease)…' }),
+    ).toBeInTheDocument();
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Close' }));
+
+    fireEvent.click(within(shownBanner()).getByRole('button', { name: 'Dismiss' }));
+
+    expect(banner()).toBeNull();
+  });
+
+  it('adopts the job a 409 job_running names instead of failing', async () => {
+    await renderSync();
+    api.refuseStart = jobFailure(409, { code: 'job_running', message: 'j9' });
+    api.job = running({ job_id: 'j9', op: 'fetch', phase: 'Receiving objects', percent: 12 });
+    fireEvent.click(screen.getByRole('button', { name: 'Sync…' }));
+
+    fireEvent.click(sheetRow('Fetch'));
+
+    await waitFor(() => {
+      expect(api.jobPolls).toEqual(['j9']);
+    });
+    expect(within(sheet()).getByRole('alert')).toHaveTextContent(
+      'Another fetch, pull or push is still running.',
+    );
+    await waitFor(() => {
+      expect(shownBanner()).toHaveTextContent('Fetching…');
+    });
+  });
+
+  it('adopts a job another client started from the socket pointer', async () => {
+    await renderSync();
+    api.job = running({ job_id: 'j5', op: 'pull' });
+
+    act(() => {
+      applySessionGitJob(client, 'a1', running({ job_id: 'j5', op: 'pull' }));
+    });
+
+    await waitFor(() => {
+      expect(shownBanner()).toHaveTextContent('Pulling…');
+    });
+    expect(api.jobPolls).toEqual(['j5']);
+    expect(screen.getByRole('button', { name: 'Stage src/app.py' })).toBeDisabled();
+  });
+
+  it('cancels from the banner and shows the cancelled outcome', async () => {
+    await renderSync();
+    api.startResult = running();
+    api.job = running({ phase: 'Writing objects', percent: 45 });
+    await startPush();
+    await waitFor(() => {
+      expect(within(shownBanner()).getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    });
+
+    fireEvent.click(within(shownBanner()).getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => {
+      expect(api.cancels).toEqual(['j1']);
+    });
+    await waitFor(() => {
+      expect(shownBanner()).toHaveTextContent('Push failed: Cancelled.');
+    });
+    expect(screen.getByRole('button', { name: 'Stage src/app.py' })).toBeEnabled();
+  });
+
+  it('reports a job the agent no longer knows as lost, and lets the notice go', async () => {
+    await renderSync();
+    api.jobError = jobFailure(404, { code: 'job_not_found' });
+
+    act(() => {
+      applySessionGitJob(client, 'a1', running({ job_id: 'j8' }));
+    });
+
+    await waitFor(() => {
+      expect(shownBanner()).toHaveTextContent(
+        'Lost track of the job — refresh to see the result.',
+      );
+    });
+    expect(api.jobPolls).toEqual(['j8']);
+    // Android `GitJobBanner.running` and iOS `GitJobBanner.running` are both
+    // `!lost && …`: a job the agent forgot holds nothing, so the staged set
+    // is back in reach while the notice is up.
+    const stageWhileLost = screen.getByRole('button', { name: 'Stage src/app.py' }).hasAttribute(
+      'disabled',
+    );
+
+    fireEvent.click(within(shownBanner()).getByRole('button', { name: 'Dismiss' }));
+
+    expect(banner()).toBeNull();
+    expect(screen.getByRole('button', { name: 'Stage src/app.py' })).toBeEnabled();
+    expect(stageWhileLost).toBe(false);
   });
 });

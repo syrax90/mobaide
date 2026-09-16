@@ -268,3 +268,53 @@ final class AgentEventBusTests: XCTestCase {
         )
     }
 }
+
+/// The two job frames: each carries a whole `GitJobResponse`, so every
+/// golden case decodes as either event by its type alone.
+final class AgentEventBusGitJobDemuxTests: XCTestCase {
+    func testEveryGitJobFixtureCaseDemuxesAsProgressAndAsDone() throws {
+        for fixtureCase in try EnvelopeFixtures.cases(fixture: "dto/agent/GitJobResponse.json") {
+            let progress = try EnvelopeFixtures.envelope(type: "git.job.progress", payload: fixtureCase.wire)
+            guard case .gitJobProgress(let job)? = AgentEnvelopeDemux.demux(progress) else {
+                return XCTFail("case \(fixtureCase.name): expected gitJobProgress")
+            }
+            XCTAssertEqual(job.session_id, "sess-42", fixtureCase.name)
+
+            let done = try EnvelopeFixtures.envelope(type: "git.job.done", payload: fixtureCase.wire)
+            guard case .gitJobDone(let finished)? = AgentEnvelopeDemux.demux(done) else {
+                return XCTFail("case \(fixtureCase.name): expected gitJobDone")
+            }
+            XCTAssertEqual(finished, job, fixtureCase.name)
+        }
+    }
+
+    func testAProgressFrameCarriesGitsCounters() {
+        let event = AgentEnvelopeDemux.demux(
+            #"{"type":"git.job.progress","payload":{"job_id":"j1","session_id":"s1","op":"push","status":"running","phase":"Writing objects","percent":45,"line":"Writing objects:  45% (14/32)","ok":null,"error_code":null,"message":null}}"#
+        )
+
+        guard case .gitJobProgress(let job)? = event else { return XCTFail("expected gitJobProgress, got \(String(describing: event))") }
+        XCTAssertEqual(job.job_id, "j1")
+        XCTAssertEqual(job.phase, "Writing objects")
+        XCTAssertEqual(job.percent, 45)
+        XCTAssertEqual(job.line, "Writing objects:  45% (14/32)")
+        XCTAssertNil(job.ok)
+        XCTAssertTrue(job.running)
+    }
+
+    func testADoneFrameIsNotRunning() {
+        let event = AgentEnvelopeDemux.demux(
+            #"{"type":"git.job.done","payload":{"job_id":"j1","session_id":"s1","op":"push","status":"done","phase":null,"percent":null,"line":null,"ok":false,"error_code":"rejected","message":"! [rejected] main -> main (fetch first)"}}"#
+        )
+
+        guard case .gitJobDone(let job)? = event else { return XCTFail("expected gitJobDone, got \(String(describing: event))") }
+        XCTAssertFalse(job.running)
+        XCTAssertEqual(job.ok, false)
+        XCTAssertEqual(job.error_code, "rejected")
+    }
+
+    func testAJobFrameWithoutAnIdIsDropped() {
+        XCTAssertNil(AgentEnvelopeDemux.demux(#"{"type":"git.job.progress","payload":{"session_id":"s1","op":"push"}}"#))
+        XCTAssertNil(AgentEnvelopeDemux.demux(#"{"type":"git.job.done","payload":{"job_id":7,"session_id":"s1","op":"push","status":"done"}}"#))
+    }
+}

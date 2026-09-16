@@ -4,11 +4,12 @@ import Foundation
 /// tell "update your agent" from "session ended" from "git itself refused"
 /// (Android `SessionGitException`).
 ///
-/// The two 404s share a status code and differ only in FastAPI's `detail`: the
-/// agent answers a session lookup miss with the string `Session '<id>' not
-/// found`, whereas an agent that predates the routes answers a relay `Unknown
-/// proxy route` or FastAPI's plain `Not Found` — so the string is the
-/// discriminator.
+/// A coded `detail` object is a git answer whatever the status — the job
+/// routes' `404 job_not_found` included, which must not read as an old agent.
+/// The two string-detail 404s differ only in FastAPI's text: the agent answers
+/// a session lookup miss with `Session '<id>' not found`, whereas an agent that
+/// predates the routes answers a relay `Unknown proxy route` or FastAPI's plain
+/// `Not Found` — so the string is the discriminator.
 enum SessionGitError: Error, Equatable, Sendable {
     case agentOutdated
     case sessionGone
@@ -28,6 +29,9 @@ enum SessionGitError: Error, Equatable, Sendable {
     static let codeHookFailed = "hook_failed"
     static let codeIndexLocked = "index_locked"
     static let codePathspecMismatch = "pathspec_mismatch"
+    /// Another fetch / pull / push owns the repository; the message is its job id.
+    static let codeJobRunning = "job_running"
+    static let codeJobNotFound = "job_not_found"
 
     /// Classify a thrown error; anything unrelated passes through unchanged.
     static func map(_ error: any Error) -> any Error {
@@ -35,15 +39,15 @@ enum SessionGitError: Error, Equatable, Sendable {
             return error
         }
         if let apiError = error as? APIError {
+            if let detail = SessionGitDetail.parse(apiError.errorBody) {
+                return SessionGitError.git(code: detail.code, message: detail.message)
+            }
             if apiError.code == 404 {
                 if let detail = ConflictDetail.stringOrNil(from: apiError.errorBody),
                    detail.hasPrefix("Session '"), detail.hasSuffix("' not found") {
                     return SessionGitError.sessionGone
                 }
                 return SessionGitError.agentOutdated
-            }
-            if let detail = SessionGitDetail.parse(apiError.errorBody) {
-                return SessionGitError.git(code: detail.code, message: detail.message)
             }
             return error
         }

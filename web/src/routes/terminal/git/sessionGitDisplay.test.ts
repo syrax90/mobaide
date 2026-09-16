@@ -6,6 +6,7 @@ import {
   type SessionGitDiff,
   type SessionGitEntry,
   type SessionGitHunk,
+  type SessionGitJob,
   type SessionGitLine,
   type SessionGitRepoInfo,
   type SessionGitStatus,
@@ -13,6 +14,7 @@ import {
 import type { GitCapabilities } from '../../../protocol/dto/agentVersion';
 import {
   IDENTITY_FIX_COMMANDS,
+  JOB_RESULT_DISMISS_MS,
   NETWORK_FAILURE_MESSAGE,
   authorLine,
   badgeFor,
@@ -27,8 +29,16 @@ import {
   discardScopeFor,
   emptyDiffNotice,
   fileName,
+  followUpLabel,
+  followUpPrompt,
+  followUpRequest,
   headLabel,
   hunkHeader,
+  jobDoneTitle,
+  jobErrorCopy,
+  jobFollowUps,
+  jobNotice,
+  jobTitle,
   mutationErrorCopy,
   pathsFor,
   refusalCopy,
@@ -40,7 +50,10 @@ import {
   selectionSubsets,
   sessionGitErrorCopy,
   showsContextChoices,
+  showsJobOutput,
   splitCommitMessage,
+  syncRequestFor,
+  syncRows,
   truncatedDiffNotice,
   truncatedEntriesNotice,
   unavailableCopy,
@@ -587,7 +600,14 @@ describe('diffView', () => {
   });
 });
 
-const ALL_GIT: GitCapabilities = { stage: true, discard: true, commit: true };
+const ALL_GIT: GitCapabilities = {
+  stage: true,
+  discard: true,
+  commit: true,
+  fetch: true,
+  pull: true,
+  push: true,
+};
 const NO_ACTIONS = { stage: false, unstage: false, discard: false };
 
 const staged = (over: Partial<SessionGitEntry> = {}): SessionGitEntry =>
@@ -661,8 +681,22 @@ describe('rowActions', () => {
   });
 
   it('gates each action on its own capability', () => {
-    const discardOnly: GitCapabilities = { stage: false, discard: true, commit: true };
-    const stageOnly: GitCapabilities = { stage: true, discard: false, commit: false };
+    const discardOnly: GitCapabilities = {
+      stage: false,
+      discard: true,
+      commit: true,
+      fetch: false,
+      pull: false,
+      push: false,
+    };
+    const stageOnly: GitCapabilities = {
+      stage: true,
+      discard: false,
+      commit: false,
+      fetch: false,
+      pull: false,
+      push: false,
+    };
 
     expect(rowActions(entry(), discardOnly)).toEqual({ stage: false, unstage: false, discard: true });
     expect(rowActions(staged(), discardOnly)).toEqual(NO_ACTIONS);
@@ -760,7 +794,16 @@ describe('sectionAction', () => {
     const [section] = sectionsFor(status({ entries: [staged()] }));
     if (section === undefined) throw new Error('no section');
 
-    expect(sectionAction(section, { stage: false, discard: true, commit: true })).toBeNull();
+    expect(
+      sectionAction(section, {
+        stage: false,
+        discard: true,
+        commit: true,
+        fetch: false,
+        pull: false,
+        push: false,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -812,6 +855,290 @@ describe('commit copy', () => {
     );
     expect(authorLine({ name: 'Ada Lovelace', email: 'ada@example.com' })).toBe(
       'Committing as Ada Lovelace <ada@example.com>',
+    );
+  });
+});
+
+const NO_SYNC: GitCapabilities = {
+  stage: true,
+  discard: true,
+  commit: true,
+  fetch: false,
+  pull: false,
+  push: false,
+};
+
+const job = (over: Partial<SessionGitJob> = {}): SessionGitJob => ({
+  job_id: 'j1',
+  session_id: 's1',
+  op: 'push',
+  status: 'running',
+  phase: null,
+  percent: null,
+  line: null,
+  ok: null,
+  error_code: null,
+  message: null,
+  ...over,
+});
+const doneJob = (over: Partial<SessionGitJob> = {}): SessionGitJob =>
+  job({ status: 'done', ok: true, message: 'main -> main', ...over });
+const failedJob = (code: string, over: Partial<SessionGitJob> = {}): SessionGitJob =>
+  job({ status: 'done', ok: false, error_code: code, ...over });
+const tracking = (ahead: number, behind: number): SessionGitRepoInfo =>
+  repo({ upstream: { ref: 'origin/main', ahead, behind } });
+
+describe('syncRows', () => {
+  const pull = (info: SessionGitRepoInfo) => syncRows(info, ALL_GIT).find((row) => row.op === 'pull');
+  const push = (info: SessionGitRepoInfo) => syncRows(info, ALL_GIT).find((row) => row.op === 'push');
+
+  it('offers a row only for the capabilities the agent advertises', () => {
+    expect(syncRows(tracking(1, 1), NO_SYNC)).toEqual([]);
+    expect(syncRows(tracking(1, 1), { ...NO_SYNC, fetch: true }).map((row) => row.op)).toEqual([
+      'fetch',
+    ]);
+    expect(syncRows(tracking(1, 1), ALL_GIT).map((row) => row.op)).toEqual(['fetch', 'pull', 'push']);
+  });
+
+  it('always lets a fetch through', () => {
+    expect(syncRows(repo(), ALL_GIT)[0]).toEqual({
+      op: 'fetch',
+      label: 'Fetch',
+      detail: 'Update remote-tracking branches',
+      enabled: true,
+    });
+  });
+
+  it('enables Pull only with commits behind, and says why not otherwise', () => {
+    expect(pull(tracking(0, 2))).toEqual({
+      op: 'pull',
+      label: 'Pull',
+      detail: 'Fast-forward 2 commits from origin/main',
+      enabled: true,
+    });
+    expect(pull(tracking(0, 1))).toMatchObject({
+      detail: 'Fast-forward 1 commit from origin/main',
+      enabled: true,
+    });
+    expect(pull(tracking(3, 0))).toMatchObject({ detail: 'Nothing to pull', enabled: false });
+    expect(pull(repo())).toMatchObject({ detail: 'No upstream', enabled: false });
+    expect(pull(repo({ upstream: { ref: 'origin/main', ahead: null, behind: null } }))).toMatchObject({
+      detail: 'Upstream gone',
+      enabled: false,
+    });
+  });
+
+  it('offers Publish branch without an upstream and Push only with commits ahead', () => {
+    expect(push(repo())).toEqual({
+      op: 'push',
+      label: 'Publish branch',
+      detail: 'Push and set the upstream',
+      enabled: true,
+    });
+    expect(push(tracking(3, 0))).toEqual({
+      op: 'push',
+      label: 'Push',
+      detail: '3 commits to origin/main',
+      enabled: true,
+    });
+    expect(push(tracking(1, 2))).toMatchObject({ detail: '1 commit to origin/main', enabled: true });
+    expect(push(tracking(0, 2))).toMatchObject({
+      label: 'Push',
+      detail: 'Nothing to push',
+      enabled: false,
+    });
+    expect(push(repo({ upstream: { ref: 'origin/main', ahead: null, behind: null } }))).toMatchObject({
+      detail: 'Recreate origin/main',
+      enabled: true,
+    });
+  });
+
+  it('blocks Pull and Push, never Fetch, on a detached or unborn head and without a repo', () => {
+    const head = repo().head;
+    const detached = repo({ head: { ...head, branch: null, detached: true } });
+    const initial = repo({ head: { ...head, initial: true } });
+
+    expect(syncRows(detached, ALL_GIT).map((row) => [row.op, row.enabled, row.detail])).toEqual([
+      ['fetch', true, 'Update remote-tracking branches'],
+      ['pull', false, 'Detached HEAD'],
+      ['push', false, 'Detached HEAD'],
+    ]);
+    expect(syncRows(initial, ALL_GIT).slice(1).map((row) => row.detail)).toEqual([
+      'No commits yet',
+      'No commits yet',
+    ]);
+    expect(syncRows(null, ALL_GIT).map((row) => [row.enabled, row.detail])).toEqual([
+      [true, 'Update remote-tracking branches'],
+      [false, 'Repository unavailable'],
+      [false, 'Repository unavailable'],
+    ]);
+  });
+});
+
+describe('sync requests', () => {
+  it('starts each row with its safe default', () => {
+    expect(syncRequestFor('fetch')).toEqual({ op: 'fetch' });
+    expect(syncRequestFor('pull')).toEqual({ op: 'pull', mode: 'ff_only' });
+    expect(syncRequestFor('push')).toEqual({ op: 'push', force: false });
+  });
+
+  it('maps each follow-up to the request that rewrites history', () => {
+    expect(followUpRequest('pull_rebase')).toEqual({ op: 'pull', mode: 'rebase' });
+    expect(followUpRequest('pull_merge')).toEqual({ op: 'pull', mode: 'merge' });
+    expect(followUpRequest('force_push')).toEqual({ op: 'push', force: true });
+  });
+});
+
+describe('job copy', () => {
+  it('titles a running and a finished job per op', () => {
+    expect((['fetch', 'pull', 'push'] as const).map(jobTitle)).toEqual([
+      'Fetching…',
+      'Pulling…',
+      'Pushing…',
+    ]);
+    expect(jobDoneTitle('fetch', true)).toBe('Fetched');
+    expect(jobDoneTitle('pull', true)).toBe('Pulled');
+    expect(jobDoneTitle('push', true)).toBe('Pushed');
+    expect(jobDoneTitle('fetch', false)).toBe('Fetch failed');
+    expect(jobDoneTitle('pull', false)).toBe('Pull failed');
+    expect(jobDoneTitle('push', false)).toBe('Push failed');
+  });
+
+  it('phrases every job error code identically to the mobile clients', () => {
+    expect(jobErrorCopy('cancelled', null)).toBe('Cancelled.');
+    expect(jobErrorCopy('git_timeout', null)).toBe('git took too long to answer. Try again.');
+    expect(jobErrorCopy('auth_required', null)).toBe(
+      'No credentials for this remote. Configure a credential helper or SSH agent on the agent host.',
+    );
+    expect(jobErrorCopy('network', null)).toBe("Couldn't reach the remote.");
+    expect(jobErrorCopy('remote_not_found', null)).toBe("The remote doesn't exist.");
+    expect(jobErrorCopy('rejected', null)).toBe('The remote rejected the push.');
+    expect(jobErrorCopy('not_fast_forward', null)).toBe('Your branch is behind the remote.');
+    expect(jobErrorCopy('conflicts', null)).toBe('Stopped on conflicts — resolve them in the terminal.');
+    expect(jobErrorCopy('dirty_worktree', null)).toBe('Commit or stash your changes first.');
+    expect(jobErrorCopy('unmerged', null)).toBe('Resolve the conflicts first.');
+    expect(jobErrorCopy('operation_in_progress', null)).toBe(
+      'A rebase or merge is already in progress.',
+    );
+    expect(jobErrorCopy('no_upstream', null)).toBe('This branch has no upstream.');
+    expect(jobErrorCopy('no_remote', null)).toBe('This repository has no remote.');
+    expect(jobErrorCopy('detached_head', null)).toBe('Detached HEAD — check out a branch first.');
+    expect(jobErrorCopy('no_head', null)).toBe('No commits yet.');
+    expect(jobErrorCopy('hook_failed', null)).toBe('A pre-push hook rejected the push.');
+    expect(jobErrorCopy('index_locked', null)).toBe('Another git process is running — try again.');
+  });
+
+  it('falls back to git_error and unknown codes on the message, else a plain failure', () => {
+    expect(jobErrorCopy('git_error', 'fatal: boom')).toBe('fatal: boom');
+    expect(jobErrorCopy('git_error', null)).toBe('git failed.');
+    expect(jobErrorCopy('something_new', 'details')).toBe('details');
+    expect(jobErrorCopy('something_new', '')).toBe('git failed.');
+    expect(jobErrorCopy(null, undefined)).toBe('git failed.');
+  });
+
+  it('builds the banner line from the title, the summary or the failure copy', () => {
+    expect(jobNotice(job())).toBe('Pushing…');
+    expect(jobNotice(job({ op: 'fetch', phase: 'Receiving objects', percent: 12 }))).toBe(
+      'Fetching…',
+    );
+    expect(jobNotice(doneJob())).toBe('Pushed · main -> main');
+    expect(jobNotice(doneJob({ message: null }))).toBe('Pushed');
+    expect(jobNotice(doneJob({ op: 'pull', message: '' }))).toBe('Pulled');
+    expect(
+      jobNotice(failedJob('rejected', { message: '! [rejected] main -> main (fetch first)' })),
+    ).toBe('Push failed: The remote rejected the push.');
+    expect(jobNotice(failedJob('git_error', { op: 'fetch', message: 'fatal: boom' }))).toBe(
+      'Fetch failed: fatal: boom',
+    );
+  });
+
+  it("shows git's output beside a failure only when the copy did not already say it", () => {
+    expect(showsJobOutput(failedJob('rejected', { message: '! [rejected] main -> main' }))).toBe(true);
+    expect(showsJobOutput(failedJob('git_error', { message: 'fatal: boom' }))).toBe(false);
+    expect(showsJobOutput(failedJob('cancelled', { message: 'cancelled' }))).toBe(true);
+    expect(showsJobOutput(failedJob('no_remote', { message: null }))).toBe(false);
+    expect(showsJobOutput(doneJob())).toBe(false);
+    expect(showsJobOutput(job({ message: 'x' }))).toBe(false);
+  });
+
+  it('offers a rebase or merge behind the remote, the lease push too after a push, the lease alone after a rejection', () => {
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'pull' }))).toEqual([
+      'pull_rebase',
+      'pull_merge',
+    ]);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'push' }))).toEqual([
+      'pull_rebase',
+      'pull_merge',
+      'force_push',
+    ]);
+    expect(jobFollowUps(failedJob('rejected', { op: 'push' }))).toEqual(['force_push']);
+    expect(jobFollowUps(failedJob('rejected', { op: 'pull' }))).toEqual([]);
+    expect(jobFollowUps(failedJob('conflicts', { op: 'pull' }))).toEqual([]);
+    expect(jobFollowUps(doneJob())).toEqual([]);
+    expect(jobFollowUps(job())).toEqual([]);
+  });
+
+  it('drops the pulls when the status says the upstream is missing or gone, never when it is unavailable', () => {
+    const gone = repo({ upstream: { ref: 'origin/main', ahead: null, behind: null } });
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'push' }), repo())).toEqual(['force_push']);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'pull' }), repo())).toEqual([]);
+    expect(jobFollowUps(failedJob('rejected', { op: 'push' }), repo())).toEqual(['force_push']);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'push' }), gone)).toEqual(['force_push']);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'pull' }), gone)).toEqual([]);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'push' }), tracking(1, 1))).toEqual([
+      'pull_rebase',
+      'pull_merge',
+      'force_push',
+    ]);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'pull' }), tracking(0, 1))).toEqual([
+      'pull_rebase',
+      'pull_merge',
+    ]);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'push' }), null)).toEqual([
+      'pull_rebase',
+      'pull_merge',
+      'force_push',
+    ]);
+    expect(jobFollowUps(failedJob('not_fast_forward', { op: 'push' }), undefined)).toEqual([
+      'pull_rebase',
+      'pull_merge',
+      'force_push',
+    ]);
+  });
+
+  it('labels and confirms each follow-up, naming the upstream and branch when known', () => {
+    expect(followUpLabel('pull_rebase')).toBe('Pull with rebase…');
+    expect(followUpLabel('pull_merge')).toBe('Pull with merge…');
+    expect(followUpLabel('force_push')).toBe('Force push (with lease)…');
+    expect(followUpPrompt('pull_rebase', tracking(1, 1))).toEqual({
+      title: 'Pull with rebase?',
+      body: 'Replays your commits on top of origin/main.',
+      confirm: 'Rebase',
+    });
+    expect(followUpPrompt('pull_merge', tracking(1, 1))).toEqual({
+      title: 'Pull with merge?',
+      body: 'Merges origin/main into main.',
+      confirm: 'Merge',
+    });
+    expect(followUpPrompt('force_push', tracking(1, 1))).toEqual({
+      title: 'Force push?',
+      body: "Overwrites origin/main with your branch. Proceeds only if the remote hasn't moved since your last fetch.",
+      confirm: 'Force push',
+    });
+    expect(followUpPrompt('pull_merge', null).body).toBe('Merges the upstream into your branch.');
+    expect(followUpPrompt('force_push', undefined).body).toMatch(/^Overwrites the upstream /);
+  });
+
+  it('keeps a successful result on screen for six seconds', () => {
+    expect(JOB_RESULT_DISMISS_MS).toBe(6_000);
+  });
+
+  it('phrases the two job refusals the start and poll routes answer', () => {
+    expect(refusalCopy('job_running', 'ab12cd34')).toBe(
+      'Another fetch, pull or push is still running.',
+    );
+    expect(refusalCopy('job_not_found', null)).toBe(
+      'Lost track of the job — refresh to see the result.',
     );
   });
 });

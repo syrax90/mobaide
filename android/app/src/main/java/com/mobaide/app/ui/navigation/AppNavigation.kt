@@ -294,6 +294,11 @@ fun AppNavigation(
                         navController.navigate(Routes.sessionGitChanges(sessionId, commit = true))
                     }
                 },
+                onOpenGitSync = {
+                    entry.arguments?.getString("sessionId")?.let { sessionId ->
+                        navController.navigate(Routes.sessionGitChanges(sessionId, sync = true))
+                    }
+                },
             )
         }
 
@@ -302,6 +307,7 @@ fun AppNavigation(
             arguments = listOf(
                 navArgument("sessionId") { type = NavType.StringType },
                 navArgument("commit") { type = NavType.BoolType; defaultValue = false },
+                navArgument("sync") { type = NavType.BoolType; defaultValue = false },
             ),
         ) {
             GitChangesScreen(

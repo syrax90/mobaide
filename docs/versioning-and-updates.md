@@ -339,7 +339,10 @@ range is rejected up front.
         ]
       }
     },
-    "git": { "changes": true, "stage": true, "discard": true, "commit": true }
+    "git": {
+      "changes": true, "stage": true, "discard": true, "commit": true,
+      "fetch": true, "pull": true, "push": true
+    }
   },
   "latest_agent_version": "0.1.0"
 }
@@ -351,7 +354,11 @@ without the key answers those routes with 404 and clients render an
 "update your agent" state. `capabilities.git.stage` / `discard` / `commit` —
 also additive — advertise the stage/unstage, discard and commit routes; a
 client shows a mutating control only when its key is `true`, so an older agent
-keeps a read-only viewer. `capabilities.cli` carries one `{ "available": <bool> }` entry per managed CLI
+keeps a read-only viewer. `capabilities.git.fetch` / `pull` / `push` — additive
+too — advertise the background fetch/pull/push jobs and their `git.job.*`
+events; the terminal menu's *Fetch / Pull / Push…* entry and the Changes
+screen's Sync button exist on any of the three, each row on its own key.
+`capabilities.cli` carries one `{ "available": <bool> }` entry per managed CLI
 the agent registers — additive, no `protocol_version` bump — and the Android
 mode-select screen disables a per-CLI button when its binary is absent. The
 client parses it tolerantly: an absent / old-agent / malformed value is treated

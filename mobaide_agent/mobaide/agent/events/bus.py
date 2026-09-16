@@ -22,6 +22,11 @@ class AgentEvent:
           <abs path|null>, "common_dir": <abs path|null>} (pointer, not a
           snapshot; ``toplevel``/``common_dir`` let a session whose cwd is a
           linked worktree match the event)
+        - ``git.job.progress``  — payload: <full GitJobResponse, status
+          "running"> (throttled to 4/s per job; every frame is the whole
+          state, so a dropped one costs nothing)
+        - ``git.job.done``      — payload: <full GitJobResponse, status
+          "done"> (once per job, followed by ``git.changed``)
         - ``autoscan.status``   — payload: <full AutoScanInstance.to_dto()>
         - ``autoscan.event``    — payload: {"project_name": ..., "event": {...}}
         - ``autoscan.list.changed`` — payload: <full AutoScanSessionManager.list_response()>

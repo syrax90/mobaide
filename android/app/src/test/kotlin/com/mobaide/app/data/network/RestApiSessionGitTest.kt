@@ -4,6 +4,8 @@ import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.network.dto.GitCommitRequest
 import com.mobaide.app.data.network.dto.GitDiscardRequest
 import com.mobaide.app.data.network.dto.GitPathsRequest
+import com.mobaide.app.data.network.dto.GitPullRequest
+import com.mobaide.app.data.network.dto.GitPushRequest
 import io.mockk.CapturingSlot
 import io.mockk.Runs
 import io.mockk.every
@@ -333,5 +335,117 @@ class RestApiSessionGitTest {
             assertEquals(409, e.code)
             assertEquals(body, e.errorBody)
         }
+    }
+}
+
+/** The fetch / pull / push job routes: start with a body per op, poll cancellably, cancel. */
+@OptIn(ExperimentalCoroutinesApi::class)
+class RestApiSessionGitJobsTest {
+
+    private val jsonType = "application/json".toMediaType()
+    private val jobBody = """{"job_id":"j1","session_id":"s1","op":"push","status":"running"}"""
+
+    private fun responseFor(req: Request, bodyJson: String, code: Int = 200): Response = Response.Builder()
+        .request(req)
+        .protocol(Protocol.HTTP_1_1)
+        .code(code)
+        .message(if (code == 200) "OK" else "Error")
+        .body(bodyJson.toResponseBody(jsonType))
+        .build()
+
+    private fun newExecuteApi(bodyJson: String): Pair<RestApi, CapturingSlot<Request>> {
+        val client = mockk<OkHttpClient>()
+        val tokenStore = mockk<TokenStore>()
+        every { tokenStore.getEffectiveBaseUrl() } returns "https://api.example.com"
+        val captured = slot<Request>()
+        val call = mockk<Call>()
+        every { client.newCall(capture(captured)) } returns call
+        every { call.execute() } answers { responseFor(captured.captured, bodyJson) }
+        return RestApi(client, tokenStore) to captured
+    }
+
+    private fun newEnqueueApi(bodyJson: String): Pair<RestApi, CapturingSlot<Request>> {
+        val client = mockk<OkHttpClient>()
+        val tokenStore = mockk<TokenStore>()
+        every { tokenStore.getEffectiveBaseUrl() } returns "https://api.example.com"
+        val captured = slot<Request>()
+        val call = mockk<Call>()
+        every { client.newCall(capture(captured)) } returns call
+        every { call.enqueue(any()) } answers {
+            firstArg<Callback>().onResponse(call, responseFor(captured.captured, bodyJson))
+        }
+        return RestApi(client, tokenStore) to captured
+    }
+
+    private fun Request.bodyJson(): JsonElement {
+        val buffer = Buffer()
+        body!!.writeTo(buffer)
+        return Json.parseToJsonElement(buffer.readUtf8())
+    }
+
+    @Test
+    fun fetchSessionGit_postsAnEmptyObject_andDecodesTheFirstSnapshot() = runTest {
+        val (api, captured) = newExecuteApi(jobBody.replace("push", "fetch"))
+
+        val job = api.fetchSessionGit("s1")
+
+        assertEquals("POST", captured.captured.method)
+        assertEquals("https://api.example.com/api/sessions/s1/git/fetch", captured.captured.url.toString())
+        assertEquals(Json.parseToJsonElement("{}"), captured.captured.bodyJson())
+        assertEquals("j1", job.job_id)
+        assertEquals("fetch", job.op)
+        assertTrue(job.running)
+    }
+
+    @Test
+    fun pullSessionGit_carriesTheMode() = runTest {
+        val (api, captured) = newExecuteApi(jobBody)
+
+        api.pullSessionGit("s1", GitPullRequest(GitPullRequest.MODE_REBASE))
+
+        assertEquals("https://api.example.com/api/sessions/s1/git/pull", captured.captured.url.toString())
+        assertEquals(Json.parseToJsonElement("""{"mode":"rebase"}"""), captured.captured.bodyJson())
+    }
+
+    @Test
+    fun pushSessionGit_carriesTheForceFlag_andLeavesTheDefaultToTheAgent() = runTest {
+        // Like `commitSessionGit`, defaults are not serialised: an empty body
+        // is what the agent's `body or {}` reads as `force=false`.
+        val (api, captured) = newExecuteApi(jobBody)
+
+        api.pushSessionGit("s1", GitPushRequest(force = true))
+        assertEquals("https://api.example.com/api/sessions/s1/git/push", captured.captured.url.toString())
+        assertEquals(Json.parseToJsonElement("""{"force":true}"""), captured.captured.bodyJson())
+
+        api.pushSessionGit("s1", GitPushRequest())
+        assertEquals(Json.parseToJsonElement("{}"), captured.captured.bodyJson())
+    }
+
+    @Test
+    fun getSessionGitJob_readsTheJobUnderItsId_onTheCancellablePath() = runTest {
+        val (api, captured) = newEnqueueApi(jobBody)
+
+        val job = api.getSessionGitJob("s1", "j1")
+
+        assertEquals("GET", captured.captured.method)
+        assertEquals("https://api.example.com/api/sessions/s1/git/jobs/j1", captured.captured.url.toString())
+        assertEquals("j1", job.job_id)
+    }
+
+    @Test
+    fun cancelSessionGitJob_postsUnderTheJob() = runTest {
+        val cancelled = """{"job_id":"j1","session_id":"s1","op":"push","status":"done","ok":false,"error_code":"cancelled"}"""
+        val (api, captured) = newExecuteApi(cancelled)
+
+        val job = api.cancelSessionGitJob("s1", "j1")
+
+        assertEquals("POST", captured.captured.method)
+        assertEquals(
+            "https://api.example.com/api/sessions/s1/git/jobs/j1/cancel",
+            captured.captured.url.toString(),
+        )
+        assertEquals(Json.parseToJsonElement("{}"), captured.captured.bodyJson())
+        assertFalse(job.running)
+        assertEquals("cancelled", job.error_code)
     }
 }

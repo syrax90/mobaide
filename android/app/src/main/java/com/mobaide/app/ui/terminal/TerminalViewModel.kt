@@ -17,7 +17,8 @@ import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.TemplateDto
-import com.mobaide.app.data.network.dto.gitCapability
+import com.mobaide.app.data.repository.GitCapabilities
+import com.mobaide.app.data.repository.toGitCapabilities
 import com.mobaide.app.data.network.dto.wireName
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
@@ -260,16 +261,26 @@ class TerminalViewModel @Inject constructor(
             .map { it.cwd }
             .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    /** Whether the `⋯` menu offers Commit…: one `GET /api/version` probe per
-     *  subscription, read as an explicit `capabilities.git.commit == true`;
-     *  an older agent or an unreadable probe hides the entry. */
-    val gitCommitAvailable: StateFlow<Boolean> =
+    /** The agent's `capabilities.git`: one `GET /api/version` probe per
+     *  subscription, every key read as an explicit `true`; an older agent or
+     *  an unreadable probe hides every gated entry. */
+    val gitCapabilities: StateFlow<GitCapabilities> =
         flow {
             emit(
-                runCatching { sessionRepository.getAgentVersion().gitCapability("commit") }
-                    .getOrDefault(false),
+                runCatching { sessionRepository.getAgentVersion().toGitCapabilities() }
+                    .getOrDefault(GitCapabilities.NONE),
             )
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GitCapabilities.NONE)
+
+    /** Whether the `⋯` menu offers Commit… (`capabilities.git.commit`). */
+    val gitCommitAvailable: StateFlow<Boolean> =
+        gitCapabilities.map { it.commit }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** Whether the `⋯` menu offers Fetch / Pull / Push… (any of the three job keys). */
+    val gitSyncAvailable: StateFlow<Boolean> =
+        gitCapabilities.map { it.hasSync }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()

@@ -144,9 +144,24 @@ export interface GitCapabilities {
   stage: boolean;
   discard: boolean;
   commit: boolean;
+  fetch: boolean;
+  pull: boolean;
+  push: boolean;
 }
 
-export const NO_GIT_CAPABILITIES: GitCapabilities = { stage: false, discard: false, commit: false };
+export const NO_GIT_CAPABILITIES: GitCapabilities = {
+  stage: false,
+  discard: false,
+  commit: false,
+  fetch: false,
+  pull: false,
+  push: false,
+};
+
+/** The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three. */
+export function hasGitSync(capabilities: GitCapabilities): boolean {
+  return capabilities.fetch || capabilities.pull || capabilities.push;
+}
 
 /**
  * Whether the agent advertises one `capabilities.git.<key>` as `true`.
@@ -167,5 +182,8 @@ export function gitCapabilities(info: AgentVersionInfo | undefined): GitCapabili
     stage: gitCapability(info, 'stage'),
     discard: gitCapability(info, 'discard'),
     commit: gitCapability(info, 'commit'),
+    fetch: gitCapability(info, 'fetch'),
+    pull: gitCapability(info, 'pull'),
+    push: gitCapability(info, 'push'),
   };
 }

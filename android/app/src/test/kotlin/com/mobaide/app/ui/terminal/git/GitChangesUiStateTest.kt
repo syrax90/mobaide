@@ -5,12 +5,17 @@ import com.mobaide.app.data.network.dto.GitCommitAuthor
 import com.mobaide.app.data.network.dto.GitCommitHead
 import com.mobaide.app.data.network.dto.GitCommitResponse
 import com.mobaide.app.data.network.dto.GitDiscardRequest
+import com.mobaide.app.data.network.dto.GitHeadInfo
+import com.mobaide.app.data.network.dto.GitJobResponse
+import com.mobaide.app.data.network.dto.GitRepoInfo
 import com.mobaide.app.data.network.dto.GitStatusCounts
 import com.mobaide.app.data.network.dto.GitStatusEntry
 import com.mobaide.app.data.network.dto.GitStatusResponse
+import com.mobaide.app.data.network.dto.GitUpstreamInfo
 import com.mobaide.app.data.repository.GitCapabilities
 import com.mobaide.app.data.repository.SessionGitException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -352,5 +357,280 @@ class GitChangesUiStateTest {
             "Could not reach the agent. Check the connection and try again.",
             mutationErrorCopy(SessionGitException.Network(IOException("down"))),
         )
+    }
+}
+
+/**
+ * The pure half of the Sync sheet and the job banner: the three rows and
+ * their reasons, the job copy shared byte-for-byte with iOS and the web, the
+ * follow-ups a failure allows, and what [GitJobBanner] derives.
+ */
+class GitChangesUiStateSyncTest {
+
+    private val syncCaps = GitCapabilities(
+        stage = true, discard = true, commit = true, fetch = true, pull = true, push = true,
+    )
+    private val noSync = GitCapabilities(stage = true, discard = true, commit = true)
+
+    private fun repo(
+        upstream: GitUpstreamInfo? = null,
+        head: GitHeadInfo = GitHeadInfo(oid = "abc1234def", short_oid = "abc1234", branch = "main"),
+    ) = GitRepoInfo(
+        toplevel = "/repo", git_dir = "/repo/.git", common_dir = "/repo/.git",
+        head = head, upstream = upstream,
+    )
+
+    private fun tracking(ahead: Int?, behind: Int?) = repo(GitUpstreamInfo("origin/main", ahead, behind))
+
+    private fun job(
+        op: String = GitJobResponse.OP_PUSH,
+        status: String = GitJobResponse.STATUS_RUNNING,
+        ok: Boolean? = null,
+        errorCode: String? = null,
+        message: String? = null,
+    ) = GitJobResponse(
+        job_id = "j1", session_id = "s1", op = op, status = status,
+        ok = ok, error_code = errorCode, message = message,
+    )
+
+    private fun done(op: String = GitJobResponse.OP_PUSH, message: String? = "main -> main") =
+        job(op = op, status = GitJobResponse.STATUS_DONE, ok = true, message = message)
+
+    private fun failed(code: String, op: String = GitJobResponse.OP_PUSH, message: String? = null) =
+        job(op = op, status = GitJobResponse.STATUS_DONE, ok = false, errorCode = code, message = message)
+
+    private fun rowsOf(repo: GitRepoInfo?, caps: GitCapabilities = syncCaps) = syncRows(repo, caps)
+    private fun pull(repo: GitRepoInfo?) = rowsOf(repo).first { it.op == GitJobResponse.OP_PULL }
+    private fun push(repo: GitRepoInfo?) = rowsOf(repo).first { it.op == GitJobResponse.OP_PUSH }
+
+    @Test
+    fun syncRows_existOnlyForTheCapabilitiesTheAgentAdvertises() {
+        assertEquals(emptyList<SyncRow>(), rowsOf(tracking(1, 1), noSync))
+        assertEquals(listOf("fetch"), rowsOf(tracking(1, 1), GitCapabilities(fetch = true)).map { it.op })
+        assertEquals(listOf("fetch", "pull", "push"), rowsOf(tracking(1, 1)).map { it.op })
+    }
+
+    @Test
+    fun syncRows_alwaysLetAFetchThrough() {
+        assertEquals(
+            SyncRow("fetch", "Fetch", "Update remote-tracking branches", enabled = true),
+            rowsOf(repo())[0],
+        )
+    }
+
+    @Test
+    fun syncRows_enablePullOnlyWithCommitsBehind_andSayWhyNotOtherwise() {
+        assertEquals(
+            SyncRow("pull", "Pull", "Fast-forward 2 commits from origin/main", enabled = true),
+            pull(tracking(0, 2)),
+        )
+        assertEquals("Fast-forward 1 commit from origin/main", pull(tracking(0, 1)).detail)
+        assertEquals(SyncRow("pull", "Pull", "Nothing to pull", enabled = false), pull(tracking(3, 0)))
+        assertEquals(SyncRow("pull", "Pull", "No upstream", enabled = false), pull(repo()))
+        assertEquals(SyncRow("pull", "Pull", "Upstream gone", enabled = false), pull(tracking(null, null)))
+    }
+
+    @Test
+    fun syncRows_offerPublishBranchWithoutAnUpstream_andPushOnlyWithCommitsAhead() {
+        assertEquals(
+            SyncRow("push", "Publish branch", "Push and set the upstream", enabled = true),
+            push(repo()),
+        )
+        assertEquals(SyncRow("push", "Push", "3 commits to origin/main", enabled = true), push(tracking(3, 0)))
+        assertEquals("1 commit to origin/main", push(tracking(1, 2)).detail)
+        assertEquals(SyncRow("push", "Push", "Nothing to push", enabled = false), push(tracking(0, 2)))
+        assertEquals(SyncRow("push", "Push", "Recreate origin/main", enabled = true), push(tracking(null, null)))
+    }
+
+    @Test
+    fun syncRows_blockPullAndPush_neverFetch_onADetachedOrUnbornHead_andWithoutARepo() {
+        val detached = repo(head = GitHeadInfo(short_oid = "abc1234", detached = true))
+        val initial = repo(head = GitHeadInfo(branch = "main", initial = true))
+
+        assertEquals(
+            listOf(
+                Triple("fetch", true, "Update remote-tracking branches"),
+                Triple("pull", false, "Detached HEAD"),
+                Triple("push", false, "Detached HEAD"),
+            ),
+            rowsOf(detached).map { Triple(it.op, it.enabled, it.detail) },
+        )
+        assertEquals(listOf("No commits yet", "No commits yet"), rowsOf(initial).drop(1).map { it.detail })
+        assertEquals(
+            listOf(true to "Update remote-tracking branches", false to "Repository unavailable", false to "Repository unavailable"),
+            rowsOf(null).map { it.enabled to it.detail },
+        )
+    }
+
+    @Test
+    fun jobTitles_perOp_runningAndFinished() {
+        assertEquals(listOf("Fetching…", "Pulling…", "Pushing…"), listOf("fetch", "pull", "push").map(::jobTitle))
+        assertEquals("Fetched", jobDoneTitle("fetch", ok = true))
+        assertEquals("Pulled", jobDoneTitle("pull", ok = true))
+        assertEquals("Pushed", jobDoneTitle("push", ok = true))
+        assertEquals("Fetch failed", jobDoneTitle("fetch", ok = false))
+        assertEquals("Pull failed", jobDoneTitle("pull", ok = false))
+        assertEquals("Push failed", jobDoneTitle("push", ok = false))
+    }
+
+    @Test
+    fun jobErrorCopy_phrasesEveryCode_identicallyToTheOtherClients() {
+        assertEquals("Cancelled.", jobErrorCopy("cancelled", null))
+        assertEquals("git took too long to answer. Try again.", jobErrorCopy("git_timeout", null))
+        assertEquals(
+            "No credentials for this remote. Configure a credential helper or SSH agent on the agent host.",
+            jobErrorCopy("auth_required", null),
+        )
+        assertEquals("Couldn't reach the remote.", jobErrorCopy("network", null))
+        assertEquals("The remote doesn't exist.", jobErrorCopy("remote_not_found", null))
+        assertEquals("The remote rejected the push.", jobErrorCopy("rejected", null))
+        assertEquals("Your branch is behind the remote.", jobErrorCopy("not_fast_forward", null))
+        assertEquals("Stopped on conflicts — resolve them in the terminal.", jobErrorCopy("conflicts", null))
+        assertEquals("Commit or stash your changes first.", jobErrorCopy("dirty_worktree", null))
+        assertEquals("Resolve the conflicts first.", jobErrorCopy("unmerged", null))
+        assertEquals("A rebase or merge is already in progress.", jobErrorCopy("operation_in_progress", null))
+        assertEquals("This branch has no upstream.", jobErrorCopy("no_upstream", null))
+        assertEquals("This repository has no remote.", jobErrorCopy("no_remote", null))
+        assertEquals("Detached HEAD — check out a branch first.", jobErrorCopy("detached_head", null))
+        assertEquals("No commits yet.", jobErrorCopy("no_head", null))
+        assertEquals("A pre-push hook rejected the push.", jobErrorCopy("hook_failed", null))
+        assertEquals("Another git process is running — try again.", jobErrorCopy("index_locked", null))
+    }
+
+    @Test
+    fun jobErrorCopy_fallsBackToTheMessage_forGitErrorAndUnknownCodes() {
+        assertEquals("fatal: boom", jobErrorCopy("git_error", "fatal: boom"))
+        assertEquals("git failed.", jobErrorCopy("git_error", null))
+        assertEquals("details", jobErrorCopy("something_new", "details"))
+        assertEquals("git failed.", jobErrorCopy("something_new", ""))
+        assertEquals("git failed.", jobErrorCopy(null, null))
+    }
+
+    @Test
+    fun jobNotice_isTheTitle_theSummary_orTheFailureCopy() {
+        assertEquals("Pushing…", jobNotice(job()))
+        assertEquals("Fetching…", jobNotice(job(op = "fetch")))
+        assertEquals("Pushed · main -> main", jobNotice(done()))
+        assertEquals("Pushed", jobNotice(done(message = null)))
+        assertEquals("Pulled", jobNotice(done(op = "pull", message = "")))
+        assertEquals(
+            "Push failed: The remote rejected the push.",
+            jobNotice(failed("rejected", message = "! [rejected] main -> main (fetch first)")),
+        )
+        assertEquals("Fetch failed: fatal: boom", jobNotice(failed("git_error", op = "fetch", message = "fatal: boom")))
+    }
+
+    @Test
+    fun showsJobOutput_onlyWhenTheCopyDidNotAlreadySayIt() {
+        assertTrue(showsJobOutput(failed("rejected", message = "! [rejected] main -> main")))
+        assertFalse(showsJobOutput(failed("git_error", message = "fatal: boom")))
+        assertTrue(showsJobOutput(failed("cancelled", message = "cancelled")))
+        assertFalse(showsJobOutput(failed("no_remote", message = null)))
+        assertFalse(showsJobOutput(done()))
+        assertFalse(showsJobOutput(job(message = "x")))
+    }
+
+    @Test
+    fun jobFollowUps_rebaseOrMergeBehindTheRemote_leaseTooAfterAPush_leaseAloneAfterARejection() {
+        assertEquals(
+            listOf(SyncFollowUp.PullRebase, SyncFollowUp.PullMerge),
+            jobFollowUps(failed("not_fast_forward", op = "pull")),
+        )
+        assertEquals(
+            listOf(SyncFollowUp.PullRebase, SyncFollowUp.PullMerge, SyncFollowUp.ForcePush),
+            jobFollowUps(failed("not_fast_forward", op = "push")),
+        )
+        assertEquals(listOf(SyncFollowUp.ForcePush), jobFollowUps(failed("rejected", op = "push")))
+        assertEquals(emptyList<SyncFollowUp>(), jobFollowUps(failed("rejected", op = "pull")))
+        assertEquals(emptyList<SyncFollowUp>(), jobFollowUps(failed("conflicts", op = "pull")))
+        assertEquals(emptyList<SyncFollowUp>(), jobFollowUps(done()))
+        assertEquals(emptyList<SyncFollowUp>(), jobFollowUps(job()))
+    }
+
+    @Test
+    fun jobFollowUps_dropThePulls_whenTheStatusSaysNoUpstream_neverWhenItIsUnavailable() {
+        assertEquals(
+            listOf(SyncFollowUp.ForcePush),
+            jobFollowUps(failed("not_fast_forward", op = "push"), repo()),
+        )
+        assertEquals(emptyList<SyncFollowUp>(), jobFollowUps(failed("not_fast_forward", op = "pull"), repo()))
+        assertEquals(listOf(SyncFollowUp.ForcePush), jobFollowUps(failed("rejected", op = "push"), repo()))
+        assertEquals(
+            listOf(SyncFollowUp.ForcePush),
+            jobFollowUps(failed("not_fast_forward", op = "push"), tracking(null, null)),
+        )
+        assertEquals(
+            emptyList<SyncFollowUp>(),
+            jobFollowUps(failed("not_fast_forward", op = "pull"), tracking(null, null)),
+        )
+        assertEquals(
+            listOf(SyncFollowUp.PullRebase, SyncFollowUp.PullMerge, SyncFollowUp.ForcePush),
+            jobFollowUps(failed("not_fast_forward", op = "push"), tracking(1, 1)),
+        )
+        assertEquals(
+            listOf(SyncFollowUp.PullRebase, SyncFollowUp.PullMerge),
+            jobFollowUps(failed("not_fast_forward", op = "pull"), tracking(0, 1)),
+        )
+        assertEquals(
+            listOf(SyncFollowUp.PullRebase, SyncFollowUp.PullMerge, SyncFollowUp.ForcePush),
+            jobFollowUps(failed("not_fast_forward", op = "push"), null),
+        )
+    }
+
+    @Test
+    fun followUps_areLabelledAndConfirmed_namingTheUpstreamAndBranchWhenKnown() {
+        assertEquals("Pull with rebase…", followUpLabel(SyncFollowUp.PullRebase))
+        assertEquals("Pull with merge…", followUpLabel(SyncFollowUp.PullMerge))
+        assertEquals("Force push (with lease)…", followUpLabel(SyncFollowUp.ForcePush))
+        assertEquals(
+            SyncPrompt("Pull with rebase?", "Replays your commits on top of origin/main.", "Rebase"),
+            followUpPrompt(SyncFollowUp.PullRebase, tracking(1, 1)),
+        )
+        assertEquals(
+            SyncPrompt("Pull with merge?", "Merges origin/main into main.", "Merge"),
+            followUpPrompt(SyncFollowUp.PullMerge, tracking(1, 1)),
+        )
+        assertEquals(
+            SyncPrompt(
+                "Force push?",
+                "Overwrites origin/main with your branch. Proceeds only if the remote hasn't moved since your last fetch.",
+                "Force push",
+            ),
+            followUpPrompt(SyncFollowUp.ForcePush, tracking(1, 1)),
+        )
+        assertEquals("Merges the upstream into your branch.", followUpPrompt(SyncFollowUp.PullMerge, null).body)
+    }
+
+    @Test
+    fun gitJobBanner_derivesRunningFailedAndText_andALostJobHoldsNothing() {
+        val running = GitJobBanner("j1", job())
+        assertTrue(running.running)
+        assertFalse(running.failed)
+        assertEquals("Pushing…", running.text)
+
+        val waiting = GitJobBanner("j1", null)
+        assertTrue(waiting.running)
+        assertEquals("Syncing…", waiting.text)
+
+        val ok = GitJobBanner("j1", done())
+        assertFalse(ok.running)
+        assertFalse(ok.failed)
+        assertEquals("Pushed · main -> main", ok.text)
+
+        val rejected = GitJobBanner("j1", failed("rejected"))
+        assertFalse(rejected.running)
+        assertTrue(rejected.failed)
+
+        val lost = GitJobBanner("j1", job(), lost = true)
+        assertFalse(lost.running)
+        assertTrue(lost.failed)
+        assertEquals("Lost track of the job — refresh to see the result.", lost.text)
+    }
+
+    @Test
+    fun refusalCopy_phrasesTheTwoJobRefusals_andTheResultStaysSixSeconds() {
+        assertEquals("Another fetch, pull or push is still running.", refusalCopy("job_running", "ab12cd34"))
+        assertEquals("Lost track of the job — refresh to see the result.", refusalCopy("job_not_found", null))
+        assertEquals(6_000L, JOB_RESULT_DISMISS_MS)
     }
 }

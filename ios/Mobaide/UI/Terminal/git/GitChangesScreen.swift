@@ -6,11 +6,14 @@ import SwiftUI
 struct GitChangesScreen: View {
     let sessionId: String
     var openCommit = false
+    var openSync = false
     @Environment(\.appContainer) private var container
 
     var body: some View {
         if let container {
-            GitChangesContent(container: container, sessionId: sessionId, openCommit: openCommit)
+            GitChangesContent(
+                container: container, sessionId: sessionId, openCommit: openCommit, openSync: openSync
+            )
         }
     }
 }
@@ -25,7 +28,7 @@ private struct GitChangesContent: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.mobaideColors) private var colors
 
-    init(container: AppContainer, sessionId: String, openCommit: Bool) {
+    init(container: AppContainer, sessionId: String, openCommit: Bool, openSync: Bool) {
         let sessionRepository = container.sessionRepository
         _model = State(initialValue: GitChangesModel(
             sessionId: sessionId,
@@ -34,7 +37,8 @@ private struct GitChangesContent: View {
             projectName: {
                 sessionRepository.currentSessions.first { $0.session_id == sessionId }?.project_name
             },
-            openCommit: openCommit
+            openCommit: openCommit,
+            openSync: openSync
         ))
     }
 
@@ -55,9 +59,17 @@ private struct GitChangesContent: View {
                 await model.run()
             }
             .task { await model.observeGitChanged() }
+            .task { await model.observeGitJobFrames() }
+            // Restarted whenever the followed job changes or finishes, so the
+            // first poll of a job is immediate and a finished one costs nothing.
+            .task(id: model.jobReconcileKey(active: scenePhase != .background)) {
+                guard scenePhase != .background else { return }
+                await model.runJobReconcile()
+            }
             .task {
                 await model.loadCapabilities()
                 model.consumeOpenCommit()
+                model.consumeOpenSync()
             }
             .confirmationDialog(
                 model.discardPrompt?.title ?? "Discard?",
@@ -77,6 +89,9 @@ private struct GitChangesContent: View {
             }
             .sheet(isPresented: commitPresented) {
                 GitCommitSheet(model: model)
+            }
+            .sheet(isPresented: syncPresented) {
+                GitSyncSheet(model: model)
             }
             .toast($model.toast)
             .onChange(of: editMode) { _, newValue in
@@ -117,6 +132,13 @@ private struct GitChangesContent: View {
         )
     }
 
+    private var syncPresented: Binding<Bool> {
+        Binding(
+            get: { model.syncSheet != nil },
+            set: { if !$0 { model.closeSync() } }
+        )
+    }
+
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
@@ -125,14 +147,20 @@ private struct GitChangesContent: View {
             } else {
                 if model.hasActionableRows {
                     Button("Select") { withAnimation { editMode = .active } }
-                        .disabled(model.isMutating)
+                        .disabled(model.isBusy)
                 }
                 if model.capabilities.commit {
                     Button { model.openCommit() } label: {
                         Label("Commit…", systemImage: "checkmark.circle")
                     }
-                    .disabled(model.stagedCount == 0 || model.isMutating)
+                    .disabled(model.stagedCount == 0 || model.isBusy)
                     .accessibilityLabel("Commit")
+                }
+                if model.capabilities.hasSync {
+                    Button { model.openSync() } label: {
+                        Label("Sync…", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .accessibilityLabel("Sync")
                 }
             }
         }
@@ -148,7 +176,7 @@ private struct GitChangesContent: View {
                             endSelectionIfEmpty()
                         }
                     }
-                    .disabled(subsets.stage.isEmpty || model.isMutating)
+                    .disabled(subsets.stage.isEmpty || model.isBusy)
                     Spacer()
                     Button("Unstage") {
                         Task {
@@ -156,12 +184,12 @@ private struct GitChangesContent: View {
                             endSelectionIfEmpty()
                         }
                     }
-                    .disabled(subsets.unstage.isEmpty || model.isMutating)
+                    .disabled(subsets.unstage.isEmpty || model.isBusy)
                 }
                 if model.capabilities.discard {
                     Spacer()
                     Button("Discard…", role: .destructive) { model.requestDiscard(subsets.discard) }
-                        .disabled(subsets.discard.isEmpty || model.isMutating)
+                        .disabled(subsets.discard.isEmpty || model.isBusy)
                 }
             }
         }
@@ -206,6 +234,11 @@ private struct GitChangesContent: View {
                     .selectionDisabled()
                 if let staleError = model.staleError {
                     staleBanner(staleError)
+                        .pixelListRow()
+                        .selectionDisabled()
+                }
+                if let banner = model.job {
+                    jobBanner(banner)
                         .pixelListRow()
                         .selectionDisabled()
                 }
@@ -304,7 +337,7 @@ private struct GitChangesContent: View {
                     }
                 }
             }
-            .disabled(model.isMutating && actions.any)
+            .disabled(model.isBusy && actions.any)
         }
     }
 
@@ -323,7 +356,7 @@ private struct GitChangesContent: View {
                     }
                 }
                 .buttonStyle(.pixelSmall)
-                .disabled(model.isMutating)
+                .disabled(model.isBusy)
                 .accessibilityLabel("\(action.label) \(section.title)")
             }
         }
@@ -347,13 +380,28 @@ private struct GitChangesContent: View {
                     PixelChip("worktree", .status(.muted))
                 }
             }
+            // The ahead/behind counts are what a fetch, pull or push acts on,
+            // so the line itself opens the sheet once the agent can run them.
             if let upstream = GitChangesDisplay.upstreamLabel(repo.upstream) {
-                Text(upstream)
-                    .font(.caption)
-                    .monospaced()
-                    .foregroundStyle(colors.textMuted)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if model.capabilities.hasSync {
+                    Button { model.openSync() } label: {
+                        Text(upstream)
+                            .font(.caption)
+                            .monospaced()
+                            .foregroundStyle(colors.accent)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("git-changes-upstream")
+                } else {
+                    Text(upstream)
+                        .font(.caption)
+                        .monospaced()
+                        .foregroundStyle(colors.textMuted)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
             if let cwd {
                 Text(cwd)
@@ -374,6 +422,53 @@ private struct GitChangesContent: View {
             Button("Retry") { Task { await model.load() } }
                 .buttonStyle(.pixelSmall)
         }
+    }
+
+    /// A running fetch / pull / push, or its result until dismissed: the title
+    /// and git's latest line with the bar while it runs, Cancel beside it; the
+    /// outcome afterwards, with Options… leading back to the sheet's follow-ups
+    /// when it failed.
+    private func jobBanner(_ banner: GitJobBanner) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if banner.failed {
+                PixelErrorBanner(banner.text)
+            } else {
+                Text(banner.text)
+                    .font(.footnote)
+                    .foregroundStyle(banner.running ? colors.text : colors.ok)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .pixelInfoBanner()
+            }
+            if banner.running, let job = banner.job {
+                PixelProgressBar(percent: job.percent)
+                if let line = job.line, !line.isEmpty {
+                    Text(line)
+                        .font(.caption)
+                        .monospaced()
+                        .foregroundStyle(colors.textMuted)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            HStack(spacing: 12) {
+                if banner.running {
+                    Button("Cancel") { Task { await model.cancelSync() } }
+                        .buttonStyle(.pixelSmall)
+                        .accessibilityIdentifier("git-changes-job-cancel")
+                } else {
+                    if banner.failed, model.capabilities.hasSync {
+                        Button("Options…") { model.openSync() }
+                            .buttonStyle(.pixelSmall)
+                            .accessibilityIdentifier("git-changes-job-options")
+                    }
+                    Button("Dismiss") { model.dismissJobResult() }
+                        .buttonStyle(.pixelSmall)
+                        .accessibilityIdentifier("git-changes-job-dismiss")
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("git-changes-job")
     }
 }
 

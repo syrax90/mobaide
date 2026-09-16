@@ -2,6 +2,7 @@ package com.mobaide.app.data.events
 
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
+import com.mobaide.app.data.network.dto.GitJobResponse
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.TemplateDto
@@ -85,6 +86,13 @@ sealed class AgentEvent {
         val toplevel: String? = null,
         val commonDir: String? = null,
     ) : AgentEvent()
+
+    /** A running fetch / pull / push, as a whole snapshot: at most four a
+     *  second per job, newest counters winning, so a dropped one costs nothing. */
+    data class GitJobProgress(val job: GitJobResponse) : AgentEvent()
+
+    /** The same job's final snapshot, once; a `git.changed` follows it. */
+    data class GitJobDone(val job: GitJobResponse) : AgentEvent()
 
     /** Pushed by the server's user-scoped channel when any of the user's
      *  agents transitions between online and offline. */

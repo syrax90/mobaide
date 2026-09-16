@@ -3,6 +3,7 @@ package com.mobaide.app.ui.terminal.git
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.outlined.Commit
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -54,6 +57,7 @@ import com.mobaide.app.ui.common.pixel.PixelCard
 import com.mobaide.app.ui.common.pixel.PixelChip
 import com.mobaide.app.ui.common.pixel.PixelEmptyState
 import com.mobaide.app.ui.common.pixel.PixelIconButton
+import com.mobaide.app.ui.common.pixel.PixelProgressBar
 import com.mobaide.app.ui.common.pixel.PixelScaffold
 import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import com.mobaide.app.ui.common.pixel.PixelTextButton
@@ -78,6 +82,12 @@ const val GIT_CHANGES_SELECTION_STAGE_TAG = "git_changes_selection_stage"
 const val GIT_CHANGES_SELECTION_UNSTAGE_TAG = "git_changes_selection_unstage"
 const val GIT_CHANGES_SELECTION_DISCARD_TAG = "git_changes_selection_discard"
 const val GIT_CHANGES_DISCARD_DIALOG_TAG = "git_changes_discard_dialog"
+const val GIT_CHANGES_SYNC_TAG = "git_changes_sync"
+const val GIT_CHANGES_UPSTREAM_TAG = "git_changes_upstream"
+const val GIT_CHANGES_JOB_TAG = "git_changes_job"
+const val GIT_CHANGES_JOB_CANCEL_TAG = "git_changes_job_cancel"
+const val GIT_CHANGES_JOB_OPTIONS_TAG = "git_changes_job_options"
+const val GIT_CHANGES_JOB_DISMISS_TAG = "git_changes_job_dismiss"
 
 fun gitChangesSectionActionTag(group: String): String = "git_changes_section_action_$group"
 
@@ -91,6 +101,7 @@ fun GitChangesScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val discardPrompt by viewModel.discardPrompt.collectAsStateWithLifecycle()
     val commitSheet by viewModel.commitSheet.collectAsStateWithLifecycle()
+    val syncSheet by viewModel.syncSheet.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Keeps the covered terminal's socket attached for exactly as long as this
@@ -152,6 +163,14 @@ fun GitChangesScreen(
                                 modifier = Modifier.testTag(GIT_CHANGES_COMMIT_TAG),
                             )
                         }
+                        if (ready != null && ready.capabilities.hasSync) {
+                            PixelIconButton(
+                                imageVector = Icons.Outlined.Sync,
+                                contentDescription = "Sync",
+                                onClick = viewModel::openSync,
+                                modifier = Modifier.testTag(GIT_CHANGES_SYNC_TAG),
+                            )
+                        }
                     },
                 )
             }
@@ -174,6 +193,9 @@ fun GitChangesScreen(
                 onStage = viewModel::stage,
                 onUnstage = viewModel::unstage,
                 onDiscard = viewModel::requestDiscard,
+                onSync = if (ready?.capabilities?.hasSync == true) viewModel::openSync else null,
+                onCancelJob = viewModel::cancelSync,
+                onDismissJob = viewModel::dismissJobResult,
             )
         }
     }
@@ -194,6 +216,27 @@ fun GitChangesScreen(
             onDismiss = viewModel::closeCommit,
             onCommit = viewModel::commit,
         )
+    }
+
+    syncSheet?.let { sheet ->
+        GitSyncSheet(
+            state = sheet,
+            repo = ready?.repo,
+            capabilities = ready?.capabilities ?: GitCapabilities.NONE,
+            banner = ready?.job,
+            onDismiss = viewModel::closeSync,
+            onStart = viewModel::startSync,
+            onCancelJob = viewModel::cancelSync,
+            onFollowUp = viewModel::requestFollowUp,
+        )
+        sheet.pendingFollowUp?.let { followUp ->
+            GitSyncConfirmDialog(
+                prompt = followUpPrompt(followUp, ready?.repo),
+                destructive = followUp == SyncFollowUp.ForcePush,
+                onConfirm = viewModel::confirmFollowUp,
+                onDismiss = viewModel::dismissFollowUp,
+            )
+        }
     }
 }
 
@@ -280,6 +323,10 @@ internal fun GitChangesContent(
     onStage: (List<GitStatusEntry>) -> Unit = {},
     onUnstage: (List<GitStatusEntry>) -> Unit = {},
     onDiscard: (List<GitStatusEntry>) -> Unit = {},
+    /** Opens the Fetch / Pull / Push sheet; null on an agent without the jobs. */
+    onSync: (() -> Unit)? = null,
+    onCancelJob: () -> Unit = {},
+    onDismissJob: () -> Unit = {},
 ) {
     when (state) {
         GitChangesUiState.Loading -> GitStateLoading(GIT_CHANGES_LOADING_TAG, modifier)
@@ -291,6 +338,9 @@ internal fun GitChangesContent(
             onStage = onStage,
             onUnstage = onUnstage,
             onDiscard = onDiscard,
+            onSync = onSync,
+            onCancelJob = onCancelJob,
+            onDismissJob = onDismissJob,
             modifier = modifier,
         )
         is GitChangesUiState.Unavailable -> {
@@ -337,6 +387,9 @@ private fun ChangesList(
     onStage: (List<GitStatusEntry>) -> Unit,
     onUnstage: (List<GitStatusEntry>) -> Unit,
     onDiscard: (List<GitStatusEntry>) -> Unit,
+    onSync: (() -> Unit)?,
+    onCancelJob: () -> Unit,
+    onDismissJob: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -346,7 +399,19 @@ private fun ChangesList(
         state.staleError?.let { message ->
             item(key = "stale", contentType = "stale") { StaleBanner(message, onRetry) }
         }
-        item(key = "header", contentType = "header") { RepoHeader(state.status, state.repo) }
+        state.job?.let { banner ->
+            item(key = "job", contentType = "job") {
+                SyncJobBanner(
+                    banner = banner,
+                    onCancel = onCancelJob,
+                    onOptions = onSync,
+                    onDismiss = onDismissJob,
+                )
+            }
+        }
+        item(key = "header", contentType = "header") {
+            RepoHeader(state.status, state.repo, onSync)
+        }
         if (state.status.truncated) {
             item(key = "truncated", contentType = "truncated") {
                 Text(
@@ -402,7 +467,7 @@ private fun ChangesList(
 }
 
 @Composable
-private fun RepoHeader(status: GitStatusResponse, repo: GitRepoInfo) {
+private fun RepoHeader(status: GitStatusResponse, repo: GitRepoInfo, onSync: (() -> Unit)?) {
     PixelCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -429,11 +494,17 @@ private fun RepoHeader(status: GitStatusResponse, repo: GitRepoInfo) {
                     PixelChip("worktree", tone = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+            // The ahead/behind counts are what a fetch, pull or push acts on,
+            // so the line itself opens the sheet once the agent can run them.
             upstreamLabel(repo.upstream)?.let { label ->
                 Text(
                     text = label,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (onSync == null) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .testTag(GIT_CHANGES_UPSTREAM_TAG)
+                        .let { base -> if (onSync == null) base else base.clickable(onClick = onSync) },
                 )
             }
             status.cwd?.let { cwd ->
@@ -483,6 +554,76 @@ private fun SectionHeader(
                 enabled = enabled,
                 modifier = Modifier.testTag(gitChangesSectionActionTag(section.group)),
             ) { Text(action.label) }
+        }
+    }
+}
+
+/**
+ * A running fetch / pull / push, or its result until dismissed: the title
+ * and git's latest line with the bar while it runs, Cancel beside it; the
+ * outcome afterwards, with Options… leading back to the sheet's follow-ups
+ * when it failed.
+ */
+@Composable
+private fun SyncJobBanner(
+    banner: GitJobBanner,
+    onCancel: () -> Unit,
+    onOptions: (() -> Unit)?,
+    onDismiss: () -> Unit,
+) {
+    val job = banner.job
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)
+            .testTag(GIT_CHANGES_JOB_TAG),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = banner.text,
+                style = MaterialTheme.typography.bodySmall,
+                color = when {
+                    banner.failed -> MaterialTheme.colorScheme.error
+                    banner.running -> MaterialTheme.colorScheme.onSurface
+                    else -> MaterialTheme.pixel.ok
+                },
+            )
+            if (banner.running && job != null) {
+                PixelProgressBar(progress = job.percent?.let { it / 100f })
+                job.line?.takeIf { it.isNotEmpty() }?.let { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        if (banner.running) {
+            PixelTextButton(
+                onClick = onCancel,
+                modifier = Modifier.testTag(GIT_CHANGES_JOB_CANCEL_TAG),
+            ) { Text("Cancel") }
+        } else {
+            if (banner.failed && onOptions != null) {
+                PixelTextButton(
+                    onClick = onOptions,
+                    modifier = Modifier.testTag(GIT_CHANGES_JOB_OPTIONS_TAG),
+                ) { Text("Options…") }
+            }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.testTag(GIT_CHANGES_JOB_DISMISS_TAG),
+            ) {
+                Icon(Icons.Default.Close, contentDescription = "Dismiss")
+            }
         }
     }
 }

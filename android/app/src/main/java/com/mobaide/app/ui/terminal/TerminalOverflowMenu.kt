@@ -6,6 +6,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Commit
 import androidx.compose.material.icons.outlined.Difference
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -26,6 +27,7 @@ import com.mobaide.app.ui.theme.chromeCaps
 
 const val TERMINAL_MENU_GIT_CHANGES_TAG = "terminal_menu_git_changes"
 const val TERMINAL_MENU_GIT_COMMIT_TAG = "terminal_menu_git_commit"
+const val TERMINAL_MENU_GIT_SYNC_TAG = "terminal_menu_git_sync"
 
 /**
  * The terminal top bar's `⋯` menu. `internal` (vs the screen file's usual
@@ -33,16 +35,18 @@ const val TERMINAL_MENU_GIT_COMMIT_TAG = "terminal_menu_git_commit"
  *
  * The "Git" heading is a hand-rolled, non-clickable label: material3 1.3
  * (Compose BOM 2024.12) predates `MenuDefaults.DropdownMenuGroupLabel`, and
- * this is shaped for a mechanical swap once the BOM moves. Further git actions
- * (fetch/pull/push, branches, rebase) are reserved slots under the same
- * heading, after Commit…, which exists only on an agent that advertises
- * `capabilities.git.commit`.
+ * this is shaped for a mechanical swap once the BOM moves. Commit… exists only
+ * on an agent that advertises `capabilities.git.commit`, Fetch / Pull / Push…
+ * on any of the three job keys; the remaining git actions (branches, rebase)
+ * are reserved slots under the same heading, after it, in that order.
  */
 @Composable
 internal fun TerminalOverflowMenu(
     onOpenGitChanges: () -> Unit,
     onOpenGitCommit: () -> Unit = {},
     commitAvailable: Boolean = false,
+    onOpenGitSync: () -> Unit = {},
+    syncAvailable: Boolean = false,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box {
@@ -69,6 +73,17 @@ internal fun TerminalOverflowMenu(
                     modifier = Modifier.testTag(TERMINAL_MENU_GIT_COMMIT_TAG),
                 )
             }
+            if (syncAvailable) {
+                DropdownMenuItem(
+                    text = { Text("Fetch / Pull / Push…") },
+                    onClick = {
+                        menuExpanded = false
+                        onOpenGitSync()
+                    },
+                    leadingIcon = { Icon(Icons.Outlined.Sync, contentDescription = null) },
+                    modifier = Modifier.testTag(TERMINAL_MENU_GIT_SYNC_TAG),
+                )
+            }
         }
     }
 }
@@ -86,7 +101,9 @@ private fun MenuSectionLabel(text: String) {
 @Preview(name = "Overflow menu dark", showBackground = true, backgroundColor = 0xFF121212)
 @Composable
 private fun TerminalOverflowMenuPreviewDark() {
-    MobaideTheme(darkTheme = true) { TerminalOverflowMenu(onOpenGitChanges = {}, commitAvailable = true) }
+    MobaideTheme(darkTheme = true) {
+        TerminalOverflowMenu(onOpenGitChanges = {}, commitAvailable = true, syncAvailable = true)
+    }
 }
 
 @Preview(name = "Overflow menu light", showBackground = true, backgroundColor = 0xFFF4F4F4)

@@ -28,9 +28,10 @@ private struct TerminalScreenContent: View {
     /// below).
     @State private var screenVisible = false
     @State private var renameShortcutTarget: SavedShortcutUi?
-    /// `capabilities.git.commit` from one `GET /api/version` per screen visit;
-    /// the menu's Commit… exists only on an agent that advertises it.
-    @State private var gitCommitAvailable = false
+    /// `capabilities.git` from one `GET /api/version` per screen visit; the
+    /// menu's Commit… exists only on an agent that advertises `commit`,
+    /// Fetch / Pull / Push… on any of the three job keys.
+    @State private var gitCapabilities = GitCapabilities.none
     /// Last known row for this session, the header label's source. Held rather
     /// than read from the repository on demand because `SessionRepository` is
     /// not `@Observable` — only its stream drives a re-render.
@@ -156,8 +157,8 @@ private struct TerminalScreenContent: View {
                 // is nil until it loads (cold-start deep link), so the menu
                 // appears once the cwd is known. Fixed order: a top-bar `Menu`
                 // otherwise renders its sections bottom-up, and the later git
-                // actions (fetch / pull / push, branches, rebase) are reserved
-                // slots under the same heading, after Commit…, in that order.
+                // actions (branches, rebase) are reserved slots under the same
+                // heading, after Fetch / Pull / Push…, in that order.
                 if sessionRow?.cwd != nil {
                     Menu {
                         Section("Git") {
@@ -166,11 +167,18 @@ private struct TerminalScreenContent: View {
                             } label: {
                                 Label("Changes…", systemImage: "arrow.triangle.branch")
                             }
-                            if gitCommitAvailable {
+                            if gitCapabilities.commit {
                                 Button {
                                     router.navigate(to: .sessionGitChanges(sessionId: sessionId, commit: true))
                                 } label: {
                                     Label("Commit…", systemImage: "checkmark.circle")
+                                }
+                            }
+                            if gitCapabilities.hasSync {
+                                Button {
+                                    router.navigate(to: .sessionGitChanges(sessionId: sessionId, sync: true))
+                                } label: {
+                                    Label("Fetch / Pull / Push…", systemImage: "arrow.triangle.2.circlepath")
                                 }
                             }
                         }
@@ -217,7 +225,7 @@ private struct TerminalScreenContent: View {
             await seedSessionRow()
         }
         .task {
-            gitCommitAvailable = (try? await agentAPI.getAgentVersion())?.gitCapability("commit") ?? false
+            gitCapabilities = (try? await agentAPI.getAgentVersion())?.gitCapabilities ?? .none
         }
         .task {
             checkSessionStillExists()

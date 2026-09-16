@@ -3953,6 +3953,9 @@ class TestProxyVersionCapabilities:
                 "stage": True,
                 "discard": True,
                 "commit": True,
+                "fetch": True,
+                "pull": True,
+                "push": True,
             },
         }
 
@@ -3978,6 +3981,9 @@ class TestProxyVersionCapabilities:
                 "stage": True,
                 "discard": True,
                 "commit": True,
+                "fetch": True,
+                "pull": True,
+                "push": True,
             },
         }
 

@@ -23,6 +23,36 @@ struct PixelLoadingBlock: View {
     }
 }
 
+/// A two-rectangle determinate bar; nil is the indeterminate state, drawn as
+/// the loading block. No width animation: git's per-phase percentage restarts
+/// at every phase and an animated fill would run backwards each time.
+struct PixelProgressBar: View {
+    var percent: Int?
+    var height: CGFloat = 6
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        if let percent {
+            let clamped = min(max(percent, 0), 100)
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(colors.surface2)
+                    Rectangle()
+                        .fill(colors.accent)
+                        .frame(width: geometry.size.width * CGFloat(clamped) / 100)
+                }
+            }
+            .frame(height: height)
+            .accessibilityElement()
+            .accessibilityLabel("Progress")
+            .accessibilityValue("\(clamped)%")
+        } else {
+            PixelLoadingBlock(width: 8, height: 12)
+        }
+    }
+}
+
 /// A modal "busy" plate over the scrim.
 struct PixelBusyOverlay: View {
     var text: String? = nil

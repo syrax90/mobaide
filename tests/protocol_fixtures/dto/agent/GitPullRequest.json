@@ -1,0 +1,23 @@
+{
+  "type": "GitPullRequest",
+  "cases": [
+    {
+      "name": "ff_only",
+      "wire": {
+        "mode": "ff_only"
+      }
+    },
+    {
+      "name": "rebase",
+      "wire": {
+        "mode": "rebase"
+      }
+    },
+    {
+      "name": "merge",
+      "wire": {
+        "mode": "merge"
+      }
+    }
+  ]
+}

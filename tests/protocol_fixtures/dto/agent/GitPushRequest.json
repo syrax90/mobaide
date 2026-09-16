@@ -1,0 +1,17 @@
+{
+  "type": "GitPushRequest",
+  "cases": [
+    {
+      "name": "plain",
+      "wire": {
+        "force": false
+      }
+    },
+    {
+      "name": "force_with_lease",
+      "wire": {
+        "force": true
+      }
+    }
+  ]
+}

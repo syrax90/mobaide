@@ -7,8 +7,11 @@ import com.mobaide.app.data.network.dto.GitCommitContextResponse
 import com.mobaide.app.data.network.dto.GitCommitRequest
 import com.mobaide.app.data.network.dto.GitCommitResponse
 import com.mobaide.app.data.network.dto.GitDiscardRequest
+import com.mobaide.app.data.network.dto.GitJobResponse
 import com.mobaide.app.data.network.dto.GitMutationResponse
 import com.mobaide.app.data.network.dto.GitPathsRequest
+import com.mobaide.app.data.network.dto.GitPullRequest
+import com.mobaide.app.data.network.dto.GitPushRequest
 import com.mobaide.app.data.network.dto.VersionInfoResponse
 import io.mockk.coEvery
 import io.mockk.every
@@ -19,6 +22,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -164,6 +168,104 @@ class GitRepositorySessionMutationsTest {
             fail("expected SessionGitException.AgentOutdated")
         } catch (e: SessionGitException) {
             assertTrue(e is SessionGitException.AgentOutdated)
+        }
+    }
+}
+
+/** The job half of [GitRepository]'s capability probe and start calls. */
+class GitRepositorySessionJobStartTest {
+
+    private fun newRepo(): Pair<GitRepository, RestApi> {
+        val restApi = mockk<RestApi>(relaxed = true)
+        val bus = mockk<AgentEventBus>()
+        every { bus.events } returns MutableSharedFlow()
+        return GitRepository(restApi, bus) to restApi
+    }
+
+    private fun version(capabilities: String) = VersionInfoResponse(
+        name = "mobaide-agent",
+        server_version = "1.4.0",
+        protocol_versions = listOf(7),
+        min_client_version = 1,
+        capabilities = Json.parseToJsonElement(capabilities).jsonObject,
+    )
+
+    private fun job(op: String) = GitJobResponse(job_id = "j1", session_id = "s1", op = op)
+
+    @Test
+    fun gitCapabilities_readTheThreeJobKeys_eachAsAnExplicitTrue() = runTest {
+        val (repo, restApi) = newRepo()
+        coEvery { restApi.getAgentVersion() } returns version(
+            """{"git":{"changes":true,"stage":true,"discard":true,"commit":true,"fetch":true,"pull":"true","push":false}}""",
+        )
+
+        val caps = repo.gitCapabilities()
+
+        assertEquals(
+            GitCapabilities(stage = true, discard = true, commit = true, fetch = true, pull = false, push = false),
+            caps,
+        )
+        assertTrue(caps.hasSync)
+    }
+
+    @Test
+    fun hasSync_isTrueOnAnyJobKey_andFalseForAStageAndCommitAgent() {
+        assertTrue(GitCapabilities(push = true).hasSync)
+        assertTrue(GitCapabilities(pull = true).hasSync)
+        assertTrue(GitCapabilities(fetch = true).hasSync)
+        assertFalse(GitCapabilities(stage = true, discard = true, commit = true).hasSync)
+        assertFalse(GitCapabilities.NONE.hasSync)
+    }
+
+    @Test
+    fun startSessionGitJob_routesEachOp_withItsBody() = runTest {
+        val (repo, restApi) = newRepo()
+        val pulled = slot<GitPullRequest>()
+        val pushed = slot<GitPushRequest>()
+        coEvery { restApi.fetchSessionGit("s1") } returns job("fetch")
+        coEvery { restApi.pullSessionGit("s1", capture(pulled)) } returns job("pull")
+        coEvery { restApi.pushSessionGit("s1", capture(pushed)) } returns job("push")
+
+        assertEquals("fetch", repo.startSessionGitJob("s1", GitJobResponse.OP_FETCH).op)
+        assertEquals("pull", repo.startSessionGitJob("s1", GitJobResponse.OP_PULL, pullMode = "rebase").op)
+        assertEquals("push", repo.startSessionGitJob("s1", GitJobResponse.OP_PUSH, force = true).op)
+
+        assertEquals(GitPullRequest("rebase"), pulled.captured)
+        assertEquals(GitPushRequest(force = true), pushed.captured)
+    }
+
+    @Test
+    fun aJobRunningRefusal_carriesTheActiveJobId() = runTest {
+        val (repo, restApi) = newRepo()
+        coEvery { restApi.fetchSessionGit("s1") } throws
+            ApiException(409, """{"detail":{"code":"job_running","message":"ab12cd34"}}""")
+
+        try {
+            repo.startSessionGitJob("s1", GitJobResponse.OP_FETCH)
+            fail("expected SessionGitException.GitError")
+        } catch (e: SessionGitException.GitError) {
+            assertEquals(SessionGitException.CODE_JOB_RUNNING, e.code)
+            assertEquals("ab12cd34", e.detailMessage)
+        }
+    }
+
+    @Test
+    fun anUnknownJob_onGetOrCancel_isAGitErrorNotAnOutdatedAgent() = runTest {
+        val (repo, restApi) = newRepo()
+        val body = """{"detail":{"code":"job_not_found"}}"""
+        coEvery { restApi.getSessionGitJob("s1", "gone") } throws ApiException(404, body)
+        coEvery { restApi.cancelSessionGitJob("s1", "gone") } throws ApiException(404, body)
+
+        for (call in listOf<suspend () -> GitJobResponse>(
+            { repo.sessionGitJob("s1", "gone") },
+            { repo.cancelSessionGitJob("s1", "gone") },
+        )) {
+            try {
+                call()
+                fail("expected SessionGitException.GitError")
+            } catch (e: SessionGitException.GitError) {
+                assertEquals(SessionGitException.CODE_JOB_NOT_FOUND, e.code)
+            }
         }
     }
 }

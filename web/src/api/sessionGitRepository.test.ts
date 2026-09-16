@@ -24,14 +24,18 @@ vi.mock('./clients', () => ({
 
 const {
   SessionGitError,
+  cancelSessionGitJob,
   commitSessionGit,
   discardSessionGit,
   getSessionGitCommitContext,
   getSessionGitDiff,
+  getSessionGitJob,
   getSessionGitStatus,
   isSessionGitError,
+  isSessionGitJobLost,
   isTerminalSessionGitError,
   stageSessionGit,
+  startSessionGitJob,
   toSessionGitError,
   unstageSessionGit,
 } = await import('./sessionGitRepository');
@@ -350,5 +354,159 @@ describe('commitSessionGit', () => {
     await expect(
       commitSessionGit('a1', 's1', { message: ' ', amend: false, no_verify: false }),
     ).rejects.toMatchObject({ kind: 'git', code: 'empty_message', detailMessage: null });
+  });
+});
+
+/** The first snapshot a start route answers, before any progress arrived. */
+const jobSnapshot = {
+  job_id: 'j1',
+  session_id: 's1',
+  op: 'push',
+  status: 'running',
+  phase: null,
+  percent: null,
+  line: null,
+  ok: null,
+  error_code: null,
+  message: null,
+};
+
+describe('toSessionGitError on the job routes', () => {
+  it('reads a coded 404 as the unknown-job answer, never as an old agent', () => {
+    // `GET …/git/jobs/{id}` answers `{"detail": {"code": "job_not_found"}}`.
+    // Read as `agentOutdated` it would end the status feed and hide every
+    // mutating control; the poll needs a git failure it can stop on.
+    const error = toSessionGitError(apiError(404, { detail: { code: 'job_not_found' } }));
+
+    expect(error).toMatchObject({ kind: 'git', code: 'job_not_found', detailMessage: null });
+    expect(isTerminalSessionGitError(error)).toBe(false);
+  });
+
+  it('carries the active job id a 409 job_running names', () => {
+    const error = toSessionGitError(
+      apiError(409, { detail: { code: 'job_running', message: 'ab12cd34' } }),
+    );
+
+    expect(error).toMatchObject({ kind: 'git', code: 'job_running', detailMessage: 'ab12cd34' });
+  });
+});
+
+describe('isSessionGitJobLost', () => {
+  it('is true only for the job_not_found answer', () => {
+    expect(
+      isSessionGitJobLost(toSessionGitError(apiError(404, { detail: { code: 'job_not_found' } }))),
+    ).toBe(true);
+    expect(
+      isSessionGitJobLost(toSessionGitError(apiError(404, { detail: "Session 's1' not found" }))),
+    ).toBe(false);
+    expect(isSessionGitJobLost(toSessionGitError(apiError(404, { detail: 'Not Found' })))).toBe(
+      false,
+    );
+    expect(
+      isSessionGitJobLost(toSessionGitError(apiError(409, { detail: { code: 'job_running' } }))),
+    ).toBe(false);
+    expect(isSessionGitJobLost(new TypeError('Failed to fetch'))).toBe(false);
+  });
+});
+
+describe('startSessionGitJob', () => {
+  it('POSTs fetch with no body and resolves to the first snapshot', async () => {
+    ok({ ...jobSnapshot, op: 'fetch' });
+
+    await expect(startSessionGitJob('a1', 's1', { op: 'fetch' })).resolves.toMatchObject({
+      job_id: 'j1',
+      op: 'fetch',
+      status: 'running',
+    });
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      agentId: 'a1',
+      method: 'POST',
+      path: '/api/sessions/{session_id}/git/fetch',
+    });
+    expect(lastParams()).toEqual({ path: { session_id: 's1' } });
+    expect(lastBody()).toBeUndefined();
+  });
+
+  it('POSTs the pull mode', async () => {
+    ok({ ...jobSnapshot, op: 'pull' });
+
+    await startSessionGitJob('a1', 's1', { op: 'pull', mode: 'rebase' });
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      method: 'POST',
+      path: '/api/sessions/{session_id}/git/pull',
+    });
+    expect(lastParams()).toEqual({ path: { session_id: 's1' } });
+    expect(lastBody()).toEqual({ mode: 'rebase' });
+  });
+
+  it('POSTs the push force flag', async () => {
+    ok(jobSnapshot);
+
+    await startSessionGitJob('a1', 's1', { op: 'push', force: true });
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      method: 'POST',
+      path: '/api/sessions/{session_id}/git/push',
+    });
+    expect(lastBody()).toEqual({ force: true });
+  });
+
+  it('types the job_running refusal with the job the caller should follow', async () => {
+    refuse(409, { code: 'job_running', message: 'ab12cd34' });
+
+    await expect(startSessionGitJob('a1', 's1', { op: 'fetch' })).rejects.toMatchObject({
+      name: 'SessionGitError',
+      kind: 'git',
+      code: 'job_running',
+      detailMessage: 'ab12cd34',
+    });
+  });
+});
+
+describe('getSessionGitJob / cancelSessionGitJob', () => {
+  it('GETs the job by id under the session, carrying the abort signal', async () => {
+    ok(jobSnapshot);
+    const controller = new AbortController();
+
+    await expect(getSessionGitJob('a1', 's1', 'j1', controller.signal)).resolves.toMatchObject({
+      job_id: 'j1',
+    });
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      agentId: 'a1',
+      method: 'GET',
+      path: '/api/sessions/{session_id}/git/jobs/{job_id}',
+    });
+    expect(lastParams()).toEqual({ path: { session_id: 's1', job_id: 'j1' } });
+    expect((agent.requests.at(-1)?.init as { signal?: AbortSignal }).signal).toBe(
+      controller.signal,
+    );
+  });
+
+  it('types the unknown-job 404 so the poll can stop', async () => {
+    refuse(404, { code: 'job_not_found' });
+
+    await expect(getSessionGitJob('a1', 's1', 'gone')).rejects.toMatchObject({
+      kind: 'git',
+      code: 'job_not_found',
+    });
+  });
+
+  it('POSTs cancel under the job and resolves to its snapshot', async () => {
+    ok({ ...jobSnapshot, status: 'done', ok: false, error_code: 'cancelled', message: 'cancelled' });
+
+    await expect(cancelSessionGitJob('a1', 's1', 'j1')).resolves.toMatchObject({
+      status: 'done',
+      error_code: 'cancelled',
+    });
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      method: 'POST',
+      path: '/api/sessions/{session_id}/git/jobs/{job_id}/cancel',
+    });
+    expect(lastParams()).toEqual({ path: { session_id: 's1', job_id: 'j1' } });
+    expect(lastBody()).toBeUndefined();
   });
 });

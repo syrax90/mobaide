@@ -894,14 +894,42 @@ button, and the terminal menu's own `⋯ → Git → Commit…` entry (which bum
 open `GitCommitDialog.tsx`: Summary + Description, the author line and an
 Amend prefill both read from a `commit-context` query, and a Skip hooks
 (`--no-verify`) checkbox, with hook output shown on a `hook_failed` refusal.
+#676 adds the network operations as agent-side jobs: the terminal menu's
+`⋯ → Git → Fetch / Pull / Push…` (a `syncRequest` counter, like
+`commitRequest`), the panel header's `Sync…` button and the repo header's
+now-clickable `↑n ↓m` line all open `GitSyncDialog.tsx` — three rows
+(Fetch always, Pull when behind, Push when ahead or *Publish branch*
+without an upstream) with the disabled reason under each, then the running
+job's `phase` / `percent` on a two-rectangle `.git-sync-bar` (no width
+transition: git's percentage restarts per phase) with Cancel, or the
+outcome with its follow-ups (Pull with rebase / merge after
+`not_fast_forward` when the branch still has a live upstream, Force push
+(with lease) after `rejected` or a non-fast-forward push), each behind a
+nested `alertdialog` whose initial focus sits on Cancel. The panel shows
+the same job as a `busy`-toned notice strip until its result is dismissed
+(a success clears itself after 6 s). Job state is one holder per panel
+(`activeJobId`): the frames `git.job.progress` / `git.job.done` are
+*written* into `['agent', id, 'session-git', sid, 'job', jobId]` by
+`realtime/sessionGitJobCache.ts` (whole snapshots, monotonic — a `running`
+frame never overwrites a `done` one — plus a per-session `latest-job`
+pointer the panel adopts from, so a job another tab or client started
+shows too), `useSessionGitJob` polls `GET …/git/jobs/{id}` every 3 s under
+the status poll's visibility gate and only while the job runs (a finished
+one is disabled, so the `git.changed` invalidation that follows every job
+cannot refetch it into a `404` after the agent's retention window), and
+`busy` — which gates every staged-set write, because the agent answers
+`job_running` meanwhile — includes a running job.
 Because a top-layer `<dialog>` still bubbles its `Escape` keydown to this DOM
-parent, the panel's own handler only closes it when neither the commit sheet
-nor the discard confirmation is open, leaving those dialogs to handle their
-own Escape. The data layer is
+parent, the panel's own handler only closes it when neither the commit sheet,
+the sync sheet nor the discard confirmation is open, leaving those dialogs to
+handle their own Escape. The data layer is
 `api/sessionGitRepository.ts` on the generated
-client (REST-only shapes, so no Zod mirror — the two golden fixtures stay
-`OWNER.generated`), with the two 404s told apart by FastAPI's `detail` string
-exactly as on mobile. Polling is one `enabled` gate on
+client (REST-only shapes, so no Zod mirror — the golden fixtures stay
+`OWNER.generated`, except `GitJobResponse`, which also rides the socket and
+keeps `protocol/dto/gitJob.ts`), with the two 404s told apart by FastAPI's
+`detail` string exactly as on mobile — after a coded `detail` object has been
+checked first, so the job routes' `404 job_not_found` reads as a lost job,
+never as an outdated agent. Polling is one `enabled` gate on
 `useSessionGitStatus`: the 10 s interval runs only while the panel is open, the
 tab visible and the window focused, and re-enabling refetches because the data
 is kept always-stale — refresh on open, on focus (side-by-side windows too,

@@ -806,4 +806,31 @@ describe('TerminalScreen git changes', () => {
     expect(await within(panel).findByText('app.py')).toBeInTheDocument();
     expect(screen.queryByRole('menuitem')).toBeNull();
   });
+
+  it('offers Fetch / Pull / Push… on any job capability and opens the viewer with the sheet up', async () => {
+    agentVersion.capabilities = { git: { changes: true, push: true } };
+    await renderSynced(row({ cwd: '/srv/p1' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'More options' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Fetch / Pull / Push…' }));
+
+    const panel = await screen.findByRole('dialog', { name: 'Git changes' });
+    const sheet = await screen.findByRole('dialog', { name: 'Fetch / Pull / Push' });
+    // Only push is advertised and the row has no upstream yet: one row, Publish branch.
+    expect(
+      [...sheet.querySelectorAll('.git-sync-row-label')].map((label) => label.textContent),
+    ).toEqual(['Publish branch']);
+    expect(await within(panel).findByText('app.py')).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem')).toBeNull();
+  });
+
+  it('keeps Fetch / Pull / Push… off the menu of an agent that only stages and commits', async () => {
+    agentVersion.capabilities = { git: { changes: true, stage: true, discard: true, commit: true } };
+    await renderSynced(row({ cwd: '/srv/p1' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'More options' }));
+
+    expect(screen.getByRole('menuitem', { name: 'Commit…' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Fetch / Pull / Push…' })).toBeNull();
+  });
 });

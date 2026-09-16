@@ -69,6 +69,36 @@ def init_repo(path: str, *, initial_commit: bool = True) -> str:
     return path
 
 
+def init_bare_remote(path: str) -> str:
+    """An empty bare repository on ``main`` for the fetch/pull/push jobs to
+    talk to over the local transport."""
+    os.makedirs(path, exist_ok=True)
+    run_git_sync(path, "init", "-q", "--bare", "-b", "main")
+    return path
+
+
+def seed_remote(tmp_root: str) -> str:
+    """A bare remote at ``<tmp_root>/remote.git`` whose ``main`` carries the
+    initial commit ``init_repo`` makes."""
+    bare = init_bare_remote(os.path.join(tmp_root, "remote.git"))
+    seed = init_repo(os.path.join(tmp_root, "seed"))
+    run_git_sync(seed, "remote", "add", "origin", bare)
+    run_git_sync(seed, "push", "-q", "-u", "origin", "main")
+    return bare
+
+
+def clone_repo(remote: str, path: str) -> str:
+    """A clone of ``remote`` (``main`` tracking ``origin/main``) with the
+    identity ``init_repo`` uses."""
+    parent = os.path.dirname(path) or os.curdir
+    os.makedirs(parent, exist_ok=True)
+    run_git_sync(parent, "clone", "-q", remote, path)
+    run_git_sync(path, "config", "core.autocrlf", "false")
+    run_git_sync(path, "config", "user.email", "test@example.com")
+    run_git_sync(path, "config", "user.name", "Test")
+    return path
+
+
 def make_conflict_branches(repo: str) -> None:
     """``main`` and ``other`` each rewrite line 2 of ``keep.txt`` so any
     merge / rebase / cherry-pick between them stops with a conflict."""

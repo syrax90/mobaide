@@ -61,6 +61,9 @@ class GitMutationDtoFixtureTest {
         fixture("GitCommitResponse").assertCanonicalDecodesLikeWire(GitCommitResponse.serializer())
         fixture("GitCommitContextResponse")
             .assertCanonicalDecodesLikeWire(GitCommitContextResponse.serializer())
+        fixture("GitPullRequest").assertCanonicalDecodesLikeWire(GitPullRequest.serializer())
+        fixture("GitPushRequest").assertCanonicalDecodesLikeWire(GitPushRequest.serializer())
+        fixture("GitJobResponse").assertCanonicalDecodesLikeWire(GitJobResponse.serializer())
     }
 
     @Test

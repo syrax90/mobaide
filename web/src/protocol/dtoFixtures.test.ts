@@ -10,6 +10,7 @@ import {
 } from './dto/autoscan';
 import { createCustomAgentTypeRequestSchema } from './dto/customAgentTypes';
 import { busyByResponseSchema, busyHolderSchema } from './dto/gitConflict';
+import { gitJobSchema } from './dto/gitJob';
 import { autoScanFilterSchema, projectInfoSchema } from './dto/projects';
 import { sessionKindSchema, sessionResponseSchema } from './dto/session';
 import {
@@ -46,6 +47,7 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   AutoScanListResponse: autoScanListResponseSchema,
   BusyByResponse: busyByResponseSchema,
   BusyHolder: busyHolderSchema,
+  GitJobResponse: gitJobSchema,
   TemplateDto: templateSchema,
   TemplateDeletedPayload: templateDeletedSchema,
   CustomAgentTypeDto: customAgentTypeSchema,

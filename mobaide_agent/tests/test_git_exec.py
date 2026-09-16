@@ -6,6 +6,7 @@ fake ``git`` on PATH.
 """
 from __future__ import annotations
 
+import asyncio
 import shutil
 import sys
 import time
@@ -19,6 +20,7 @@ from mobaide.core.git_exec import (
     CmdResult,
     GitCwdMissingError,
     GitUnavailableError,
+    ProcessHandle,
     git_binary,
     git_env,
     git_version,
@@ -247,7 +249,10 @@ class TestRunGit:
     async def test_prefixes_argv_and_scrubs_env(self, monkeypatch):
         captured: dict[str, object] = {}
 
-        def fake_run_capped(argv, *, cwd, timeout, max_bytes, env, stdin=None):
+        def fake_run_capped(
+            argv, *, cwd, timeout, max_bytes, env, stdin=None,
+            on_stderr=None, handle=None,
+        ):
             captured.update(argv=list(argv), cwd=cwd, env=env, stdin=stdin)
             return CmdResult(rc=0, stdout=b"", stderr=b"")
 
@@ -312,3 +317,106 @@ class TestGitVersion:
 
         with pytest.raises(GitUnavailableError):
             await git_version()
+
+
+class TestStreamingAndCancel:
+    def test_on_stderr_sees_every_chunk_past_the_retained_cap(self):
+        seen: list[bytes] = []
+
+        result = run_capped(
+            _py("import sys; sys.stderr.write('e' * 200000); sys.stderr.flush()"),
+            cwd=None, timeout=30.0, max_bytes=1024, on_stderr=seen.append,
+        )
+
+        assert result.rc == 0
+        assert len(result.stderr) == 64 * 1024
+        assert sum(len(chunk) for chunk in seen) == 200000
+
+    def test_a_raising_on_stderr_does_not_lose_the_result(self):
+        def boom(_chunk: bytes) -> None:
+            raise RuntimeError("callback bug")
+
+        result = run_capped(
+            _py("import sys; sys.stderr.write('err'); sys.stdout.write('out')"),
+            cwd=None, timeout=30.0, max_bytes=1024, on_stderr=boom,
+        )
+
+        assert result == CmdResult(rc=0, stdout=b"out", stderr=b"err")
+
+    def test_cancel_before_spawn_kills_the_process_as_soon_as_it_attaches(self):
+        handle = ProcessHandle()
+        handle.cancel()
+        started = time.monotonic()
+
+        result = run_capped(
+            _py("import time; time.sleep(60)"),
+            cwd=None, timeout=30.0, max_bytes=1024, handle=handle,
+        )
+
+        assert handle.cancelled is True
+        assert result.timed_out is False
+        assert result.rc != 0
+        assert time.monotonic() - started < 30
+
+    async def test_cancel_after_spawn_kills_the_whole_tree(self, tmp_path):
+        marker = tmp_path / "started"
+        code = (
+            "import subprocess, sys, time\n"
+            "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+            f"open({str(marker)!r}, 'w').write(str(p.pid))\n"
+            "time.sleep(60)\n"
+        )
+        handle = ProcessHandle()
+        started = time.monotonic()
+        running = asyncio.create_task(asyncio.to_thread(
+            run_capped, _py(code), cwd=None, timeout=30.0, max_bytes=1024, handle=handle,
+        ))
+        while not marker.exists() or not marker.read_text():
+            await asyncio.sleep(0.02)
+
+        await asyncio.to_thread(handle.cancel)
+        result = await running
+
+        assert result.timed_out is False
+        assert result.rc != 0
+        assert time.monotonic() - started < 30
+        grandchild = int(marker.read_text())
+        deadline = time.monotonic() + 10
+        while not _process_gone(grandchild):
+            if time.monotonic() > deadline:
+                pytest.fail(f"grandchild {grandchild} survived the cancel")
+            await asyncio.sleep(0.05)
+
+    def test_cancel_after_exit_is_harmless(self):
+        handle = ProcessHandle()
+        result = run_capped(
+            _py("pass"), cwd=None, timeout=30.0, max_bytes=1024, handle=handle
+        )
+
+        handle.cancel()
+
+        assert result.rc == 0
+        assert handle.cancelled is True
+
+    async def test_run_git_hands_the_stream_and_handle_to_the_runner(self, monkeypatch):
+        captured: dict[str, object] = {}
+
+        def fake_run_capped(argv, *, cwd, timeout, max_bytes, env, stdin=None,
+                            on_stderr=None, handle=None):
+            captured.update(on_stderr=on_stderr, handle=handle)
+            return CmdResult(rc=0, stdout=b"", stderr=b"")
+
+        def on_chunk(_chunk: bytes) -> None:
+            pass
+
+        monkeypatch.setattr(git_exec.shutil, "which", lambda _name: "/opt/git")
+        monkeypatch.setattr(git_exec, "run_capped", fake_run_capped)
+        handle = ProcessHandle()
+
+        await run_git(
+            ["fetch"], cwd="/repo", timeout=1.0, max_bytes=10,
+            on_stderr=on_chunk, handle=handle,
+        )
+
+        assert captured["on_stderr"] is on_chunk
+        assert captured["handle"] is handle

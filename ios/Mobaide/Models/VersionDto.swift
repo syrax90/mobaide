@@ -108,6 +108,12 @@ struct GitCapabilities: Equatable, Sendable {
     var stage = false
     var discard = false
     var commit = false
+    var fetch = false
+    var pull = false
+    var push = false
+
+    /// The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three.
+    var hasSync: Bool { fetch || pull || push }
 
     static let none = GitCapabilities()
 }
@@ -125,7 +131,10 @@ extension VersionInfoResponse {
         GitCapabilities(
             stage: gitCapability("stage"),
             discard: gitCapability("discard"),
-            commit: gitCapability("commit")
+            commit: gitCapability("commit"),
+            fetch: gitCapability("fetch"),
+            pull: gitCapability("pull"),
+            push: gitCapability("push")
         )
     }
 }

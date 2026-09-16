@@ -472,3 +472,63 @@ describe('refresh on connect', () => {
     ]);
   });
 });
+
+describe('applyAgentEvent git jobs', () => {
+  // Both frames carry a whole `GitJobResponse`, so — like the Auto Scan pair —
+  // they are written, never invalidated: the agent emits up to four a second
+  // while a push runs, and a `/proxy` GET per frame is the storm its throttle
+  // exists to prevent.
+  const jobFrame = (over: Record<string, unknown> = {}) => ({
+    job_id: 'j1',
+    session_id: 's1',
+    op: 'push',
+    status: 'running',
+    phase: null,
+    percent: null,
+    line: null,
+    ok: null,
+    error_code: null,
+    message: null,
+    ...over,
+  });
+  const jobKey = queryKeys.sessionGitJob('a1', 's1', 'j1');
+
+  it('writes a progress frame and the session pointer instead of invalidating', () => {
+    const outcome = applyAgentEvent(
+      client,
+      'a1',
+      frame('git.job.progress', jobFrame({ phase: 'Writing objects', percent: 45 })),
+    );
+
+    expect(outcome).toEqual({ kind: 'patched', type: 'git.job.progress', keys: [jobKey] });
+    expect(client.getQueryData(jobKey)).toMatchObject({ phase: 'Writing objects', percent: 45 });
+    expect(client.getQueryData(queryKeys.sessionGitLatestJob('a1', 's1'))).toEqual({ jobId: 'j1' });
+    expect(invalidated).toEqual([]);
+  });
+
+  it('writes the done frame over the running one and leaves the tree refresh to git.changed', () => {
+    applyAgentEvent(client, 'a1', frame('git.job.progress', jobFrame({ percent: 45 })));
+
+    const outcome = applyAgentEvent(
+      client,
+      'a1',
+      frame('git.job.done', jobFrame({ status: 'done', ok: true, message: 'main -> main' })),
+    );
+
+    expect(outcome).toEqual({ kind: 'patched', type: 'git.job.done', keys: [jobKey] });
+    expect(client.getQueryData(jobKey)).toMatchObject({
+      status: 'done',
+      ok: true,
+      message: 'main -> main',
+    });
+    expect(invalidated).toEqual([]);
+  });
+
+  it('drops a job frame it cannot type', () => {
+    const outcome = applyAgentEvent(client, 'a1', frame('git.job.progress', jobFrame({ op: 'clone' })));
+
+    expect(outcome).toEqual({ kind: 'dropped' });
+    expect(client.getQueryData(jobKey)).toBeUndefined();
+    expect(invalidated).toEqual([]);
+  });
+});

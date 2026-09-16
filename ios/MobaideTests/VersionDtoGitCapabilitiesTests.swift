@@ -53,3 +53,55 @@ final class VersionDtoGitCapabilitiesTests: XCTestCase {
         XCTAssertEqual(probe.gitCapabilities, GitCapabilities(stage: true, discard: true, commit: true))
     }
 }
+
+/// The three job keys and `hasSync`, which gates the menu entry and
+/// the Sync button on any of them.
+final class VersionDtoGitSyncCapabilitiesTests: XCTestCase {
+    private func info(_ capabilities: JSONValue) -> VersionInfoResponse {
+        VersionInfoResponse(
+            name: "mobaide-agent",
+            server_version: "1.4.0",
+            protocol_versions: [7],
+            min_client_version: 1,
+            capabilities: capabilities
+        )
+    }
+
+    func testReadsEachJobKeyAsAnExplicitTrue() {
+        let probe = info(["git": ["changes": true, "fetch": true, "pull": "true", "push": false]])
+
+        XCTAssertEqual(
+            probe.gitCapabilities,
+            GitCapabilities(stage: false, discard: false, commit: false, fetch: true, pull: false, push: false)
+        )
+    }
+
+    func testHasSyncOnAnyJobKeyAndNotForAStageAndCommitAgent() {
+        XCTAssertTrue(info(["git": ["push": true]]).gitCapabilities.hasSync)
+        XCTAssertTrue(info(["git": ["pull": true]]).gitCapabilities.hasSync)
+        XCTAssertTrue(info(["git": ["fetch": true]]).gitCapabilities.hasSync)
+        XCTAssertFalse(
+            info(["git": ["changes": true, "stage": true, "discard": true, "commit": true]]).gitCapabilities.hasSync
+        )
+        XCTAssertFalse(GitCapabilities.none.hasSync)
+        XCTAssertEqual(
+            GitCapabilities.none,
+            GitCapabilities(stage: false, discard: false, commit: false, fetch: false, pull: false, push: false)
+        )
+    }
+
+    func testADecodedProbeReadsTheSixKeys() throws {
+        let wire = Data(#"""
+        {"name":"mobaide-agent","server_version":"1.4.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"git":{"changes":true,"stage":true,"discard":true,"commit":true,"fetch":true,"pull":true,"push":true}}}
+        """#.utf8)
+
+        let probe = try WireJSON.decoder().decode(VersionInfoResponse.self, from: wire)
+
+        XCTAssertEqual(
+            probe.gitCapabilities,
+            GitCapabilities(stage: true, discard: true, commit: true, fetch: true, pull: true, push: true)
+        )
+        XCTAssertTrue(probe.gitCapabilities.hasSync)
+    }
+}

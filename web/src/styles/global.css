@@ -3183,6 +3183,108 @@ body:has(dialog[open]) {
   color: var(--danger);
 }
 
+/* A running fetch / pull / push: the same strip in the plain text colour,
+   with git's progress under the title. */
+.git-panel-notice[data-tone='busy'] {
+  color: var(--text);
+}
+
+.git-panel-job-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+/* Two rectangles, no motion: git's percentage restarts at every phase and an
+   animated fill would run backwards each time. */
+.git-sync-bar {
+  display: block;
+  width: 100%;
+  height: 6px;
+  background: var(--surface-2);
+}
+
+.git-sync-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.git-sync-bar-indeterminate {
+  width: auto;
+  height: auto;
+  background: none;
+}
+
+.git-sync-line {
+  font-family: var(--font-code);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.git-sync-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+}
+
+.git-sync-upstream {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.git-sync-rows {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.git-sync-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  text-align: left;
+}
+
+.git-sync-row-detail {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-transform: none;
+}
+
+.git-sync-progress,
+.git-sync-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 2px solid var(--surface-2);
+}
+
+.git-sync-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.git-sync-phase {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.git-sync-result[data-tone='ok'] strong {
+  color: var(--ok);
+}
+
+.git-sync-result[data-tone='danger'] strong {
+  color: var(--danger);
+}
+
 .git-selection-bar {
   position: sticky;
   top: 0;
@@ -3314,6 +3416,24 @@ body:has(dialog[open]) {
 .git-changes-upstream {
   font-size: 0.85rem;
   color: var(--text-muted);
+}
+
+/* The same line as a control once the agent can fetch, pull and push. */
+.git-changes-upstream-button {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+
+.git-changes-upstream-button:hover,
+.git-changes-upstream-button:focus-visible {
+  color: var(--accent);
 }
 
 .git-changes-cwd,
