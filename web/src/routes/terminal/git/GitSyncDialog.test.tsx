@@ -15,6 +15,7 @@ const ALL_GIT: GitCapabilities = {
   fetch: true,
   pull: true,
   push: true,
+  branches: true,
 };
 
 const repo = (over: Partial<SessionGitRepoInfo> = {}): SessionGitRepoInfo => ({

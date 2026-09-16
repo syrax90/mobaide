@@ -10,6 +10,9 @@ import com.mobaide.app.data.network.dto.GitCommitContextResponse
 import com.mobaide.app.data.network.dto.GitCommitRequest
 import com.mobaide.app.data.network.dto.GitCommitResponse
 import com.mobaide.app.data.network.dto.GitDeleteItem
+import com.mobaide.app.data.network.dto.GitCheckoutRequest
+import com.mobaide.app.data.network.dto.GitBranchResponse
+import com.mobaide.app.data.network.dto.GitBranchCreateRequest
 import com.mobaide.app.data.network.dto.GitDeleteRequest
 import com.mobaide.app.data.network.dto.GitDeleteResponse
 import com.mobaide.app.data.network.dto.GitDiffResponse
@@ -109,6 +112,8 @@ data class GitCapabilities(
     val fetch: Boolean = false,
     val pull: Boolean = false,
     val push: Boolean = false,
+    /** The project Git screen's remote rows, New branch and Check out. */
+    val branches: Boolean = false,
 ) {
     /** The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three. */
     val hasSync: Boolean get() = fetch || pull || push
@@ -125,6 +130,7 @@ fun VersionInfoResponse.toGitCapabilities(): GitCapabilities = GitCapabilities(
     fetch = gitCapability("fetch"),
     pull = gitCapability("pull"),
     push = gitCapability("push"),
+    branches = gitCapability("branches"),
 )
 
 class GitRepository(
@@ -156,6 +162,16 @@ class GitRepository(
         items: List<GitDeleteItem>,
     ): GitDeleteResponse =
         mapBusy { restApi.deleteGitItems(projectName, GitDeleteRequest(items)) }
+
+    suspend fun createBranch(
+        projectName: String,
+        request: GitBranchCreateRequest,
+    ): GitBranchResponse =
+        mapBranchRoute { restApi.createGitBranch(projectName, request) }
+
+    /** `ref` is a row's `branch` verbatim — a local name or `<remote>/<name>`. */
+    suspend fun checkout(projectName: String, ref: String): GitBranchResponse =
+        mapBranchRoute { restApi.checkoutGitRef(projectName, GitCheckoutRequest(ref)) }
 
     suspend fun sessionGitStatus(sessionId: String, etag: String?): GitStatusResponse =
         mapSessionGit { restApi.getSessionGitStatus(sessionId, etag) }
@@ -396,6 +412,24 @@ class GitRepository(
         } catch (e: ApiException) {
             if (e.code == 409) throw GitBusyException(parseBusyBy(e.errorBody))
             throw e
+        }
+
+    // The busy 409 keeps the project screen's own exception; every other coded
+    // detail — the branch refusals and the session vocabulary they reuse —
+    // maps like the session routes.
+    private inline fun <T> mapBranchRoute(block: () -> T): T =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ApiException) {
+            if (e.code == 409) {
+                val holders = parseBusyBy(e.errorBody)
+                if (holders.isNotEmpty()) throw GitBusyException(holders)
+            }
+            throw mapSessionGitError(e)
+        } catch (e: Exception) {
+            throw mapSessionGitError(e)
         }
 
     private fun parseBusyBy(body: String): List<BusyHolder> {

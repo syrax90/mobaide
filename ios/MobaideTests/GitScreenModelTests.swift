@@ -373,4 +373,253 @@ final class GitScreenModelTests: XCTestCase {
         await waitUntil { model.items.count == 2 }
         XCTAssertEqual(model.items.map(\.branch), ["b", "c"])
     }
+
+    // MARK: - Branches: capability, create, check out
+
+    private let versionURL = "http://agent.example.com/api/version"
+    private let itemsURL = "http://agent.example.com/api/projects/proj/git/items?remote=true"
+    private let branchesBody = #"""
+    {"items":[{"kind":"branch_only","branch":"main","is_current":true},{"kind":"branch_only","branch":"stale"},{"kind":"branch_with_worktree","branch":"topic","worktree_path":"/repo/wt/topic"},{"kind":"remote_branch","branch":"origin/feature-x","remote":"origin","subject":"Add x","committed_at":"2026-09-16T10:20:30+02:00"}]}
+    """#
+    private let dirtyCopy = "The project folder has local changes this checkout would overwrite. "
+        + "Commit or discard them from a session's Changes screen first."
+
+    private var requestURLs: [String] {
+        StubURLProtocol.requests.compactMap { $0.url?.absoluteString }
+    }
+
+    private func versionBody(_ git: String) -> String {
+        #"{"name":"mobaide-agent","server_version":"1.4.0","protocol_versions":[7],"min_client_version":1,"capabilities":{"git":\#(git)}}"#
+    }
+
+    /// The four-row list on screen with the capability on, the probe's and the
+    /// load's traffic already forgotten.
+    private func branchesModel() async throws -> GitScreenModel {
+        let (model, _, _) = makeModel(sleeper: ManualSleeper())
+        StubURLProtocol.enqueue(status: 200, body: versionBody(#"{"branches":true}"#))
+        await model.loadCapabilities()
+        StubURLProtocol.enqueue(status: 200, body: branchesBody)
+        await model.load()
+        StubURLProtocol.reset()
+        return model
+    }
+
+    private func row(_ model: GitScreenModel, _ branch: String) throws -> GitItem {
+        try XCTUnwrap(model.items.first { $0.branch == branch }, "no row \(branch)")
+    }
+
+    private func sentBody<T: Decodable>(_ type: T.Type, at index: Int) throws -> T {
+        let bodies = StubURLProtocol.bodies
+        let data = try XCTUnwrap(index < bodies.count ? bodies[index] : nil, "no body at \(index)")
+        return try WireJSON.decoder().decode(type, from: data)
+    }
+
+    func testLoadIsOneGetThatAlwaysAsksForRemoteRows() async throws {
+        let (model, _, _) = makeModel(sleeper: ManualSleeper())
+        StubURLProtocol.enqueue(status: 200, body: branchesBody)
+
+        await model.load()
+
+        XCTAssertEqual(requestURLs, [itemsURL])
+        XCTAssertEqual(model.localItems.map(\.branch), ["main", "stale", "topic"])
+        XCTAssertEqual(model.remoteItems.map(\.branch), ["origin/feature-x"])
+        XCTAssertFalse(model.remoteOpen)
+        XCTAssertFalse(model.filterable)
+    }
+
+    func testLoadCapabilitiesIsItsOwnRequestAndGatesTheBranchActions() async throws {
+        let (model, _, _) = makeModel(sleeper: ManualSleeper())
+        StubURLProtocol.enqueue(status: 200, body: branchesBody)
+        await model.load()
+        XCTAssertFalse(model.canManageBranches)
+        model.openNewBranch()
+        XCTAssertNil(model.newBranch)
+        model.requestCheckout(try row(model, "stale"))
+        XCTAssertNil(model.checkoutPrompt)
+
+        StubURLProtocol.enqueue(status: 200, body: versionBody(#"{"branches":true}"#))
+        await model.loadCapabilities()
+
+        XCTAssertEqual(requestURLs, [itemsURL, versionURL])
+        XCTAssertTrue(model.canManageBranches)
+        model.openNewBranch()
+        XCTAssertEqual(model.newBranch, GitScreenModel.NewBranchSheetState())
+    }
+
+    func testAFailedCapabilityProbeKeepsTheDeleteOnlyScreen() async throws {
+        let (model, _, _) = makeModel(sleeper: ManualSleeper())
+        StubURLProtocol.enqueue(status: 503, body: #"{"detail":"Agent is offline"}"#)
+
+        await model.loadCapabilities()
+
+        XCTAssertFalse(model.canManageBranches)
+    }
+
+    func testCreateBranchPostsTheTrimmedFormClosesTheSheetAndReportsTheResult() async throws {
+        let model = try await branchesModel()
+        model.openNewBranch()
+        StubURLProtocol.enqueue(status: 200, body: #"{"branch":"feature/new","checked_out":true,"created":true}"#)
+
+        await model.createBranch(name: "  feature/new ", startPoint: "main", checkout: true)
+
+        XCTAssertEqual(requestURLs, ["http://agent.example.com/api/projects/proj/git/branches"])
+        XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "POST")
+        XCTAssertEqual(
+            try sentBody(GitBranchCreateRequest.self, at: 0),
+            GitBranchCreateRequest(name: "feature/new", start_point: "main", checkout: true)
+        )
+        XCTAssertNil(model.newBranch)
+        XCTAssertEqual(model.message, "Created and checked out feature/new")
+    }
+
+    func testCreateBranchIgnoresABlankNameAndAClosedSheet() async throws {
+        let model = try await branchesModel()
+
+        await model.createBranch(name: "feature/new", startPoint: nil, checkout: false)
+        model.openNewBranch()
+        await model.createBranch(name: "   ", startPoint: nil, checkout: false)
+
+        XCTAssertEqual(requestURLs, [])
+        XCTAssertEqual(model.newBranch, GitScreenModel.NewBranchSheetState())
+    }
+
+    func testCreateBranchExistsKeepsTheSheetOpenWithTheRefusalInline() async throws {
+        let model = try await branchesModel()
+        model.openNewBranch()
+        StubURLProtocol.enqueue(status: 409, body: #"{"detail":{"code":"exists","message":"feature/new"}}"#)
+
+        await model.createBranch(name: "feature/new", startPoint: nil, checkout: false)
+
+        XCTAssertEqual(
+            model.newBranch,
+            GitScreenModel.NewBranchSheetState(isCreating: false, error: "A branch named feature/new already exists.")
+        )
+        XCTAssertNil(model.message)
+        model.closeNewBranch()
+        XCTAssertNil(model.newBranch)
+    }
+
+    func testCreateBranchBusyClosesTheSheetAndShowsTheHolders() async throws {
+        let model = try await branchesModel()
+        model.openNewBranch()
+        StubURLProtocol.enqueue(
+            status: 409,
+            body: #"{"detail":{"busy_by":[{"kind":"session","session_id":"s1","cwd":"/repo"}]}}"#
+        )
+
+        await model.createBranch(name: "feature/new", startPoint: nil, checkout: true)
+
+        XCTAssertNil(model.newBranch)
+        XCTAssertEqual(model.busyDialog?.map(\.session_id), ["s1"])
+    }
+
+    func testRequestCheckoutPromptsOnlyForRowsNothingHasCheckedOut() async throws {
+        let model = try await branchesModel()
+
+        model.requestCheckout(try row(model, "main"))
+        XCTAssertNil(model.checkoutPrompt, "the current branch")
+        model.requestCheckout(try row(model, "topic"))
+        XCTAssertNil(model.checkoutPrompt, "a worktree-backed branch")
+
+        model.requestCheckout(try row(model, "origin/feature-x"))
+        XCTAssertEqual(model.checkoutPrompt?.branch, "origin/feature-x")
+        model.dismissCheckoutPrompt()
+        XCTAssertNil(model.checkoutPrompt)
+
+        model.requestCheckout(try row(model, "stale"))
+        XCTAssertEqual(model.checkoutPrompt?.branch, "stale")
+    }
+
+    /// The confirm action must survive SwiftUI clearing `checkoutPrompt` when
+    /// the dialog dismisses, which can land before the button action runs.
+    func testConfirmCheckoutPostsTheRefAndSurvivesThePromptClearedByDismissal() async throws {
+        let model = try await branchesModel()
+        model.requestCheckout(try row(model, "origin/feature-x"))
+        StubURLProtocol.enqueue(status: 200, body: #"{"branch":"feature-x","checked_out":true,"created":true}"#)
+
+        model.checkoutPrompt = nil
+        model.confirmCheckout()
+        XCTAssertTrue(model.isCheckingOut)
+        await waitUntil { model.message != nil }
+
+        XCTAssertEqual(requestURLs, ["http://agent.example.com/api/projects/proj/git/checkout"])
+        XCTAssertEqual(try sentBody(GitCheckoutRequest.self, at: 0), GitCheckoutRequest(ref: "origin/feature-x"))
+        XCTAssertEqual(model.message, "Checked out feature-x")
+        XCTAssertFalse(model.isCheckingOut)
+    }
+
+    func testConfirmCheckoutWithoutAPromptSendsNothing() async throws {
+        let model = try await branchesModel()
+
+        model.confirmCheckout()
+        try await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertEqual(requestURLs, [])
+        XCTAssertFalse(model.isCheckingOut)
+    }
+
+    func testCheckoutBusyShowsTheHolders() async throws {
+        let model = try await branchesModel()
+        model.requestCheckout(try row(model, "stale"))
+        StubURLProtocol.enqueue(
+            status: 409,
+            body: #"{"detail":{"busy_by":[{"kind":"auto_scan","project_name":"proj","worktree_path":"/repo"}]}}"#
+        )
+
+        model.confirmCheckout()
+        await waitUntil { model.busyDialog != nil }
+
+        XCTAssertEqual(model.busyDialog?.first?.kind, "auto_scan")
+        XCTAssertNil(model.message)
+        XCTAssertFalse(model.isCheckingOut)
+    }
+
+    func testCheckoutDirtyShowsTheDirtyCopy() async throws {
+        let model = try await branchesModel()
+        model.requestCheckout(try row(model, "stale"))
+        StubURLProtocol.enqueue(status: 409, body: #"{"detail":{"code":"dirty","message":"error: Your local changes"}}"#)
+
+        model.confirmCheckout()
+        await waitUntil { model.message != nil }
+
+        XCTAssertEqual(model.message, dirtyCopy)
+        XCTAssertNil(model.busyDialog)
+        XCTAssertFalse(model.isCheckingOut)
+    }
+
+    func testAFilterAppearsAtEightRowsNarrowsBothSectionsAndOpensTheRemoteOne() async throws {
+        let (model, _, _) = makeModel(sleeper: ManualSleeper())
+        let locals = (1...6).map { #"{"kind":"branch_only","branch":"feature-\#($0)"}"# }
+        let remotes = [
+            #"{"kind":"remote_branch","branch":"origin/feature-1","remote":"origin"}"#,
+            #"{"kind":"remote_branch","branch":"origin/main","remote":"origin"}"#,
+        ]
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[\#((locals + remotes).joined(separator: ","))]}"#)
+        await model.load()
+        XCTAssertTrue(model.filterable)
+        XCTAssertFalse(model.remoteOpen)
+
+        model.filter = " FEATURE-1 "
+        XCTAssertEqual(model.localItems.map(\.branch), ["feature-1"])
+        XCTAssertEqual(model.remoteItems.map(\.branch), ["origin/feature-1"])
+        XCTAssertTrue(model.remoteOpen)
+
+        model.filter = "   "
+        XCTAssertEqual(model.localItems.count, 6)
+        XCTAssertFalse(model.remoteOpen)
+        model.toggleRemote()
+        XCTAssertTrue(model.remoteOpen)
+    }
+
+    func testRemoteRowsAreNeitherSelectableNorDeletable() async throws {
+        let model = try await branchesModel()
+        let remote = try row(model, "origin/feature-x")
+
+        model.select(remote)
+        XCTAssertTrue(model.selected.isEmpty)
+        model.delete(remote)
+
+        XCTAssertNil(model.undoToast)
+        XCTAssertEqual(model.visibleItems.count, 4)
+    }
 }

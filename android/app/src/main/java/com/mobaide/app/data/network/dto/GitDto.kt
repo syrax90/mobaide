@@ -5,12 +5,15 @@ import kotlinx.serialization.Serializable
 /**
  * One row in the unified git management list.
  *
- * `kind` discriminates between three shapes:
+ * `kind` discriminates between four shapes:
  *  - `branch_with_worktree` — local branch checked out in some worktree.
  *  - `branch_only` — local branch with no associated worktree.
  *  - `orphan_worktree` — worktree on detached HEAD or whose branch ref no longer exists.
+ *  - `remote_branch` — a remote-tracking branch (`branch` is `<remote>/<name>`,
+ *    `remote` names the remote), only listed when asked for with `?remote=true`.
  *
  * The server resolves the branch↔worktree relationship; the client only renders.
+ * `subject` / `committed_at` describe the tip commit when the ref has one.
  */
 @Serializable
 data class GitItem(
@@ -26,11 +29,15 @@ data class GitItem(
     val locked_reason: String? = null,
     val detached: Boolean = false,
     val prunable: Boolean = false,
+    val remote: String? = null,
+    val subject: String? = null,
+    val committed_at: String? = null,
 ) {
     companion object {
         const val KIND_BRANCH_WITH_WORKTREE = "branch_with_worktree"
         const val KIND_BRANCH_ONLY = "branch_only"
         const val KIND_ORPHAN_WORKTREE = "orphan_worktree"
+        const val KIND_REMOTE_BRANCH = "remote_branch"
     }
 
     /** Stable identifier for selection state. */
@@ -43,9 +50,16 @@ data class GitItem(
             else -> "$kind:${branch.orEmpty()}|${worktree_path.orEmpty()}"
         }
 
-    /** True when the row is checked out somewhere — git refuses to delete it. */
+    /** False for the checked-out branch (git refuses) and for remote-tracking rows. */
     val isDeletable: Boolean
-        get() = !is_current
+        get() = !is_current && kind != KIND_REMOTE_BRANCH
+
+    /**
+     * Check out is offered for a branch nothing has checked out: a `branch_only`
+     * row or a remote-tracking one; never the current branch or a worktree-backed row.
+     */
+    val canCheckOut: Boolean
+        get() = !is_current && (kind == KIND_BRANCH_ONLY || kind == KIND_REMOTE_BRANCH)
 }
 
 @Serializable
@@ -85,6 +99,25 @@ data class BusyHolder(
 
 @Serializable
 data class BusyByResponse(val busy_by: List<BusyHolder>)
+
+/** `POST /api/projects/{name}/git/branches`. */
+@Serializable
+data class GitBranchCreateRequest(
+    val name: String,
+    val start_point: String? = null,
+    val checkout: Boolean = false,
+)
+
+/** `POST /api/projects/{name}/git/checkout`; `ref` is a row's `branch` verbatim. */
+@Serializable
+data class GitCheckoutRequest(val ref: String)
+
+@Serializable
+data class GitBranchResponse(
+    val branch: String,
+    val checked_out: Boolean,
+    val created: Boolean,
+)
 
 // The agent always emits every key, nulls included; the defaults below mirror
 // the agent's pydantic models so the null-dropped fixture shape decodes too.

@@ -2,25 +2,42 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router';
 import {
+  checkoutGitRef,
+  createGitBranch,
   deleteGitItems,
   gitItemId,
   GitBusyError,
   isDeletable,
+  KIND_REMOTE_BRANCH,
   listGitItems,
+  type GitBranchCreateRequest,
   type GitItem,
 } from '../../../api/gitRepository';
 import { busyHolderLine } from '../../../api/conflicts';
 import { isApiError } from '../../../api/errors';
 import { queryKeys } from '../../../lib/queryKeys';
 import { useDeferredCommit } from '../../../lib/useDeferredCommit';
+import { NO_GIT_CAPABILITIES } from '../../../protocol/dto/agentVersion';
 import type { BusyHolder } from '../../../protocol/dto/gitConflict';
 import { useAgentEvents } from '../../../realtime';
 import { useToastStore } from '../../../stores/toastStore';
 import { ErrorState } from '../../../components/ErrorState';
 import { Modal } from '../../../components/Modal';
 import { UndoBar } from '../../../components/UndoBar';
+import { useSessionGitCapabilities } from '../../terminal/git/useSessionGit';
 import { GitItemRow } from './GitItemRow';
-import { deleteFailureMessage, forceDeleteMessage } from './gitDisplay';
+import { GitNewBranchDialog } from './GitNewBranchDialog';
+import {
+  FILTER_THRESHOLD,
+  branchCreatedMessage,
+  checkedOutMessage,
+  checkoutConfirmMessage,
+  checkoutErrorCopy,
+  deleteFailureMessage,
+  forceDeleteMessage,
+  matchesFilter,
+  primaryLabel,
+} from './gitDisplay';
 import {
   applyResults,
   confirmForce,
@@ -37,11 +54,15 @@ import {
 } from './gitDeleteMachine';
 
 /**
- * Branches and worktrees for one project.
+ * Branches and worktrees for one project, the remote-tracking branches in a
+ * collapsed section under them, plus New branch and Check out once the agent
+ * advertises `capabilities.git.branches`.
  *
  * Delete is deferred: rows hide at once and the request goes out only after the
  * undo window closes, so Undo cancels before anything reaches the server. A
  * second delete inside the window joins the batch and restarts the countdown.
+ * Check out and New branch are pessimistic instead: each is a confirmed or
+ * typed request whose outcome the list shows through `git.changed`.
  *
  * Unlike the mobile models this needs no generation counter around loads:
  * `git.changed` arrives *before* the delete response, but the list lives in
@@ -57,6 +78,11 @@ export function GitScreen() {
   const [machine, setMachine] = useState<GitDeleteState>(initialGitDeleteState);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [busyDialog, setBusyDialog] = useState<BusyHolder[] | null>(null);
+  const [remoteOpen, setRemoteOpen] = useState(false);
+  const [filter, setFilter] = useState('');
+  const [newBranchOpen, setNewBranchOpen] = useState(false);
+  const [checkoutPrompt, setCheckoutPrompt] = useState<GitItem | null>(null);
+  const checkoutCancelRef = useRef<HTMLButtonElement>(null);
 
   // The delete callbacks run from a timer and from mutation results, both of
   // which would otherwise close over whichever state existed when they were
@@ -67,6 +93,10 @@ export function GitScreen() {
   machineRef.current = machine;
 
   useAgentEvents(agentId);
+
+  // The same probe the terminal uses: it is per agent, not per session.
+  const branchesEnabled =
+    (useSessionGitCapabilities(agentId, agentId !== '').data ?? NO_GIT_CAPABILITIES).branches;
 
   const items = useQuery({
     queryKey: queryKeys.gitItems(agentId, projectName),
@@ -111,6 +141,31 @@ export function GitScreen() {
           'error',
         );
     },
+  });
+
+  const invalidateItems = () =>
+    queryClient.invalidateQueries({ queryKey: queryKeys.gitItems(agentId, projectName) });
+
+  const checkout = useMutation({
+    mutationFn: (item: GitItem) => checkoutGitRef(agentId, projectName, item.branch ?? ''),
+    onSuccess: (result) => {
+      useToastStore.getState().show(checkedOutMessage(result), 'success');
+      void invalidateItems();
+    },
+    onError: (error: unknown, item) => {
+      if (error instanceof GitBusyError) {
+        if (error.holders !== null) setBusyDialog(error.holders);
+        else useToastStore.getState().show('The project folder is in use.', 'error');
+        return;
+      }
+      useToastStore.getState().show(checkoutErrorCopy(error, primaryLabel(item)), 'error');
+    },
+  });
+
+  const create = useMutation({
+    mutationFn: (request: GitBranchCreateRequest) =>
+      createGitBranch(agentId, projectName, request),
+    onSuccess: () => void invalidateItems(),
   });
 
   const commitPending = () => {
@@ -170,15 +225,51 @@ export function GitScreen() {
     [queue],
   );
 
+  const askCheckout = useCallback((target: GitItem) => {
+    setCheckoutPrompt(target);
+  }, []);
+
   const visible = visibleItems(items.data ?? [], machine);
   const selectable = visible.filter(isDeletable);
   const selectedItems = selectable.filter((item) => selected.has(gitItemId(item)));
+  const filterable = visible.length >= FILTER_THRESHOLD;
+  const shown = filterable ? visible.filter((item) => matchesFilter(item, filter)) : visible;
+  const localRows = shown.filter((item) => item.kind !== KIND_REMOTE_BRANCH);
+  const remoteRows = shown.filter((item) => item.kind === KIND_REMOTE_BRANCH);
+  const rowBusy = del.isPending || checkout.isPending;
+
+  const renderRow = (item: GitItem) => (
+    <GitItemRow
+      key={gitItemId(item)}
+      item={item}
+      selected={selected.has(gitItemId(item))}
+      busy={rowBusy}
+      checkoutEnabled={branchesEnabled}
+      onToggle={toggleSelected}
+      onDelete={queueOne}
+      onCheckout={askCheckout}
+    />
+  );
 
   return (
     <section className="page">
       <header className="page-header">
         <h1>Git: {projectName}</h1>
-        <Link to="/projects">Back to projects</Link>
+        <div className="button-row">
+          {branchesEnabled && (
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={rowBusy}
+              onClick={() => {
+                setNewBranchOpen(true);
+              }}
+            >
+              New branch…
+            </button>
+          )}
+          <Link to="/projects">Back to projects</Link>
+        </div>
       </header>
 
       {selectedItems.length > 0 && (
@@ -215,18 +306,37 @@ export function GitScreen() {
       ) : visible.length === 0 ? (
         <p className="empty-state">No branches or worktrees.</p>
       ) : (
-        <ul className="git-list">
-          {visible.map((item) => (
-            <GitItemRow
-              key={gitItemId(item)}
-              item={item}
-              selected={selected.has(gitItemId(item))}
-              busy={del.isPending}
-              onToggle={toggleSelected}
-              onDelete={queueOne}
+        <>
+          {filterable && (
+            <input
+              type="search"
+              className="field-input"
+              value={filter}
+              placeholder="Filter branches"
+              aria-label="Filter branches"
+              onChange={(event) => {
+                setFilter(event.target.value);
+              }}
             />
-          ))}
-        </ul>
+          )}
+          {localRows.length === 0 && remoteRows.length === 0 ? (
+            <p className="empty-state">No matching branches or worktrees.</p>
+          ) : (
+            localRows.length > 0 && <ul className="git-list">{localRows.map(renderRow)}</ul>
+          )}
+          {remoteRows.length > 0 && (
+            <details
+              className="advanced git-remote-section"
+              open={remoteOpen || filter.trim() !== ''}
+              onToggle={(event) => {
+                setRemoteOpen(event.currentTarget.open);
+              }}
+            >
+              <summary>Remote branches ({remoteRows.length})</summary>
+              <ul className="git-list">{remoteRows.map(renderRow)}</ul>
+            </details>
+          )}
+        </>
       )}
 
       {deferred.pending !== null && (
@@ -277,6 +387,64 @@ export function GitScreen() {
             </button>
           </div>
         </Modal>
+      )}
+
+      {checkoutPrompt !== null && (
+        <Modal
+          role="alertdialog"
+          labelledBy="checkout-title"
+          initialFocus={checkoutCancelRef}
+          onClose={() => {
+            setCheckoutPrompt(null);
+          }}
+        >
+          <h2 id="checkout-title">Check out {primaryLabel(checkoutPrompt)}?</h2>
+          <p>{checkoutConfirmMessage(primaryLabel(checkoutPrompt), projectName)}</p>
+          <div className="button-row">
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={() => {
+                const target = checkoutPrompt;
+                setCheckoutPrompt(null);
+                checkout.mutate(target);
+              }}
+            >
+              Check out
+            </button>
+            <button
+              type="button"
+              ref={checkoutCancelRef}
+              className="button"
+              onClick={() => {
+                setCheckoutPrompt(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {newBranchOpen && (
+        <GitNewBranchDialog
+          items={visible}
+          projectName={projectName}
+          busy={create.isPending}
+          create={create.mutateAsync}
+          onClose={() => {
+            setNewBranchOpen(false);
+          }}
+          onCreated={(result) => {
+            setNewBranchOpen(false);
+            useToastStore.getState().show(branchCreatedMessage(result), 'success');
+          }}
+          onBusy={(holders) => {
+            setNewBranchOpen(false);
+            if (holders !== null) setBusyDialog(holders);
+            else useToastStore.getState().show('The project folder is in use.', 'error');
+          }}
+        />
       )}
 
       {busyDialog !== null && (

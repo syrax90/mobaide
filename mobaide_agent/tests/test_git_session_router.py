@@ -184,6 +184,7 @@ class TestAuthAndRouting:
             "fetch": True,
             "pull": True,
             "push": True,
+            "branches": True,
         }
 
 

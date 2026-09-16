@@ -279,6 +279,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{name}/git/branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Branch Endpoint
+         * @description Create a branch in the project's repository.
+         *
+         *     ``400 bad_branch_name`` for a name git would refuse, ``409 exists`` /
+         *     ``unknown_start_point`` for the obvious conflicts; with ``checkout``
+         *     the refusals of ``POST /checkout`` apply as well.
+         */
+        post: operations["create_branch_endpoint_api_projects__name__git_branches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{name}/git/checkout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Checkout Endpoint
+         * @description Check ``ref`` out in the project root.
+         *
+         *     Returns 409 with ``{busy_by: [...]}`` while a session or auto-scan work
+         *     item runs in the project root (a linked worktree's session does not
+         *     count), and a coded 409 — ``dirty``, ``checked_out_elsewhere``,
+         *     ``operation_in_progress``, ``job_running`` — for the states git or the
+         *     agent refuse to switch in; ``404 ref_not_found`` for a ref that is
+         *     neither a local nor a remote-tracking branch.
+         */
+        post: operations["checkout_endpoint_api_projects__name__git_checkout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{name}/git/items": {
         parameters: {
             query?: never;
@@ -288,7 +339,8 @@ export interface paths {
         };
         /**
          * List Git Items Endpoint
-         * @description Return the unified list of local branches and worktrees.
+         * @description Return the unified list of local branches and worktrees, with the
+         *     remote-tracking branches appended when ``remote`` is set.
          */
         get: operations["list_git_items_endpoint_api_projects__name__git_items_get"];
         put?: never;
@@ -1015,6 +1067,48 @@ export interface components {
              */
             worktree: boolean;
         };
+        /**
+         * GitBranchCreateRequest
+         * @description ``POST /branches``: create ``name`` at ``start_point`` (``HEAD`` of the
+         *     project root when omitted); ``checkout`` switches the project root to
+         *     it in the same call and is subject to the checkout refusals.
+         */
+        GitBranchCreateRequest: {
+            /**
+             * Checkout
+             * @default false
+             */
+            checkout: boolean;
+            /** Name */
+            name: string;
+            /** Start Point */
+            start_point?: string | null;
+        };
+        /**
+         * GitBranchResponse
+         * @description Outcome of ``POST /branches`` and ``POST /checkout``: the local
+         *     branch touched, whether the project root now has it checked out and
+         *     whether the call created it.
+         */
+        GitBranchResponse: {
+            /** Branch */
+            branch: string;
+            /** Checked Out */
+            checked_out: boolean;
+            /** Created */
+            created: boolean;
+        };
+        /**
+         * GitCheckoutRequest
+         * @description ``POST /checkout``: ``ref`` is a local branch name or a
+         *     ``<remote>/<name>`` remote-tracking branch as listed by ``GET /items``;
+         *     a remote ref without a local branch of that name gets one created,
+         *     tracking it.
+         */
+        GitCheckoutRequest: {
+            /** Ref */
+            ref: string;
+        };
         /** GitCommitAuthor */
         GitCommitAuthor: {
             /** Email */
@@ -1128,7 +1222,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "branch_with_worktree" | "branch_only" | "orphan_worktree";
+            kind: "branch_with_worktree" | "branch_only" | "orphan_worktree" | "remote_branch";
             /** Ok */
             ok: boolean;
             /** Target */
@@ -1259,9 +1353,14 @@ export interface components {
          * GitItemRead
          * @description One row in the unified git management list.
          *
-         *     ``branch`` is set for ``branch_*`` kinds; ``worktree_path`` is set for
-         *     ``branch_with_worktree`` and ``orphan_worktree``. Status fields apply
-         *     where relevant; clients should ignore irrelevant fields.
+         *     ``branch`` is set for ``branch_*`` kinds and, as ``<remote>/<name>``,
+         *     for ``remote_branch``; ``worktree_path`` is set for
+         *     ``branch_with_worktree`` and ``orphan_worktree``; ``remote`` only for
+         *     ``remote_branch`` (remote and branch names may both contain ``/``, so
+         *     the client never splits ``branch`` itself). ``subject`` and
+         *     ``committed_at`` (committer date, ISO 8601) describe the tip commit
+         *     when the ref resolves to one. Status fields apply where relevant;
+         *     clients should ignore irrelevant fields.
          */
         GitItemRead: {
             /**
@@ -1276,6 +1375,8 @@ export interface components {
             behind: number;
             /** Branch */
             branch?: string | null;
+            /** Committed At */
+            committed_at?: string | null;
             /**
              * Detached
              * @default false
@@ -1295,7 +1396,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "branch_with_worktree" | "branch_only" | "orphan_worktree";
+            kind: "branch_with_worktree" | "branch_only" | "orphan_worktree" | "remote_branch";
             /**
              * Locked
              * @default false
@@ -1308,6 +1409,10 @@ export interface components {
              * @default false
              */
             prunable: boolean;
+            /** Remote */
+            remote?: string | null;
+            /** Subject */
+            subject?: string | null;
             /** Upstream */
             upstream?: string | null;
             /** Worktree Path */
@@ -2200,9 +2305,81 @@ export interface operations {
             };
         };
     };
-    list_git_items_endpoint_api_projects__name__git_items_get: {
+    create_branch_endpoint_api_projects__name__git_branches_post: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitBranchCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitBranchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    checkout_endpoint_api_projects__name__git_checkout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitCheckoutRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitBranchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_git_items_endpoint_api_projects__name__git_items_get: {
+        parameters: {
+            query?: {
+                remote?: boolean;
+            };
             header?: never;
             path: {
                 name: string;

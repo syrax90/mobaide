@@ -299,6 +299,9 @@ fun AppNavigation(
                         navController.navigate(Routes.sessionGitChanges(sessionId, sync = true))
                     }
                 },
+                onOpenGitBranches = { name ->
+                    navController.navigate(Routes.gitManagement(name))
+                },
             )
         }
 

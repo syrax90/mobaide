@@ -1,9 +1,13 @@
 import Foundation
 
+/// One row of the project Git screen. `remote_branch` rows (`branch` is
+/// `<remote>/<name>`, `remote` names the remote) arrive only when asked for
+/// with `?remote=true`; `subject` / `committed_at` describe the tip commit.
 struct GitItem: Codable, Equatable, Sendable {
     static let kindBranchWithWorktree = "branch_with_worktree"
     static let kindBranchOnly = "branch_only"
     static let kindOrphanWorktree = "orphan_worktree"
+    static let kindRemoteBranch = "remote_branch"
 
     let kind: String
     let branch: String?
@@ -17,6 +21,9 @@ struct GitItem: Codable, Equatable, Sendable {
     let locked_reason: String?
     let detached: Bool
     let prunable: Bool
+    let remote: String?
+    let subject: String?
+    let committed_at: String?
 
     init(
         kind: String,
@@ -30,7 +37,10 @@ struct GitItem: Codable, Equatable, Sendable {
         locked: Bool = false,
         locked_reason: String? = nil,
         detached: Bool = false,
-        prunable: Bool = false
+        prunable: Bool = false,
+        remote: String? = nil,
+        subject: String? = nil,
+        committed_at: String? = nil
     ) {
         self.kind = kind
         self.branch = branch
@@ -44,6 +54,9 @@ struct GitItem: Codable, Equatable, Sendable {
         self.locked_reason = locked_reason
         self.detached = detached
         self.prunable = prunable
+        self.remote = remote
+        self.subject = subject
+        self.committed_at = committed_at
     }
 
     var id: String {
@@ -57,8 +70,15 @@ struct GitItem: Codable, Equatable, Sendable {
         }
     }
 
+    /// False for the checked-out branch (git refuses) and for remote-tracking rows.
     var isDeletable: Bool {
-        !is_current
+        !is_current && kind != Self.kindRemoteBranch
+    }
+
+    /// Check out is offered for a branch nothing has checked out: a `branch_only`
+    /// row or a remote-tracking one; never the current branch or a worktree-backed row.
+    var canCheckOut: Bool {
+        !is_current && (kind == Self.kindBranchOnly || kind == Self.kindRemoteBranch)
     }
 }
 
@@ -77,6 +97,9 @@ extension GitItem {
         locked_reason = try container.decodeIfPresent(String.self, forKey: .locked_reason)
         detached = try container.decodeIfPresent(Bool.self, forKey: .detached) ?? false
         prunable = try container.decodeIfPresent(Bool.self, forKey: .prunable) ?? false
+        remote = try container.decodeIfPresent(String.self, forKey: .remote)
+        subject = try container.decodeIfPresent(String.self, forKey: .subject)
+        committed_at = try container.decodeIfPresent(String.self, forKey: .committed_at)
     }
 }
 
@@ -134,6 +157,39 @@ struct BusyHolder: Codable, Equatable, Sendable {
 
 struct BusyByResponse: Codable, Equatable, Sendable {
     let busy_by: [BusyHolder]
+}
+
+/// `POST /api/projects/{name}/git/branches`.
+struct GitBranchCreateRequest: Codable, Equatable, Sendable {
+    let name: String
+    let start_point: String?
+    let checkout: Bool
+
+    init(name: String, start_point: String? = nil, checkout: Bool = false) {
+        self.name = name
+        self.start_point = start_point
+        self.checkout = checkout
+    }
+}
+
+extension GitBranchCreateRequest {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        start_point = try container.decodeIfPresent(String.self, forKey: .start_point)
+        checkout = try container.decodeIfPresent(Bool.self, forKey: .checkout) ?? false
+    }
+}
+
+/// `POST /api/projects/{name}/git/checkout`; `ref` is a row's `branch` verbatim.
+struct GitCheckoutRequest: Codable, Equatable, Sendable {
+    let ref: String
+}
+
+struct GitBranchResponse: Codable, Equatable, Sendable {
+    let branch: String
+    let checked_out: Bool
+    let created: Bool
 }
 
 // MARK: - Session-scoped read-only Changes API

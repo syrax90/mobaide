@@ -31,8 +31,14 @@ const branch = (name: string, over: Partial<GitItem> = {}): GitItem => ({
   locked_reason: null,
   prunable: false,
   upstream: null,
+  remote: null,
+  subject: null,
+  committed_at: null,
   ...over,
 });
+
+const remoteBranch = (name: string): GitItem =>
+  branch(`origin/${name}`, { kind: 'remote_branch', remote: 'origin' });
 
 const result = (target: string, over: Partial<GitDeleteResult> = {}): GitDeleteResult => ({
   kind: 'branch_only',
@@ -75,6 +81,16 @@ describe('enqueue', () => {
     const again = enqueue(queued, [branch('feature-a'), branch('main', { is_current: true })]);
 
     expect(again).toBe(queued);
+  });
+
+  it('never lets a remote-tracking row into a batch', () => {
+    const items = [remoteBranch('feature-a'), branch('feature-b')];
+
+    expect(enqueue(initialGitDeleteState, [items[0] as GitItem])).toBe(initialGitDeleteState);
+
+    const mixed = enqueue(initialGitDeleteState, items);
+    expect(mixed.pending.map((entry) => entry.id)).toEqual(['branch_only:feature-b']);
+    expect(visibleItems(items, mixed).map((item) => item.branch)).toEqual(['origin/feature-a']);
   });
 });
 
@@ -256,5 +272,10 @@ describe('gitItemId', () => {
     expect(
       gitItemId({ kind: 'branch_with_worktree', branch: 'a', worktree_path: '/wt/a' }),
     ).toBe('branch_with_worktree:a');
+  });
+
+  it('keys a remote-tracking row on the kind and its remote-qualified name', () => {
+    expect(gitItemId(remoteBranch('a'))).toBe('remote_branch:origin/a|');
+    expect(gitItemId(remoteBranch('a'))).not.toBe(gitItemId(branch('origin/a')));
   });
 });

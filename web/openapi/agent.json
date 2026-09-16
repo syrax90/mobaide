@@ -671,6 +671,74 @@
         "title": "CreateSessionRequest",
         "type": "object"
       },
+      "GitBranchCreateRequest": {
+        "description": "``POST /branches``: create ``name`` at ``start_point`` (``HEAD`` of the\nproject root when omitted); ``checkout`` switches the project root to\nit in the same call and is subject to the checkout refusals.",
+        "properties": {
+          "checkout": {
+            "default": false,
+            "title": "Checkout",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "start_point": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Point"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "GitBranchCreateRequest",
+        "type": "object"
+      },
+      "GitBranchResponse": {
+        "description": "Outcome of ``POST /branches`` and ``POST /checkout``: the local\nbranch touched, whether the project root now has it checked out and\nwhether the call created it.",
+        "properties": {
+          "branch": {
+            "title": "Branch",
+            "type": "string"
+          },
+          "checked_out": {
+            "title": "Checked Out",
+            "type": "boolean"
+          },
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "branch",
+          "checked_out",
+          "created"
+        ],
+        "title": "GitBranchResponse",
+        "type": "object"
+      },
+      "GitCheckoutRequest": {
+        "description": "``POST /checkout``: ``ref`` is a local branch name or a\n``<remote>/<name>`` remote-tracking branch as listed by ``GET /items``;\na remote ref without a local branch of that name gets one created,\ntracking it.",
+        "properties": {
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "title": "GitCheckoutRequest",
+        "type": "object"
+      },
       "GitCommitAuthor": {
         "properties": {
           "email": {
@@ -896,7 +964,8 @@
             "enum": [
               "branch_with_worktree",
               "branch_only",
-              "orphan_worktree"
+              "orphan_worktree",
+              "remote_branch"
             ],
             "title": "Kind",
             "type": "string"
@@ -1209,7 +1278,7 @@
         "type": "object"
       },
       "GitItemRead": {
-        "description": "One row in the unified git management list.\n\n``branch`` is set for ``branch_*`` kinds; ``worktree_path`` is set for\n``branch_with_worktree`` and ``orphan_worktree``. Status fields apply\nwhere relevant; clients should ignore irrelevant fields.",
+        "description": "One row in the unified git management list.\n\n``branch`` is set for ``branch_*`` kinds and, as ``<remote>/<name>``,\nfor ``remote_branch``; ``worktree_path`` is set for\n``branch_with_worktree`` and ``orphan_worktree``; ``remote`` only for\n``remote_branch`` (remote and branch names may both contain ``/``, so\nthe client never splits ``branch`` itself). ``subject`` and\n``committed_at`` (committer date, ISO 8601) describe the tip commit\nwhen the ref resolves to one. Status fields apply where relevant;\nclients should ignore irrelevant fields.",
         "properties": {
           "ahead": {
             "default": 0,
@@ -1232,6 +1301,17 @@
             ],
             "title": "Branch"
           },
+          "committed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Committed At"
+          },
           "detached": {
             "default": false,
             "title": "Detached",
@@ -1251,7 +1331,8 @@
             "enum": [
               "branch_with_worktree",
               "branch_only",
-              "orphan_worktree"
+              "orphan_worktree",
+              "remote_branch"
             ],
             "title": "Kind",
             "type": "string"
@@ -1276,6 +1357,28 @@
             "default": false,
             "title": "Prunable",
             "type": "boolean"
+          },
+          "remote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
           },
           "upstream": {
             "anyOf": [
@@ -2966,9 +3069,115 @@
         ]
       }
     },
+    "/api/projects/{name}/git/branches": {
+      "post": {
+        "description": "Create a branch in the project's repository.\n\n``400 bad_branch_name`` for a name git would refuse, ``409 exists`` /\n``unknown_start_point`` for the obvious conflicts; with ``checkout``\nthe refusals of ``POST /checkout`` apply as well.",
+        "operationId": "create_branch_endpoint_api_projects__name__git_branches_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitBranchCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitBranchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Branch Endpoint",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/projects/{name}/git/checkout": {
+      "post": {
+        "description": "Check ``ref`` out in the project root.\n\nReturns 409 with ``{busy_by: [...]}`` while a session or auto-scan work\nitem runs in the project root (a linked worktree's session does not\ncount), and a coded 409 \u2014 ``dirty``, ``checked_out_elsewhere``,\n``operation_in_progress``, ``job_running`` \u2014 for the states git or the\nagent refuse to switch in; ``404 ref_not_found`` for a ref that is\nneither a local nor a remote-tracking branch.",
+        "operationId": "checkout_endpoint_api_projects__name__git_checkout_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitCheckoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitBranchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Checkout Endpoint",
+        "tags": [
+          "git"
+        ]
+      }
+    },
     "/api/projects/{name}/git/items": {
       "get": {
-        "description": "Return the unified list of local branches and worktrees.",
+        "description": "Return the unified list of local branches and worktrees, with the\nremote-tracking branches appended when ``remote`` is set.",
         "operationId": "list_git_items_endpoint_api_projects__name__git_items_get",
         "parameters": [
           {
@@ -2978,6 +3187,16 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "remote",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Remote",
+              "type": "boolean"
             }
           }
         ],

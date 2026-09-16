@@ -1,6 +1,6 @@
 """Pydantic wire models for the git management API.
 
-The unified ``items`` array carries three row kinds, distinguished by the
+The unified ``items`` array carries four row kinds, distinguished by the
 ``kind`` field:
 
 * ``branch_with_worktree`` — local branch checked out in some worktree.
@@ -8,6 +8,9 @@ The unified ``items`` array carries three row kinds, distinguished by the
   auto-scan branches whose worktree was already cleaned up).
 * ``orphan_worktree`` — worktree on detached HEAD or whose branch ref no
   longer exists.
+* ``remote_branch`` — remote-tracking branch, only when the client asked for
+  it with ``?remote=true``; clients that predate the kind never receive a
+  row they would offer for delete.
 
 Server resolves the relationship between branches and worktrees so the
 client never has to.
@@ -18,15 +21,23 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ItemKind = Literal["branch_with_worktree", "branch_only", "orphan_worktree"]
+DeletableKind = Literal["branch_with_worktree", "branch_only", "orphan_worktree"]
+ItemKind = Literal[
+    "branch_with_worktree", "branch_only", "orphan_worktree", "remote_branch"
+]
 
 
 class GitItemRead(BaseModel):
     """One row in the unified git management list.
 
-    ``branch`` is set for ``branch_*`` kinds; ``worktree_path`` is set for
-    ``branch_with_worktree`` and ``orphan_worktree``. Status fields apply
-    where relevant; clients should ignore irrelevant fields.
+    ``branch`` is set for ``branch_*`` kinds and, as ``<remote>/<name>``,
+    for ``remote_branch``; ``worktree_path`` is set for
+    ``branch_with_worktree`` and ``orphan_worktree``; ``remote`` only for
+    ``remote_branch`` (remote and branch names may both contain ``/``, so
+    the client never splits ``branch`` itself). ``subject`` and
+    ``committed_at`` (committer date, ISO 8601) describe the tip commit
+    when the ref resolves to one. Status fields apply where relevant;
+    clients should ignore irrelevant fields.
     """
 
     kind: ItemKind
@@ -41,10 +52,20 @@ class GitItemRead(BaseModel):
     locked_reason: str | None = None
     detached: bool = False
     prunable: bool = False
+    remote: str | None = None
+    subject: str | None = None
+    committed_at: str | None = None
 
 
 class GitItemsResponse(BaseModel):
     items: list[GitItemRead]
+
+
+class GitItemsQuery(BaseModel):
+    """Query string of ``GET /items``; parsed here so the relay accepts the
+    same boolean spellings as FastAPI and answers the same 422."""
+
+    remote: bool = False
 
 
 class GitDeleteItem(BaseModel):
@@ -58,7 +79,7 @@ class GitDeleteItem(BaseModel):
     modified/untracked files is deleted instead of refused.
     """
 
-    kind: ItemKind
+    kind: DeletableKind
     branch: str | None = None
     worktree_path: str | None = None
     force: bool = False
@@ -103,3 +124,32 @@ class BusyHolder(BaseModel):
 
 class BusyByResponse(BaseModel):
     busy_by: list[BusyHolder]
+
+
+class GitBranchCreateRequest(BaseModel):
+    """``POST /branches``: create ``name`` at ``start_point`` (``HEAD`` of the
+    project root when omitted); ``checkout`` switches the project root to
+    it in the same call and is subject to the checkout refusals."""
+
+    name: str
+    start_point: str | None = None
+    checkout: bool = False
+
+
+class GitCheckoutRequest(BaseModel):
+    """``POST /checkout``: ``ref`` is a local branch name or a
+    ``<remote>/<name>`` remote-tracking branch as listed by ``GET /items``;
+    a remote ref without a local branch of that name gets one created,
+    tracking it."""
+
+    ref: str
+
+
+class GitBranchResponse(BaseModel):
+    """Outcome of ``POST /branches`` and ``POST /checkout``: the local
+    branch touched, whether the project root now has it checked out and
+    whether the call created it."""
+
+    branch: str
+    checked_out: bool
+    created: bool

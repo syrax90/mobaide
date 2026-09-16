@@ -341,7 +341,7 @@ range is rejected up front.
     },
     "git": {
       "changes": true, "stage": true, "discard": true, "commit": true,
-      "fetch": true, "pull": true, "push": true
+      "fetch": true, "pull": true, "push": true, "branches": true
     }
   },
   "latest_agent_version": "0.1.0"
@@ -358,6 +358,10 @@ keeps a read-only viewer. `capabilities.git.fetch` / `pull` / `push` — additiv
 too — advertise the background fetch/pull/push jobs and their `git.job.*`
 events; the terminal menu's *Fetch / Pull / Push…* entry and the Changes
 screen's Sync button exist on any of the three, each row on its own key.
+`capabilities.git.branches` — additive too — advertises the project-scoped
+branch create/checkout routes and the `?remote=true` remote-tracking rows;
+clients gate the Git screen's *New branch* and *Check out* actions and the
+terminal menu's *Branches…* entry on it.
 `capabilities.cli` carries one `{ "available": <bool> }` entry per managed CLI
 the agent registers — additive, no `protocol_version` bump — and the Android
 mode-select screen disables a per-CLI button when its binary is absent. The

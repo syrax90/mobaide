@@ -89,11 +89,16 @@ from mobaide.agent.git.changes_service import (
 )
 from mobaide.agent.git.models import (
     BusyByResponse,
+    GitBranchCreateRequest,
+    GitCheckoutRequest,
     GitDeleteRequest,
+    GitItemsQuery,
     GitItemsResponse,
 )
 from mobaide.agent.git.service import (
     GitItemBusyError,
+    checkout_ref,
+    create_branch,
     delete_git_items,
     list_git_items,
 )
@@ -1518,7 +1523,7 @@ class RelayClient:
         if projects_resp is not None:
             return projects_resp
 
-        git_resp = await self._dispatch_git(method, path, body)
+        git_resp = await self._dispatch_git(method, path, body, query)
         if git_resp is not None:
             return git_resp
 
@@ -1769,6 +1774,7 @@ class RelayClient:
         method: str,
         path: str,
         body: dict | None,
+        query: dict | None = None,
     ) -> dict | None:
         """Handle ``/api/projects/{name}/git/...`` requests through the shared
         service layer so direct HTTP and relay-forwarded requests produce
@@ -1778,14 +1784,14 @@ class RelayClient:
         Returns a proxy-response dict for a matching route, or ``None`` to
         signal that the caller should fall through to the next handler.
         """
-        m_items = re.match(r"^/api/projects/([^/]+)/git/items$", path)
-        m_delete = re.match(r"^/api/projects/([^/]+)/git/items:delete$", path)
-        if not (m_items or m_delete):
+        match = re.match(
+            r"^/api/projects/([^/]+)/git/(items|items:delete|branches|checkout)$",
+            path,
+        )
+        if match is None:
             return None
-
-        match = m_items or m_delete
-        assert match is not None  # narrow for type-checker
-        name = match.group(1)
+        name, route = match.group(1), match.group(2)
+        is_items = route == "items"
 
         store = getattr(self._app_state, "projects_store", None)
         if store is None:
@@ -1814,23 +1820,42 @@ class RelayClient:
                 "body": {"detail": f"Project '{name}' is not a git repository"},
             }
 
-        if m_items and method == "GET":
-            items = await list_git_items(project_root, manager)
-            return {
-                "status": 200,
-                "body": GitItemsResponse(items=items).model_dump(),
-            }
-
-        if m_delete and method == "POST":
+        if is_items and method == "GET":
             try:
-                req = GitDeleteRequest.model_validate(body or {})
+                q = GitItemsQuery.model_validate(query or {})
             except ValidationError as exc:
                 return {
                     "status": 422,
                     "body": {"detail": _scrub_validation_errors(exc)},
                 }
             try:
-                resp = await delete_git_items(
+                items = await list_git_items(project_root, manager, remote=q.remote)
+            except Exception as exc:
+                mapped = git_changes_http_error_for(exc)
+                if mapped is None:
+                    raise
+                return {"status": mapped[0], "body": mapped[1]}
+            return {
+                "status": 200,
+                "body": GitItemsResponse(items=items).model_dump(),
+            }
+
+        post_routes = {
+            "items:delete": (GitDeleteRequest, delete_git_items),
+            "branches": (GitBranchCreateRequest, create_branch),
+            "checkout": (GitCheckoutRequest, checkout_ref),
+        }
+        if route in post_routes and method == "POST":
+            model, handler = post_routes[route]
+            try:
+                req = model.model_validate(body or {})
+            except ValidationError as exc:
+                return {
+                    "status": 422,
+                    "body": {"detail": _scrub_validation_errors(exc)},
+                }
+            try:
+                resp = await handler(
                     req,
                     project_name=project.name,
                     project_root=project_root,
@@ -1853,6 +1878,11 @@ class RelayClient:
                         ).model_dump(),
                     },
                 }
+            except Exception as exc:
+                mapped = git_changes_http_error_for(exc)
+                if mapped is None:
+                    raise
+                return {"status": mapped[0], "body": mapped[1]}
             return {"status": 200, "body": resp.model_dump()}
 
         return None

@@ -191,6 +191,7 @@ describe('gitCapabilities', () => {
       fetch: false,
       pull: false,
       push: false,
+      branches: false,
     });
   });
 
@@ -203,6 +204,7 @@ describe('gitCapabilities', () => {
       fetch: false,
       pull: false,
       push: false,
+      branches: false,
     });
   });
 });

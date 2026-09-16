@@ -4,7 +4,10 @@ import SwiftUI
 /// the `gitManagement` route. A row is deleted by swipe or from its context
 /// menu; "Select" enters edit mode for a batch delete. Every delete runs through
 /// a 5s Undo window, then branches on `force_required` (re-prompt + re-send with
-/// force) and 409-busy (holder list).
+/// force) and 409-busy (holder list). Once the agent advertises
+/// `capabilities.git.branches` the remote-tracking branches sit in a collapsed
+/// section, "+" opens the New branch sheet, and a `branch_only` or remote row
+/// offers Check out (leading swipe or context menu) behind a confirmation.
 struct GitScreen: View {
     let projectName: String
 
@@ -20,6 +23,7 @@ struct GitScreen: View {
 private struct GitContent: View {
     @State private var model: GitScreenModel
     @State private var toast: ToastMessage?
+    @Environment(\.mobaideColors) private var colors
     // Owned rather than driven by `EditButton`: this view reads edit mode for
     // its title and toolbar, which the ambient `\.editMode` binding does not
     // reliably propagate to the view that installs the toolbar.
@@ -59,10 +63,28 @@ private struct GitContent: View {
             } message: { holders in
                 Text("Stop the holder, then try again.\n\n" + holders.map(Self.busyLine).joined(separator: "\n"))
             }
+            .confirmationDialog(
+                "Check out \(model.checkoutPrompt.map(GitItemDisplay.primaryLabel) ?? "")?",
+                isPresented: checkoutPresented,
+                titleVisibility: .visible,
+                presenting: model.checkoutPrompt
+            ) { _ in
+                Button("Check out") { model.confirmCheckout() }
+                Button("Cancel", role: .cancel) { model.dismissCheckoutPrompt() }
+            } message: { item in
+                Text(GitItemDisplay.checkoutConfirmMessage(
+                    branch: GitItemDisplay.primaryLabel(item),
+                    projectName: model.projectName
+                ))
+            }
+            .sheet(isPresented: newBranchPresented) {
+                GitNewBranchSheet(model: model)
+            }
             .undoToast($model.undoToast) { model.undo() }
             .toast($toast)
             .task { await model.load() }
             .task { await model.observeGitChanged() }
+            .task { await model.loadCapabilities() }
             .onChange(of: model.message) { _, newValue in
                 if let newValue {
                     toast = ToastMessage(text: newValue)
@@ -93,6 +115,15 @@ private struct GitContent: View {
                     }
                 }
                 .disabled(model.selected.isEmpty)
+            } else if model.canManageBranches {
+                Button {
+                    model.openNewBranch()
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .disabled(model.isCheckingOut)
+                .accessibilityLabel("New branch")
+                .accessibilityIdentifier("git-new-branch")
             }
             if model.hasDeletableItems {
                 Button(editMode.isEditing ? "Done" : "Select") {
@@ -115,45 +146,130 @@ private struct GitContent: View {
                 }
                 .pixelScreenBackground()
             }
+        } else if model.filterable {
+            list
+                .searchable(
+                    text: $model.filter,
+                    placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: "Filter branches"
+                )
+                // Distinct from the empty-repository state above: a filter
+                // that matched nothing is fixed by editing the filter.
+                .overlay {
+                    if model.localItems.isEmpty && model.remoteItems.isEmpty {
+                        ContentUnavailableView.search(text: model.filter)
+                    }
+                }
         } else {
-            List(selection: $model.selected) {
-                ForEach(model.visibleItems, id: \.id) { item in
+            list
+        }
+    }
+
+    private var list: some View {
+        List(selection: $model.selected) {
+            Section {
+                ForEach(model.localItems, id: \.id) { item in
                     row(item)
                         .pixelCard(selected: editMode.isEditing && model.selected.contains(item.id))
                         .pixelListRow()
                 }
             }
-            .pixelList()
+            if !model.remoteItems.isEmpty {
+                Section(header: remoteHeader) {
+                    if model.remoteOpen {
+                        ForEach(model.remoteItems, id: \.id) { item in
+                            row(item)
+                                .pixelListRow()
+                        }
+                    }
+                }
+            }
         }
+        .pixelList()
     }
 
+    private var remoteHeader: some View {
+        Button {
+            withAnimation { model.toggleRemote() }
+        } label: {
+            HStack {
+                PixelSectionHeader("Remote branches")
+                Text("\(model.remoteItems.count)")
+                    .chromeText()
+                    .foregroundStyle(colors.textMuted)
+                Spacer()
+                Image(systemName: model.remoteOpen ? "chevron.up" : "chevron.down")
+                    .foregroundStyle(colors.textMuted)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(model.remoteOpen ? "Collapse remote branches" : "Expand remote branches")
+        .accessibilityIdentifier("git-remote-header")
+    }
+
+    /// In edit mode the row is plain content so the `List` owns the tap; a
+    /// remote-tracking row is never selectable. Outside it, a deletable row
+    /// keeps its trailing Delete swipe, and every row that can be checked out
+    /// gets a leading Check out swipe plus the same entry in its context menu.
     @ViewBuilder
     private func row(_ item: GitItem) -> some View {
-        if item.isDeletable {
+        let checkoutable = model.canManageBranches && item.canCheckOut
+        if editMode.isEditing {
+            if item.isDeletable {
+                GitItemRow(item: item)
+            } else {
+                GitItemRow(item: item)
+                    .selectionDisabled()
+            }
+        } else if item.isDeletable || checkoutable {
             GitItemRow(item: item)
+                .selectionDisabled(!item.isDeletable)
+                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                    if checkoutable {
+                        checkoutButton(item)
+                            .tint(colors.accent)
+                    }
+                }
                 .swipeActions(edge: .trailing) {
-                    Button(role: .destructive) {
-                        withAnimation { model.delete(item) }
-                    } label: {
-                        Label("Delete", systemImage: "trash")
+                    if item.isDeletable {
+                        Button(role: .destructive) {
+                            withAnimation { model.delete(item) }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
                     }
                 }
                 .contextMenu {
-                    Button(role: .destructive) {
-                        withAnimation { model.delete(item) }
-                    } label: {
-                        Label("Delete", systemImage: "trash")
+                    if checkoutable {
+                        checkoutButton(item)
                     }
-                    Button {
-                        model.select(item)
-                        withAnimation { editMode = .active }
-                    } label: {
-                        Label("Select", systemImage: "checkmark.circle")
+                    if item.isDeletable {
+                        Button(role: .destructive) {
+                            withAnimation { model.delete(item) }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        Button {
+                            model.select(item)
+                            withAnimation { editMode = .active }
+                        } label: {
+                            Label("Select", systemImage: "checkmark.circle")
+                        }
                     }
                 }
+                .disabled(model.isCheckingOut && checkoutable)
         } else {
             GitItemRow(item: item)
                 .selectionDisabled()
+        }
+    }
+
+    private func checkoutButton(_ item: GitItem) -> some View {
+        Button {
+            model.requestCheckout(item)
+        } label: {
+            Label("Check out", systemImage: "arrow.right.circle")
         }
     }
 
@@ -170,6 +286,22 @@ private struct GitContent: View {
         Binding(
             get: { model.busyDialog != nil },
             set: { if !$0 { model.busyDialog = nil } }
+        )
+    }
+
+    private var checkoutPresented: Binding<Bool> {
+        Binding(
+            // Clears only the prompt: the row the action needs stays in the
+            // model's `pendingCheckout` until Check out or Cancel runs.
+            get: { model.checkoutPrompt != nil },
+            set: { if !$0 { model.checkoutPrompt = nil } }
+        )
+    }
+
+    private var newBranchPresented: Binding<Bool> {
+        Binding(
+            get: { model.newBranch != nil },
+            set: { if !$0 { model.closeNewBranch() } }
         )
     }
 

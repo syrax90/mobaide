@@ -607,6 +607,7 @@ const ALL_GIT: GitCapabilities = {
   fetch: true,
   pull: true,
   push: true,
+  branches: true,
 };
 const NO_ACTIONS = { stage: false, unstage: false, discard: false };
 
@@ -688,6 +689,7 @@ describe('rowActions', () => {
       fetch: false,
       pull: false,
       push: false,
+      branches: false,
     };
     const stageOnly: GitCapabilities = {
       stage: true,
@@ -696,6 +698,7 @@ describe('rowActions', () => {
       fetch: false,
       pull: false,
       push: false,
+      branches: false,
     };
 
     expect(rowActions(entry(), discardOnly)).toEqual({ stage: false, unstage: false, discard: true });
@@ -802,6 +805,7 @@ describe('sectionAction', () => {
         fetch: false,
         pull: false,
         push: false,
+        branches: false,
       }),
     ).toBeNull();
   });
@@ -866,6 +870,7 @@ const NO_SYNC: GitCapabilities = {
   fetch: false,
   pull: false,
   push: false,
+  branches: false,
 };
 
 const job = (over: Partial<SessionGitJob> = {}): SessionGitJob => ({

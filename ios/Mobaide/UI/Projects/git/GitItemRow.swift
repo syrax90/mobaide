@@ -21,6 +21,13 @@ struct GitItemRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+                if let tip = GitItemDisplay.tipLine(item) {
+                    Text(tip)
+                        .font(.caption)
+                        .foregroundStyle(colors.textMuted)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
                 let chips = GitItemDisplay.chips(item)
                 if !chips.isEmpty {
                     // A horizontal ScrollView here would install its own pan

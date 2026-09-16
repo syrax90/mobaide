@@ -147,6 +147,8 @@ export interface GitCapabilities {
   fetch: boolean;
   pull: boolean;
   push: boolean;
+  /** The project Git screen's remote rows, New branch and Check out (#677). */
+  branches: boolean;
 }
 
 export const NO_GIT_CAPABILITIES: GitCapabilities = {
@@ -156,6 +158,7 @@ export const NO_GIT_CAPABILITIES: GitCapabilities = {
   fetch: false,
   pull: false,
   push: false,
+  branches: false,
 };
 
 /** The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three. */
@@ -185,5 +188,6 @@ export function gitCapabilities(info: AgentVersionInfo | undefined): GitCapabili
     fetch: gitCapability(info, 'fetch'),
     pull: gitCapability(info, 'pull'),
     push: gitCapability(info, 'push'),
+    branches: gitCapability(info, 'branches'),
   };
 }

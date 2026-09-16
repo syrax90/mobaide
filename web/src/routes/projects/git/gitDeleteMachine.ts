@@ -14,7 +14,12 @@
  * * The busy 409 is all-or-nothing — the guard runs before any deletion — so it
  *   restores the whole batch, not the reported subset.
  */
-import type { GitDeleteItem, GitDeleteResult, GitItem } from '../../../api/gitRepository';
+import type {
+  DeletableGitItem,
+  GitDeleteItem,
+  GitDeleteResult,
+  GitItem,
+} from '../../../api/gitRepository';
 import { gitItemId, isDeletable } from '../../../api/gitRepository';
 
 export interface PendingDelete {
@@ -40,7 +45,7 @@ export const initialGitDeleteState: GitDeleteState = {
   force: null,
 };
 
-function toDeleteItem(item: GitItem): GitDeleteItem {
+function toDeleteItem(item: DeletableGitItem): GitDeleteItem {
   return {
     kind: item.kind,
     branch: item.branch ?? null,
@@ -58,9 +63,9 @@ export function visibleItems(
 
 /** Queue rows for deletion. Already-hidden and non-deletable targets are ignored. */
 export function enqueue(state: GitDeleteState, targets: readonly GitItem[]): GitDeleteState {
-  const queued = targets.filter(
-    (item) => isDeletable(item) && !state.hidden.has(gitItemId(item)),
-  );
+  const queued = targets
+    .filter(isDeletable)
+    .filter((item) => !state.hidden.has(gitItemId(item)));
   if (queued.length === 0) return state;
 
   const hidden = new Set(state.hidden);

@@ -1,10 +1,14 @@
 """HTTP endpoints for the in-app git management screen.
 
-Two endpoints, both nested under ``/api/projects/{name}/git`` and protected
+Four endpoints, all nested under ``/api/projects/{name}/git`` and protected
 by the same JWT auth dependency as the projects router:
 
-* ``GET /items`` — list local branches and worktrees as a unified array.
+* ``GET /items`` — list local branches and worktrees as a unified array,
+  plus the remote-tracking branches with ``?remote=true``.
 * ``POST /items:delete`` — batch-delete branches and/or worktrees.
+* ``POST /branches`` — create a branch, optionally checking it out.
+* ``POST /checkout`` — check a local or remote-tracking branch out in the
+  project root.
 
 The colon-suffixed RPC-style ``items:delete`` is used instead of
 ``DELETE /items`` because some proxies/clients drop request bodies on
@@ -15,19 +19,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from mobaide.core.projects_store import safe_path_exists
 
 from ..auth.dependencies import get_current_user
+from .changes_service import http_error_for
 from .models import (
     BusyByResponse,
+    GitBranchCreateRequest,
+    GitBranchResponse,
+    GitCheckoutRequest,
     GitDeleteRequest,
     GitDeleteResponse,
     GitItemsResponse,
 )
 from .service import (
     GitItemBusyError,
+    checkout_ref,
+    create_branch,
     delete_git_items,
     list_git_items,
 )
@@ -96,15 +106,35 @@ def _resolve_project(request: Request, name: str) -> tuple[str, str]:
     return project.name, project_root
 
 
+def _raise_mapped(exc: Exception) -> None:
+    mapped = http_error_for(exc)
+    if mapped is None:
+        raise exc
+    raise HTTPException(status_code=mapped[0], detail=mapped[1]["detail"])
+
+
+def _raise_busy(exc: GitItemBusyError) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=BusyByResponse(busy_by=exc.busy_by).model_dump(),
+    )
+
+
 @router.get("/items", response_model=GitItemsResponse)
 async def list_git_items_endpoint(
     name: str,
     request: Request,
+    remote: bool = Query(False),
 ) -> GitItemsResponse:
-    """Return the unified list of local branches and worktrees."""
+    """Return the unified list of local branches and worktrees, with the
+    remote-tracking branches appended when ``remote`` is set."""
     _, project_root = _resolve_project(request, name)
     manager = _worktree_manager(request)
-    items = await list_git_items(project_root, manager)
+    try:
+        items = await list_git_items(project_root, manager, remote=remote)
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
     return GitItemsResponse(items=items)
 
 
@@ -137,7 +167,74 @@ async def delete_git_items_endpoint(
             actor=_actor(request),
         )
     except GitItemBusyError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=BusyByResponse(busy_by=exc.busy_by).model_dump(),
+        _raise_busy(exc)
+        raise
+
+
+@router.post("/branches", response_model=GitBranchResponse)
+async def create_branch_endpoint(
+    name: str,
+    body: GitBranchCreateRequest,
+    request: Request,
+) -> GitBranchResponse:
+    """Create a branch in the project's repository.
+
+    ``400 bad_branch_name`` for a name git would refuse, ``409 exists`` /
+    ``unknown_start_point`` for the obvious conflicts; with ``checkout``
+    the refusals of ``POST /checkout`` apply as well.
+    """
+    project_name, project_root = _resolve_project(request, name)
+    manager = _worktree_manager(request)
+    try:
+        return await create_branch(
+            body,
+            project_name=project_name,
+            project_root=project_root,
+            manager=manager,
+            session_manager=_session_manager(request),
+            autoscan_manager=_autoscan_manager(request),
+            event_bus=_event_bus(request),
+            actor=_actor(request),
         )
+    except GitItemBusyError as exc:
+        _raise_busy(exc)
+        raise
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.post("/checkout", response_model=GitBranchResponse)
+async def checkout_endpoint(
+    name: str,
+    body: GitCheckoutRequest,
+    request: Request,
+) -> GitBranchResponse:
+    """Check ``ref`` out in the project root.
+
+    Returns 409 with ``{busy_by: [...]}`` while a session or auto-scan work
+    item runs in the project root (a linked worktree's session does not
+    count), and a coded 409 — ``dirty``, ``checked_out_elsewhere``,
+    ``operation_in_progress``, ``job_running`` — for the states git or the
+    agent refuse to switch in; ``404 ref_not_found`` for a ref that is
+    neither a local nor a remote-tracking branch.
+    """
+    project_name, project_root = _resolve_project(request, name)
+    manager = _worktree_manager(request)
+    try:
+        return await checkout_ref(
+            body,
+            project_name=project_name,
+            project_root=project_root,
+            manager=manager,
+            session_manager=_session_manager(request),
+            autoscan_manager=_autoscan_manager(request),
+            event_bus=_event_bus(request),
+            actor=_actor(request),
+        )
+    except GitItemBusyError as exc:
+        _raise_busy(exc)
+        raise
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise

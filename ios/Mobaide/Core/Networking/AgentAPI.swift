@@ -109,9 +109,22 @@ struct AgentAPI: Sendable {
         return try await execute(method: "GET", url: "\(try await base())/api/projects/\(name)/linear/states")
     }
 
+    /// Always asks for the remote-tracking rows: the flag shields *older
+    /// clients* from a kind they would offer for delete, and an older agent
+    /// ignores it.
     func getGitItems(projectName: String) async throws -> GitItemsResponse {
         let name = Self.encodePathSegment(projectName)
-        return try await execute(method: "GET", url: "\(try await base())/api/projects/\(name)/git/items")
+        return try await execute(method: "GET", url: "\(try await base())/api/projects/\(name)/git/items?remote=true")
+    }
+
+    func createGitBranch(projectName: String, request: GitBranchCreateRequest) async throws -> GitBranchResponse {
+        let name = Self.encodePathSegment(projectName)
+        return try await execute(method: "POST", url: "\(try await base())/api/projects/\(name)/git/branches", body: request)
+    }
+
+    func checkoutGitRef(projectName: String, request: GitCheckoutRequest) async throws -> GitBranchResponse {
+        let name = Self.encodePathSegment(projectName)
+        return try await execute(method: "POST", url: "\(try await base())/api/projects/\(name)/git/checkout", body: request)
     }
 
     func deleteGitItems(projectName: String, request: GitDeleteRequest) async throws -> GitDeleteResponse {

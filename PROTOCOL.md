@@ -129,6 +129,85 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-09-16, project Git management —
+  remote branches, create and check out): **one additive query flag, two
+  additive REST routes, three additive row fields, one additive row kind,
+  one additive capability key, no version bump.** Branches are objects of
+  the repository, not of a session, so ref management lives on the
+  project-scoped prefix ``/api/projects/{name}/git`` the delete-only Git
+  screen already used, both transports byte-identical (the relay
+  dispatcher hand-routes the new paths like the two existing ones):
+  * ``GET /api/projects/{name}/git/items?remote=true`` — every row now
+    carries ``subject`` and ``committed_at`` (the tip commit's subject line
+    and committer date as ``iso-strict``, both ``null`` when the ref has no
+    commit) and, with ``remote=true``, the remote-tracking branches follow
+    the local rows as ``{"kind": "remote_branch", "branch":
+    "<remote>/<name>", "remote": "<remote>", "is_current": false, …}``
+    (``<remote>/HEAD`` symrefs skipped; ``remote`` resolved by the longest
+    configured remote name because both halves may contain ``/``). The
+    flag exists so clients that predate the kind never receive a row they
+    would offer for delete; the new clients always send it and an older
+    agent ignores it. ``remote`` is parsed as a pydantic bool on both
+    transports (``true/t/yes/y/on/1`` and their negatives; anything else is
+    ``422``).
+  * ``POST /api/projects/{name}/git/branches`` ``{"name", "start_point"?,
+    "checkout"?: false}`` → ``GitBranchResponse {"branch", "checked_out",
+    "created": true}``. ``git branch -- <name> <start_point|HEAD>``;
+    ``checkout: true`` runs ``git switch -c <name> -- <start_point>`` under
+    the checkout guards below. The agent rejects an empty or > 255-byte
+    name, a leading ``-``, ``HEAD``, ``@`` and any ``@{`` itself
+    (``check-ref-format --branch`` expands revision syntax rather than
+    refusing it), then asks ``git check-ref-format --branch``: ``400
+    bad_branch_name``. ``409 exists`` when ``refs/heads/<name>`` resolves,
+    ``409 unknown_start_point`` (message = the start point) when
+    ``rev-parse --verify --end-of-options <start>^{commit}`` fails.
+    Tracking follows git's own ``branch.autoSetupMerge``.
+  * ``POST /api/projects/{name}/git/checkout`` ``{"ref"}`` →
+    ``GitBranchResponse {"branch", "checked_out": true, "created"}``.
+    ``ref`` is a row's ``branch`` verbatim: a local branch runs ``git
+    switch --no-guess -- <ref>`` in the project root; a remote-tracking
+    ``<remote>/<short>`` switches to the local ``<short>`` when it exists,
+    else creates it tracking the remote (``git switch --no-guess --track -c
+    <short> -- <remote>/<short>``, ``created: true``); anything else is
+    ``404 {"detail": {"code": "ref_not_found"}}`` (detached checkouts are
+    out of scope; ``400 bad_ref`` for an empty or ``-``-leading ref).
+  * Checkout guards, all ``409``: ``job_running`` (message = job id) while a
+    fetch/pull/push job owns the repository — asked first, before queuing on
+    the per-toplevel lock, so a running job's whole duration is never
+    awaited only to be refused — then, once queued, the project-git
+    ``{"detail": {"busy_by": [...]}}`` shape when a session or auto-scan
+    item works in the project root — a holder whose realpath-normalised cwd
+    is the root or lies below it and not inside a linked worktree, so a
+    session in a sub-folder blocks and a session in a linked worktree does
+    not — and ``operation_in_progress`` (message = ``merging`` /
+    ``rebasing`` / ``cherry_picking`` / ``reverting`` / ``bisecting``).
+    ``dirty`` and ``checked_out_elsewhere``
+    (message = the worktree path) are git's own refusals classified from
+    stderr: ``git switch`` carries unrelated local changes along and only
+    refuses an overwrite, so a modified tree does not by itself block a
+    checkout. The mutation floor (``git_too_old`` below 2.26),
+    ``not_a_repo``, ``bare_repository``, ``unsafe_directory``,
+    ``cwd_missing`` (400), ``git_unavailable`` (503), ``git_timeout`` (504,
+    15 s) and ``git_error`` (500) are the session vocabulary. Clients read
+    ``detail.busy_by`` first, then ``detail.code``. Both routes serialise
+    under the worktree manager's per-project lock *and* the session
+    mutations' per-toplevel lock, audit (``audit.git.branch.created`` /
+    ``audit.git.checked_out``) and publish ``git.changed {project_name,
+    toplevel, common_dir}``.
+  * ``GET /api/version`` ``capabilities.git`` gains ``"branches": true``
+    (both transports). Clients gate the Git screen's New branch and Check
+    out actions and the terminal menu's *Branches…* entry (a link to the
+    project Git screen, only for a session with a ``project_name``) on it;
+    the remote rows need no gate because the flag is sent regardless.
+  * ``GitDeleteItem.kind`` is narrowed to the three deletable kinds, so a
+    ``remote_branch`` row in a delete batch is a ``422``.
+  * Golden fixtures: ``GitItem.json`` gains ``subject`` / ``committed_at``
+    and a ``remote_branch`` case; new
+    ``tests/protocol_fixtures/dto/agent/{GitBranchCreateRequest,
+    GitCheckoutRequest,GitBranchResponse}.json`` on the four registries.
+    The project-git shapes follow the "defaults materialise" convention,
+    so the Python arm compares the dump minus nulls with
+    ``decoded_canonical`` for them (``test_git_fixtures.py``).
 * Additive delta within proto-v7 (2026-09-15, in-session git fetch/pull/push
   jobs): **five additive REST routes + two additive event types + three
   additive capability keys, no version bump.** Network git operations can

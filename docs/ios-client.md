@@ -17,7 +17,8 @@ bodies — the SwiftTerm-backed terminal, the sessions list, and the
 create-session wizard; CLA-101 replaced the Projects and Git placeholders
 with the bus-driven Projects management screen (create/edit form sheet,
 swipe-delete Undo, drag-reorder) and the Git branches/worktrees screen
-(long-press multi-select, deferred batch delete with force/busy handling),
+(long-press multi-select, deferred batch delete with force/busy handling;
+#677 added the remote-branches section, the New branch sheet and Check out),
 backed by an app-scoped `ProjectsRepository` and a reusable `UndoSnackbar`;
 CLA-102 replaced the Agents, Devices, and Templates placeholders with the
 QR-pairing Agents screen (in-app VisionKit/AVFoundation scanner gated by a
@@ -700,6 +701,23 @@ ref-counted watch on
 `ForegroundSessionTracker` (`View.holdsSessionWatch`) for exactly as long as
 they are on the stack, so the terminal underneath stays attached and returning
 never costs a ring replay.
+
+The project Git screen (`UI/Projects/git`) grew #677's branch management on
+top of the delete flow. `GitScreenModel.loadCapabilities()` runs from the
+screen's own `.task` — the model tests pin the request sequence by index, so
+`load()` stays exactly the items read, which always ask for `?remote=true`.
+The remote-tracking rows sit in a `Section` whose header button toggles
+`remoteExpanded` (a non-empty `.searchable` filter, shown at eight rows,
+forces it open), "+" presents `GitNewBranchSheet` (a `Picker` start point
+defaulting to the checked-out branch, `nil` for the agent's `HEAD`, a checkout
+`Toggle`), and Check out is a leading swipe plus a context-menu entry on
+`branch_only` / `remote_branch` rows behind a `confirmationDialog` whose
+`isPresented` setter clears only the prompt — the row lives in
+`pendingCheckout` until Check out or Cancel runs, the same split the
+force-delete and discard dialogs use. Errors reuse `SessionGitError.map`
+after `ConflictDetail.busyHolders`; the copy lives in `GitItemDisplay`. The
+terminal menu's *Branches…* entry routes to `.gitManagement(projectName:)`
+for a project-backed session.
 
 ## Device support
 
