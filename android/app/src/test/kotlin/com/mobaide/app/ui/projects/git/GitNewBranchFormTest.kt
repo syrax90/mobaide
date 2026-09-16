@@ -155,4 +155,27 @@ class GitNewBranchFormTest {
             startPointOptions(items).map { it.value to it.label },
         )
     }
+
+    @Test
+    fun startPointOptions_skipAnOrphanWorktree_evenWhenItStillNamesItsDeletedBranch() {
+        val items = listOf(
+            GitItem(
+                kind = GitItem.KIND_ORPHAN_WORKTREE,
+                branch = "gone",
+                worktree_path = "/repo/wt/gone",
+                detached = false,
+            ),
+            GitItem(kind = GitItem.KIND_BRANCH_ONLY, branch = "feature-a"),
+            GitItem(kind = GitItem.KIND_REMOTE_BRANCH, branch = "origin/feature-x", remote = "origin"),
+        )
+
+        assertEquals(
+            listOf(
+                null to "HEAD (current commit)",
+                "feature-a" to "feature-a",
+                "origin/feature-x" to "origin/feature-x (remote)",
+            ),
+            startPointOptions(items).map { it.value to it.label },
+        )
+    }
 }

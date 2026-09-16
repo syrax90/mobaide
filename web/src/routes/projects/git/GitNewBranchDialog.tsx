@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import {
   GitBusyError,
+  KIND_BRANCH_ONLY,
+  KIND_BRANCH_WITH_WORKTREE,
   KIND_REMOTE_BRANCH,
   type GitBranchCreateRequest,
   type GitBranchResult,
@@ -45,7 +47,13 @@ export function GitNewBranchDialog({
   const [checkout, setCheckout] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const local = items.filter((item) => item.branch !== null && item.kind !== KIND_REMOTE_BRANCH);
+  // Only rows whose branch ref exists can start a branch: an orphan worktree
+  // still names a branch git already deleted, and its label is a path.
+  const local = items.filter(
+    (item) =>
+      item.branch !== null &&
+      (item.kind === KIND_BRANCH_ONLY || item.kind === KIND_BRANCH_WITH_WORKTREE),
+  );
   const remote = items.filter((item) => item.kind === KIND_REMOTE_BRANCH);
   const options: SelectOption[] = [
     { value: null, label: 'HEAD (current commit)' },

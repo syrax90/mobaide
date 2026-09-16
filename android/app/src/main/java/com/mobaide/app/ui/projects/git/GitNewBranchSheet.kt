@@ -54,7 +54,12 @@ const val GIT_NEW_BRANCH_ERROR_TAG = "git_new_branch_error"
 internal data class StartPointOption(val value: String?, val label: String)
 
 internal fun startPointOptions(items: List<GitItem>): List<StartPointOption> {
-    val local = items.filter { it.branch != null && it.kind != GitItem.KIND_REMOTE_BRANCH }
+    // Only rows whose branch ref exists can start a branch: an orphan worktree
+    // still names a branch git already deleted, and its label is a path.
+    val local = items.filter {
+        it.branch != null &&
+            (it.kind == GitItem.KIND_BRANCH_ONLY || it.kind == GitItem.KIND_BRANCH_WITH_WORKTREE)
+    }
     val remote = items.filter { it.kind == GitItem.KIND_REMOTE_BRANCH }
     return listOf(StartPointOption(null, "HEAD (current commit)")) +
         local.map { StartPointOption(it.branch, primaryLabel(it)) } +

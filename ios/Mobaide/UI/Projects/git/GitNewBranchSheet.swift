@@ -22,8 +22,12 @@ struct GitNewBranchSheet: View {
         !busy && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Only rows whose branch ref exists can start a branch: an orphan worktree
+    /// still names a branch git already deleted, and its label is a path.
     private var localItems: [GitItem] {
-        model.visibleItems.filter { $0.branch != nil && $0.kind != GitItem.kindRemoteBranch }
+        model.visibleItems.filter {
+            $0.branch != nil && ($0.kind == GitItem.kindBranchOnly || $0.kind == GitItem.kindBranchWithWorktree)
+        }
     }
 
     private var remoteItems: [GitItem] {

@@ -562,4 +562,26 @@ describe('GitScreen new branch', () => {
       'origin/feature-x (remote)',
     ]);
   });
+
+  it('skips an orphan worktree even when it still names its deleted branch', async () => {
+    api.items = [
+      branch('main', { is_current: true }),
+      branch('gone', { kind: 'orphan_worktree', worktree_path: '/wt/gone' }),
+      branch('feature-a'),
+      remoteBranch('feature-x'),
+    ];
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'New branch…' }));
+    const dialog = screen.getByRole('dialog');
+
+    const options = within(dialog)
+      .getAllByRole('option')
+      .map((option) => option.textContent);
+    expect(options).toEqual([
+      'HEAD (current commit)',
+      'main',
+      'feature-a',
+      'origin/feature-x (remote)',
+    ]);
+  });
 });
