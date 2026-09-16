@@ -48,7 +48,9 @@ const OWNER = {
    * `AutoScanInstanceDto` and `AutoScanListResponse` — the two that also arrive
    * over the agent channel and the `ws/autoscan` snapshot. #676's
    * `GitPullRequest` / `GitPushRequest` follow them here; `GitJobResponse`
-   * rides `git.job.progress` / `git.job.done` and keeps its mirror.
+   * rides `git.job.progress` / `git.job.done` and keeps its mirror. #677's
+   * `GitBranchCreateRequest` / `GitCheckoutRequest` / `GitBranchResponse` are
+   * plain REST bodies of the project Git screen and follow the same call.
    */
   generated: 'shipped — typed by the generated OpenAPI schema',
   /** Editing a custom agent type on web: CLA-231. */
@@ -105,6 +107,9 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/CodexLoginRequest.json': OWNER.generated,
   'dto/agent/CodexLoginResponse.json': OWNER.generated,
   'dto/agent/ForceUpdateResponse.json': OWNER.agentUpdate,
+  'dto/agent/GitBranchCreateRequest.json': OWNER.generated,
+  'dto/agent/GitBranchResponse.json': OWNER.generated,
+  'dto/agent/GitCheckoutRequest.json': OWNER.generated,
   'dto/agent/GitDeleteItem.json': OWNER.generated,
   'dto/agent/GitDeleteRequest.json': OWNER.generated,
   'dto/agent/GitDeleteResponse.json': OWNER.generated,

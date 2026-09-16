@@ -40,6 +40,7 @@ async def test_get_version(client) -> None:
             "fetch": True,
             "pull": True,
             "push": True,
+            "branches": True,
         },
     }
     # The signed manifest body now travels inline over the relay WebSocket

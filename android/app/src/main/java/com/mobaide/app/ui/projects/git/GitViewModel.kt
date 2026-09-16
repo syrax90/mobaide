@@ -3,6 +3,7 @@ package com.mobaide.app.ui.projects.git
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mobaide.app.data.network.dto.GitBranchCreateRequest
 import com.mobaide.app.data.network.dto.GitDeleteResultItem
 import com.mobaide.app.data.network.dto.GitDeleteItem
 import com.mobaide.app.data.network.dto.GitItem
@@ -38,6 +39,8 @@ import javax.inject.Inject
  *    compensating create, because no destructive action ever reached the server.
  *  - `force_required` results re-prompt and re-send with `force=true`; a 409
  *    restores every row, because the server rejects the batch whole.
+ *  - New branch and Check out are pessimistic: a typed or confirmed request
+ *    whose outcome the list shows through the same `git.changed` reload.
  */
 @HiltViewModel
 class GitViewModel @Inject constructor(
@@ -73,6 +76,18 @@ class GitViewModel @Inject constructor(
         viewModelScope.launch { reload() }
         viewModelScope.launch {
             gitRepository.changed.filter { it == projectName }.collect { reload() }
+        }
+        viewModelScope.launch { loadCapabilities() }
+    }
+
+    private suspend fun loadCapabilities() {
+        try {
+            val capabilities = gitRepository.gitCapabilities()
+            _uiState.update { it.copy(branchesEnabled = capabilities.branches) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // An unreadable probe keeps the delete-only screen older agents get.
         }
     }
 
@@ -296,6 +311,82 @@ class GitViewModel @Inject constructor(
                 )
             }
             _events.tryEmit(GitUiEvent.Message("Delete failed: ${e.message ?: "unknown error"}"))
+        }
+    }
+
+    fun toggleRemote() {
+        _uiState.update { it.copy(remoteExpanded = !it.remoteExpanded) }
+    }
+
+    fun setFilter(text: String) {
+        _uiState.update { it.copy(filter = text) }
+    }
+
+    fun openNewBranch() {
+        _uiState.update { if (it.branchesEnabled) it.copy(newBranch = NewBranchSheetState()) else it }
+    }
+
+    fun dismissNewBranch() {
+        _uiState.update { if (it.newBranch?.creating == true) it else it.copy(newBranch = null) }
+    }
+
+    /** `startPoint` null means the agent's default, `HEAD` of the project root. */
+    fun createBranch(name: String, startPoint: String?, checkout: Boolean) {
+        val trimmed = name.trim()
+        val sheet = _uiState.value.newBranch ?: return
+        if (sheet.creating || trimmed.isEmpty()) return
+        _uiState.update { it.copy(newBranch = NewBranchSheetState(creating = true)) }
+        viewModelScope.launch {
+            try {
+                val result = gitRepository.createBranch(
+                    projectName,
+                    GitBranchCreateRequest(name = trimmed, start_point = startPoint, checkout = checkout),
+                )
+                _uiState.update { it.copy(newBranch = null) }
+                _events.tryEmit(GitUiEvent.Message(branchCreatedMessage(result)))
+            } catch (e: GitBusyException) {
+                _uiState.update { it.copy(newBranch = null, busyDialog = e.busyBy) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(newBranch = NewBranchSheetState(error = createBranchErrorCopy(e, trimmed)))
+                }
+            }
+        }
+    }
+
+    fun requestCheckout(itemId: String) {
+        _uiState.update { state ->
+            val item = state.visibleItems.firstOrNull { it.id == itemId } ?: return@update state
+            if (!state.branchesEnabled || !item.canCheckOut || state.rowBusy) state
+            else state.copy(checkoutPrompt = item)
+        }
+    }
+
+    fun dismissCheckoutPrompt() {
+        _uiState.update { it.copy(checkoutPrompt = null) }
+    }
+
+    fun confirmCheckout() {
+        val item = _uiState.value.checkoutPrompt ?: return
+        val ref = item.branch ?: return
+        // Set before launching: on Main.immediate a second tap could otherwise
+        // land between the launch and the first suspension.
+        _uiState.update { it.copy(checkoutPrompt = null, checkingOut = true) }
+        viewModelScope.launch {
+            try {
+                val result = gitRepository.checkout(projectName, ref)
+                _events.tryEmit(GitUiEvent.Message(checkedOutMessage(result)))
+            } catch (e: GitBusyException) {
+                _uiState.update { it.copy(busyDialog = e.busyBy) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _events.tryEmit(GitUiEvent.Message(checkoutErrorCopy(e, primaryLabel(item))))
+            } finally {
+                _uiState.update { it.copy(checkingOut = false) }
+            }
         }
     }
 

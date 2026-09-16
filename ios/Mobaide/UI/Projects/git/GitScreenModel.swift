@@ -9,10 +9,17 @@ import Observation
 /// open joins the pending batch instead of replacing it. A `force_required`
 /// per-item result re-prompts and re-sends with `force=true`; a 409 lists the
 /// busy holders and restores every row, because the server rejects the batch
-/// whole.
+/// whole. New branch and Check out are pessimistic: a typed or confirmed
+/// request whose outcome the list shows through the same `git.changed` reload.
 @MainActor
 @Observable
 final class GitScreenModel {
+    /// The New branch sheet: `isCreating` blocks dismissal, `error` is the inline refusal.
+    struct NewBranchSheetState: Equatable {
+        var isCreating = false
+        var error: String?
+    }
+
     /// A queued delete: the wire item plus the `GitItem.id` it came from, so the
     /// positional `results` array can be mapped back onto rows.
     struct PendingDelete: Equatable {
@@ -33,6 +40,19 @@ final class GitScreenModel {
     var forcePrompt: ForcePrompt?
     var busyDialog: [BusyHolder]?
     var message: String?
+
+    /// Set from the screen's own task, never from `load()`: the tests pin the
+    /// request sequence by index.
+    private(set) var capabilities = GitCapabilities.none
+    var remoteExpanded = false
+    var filter = ""
+    var newBranch: NewBranchSheetState?
+    var checkoutPrompt: GitItem?
+    private(set) var isCheckingOut = false
+    /// The row the confirmation is about. Kept apart from `checkoutPrompt`
+    /// because SwiftUI writes the dialog's `isPresented` binding on dismissal,
+    /// which can clear the prompt before the confirm action runs.
+    private var pendingCheckout: GitItem?
 
     let projectName: String
     private let agentAPI: AgentAPI
@@ -66,6 +86,28 @@ final class GitScreenModel {
     var hasDeletableItems: Bool { visibleItems.contains(where: \.isDeletable) }
 
     var isEmpty: Bool { visibleItems.isEmpty && !isLoading }
+
+    var canManageBranches: Bool { capabilities.branches }
+
+    var filterable: Bool { visibleItems.count >= GitItemDisplay.filterThreshold }
+
+    private var shownItems: [GitItem] {
+        filterable ? visibleItems.filter { GitItemDisplay.matchesFilter($0, filter) } : visibleItems
+    }
+
+    var localItems: [GitItem] { shownItems.filter { $0.kind != GitItem.kindRemoteBranch } }
+
+    var remoteItems: [GitItem] { shownItems.filter { $0.kind == GitItem.kindRemoteBranch } }
+
+    /// A non-empty filter opens the remote section: hidden matches would read as "not found".
+    var remoteOpen: Bool { remoteExpanded || !filter.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    /// One `GET /api/version` per screen visit. An unreadable probe keeps the
+    /// delete-only screen older agents get.
+    func loadCapabilities() async {
+        guard let info = try? await agentAPI.getAgentVersion() else { return }
+        capabilities = info.gitCapabilities
+    }
 
     func load() async {
         // Guard against overlapping loads (appear `.task`, pull-to-refresh, and
@@ -192,6 +234,94 @@ final class GitScreenModel {
 
     func dismissBusy() { busyDialog = nil }
 
+    // MARK: - Branches (create, check out)
+
+    func toggleRemote() { remoteExpanded.toggle() }
+
+    func openNewBranch() {
+        guard capabilities.branches else { return }
+        newBranch = NewBranchSheetState()
+    }
+
+    func closeNewBranch() {
+        guard newBranch?.isCreating != true else { return }
+        newBranch = nil
+    }
+
+    /// `startPoint` nil means the agent's default, `HEAD` of the project root.
+    func createBranch(name: String, startPoint: String?, checkout: Bool) async {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var sheet = newBranch, !sheet.isCreating, !trimmed.isEmpty else { return }
+        sheet.isCreating = true
+        sheet.error = nil
+        newBranch = sheet
+        do {
+            let result = try await agentAPI.createGitBranch(
+                projectName: projectName,
+                request: GitBranchCreateRequest(name: trimmed, start_point: startPoint, checkout: checkout)
+            )
+            newBranch = nil
+            message = GitItemDisplay.branchCreatedMessage(result)
+        } catch {
+            if SessionGitError.isCancellation(error) { return }
+            if let holders = Self.busyHolders(in: error) {
+                newBranch = nil
+                busyDialog = holders
+                return
+            }
+            newBranch = NewBranchSheetState(
+                error: GitItemDisplay.createBranchErrorCopy(SessionGitError.map(error), name: trimmed)
+            )
+        }
+    }
+
+    func requestCheckout(_ item: GitItem) {
+        guard capabilities.branches, item.canCheckOut, !isCheckingOut else { return }
+        pendingCheckout = item
+        checkoutPrompt = item
+    }
+
+    func dismissCheckoutPrompt() {
+        pendingCheckout = nil
+        checkoutPrompt = nil
+    }
+
+    func confirmCheckout() {
+        guard let item = pendingCheckout, let ref = item.branch else { return }
+        pendingCheckout = nil
+        checkoutPrompt = nil
+        isCheckingOut = true
+        Task { [weak self] in await self?.checkout(item, ref: ref) }
+    }
+
+    private func checkout(_ item: GitItem, ref: String) async {
+        defer { isCheckingOut = false }
+        do {
+            let result = try await agentAPI.checkoutGitRef(
+                projectName: projectName,
+                request: GitCheckoutRequest(ref: ref)
+            )
+            message = GitItemDisplay.checkedOutMessage(result)
+        } catch {
+            if SessionGitError.isCancellation(error) { return }
+            if let holders = Self.busyHolders(in: error) {
+                busyDialog = holders
+                return
+            }
+            message = GitItemDisplay.checkoutErrorCopy(
+                SessionGitError.map(error),
+                branch: GitItemDisplay.primaryLabel(item)
+            )
+        }
+    }
+
+    /// The busy `409` keeps the screen's own dialog; every other coded detail
+    /// maps like the session routes.
+    private static func busyHolders(in error: any Error) -> [BusyHolder]? {
+        guard let apiError = error as? APIError, apiError.code == 409 else { return nil }
+        return ConflictDetail.busyHolders(from: apiError.errorBody)
+    }
+
     private func sendDelete(_ batch: [PendingDelete]) async {
         guard !batch.isEmpty else { return }
         do {
@@ -257,6 +387,18 @@ private extension GitDeleteItem {
 
 /// Row display derivations shared by the git list (Android `GitItemRow`).
 enum GitItemDisplay {
+    /// Below this many rows a filter field would take more space than it saves.
+    static let filterThreshold = 8
+
+    /// The coded refusals of the branch routes (PROTOCOL.md), on top of the session vocabulary.
+    static let codeExists = "exists"
+    static let codeBadBranchName = "bad_branch_name"
+    static let codeUnknownStartPoint = "unknown_start_point"
+    static let codeDirty = "dirty"
+    static let codeCheckedOutElsewhere = "checked_out_elsewhere"
+    static let codeOperationInProgress = "operation_in_progress"
+    static let codeRefNotFound = "ref_not_found"
+
     static func primaryLabel(_ item: GitItem) -> String {
         switch item.kind {
         case GitItem.kindOrphanWorktree:
@@ -284,9 +426,34 @@ enum GitItemDisplay {
         case muted
     }
 
+    /// `YYYY-MM-DD` from the agent's `iso-strict` committer date — a prefix, not a
+    /// parse, so the day stays the committer's own on all three clients.
+    static func shortDate(_ iso: String?) -> String? {
+        guard let iso, !iso.isEmpty else { return nil }
+        return iso.count > 10 ? String(iso.prefix(10)) : iso
+    }
+
+    /// The tip commit's subject and day, as the agent reported them.
+    static func tipLine(_ item: GitItem) -> String? {
+        let subject = item.subject?.trimmingCharacters(in: .whitespaces) ?? ""
+        let date = shortDate(item.committed_at)
+        if subject.isEmpty { return date }
+        guard let date else { return subject }
+        return "\(subject) · \(date)"
+    }
+
+    /// A case-insensitive substring match on the branch and the worktree path.
+    static func matchesFilter(_ item: GitItem, _ filter: String) -> Bool {
+        let needle = filter.trimmingCharacters(in: .whitespaces).lowercased()
+        if needle.isEmpty { return true }
+        return primaryLabel(item).lowercased().contains(needle)
+            || (item.worktree_path ?? "").lowercased().contains(needle)
+    }
+
     static func chips(_ item: GitItem) -> [(text: String, style: ChipStyle)] {
         var chips: [(String, ChipStyle)] = []
         if item.is_current { chips.append(("current", .highlight)) }
+        if item.kind == GitItem.kindRemoteBranch { chips.append((item.remote ?? "remote", .muted)) }
         if item.gone { chips.append(("gone", .danger)) }
         if item.ahead > 0 || item.behind > 0 { chips.append(("ahead \(item.ahead) / behind \(item.behind)", .neutral)) }
         if item.locked {
@@ -318,5 +485,66 @@ enum GitItemDisplay {
         case "invalid": return "the request was invalid"
         default: return "unknown error"
         }
+    }
+}
+
+extension GitItemDisplay {
+    static func checkoutConfirmMessage(branch: String, projectName: String) -> String {
+        "Check out \(branch) in the project folder of \(projectName)? "
+            + "Sessions started in that folder afterwards use this branch."
+    }
+
+    static func checkedOutMessage(_ result: GitBranchResponse) -> String {
+        "Checked out \(result.branch)"
+    }
+
+    static func branchCreatedMessage(_ result: GitBranchResponse) -> String {
+        result.checked_out ? "Created and checked out \(result.branch)" : "Created \(result.branch)"
+    }
+
+    /// The checkout refusals, word for word what Android and the web show.
+    static func checkoutErrorCopy(_ error: any Error, branch: String) -> String {
+        if case .git(let code, let message)? = error as? SessionGitError {
+            switch code {
+            case codeDirty:
+                return "The project folder has local changes this checkout would overwrite. "
+                    + "Commit or discard them from a session's Changes screen first."
+            case codeCheckedOutElsewhere:
+                if let message, !message.isEmpty {
+                    return "\(branch) is already checked out in another worktree (\(message))."
+                }
+                return "\(branch) is already checked out in another worktree."
+            case codeOperationInProgress:
+                return "A merge, rebase or cherry-pick is in progress in the project folder. "
+                    + "Finish or abort it first."
+            case SessionGitError.codeJobRunning:
+                return "A fetch, pull or push is still running in the project folder."
+            case codeRefNotFound:
+                return "Branch not found — refresh the list."
+            default:
+                break
+            }
+        }
+        return SessionGitCopy.errorMessage(for: error)
+    }
+
+    /// The create refusals shown inline in the New branch sheet.
+    static func createBranchErrorCopy(_ error: any Error, name: String) -> String {
+        if case .git(let code, let message)? = error as? SessionGitError {
+            switch code {
+            case codeExists:
+                return "A branch named \(name) already exists."
+            case codeBadBranchName:
+                return "Not a valid branch name."
+            case codeUnknownStartPoint:
+                if let message, !message.isEmpty {
+                    return "Start point \(message) was not found."
+                }
+                return "The start point was not found."
+            default:
+                break
+            }
+        }
+        return checkoutErrorCopy(error, branch: name)
     }
 }

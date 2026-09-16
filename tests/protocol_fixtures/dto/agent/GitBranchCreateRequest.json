@@ -1,0 +1,23 @@
+{
+  "type": "GitBranchCreateRequest",
+  "cases": [
+    {
+      "name": "minimal",
+      "wire": {
+        "name": "feature/login"
+      },
+      "decoded_canonical": {
+        "name": "feature/login",
+        "checkout": false
+      }
+    },
+    {
+      "name": "with_start_point_and_checkout",
+      "wire": {
+        "name": "hotfix/1.2.1",
+        "start_point": "origin/release/1.2",
+        "checkout": true
+      }
+    }
+  ]
+}

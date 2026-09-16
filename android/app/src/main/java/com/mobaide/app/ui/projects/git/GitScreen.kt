@@ -1,18 +1,29 @@
 package com.mobaide.app.ui.projects.git
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
+import com.mobaide.app.ui.theme.ChromeFontFamily
 import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import com.mobaide.app.ui.common.pixel.PixelBlinkCursor
 import com.mobaide.app.ui.common.pixel.PixelIconButton
@@ -40,7 +51,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.BusyHolder
+import com.mobaide.app.data.network.dto.GitItem
 import com.mobaide.app.ui.common.DeleteSwipeBackground
+
+const val GIT_NEW_BRANCH_BUTTON_TAG = "git_new_branch_button"
+const val GIT_FILTER_TAG = "git_filter"
+const val GIT_REMOTE_HEADER_TAG = "git_remote_header"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -109,6 +125,15 @@ fun GitScreen(
                         }
                     },
                     actions = {
+                        if (state.branchesEnabled) {
+                            PixelIconButton(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "New branch",
+                                onClick = viewModel::openNewBranch,
+                                enabled = !state.rowBusy,
+                                modifier = Modifier.testTag(GIT_NEW_BRANCH_BUTTON_TAG),
+                            )
+                        }
                         if (state.hasDeletableItems) {
                             PixelIconButton(
                                 imageVector = Icons.Default.Checklist,
@@ -147,50 +172,84 @@ fun GitScreen(
                     )
                 }
                 else -> {
+                    val localItems = state.localItems
+                    val remoteItems = state.remoteItems
                     LazyColumn(
                         contentPadding = PaddingValues(vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
-                        items(visibleItems, key = { it.id }) { item ->
-                            val row: @Composable () -> Unit = {
-                                GitItemRow(
-                                    item = item,
-                                    selected = item.id in state.selected,
-                                    inSelectionMode = state.inSelectionMode,
-                                    onTap = {
-                                        if (state.inSelectionMode) viewModel.toggle(item.id)
-                                    },
-                                    onLongPress = { viewModel.enterSelection(item.id) },
+                        if (state.filterable) {
+                            item(key = "filter") {
+                                OutlinedTextField(
+                                    colors = PixelTextFieldDefaults.colors(),
+                                    value = state.filter,
+                                    onValueChange = viewModel::setFilter,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                                        .testTag(GIT_FILTER_TAG),
+                                    placeholder = { Text("Filter branches") },
+                                    singleLine = true,
                                 )
                             }
-                            if (item.isDeletable && !state.inSelectionMode) {
-                                val dismissState = rememberSwipeToDismissBoxState(
-                                    confirmValueChange = { value ->
-                                        if (value == SwipeToDismissBoxValue.EndToStart) {
-                                            viewModel.deleteItem(item.id)
-                                        }
-                                        // Return false so the row isn't locked in the
-                                        // dismissed position: the VM hides it via
-                                        // pendingDeleteIds, and Undo must restore it.
-                                        false
-                                    },
+                        }
+                        if (localItems.isEmpty() && remoteItems.isEmpty()) {
+                            item(key = "no-match") {
+                                Text(
+                                    text = "No matching branches or worktrees.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(24.dp),
                                 )
-                                SwipeToDismissBox(
-                                    state = dismissState,
-                                    enableDismissFromStartToEnd = false,
-                                    enableDismissFromEndToStart = true,
-                                    backgroundContent = { DeleteSwipeBackground() },
-                                ) {
-                                    row()
+                            }
+                        }
+                        items(localItems, key = { it.id }) { item ->
+                            SwipeableGitRow(item = item, state = state, viewModel = viewModel)
+                        }
+                        if (remoteItems.isNotEmpty()) {
+                            item(key = "remote-header") {
+                                RemoteSectionHeader(
+                                    count = remoteItems.size,
+                                    open = state.remoteOpen,
+                                    onToggle = viewModel::toggleRemote,
+                                )
+                            }
+                            if (state.remoteOpen) {
+                                items(remoteItems, key = { it.id }) { item ->
+                                    SwipeableGitRow(item = item, state = state, viewModel = viewModel)
                                 }
-                            } else {
-                                row()
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    val checkoutPrompt = state.checkoutPrompt
+    if (checkoutPrompt != null) {
+        val branch = primaryLabel(checkoutPrompt)
+        PixelAlertDialog(
+            onDismissRequest = viewModel::dismissCheckoutPrompt,
+            title = { Text("Check out $branch?") },
+            text = { Text(checkoutConfirmMessage(branch, projectName)) },
+            confirmButton = {
+                PixelTextButton(onClick = viewModel::confirmCheckout) { Text("Check out") }
+            },
+            dismissButton = {
+                PixelTextButton(onClick = viewModel::dismissCheckoutPrompt) { Text("Cancel") }
+            },
+        )
+    }
+
+    val newBranch = state.newBranch
+    if (newBranch != null) {
+        GitNewBranchSheet(
+            state = newBranch,
+            items = state.visibleItems,
+            projectName = projectName,
+            onDismiss = viewModel::dismissNewBranch,
+            onCreate = viewModel::createBranch,
+        )
     }
 
     val busyDialog = state.busyDialog
@@ -219,6 +278,81 @@ fun GitScreen(
             dismissButton = {
                 PixelTextButton(onClick = viewModel::dismissForceDeletePrompt) { Text("Cancel") }
             },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeableGitRow(
+    item: GitItem,
+    state: GitUiState,
+    viewModel: GitViewModel,
+) {
+    val row: @Composable () -> Unit = {
+        GitItemRow(
+            item = item,
+            selected = item.id in state.selected,
+            inSelectionMode = state.inSelectionMode,
+            onTap = {
+                if (state.inSelectionMode) viewModel.toggle(item.id)
+            },
+            onLongPress = { viewModel.enterSelection(item.id) },
+            checkoutEnabled = state.branchesEnabled,
+            busy = state.rowBusy,
+            onCheckout = { viewModel.requestCheckout(item.id) },
+        )
+    }
+    if (item.isDeletable && !state.inSelectionMode) {
+        val dismissState = rememberSwipeToDismissBoxState(
+            confirmValueChange = { value ->
+                if (value == SwipeToDismissBoxValue.EndToStart) {
+                    viewModel.deleteItem(item.id)
+                }
+                // Return false so the row isn't locked in the dismissed
+                // position: the VM hides it via pendingDeleteIds, and Undo
+                // must restore it.
+                false
+            },
+        )
+        SwipeToDismissBox(
+            state = dismissState,
+            enableDismissFromStartToEnd = false,
+            enableDismissFromEndToStart = true,
+            backgroundContent = { DeleteSwipeBackground() },
+        ) {
+            row()
+        }
+    } else {
+        row()
+    }
+}
+
+@Composable
+private fun RemoteSectionHeader(
+    count: Int,
+    open: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .testTag(GIT_REMOTE_HEADER_TAG),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = "Remote branches ($count)",
+            style = MaterialTheme.typography.titleSmall.copy(fontFamily = ChromeFontFamily),
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Icon(
+            imageVector = if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+            contentDescription = if (open) "Collapse remote branches" else "Expand remote branches",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

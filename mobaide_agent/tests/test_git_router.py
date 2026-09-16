@@ -45,6 +45,7 @@ from mobaide.linear.worktree import (
 )
 
 from .conftest import TEST_JWT_SECRET, TEST_PASSWORD, TEST_USERNAME
+from .git_repo_support import clone_repo, seed_remote
 
 
 GIT_BIN = shutil.which("git")
@@ -915,3 +916,218 @@ class TestGitRouterEndpoints:
         items = resp3.json()["items"]
         assert all(i.get("worktree_path") != topic_wt for i in items)
         assert all(i.get("branch") != "topic" for i in items)
+
+
+class TestGitBranchEndpoints:
+    """The routes added: ``?remote=true`` on the listing, ``POST
+    /branches`` and ``POST /checkout``, with the 200 / 400 / 404 / 409 shapes
+    the three clients branch on."""
+
+    async def _branches(self, client, headers, project="alpha"):
+        resp = await client.get(f"/api/projects/{project}/git/items", headers=headers)
+        assert resp.status_code == 200, resp.text
+        return {
+            i["branch"]: i for i in resp.json()["items"] if i.get("branch") is not None
+        }
+
+    async def test_get_items_remote_true_adds_tip_fields_and_remote_rows(
+        self, client_git, auth_headers_g, app_with_git, tmp_path,
+    ):
+        clone = clone_repo(seed_remote(str(tmp_path)), str(tmp_path / "beta"))
+        app_with_git.state.projects_store.create(ProjectRecord(name="beta", path=clone))
+
+        plain = await client_git.get(
+            "/api/projects/beta/git/items", headers=auth_headers_g,
+        )
+        remote = await client_git.get(
+            "/api/projects/beta/git/items", params={"remote": "true"}, headers=auth_headers_g,
+        )
+
+        assert plain.status_code == 200 and remote.status_code == 200
+        assert [i["kind"] for i in plain.json()["items"]] == ["branch_with_worktree"]
+        assert [(i["kind"], i["branch"], i["remote"]) for i in remote.json()["items"]] == [
+            ("branch_with_worktree", "main", None),
+            ("remote_branch", "origin/main", "origin"),
+        ]
+        for item in remote.json()["items"]:
+            assert item["subject"] == "initial"
+            assert isinstance(item["committed_at"], str)
+
+    async def test_get_items_rejects_a_non_boolean_remote_flag(
+        self, client_git, auth_headers_g,
+    ):
+        resp = await client_git.get(
+            "/api/projects/alpha/git/items", params={"remote": "maybe"}, headers=auth_headers_g,
+        )
+        assert resp.status_code == 422
+
+    async def test_post_items_delete_rejects_a_remote_branch_row(
+        self, client_git, auth_headers_g,
+    ):
+        resp = await client_git.post(
+            "/api/projects/alpha/git/items:delete",
+            headers=auth_headers_g,
+            json={"items": [{"kind": "remote_branch", "branch": "origin/main"}]},
+        )
+        assert resp.status_code == 422
+
+    async def test_post_branches_creates_and_lists_the_branch(
+        self, client_git, auth_headers_g,
+    ):
+        resp = await client_git.post(
+            "/api/projects/alpha/git/branches",
+            headers=auth_headers_g,
+            json={"name": "feature/new"},
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"branch": "feature/new", "checked_out": False, "created": True}
+        branches = await self._branches(client_git, auth_headers_g)
+        assert branches["feature/new"]["kind"] == "branch_only"
+        assert branches["main"]["is_current"] is True
+
+    async def test_post_branches_with_checkout_switches_the_root(
+        self, client_git, auth_headers_g,
+    ):
+        resp = await client_git.post(
+            "/api/projects/alpha/git/branches",
+            headers=auth_headers_g,
+            json={"name": "feature/new", "start_point": "stale", "checkout": True},
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"branch": "feature/new", "checked_out": True, "created": True}
+        branches = await self._branches(client_git, auth_headers_g)
+        assert branches["feature/new"]["is_current"] is True
+        assert branches["main"]["is_current"] is False
+
+    @pytest.mark.parametrize(
+        ("body", "status", "detail"),
+        [
+            ({"name": "-x"}, 400, {"code": "bad_branch_name"}),
+            ({"name": "stale"}, 409, {"code": "exists", "message": "stale"}),
+            (
+                {"name": "n", "start_point": "nope"},
+                409,
+                {"code": "unknown_start_point", "message": "nope"},
+            ),
+        ],
+    )
+    async def test_post_branches_refusals(
+        self, client_git, auth_headers_g, body, status, detail,
+    ):
+        resp = await client_git.post(
+            "/api/projects/alpha/git/branches", headers=auth_headers_g, json=body,
+        )
+
+        assert resp.status_code == status, resp.text
+        assert resp.json() == {"detail": detail}
+        assert set(await self._branches(client_git, auth_headers_g)) == {"main", "topic", "stale"}
+
+    async def test_post_branches_requires_auth(self, client_git):
+        resp = await client_git.post(
+            "/api/projects/alpha/git/branches", json={"name": "x"},
+        )
+        assert resp.status_code in (401, 403)
+
+    async def test_post_checkout_switches_the_root_and_publishes_git_changed(
+        self, client_git, auth_headers_g, app_with_git, real_repo,
+    ):
+        bus = app_with_git.state.event_bus
+        queue = bus.subscribe()
+        try:
+            resp = await client_git.post(
+                "/api/projects/alpha/git/checkout",
+                headers=auth_headers_g,
+                json={"ref": "stale"},
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json() == {"branch": "stale", "checked_out": True, "created": False}
+
+            event = await asyncio.wait_for(queue.get(), timeout=2.0)
+            toplevel, common_dir = await resolve_repo_dirs(real_repo)
+            assert event.type == "git.changed"
+            assert event.payload == {
+                "project_name": "alpha",
+                "toplevel": toplevel,
+                "common_dir": common_dir,
+            }
+        finally:
+            bus.unsubscribe(queue)
+
+        branches = await self._branches(client_git, auth_headers_g)
+        assert branches["stale"]["is_current"] is True
+        assert branches["main"]["is_current"] is False
+
+    async def test_post_checkout_unknown_ref_is_404_with_a_coded_detail(
+        self, client_git, auth_headers_g,
+    ):
+        resp = await client_git.post(
+            "/api/projects/alpha/git/checkout",
+            headers=auth_headers_g,
+            json={"ref": "nope"},
+        )
+
+        assert resp.status_code == 404
+        assert resp.json() == {"detail": {"code": "ref_not_found"}}
+
+    async def test_post_checkout_branch_in_another_worktree_is_409(
+        self, client_git, auth_headers_g, real_repo,
+    ):
+        resp = await client_git.post(
+            "/api/projects/alpha/git/checkout",
+            headers=auth_headers_g,
+            json={"ref": "topic"},
+        )
+
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "checked_out_elsewhere"
+        assert os.path.realpath(detail["message"]) == os.path.realpath(
+            os.path.join(real_repo, "wt", "topic")
+        )
+        assert (await self._branches(client_git, auth_headers_g))["main"]["is_current"] is True
+
+    async def test_post_checkout_busy_returns_409_with_busy_by(
+        self, client_git, auth_headers_g, app_with_git, real_repo,
+    ):
+        fake_session = types.SimpleNamespace(session_id="s-busy", cwd=real_repo)
+        original_list = app_with_git.state.session_manager.list_sessions
+        app_with_git.state.session_manager.list_sessions = (  # type: ignore[method-assign]
+            lambda: [fake_session]
+        )
+        try:
+            resp = await client_git.post(
+                "/api/projects/alpha/git/checkout",
+                headers=auth_headers_g,
+                json={"ref": "stale"},
+            )
+        finally:
+            app_with_git.state.session_manager.list_sessions = original_list  # type: ignore[method-assign]
+
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert [(h["kind"], h["session_id"]) for h in detail["busy_by"]] == [("session", "s-busy")]
+        assert "code" not in detail
+        assert (await self._branches(client_git, auth_headers_g))["main"]["is_current"] is True
+
+    async def test_post_checkout_session_in_a_linked_worktree_does_not_block(
+        self, client_git, auth_headers_g, app_with_git, real_repo,
+    ):
+        topic_wt = os.path.join(real_repo, "wt", "topic")
+        fake_session = types.SimpleNamespace(session_id="s-linked", cwd=topic_wt)
+        original_list = app_with_git.state.session_manager.list_sessions
+        app_with_git.state.session_manager.list_sessions = (  # type: ignore[method-assign]
+            lambda: [fake_session]
+        )
+        try:
+            resp = await client_git.post(
+                "/api/projects/alpha/git/checkout",
+                headers=auth_headers_g,
+                json={"ref": "stale"},
+            )
+        finally:
+            app_with_git.state.session_manager.list_sessions = original_list  # type: ignore[method-assign]
+
+        assert resp.status_code == 200, resp.text
+        assert (await self._branches(client_git, auth_headers_g))["stale"]["is_current"] is True

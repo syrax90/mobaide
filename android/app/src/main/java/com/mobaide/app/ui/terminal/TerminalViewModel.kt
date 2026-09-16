@@ -282,6 +282,17 @@ class TerminalViewModel @Inject constructor(
         gitCapabilities.map { it.hasSync }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    /** The project the session belongs to; Branches… links to its Git screen. */
+    val sessionProjectName: StateFlow<String?> =
+        sessionRow
+            .map { it.project_name }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** Whether the `⋯` menu offers Branches… (`capabilities.git.branches`). */
+    val gitBranchesAvailable: StateFlow<Boolean> =
+        gitCapabilities.map { it.branches }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 

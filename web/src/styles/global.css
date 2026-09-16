@@ -3826,3 +3826,13 @@ body:has(dialog[open]) {
 }
 
 /* endregion */
+
+/* region Project Git: remote branches section */
+.git-remote-section {
+  margin-top: 1rem;
+}
+
+.git-remote-section > .git-list {
+  margin-top: 0.5rem;
+}
+/* endregion */

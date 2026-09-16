@@ -15,12 +15,17 @@
         "locked": true,
         "locked_reason": "manual lock",
         "detached": false,
-        "prunable": false
+        "prunable": false,
+        "subject": "Fix the login redirect",
+        "committed_at": "2026-09-16T10:11:12+02:00"
       }
     },
     {
       "name": "minimal_defaults_materialize",
-      "wire": { "kind": "branch_only", "branch": "main" },
+      "wire": {
+        "kind": "branch_only",
+        "branch": "main"
+      },
       "decoded_canonical": {
         "kind": "branch_only",
         "branch": "main",
@@ -31,6 +36,30 @@
         "locked": false,
         "detached": false,
         "prunable": false
+      }
+    },
+    {
+      "name": "remote_branch",
+      "wire": {
+        "kind": "remote_branch",
+        "branch": "origin/feature/x",
+        "remote": "origin",
+        "subject": "Fix the login redirect",
+        "committed_at": "2026-09-16T10:11:12+02:00"
+      },
+      "decoded_canonical": {
+        "kind": "remote_branch",
+        "branch": "origin/feature/x",
+        "is_current": false,
+        "ahead": 0,
+        "behind": 0,
+        "gone": false,
+        "locked": false,
+        "detached": false,
+        "prunable": false,
+        "remote": "origin",
+        "subject": "Fix the login redirect",
+        "committed_at": "2026-09-16T10:11:12+02:00"
       }
     }
   ]

@@ -87,11 +87,14 @@ fun TerminalScreen(
     onOpenGitChanges: () -> Unit = {},
     onOpenGitCommit: () -> Unit = {},
     onOpenGitSync: () -> Unit = {},
+    onOpenGitBranches: (projectName: String) -> Unit = {},
 ) {
     val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
     val sessionCwd by viewModel.sessionCwd.collectAsStateWithLifecycle()
+    val sessionProjectName by viewModel.sessionProjectName.collectAsStateWithLifecycle()
     val gitCommitAvailable by viewModel.gitCommitAvailable.collectAsStateWithLifecycle()
     val gitSyncAvailable by viewModel.gitSyncAvailable.collectAsStateWithLifecycle()
+    val gitBranchesAvailable by viewModel.gitBranchesAvailable.collectAsStateWithLifecycle()
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val followMode by viewModel.followMode.collectAsStateWithLifecycle()
@@ -216,12 +219,17 @@ fun TerminalScreen(
                 },
                 actions = {
                     if (sessionCwd != null) {
+                        val branchesProject = sessionProjectName
                         TerminalOverflowMenu(
                             onOpenGitChanges = onOpenGitChanges,
                             onOpenGitCommit = onOpenGitCommit,
                             commitAvailable = gitCommitAvailable,
                             onOpenGitSync = onOpenGitSync,
                             syncAvailable = gitSyncAvailable,
+                            onOpenGitBranches = {
+                                if (branchesProject != null) onOpenGitBranches(branchesProject)
+                            },
+                            branchesAvailable = gitBranchesAvailable && branchesProject != null,
                         )
                     }
                 },

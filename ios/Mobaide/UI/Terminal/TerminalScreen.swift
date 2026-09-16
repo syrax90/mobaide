@@ -156,9 +156,9 @@ private struct TerminalScreenContent: View {
                 // Session-scoped git needs a directory to run in, and the row
                 // is nil until it loads (cold-start deep link), so the menu
                 // appears once the cwd is known. Fixed order: a top-bar `Menu`
-                // otherwise renders its sections bottom-up, and the later git
-                // actions (branches, rebase) are reserved slots under the same
-                // heading, after Fetch / Pull / Push…, in that order.
+                // otherwise renders its sections bottom-up. Branches… links to
+                // the project's Git screen, so it also needs a project-backed
+                // session; Rebase… is the one reserved slot left, after it.
                 if sessionRow?.cwd != nil {
                     Menu {
                         Section("Git") {
@@ -179,6 +179,13 @@ private struct TerminalScreenContent: View {
                                     router.navigate(to: .sessionGitChanges(sessionId: sessionId, sync: true))
                                 } label: {
                                     Label("Fetch / Pull / Push…", systemImage: "arrow.triangle.2.circlepath")
+                                }
+                            }
+                            if gitCapabilities.branches, let projectName = sessionRow?.project_name {
+                                Button {
+                                    router.navigate(to: .gitManagement(projectName: projectName))
+                                } label: {
+                                    Label("Branches…", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                                 }
                             }
                         }

@@ -163,6 +163,49 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.bodies[0], Data())
     }
 
+    func testGitItemsAlwaysAskForTheRemoteRows() async throws {
+        StubURLProtocol.enqueue(status: 200, body: #"{"items":[]}"#)
+        _ = try await makeAPI().getGitItems(projectName: "My Project")
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "http://agent.example.com/api/projects/My%20Project/git/items?remote=true"
+        )
+    }
+
+    func testGitBranchRoutesPostTheirBodies() async throws {
+        StubURLProtocol.enqueue(status: 200, body: #"{"branch":"x","checked_out":false,"created":true}"#)
+        StubURLProtocol.enqueue(status: 200, body: #"{"branch":"x","checked_out":true,"created":false}"#)
+        let api = makeAPI()
+
+        let created = try await api.createGitBranch(
+            projectName: "proj",
+            request: GitBranchCreateRequest(name: "x", start_point: "origin/main", checkout: false)
+        )
+        let checkedOut = try await api.checkoutGitRef(projectName: "proj", request: GitCheckoutRequest(ref: "x"))
+
+        XCTAssertEqual(created, GitBranchResponse(branch: "x", checked_out: false, created: true))
+        XCTAssertEqual(checkedOut, GitBranchResponse(branch: "x", checked_out: true, created: false))
+        XCTAssertEqual(
+            StubURLProtocol.requests.map { $0.url?.absoluteString },
+            [
+                "http://agent.example.com/api/projects/proj/git/branches",
+                "http://agent.example.com/api/projects/proj/git/checkout",
+            ]
+        )
+        XCTAssertEqual(StubURLProtocol.requests.map(\.httpMethod), ["POST", "POST"])
+        XCTAssertEqual(
+            try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0]),
+            ["name": "x", "start_point": "origin/main", "checkout": false]
+        )
+        XCTAssertEqual(
+            try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[1]),
+            ["ref": "x"]
+        )
+    }
+
     func testGitItemsDeleteUsesColonSuffixPost() async throws {
         StubURLProtocol.enqueue(status: 200, body: #"{"results":[]}"#)
         _ = try await makeAPI().deleteGitItems(

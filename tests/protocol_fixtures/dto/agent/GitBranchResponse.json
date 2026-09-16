@@ -1,0 +1,21 @@
+{
+  "type": "GitBranchResponse",
+  "cases": [
+    {
+      "name": "created_only",
+      "wire": {
+        "branch": "feature/login",
+        "checked_out": false,
+        "created": true
+      }
+    },
+    {
+      "name": "checked_out_existing",
+      "wire": {
+        "branch": "feature/login",
+        "checked_out": true,
+        "created": false
+      }
+    }
+  ]
+}

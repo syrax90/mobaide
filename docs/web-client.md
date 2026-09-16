@@ -791,6 +791,30 @@ hand-written Zod mirror and a shared parser in `src/api/conflicts.ts` —
 alongside the string-shaped project conflicts, which is the split
 `ConflictParsing.swift` makes and Android duplicates.
 
+**Branch management (#677)** rides the same screen once
+`capabilities.git.branches` is advertised — probed with the terminal's
+`useSessionGitCapabilities`, which is per agent despite its name. The list
+always asks for `?remote=true` (the flag shields *older clients* from the
+`remote_branch` kind; an older agent ignores it) and renders the remote rows
+inside a `<details className="advanced">` under the local ones, closed until
+opened or until the filter — a plain `type="search"` input that appears at
+eight rows — is non-empty. Rows show the tip commit's subject and a
+`YYYY-MM-DD` prefix of `committed_at` (a slice, never a parse, so the day is
+the committer's own on all three clients). *New branch…* opens
+`GitNewBranchDialog` (name, a `SelectField` start point defaulting to the
+checked-out branch with `null` for the agent's `HEAD`, a checkout checkbox);
+Check out is a per-row button on `branch_only` and `remote_branch` rows behind
+an `alertdialog` confirmation whose initial focus is Cancel. Both mutations
+reuse `toSessionGitError` after the busy check: a `busy_by` 409 opens the
+existing "Item is in use" dialog, every coded detail becomes a
+`SessionGitError` whose copy `gitDisplay.ts` maps (`dirty`,
+`checked_out_elsewhere`, `operation_in_progress`, `job_running`,
+`ref_not_found`, and `exists` / `bad_branch_name` / `unknown_start_point`
+inline in the dialog). `isDeletable` is now a type guard, so the delete
+machine's batch can never carry a remote row. The terminal's `⋯` menu gains
+*Branches…* after *Fetch / Pull / Push…* for a project-backed session,
+navigating to `/agents/:agentId/projects/:projectName/git`.
+
 **Templates** add create/edit/delete to the picker's existing list/touch/
 favourite calls. The management grouping is Favorites then All, each sorted
 case-insensitively — deliberately not the picker's recents-first grouping,
@@ -805,7 +829,9 @@ Fixture coverage: `ProjectInfo`, `BusyByResponse` and `BusyHolder` moved into
 `COVERED_FIXTURES` with Zod mirrors — the first because it crosses a socket
 into the cache, the other two because no schema documents them. The eleven
 remaining WEB-09 fixtures are REST request/response bodies and were re-pointed
-to `OWNER.generated`, the same call WEB-08 made for the pairing group.
+to `OWNER.generated`, the same call WEB-08 made for the pairing group; #677's
+`GitBranchCreateRequest`, `GitCheckoutRequest` and `GitBranchResponse` follow
+them there.
 
 ## Terminal screen (WEB-05)
 

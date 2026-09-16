@@ -2,7 +2,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GitDeleteItem, GitDeleteResult, GitItem } from '../../../api/gitRepository';
+import type {
+  GitBranchCreateRequest,
+  GitDeleteItem,
+  GitDeleteResult,
+  GitItem,
+} from '../../../api/gitRepository';
+import type { AgentVersionInfo } from '../../../protocol/dto/agentVersion';
 import type { BusyHolder } from '../../../protocol/dto/gitConflict';
 
 // No agent token means no URL, so no socket is ever constructed.
@@ -19,6 +25,12 @@ const api = vi.hoisted(() => ({
   items: [] as GitItem[],
   calls: [] as GitDeleteItem[][],
   outcomes: [] as Outcome[],
+  version: undefined as AgentVersionInfo | undefined,
+  /** The refs `checkoutGitRef` was asked for; an `Error` outcome rejects the next one. */
+  checkouts: [] as string[],
+  checkoutOutcome: undefined as Error | undefined,
+  creates: [] as GitBranchCreateRequest[],
+  createOutcome: undefined as Error | undefined,
 }));
 
 vi.mock('../../../api/gitRepository', async (importOriginal) => {
@@ -42,12 +54,43 @@ vi.mock('../../../api/gitRepository', async (importOriginal) => {
           })),
       );
     },
+    checkoutGitRef: (_agentId: string, _project: string, ref: string) => {
+      api.checkouts.push(ref);
+      if (api.checkoutOutcome !== undefined) return Promise.reject(api.checkoutOutcome);
+      const remote = ref.startsWith('origin/');
+      return Promise.resolve({
+        branch: remote ? ref.slice('origin/'.length) : ref,
+        checked_out: true,
+        created: remote,
+      });
+    },
+    createGitBranch: (_agentId: string, _project: string, request: GitBranchCreateRequest) => {
+      api.creates.push({ ...request });
+      if (api.createOutcome !== undefined) return Promise.reject(api.createOutcome);
+      return Promise.resolve({
+        branch: request.name,
+        checked_out: request.checkout === true,
+        created: true,
+      });
+    },
   };
 });
 
-const { GitScreen } = await import('./GitScreen');
+vi.mock('../../../api/agentCapabilities', () => ({
+  fetchAgentCapabilities: () =>
+    api.version === undefined
+      ? Promise.reject(new Error('no version staged'))
+      : Promise.resolve(api.version),
+}));
 
-const branch = (name: string): GitItem => ({
+const { GitScreen } = await import('./GitScreen');
+const { GitBusyError } = await import('../../../api/gitRepository');
+const { toApiError } = await import('../../../api/errors');
+const { toSessionGitError } = await import('../../../api/sessionGitRepository');
+const { agentVersionSchema } = await import('../../../protocol/dto/agentVersion');
+const { useToastStore } = await import('../../../stores/toastStore');
+
+const branch = (name: string, over: Partial<GitItem> = {}): GitItem => ({
   kind: 'branch_only',
   branch: name,
   worktree_path: null,
@@ -60,7 +103,14 @@ const branch = (name: string): GitItem => ({
   locked_reason: null,
   prunable: false,
   upstream: null,
+  remote: null,
+  subject: null,
+  committed_at: null,
+  ...over,
 });
+
+const remoteBranch = (name: string): GitItem =>
+  branch(`origin/${name}`, { kind: 'remote_branch', remote: 'origin' });
 
 const holder = (over: Partial<BusyHolder> & { kind: string }): BusyHolder => ({
   session_id: undefined,
@@ -69,6 +119,26 @@ const holder = (over: Partial<BusyHolder> & { kind: string }): BusyHolder => ({
   worktree_path: undefined,
   ...over,
 });
+
+const agentVersion = (git: Record<string, unknown>): AgentVersionInfo =>
+  agentVersionSchema.parse({
+    name: 'mobaide-agent',
+    server_version: '1.4.0',
+    protocol_versions: [7],
+    min_client_version: 1,
+    capabilities: { git },
+  });
+
+/** A failure as the repository throws it off the wire. */
+const wireFailure = (httpStatus: number, detail: unknown): Error => {
+  const failure = toSessionGitError(
+    toApiError(new Response(null, { status: httpStatus }), { detail }),
+  );
+  if (!(failure instanceof Error)) throw new Error('the repository only throws Error subclasses');
+  return failure;
+};
+
+const lastToast = () => useToastStore.getState().toasts.at(-1)?.message;
 
 let client: QueryClient;
 
@@ -94,6 +164,12 @@ beforeEach(() => {
   api.items = [branch('feature-a'), branch('feature-b')];
   api.calls.length = 0;
   api.outcomes.length = 0;
+  api.version = agentVersion({ branches: true });
+  api.checkouts.length = 0;
+  api.checkoutOutcome = undefined;
+  api.creates.length = 0;
+  api.createOutcome = undefined;
+  useToastStore.setState({ toasts: [] });
 });
 
 afterEach(() => {
@@ -212,5 +288,300 @@ describe('GitScreen undo', () => {
 
     expect(screen.getByRole('button', { name: 'Delete feature-a' })).toBeInTheDocument();
     expect(api.calls).toEqual([]);
+  });
+});
+
+describe('GitScreen branches capability', () => {
+  it('keeps the delete-only screen until the agent advertises branches', async () => {
+    api.version = agentVersion({ changes: true });
+    api.items = [branch('main', { is_current: true }), branch('feature-a')];
+    renderScreen();
+    await screen.findByRole('button', { name: 'Delete feature-a' });
+
+    expect(screen.queryByRole('button', { name: 'New branch…' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Check out feature-a' })).toBeNull();
+  });
+
+  it('offers New branch and Check out on the rows nothing has checked out', async () => {
+    api.items = [
+      branch('main', { is_current: true }),
+      branch('feature-a'),
+      branch('topic', { kind: 'branch_with_worktree', worktree_path: '/wt/topic' }),
+      remoteBranch('feature-x'),
+    ];
+    renderScreen();
+
+    expect(await screen.findByRole('button', { name: 'New branch…' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check out feature-a' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check out origin/feature-x' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Check out main' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Check out topic' })).toBeNull();
+  });
+});
+
+describe('GitScreen remote branches', () => {
+  it('lists them in a collapsed section with a remote chip and no delete', async () => {
+    api.items = [branch('feature-a'), remoteBranch('feature-x'), remoteBranch('main')];
+    renderScreen();
+    await screen.findByRole('button', { name: 'Delete feature-a' });
+
+    const summary = screen.getByText('Remote branches (2)');
+    const section = summary.closest('details');
+    expect(section).not.toBeNull();
+    expect(section?.open).toBe(false);
+    expect(within(section as HTMLElement).getByText('origin/feature-x')).toBeInTheDocument();
+    expect(within(section as HTMLElement).getAllByText('origin')).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: 'Delete origin/feature-x' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'Select origin/feature-x' })).toBeNull();
+  });
+
+  it('shows the filter from eight rows on, and a filter opens the remote section', async () => {
+    api.items = [
+      ...['a', 'b', 'c', 'd', 'e', 'f'].map((suffix) => branch(`feature-${suffix}`)),
+      remoteBranch('feature-x'),
+      remoteBranch('main'),
+    ];
+    renderScreen();
+    const filter = await screen.findByRole('searchbox', { name: 'Filter branches' });
+    const section = screen.getByText('Remote branches (2)').closest('details');
+    expect(section?.open).toBe(false);
+
+    fireEvent.change(filter, { target: { value: 'feature-x' } });
+
+    expect(screen.getByText('Remote branches (1)').closest('details')?.open).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Delete feature-a' })).toBeNull();
+    expect(screen.queryByText('No matching branches or worktrees.')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Check out origin/feature-x' })).toBeInTheDocument();
+  });
+
+  it('has no filter below eight rows', async () => {
+    renderScreen();
+    await screen.findByRole('button', { name: 'Delete feature-a' });
+
+    expect(screen.queryByRole('searchbox', { name: 'Filter branches' })).toBeNull();
+  });
+});
+
+describe('GitScreen filter', () => {
+  const eightRows = () => {
+    api.items = [
+      ...['a', 'b', 'c', 'd', 'e', 'f'].map((suffix) => branch(`feature-${suffix}`)),
+      remoteBranch('feature-x'),
+      remoteBranch('main'),
+    ];
+  };
+
+  it('keeps the open remote section and drops the local list when only a remote row matches', async () => {
+    eightRows();
+    renderScreen();
+    const filter = await screen.findByRole('searchbox', { name: 'Filter branches' });
+
+    fireEvent.change(filter, { target: { value: 'feature-x' } });
+
+    const section = screen.getByText('Remote branches (1)').closest('details');
+    expect(section?.open).toBe(true);
+    expect(
+      within(section as HTMLElement).getByRole('button', { name: 'Check out origin/feature-x' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('No matching branches or worktrees.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete feature-a' })).toBeNull();
+    // Only the remote list is left; the local <ul> is not rendered empty.
+    expect(screen.getAllByRole('list')).toHaveLength(1);
+  });
+
+  it('shows the notice only when neither list has a match', async () => {
+    eightRows();
+    renderScreen();
+    const filter = await screen.findByRole('searchbox', { name: 'Filter branches' });
+
+    fireEvent.change(filter, { target: { value: 'nothing-like-this' } });
+
+    expect(screen.getByText('No matching branches or worktrees.')).toBeInTheDocument();
+    expect(screen.queryByText(/Remote branches/)).toBeNull();
+    expect(screen.queryByRole('list')).toBeNull();
+  });
+});
+
+describe('GitScreen check out', () => {
+  const rowsWithRemote = () => {
+    api.items = [branch('main', { is_current: true }), branch('feature-a'), remoteBranch('feature-x')];
+  };
+
+  it("confirms, then sends the row's ref and reports what the agent checked out", async () => {
+    rowsWithRemote();
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'Check out origin/feature-x' }));
+
+    const prompt = await screen.findByRole('alertdialog');
+    expect(within(prompt).getByText('Check out origin/feature-x?')).toBeInTheDocument();
+    expect(
+      within(prompt).getByText(
+        'Check out origin/feature-x in the project folder of proj? ' +
+          'Sessions started in that folder afterwards use this branch.',
+      ),
+    ).toBeInTheDocument();
+    expect(api.checkouts).toEqual([]);
+
+    fireEvent.click(within(prompt).getByRole('button', { name: 'Check out' }));
+
+    await waitFor(() => {
+      expect(api.checkouts).toEqual(['origin/feature-x']);
+    });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => {
+      expect(lastToast()).toBe('Checked out feature-x');
+    });
+  });
+
+  it('sends nothing when the confirmation is cancelled', async () => {
+    rowsWithRemote();
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'Check out feature-a' }));
+
+    const prompt = await screen.findByRole('alertdialog');
+    fireEvent.click(within(prompt).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(api.checkouts).toEqual([]);
+  });
+
+  it('names the holders on a busy conflict', async () => {
+    rowsWithRemote();
+    api.checkoutOutcome = new GitBusyError([holder({ kind: 'session', session_id: 's1', cwd: '/repo' })]);
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'Check out feature-a' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Check out' }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('Item is in use')).toBeInTheDocument();
+    expect(within(dialog).getByText('Session: /repo')).toBeInTheDocument();
+    expect(api.checkouts).toEqual(['feature-a']);
+  });
+
+  it('shows a coded refusal as its copy', async () => {
+    rowsWithRemote();
+    api.checkoutOutcome = wireFailure(409, { code: 'dirty', message: 'error: Your local changes' });
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'Check out feature-a' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Check out' }));
+
+    await waitFor(() => {
+      expect(lastToast()).toBe(
+        'The project folder has local changes this checkout would overwrite. ' +
+          "Commit or discard them from a session's Changes screen first.",
+      );
+    });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+});
+
+describe('GitScreen new branch', () => {
+  const openDialog = async () => {
+    api.items = [branch('main', { is_current: true }), branch('feature-a'), remoteBranch('feature-x')];
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'New branch…' }));
+    return screen.getByRole('dialog');
+  };
+
+  it('starts from the checked-out branch and sends the typed form', async () => {
+    const dialog = await openDialog();
+    const startPoint = within(dialog).getByLabelText('Start point');
+    expect(startPoint).toHaveValue('main');
+    expect(within(dialog).getByRole('button', { name: 'Create' })).toBeDisabled();
+
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: '  feature/new ' } });
+    fireEvent.click(within(dialog).getByLabelText(/Check out in the project folder of proj/));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(api.creates).toEqual([{ name: 'feature/new', start_point: 'main', checkout: true }]);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(lastToast()).toBe('Created and checked out feature/new');
+  });
+
+  it('omits the start point for HEAD and keeps the dialog open with the refusal inline', async () => {
+    api.createOutcome = wireFailure(409, { code: 'exists', message: 'feature/new' });
+    const dialog = await openDialog();
+
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'feature/new' } });
+    fireEvent.change(within(dialog).getByLabelText('Start point'), { target: { value: '' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'A branch named feature/new already exists.',
+    );
+    expect(api.creates).toEqual([{ name: 'feature/new', checkout: false }]);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(lastToast()).toBeUndefined();
+  });
+
+  it('closes on a busy conflict and hands the holders to the screen dialog', async () => {
+    api.createOutcome = new GitBusyError([holder({ kind: 'session', session_id: 's1', cwd: '/repo' })]);
+    const dialog = await openDialog();
+
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'feature/new' } });
+    fireEvent.click(within(dialog).getByLabelText(/Check out in the project folder of proj/));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+    const busy = await screen.findByRole('alertdialog');
+    expect(within(busy).getByText('Item is in use')).toBeInTheDocument();
+    expect(within(busy).getByText('Session: /repo')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.creates).toEqual([{ name: 'feature/new', start_point: 'main', checkout: true }]);
+    expect(lastToast()).toBeUndefined();
+  });
+
+  it('closes with a plain toast when the busy 409 names no holders', async () => {
+    api.createOutcome = new GitBusyError(null);
+    const dialog = await openDialog();
+
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'feature/new' } });
+    fireEvent.click(within(dialog).getByLabelText(/Check out in the project folder of proj/));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(lastToast()).toBe('The project folder is in use.');
+  });
+
+  it('lists local then remote rows as start points', async () => {
+    const dialog = await openDialog();
+
+    const options = within(dialog)
+      .getAllByRole('option')
+      .map((option) => option.textContent);
+    expect(options).toEqual([
+      'HEAD (current commit)',
+      'main',
+      'feature-a',
+      'origin/feature-x (remote)',
+    ]);
+  });
+
+  it('skips an orphan worktree even when it still names its deleted branch', async () => {
+    api.items = [
+      branch('main', { is_current: true }),
+      branch('gone', { kind: 'orphan_worktree', worktree_path: '/wt/gone' }),
+      branch('feature-a'),
+      remoteBranch('feature-x'),
+    ];
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'New branch…' }));
+    const dialog = screen.getByRole('dialog');
+
+    const options = within(dialog)
+      .getAllByRole('option')
+      .map((option) => option.textContent);
+    expect(options).toEqual([
+      'HEAD (current commit)',
+      'main',
+      'feature-a',
+      'origin/feature-x (remote)',
+    ]);
   });
 });

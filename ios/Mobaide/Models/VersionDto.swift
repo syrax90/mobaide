@@ -111,6 +111,8 @@ struct GitCapabilities: Equatable, Sendable {
     var fetch = false
     var pull = false
     var push = false
+    /// The project Git screen's remote rows, New branch and Check out.
+    var branches = false
 
     /// The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three.
     var hasSync: Bool { fetch || pull || push }
@@ -134,7 +136,8 @@ extension VersionInfoResponse {
             commit: gitCapability("commit"),
             fetch: gitCapability("fetch"),
             pull: gitCapability("pull"),
-            push: gitCapability("push")
+            push: gitCapability("push"),
+            branches: gitCapability("branches")
         )
     }
 }

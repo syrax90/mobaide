@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createTemplate } from '../../api/templateRepository';
 import { isApiError } from '../../api/errors';
@@ -161,6 +161,13 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
     NO_GIT_CAPABILITIES;
   const canCommit = gitCapabilities.commit;
   const canSync = hasGitSync(gitCapabilities);
+  // *Branches…* is a link to the project's Git screen, so it needs a
+  // project-backed session on top of the capability.
+  const branchesProject =
+    gitCapabilities.branches && session?.project_name !== undefined
+      ? session.project_name
+      : null;
+  const navigate = useNavigate();
   const immersive = useKeyboardLock();
   // Shared with the scrollbar, whose `role="scrollbar"` has to name what it
   // controls.
@@ -297,9 +304,8 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
         )}
         {/* Only once the row carries a cwd, as on both mobile clients: the
             git routes answer for the directory the session was spawned in,
-            and a row without one has nothing to show. Later git actions
-            (fetch / pull / push, branches, rebase) are reserved slots under
-            the same heading, after Commit…, in that order. */}
+            and a row without one has nothing to show. Rebase… is the one
+            reserved slot left under the heading, after Branches…. */}
         {session?.cwd !== undefined && (
           <MenuButton
             label="More options"
@@ -337,6 +343,19 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
                           onSelect: () => {
                             setChangesOpen(true);
                             setSyncRequest((n) => n + 1);
+                          },
+                        },
+                      ]
+                    : []),
+                  ...(branchesProject !== null
+                    ? [
+                        {
+                          id: 'branches',
+                          label: 'Branches…',
+                          onSelect: () => {
+                            void navigate(
+                              `/agents/${encodeURIComponent(model.agentId)}/projects/${encodeURIComponent(branchesProject)}/git`,
+                            );
                           },
                         },
                       ]

@@ -11,6 +11,9 @@ import com.mobaide.app.data.network.dto.GitCommitContextResponse
 import com.mobaide.app.data.network.dto.GitCommitRequest
 import com.mobaide.app.data.network.dto.GitCommitResponse
 import com.mobaide.app.data.network.dto.GitDeleteRequest
+import com.mobaide.app.data.network.dto.GitCheckoutRequest
+import com.mobaide.app.data.network.dto.GitBranchResponse
+import com.mobaide.app.data.network.dto.GitBranchCreateRequest
 import com.mobaide.app.data.network.dto.GitDeleteResponse
 import com.mobaide.app.data.network.dto.GitDiffResponse
 import com.mobaide.app.data.network.dto.GitDiscardRequest
@@ -224,13 +227,41 @@ class RestApi(
     private fun encodePathSegment(name: String): String =
         URLEncoder.encode(name, "UTF-8").replace("+", "%20")
 
+    // Always asks for the remote-tracking rows: the flag shields *older
+    // clients* from a kind they would offer for delete, and an older agent
+    // ignores it.
     suspend fun getGitItems(projectName: String): GitItemsResponse {
-        val request = Request.Builder()
-            .url("${baseUrl()}/api/projects/${encodePathSegment(projectName)}/git/items")
-            .get()
+        val url = projectGitUrl(projectName, "items")
+            .addQueryParameter("remote", "true")
             .build()
-        return execute(request)
+        return execute(Request.Builder().url(url).get().build())
     }
+
+    suspend fun createGitBranch(
+        projectName: String,
+        body: GitBranchCreateRequest,
+    ): GitBranchResponse {
+        val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
+        val url = projectGitUrl(projectName, "branches").build()
+        return execute(Request.Builder().url(url).post(payload).build())
+    }
+
+    suspend fun checkoutGitRef(
+        projectName: String,
+        body: GitCheckoutRequest,
+    ): GitBranchResponse {
+        val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
+        val url = projectGitUrl(projectName, "checkout").build()
+        return execute(Request.Builder().url(url).post(payload).build())
+    }
+
+    private fun projectGitUrl(projectName: String, leaf: String): HttpUrl.Builder =
+        baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("projects")
+            .addPathSegment(projectName)
+            .addPathSegment("git")
+            .addPathSegment(leaf)
 
     suspend fun deleteGitItems(
         projectName: String,

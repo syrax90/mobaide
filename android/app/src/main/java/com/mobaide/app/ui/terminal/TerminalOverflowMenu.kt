@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Commit
 import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.outlined.Sync
@@ -28,6 +29,7 @@ import com.mobaide.app.ui.theme.chromeCaps
 const val TERMINAL_MENU_GIT_CHANGES_TAG = "terminal_menu_git_changes"
 const val TERMINAL_MENU_GIT_COMMIT_TAG = "terminal_menu_git_commit"
 const val TERMINAL_MENU_GIT_SYNC_TAG = "terminal_menu_git_sync"
+const val TERMINAL_MENU_GIT_BRANCHES_TAG = "terminal_menu_git_branches"
 
 /**
  * The terminal top bar's `⋯` menu. `internal` (vs the screen file's usual
@@ -37,8 +39,9 @@ const val TERMINAL_MENU_GIT_SYNC_TAG = "terminal_menu_git_sync"
  * (Compose BOM 2024.12) predates `MenuDefaults.DropdownMenuGroupLabel`, and
  * this is shaped for a mechanical swap once the BOM moves. Commit… exists only
  * on an agent that advertises `capabilities.git.commit`, Fetch / Pull / Push…
- * on any of the three job keys; the remaining git actions (branches, rebase)
- * are reserved slots under the same heading, after it, in that order.
+ * on any of the three job keys, Branches… (a link to the project's Git
+ * screen) on `capabilities.git.branches` for a project-backed session;
+ * Rebase… is the one reserved slot left under the heading, after Branches….
  */
 @Composable
 internal fun TerminalOverflowMenu(
@@ -47,6 +50,8 @@ internal fun TerminalOverflowMenu(
     commitAvailable: Boolean = false,
     onOpenGitSync: () -> Unit = {},
     syncAvailable: Boolean = false,
+    onOpenGitBranches: () -> Unit = {},
+    branchesAvailable: Boolean = false,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box {
@@ -84,6 +89,17 @@ internal fun TerminalOverflowMenu(
                     modifier = Modifier.testTag(TERMINAL_MENU_GIT_SYNC_TAG),
                 )
             }
+            if (branchesAvailable) {
+                DropdownMenuItem(
+                    text = { Text("Branches…") },
+                    onClick = {
+                        menuExpanded = false
+                        onOpenGitBranches()
+                    },
+                    leadingIcon = { Icon(Icons.Outlined.AccountTree, contentDescription = null) },
+                    modifier = Modifier.testTag(TERMINAL_MENU_GIT_BRANCHES_TAG),
+                )
+            }
         }
     }
 }
@@ -102,7 +118,12 @@ private fun MenuSectionLabel(text: String) {
 @Composable
 private fun TerminalOverflowMenuPreviewDark() {
     MobaideTheme(darkTheme = true) {
-        TerminalOverflowMenu(onOpenGitChanges = {}, commitAvailable = true, syncAvailable = true)
+        TerminalOverflowMenu(
+            onOpenGitChanges = {},
+            commitAvailable = true,
+            syncAvailable = true,
+            branchesAvailable = true,
+        )
     }
 }
 

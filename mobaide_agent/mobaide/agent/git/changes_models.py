@@ -20,6 +20,8 @@ BYTE_LIMIT = 1024 * 1024
 # Advertised as ``capabilities.git`` on ``GET /api/version`` (both transports).
 # Clients render the Changes viewer on ``changes`` and gate every mutating
 # control on its own key, so an agent without a key degrades to read-only.
+# ``branches`` covers the project-scoped ``GET /items?remote=true``,
+# ``POST /branches`` and ``POST /checkout`` routes.
 GIT_CAPABILITIES: dict[str, bool] = {
     "changes": True,
     "stage": True,
@@ -28,6 +30,7 @@ GIT_CAPABILITIES: dict[str, bool] = {
     "fetch": True,
     "pull": True,
     "push": True,
+    "branches": True,
 }
 MESSAGE_LIMIT = 64 * 1024
 JOB_LINE_LIMIT = 200

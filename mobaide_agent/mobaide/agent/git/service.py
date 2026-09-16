@@ -1,21 +1,28 @@
-"""Git management service — pure logic shared by the HTTP router.
+"""Git management service — pure logic shared by the HTTP router and the
+relay dispatcher.
 
 Responsibilities:
 
 * Combine ``WorktreeManager.list_branches`` and ``list_worktrees`` into the
-  unified item shape returned by the API.
+  unified item shape returned by the API, enriched with each ref's tip
+  commit and, on request, the remote-tracking branches.
 * Enforce a busy-guard against active terminal sessions and auto-scan
   work items before allowing destructive operations.
 * Drive per-item deletes (branch / worktree / branch+worktree) with the
   per-repo lock owned by the manager, audit each outcome, and publish
   ``git.changed`` after any successful delete.
+* Create branches and check them out in the project root through the
+  hardened runner, with the refusal vocabulary the session mutations use.
 """
 from __future__ import annotations
 
 import os
+import re
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from mobaide.core.git_exec import CmdResult, run_git
 from mobaide.linear.worktree import (
     BranchDeleteError,
     BranchInfo,
@@ -25,9 +32,31 @@ from mobaide.linear.worktree import (
 )
 
 from ..logging import audit_event, get_logger
-from .changes_service import resolve_repo_dirs
+from .changes_service import (
+    _QUICK_TIMEOUT,
+    _SMALL_OUTPUT,
+    _STATUS_MAX_BYTES,
+    _STATUS_TIMEOUT,
+    GitBadRequestError,
+    GitChangesError,
+    GitNotFoundError,
+    GitRefusedError,
+    ResolvedRepo,
+    _check_result,
+    _fail,
+    _lines,
+    _lock_for,
+    _mutable_repo,
+    _ref_exists,
+    _text,
+    repo_state,
+    resolve_repo_dirs,
+)
 from .models import (
     BusyHolder,
+    GitBranchCreateRequest,
+    GitBranchResponse,
+    GitCheckoutRequest,
     GitDeleteItem,
     GitDeleteRequest,
     GitDeleteResponse,
@@ -39,6 +68,20 @@ from .models import (
 logger = get_logger(__name__)
 
 _LOCKED_PATTERNS = ("is locked",)
+_MUTATE_TIMEOUT = 15.0
+_MAX_BRANCH_NAME_BYTES = 255
+_REFS_HEADS = "refs/heads/"
+_REFS_REMOTES = "refs/remotes/"
+_TIP_FORMAT = "%(refname)%00%(symref)%00%(subject)%00%(committerdate:iso-strict)"
+_DIRTY_NEEDLES = (
+    "would be overwritten by",
+    "would be removed by",
+    "would lose untracked files",
+    "Your local changes",
+    "Please commit your changes",
+)
+_IN_PROGRESS_NEEDLES = ("cannot switch branch while", "in the middle of an am session")
+_ELSEWHERE_RE = re.compile(r"is already (?:used by worktree|checked out) at '(.*)'")
 
 
 class GitItemBusyError(Exception):
@@ -128,19 +171,124 @@ def _build_items(
     return items
 
 
+@dataclass(frozen=True)
+class _Tip:
+    subject: str | None
+    committed_at: str | None
+
+
+async def _quick(cwd: str, args: Sequence[str]) -> CmdResult:
+    result = await run_git(
+        list(args), cwd=cwd, timeout=_QUICK_TIMEOUT, max_bytes=_SMALL_OUTPUT
+    )
+    _check_result(result)
+    return result
+
+
+async def _ref_tips(project_root: str) -> tuple[dict[str, _Tip], list[str]]:
+    """``refname -> tip`` for every local and remote-tracking branch, plus
+    the remote-tracking refnames that are real branches (``<remote>/HEAD``
+    is a symref and is left out)."""
+    result = await run_git(
+        ["for-each-ref", f"--format={_TIP_FORMAT}", _REFS_HEADS, _REFS_REMOTES],
+        cwd=project_root,
+        timeout=_STATUS_TIMEOUT,
+        max_bytes=_STATUS_MAX_BYTES,
+    )
+    _check_result(result)
+    if result.rc != 0 and not result.truncated:
+        raise _fail(result, "git for-each-ref failed")
+    lines = _text(result.stdout).split("\n")
+    if result.truncated or (lines and lines[-1] == ""):
+        lines.pop()
+    tips: dict[str, _Tip] = {}
+    remote_refs: list[str] = []
+    for line in lines:
+        parts = line.split("\0")
+        if len(parts) != 4:
+            continue
+        refname, symref, subject, committed_at = parts
+        tips[refname] = _Tip(subject or None, committed_at or None)
+        if refname.startswith(_REFS_REMOTES) and not symref:
+            remote_refs.append(refname)
+    return tips, remote_refs
+
+
+async def _remote_names(project_root: str) -> list[str]:
+    result = await _quick(project_root, ["remote"])
+    if result.rc != 0:
+        raise _fail(result, "git remote failed")
+    return [line for line in _lines(result.stdout) if line]
+
+
+def _split_remote_ref(short: str, remotes: Iterable[str]) -> tuple[str, str] | None:
+    """``("origin", "feature/x")`` for ``origin/feature/x``; the longest
+    configured remote wins because remote names may contain ``/`` too."""
+    best: str | None = None
+    for remote in remotes:
+        prefix = remote + "/"
+        if short.startswith(prefix) and len(short) > len(prefix):
+            if best is None or len(remote) > len(best):
+                best = remote
+    if best is None:
+        return None
+    return best, short[len(best) + 1:]
+
+
 async def list_git_items(
     project_root: str,
     manager: WorktreeManager,
+    *,
+    remote: bool = False,
 ) -> list[GitItemRead]:
-    """List the unified git items for ``project_root``."""
+    """List the unified git items for ``project_root``.
+
+    Tip-commit enrichment is best-effort for the local rows; with
+    ``remote`` the same ``for-each-ref`` call is what lists the remote
+    branches, so its failure surfaces instead of silently hiding them.
+    """
     branches = await manager.list_branches(project_root)
     worktrees = await manager.list_worktrees(project_root)
-    return _build_items(branches, worktrees)
+    items = _build_items(branches, worktrees)
+    try:
+        tips, remote_refs = await _ref_tips(project_root)
+    except Exception:
+        if remote:
+            raise
+        logger.warning("git.ref_tips_failed", exc_info=True)
+        return items
+    for item in items:
+        tip = tips.get(_REFS_HEADS + item.branch) if item.branch else None
+        if tip is not None:
+            item.subject = tip.subject
+            item.committed_at = tip.committed_at
+    if not remote:
+        return items
+    remotes = await _remote_names(project_root)
+    for refname in remote_refs:
+        short = refname[len(_REFS_REMOTES):]
+        split = _split_remote_ref(short, remotes)
+        # A ref under a name that matches no configured remote (an ad-hoc
+        # fetch, an interrupted remote rename) cannot be checked out with
+        # tracking, so it is not offered.
+        if split is None:
+            continue
+        tip = tips[refname]
+        items.append(
+            GitItemRead(
+                kind="remote_branch",
+                branch=short,
+                remote=split[0],
+                subject=tip.subject,
+                committed_at=tip.committed_at,
+            )
+        )
+    return items
 
 
 @dataclass
-class _DeleteContext:
-    """All collaborators a single delete batch needs."""
+class _RepoContext:
+    """All collaborators a delete batch or a ref mutation needs."""
 
     project_name: str
     project_root: str
@@ -160,15 +308,14 @@ def _affected_paths(items: list[GitDeleteItem]) -> set[str]:
     return paths
 
 
-async def _busy_holders(
-    affected: set[str],
+async def _holders(
     session_manager: Any | None,
     autoscan_manager: Any | None,
+    matches: Callable[[str], bool],
 ) -> list[BusyHolder]:
-    """Return every session / auto-scan work item whose path is in ``affected``."""
+    """Every session / auto-scan work item whose normalised path satisfies
+    ``matches``."""
     holders: list[BusyHolder] = []
-    if not affected:
-        return holders
 
     if session_manager is not None:
         try:
@@ -178,7 +325,7 @@ async def _busy_holders(
         for info in sessions:
             cwd = getattr(info, "cwd", None)
             norm = _normalize_path(cwd)
-            if norm is not None and norm in affected:
+            if norm is not None and matches(norm):
                 holders.append(
                     BusyHolder(
                         kind="session",
@@ -195,7 +342,7 @@ async def _busy_holders(
         for project_name, items in workitems_by_project.items():
             for item in items:
                 norm = _normalize_path(getattr(item, "worktree_path", None))
-                if norm is not None and norm in affected:
+                if norm is not None and matches(norm):
                     holders.append(
                         BusyHolder(
                             kind="auto_scan",
@@ -205,6 +352,43 @@ async def _busy_holders(
                     )
 
     return holders
+
+
+async def _busy_holders(
+    affected: set[str],
+    session_manager: Any | None,
+    autoscan_manager: Any | None,
+) -> list[BusyHolder]:
+    """Return every session / auto-scan work item whose path is in ``affected``."""
+    if not affected:
+        return []
+    return await _holders(session_manager, autoscan_manager, affected.__contains__)
+
+
+def _within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _root_matcher(project_root: str, worktree_paths: Iterable[str]) -> Callable[[str], bool]:
+    """Holder predicate for a checkout in the project root: anything at or
+    below the root counts, except what lives inside a linked worktree
+    (which keeps its own HEAD). Only worktrees strictly inside the root can
+    shadow a holder — a project registered at a linked worktree nested in
+    the main one must not have its own root hidden by the main worktree's
+    path."""
+    root = _normalize_path(project_root)
+    linked = [
+        norm
+        for norm in (_normalize_path(path) for path in worktree_paths)
+        if norm is not None and root is not None and norm != root and _within(norm, root)
+    ]
+
+    def matches(norm: str) -> bool:
+        if root is None or not _within(norm, root):
+            return False
+        return not any(_within(norm, wt) for wt in linked)
+
+    return matches
 
 
 def _result(
@@ -236,7 +420,7 @@ def _worktree_error_code(exc: WorktreeRemoveError) -> str:
 
 async def _delete_one(
     item: GitDeleteItem,
-    ctx: _DeleteContext,
+    ctx: _RepoContext,
 ) -> tuple[GitDeleteResultItem, bool]:
     """Process a single delete item and return ``(result, did_change)``."""
     if item.kind == "branch_only":
@@ -370,7 +554,7 @@ async def delete_git_items(
     if busy:
         raise GitItemBusyError(busy_by=busy)
 
-    ctx = _DeleteContext(
+    ctx = _RepoContext(
         project_name=project_name,
         project_root=project_root,
         manager=manager,
@@ -393,3 +577,221 @@ async def delete_git_items(
         )
 
     return GitDeleteResponse(results=results)
+
+
+def _validate_branch_name(name: str) -> None:
+    """The cheap rejections ``check-ref-format --branch`` cannot make: a
+    leading ``-`` would read as an option, ``@{-1}`` and ``@`` are
+    revision syntax it expands rather than refuses, ``HEAD`` is reserved."""
+    if (
+        not name
+        or len(name.encode("utf-8")) > _MAX_BRANCH_NAME_BYTES
+        or "\0" in name
+        or name.startswith("-")
+        or name in ("HEAD", "@")
+        or "@{" in name
+    ):
+        raise GitBadRequestError("bad_branch_name")
+
+
+async def _check_branch_name(project_root: str, name: str) -> None:
+    _validate_branch_name(name)
+    result = await _quick(project_root, ["check-ref-format", "--branch", name])
+    if result.rc != 0:
+        raise GitBadRequestError("bad_branch_name")
+
+
+async def _resolve_start_point(project_root: str, start_point: str | None) -> str:
+    start = start_point or "HEAD"
+    if start.startswith("-") or "\0" in start:
+        raise GitRefusedError("unknown_start_point", start)
+    result = await _quick(
+        project_root,
+        ["rev-parse", "-q", "--verify", "--end-of-options", f"{start}^{{commit}}"],
+    )
+    if result.rc != 0:
+        raise GitRefusedError("unknown_start_point", start)
+    return start
+
+
+async def _resolve_checkout(project_root: str, ref: str) -> tuple[str, str | None]:
+    """``(local branch, start point)``: ``start point`` is the remote-tracking
+    ref to create the branch from, ``None`` when the branch already exists."""
+    if await _ref_exists(project_root, _REFS_HEADS + ref):
+        return ref, None
+    if not await _ref_exists(project_root, _REFS_REMOTES + ref):
+        raise GitNotFoundError("ref_not_found")
+    split = _split_remote_ref(ref, await _remote_names(project_root))
+    if split is None:
+        raise GitNotFoundError("ref_not_found")
+    short = split[1]
+    if await _ref_exists(project_root, _REFS_HEADS + short):
+        return short, None
+    return short, ref
+
+
+def _refuse_running_job(toplevel: str) -> None:
+    """A fetch/pull/push job holds the toplevel lock for its whole run, so
+    this must be asked *before* queuing on that lock: waiting would only
+    turn into a relay timeout with the mutation landing afterwards."""
+    from .changes_jobs import job_registry
+
+    active = job_registry.active_job_id(toplevel)
+    if active is not None:
+        raise GitRefusedError("job_running", active)
+
+
+async def _guard_checkout(ctx: _RepoContext, repo: ResolvedRepo) -> None:
+    """Refuse to move the project root's HEAD under a session or auto-scan
+    item working in it, while a fetch/pull/push job owns the repository, or
+    in the middle of a merge/rebase/cherry-pick/revert/bisect."""
+    worktrees = await ctx.manager.list_worktrees(ctx.project_root)
+    matches = _root_matcher(ctx.project_root, [wt.path for wt in worktrees])
+    busy = await _holders(ctx.session_manager, ctx.autoscan_manager, matches)
+    if busy:
+        raise GitItemBusyError(busy_by=busy)
+    _refuse_running_job(repo.toplevel)
+    state = await repo_state(repo.toplevel)
+    if state != "clean":
+        raise GitRefusedError("operation_in_progress", state)
+
+
+def _classify_ref_failure(result: CmdResult, fallback: str) -> GitChangesError:
+    """Turn a failed ``git branch`` / ``git switch`` into the refusal
+    vocabulary; ``git switch`` decides for itself whether local changes
+    survive the move, so ``dirty`` is only ever what it refused."""
+    stderr = _text(result.stderr)
+    detail = stderr.strip() or _text(result.stdout).strip() or fallback
+    elsewhere = _ELSEWHERE_RE.search(stderr)
+    if elsewhere is not None:
+        return GitRefusedError("checked_out_elsewhere", elsewhere.group(1))
+    if any(needle in stderr for needle in _DIRTY_NEEDLES):
+        return GitRefusedError("dirty", detail)
+    if any(needle in stderr for needle in _IN_PROGRESS_NEEDLES):
+        return GitRefusedError("operation_in_progress", detail)
+    if "is not a valid branch name" in stderr:
+        return GitBadRequestError("bad_branch_name")
+    if "already exists" in stderr:
+        return GitRefusedError("exists", detail)
+    if "index.lock" in stderr:
+        return GitRefusedError("index_locked", detail)
+    return _fail(result, fallback)
+
+
+async def _run_ref_mutation(
+    ctx: _RepoContext, repo: ResolvedRepo, args: Sequence[str], fallback: str
+) -> None:
+    result = await run_git(
+        list(args),
+        cwd=ctx.project_root,
+        timeout=_MUTATE_TIMEOUT,
+        max_bytes=_SMALL_OUTPUT,
+    )
+    _check_result(result)
+    if result.rc != 0:
+        raise _classify_ref_failure(result, fallback)
+
+
+async def create_branch(
+    request: GitBranchCreateRequest,
+    *,
+    project_name: str,
+    project_root: str,
+    manager: WorktreeManager,
+    session_manager: Any | None,
+    autoscan_manager: Any | None,
+    event_bus: Any | None,
+    actor: str | None,
+) -> GitBranchResponse:
+    """Create ``request.name`` at ``request.start_point`` in the project's
+    repository; with ``checkout`` the project root switches to it in the
+    same ``git switch -c``, under the checkout guards."""
+    repo = await _mutable_repo(project_root)
+    _refuse_running_job(repo.toplevel)
+    ctx = _RepoContext(
+        project_name=project_name,
+        project_root=project_root,
+        manager=manager,
+        session_manager=session_manager,
+        autoscan_manager=autoscan_manager,
+        event_bus=event_bus,
+        actor=actor,
+    )
+    name = request.name
+    async with manager._lock_for(project_root):
+        async with _lock_for(repo.toplevel):
+            await _check_branch_name(project_root, name)
+            start = await _resolve_start_point(project_root, request.start_point)
+            if await _ref_exists(project_root, _REFS_HEADS + name):
+                raise GitRefusedError("exists", name)
+            if request.checkout:
+                await _guard_checkout(ctx, repo)
+                args = ["switch", "--no-guess", "-c", name, "--", start]
+            else:
+                args = ["branch", "--", name, start]
+            await _run_ref_mutation(ctx, repo, args, "git branch failed")
+    audit_event(
+        "audit.git.branch.created",
+        actor=actor,
+        target=name,
+        outcome="ok",
+        project=project_name,
+        start_point=start,
+        checkout=request.checkout,
+    )
+    _publish_git_changed(
+        event_bus, project_name, toplevel=repo.toplevel, common_dir=repo.common_dir
+    )
+    return GitBranchResponse(branch=name, checked_out=request.checkout, created=True)
+
+
+async def checkout_ref(
+    request: GitCheckoutRequest,
+    *,
+    project_name: str,
+    project_root: str,
+    manager: WorktreeManager,
+    session_manager: Any | None,
+    autoscan_manager: Any | None,
+    event_bus: Any | None,
+    actor: str | None,
+) -> GitBranchResponse:
+    """Switch the project root to ``request.ref``: a local branch as is, a
+    remote-tracking branch through the local branch of the same name,
+    created tracking it when missing."""
+    repo = await _mutable_repo(project_root)
+    _refuse_running_job(repo.toplevel)
+    ref = request.ref
+    if not ref or ref.startswith("-") or "\0" in ref:
+        raise GitBadRequestError("bad_ref")
+    ctx = _RepoContext(
+        project_name=project_name,
+        project_root=project_root,
+        manager=manager,
+        session_manager=session_manager,
+        autoscan_manager=autoscan_manager,
+        event_bus=event_bus,
+        actor=actor,
+    )
+    async with manager._lock_for(project_root):
+        async with _lock_for(repo.toplevel):
+            await _guard_checkout(ctx, repo)
+            branch, start = await _resolve_checkout(project_root, ref)
+            if start is None:
+                args = ["switch", "--no-guess", "--", branch]
+            else:
+                args = ["switch", "--no-guess", "--track", "-c", branch, "--", start]
+            await _run_ref_mutation(ctx, repo, args, "git switch failed")
+    audit_event(
+        "audit.git.checked_out",
+        actor=actor,
+        target=branch,
+        outcome="ok",
+        project=project_name,
+        ref=ref,
+        created=start is not None,
+    )
+    _publish_git_changed(
+        event_bus, project_name, toplevel=repo.toplevel, common_dir=repo.common_dir
+    )
+    return GitBranchResponse(branch=branch, checked_out=True, created=start is not None)

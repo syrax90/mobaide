@@ -2,13 +2,18 @@ package com.mobaide.app.ui.projects.git
 
 import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
+import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.BusyHolder
+import com.mobaide.app.data.network.dto.GitBranchCreateRequest
+import com.mobaide.app.data.network.dto.GitBranchResponse
 import com.mobaide.app.data.network.dto.GitDeleteItem
 import com.mobaide.app.data.network.dto.GitDeleteResponse
 import com.mobaide.app.data.network.dto.GitDeleteResultItem
 import com.mobaide.app.data.network.dto.GitItem
 import com.mobaide.app.data.repository.GitBusyException
+import com.mobaide.app.data.repository.GitCapabilities
 import com.mobaide.app.data.repository.GitRepository
+import com.mobaide.app.data.repository.SessionGitException
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -91,11 +96,13 @@ class GitViewModelTest {
             branchWithWorktree("topic", "/repo/wt/topic"),
             orphanWorktree("/repo/wt/orphan"),
         ),
+        capabilities: GitCapabilities = GitCapabilities.NONE,
     ): Fixture {
         val repo = mockk<GitRepository>(relaxed = true)
         val changed = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 8)
         every { repo.changed } returns changed
         coEvery { repo.listGitItems(projectName) } returns initialItems
+        coEvery { repo.gitCapabilities() } returns capabilities
         val handle = SavedStateHandle(mapOf("projectName" to projectName))
         val vm = GitViewModel(repo, handle)
         return Fixture(vm, repo, changed)
@@ -709,6 +716,399 @@ class GitViewModelTest {
                     failedResult(GitItem.KIND_BRANCH_ONLY, "b2", "error"),
                 ),
             ),
+        )
+    }
+
+    // MARK: - Branches: capability, create, check out
+
+    private val remoteId = "${GitItem.KIND_REMOTE_BRANCH}:origin/feature-x|"
+
+    private fun remoteBranch(name: String): GitItem = GitItem(
+        kind = GitItem.KIND_REMOTE_BRANCH,
+        branch = "origin/$name",
+        remote = "origin",
+    )
+
+    private fun gitError(code: String, message: String? = null) =
+        SessionGitException.GitError(code, message, ApiException(409, ""))
+
+    /** Local rows, a worktree-backed one and a remote-tracking one, with the capability on. */
+    private fun branchesFixture(): Fixture = newFixture(
+        initialItems = listOf(
+            branchOnly("main", isCurrent = true),
+            branchOnly("stale"),
+            branchWithWorktree("topic", "/repo/wt/topic"),
+            remoteBranch("feature-x"),
+        ),
+        capabilities = GitCapabilities(branches = true),
+    )
+
+    private val dirtyCopy =
+        "The project folder has local changes this checkout would overwrite. " +
+            "Commit or discard them from a session's Changes screen first."
+
+    @Test
+    fun init_probesTheCapability_besideTheSingleListLoad() = runTest {
+        val f = newFixture(capabilities = GitCapabilities(branches = true))
+        advanceUntilIdle()
+        assertTrue(f.vm.uiState.value.branchesEnabled)
+        coVerify(exactly = 1) { f.repo.listGitItems("alpha") }
+        coVerify(exactly = 1) { f.repo.gitCapabilities() }
+    }
+
+    @Test
+    fun init_aFailedProbe_keepsTheDeleteOnlyScreen_withTheListLoaded() = runTest {
+        val repo = mockk<GitRepository>(relaxed = true)
+        every { repo.changed } returns MutableSharedFlow()
+        coEvery { repo.listGitItems("alpha") } returns listOf(branchOnly("stale"))
+        coEvery { repo.gitCapabilities() } throws RuntimeException("offline")
+        val vm = GitViewModel(repo, SavedStateHandle(mapOf("projectName" to "alpha")))
+        advanceUntilIdle()
+        val state = vm.uiState.value
+        assertFalse(state.branchesEnabled)
+        assertEquals(1, state.items.size)
+        assertNull(state.errorMessage)
+    }
+
+    @Test
+    fun openNewBranch_isGatedOnTheCapability() = runTest {
+        val without = newFixture()
+        advanceUntilIdle()
+        without.vm.openNewBranch()
+        assertNull(without.vm.uiState.value.newBranch)
+
+        val with = branchesFixture()
+        advanceUntilIdle()
+        with.vm.openNewBranch()
+        assertEquals(NewBranchSheetState(), with.vm.uiState.value.newBranch)
+    }
+
+    @Test
+    fun createBranch_sendsTheTrimmedForm_closesTheSheet_andReportsTheResult() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        coEvery {
+            f.repo.createBranch("alpha", GitBranchCreateRequest("feature/new", "main", true))
+        } returns GitBranchResponse(branch = "feature/new", checked_out = true, created = true)
+        f.vm.openNewBranch()
+        f.vm.events.test {
+            f.vm.createBranch("  feature/new ", "main", true)
+            assertEquals(NewBranchSheetState(creating = true), f.vm.uiState.value.newBranch)
+            advanceUntilIdle()
+            assertEquals(GitUiEvent.Message("Created and checked out feature/new"), awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertNull(f.vm.uiState.value.newBranch)
+    }
+
+    @Test
+    fun createBranch_ignoresABlankName_andAClosedSheet() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        f.vm.createBranch("feature/new", null, false)
+        f.vm.openNewBranch()
+        f.vm.createBranch("   ", null, false)
+        advanceUntilIdle()
+        coVerify(exactly = 0) { f.repo.createBranch(any(), any()) }
+        assertEquals(NewBranchSheetState(), f.vm.uiState.value.newBranch)
+    }
+
+    @Test
+    fun createBranch_exists_keepsTheSheetOpen_withTheRefusalInline() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        coEvery { f.repo.createBranch("alpha", any()) } throws gitError("exists", "feature/new")
+        f.vm.openNewBranch()
+        f.vm.createBranch("feature/new", null, false)
+        advanceUntilIdle()
+        assertEquals(
+            NewBranchSheetState(error = "A branch named feature/new already exists."),
+            f.vm.uiState.value.newBranch,
+        )
+        f.vm.dismissNewBranch()
+        assertNull(f.vm.uiState.value.newBranch)
+    }
+
+    @Test
+    fun createBranch_busy_closesTheSheet_andShowsTheBusyDialog() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        val holders = listOf(BusyHolder(kind = "session", session_id = "s-1", cwd = "/repo"))
+        coEvery { f.repo.createBranch("alpha", any()) } throws GitBusyException(holders)
+        f.vm.openNewBranch()
+        f.vm.createBranch("feature/new", null, true)
+        advanceUntilIdle()
+        assertNull(f.vm.uiState.value.newBranch)
+        assertEquals(holders, f.vm.uiState.value.busyDialog)
+    }
+
+    @Test
+    fun dismissNewBranch_isRefusedWhileTheRequestIsInFlight() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        val reply = CompletableDeferred<GitBranchResponse>()
+        coEvery { f.repo.createBranch("alpha", any()) } coAnswers { reply.await() }
+        f.vm.openNewBranch()
+        f.vm.createBranch("feature/new", null, false)
+        advanceUntilIdle()
+
+        f.vm.dismissNewBranch()
+        assertEquals(NewBranchSheetState(creating = true), f.vm.uiState.value.newBranch)
+
+        reply.complete(GitBranchResponse("feature/new", checked_out = false, created = true))
+        advanceUntilIdle()
+        assertNull(f.vm.uiState.value.newBranch)
+    }
+
+    @Test
+    fun requestCheckout_promptsOnlyForRowsNothingHasCheckedOut() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        f.vm.requestCheckout(mainId)
+        assertNull("the current branch", f.vm.uiState.value.checkoutPrompt)
+        f.vm.requestCheckout(topicId)
+        assertNull("a worktree-backed branch", f.vm.uiState.value.checkoutPrompt)
+
+        f.vm.requestCheckout(remoteId)
+        assertEquals(remoteBranch("feature-x"), f.vm.uiState.value.checkoutPrompt)
+        f.vm.dismissCheckoutPrompt()
+        assertNull(f.vm.uiState.value.checkoutPrompt)
+
+        f.vm.requestCheckout(staleId)
+        assertEquals(branchOnly("stale"), f.vm.uiState.value.checkoutPrompt)
+    }
+
+    @Test
+    fun requestCheckout_isANoOpWithoutTheCapability() = runTest {
+        val f = newFixture()
+        advanceUntilIdle()
+        f.vm.requestCheckout(staleId)
+        assertNull(f.vm.uiState.value.checkoutPrompt)
+    }
+
+    @Test
+    fun confirmCheckout_sendsTheRowsRef_andReportsWhatTheAgentCheckedOut() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        coEvery { f.repo.checkout("alpha", "origin/feature-x") } returns
+            GitBranchResponse(branch = "feature-x", checked_out = true, created = true)
+        f.vm.requestCheckout(remoteId)
+        f.vm.events.test {
+            f.vm.confirmCheckout()
+            val state = f.vm.uiState.value
+            assertNull("the prompt closes as the request starts", state.checkoutPrompt)
+            assertTrue(state.checkingOut)
+            assertTrue(state.rowBusy)
+            advanceUntilIdle()
+            assertEquals(GitUiEvent.Message("Checked out feature-x"), awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertFalse(f.vm.uiState.value.checkingOut)
+        coVerify(exactly = 1) { f.repo.checkout("alpha", "origin/feature-x") }
+    }
+
+    @Test
+    fun confirmCheckout_withoutAPrompt_sendsNothing() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        f.vm.confirmCheckout()
+        advanceUntilIdle()
+        coVerify(exactly = 0) { f.repo.checkout(any(), any()) }
+    }
+
+    @Test
+    fun confirmCheckout_busy_showsTheBusyDialog() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        val holders = listOf(
+            BusyHolder(kind = "auto_scan", project_name = "alpha", worktree_path = "/repo"),
+        )
+        coEvery { f.repo.checkout("alpha", "stale") } throws GitBusyException(holders)
+        f.vm.requestCheckout(staleId)
+        f.vm.confirmCheckout()
+        advanceUntilIdle()
+        assertEquals(holders, f.vm.uiState.value.busyDialog)
+        assertFalse(f.vm.uiState.value.checkingOut)
+    }
+
+    @Test
+    fun confirmCheckout_dirty_emitsTheDirtyCopy() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        coEvery { f.repo.checkout("alpha", "stale") } throws
+            gitError("dirty", "error: Your local changes")
+        f.vm.requestCheckout(staleId)
+        f.vm.events.test {
+            f.vm.confirmCheckout()
+            advanceUntilIdle()
+            assertEquals(GitUiEvent.Message(dirtyCopy), awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertFalse(f.vm.uiState.value.checkingOut)
+    }
+
+    @Test
+    fun requestCheckout_waitsOutAnInFlightCheckout() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        val reply = CompletableDeferred<GitBranchResponse>()
+        coEvery { f.repo.checkout("alpha", "stale") } coAnswers { reply.await() }
+        f.vm.requestCheckout(staleId)
+        f.vm.confirmCheckout()
+        advanceUntilIdle()
+
+        f.vm.requestCheckout(remoteId)
+        assertNull(f.vm.uiState.value.checkoutPrompt)
+
+        reply.complete(GitBranchResponse("stale", checked_out = true, created = false))
+        advanceUntilIdle()
+        f.vm.requestCheckout(remoteId)
+        assertNotNull(f.vm.uiState.value.checkoutPrompt)
+    }
+
+    // MARK: - Remote rows and filter
+
+    @Test
+    fun uiState_splitsRemoteRows_andOpensTheSectionOnlyWhenToggled() = runTest {
+        val f = newFixture(
+            initialItems = listOf(
+                branchOnly("main", isCurrent = true),
+                remoteBranch("feature-x"),
+                remoteBranch("main"),
+            ),
+        )
+        advanceUntilIdle()
+        val state = f.vm.uiState.value
+        assertEquals(listOf("main"), state.localItems.map { it.branch })
+        assertEquals(listOf("origin/feature-x", "origin/main"), state.remoteItems.map { it.branch })
+        assertFalse(state.remoteOpen)
+        assertFalse(state.filterable)
+        assertFalse("remote rows are never deletable", state.hasDeletableItems)
+
+        f.vm.toggleRemote()
+        assertTrue(f.vm.uiState.value.remoteOpen)
+        f.vm.toggleRemote()
+        assertFalse(f.vm.uiState.value.remoteOpen)
+    }
+
+    @Test
+    fun filter_appearsAtEightRows_narrowsBothSections_andOpensTheRemoteOne() = runTest {
+        val f = newFixture(
+            initialItems = (1..6).map { branchOnly("feature-$it") } +
+                listOf(remoteBranch("feature-1"), remoteBranch("main")),
+        )
+        advanceUntilIdle()
+        assertTrue(f.vm.uiState.value.filterable)
+
+        f.vm.setFilter(" FEATURE-1 ")
+        val state = f.vm.uiState.value
+        assertEquals(listOf("feature-1"), state.localItems.map { it.branch })
+        assertEquals(listOf("origin/feature-1"), state.remoteItems.map { it.branch })
+        assertTrue(state.remoteOpen)
+
+        f.vm.setFilter("   ")
+        assertEquals(6, f.vm.uiState.value.localItems.size)
+        assertFalse(f.vm.uiState.value.remoteOpen)
+    }
+
+    @Test
+    fun filter_isIgnoredBelowEightRows() = runTest {
+        val f = newFixture()
+        advanceUntilIdle()
+        f.vm.setFilter("nothing-matches")
+        assertFalse(f.vm.uiState.value.filterable)
+        assertEquals(4, f.vm.uiState.value.localItems.size)
+    }
+
+    // MARK: - Row and refusal copy
+
+    @Test
+    fun tipLine_joinsSubjectAndDay_orShowsWhicheverThereIs() {
+        val row = branchOnly("b")
+        assertEquals(
+            "Fix login · 2026-09-16",
+            tipLine(row.copy(subject = "  Fix login ", committed_at = "2026-09-16T10:20:30+02:00")),
+        )
+        assertEquals("Fix login", tipLine(row.copy(subject = "Fix login")))
+        assertEquals("2026-09-16", tipLine(row.copy(committed_at = "2026-09-16T10:20:30+02:00")))
+        assertEquals("2026-09-16", shortDate("2026-09-16"))
+        assertNull(tipLine(row.copy(subject = "   ")))
+        assertNull(shortDate(""))
+    }
+
+    @Test
+    fun matchesFilter_isCaseInsensitive_onTheLabelAndTheWorktreePath() {
+        assertTrue(matchesFilter(branchOnly("Feature/Login"), " login "))
+        assertTrue(matchesFilter(remoteBranch("feature-x"), "ORIGIN/"))
+        assertTrue(matchesFilter(branchWithWorktree("b", "/wt/Alpha"), "alpha"))
+        assertTrue(matchesFilter(orphanWorktree("/wt/x"), "wt/x"))
+        assertTrue(matchesFilter(branchOnly("b"), ""))
+        assertFalse(matchesFilter(branchOnly("b"), "main"))
+    }
+
+    @Test
+    fun checkoutErrorCopy_wordsEachRefusal_andFallsBackToTheSessionCopy() {
+        assertEquals(dirtyCopy, checkoutErrorCopy(gitError("dirty", "error: Your local changes"), "b"))
+        assertEquals(
+            "feature-a is already checked out in another worktree (/wt/topic).",
+            checkoutErrorCopy(gitError("checked_out_elsewhere", "/wt/topic"), "feature-a"),
+        )
+        assertEquals(
+            "feature-a is already checked out in another worktree.",
+            checkoutErrorCopy(gitError("checked_out_elsewhere"), "feature-a"),
+        )
+        assertEquals(
+            "A merge, rebase or cherry-pick is in progress in the project folder. Finish or abort it first.",
+            checkoutErrorCopy(gitError("operation_in_progress", "merging"), "feature-a"),
+        )
+        assertEquals(
+            "A fetch, pull or push is still running in the project folder.",
+            checkoutErrorCopy(gitError("job_running", "job-1"), "feature-a"),
+        )
+        assertEquals(
+            "Branch not found — refresh the list.",
+            checkoutErrorCopy(gitError("ref_not_found"), "feature-a"),
+        )
+        assertEquals(
+            "git failed: fatal: boom",
+            checkoutErrorCopy(gitError("git_error", "fatal: boom"), "feature-a"),
+        )
+        assertEquals("offline", checkoutErrorCopy(RuntimeException("offline"), "feature-a"))
+    }
+
+    @Test
+    fun createBranchErrorCopy_namesTheClash_theBadName_andTheMissingStartPoint() {
+        assertEquals(
+            "A branch named feature-a already exists.",
+            createBranchErrorCopy(gitError("exists", "feature-a"), "feature-a"),
+        )
+        assertEquals("Not a valid branch name.", createBranchErrorCopy(gitError("bad_branch_name"), "-x"))
+        assertEquals(
+            "Start point nope was not found.",
+            createBranchErrorCopy(gitError("unknown_start_point", "nope"), "feature-a"),
+        )
+        assertEquals(
+            "The start point was not found.",
+            createBranchErrorCopy(gitError("unknown_start_point"), "feature-a"),
+        )
+        assertEquals(
+            "feature-a is already checked out in another worktree (/wt).",
+            createBranchErrorCopy(gitError("checked_out_elsewhere", "/wt"), "feature-a"),
+        )
+    }
+
+    @Test
+    fun branchMessages_nameTheBranchTheAgentTouched() {
+        assertEquals(
+            "Check out feature-a in the project folder of alpha? " +
+                "Sessions started in that folder afterwards use this branch.",
+            checkoutConfirmMessage("feature-a", "alpha"),
+        )
+        assertEquals("Checked out feature-a", checkedOutMessage(GitBranchResponse("feature-a", true, false)))
+        assertEquals("Created feature-a", branchCreatedMessage(GitBranchResponse("feature-a", false, true)))
+        assertEquals(
+            "Created and checked out feature-a",
+            branchCreatedMessage(GitBranchResponse("feature-a", true, true)),
         )
     }
 }

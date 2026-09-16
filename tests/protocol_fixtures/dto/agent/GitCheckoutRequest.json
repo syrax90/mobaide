@@ -1,0 +1,17 @@
+{
+  "type": "GitCheckoutRequest",
+  "cases": [
+    {
+      "name": "local",
+      "wire": {
+        "ref": "feature/login"
+      }
+    },
+    {
+      "name": "remote",
+      "wire": {
+        "ref": "origin/feature/login"
+      }
+    }
+  ]
+}

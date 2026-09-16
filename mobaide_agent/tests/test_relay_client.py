@@ -42,6 +42,11 @@ from mobaide.relay.envelope import (
     encode,
 )
 from mobaide.agent.events.bus import AgentEvent
+from mobaide.agent.git.changes_service import (
+    GitBadRequestError,
+    GitNotFoundError,
+    GitRefusedError,
+)
 from mobaide.core import (
     AntigravityBinaryNotFoundError,
     ClaudeBinaryNotFoundError,
@@ -3064,6 +3069,235 @@ class TestProxyGitItems:
         )
 
 
+class TestProxyGitBranches:
+    """Relay parity for the project-git routes added next to
+    ``TestProxyGitItems``: the ``?remote`` flag reaches the service parsed,
+    ``POST /branches`` and ``POST /checkout`` answer the FastAPI router's
+    bodies byte-for-byte — the busy 409 nested under ``detail`` and the coded
+    refusals in the session-git ``{detail: {code, message}}`` shape."""
+
+    def _wire_project(self, mock_app_state, tmp_path, name="proj"):
+        (tmp_path / ".git").mkdir(exist_ok=True)
+        project = MagicMock()
+        project.name = name
+        project.path = str(tmp_path)
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        mock_app_state.worktree_manager = MagicMock()
+        mock_app_state.session_manager = MagicMock()
+        mock_app_state.event_bus = MagicMock()
+
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [(None, False), ({"remote": "true"}, True), ({"remote": "0"}, False)],
+    )
+    async def test_get_items_forwards_the_parsed_remote_flag(
+        self, client, mock_app_state, tmp_path, query, expected,
+    ):
+        self._wire_project(mock_app_state, tmp_path)
+        ws = AsyncMock()
+        with patch(
+            "mobaide.relay.client.list_git_items",
+            new=AsyncMock(return_value=[]),
+        ) as mock_list:
+            result = await client._dispatch_proxy(
+                "GET", "/api/projects/proj/git/items", None, query, ws,
+            )
+
+        assert result["status"] == 200
+        assert result["body"] == {"items": []}
+        assert mock_list.await_args is not None
+        assert mock_list.await_args.kwargs["remote"] is expected
+
+    async def test_get_items_rejects_a_non_boolean_remote_flag_with_422(
+        self, client, mock_app_state, tmp_path,
+    ):
+        self._wire_project(mock_app_state, tmp_path)
+        ws = AsyncMock()
+        with patch(
+            "mobaide.relay.client.list_git_items",
+            new=AsyncMock(return_value=[]),
+        ) as mock_list:
+            result = await client._dispatch_proxy(
+                "GET", "/api/projects/proj/git/items", None, {"remote": "maybe"}, ws,
+            )
+
+        assert result["status"] == 422
+        assert isinstance(result["body"]["detail"], list)
+        mock_list.assert_not_awaited()
+
+    async def test_post_branches_happy_path(self, client, mock_app_state, tmp_path):
+        from mobaide.agent.git.models import GitBranchCreateRequest, GitBranchResponse
+
+        self._wire_project(mock_app_state, tmp_path)
+        ws = AsyncMock()
+        with patch(
+            "mobaide.relay.client.create_branch",
+            new=AsyncMock(
+                return_value=GitBranchResponse(branch="x", checked_out=True, created=True),
+            ),
+        ) as mock_create:
+            result = await client._dispatch_proxy(
+                "POST",
+                "/api/projects/proj/git/branches",
+                {"name": "x", "start_point": "origin/main", "checkout": True},
+                None,
+                ws,
+            )
+
+        assert result["status"] == 200
+        assert result["body"] == {"branch": "x", "checked_out": True, "created": True}
+        mock_create.assert_awaited_once()
+        await_args = mock_create.await_args
+        assert await_args is not None
+        assert await_args.args == (
+            GitBranchCreateRequest(name="x", start_point="origin/main", checkout=True),
+        )
+        assert await_args.kwargs["project_name"] == "proj"
+        assert await_args.kwargs["project_root"] == str(tmp_path)
+        assert await_args.kwargs["actor"] is None
+
+    async def test_post_branches_malformed_returns_422(self, client, mock_app_state, tmp_path):
+        self._wire_project(mock_app_state, tmp_path)
+        ws = AsyncMock()
+        with patch(
+            "mobaide.relay.client.create_branch", new=AsyncMock(),
+        ) as mock_create:
+            result = await client._dispatch_proxy(
+                "POST", "/api/projects/proj/git/branches", {"checkout": True}, None, ws,
+            )
+
+        assert result["status"] == 422
+        assert isinstance(result["body"]["detail"], list)
+        mock_create.assert_not_awaited()
+
+    async def test_post_checkout_happy_path(self, client, mock_app_state, tmp_path):
+        from mobaide.agent.git.models import GitBranchResponse, GitCheckoutRequest
+
+        self._wire_project(mock_app_state, tmp_path)
+        ws = AsyncMock()
+        with patch(
+            "mobaide.relay.client.checkout_ref",
+            new=AsyncMock(
+                return_value=GitBranchResponse(
+                    branch="feature/x", checked_out=True, created=True,
+                ),
+            ),
+        ) as mock_checkout:
+            result = await client._dispatch_proxy(
+                "POST",
+                "/api/projects/proj/git/checkout",
+                {"ref": "origin/feature/x"},
+                None,
+                ws,
+            )
+
+        assert result["status"] == 200
+        assert result["body"] == {"branch": "feature/x", "checked_out": True, "created": True}
+        await_args = mock_checkout.await_args
+        assert await_args is not None
+        assert await_args.args == (GitCheckoutRequest(ref="origin/feature/x"),)
+        assert await_args.kwargs["project_name"] == "proj"
+
+    async def test_post_checkout_busy_returns_409_with_nested_detail(
+        self, client, mock_app_state, tmp_path,
+    ):
+        from mobaide.agent.git.models import BusyHolder
+        from mobaide.agent.git.service import GitItemBusyError
+
+        self._wire_project(mock_app_state, tmp_path)
+        busy_by = [BusyHolder(kind="session", session_id="s1", cwd=str(tmp_path))]
+        ws = AsyncMock()
+        with patch(
+            "mobaide.relay.client.checkout_ref",
+            new=AsyncMock(side_effect=GitItemBusyError(busy_by=busy_by)),
+        ):
+            result = await client._dispatch_proxy(
+                "POST", "/api/projects/proj/git/checkout", {"ref": "x"}, None, ws,
+            )
+
+        assert result["status"] == 409
+        assert result["body"]["detail"]["busy_by"][0]["session_id"] == "s1"
+        assert "code" not in result["body"]["detail"]
+        assert "busy_by" not in result["body"]
+
+    @pytest.mark.parametrize(
+        ("exc", "status", "detail"),
+        [
+            (
+                GitRefusedError("dirty", "error: Your local changes"),
+                409,
+                {"code": "dirty", "message": "error: Your local changes"},
+            ),
+            (
+                GitRefusedError("checked_out_elsewhere", "/wt/topic"),
+                409,
+                {"code": "checked_out_elsewhere", "message": "/wt/topic"},
+            ),
+            (GitNotFoundError("ref_not_found"), 404, {"code": "ref_not_found"}),
+            (GitBadRequestError("bad_ref"), 400, {"code": "bad_ref"}),
+        ],
+    )
+    async def test_post_checkout_coded_refusals_match_the_router_shape(
+        self, client, mock_app_state, tmp_path, exc, status, detail,
+    ):
+        self._wire_project(mock_app_state, tmp_path)
+        ws = AsyncMock()
+        with patch(
+            "mobaide.relay.client.checkout_ref", new=AsyncMock(side_effect=exc),
+        ):
+            result = await client._dispatch_proxy(
+                "POST", "/api/projects/proj/git/checkout", {"ref": "x"}, None, ws,
+            )
+
+        assert result["status"] == status
+        assert result["body"] == {"detail": detail}
+
+    async def test_post_branches_coded_refusal_matches_the_router_shape(
+        self, client, mock_app_state, tmp_path,
+    ):
+        self._wire_project(mock_app_state, tmp_path)
+        ws = AsyncMock()
+        with patch(
+            "mobaide.relay.client.create_branch",
+            new=AsyncMock(side_effect=GitRefusedError("exists", "x")),
+        ):
+            result = await client._dispatch_proxy(
+                "POST", "/api/projects/proj/git/branches", {"name": "x"}, None, ws,
+            )
+
+        assert result["status"] == 409
+        assert result["body"] == {"detail": {"code": "exists", "message": "x"}}
+
+    async def test_unknown_project_and_non_git_project_apply_to_the_new_routes(
+        self, client, mock_app_state, tmp_path,
+    ):
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=None)
+        mock_app_state.worktree_manager = MagicMock()
+        ws = AsyncMock()
+
+        missing = await client._dispatch_proxy(
+            "POST", "/api/projects/missing/git/checkout", {"ref": "x"}, None, ws,
+        )
+
+        assert missing["status"] == 404
+        assert "not found" in missing["body"]["detail"]
+
+        project = MagicMock()
+        project.name = "plain"
+        project.path = str(tmp_path / "plain")
+        (tmp_path / "plain").mkdir()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+
+        plain = await client._dispatch_proxy(
+            "POST", "/api/projects/plain/git/branches", {"name": "x"}, None, ws,
+        )
+
+        assert plain["status"] == 400
+        assert "not a git repository" in plain["body"]["detail"]
+
+
 class TestProxyLinearDiscoveryRelayParity:
     """Regression guards for the new Linear discovery endpoints
     (``GET /api/projects/{name}/linear/labels`` and ``/states``): they must
@@ -3956,6 +4190,7 @@ class TestProxyVersionCapabilities:
                 "fetch": True,
                 "pull": True,
                 "push": True,
+                "branches": True,
             },
         }
 
@@ -3984,6 +4219,7 @@ class TestProxyVersionCapabilities:
                 "fetch": True,
                 "pull": True,
                 "push": True,
+                "branches": True,
             },
         }
 
