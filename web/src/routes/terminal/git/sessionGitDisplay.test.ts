@@ -1334,6 +1334,7 @@ describe('rebaseBanner', () => {
       title: 'Rebasing topic onto main',
       progress: 'Stopped at fedcba9 Fix the login redirect · 2/5',
       hint: '1 conflict — fix the files, then Mark resolved.',
+      actionable: true,
     });
     expect(rebaseBanner(rebasing(), 3)?.hint).toBe('3 conflicts — fix the files, then Mark resolved.');
     expect(rebaseBanner(rebasing(), 0)?.hint).toBe('No conflicts left — Continue when ready.');
@@ -1353,16 +1354,23 @@ describe('rebaseBanner', () => {
     );
   });
 
-  it('reads as a bare rebase in progress for an agent that sends no details', () => {
-    expect(rebaseBanner(rebasing(null), 0)).toEqual({
+  it('sends a rebase with no details, as a git am session reports it, to the terminal whatever the conflicts', () => {
+    const toTerminal = {
       title: 'Rebase in progress',
       progress: null,
-      hint: 'No conflicts left — Continue when ready.',
-    });
+      hint: 'Continue, skip or abort it in the terminal.',
+      actionable: false,
+    };
+    expect(rebaseBanner(rebasing(null), 0)).toEqual(toTerminal);
+    expect(rebaseBanner(rebasing(null), 2)).toEqual(toTerminal);
+  });
+
+  it('keeps the controls for a rebase whose details the agent could not read', () => {
     expect(rebaseBanner(rebasing(rebaseInfo({ branch: null, onto_ref: null, onto_short_oid: null, stopped_on: null, step: null, total: null })), 2)).toEqual({
       title: 'Rebase in progress',
       progress: null,
       hint: '2 conflicts — fix the files, then Mark resolved.',
+      actionable: true,
     });
   });
 });

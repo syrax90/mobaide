@@ -451,7 +451,7 @@ private fun ChangesList(
             item(key = "rebase", contentType = "rebase") {
                 RebaseBannerRow(
                     banner = banner,
-                    actionable = state.capabilities.rebase,
+                    actionable = state.capabilities.rebase && banner.actionable,
                     canContinue = !state.busy && (state.status.counts?.conflicts ?: 0) == 0,
                     busy = state.busy,
                     onContinue = onContinueRebase,

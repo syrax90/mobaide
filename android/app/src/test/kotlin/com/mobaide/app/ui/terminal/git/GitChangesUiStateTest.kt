@@ -813,6 +813,7 @@ class GitChangesUiStateRebaseTest {
                 title = "Rebasing topic onto main",
                 progress = "Stopped at fedcba9 Fix the login redirect · 2/5",
                 hint = "1 conflict — fix the files, then Mark resolved.",
+                actionable = true,
             ),
             rebaseBanner(rebasing(), 1),
         )
@@ -836,13 +837,21 @@ class GitChangesUiStateRebaseTest {
     }
 
     @Test
-    fun rebaseBanner_readsAsABareRebaseInProgress_forAnAgentThatSendsNoDetails() {
-        assertEquals(
-            RebaseBanner("Rebase in progress", null, "No conflicts left — Continue when ready."),
-            rebaseBanner(rebasing(null), 0),
+    fun rebaseBanner_withNoDetails_asAGitAmSessionReportsIt_pointsToTheTerminalWhateverTheConflicts() {
+        val toTerminal = RebaseBanner(
+            "Rebase in progress", null, "Continue, skip or abort it in the terminal.", actionable = false,
         )
+
+        assertEquals(toTerminal, rebaseBanner(rebasing(null), 0))
+        assertEquals(toTerminal, rebaseBanner(rebasing(null), 2))
+    }
+
+    @Test
+    fun rebaseBanner_keepsTheControls_forARebaseWhoseDetailsTheAgentCouldNotRead() {
         assertEquals(
-            RebaseBanner("Rebase in progress", null, "2 conflicts — fix the files, then Mark resolved."),
+            RebaseBanner(
+                "Rebase in progress", null, "2 conflicts — fix the files, then Mark resolved.", actionable = true,
+            ),
             rebaseBanner(rebasing(GitRebaseInfo()), 2),
         )
     }

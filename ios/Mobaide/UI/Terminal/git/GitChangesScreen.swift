@@ -494,7 +494,7 @@ private struct GitChangesContent: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .pixelInfoBanner()
-            if model.capabilities.rebase {
+            if model.capabilities.rebase && banner.actionable {
                 HStack(spacing: 12) {
                     Button("Continue") { Task { await model.continueRebase() } }
                         .buttonStyle(.pixelSmall)

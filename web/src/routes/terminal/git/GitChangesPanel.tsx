@@ -517,7 +517,7 @@ export function GitChangesPanel({
             {banner.progress !== null && <span className="git-rebase-progress">{banner.progress}</span>}
             <span>{banner.hint}</span>
           </span>
-          {capabilities.rebase && (
+          {capabilities.rebase && banner.actionable && (
             <>
               <button
                 type="button"

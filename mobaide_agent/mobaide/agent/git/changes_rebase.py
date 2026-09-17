@@ -6,11 +6,14 @@ and answers when git exits: a local rebase has no network step, so it fits
 the relay's 30 s budget the way a commit does, and a rebase cut off by the
 timeout is left in progress for Abort to undo. The editors are disabled with
 ``:``, which git itself treats as "no editor", so nothing is ever spawned to
-wait for a person. A rebase that stops on conflicts is a normal ``stopped``
-answer carrying the progress the status poll also reports; git declining to
-act is a ``409`` in the jobs' failure vocabulary (``dirty_worktree``,
-``unmerged``, ``hook_failed``, …). ``git.changed`` is published whenever
-git ran, whatever it answered.
+wait for a person. A call that leaves the rebase in progress and further
+along — a start always; a continue, skip or abort that moved HEAD or
+``REBASE_HEAD`` (the commit git stopped at), or left unmerged paths where
+there were none — is a normal ``stopped`` answer carrying the progress the
+status poll also reports, whatever git exited with; git declining to act
+without moving anything is a ``409`` in the jobs' failure vocabulary
+(``dirty_worktree``, ``unmerged``, ``hook_failed``, …). ``git.changed`` is
+published whenever git ran, whatever it answered.
 """
 from __future__ import annotations
 
@@ -53,8 +56,12 @@ _Action = Literal["start", "continue", "skip", "abort"]
 
 
 async def _head_oid(toplevel: str) -> str | None:
+    return await _rev(toplevel, "HEAD")
+
+
+async def _rev(toplevel: str, name: str) -> str | None:
     result = await run_git(
-        ["rev-parse", "-q", "--verify", "HEAD"],
+        ["rev-parse", "-q", "--verify", name],
         cwd=toplevel,
         timeout=_QUICK_TIMEOUT,
         max_bytes=_SMALL_OUTPUT,
@@ -82,6 +89,15 @@ async def _require_rebasing(toplevel: str) -> None:
         raise GitRefusedError("no_rebase", state)
 
 
+async def _progress(toplevel: str) -> tuple[str | None, str | None]:
+    """``(HEAD, REBASE_HEAD)``: a continue that commits the resolved pick moves
+    HEAD, a skip moves the commit git stopped at, and either means git did
+    something even when it then exits non-zero on the next pick. Not the todo
+    step: git reschedules a pick that failed and bumps ``msgnum`` on every
+    retry, so a retry that changed nothing would read as progress."""
+    return await _head_oid(toplevel), await _rev(toplevel, "REBASE_HEAD")
+
+
 async def _run_rebase(toplevel: str, args: Sequence[str]) -> CmdResult:
     result = await run_git(
         ["rebase", *args],
@@ -102,30 +118,44 @@ def _output_lines(data: bytes) -> list[str]:
     return [part for line in _lines(data) for part in line.split("\r") if part]
 
 
+def _advice_free(data: bytes) -> list[str]:
+    return [line for line in _output_lines(data) if not line.startswith("hint:")]
+
+
 async def _outcome(
     toplevel: str,
     result: CmdResult,
     *,
     action: _Action,
-    head_before: str | None = None,
+    before: tuple[str | None, str | None],
+    had_unmerged: bool = False,
 ) -> GitRebaseResponse:
-    """A rebase still in progress after git exits has stopped; one that is
-    not either finished or was refused, and a refusal to continue or skip
-    leaves the stop as it was."""
+    """Decided from the repository, never from git's wording, which quotes
+    commit subjects and paths: a failed call that left the rebase in progress
+    and further along — HEAD or ``REBASE_HEAD`` moved, or a retried pick
+    left conflicts where there were none — has stopped (its message is git's
+    explanation only when no unmerged path explains it); one that moved
+    nothing was refused. ``hint:`` lines are dropped before classifying: git's
+    advice for a rescheduled pick quotes its subject."""
     _, rebase_dir = await operation_state(toplevel)
     if result.rc != 0:
-        stdout, stderr = _output_lines(result.stdout), _output_lines(result.stderr)
+        stdout, stderr = _advice_free(result.stdout), _advice_free(result.stderr)
         code, message = classify_job_failure("rebase", err_tail=stderr, out_tail=stdout)
+        unmerged = rebase_dir is not None and await _has_unmerged(toplevel)
+        if rebase_dir is not None and (
+            action == "start"
+            or (unmerged and not had_unmerged)
+            or await _progress(toplevel) != before
+        ):
+            return GitRebaseResponse(
+                outcome="stopped",
+                rebase=await rebase_info(toplevel, rebase_dir),
+                message=None if unmerged else message,
+            )
         if action == "continue" and code == "git_error" and any(
             _CONTINUE_DIRTY in line for line in (*stdout, *stderr)
         ):
             code, message = "dirty_worktree", "unstaged changes to tracked files"
-        if rebase_dir is not None and (code == "conflicts" or action == "start"):
-            return GitRebaseResponse(
-                outcome="stopped",
-                rebase=await rebase_info(toplevel, rebase_dir),
-                message=None if code == "conflicts" else message,
-            )
         raise GitRefusedError(code, message)
     if rebase_dir is not None:
         return GitRebaseResponse(
@@ -133,7 +163,7 @@ async def _outcome(
         )
     if action == "abort":
         return GitRebaseResponse(outcome="aborted")
-    if action == "start" and head_before == await _head_oid(toplevel):
+    if action == "start" and before[0] == await _head_oid(toplevel):
         return GitRebaseResponse(outcome="up_to_date")
     return GitRebaseResponse(outcome="rebased")
 
@@ -166,7 +196,7 @@ async def start_session_rebase(
                 repo.toplevel, ["--no-autostash", "--end-of-options", onto]
             )
             return await _outcome(
-                repo.toplevel, result, action="start", head_before=head
+                repo.toplevel, result, action="start", before=(head, None)
             )
     finally:
         if ran:
@@ -185,11 +215,19 @@ async def _step(
     try:
         async with _lock_for(repo.toplevel):
             await _require_rebasing(repo.toplevel)
-            if action == "continue" and await _has_unmerged(repo.toplevel):
+            had_unmerged = await _has_unmerged(repo.toplevel)
+            if action == "continue" and had_unmerged:
                 raise GitRefusedError("unmerged", "unmerged paths in the index")
+            before = await _progress(repo.toplevel)
             ran = True
             result = await _run_rebase(repo.toplevel, [f"--{action}"])
-            return await _outcome(repo.toplevel, result, action=action)
+            return await _outcome(
+                repo.toplevel,
+                result,
+                action=action,
+                before=before,
+                had_unmerged=had_unmerged,
+            )
     finally:
         if ran:
             _publish(event_bus, project_name, repo)

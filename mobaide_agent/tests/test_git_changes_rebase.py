@@ -146,6 +146,45 @@ def _resolve(repo_dir: str, content: bytes = b"one\nRESOLVED\nthree\n") -> None:
     run_git_sync(repo_dir, "add", "keep.txt")
 
 
+def _picks_onto_main(repo_dir: str, picks: list[tuple[str, str, bytes]]) -> None:
+    """``topic`` (checked out) makes one commit per ``(subject, path,
+    content)`` off the initial commit while ``main`` rewrites line 2 of
+    ``keep.txt``, so every pick that rewrites that line stops on a conflict."""
+    run_git_sync(repo_dir, "checkout", "-q", "-b", "topic")
+    for subject, path, content in picks:
+        write_file(repo_dir, path, content)
+        commit_all(repo_dir, subject)
+    run_git_sync(repo_dir, "checkout", "-q", "main")
+    write_file(repo_dir, "keep.txt", b"one\nMAIN\nthree\n")
+    commit_all(repo_dir, "main side")
+    run_git_sync(repo_dir, "checkout", "-q", "topic")
+
+
+def _stop_before_a_pick_that_adds_b(repo_dir: str) -> None:
+    """Stopped on a ``keep.txt`` conflict at step 1 of 2, with ``b.txt``
+    untracked in the worktree where the second pick adds it."""
+    _picks_onto_main(repo_dir, [
+        ("topic side", "keep.txt", b"one\nTOPIC\nthree\n"),
+        ("adds b", "b.txt", b"b\n"),
+    ])
+    run_git_sync(repo_dir, "rebase", "--no-autostash", "main", check=False)
+    write_file(repo_dir, "b.txt", b"mine\n")
+
+
+def _stop_before_a_conflicting_pick_that_adds_b(repo_dir: str, subject: str) -> None:
+    """Resolved at step 1 of 2, with ``b.txt`` untracked where the second pick,
+    ``subject``, adds it while rewriting line 2 of ``keep.txt`` again: a
+    continue commits the resolution and git reschedules that pick, whose
+    retry conflicts once the blocker is gone."""
+    _picks_onto_main(repo_dir, [("topic side", "keep.txt", b"one\nTOPIC\nthree\n")])
+    write_file(repo_dir, "b.txt", b"b\n")
+    write_file(repo_dir, "keep.txt", b"one\nTOPIC AGAIN\nthree\n")
+    commit_all(repo_dir, subject)
+    run_git_sync(repo_dir, "rebase", "--no-autostash", "main", check=False)
+    _resolve(repo_dir)
+    write_file(repo_dir, "b.txt", b"mine\n")
+
+
 @requires_git
 class TestStart:
     async def test_replays_the_branch_onto_the_target_and_publishes(self, repo):
@@ -432,6 +471,108 @@ class TestContinue:
         assert resp.rebase.stopped_on.oid == _oid(repo, "other")
         assert (await _status(repo)).repo.rebase == resp.rebase
 
+    async def test_subjects_worded_like_a_network_failure_still_stop_on_their_conflicts(
+        self, repo
+    ):
+        # git quotes both subjects in its output, where the failure classifier
+        # reads "unable to access" as `network`.
+        _picks_onto_main(repo, [
+            ("fix: unable to access the cache", "keep.txt", b"one\nTOPIC\nthree\n"),
+            ("retry: unable to access it again", "keep.txt", b"one\nTOPIC AGAIN\nthree\n"),
+        ])
+        first = await _start(repo, "main")
+        _resolve(repo)
+
+        resp = await _continue(repo)
+
+        assert (first.outcome, first.message, first.rebase.step) == ("stopped", None, 1)
+        assert (resp.outcome, resp.message) == ("stopped", None)
+        assert (resp.rebase.stopped_on.subject, resp.rebase.step, resp.rebase.total) == (
+            "retry: unable to access it again", 2, 2)
+        assert _subjects(repo)[0] == "fix: unable to access the cache"
+        assert (await _status(repo)).repo.rebase == resp.rebase
+
+    async def test_committing_the_resolution_into_an_untracked_file_stops_with_gits_message(
+        self, repo
+    ):
+        _stop_before_a_pick_that_adds_b(repo)
+        _resolve(repo)
+        bus = FakeEventBus()
+
+        resp = await _continue(repo, event_bus=bus)
+
+        assert resp.outcome == "stopped"
+        assert "would be overwritten by merge" in resp.message
+        assert (resp.rebase.branch, resp.rebase.step, resp.rebase.total) == ("topic", 2, 2)
+        assert _subjects(repo) == ["topic side", "main side", "initial"]
+        assert _read(repo, "b.txt") == b"mine\n"
+        assert (await _status(repo)).repo.state == "rebasing"
+        assert bus.published == [_changed(repo, "proj")]
+
+    async def test_a_held_index_lock_is_index_locked_and_leaves_the_stop_as_it_was(
+        self, repo
+    ):
+        _stop_on_conflict(repo)
+        await _start(repo, "main")
+        _resolve(repo)
+        head = _oid(repo)
+        write_file(repo, ".git/index.lock", b"")
+        bus = FakeEventBus()
+
+        with pytest.raises(GitRefusedError) as info:
+            await _continue(repo, event_bus=bus)
+
+        assert info.value.code == "index_locked"
+        assert _oid(repo) == head
+        os.remove(os.path.join(repo, ".git", "index.lock"))
+        status = await _status(repo)
+        assert (status.repo.state, status.repo.rebase.step) == ("rebasing", 1)
+        assert bus.published == [_changed(repo, "proj")]
+
+    async def test_a_rescheduled_pick_that_conflicts_on_retry_stops_on_it(self, repo):
+        # The retried pick leaves HEAD and REBASE_HEAD where the blocked one
+        # left them: only the conflicts it adds show that git moved on.
+        _stop_before_a_conflicting_pick_that_adds_b(repo, "adds b and rewrites line two")
+        blocked = await _continue(repo)
+        os.remove(os.path.join(repo, "b.txt"))
+        head = _oid(repo)
+        bus = FakeEventBus()
+
+        resp = await _continue(repo, event_bus=bus)
+
+        assert "would be overwritten by merge" in blocked.message
+        assert (resp.outcome, resp.message) == ("stopped", None)
+        assert resp.rebase.stopped_on.subject == "adds b and rewrites line two"
+        assert _oid(repo) == head
+        status = await _status(repo)
+        assert status.repo.rebase == resp.rebase
+        assert [(e.group, e.path) for e in status.entries] == [
+            ("conflicts", "keep.txt"), ("staged", "b.txt")]
+        assert bus.published == [_changed(repo, "proj")]
+
+    async def test_a_rescheduled_pick_still_blocked_is_dirty_worktree_whatever_its_subject(
+        self, repo
+    ):
+        # git's advice for a rescheduled pick quotes its subject, where the
+        # failure classifier reads "Permission to " as `auth_required`.
+        subject = "Permission to read: unable to access b"
+        _stop_before_a_conflicting_pick_that_adds_b(repo, subject)
+        blocked = await _continue(repo)
+        head = _oid(repo)
+        bus = FakeEventBus()
+
+        with pytest.raises(GitRefusedError) as info:
+            await _continue(repo, event_bus=bus)
+
+        assert (blocked.outcome, blocked.rebase.stopped_on.subject) == ("stopped", subject)
+        assert info.value.code == "dirty_worktree"
+        assert "would be overwritten by merge" in info.value.message
+        assert _oid(repo) == head
+        assert _read(repo, "b.txt") == b"mine\n"
+        status = await _status(repo)
+        assert (status.repo.state, status.repo.rebase.stopped_on.subject) == ("rebasing", subject)
+        assert bus.published == [_changed(repo, "proj")]
+
     async def test_unmerged_paths_are_refused_before_git_runs(self, repo, monkeypatch):
         _stop_on_conflict(repo)
         await _start(repo, "main")
@@ -518,6 +659,68 @@ class TestSkip:
 
         assert resp.outcome == "rebased"
         assert (await _status(repo)).entries == []
+
+    async def test_skipping_into_an_untracked_file_in_the_next_pick_stops_with_gits_message(
+        self, repo
+    ):
+        _stop_before_a_pick_that_adds_b(repo)
+        head = _oid(repo)
+
+        resp = await _skip(repo)
+
+        assert resp.outcome == "stopped"
+        assert "would be overwritten by merge" in resp.message
+        assert (resp.rebase.step, resp.rebase.total) == (2, 2)
+        assert _oid(repo) == head
+        assert _read(repo, "b.txt") == b"mine\n"
+        assert (await _status(repo)).repo.rebase == resp.rebase
+
+    async def test_a_held_index_lock_is_index_locked_and_leaves_the_stop_as_it_was(
+        self, repo
+    ):
+        _stop_on_conflict(repo, second_conflict=True)
+        await _start(repo, "main")
+        write_file(repo, ".git/index.lock", b"")
+
+        with pytest.raises(GitRefusedError) as info:
+            await _skip(repo)
+
+        assert info.value.code == "index_locked"
+        os.remove(os.path.join(repo, ".git", "index.lock"))
+        rebase = (await _status(repo)).repo.rebase
+        assert (rebase.stopped_on.subject, rebase.step, rebase.total) == ("other side", 1, 2)
+
+    async def test_skipping_at_a_rescheduled_pick_that_conflicts_on_retry_stops(self, repo):
+        _stop_before_a_conflicting_pick_that_adds_b(repo, "adds b and rewrites line two")
+        await _continue(repo)
+        os.remove(os.path.join(repo, "b.txt"))
+        head = _oid(repo)
+        bus = FakeEventBus()
+
+        resp = await _skip(repo, event_bus=bus)
+
+        assert (resp.outcome, resp.message) == ("stopped", None)
+        assert _oid(repo) == head
+        status = await _status(repo)
+        assert status.repo.rebase == resp.rebase
+        assert ("conflicts", "keep.txt") in [(e.group, e.path) for e in status.entries]
+        assert bus.published == [_changed(repo, "proj")]
+
+    async def test_a_rescheduled_pick_still_blocked_is_dirty_worktree_whatever_its_subject(
+        self, repo
+    ):
+        subject = "Permission to read: unable to access b"
+        _stop_before_a_conflicting_pick_that_adds_b(repo, subject)
+        await _continue(repo)
+        head = _oid(repo)
+
+        with pytest.raises(GitRefusedError) as info:
+            await _skip(repo)
+
+        assert info.value.code == "dirty_worktree"
+        assert _oid(repo) == head
+        assert _read(repo, "b.txt") == b"mine\n"
+        assert (await _status(repo)).repo.state == "rebasing"
 
     async def test_without_a_rebase_it_is_no_rebase(self, repo):
         bus = FakeEventBus()

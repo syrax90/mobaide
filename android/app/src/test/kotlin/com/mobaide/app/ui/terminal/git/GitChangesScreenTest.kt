@@ -554,6 +554,7 @@ class GitChangesScreenRebaseTest {
         state: String = GitRepoInfo.STATE_REBASING,
         capabilities: GitCapabilities = rebaseCaps,
         busy: Boolean = false,
+        withDetails: Boolean = true,
     ): GitChangesUiState.Ready {
         val status = GitStatusResponse(
             session_id = "s1",
@@ -569,7 +570,7 @@ class GitChangesScreenRebaseTest {
                     stopped_on = GitRebaseCommit("fedcba98", "fedcba9", "Fix the login redirect"),
                     step = 2,
                     total = 5,
-                ).takeIf { state == GitRepoInfo.STATE_REBASING },
+                ).takeIf { state == GitRepoInfo.STATE_REBASING && withDetails },
             ),
             entries = entries,
             counts = GitStatusCounts(conflicts = entries.count { it.group == GitStatusEntry.GROUP_CONFLICTS }, total = entries.size),
@@ -649,6 +650,17 @@ class GitChangesScreenRebaseTest {
         composeRule.onNodeWithTag(GIT_CHANGES_REBASE_SKIP_TAG).assertDoesNotExist()
         composeRule.onNodeWithTag(GIT_CHANGES_REBASE_ABORT_TAG).assertDoesNotExist()
         composeRule.onNodeWithTag(gitChangesResolveTag(conflict)).assertDoesNotExist()
+    }
+
+    @Test
+    fun aRebaseWithNoDetails_pointsToTheTerminal_withoutContinueSkipOrAbort() {
+        setContent(ready(entries = emptyList(), withDetails = false))
+
+        composeRule.onNodeWithText("Rebase in progress").assertIsDisplayed()
+        composeRule.onNodeWithText("Continue, skip or abort it in the terminal.").assertIsDisplayed()
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_CONTINUE_TAG).assertDoesNotExist()
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_SKIP_TAG).assertDoesNotExist()
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_ABORT_TAG).assertDoesNotExist()
     }
 
     @Test

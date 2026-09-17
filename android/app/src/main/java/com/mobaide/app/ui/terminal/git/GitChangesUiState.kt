@@ -621,8 +621,13 @@ internal fun rebaseBlocker(status: GitStatusResponse?): String? {
 internal fun rebasedBranch(repo: GitRepoInfo?): String =
     repo?.rebase?.branch ?: repo?.head?.branch ?: "the branch"
 
-/** The Changes screen's banner while the repository is rebasing. */
-data class RebaseBanner(val title: String, val progress: String?, val hint: String)
+/**
+ * The Changes screen's banner while the repository is rebasing. [actionable]
+ * is false when `repo.rebase` is null — a `git am` session, which reports
+ * `rebasing` too and refuses Continue / Skip / Abort, or an agent that predates
+ * the rebase routes.
+ */
+data class RebaseBanner(val title: String, val progress: String?, val hint: String, val actionable: Boolean)
 
 internal fun rebaseBanner(repo: GitRepoInfo?, conflicts: Int): RebaseBanner? {
     if (repo == null || repo.state != GitRepoInfo.STATE_REBASING) return null
@@ -640,12 +645,14 @@ internal fun rebaseBanner(repo: GitRepoInfo?, conflicts: Int): RebaseBanner? {
     val step = info?.step
     val total = info?.total
     if (step != null && total != null) parts += "$step/$total"
-    val hint = if (conflicts > 0) {
-        "$conflicts ${if (conflicts == 1) "conflict" else "conflicts"} — fix the files, then Mark resolved."
-    } else {
-        "No conflicts left — Continue when ready."
+    val actionable = info != null
+    val hint = when {
+        !actionable -> "Continue, skip or abort it in the terminal."
+        conflicts > 0 ->
+            "$conflicts ${if (conflicts == 1) "conflict" else "conflicts"} — fix the files, then Mark resolved."
+        else -> "No conflicts left — Continue when ready."
     }
-    return RebaseBanner(title, parts.takeIf { it.isNotEmpty() }?.joinToString(" · "), hint)
+    return RebaseBanner(title, parts.takeIf { it.isNotEmpty() }?.joinToString(" · "), hint, actionable)
 }
 
 /** The two rebase steps that go through a confirmation. */

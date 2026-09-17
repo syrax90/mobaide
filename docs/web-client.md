@@ -939,9 +939,11 @@ same way: the terminal menu's `⋯ → Git → Rebase…` (gated on
 project-backed session picks the target from `listGitItems` (the project's
 local and remote-tracking branches, minus the session's own by name), any
 other session or a list that fails to load types the ref instead, and
-nothing is preselected. While the status reports `repo.rebase` the panel
-shows a third strip with Continue (disabled while any conflict remains),
-Skip… and Abort…, the latter two behind an `alertdialog` confirmation with
+nothing is preselected. While the status reports `state: rebasing` the panel
+shows a third strip; with a non-null `repo.rebase` (not a `git am` session,
+not an older agent) it carries Continue (disabled while any conflict
+remains), Skip… and Abort…, else it points to the terminal. The latter two
+sit behind an `alertdialog` confirmation with
 Cancel focused; `useSessionGitRebase` mirrors the sync mutations' shape. A
 conflict row's list entry and diff pane both gain a *Mark resolved* (✓)
 action, gated on `capabilities.git.{stage,resolve}` together, which stages

@@ -157,16 +157,21 @@ cadence; they do **not** gate compatibility.
     the state) unless the state is ``rebasing``, and ``job_running`` first.
   * All four answer ``GitRebaseResponse {"outcome", "rebase", "message"}``.
     ``outcome`` is an open vocabulary: ``rebased`` (finished), ``up_to_date``
-    (a start that left HEAD where it was), ``stopped`` (the rebase is still
-    in progress when git exits) and ``aborted``. A start reports ``stopped``
-    both for conflicts and for git's own non-conflict reason in ``message``
-    (an untracked file in the way of a later pick, say); a continue or skip
-    that runs into that same kind of non-conflict blocker instead answers
-    the ``409`` below — ``dirty_worktree`` for that example — even though
-    the rebase is still in progress (a known asymmetry with start, not a
-    fix). ``rebase`` is the ``GitRebaseInfo`` below, set only when
-    ``stopped``. Any other failure is a ``409`` with the fetch/pull/push
-    jobs' classifier codes and git's explanation as ``message``:
+    (a start that left HEAD where it was), ``stopped`` and ``aborted``.
+    ``stopped`` is decided from the repository, never from git's wording
+    (which quotes commit subjects and paths): the rebase is still in
+    progress when git exits and the call moved it — a start always does; a
+    continue, skip or abort did when it changed HEAD or ``REBASE_HEAD`` (the
+    commit git stopped at), or left unmerged paths where there were none (a
+    rescheduled pick — one an untracked file blocked — retried into a
+    conflict). Not the todo step, which git bumps on every retry of a
+    rescheduled pick, and never git's ``hint:`` lines, which quote the
+    rescheduled pick's subject. ``message`` is ``null`` while unmerged paths explain the
+    stop, else git's own reason (an untracked file in the way of a later
+    pick, say). ``rebase`` is the ``GitRebaseInfo`` below, set only when
+    ``stopped``. A call that fails without moving the rebase is a ``409``
+    with the fetch/pull/push jobs' classifier codes and git's explanation
+    as ``message``:
     ``dirty_worktree`` (``--continue`` with unstaged changes is reported
     this way too, although git words it like unmerged paths),
     ``hook_failed`` (the ``pre-rebase`` hook refused),
@@ -200,9 +205,12 @@ cadence; they do **not** gate compatibility.
     and a deleted file (resolving by removal) are not scanned.
   * ``GET /api/version`` ``capabilities.git`` gains ``"rebase": true`` and
     ``"resolve": true`` (both transports). Clients gate the terminal menu's
-    *Rebase…* entry and the Changes screen's Continue / Skip / Abort on
-    ``rebase``, and a conflict row's *Mark resolved* action on ``resolve``
-    (with ``stage``); an agent without ``resolve`` would stage the markers.
+    *Rebase…* entry on ``rebase``, the Changes screen's Continue / Skip /
+    Abort on ``rebase`` with a non-null ``repo.rebase`` — a ``rebasing`` state
+    without it (a ``git am`` session, or an older agent) gets a banner
+    pointing to the terminal instead — and a conflict row's *Mark resolved*
+    action on ``resolve`` (with ``stage``); an agent without ``resolve`` would
+    stage the markers.
   * Golden fixtures: new ``tests/protocol_fixtures/dto/agent/{
     GitRebaseRequest,GitRebaseResponse}.json``; ``GitStatusResponse.json``
     gains ``rebase`` on every repo and a ``rebasing_stopped_on_conflict``

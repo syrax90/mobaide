@@ -773,7 +773,8 @@ final class GitChangesDisplayRebaseTests: XCTestCase {
             GitChangesDisplay.RebaseBanner(
                 title: "Rebasing topic onto origin/main",
                 progress: "Stopped at fedcba9 Fix the login redirect · 2/5",
-                hint: "1 conflict — fix the files, then Mark resolved."
+                hint: "1 conflict — fix the files, then Mark resolved.",
+                actionable: true
             )
         )
         XCTAssertEqual(GitChangesDisplay.rebaseBanner(rebasing(info()), conflicts: 3)?.hint, "3 conflicts — fix the files, then Mark resolved.")
@@ -791,15 +792,22 @@ final class GitChangesDisplayRebaseTests: XCTestCase {
         )
     }
 
-    func testRebaseBannerReadsAsABareRebaseInProgressForAnAgentThatSendsNoDetails() throws {
-        // `upstream_gone` is an older agent's rebasing body: no `rebase` key at all.
-        XCTAssertEqual(
-            GitChangesDisplay.rebaseBanner(try status("upstream_gone").repo, conflicts: 0),
-            GitChangesDisplay.RebaseBanner(title: "Rebase in progress", progress: nil, hint: "No conflicts left — Continue when ready.")
+    func testRebaseBannerWithNoDetailsAsAGitAmSessionReportsItPointsToTheTerminalWhateverTheConflicts() throws {
+        let toTerminal = GitChangesDisplay.RebaseBanner(
+            title: "Rebase in progress", progress: nil, hint: "Continue, skip or abort it in the terminal.", actionable: false
         )
+
+        // `upstream_gone` is an older agent's rebasing body: no `rebase` key at all.
+        XCTAssertEqual(GitChangesDisplay.rebaseBanner(try status("upstream_gone").repo, conflicts: 0), toTerminal)
+        XCTAssertEqual(GitChangesDisplay.rebaseBanner(rebasing(nil), conflicts: 2), toTerminal)
+    }
+
+    func testRebaseBannerKeepsTheControlsForARebaseWhoseDetailsTheAgentCouldNotRead() {
         XCTAssertEqual(
             GitChangesDisplay.rebaseBanner(rebasing(GitRebaseInfo()), conflicts: 2),
-            GitChangesDisplay.RebaseBanner(title: "Rebase in progress", progress: nil, hint: "2 conflicts — fix the files, then Mark resolved.")
+            GitChangesDisplay.RebaseBanner(
+                title: "Rebase in progress", progress: nil, hint: "2 conflicts — fix the files, then Mark resolved.", actionable: true
+            )
         )
     }
 

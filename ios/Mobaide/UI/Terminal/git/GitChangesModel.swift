@@ -1272,6 +1272,10 @@ extension GitChangesDisplay {
         /// Where it stopped and how far along, when the agent could read it.
         let progress: String?
         let hint: String
+        /// False when `repo.rebase` is nil: a `git am` session, which reports
+        /// `rebasing` too and refuses Continue / Skip / Abort, or an agent that
+        /// predates the rebase routes.
+        let actionable: Bool
     }
 
     /// The Changes screen's banner while the repository is rebasing.
@@ -1290,10 +1294,21 @@ extension GitChangesDisplay {
         var parts: [String] = []
         if let stopped = info?.stopped_on { parts.append("Stopped at \(stopped.short_oid) \(stopped.subject)") }
         if let step = info?.step, let total = info?.total { parts.append("\(step)/\(total)") }
-        let hint = conflicts > 0
-            ? "\(conflicts) \(conflicts == 1 ? "conflict" : "conflicts") — fix the files, then Mark resolved."
-            : "No conflicts left — Continue when ready."
-        return RebaseBanner(title: title, progress: parts.isEmpty ? nil : parts.joined(separator: " · "), hint: hint)
+        let actionable = info != nil
+        let hint: String
+        if !actionable {
+            hint = "Continue, skip or abort it in the terminal."
+        } else if conflicts > 0 {
+            hint = "\(conflicts) \(conflicts == 1 ? "conflict" : "conflicts") — fix the files, then Mark resolved."
+        } else {
+            hint = "No conflicts left — Continue when ready."
+        }
+        return RebaseBanner(
+            title: title,
+            progress: parts.isEmpty ? nil : parts.joined(separator: " · "),
+            hint: hint,
+            actionable: actionable
+        )
     }
 
     static func rebaseStepPrompt(_ step: RebasePromptStep, repo: GitRepoInfo?) -> RebasePrompt {

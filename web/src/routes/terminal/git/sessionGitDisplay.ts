@@ -902,6 +902,12 @@ export interface RebaseBanner {
   /** Where it stopped and how far along, when the agent could read it. */
   progress: string | null;
   hint: string;
+  /**
+   * Whether Continue / Skip / Abort can act on it: `repo.rebase` is null for a
+   * `git am` session (which reports `rebasing` too, and refuses all three) and
+   * from an agent that predates the rebase routes.
+   */
+  actionable: boolean;
 }
 
 /** The Changes screen's banner while the repository is rebasing. */
@@ -927,11 +933,13 @@ export function rebaseBanner(
   const step = info?.step ?? null;
   const total = info?.total ?? null;
   if (step !== null && total !== null) parts.push(`${String(step)}/${String(total)}`);
-  const hint =
-    conflicts > 0
+  const actionable = info !== null;
+  const hint = !actionable
+    ? 'Continue, skip or abort it in the terminal.'
+    : conflicts > 0
       ? `${String(conflicts)} ${conflicts === 1 ? 'conflict' : 'conflicts'} — fix the files, then Mark resolved.`
       : 'No conflicts left — Continue when ready.';
-  return { title, progress: parts.length === 0 ? null : parts.join(' · '), hint };
+  return { title, progress: parts.length === 0 ? null : parts.join(' · '), hint, actionable };
 }
 
 export type RebasePromptStep = 'skip' | 'abort';

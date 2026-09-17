@@ -1386,8 +1386,15 @@ describe('GitChangesPanel rebase', () => {
   const conflict = (path: string): SessionGitEntry =>
     entry({ group: 'conflicts', path, code: 'UU', index_status: 'U', worktree_status: 'U' });
 
-  /** A linked-worktree session stopped mid-rebase: HEAD detached, the branch in `rebase`. */
-  const rebasing = (etag: string, entries: SessionGitEntry[], over: Partial<SessionGitRebaseInfo> = {}): SessionGitStatus => ({
+  /**
+   * A linked-worktree session stopped mid-rebase: HEAD detached, the branch in `rebase`.
+   * `null` details are what a `git am` session reports.
+   */
+  const rebasing = (
+    etag: string,
+    entries: SessionGitEntry[],
+    over: Partial<SessionGitRebaseInfo> | null = {},
+  ): SessionGitStatus => ({
     ...counted(etag, entries),
     repo: {
       toplevel: '/srv/p1',
@@ -1397,7 +1404,7 @@ describe('GitChangesPanel rebase', () => {
       upstream: null,
       state: 'rebasing',
       is_linked_worktree: false,
-      rebase: info(over),
+      rebase: over === null ? null : info(over),
     },
   });
 
@@ -1610,6 +1617,14 @@ describe('GitChangesPanel rebase', () => {
 
     expect(within(shownBanner()).queryByRole('button')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Mark src/login.py resolved' })).toBeNull();
+  });
+
+  it('points to the terminal instead of Continue, Skip and Abort when the agent reports no rebase details', async () => {
+    await renderRebasing(rebasing('e1', [], null));
+
+    expect(shownBanner()).toHaveTextContent('Rebase in progress');
+    expect(shownBanner()).toHaveTextContent('Continue, skip or abort it in the terminal.');
+    expect(within(shownBanner()).queryByRole('button')).toBeNull();
   });
 
   it('opens the sheet from the terminal menu and reports the rebase it started', async () => {
