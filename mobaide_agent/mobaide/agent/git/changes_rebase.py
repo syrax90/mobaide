@@ -13,14 +13,19 @@ there were none — is a normal ``stopped`` answer carrying the progress the
 status poll also reports, whatever git exited with; git declining to act
 without moving anything is a ``409`` in the jobs' failure vocabulary
 (``dirty_worktree``, ``unmerged``, ``hook_failed``, …). ``git.changed`` is
-published whenever git ran, whatever it answered.
+published whenever git ran, whatever it answered. A skip at a pick git
+rescheduled removes that pick from the todo first, because ``--skip`` alone
+would retry it.
 """
 from __future__ import annotations
 
+import contextlib
+import os
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Literal
 
-from mobaide.core.git_exec import CmdResult, run_git
+from mobaide.core.git_exec import CmdResult, git_version, run_git
 
 from .changes_jobs import classify_job_failure
 from .changes_models import GitRebaseResponse
@@ -51,6 +56,12 @@ _NO_EDITOR = {"GIT_EDITOR": ":", "GIT_SEQUENCE_EDITOR": ":"}
 # ``git rebase --continue`` words a dirty worktree like unmerged paths; the
 # unmerged pre-check has already ruled those out.
 _CONTINUE_DIRTY = "You must edit all merge conflicts"
+# Not squash/fixup: git counts them into its squash-message state before the
+# blocked merge and only unwinds that for a stop it wrote ``amend`` for, so
+# dropping one would corrupt the combined commit's message.
+_PICK_COMMANDS = frozenset({"pick", "p", "reword", "r", "edit", "e"})
+# Before 2.43 git wrote ``stopped-sha`` for a rescheduled pick too.
+_RESCHEDULE_WITHOUT_STOPPED_SHA = (2, 43, 0)
 
 _Action = Literal["start", "continue", "skip", "abort"]
 
@@ -61,7 +72,7 @@ async def _head_oid(toplevel: str) -> str | None:
 
 async def _rev(toplevel: str, name: str) -> str | None:
     result = await run_git(
-        ["rev-parse", "-q", "--verify", name],
+        ["rev-parse", "-q", "--verify", "--end-of-options", name],
         cwd=toplevel,
         timeout=_QUICK_TIMEOUT,
         max_bytes=_SMALL_OUTPUT,
@@ -83,10 +94,11 @@ async def _resolves_to_commit(toplevel: str, ref: str) -> bool:
     return result.rc == 0
 
 
-async def _require_rebasing(toplevel: str) -> None:
-    state, _ = await operation_state(toplevel)
-    if state != "rebasing":
+async def _require_rebasing(toplevel: str) -> str:
+    state, rebase_dir = await operation_state(toplevel)
+    if state != "rebasing" or rebase_dir is None:
         raise GitRefusedError("no_rebase", state)
+    return rebase_dir
 
 
 async def _progress(toplevel: str) -> tuple[str | None, str | None]:
@@ -96,6 +108,91 @@ async def _progress(toplevel: str) -> tuple[str | None, str | None]:
     step: git reschedules a pick that failed and bumps ``msgnum`` on every
     retry, so a retry that changed nothing would read as progress."""
     return await _head_oid(toplevel), await _rev(toplevel, "REBASE_HEAD")
+
+
+@dataclass(frozen=True)
+class _DroppedPick:
+    path: str
+    original: bytes
+    written: bytes
+
+
+def _first_todo_pick(todo: bytes) -> tuple[int, int, str] | None:
+    """Byte span and commit of the todo's first command, when that command
+    is one Skip may drop. Lines end at ``\\n`` only, as git reads them."""
+    start = 0
+    while start < len(todo):
+        newline = todo.find(b"\n", start)
+        end = len(todo) if newline < 0 else newline + 1
+        words = _text(todo[start:end]).split()
+        if not words or words[0].startswith("#"):
+            start = end
+            continue
+        if words[0] not in _PICK_COMMANDS or len(words) < 2:
+            return None
+        return start, end, words[1]
+    return None
+
+
+def _replace_todo(path: str, data: bytes) -> None:
+    """Written the way git writes it: into an exclusively created ``.lock``,
+    then renamed over, so a git process holding the lock is never raced."""
+    lock = path + ".lock"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(lock, flags, 0o666)
+    except FileExistsError as exc:
+        raise GitRefusedError("index_locked", os.path.basename(lock)) from exc
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.replace(lock, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(lock)
+        raise
+
+
+async def _drop_rescheduled_pick(toplevel: str, rebase_dir: str) -> _DroppedPick | None:
+    """Removes a pick an untracked file blocked, which git put back at the head
+    of the todo and ``--skip`` would retry. A stop on the pick itself has
+    already moved it to ``done``; from 2.43 ``stopped-sha`` also tells that
+    stop apart from a todo edited to repeat the commit."""
+    if os.path.basename(rebase_dir) != "rebase-merge":
+        return None
+    version = await git_version()
+    if (
+        version is not None
+        and version >= _RESCHEDULE_WITHOUT_STOPPED_SHA
+        and os.path.exists(os.path.join(rebase_dir, "stopped-sha"))
+    ):
+        return None
+    path = os.path.join(rebase_dir, "git-rebase-todo")
+    try:
+        with open(path, "rb") as fh:
+            original = fh.read()
+    except OSError:
+        return None
+    pick = _first_todo_pick(original)
+    if pick is None:
+        return None
+    start, end, commit = pick
+    stopped_at = await _rev(toplevel, "REBASE_HEAD")
+    if stopped_at is None or await _rev(toplevel, f"{commit}^{{commit}}") != stopped_at:
+        return None
+    written = original[:start] + original[end:]
+    _replace_todo(path, written)
+    return _DroppedPick(path, original, written)
+
+
+def _restore_todo(dropped: _DroppedPick) -> None:
+    """Puts the pick back after a skip that failed before git touched the
+    todo, so a refused skip leaves the stop as it was."""
+    with contextlib.suppress(OSError, GitRefusedError):
+        with open(dropped.path, "rb") as fh:
+            if fh.read() != dropped.written:
+                return
+        _replace_todo(dropped.path, dropped.original)
 
 
 async def _run_rebase(toplevel: str, args: Sequence[str]) -> CmdResult:
@@ -214,20 +311,32 @@ async def _step(
     ran = False
     try:
         async with _lock_for(repo.toplevel):
-            await _require_rebasing(repo.toplevel)
+            rebase_dir = await _require_rebasing(repo.toplevel)
             had_unmerged = await _has_unmerged(repo.toplevel)
             if action == "continue" and had_unmerged:
                 raise GitRefusedError("unmerged", "unmerged paths in the index")
             before = await _progress(repo.toplevel)
-            ran = True
-            result = await _run_rebase(repo.toplevel, [f"--{action}"])
-            return await _outcome(
-                repo.toplevel,
-                result,
-                action=action,
-                before=before,
-                had_unmerged=had_unmerged,
+            dropped = (
+                await _drop_rescheduled_pick(repo.toplevel, rebase_dir)
+                if action == "skip"
+                else None
             )
+            ran = True
+            try:
+                result = await _run_rebase(repo.toplevel, [f"--{action}"])
+                return await _outcome(
+                    repo.toplevel,
+                    result,
+                    action=action,
+                    before=before,
+                    had_unmerged=had_unmerged,
+                )
+            # Not on cancellation: git keeps running in its thread, and
+            # restoring would race its own read of the todo.
+            except Exception:
+                if dropped is not None:
+                    _restore_todo(dropped)
+                raise
     finally:
         if ran:
             _publish(event_bus, project_name, repo)
@@ -245,7 +354,8 @@ async def continue_session_rebase(
 async def skip_session_rebase(
     *, cwd: str | None, project_name: str | None, event_bus: Any | None
 ) -> GitRebaseResponse:
-    """``git rebase --skip``: drops the commit git stopped at."""
+    """``git rebase --skip``: drops the commit git stopped at, including one git
+    rescheduled."""
     return await _step("skip", cwd=cwd, project_name=project_name, event_bus=event_bus)
 
 

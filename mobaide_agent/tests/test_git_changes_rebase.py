@@ -4,8 +4,11 @@ outcomes, the guards that refuse before git runs, git's own refusals in the
 ``409`` vocabulary, and the ``git.changed`` echo published whenever git ran."""
 from __future__ import annotations
 
+import asyncio
 import os
+import re
 import subprocess
+import threading
 
 import pytest
 
@@ -81,6 +84,9 @@ def _git_out(repo_dir: str, *args: str) -> str:
     return subprocess.run(
         [GIT_BIN, *args], cwd=repo_dir, check=True, env=env, capture_output=True
     ).stdout.decode().strip()
+
+
+_TODO = ".git/rebase-merge/git-rebase-todo"
 
 
 def _read(repo_dir: str, rel: str) -> bytes:
@@ -173,18 +179,52 @@ def _stop_before_a_pick_that_adds_b(repo_dir: str) -> None:
     write_file(repo_dir, "b.txt", b"mine\n")
 
 
-def _stop_before_a_conflicting_pick_that_adds_b(repo_dir: str, subject: str) -> None:
-    """Resolved at step 1 of 2, with ``b.txt`` untracked where the second pick,
-    ``subject``, adds it while rewriting line 2 of ``keep.txt`` again: a
-    continue commits the resolution and git reschedules that pick, whose
-    retry conflicts once the blocker is gone."""
+def _stop_before_a_conflicting_pick_that_adds_b(
+    repo_dir: str, subject: str, later: tuple[tuple[str, str, bytes], ...] = ()
+) -> None:
+    """Resolved at step 1, with ``b.txt`` untracked where the second pick,
+    ``subject``, adds it while rewriting line 2 of ``keep.txt`` again, and the
+    ``later`` picks after it: a continue commits the resolution and git
+    reschedules that pick, whose retry conflicts once the blocker is gone."""
     _picks_onto_main(repo_dir, [("topic side", "keep.txt", b"one\nTOPIC\nthree\n")])
     write_file(repo_dir, "b.txt", b"b\n")
     write_file(repo_dir, "keep.txt", b"one\nTOPIC AGAIN\nthree\n")
     commit_all(repo_dir, subject)
+    for later_subject, path, content in later:
+        write_file(repo_dir, path, content)
+        commit_all(repo_dir, later_subject)
     run_git_sync(repo_dir, "rebase", "--no-autostash", "main", check=False)
     _resolve(repo_dir)
     write_file(repo_dir, "b.txt", b"mine\n")
+
+
+def _plant_stopped_sha(repo_dir: str) -> None:
+    """The ``stopped-sha`` git before 2.43 writes at a rescheduled pick."""
+    write_file(
+        repo_dir, ".git/rebase-merge/stopped-sha", f"{_oid(repo_dir, 'REBASE_HEAD')}\n".encode()
+    )
+
+
+def _pin_git_version(monkeypatch, version: tuple[int, int, int]) -> None:
+    async def pinned():
+        return version
+
+    monkeypatch.setattr(changes_rebase, "git_version", pinned)
+
+
+_CLT_GIT_DIR = "/Library/Developer/CommandLineTools/usr/bin"
+
+
+def _clt_git_before_2_43() -> bool:
+    binary = os.path.join(_CLT_GIT_DIR, "git")
+    if not os.path.isfile(binary):
+        return False
+    try:
+        out = subprocess.run([binary, "--version"], capture_output=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    match = re.search(rb"(\d+)\.(\d+)", out)
+    return match is not None and (int(match[1]), int(match[2])) < (2, 43)
 
 
 @requires_git
@@ -712,37 +752,293 @@ class TestSkip:
         rebase = (await _status(repo)).repo.rebase
         assert (rebase.stopped_on.subject, rebase.step, rebase.total) == ("other side", 1, 2)
 
-    async def test_skipping_at_a_rescheduled_pick_that_conflicts_on_retry_stops(self, repo):
-        _stop_before_a_conflicting_pick_that_adds_b(repo, "adds b and rewrites line two")
+    async def test_a_rescheduled_pick_still_blocked_is_rebased_whatever_its_subject(
+        self, repo
+    ):
+        # git's advice for a rescheduled pick quotes its subject, where the
+        # failure classifier reads "Permission to " as `auth_required`; the
+        # drop must not be steered by it.
+        subject = "Permission to read: unable to access b"
+        _stop_before_a_conflicting_pick_that_adds_b(repo, subject)
         await _continue(repo)
-        os.remove(os.path.join(repo, "b.txt"))
-        head = _oid(repo)
         bus = FakeEventBus()
 
         resp = await _skip(repo, event_bus=bus)
 
-        assert (resp.outcome, resp.message) == ("stopped", None)
-        assert _oid(repo) == head
+        assert resp.model_dump() == {"outcome": "rebased", "rebase": None, "message": None}
+        assert _subjects(repo) == ["topic side", "main side", "initial"]
+        assert _read(repo, "b.txt") == b"mine\n"
         status = await _status(repo)
-        assert status.repo.rebase == resp.rebase
-        assert ("conflicts", "keep.txt") in [(e.group, e.path) for e in status.entries]
+        assert (status.repo.state, [(e.group, e.path) for e in status.entries]) == (
+            "clean", [("untracked", "b.txt")])
         assert bus.published == [_changed(repo, "proj")]
 
-    async def test_a_rescheduled_pick_still_blocked_is_dirty_worktree_whatever_its_subject(
+    async def test_skipping_a_rescheduled_pick_drops_it_and_applies_the_later_picks(
         self, repo
     ):
-        subject = "Permission to read: unable to access b"
-        _stop_before_a_conflicting_pick_that_adds_b(repo, subject)
+        _stop_before_a_conflicting_pick_that_adds_b(
+            repo, "adds b and rewrites line two", later=(("adds c", "c.txt", b"c\n"),)
+        )
         await _continue(repo)
+        os.remove(os.path.join(repo, "b.txt"))
+        bus = FakeEventBus()
+
+        resp = await _skip(repo, event_bus=bus)
+
+        assert resp.model_dump() == {"outcome": "rebased", "rebase": None, "message": None}
+        assert _subjects(repo) == ["adds c", "topic side", "main side", "initial"]
+        assert not os.path.exists(os.path.join(repo, "b.txt"))
+        assert (_read(repo, "keep.txt"), _read(repo, "c.txt")) == (
+            b"one\nRESOLVED\nthree\n", b"c\n")
+        assert _git_out(repo, "symbolic-ref", "--short", "HEAD") == "topic"
+        assert (await _status(repo)).repo.state == "clean"
+        assert bus.published == [_changed(repo, "proj")]
+
+    async def test_a_held_todo_lock_is_index_locked_before_git_runs(self, repo):
+        _stop_before_a_conflicting_pick_that_adds_b(repo, "adds b and rewrites line two")
+        blocked = await _continue(repo)
+        todo = _read(repo, _TODO)
         head = _oid(repo)
+        write_file(repo, _TODO + ".lock", b"")
+        bus = FakeEventBus()
 
         with pytest.raises(GitRefusedError) as info:
+            await _skip(repo, event_bus=bus)
+
+        assert (info.value.code, info.value.message) == ("index_locked", "git-rebase-todo.lock")
+        assert (_read(repo, _TODO), _read(repo, _TODO + ".lock")) == (todo, b"")
+        assert _oid(repo) == head
+        assert (await _status(repo)).repo.rebase == blocked.rebase
+        assert bus.published == []
+
+    async def test_a_skip_git_refuses_puts_the_rescheduled_pick_back_for_a_retry(
+        self, repo
+    ):
+        subject = "adds b and rewrites line two"
+        _stop_before_a_conflicting_pick_that_adds_b(repo, subject)
+        await _continue(repo)
+        todo = _read(repo, _TODO)
+        head = _oid(repo)
+        write_file(repo, ".git/index.lock", b"")
+        bus = FakeEventBus()
+
+        with pytest.raises(GitRefusedError) as info:
+            await _skip(repo, event_bus=bus)
+
+        assert info.value.code == "index_locked"
+        assert _read(repo, _TODO) == todo
+        assert _oid(repo) == head
+        assert bus.published == [_changed(repo, "proj")]
+        os.remove(os.path.join(repo, ".git", "index.lock"))
+        os.remove(os.path.join(repo, "b.txt"))
+        retried = await _continue(repo)
+        assert (retried.outcome, retried.rebase.stopped_on.subject) == ("stopped", subject)
+        status = await _status(repo)
+        assert ("conflicts", "keep.txt") in [(e.group, e.path) for e in status.entries]
+
+    async def test_a_timeout_after_git_moved_on_keeps_the_todo_git_wrote(
+        self, repo, monkeypatch
+    ):
+        _stop_before_a_conflicting_pick_that_adds_b(
+            repo,
+            "adds b and rewrites line two",
+            later=(("rewrites line two again", "keep.txt", b"one\nLATER\nthree\n"),),
+        )
+        await _continue(repo)
+        os.remove(os.path.join(repo, "b.txt"))
+        dropped = _oid(repo, "topic~1")
+        real_run_git = changes_rebase.run_git
+
+        async def run_then_time_out(args, **kwargs):
+            result = await real_run_git(args, **kwargs)
+            if args[0] == "rebase":
+                return CmdResult(rc=-9, stdout=b"", stderr=b"", timed_out=True)
+            return result
+
+        monkeypatch.setattr(changes_rebase, "run_git", run_then_time_out)
+
+        with pytest.raises(GitTimeoutError):
             await _skip(repo)
 
-        assert info.value.code == "dirty_worktree"
-        assert _oid(repo) == head
-        assert _read(repo, "b.txt") == b"mine\n"
-        assert (await _status(repo)).repo.state == "rebasing"
+        assert dropped.encode() not in _read(repo, _TODO)
+        rebase = (await _status(repo)).repo.rebase
+        assert rebase.stopped_on.subject == "rewrites line two again"
+
+    async def test_a_conflict_stop_whose_todo_repeats_the_stopped_commit_keeps_the_repeat(
+        self, repo, monkeypatch
+    ):
+        # Only the missing `stopped-sha` tells a rescheduled pick from a todo
+        # edited to pick the stopped commit again; pin the version so the
+        # premise holds regardless of the git on PATH.
+        _pin_git_version(monkeypatch, (2, 43, 0))
+        _stop_on_conflict(repo)
+        await _start(repo, "main")
+        write_file(
+            repo, _TODO, f"pick {_oid(repo, 'other')} other side\n".encode() + _read(repo, _TODO)
+        )
+        _resolve(repo)
+
+        resp = await _skip(repo)
+
+        assert (resp.outcome, resp.rebase.stopped_on.subject) == ("stopped", "other side")
+        assert _oid(repo) == _oid(repo, "main")
+        status = await _status(repo)
+        assert [(e.group, e.path) for e in status.entries] == [("conflicts", "keep.txt")]
+
+    async def test_before_git_2_43_a_rescheduled_pick_with_a_stopped_sha_is_dropped(
+        self, repo, monkeypatch
+    ):
+        _stop_before_a_conflicting_pick_that_adds_b(
+            repo, "adds b and rewrites line two", later=(("adds c", "c.txt", b"c\n"),)
+        )
+        await _continue(repo)
+        _plant_stopped_sha(repo)
+        os.remove(os.path.join(repo, "b.txt"))
+        _pin_git_version(monkeypatch, (2, 42, 0))
+
+        resp = await _skip(repo)
+
+        assert resp.model_dump() == {"outcome": "rebased", "rebase": None, "message": None}
+        assert _subjects(repo) == ["adds c", "topic side", "main side", "initial"]
+
+    async def test_from_git_2_43_a_stopped_sha_keeps_the_first_pick_for_git_to_retry(
+        self, repo, monkeypatch
+    ):
+        subject = "adds b and rewrites line two"
+        _stop_before_a_conflicting_pick_that_adds_b(
+            repo, subject, later=(("adds c", "c.txt", b"c\n"),)
+        )
+        await _continue(repo)
+        _plant_stopped_sha(repo)
+        os.remove(os.path.join(repo, "b.txt"))
+        _pin_git_version(monkeypatch, (2, 43, 0))
+
+        resp = await _skip(repo)
+
+        assert (resp.outcome, resp.rebase.stopped_on.subject) == ("stopped", subject)
+        status = await _status(repo)
+        assert ("conflicts", "keep.txt") in [(e.group, e.path) for e in status.entries]
+
+    @posix_only
+    async def test_a_real_git_before_2_43_drops_the_rescheduled_pick(self, repo, monkeypatch):
+        if not _clt_git_before_2_43():
+            pytest.skip(f"no git older than 2.43 in {_CLT_GIT_DIR}")
+        _stop_before_a_conflicting_pick_that_adds_b(
+            repo, "adds b and rewrites line two", later=(("adds c", "c.txt", b"c\n"),)
+        )
+        monkeypatch.setenv("PATH", _CLT_GIT_DIR + os.pathsep + os.environ.get("PATH", ""))
+        await _continue(repo)
+        os.remove(os.path.join(repo, "b.txt"))
+        stopped_sha = _read(repo, ".git/rebase-merge/stopped-sha").strip().decode()
+        rebase_head = _oid(repo, "REBASE_HEAD")
+
+        resp = await _skip(repo)
+
+        assert await changes_rebase.git_version() < (2, 43, 0)
+        assert stopped_sha == rebase_head
+        assert resp.model_dump() == {"outcome": "rebased", "rebase": None, "message": None}
+        assert _subjects(repo) == ["adds c", "topic side", "main side", "initial"]
+
+    async def test_skipping_at_a_break_keeps_the_pick_after_it(self, repo, tmp_path):
+        # A break writes no `stopped-sha` either: only REBASE_HEAD tells the
+        # pick after it from a rescheduled one.
+        _topic_behind_main(repo)
+        write_file(repo, "c.txt", b"c\n")
+        commit_all(repo, "adds c")
+        todo = write_file(
+            str(tmp_path),
+            "todo",
+            f"pick {_oid(repo, 'HEAD~1')}\nbreak\npick {_oid(repo)}\n".encode(),
+        )
+        run_git_sync(
+            repo, "-c", f"sequence.editor=cp '{todo}'", "rebase", "-i", "--no-autostash", "main"
+        )
+        stopped = await _status(repo)
+
+        resp = await _skip(repo)
+
+        assert stopped.repo.state == "rebasing"
+        assert resp.outcome == "rebased"
+        assert _subjects(repo) == ["adds c", "topic work", "main work", "initial"]
+
+    @pytest.mark.parametrize("command", ["fixup", "squash"])
+    async def test_a_rescheduled_fixup_or_squash_is_retried_so_the_combined_message_stays_clean(
+        self, repo, tmp_path, command
+    ):
+        # git has already counted it into the squash message; dropping it
+        # would commit the combination's comment header as the message.
+        _picks_onto_main(repo, [
+            ("adds a", "a.txt", b"a\n"),
+            ("edits a", "a.txt", b"a2\n"),
+            ("adds b", "b.txt", b"b\n"),
+            ("adds d", "d.txt", b"d\n"),
+        ])
+        a, a2, b, d = (_oid(repo, f"HEAD~{n}") for n in (3, 2, 1, 0))
+        todo = write_file(
+            str(tmp_path),
+            "todo",
+            f"break\npick {a}\nsquash {a2}\n{command} {b}\npick {d}\n".encode(),
+        )
+        run_git_sync(
+            repo, "-c", f"sequence.editor=cp '{todo}'", "rebase", "-i", "--no-autostash", "main"
+        )
+        write_file(repo, "b.txt", b"mine\n")
+        blocked = await _continue(repo)
+        rescheduled = _read(repo, _TODO)
+        os.remove(os.path.join(repo, "b.txt"))
+
+        resp = await _skip(repo)
+
+        assert "would be overwritten by merge" in blocked.message
+        assert rescheduled.startswith(f"{command} {b}".encode())
+        assert resp.model_dump() == {"outcome": "rebased", "rebase": None, "message": None}
+        assert _subjects(repo) == ["adds d", "adds a", "main side", "initial"]
+        message = _git_out(repo, "log", "-1", "--format=%B", "HEAD~1")
+        assert "# This is a combination of" not in message
+        assert _git_out(repo, "ls-tree", "--name-only", "HEAD~1").splitlines() == [
+            "README.md", "a.txt", "b.txt", "keep.txt"]
+
+    async def test_a_cancelled_skip_leaves_the_dropped_pick_out_of_the_todo_git_goes_on_to_read(
+        self, repo, monkeypatch
+    ):
+        # git keeps running in its worker thread after the task is cancelled;
+        # it is held there until the cancellation has fully unwound.
+        _stop_before_a_conflicting_pick_that_adds_b(
+            repo, "adds b and rewrites line two", later=(("adds c", "c.txt", b"c\n"),)
+        )
+        await _continue(repo)
+        os.remove(os.path.join(repo, "b.txt"))
+        real_run_git = changes_rebase.run_git
+        held = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+
+        def rebase_once_released(args, kwargs):
+            held.set()
+            try:
+                if release.wait(10):
+                    asyncio.run(real_run_git(args, **kwargs))
+            finally:
+                finished.set()
+
+        async def held_rebase(args, **kwargs):
+            if args[0] == "rebase":
+                return await asyncio.to_thread(rebase_once_released, args, kwargs)
+            return await real_run_git(args, **kwargs)
+
+        monkeypatch.setattr(changes_rebase, "run_git", held_rebase)
+        skip = asyncio.create_task(_skip(repo))
+        assert await asyncio.to_thread(held.wait, 10)
+
+        skip.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await skip
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 30)
+
+        assert (await _status(repo)).repo.state == "clean"
+        assert _subjects(repo) == ["adds c", "topic side", "main side", "initial"]
+        assert _read(repo, "c.txt") == b"c\n"
 
     async def test_without_a_rebase_it_is_no_rebase(self, repo):
         bus = FakeEventBus()
@@ -752,6 +1048,43 @@ class TestSkip:
 
         assert (info.value.code, info.value.message) == ("no_rebase", "clean")
         assert bus.published == []
+
+
+class TestFirstTodoPick:
+    @pytest.mark.parametrize(
+        ("todo", "line", "commit"),
+        [
+            (b"# onto main\n\n   \npick 1a2b fix\npick 3c4d more\n", b"pick 1a2b fix\n", "1a2b"),
+            (b"pick 1a2b one\rpick 3c4d two\npick 5e6f\n", b"pick 1a2b one\rpick 3c4d two\n",
+             "1a2b"),
+            (b"reword 1a2b last", b"reword 1a2b last", "1a2b"),
+        ],
+        ids=["comments-and-blank-lines", "cr-inside-a-line", "no-final-newline"],
+    )
+    def test_the_first_command_picking_a_commit_gives_its_line_and_commit(
+        self, todo, line, commit
+    ):
+        start = todo.index(line)
+
+        assert changes_rebase._first_todo_pick(todo) == (start, start + len(line), commit)
+
+    @pytest.mark.parametrize(
+        "todo",
+        [
+            b"exec make test\npick 1a2b\n",
+            b"# comment\nbreak\npick 1a2b\n",
+            b"label onto\npick 1a2b\n",
+            b"pick\n",
+            b"fixup -C 5e6f # amend\npick 1a2b\n",
+            b"squash 5e6f\npick 1a2b\n",
+            b"# only comments\n\n",
+            b"",
+        ],
+        ids=["exec", "break", "label", "pick-without-commit", "fixup-is-left-for-git",
+             "squash-is-left-for-git", "only-comments", "empty"],
+    )
+    def test_a_todo_not_headed_by_a_pick_gives_none(self, todo):
+        assert changes_rebase._first_todo_pick(todo) is None
 
 
 @requires_git

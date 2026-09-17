@@ -155,9 +155,16 @@ cadence; they do **not** gate compatibility.
   * ``POST …/git/rebase/continue`` (no body) runs ``git rebase
     --continue``, refused with ``409 unmerged`` while ``ls-files -u`` lists
     anything; ``POST …/git/rebase/skip`` runs ``--skip`` (drops the commit
-    git stopped at); ``POST …/git/rebase/abort`` runs ``--abort`` (back to
-    the branch as it was). All three refuse ``409 no_rebase`` (message =
-    the state) unless the state is ``rebasing``, and ``job_running`` first.
+    git stopped at — for a rescheduled ``pick``/``reword``/``edit``, which
+    ``--skip`` alone would retry, the agent first removes that line from
+    ``git-rebase-todo`` under git's ``.lock`` and puts it back if the skip
+    then fails without git touching the todo; a held
+    ``git-rebase-todo.lock`` is ``409 index_locked``; a rescheduled
+    ``squash``/``fixup`` is left for git to retry, because dropping it would
+    corrupt the combined commit's message); ``POST …/git/rebase/abort`` runs
+    ``--abort`` (back to the branch as it was). All three refuse ``409
+    no_rebase`` (message = the state) unless the state is ``rebasing``, and
+    ``job_running`` first.
   * All four answer ``GitRebaseResponse {"outcome", "rebase", "message"}``.
     ``outcome`` is an open vocabulary: ``rebased`` (finished), ``up_to_date``
     (a start that left HEAD where it was), ``stopped`` and ``aborted``.
@@ -169,9 +176,9 @@ cadence; they do **not** gate compatibility.
     rescheduled pick — one an untracked file blocked — retried into a
     conflict). Not the todo step, which git bumps on every retry of a
     rescheduled pick, and never git's ``hint:`` lines, which quote the
-    rescheduled pick's subject. ``message`` is ``null`` while unmerged paths explain the
-    stop, else git's own reason (an untracked file in the way of a later
-    pick, say). ``rebase`` is the ``GitRebaseInfo`` below, set only when
+    rescheduled pick's subject. ``message`` is ``null`` while unmerged paths
+    explain the stop, else git's own reason (an untracked file in the way of a
+    later pick, say). ``rebase`` is the ``GitRebaseInfo`` below, set only when
     ``stopped``. A call that fails without moving the rebase is a ``409``
     with the fetch/pull/push jobs' classifier codes and git's explanation
     as ``message``:
