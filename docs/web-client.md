@@ -933,23 +933,24 @@ outcome with its follow-ups (Pull with rebase / merge after
 (with lease) after `rejected` or a non-fast-forward push), each behind a
 nested `alertdialog` whose initial focus sits on Cancel. The panel shows
 the same job as a `busy`-toned notice strip until its result is dismissed
-(a success clears itself after 6 s). #678 adds an in-progress **rebase** the
-same way: the terminal menu's `⋯ → Git → Rebase…` (gated on
+(a success clears itself after 6 s). #678 adds an in-progress **rebase**
+the same way: the terminal menu's `⋯ → Git → Rebase…` (gated on
 `capabilities.git.rebase`) opens `GitRebaseDialog.tsx` over the panel — a
 project-backed session picks the target from `listGitItems` (the project's
-local and remote-tracking branches, minus the session's own by name), any
-other session or a list that fails to load types the ref instead, and
-nothing is preselected. While the status reports `state: rebasing` the panel
-shows a third strip; with a non-null `repo.rebase` (not a `git am` session,
-not an older agent) it carries Continue (disabled while any conflict
-remains), Skip… and Abort…, else it points to the terminal. The latter two
-sit behind an `alertdialog` confirmation with
-Cancel focused; `useSessionGitRebase` mirrors the sync mutations' shape. A
-conflict row's list entry and diff pane both gain a *Mark resolved* (✓)
-action, gated on `capabilities.git.{stage,resolve}` together, which stages
-the row the same way any other Stage does — only `resolve` certifies the
-agent refuses one still holding `<<<<<<<`/`>>>>>>>` markers. Job state is
-one holder per panel
+local and remote-tracking branches, minus the session's own by name, each
+sent as a fully qualified `refs/heads/…` / `refs/remotes/…` ref so a
+same-named tag cannot shadow it), any other session or a list that fails to
+load types the ref instead, and nothing is preselected. While the status
+reports `state: rebasing` the panel shows a third strip; with a non-null
+`repo.rebase` (not a `git am` session, not an older agent) it carries
+Continue (disabled while any conflict remains), Skip… and Abort…, else it
+points to the terminal. The latter two sit behind an `alertdialog`
+confirmation with Cancel focused;
+`useSessionGitRebase` mirrors the sync mutations' shape. A conflict row's
+list entry and diff pane both gain a *Mark resolved* (✓) action, gated on
+`capabilities.git.{stage,resolve}` together, which stages the row the same
+way any other Stage does — only `resolve` certifies the agent refuses one
+still holding `<<<<<<<`/`>>>>>>>` markers. Job state is one holder per panel
 (`activeJobId`): the frames `git.job.progress` / `git.job.done` are
 *written* into `['agent', id, 'session-git', sid, 'job', jobId]` by
 `realtime/sessionGitJobCache.ts` (whole snapshots, monotonic — a `running`

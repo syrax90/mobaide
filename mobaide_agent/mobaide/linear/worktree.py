@@ -187,8 +187,10 @@ _TRACK_PATTERN = re.compile(r"\[(?:ahead (\d+))?(?:, )?(?:behind (\d+))?\]")
 def _parse_for_each_ref(stdout: str) -> list[BranchInfo]:
     """Parse the NUL-delimited output of ``git for-each-ref refs/heads/``.
 
-    Format: ``%(refname:short)%00%(upstream:short)%00%(upstream:track)%00%(objectname)%00%(HEAD)``
+    Format: ``%(refname:lstrip=2)%00%(upstream:short)%00%(upstream:track)%00%(objectname)%00%(HEAD)``
     Entries separated by newline; fields within an entry separated by NUL.
+    ``lstrip=2``, not ``short``: ``short`` turns a branch that shares its name
+    with a tag into ``heads/<name>``, which no ``refs/heads/`` lookup matches.
     """
     branches: list[BranchInfo] = []
     for line in stdout.split("\n"):
@@ -489,7 +491,7 @@ class WorktreeManager:
 
     async def list_branches(self, project_root: str) -> list[BranchInfo]:
         """Enumerate local branches via ``git for-each-ref refs/heads/``."""
-        fmt = "%(refname:short)%00%(upstream:short)%00%(upstream:track)%00%(objectname)%00%(HEAD)"
+        fmt = "%(refname:lstrip=2)%00%(upstream:short)%00%(upstream:track)%00%(objectname)%00%(HEAD)"
         rc, stdout, stderr = await _run_git(
             "for-each-ref", f"--format={fmt}", "refs/heads/",
             cwd=project_root,

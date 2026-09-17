@@ -147,7 +147,7 @@ describe('GitRebaseDialog picker', () => {
     expect(items.asked).toEqual(['p1']);
   });
 
-  it('rebases onto the picked branch and hands the result and the base back', async () => {
+  it('rebases onto the picked branch by its full ref and hands the result and the base back', async () => {
     items.list = [
       gitItem({ branch: 'main' }),
       gitItem({ kind: 'remote_branch', branch: 'origin/main', remote: 'origin' }),
@@ -158,13 +158,13 @@ describe('GitRebaseDialog picker', () => {
       expect(select).toBeEnabled();
     });
 
-    fireEvent.change(select, { target: { value: 'origin/main' } });
+    fireEvent.change(select, { target: { value: 'refs/remotes/origin/main' } });
     fireEvent.click(submit());
 
     await waitFor(() => {
-      expect(onDone).toHaveBeenCalledWith(rebased, 'origin/main');
+      expect(onDone).toHaveBeenCalledWith(rebased, 'refs/remotes/origin/main');
     });
-    expect(rebase.mock.calls).toEqual([['origin/main']]);
+    expect(rebase.mock.calls).toEqual([['refs/remotes/origin/main']]);
   });
 
   it('says so when the project has no other branch', async () => {

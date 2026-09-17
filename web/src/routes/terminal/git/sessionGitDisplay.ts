@@ -868,12 +868,22 @@ export function rebaseTargets(
   const local = items
     .filter((item) => item.kind === KIND_BRANCH_ONLY || item.kind === KIND_BRANCH_WITH_WORKTREE)
     .filter(usable)
-    .map((item) => ({ value: item.branch, label: item.branch }));
+    .map((item) => ({ value: `refs/heads/${item.branch}`, label: item.branch }));
   const remote = items
     .filter((item) => item.kind === KIND_REMOTE_BRANCH)
     .filter(usable)
-    .map((item) => ({ value: item.branch, label: `${item.branch} (remote)` }));
+    .map((item) => ({ value: `refs/remotes/${item.branch}`, label: `${item.branch} (remote)` }));
   return [...local, ...remote];
+}
+
+/**
+ * A picked target's name for copy: the picker sends fully qualified refs so a
+ * tag of the same name cannot shadow the branch, but a notice reads the short one.
+ */
+export function shortRefName(ref: string): string {
+  if (ref.startsWith('refs/heads/')) return ref.slice('refs/heads/'.length);
+  if (ref.startsWith('refs/remotes/')) return ref.slice('refs/remotes/'.length);
+  return ref;
 }
 
 /**
@@ -974,11 +984,15 @@ export function rebaseOutcomeNotice(
   branch: string,
   onto: string | null,
 ): { tone: 'ok' | 'danger'; text: string } {
+  const ontoName = onto === null ? null : shortRefName(onto);
   switch (result.outcome) {
     case GIT_REBASE_REBASED:
-      return { tone: 'ok', text: onto === null ? 'Rebase finished.' : `Rebased ${branch} onto ${onto}.` };
+      return {
+        tone: 'ok',
+        text: ontoName === null ? 'Rebase finished.' : `Rebased ${branch} onto ${ontoName}.`,
+      };
     case GIT_REBASE_UP_TO_DATE:
-      return { tone: 'ok', text: `${branch} is already up to date with ${onto ?? 'that branch'}.` };
+      return { tone: 'ok', text: `${branch} is already up to date with ${ontoName ?? 'that branch'}.` };
     case GIT_REBASE_ABORTED:
       return { tone: 'ok', text: `Rebase aborted — ${branch} is back where it started.` };
     case GIT_REBASE_STOPPED: {

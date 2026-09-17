@@ -59,6 +59,7 @@ import {
   sectionsFor,
   selectionSubsets,
   sessionGitErrorCopy,
+  shortRefName,
   showsContextChoices,
   showsJobOutput,
   splitCommitMessage,
@@ -1239,7 +1240,7 @@ const rebaseResult = (over: Partial<SessionGitRebaseResult> = {}): SessionGitReb
 });
 
 describe('rebaseTargets', () => {
-  it('lists local branches first, then remote ones labelled as such', () => {
+  it('lists local branches first, then remote ones labelled as such, each sent as a full ref', () => {
     const items = [
       gitItem({ kind: 'remote_branch', branch: 'origin/main', remote: 'origin' }),
       gitItem({ kind: 'branch_with_worktree', branch: 'topic-b', worktree_path: '/wt/b' }),
@@ -1248,10 +1249,10 @@ describe('rebaseTargets', () => {
     ];
 
     expect(rebaseTargets(items, 'topic')).toEqual([
-      { value: 'topic-b', label: 'topic-b' },
-      { value: 'main', label: 'main' },
-      { value: 'origin/main', label: 'origin/main (remote)' },
-      { value: 'origin/topic', label: 'origin/topic (remote)' },
+      { value: 'refs/heads/topic-b', label: 'topic-b' },
+      { value: 'refs/heads/main', label: 'main' },
+      { value: 'refs/remotes/origin/main', label: 'origin/main (remote)' },
+      { value: 'refs/remotes/origin/topic', label: 'origin/topic (remote)' },
     ]);
   });
 
@@ -1262,7 +1263,7 @@ describe('rebaseTargets', () => {
       gitItem({ kind: 'branch_with_worktree', branch: 'topic', worktree_path: '/wt/topic' }),
     ];
 
-    expect(rebaseTargets(items, 'topic')).toEqual([{ value: 'main', label: 'main' }]);
+    expect(rebaseTargets(items, 'topic')).toEqual([{ value: 'refs/heads/main', label: 'main' }]);
   });
 
   it('skips orphan worktrees and rows without a branch, and keeps everything on a detached HEAD', () => {
@@ -1272,8 +1273,24 @@ describe('rebaseTargets', () => {
       gitItem({ kind: 'branch_only', branch: 'main' }),
     ];
 
-    expect(rebaseTargets(items, null)).toEqual([{ value: 'main', label: 'main' }]);
+    expect(rebaseTargets(items, null)).toEqual([{ value: 'refs/heads/main', label: 'main' }]);
     expect(rebaseTargets([], 'main')).toEqual([]);
+  });
+});
+
+describe('shortRefName', () => {
+  it('drops a leading refs/heads/ or refs/remotes/, once', () => {
+    expect(shortRefName('refs/heads/main')).toBe('main');
+    expect(shortRefName('refs/heads/feature/login')).toBe('feature/login');
+    expect(shortRefName('refs/remotes/origin/main')).toBe('origin/main');
+    expect(shortRefName('refs/heads/refs/remotes/x')).toBe('refs/remotes/x');
+  });
+
+  it('leaves a typed ref, a tag or a prefix that is not leading as it is', () => {
+    expect(shortRefName('main')).toBe('main');
+    expect(shortRefName('origin/main')).toBe('origin/main');
+    expect(shortRefName('refs/tags/v1.2.0')).toBe('refs/tags/v1.2.0');
+    expect(shortRefName('topic/refs/heads/main')).toBe('topic/refs/heads/main');
   });
 });
 
@@ -1422,6 +1439,15 @@ describe('rebaseOutcomeNotice', () => {
       tone: 'ok',
       text: 'Rebase aborted — topic is back where it started.',
     });
+  });
+
+  it('names a base picked as a full ref by its short name', () => {
+    expect(rebaseOutcomeNotice(rebaseResult(), 'topic', 'refs/heads/main').text).toBe(
+      'Rebased topic onto main.',
+    );
+    expect(
+      rebaseOutcomeNotice(rebaseResult({ outcome: 'up_to_date' }), 'topic', 'refs/remotes/origin/main').text,
+    ).toBe('topic is already up to date with origin/main.');
   });
 
   it("reports a stop on the commit's subject, or git's own explanation when it was not a conflict", () => {

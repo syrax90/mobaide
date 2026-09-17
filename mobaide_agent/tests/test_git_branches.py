@@ -133,6 +133,16 @@ def _publish_remote_only(local: str, name: str, message: str) -> None:
     run_git_sync(local, "branch", "-q", "-D", name)
 
 
+def _branch_shadowed_by_tag(local: str, name: str) -> None:
+    """Branch ``name`` one commit (``"<name> tip"``) past a tag of the same
+    name on ``main``, so git reads the bare ``name`` as ambiguous."""
+    run_git_sync(local, "tag", name)
+    run_git_sync(local, "switch", "-q", "-c", name)
+    write_file(local, f"{name}.txt", b"r\n")
+    commit_all(local, f"{name} tip")
+    run_git_sync(local, "switch", "-q", "main")
+
+
 def _fetch_as_ghost(local: str) -> None:
     """``ghost/*`` remote-tracking refs of every ``origin`` branch with no
     ``ghost`` remote configured: what an ad-hoc ``git fetch <url>`` or an
@@ -242,6 +252,23 @@ class TestListRemoteBranches:
         assert [(i.kind, i.branch, i.subject, i.remote) for i in items] == [
             ("branch_with_worktree", "main", "initial", None)]
         assert _ISO_STRICT.match(items[0].committed_at or "")
+
+    async def test_a_branch_shadowed_by_a_tag_is_listed_by_its_exact_name(self, local):
+        _branch_shadowed_by_tag(local, "release")
+        run_git_sync(local, "tag", "topic")
+        path = _add_linked_worktree(local, "topic")
+        assert _rev(local, "refs/tags/release") != _rev(local, "refs/heads/release")
+
+        items = await list_git_items(local, _manager(), remote=True)
+
+        assert [
+            (i.kind, i.branch, i.subject) for i in items if i.kind != "remote_branch"
+        ] == [
+            ("branch_with_worktree", "main", "initial"),
+            ("branch_only", "release", "release tip"),
+            ("branch_with_worktree", "topic", "initial"),
+        ]
+        assert os.path.realpath(items[2].worktree_path) == os.path.realpath(path)
 
     async def test_a_remote_named_with_a_slash_keeps_its_whole_name(self, local):
         run_git_sync(local, "remote", "add", "up/stream", _git_out(local, "remote", "get-url", "origin"))
@@ -385,6 +412,45 @@ class TestCreateBranch:
         assert _head(local) == "feature/x"
         assert _upstream(local, "feature/x") == "origin/feature/x"
         assert bus.published == [_changed(local, "proj")]
+
+    @pytest.mark.parametrize("checkout", [False, True])
+    async def test_a_listed_branch_shadowed_by_a_tag_starts_from_the_branch(
+        self, local, checkout
+    ):
+        _branch_shadowed_by_tag(local, "release")
+        items = await list_git_items(local, _manager(), remote=True)
+        (row,) = [i for i in items if i.kind == "branch_only"]
+
+        resp = await _create(local, "hotfix", start_point=row.branch, checkout=checkout)
+
+        assert resp == GitBranchResponse(branch="hotfix", checked_out=checkout, created=True)
+        assert (
+            _rev(local, "hotfix")
+            == _rev(local, "refs/heads/release")
+            != _rev(local, "refs/tags/release")
+        )
+        assert _head(local) == ("hotfix" if checkout else "main")
+
+    async def test_a_listed_remote_branch_shadowed_by_a_tag_starts_from_and_tracks_it(
+        self, local
+    ):
+        _publish_remote_only(local, "feature/x", "feature work")
+        run_git_sync(local, "tag", "origin/feature/x")
+        items = await list_git_items(local, _manager(), remote=True)
+        (row,) = [i for i in items if i.subject == "feature work"]
+
+        resp = await _create(local, "mine", start_point=row.branch)
+
+        assert resp == GitBranchResponse(branch="mine", checked_out=False, created=True)
+        assert (
+            _rev(local, "mine")
+            == _rev(local, "refs/remotes/origin/feature/x")
+            != _rev(local, "refs/tags/origin/feature/x")
+        )
+        assert (
+            _git_out(local, "rev-parse", "--symbolic-full-name", "mine@{upstream}")
+            == "refs/remotes/origin/feature/x"
+        )
 
     async def test_an_existing_name_is_refused_before_anything_changes(self, local):
         bus = FakeEventBus()

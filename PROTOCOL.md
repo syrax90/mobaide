@@ -148,7 +148,10 @@ cadence; they do **not** gate compatibility.
     git's own call (``dirty_worktree``: staged or unstaged changes to
     tracked files, or an untracked file the checkout would overwrite);
     ``--no-autostash`` keeps ``rebase.autoStash`` from stashing around it.
-    An empty ``onto`` is a ``422``.
+    An empty ``onto`` is a ``422``. The clients' branch pickers send fully
+    qualified refs (``refs/heads/<name>``, ``refs/remotes/<remote>/<name>``)
+    so a tag of the same name cannot shadow the branch; a typed ref goes as
+    entered.
   * ``POST …/git/rebase/continue`` (no body) runs ``git rebase
     --continue``, refused with ``409 unmerged`` while ``ls-files -u`` lists
     anything; ``POST …/git/rebase/skip`` runs ``--skip`` (drops the commit
@@ -247,7 +250,11 @@ cadence; they do **not** gate compatibility.
     refusing it), then asks ``git check-ref-format --branch``: ``400
     bad_branch_name``. ``409 exists`` when ``refs/heads/<name>`` resolves,
     ``409 unknown_start_point`` (message = the start point) when
-    ``rev-parse --verify --end-of-options <start>^{commit}`` fails.
+    ``rev-parse --verify --end-of-options <start>^{commit}`` fails. A start
+    point naming a local or remote-tracking branch is resolved as that
+    branch (``refs/heads/…`` first, then ``refs/remotes/…``), so a tag of the
+    same name cannot make it ambiguous; the item rows list local branches by
+    their exact name (``%(refname:lstrip=2)``).
     Tracking follows git's own ``branch.autoSetupMerge``.
   * ``POST /api/projects/{name}/git/checkout`` ``{"ref"}`` →
     ``GitBranchResponse {"branch", "checked_out": true, "created"}``.

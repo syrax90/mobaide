@@ -1242,12 +1242,22 @@ extension GitChangesDisplay {
         let local = items
             .filter { $0.kind == GitItem.kindBranchOnly || $0.kind == GitItem.kindBranchWithWorktree }
             .compactMap(usable)
-            .map { RebaseTarget(value: $0, label: $0) }
+            .map { RebaseTarget(value: "refs/heads/\($0)", label: $0) }
         let remote = items
             .filter { $0.kind == GitItem.kindRemoteBranch }
             .compactMap(usable)
-            .map { RebaseTarget(value: $0, label: "\($0) (remote)") }
+            .map { RebaseTarget(value: "refs/remotes/\($0)", label: "\($0) (remote)") }
         return local + remote
+    }
+
+    /// A picked target's name for copy: the picker sends fully qualified refs
+    /// so a tag of the same name cannot shadow the branch, but a notice reads
+    /// the short one.
+    static func shortRefName(_ ref: String) -> String {
+        for prefix in ["refs/heads/", "refs/remotes/"] where ref.hasPrefix(prefix) {
+            return String(ref.dropFirst(prefix.count))
+        }
+        return ref
     }
 
     /// Why a rebase cannot start from this status, or nil. Untracked files do
@@ -1337,11 +1347,12 @@ extension GitChangesDisplay {
     /// The message a finished rebase call leaves. `onto` is what the user
     /// picked, known only for a start; Continue and Skip finish without it.
     static func rebaseOutcomeNotice(_ result: GitRebaseResponse, branch: String, onto: String?) -> String {
+        let ontoName = onto.map(shortRefName)
         switch result.outcome {
         case GitRebaseResponse.outcomeRebased:
-            return onto.map { "Rebased \(branch) onto \($0)." } ?? "Rebase finished."
+            return ontoName.map { "Rebased \(branch) onto \($0)." } ?? "Rebase finished."
         case GitRebaseResponse.outcomeUpToDate:
-            return "\(branch) is already up to date with \(onto ?? "that branch")."
+            return "\(branch) is already up to date with \(ontoName ?? "that branch")."
         case GitRebaseResponse.outcomeAborted:
             return "Rebase aborted — \(branch) is back where it started."
         case GitRebaseResponse.outcomeStopped:

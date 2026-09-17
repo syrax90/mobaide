@@ -22,7 +22,9 @@ from mobaide.agent.git.changes_service import (
     GitTimeoutError,
     get_session_git_status,
 )
+from mobaide.agent.git.service import list_git_items
 from mobaide.core.git_exec import CmdResult, reset_caches
+from mobaide.linear.worktree import WorktreeManager
 
 from .git_repo_support import (
     GIT_BIN,
@@ -376,6 +378,26 @@ class TestStart:
 
         assert resp.outcome == "rebased"
         assert _oid(repo, "HEAD~1") == _oid(repo, "main")
+
+    async def test_a_listed_branch_shadowed_by_a_tag_rebases_onto_the_branch_not_the_tag(
+        self, repo
+    ):
+        # A bare `release` resolves to the tag first; the pickers send
+        # `refs/heads/` + the branch name the project listing reports.
+        _topic_behind_main(repo)
+        run_git_sync(repo, "branch", "release", "main")
+        run_git_sync(repo, "tag", "release", "main~1")
+        assert _oid(repo, "release") != _oid(repo, "refs/heads/release")
+        items = await list_git_items(
+            repo, WorktreeManager(worktree_base=".worktrees", branch_prefix="auto"), remote=True
+        )
+        [listed] = [i.branch for i in items if i.branch not in ("main", "topic")]
+
+        resp = await _start(repo, "refs/heads/" + listed)
+
+        assert resp.outcome == "rebased"
+        assert _oid(repo, "HEAD~1") == _oid(repo, "refs/heads/release")
+        assert _subjects(repo) == ["topic work", "main work", "initial"]
 
     async def test_a_timeout_is_504_and_still_publishes(self, repo, monkeypatch):
         _topic_behind_main(repo)

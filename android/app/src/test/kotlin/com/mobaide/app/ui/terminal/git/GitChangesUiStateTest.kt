@@ -726,7 +726,7 @@ class GitChangesUiStateRebaseTest {
     // MARK: - Sheet
 
     @Test
-    fun rebaseTargets_listLocalBranchesFirst_thenRemoteOnesLabelledAsSuch() {
+    fun rebaseTargets_listLocalBranchesFirst_thenRemoteOnesLabelledAsSuch_eachSentAsAFullRef() {
         val items = listOf(
             item(GitItem.KIND_REMOTE_BRANCH, "origin/main"),
             item(GitItem.KIND_BRANCH_WITH_WORKTREE, "topic-b"),
@@ -736,10 +736,10 @@ class GitChangesUiStateRebaseTest {
 
         assertEquals(
             listOf(
-                RebaseTarget("topic-b", "topic-b"),
-                RebaseTarget("main", "main"),
-                RebaseTarget("origin/main", "origin/main (remote)"),
-                RebaseTarget("origin/topic", "origin/topic (remote)"),
+                RebaseTarget("refs/heads/topic-b", "topic-b"),
+                RebaseTarget("refs/heads/main", "main"),
+                RebaseTarget("refs/remotes/origin/main", "origin/main (remote)"),
+                RebaseTarget("refs/remotes/origin/topic", "origin/topic (remote)"),
             ),
             rebaseTargets(items, currentBranch = "topic"),
         )
@@ -753,7 +753,10 @@ class GitChangesUiStateRebaseTest {
             item(GitItem.KIND_BRANCH_WITH_WORKTREE, "topic"),
         )
 
-        assertEquals(listOf(RebaseTarget("main", "main")), rebaseTargets(items, currentBranch = "topic"))
+        assertEquals(
+            listOf(RebaseTarget("refs/heads/main", "main")),
+            rebaseTargets(items, currentBranch = "topic"),
+        )
     }
 
     @Test
@@ -764,8 +767,27 @@ class GitChangesUiStateRebaseTest {
             item(GitItem.KIND_BRANCH_ONLY, "main"),
         )
 
-        assertEquals(listOf(RebaseTarget("main", "main")), rebaseTargets(items, currentBranch = null))
+        assertEquals(
+            listOf(RebaseTarget("refs/heads/main", "main")),
+            rebaseTargets(items, currentBranch = null),
+        )
         assertEquals(emptyList<RebaseTarget>(), rebaseTargets(emptyList(), currentBranch = "main"))
+    }
+
+    @Test
+    fun shortRefName_dropsALeadingHeadsOrRemotesPrefix_once() {
+        assertEquals("main", shortRefName("refs/heads/main"))
+        assertEquals("feature/login", shortRefName("refs/heads/feature/login"))
+        assertEquals("origin/main", shortRefName("refs/remotes/origin/main"))
+        assertEquals("refs/remotes/x", shortRefName("refs/heads/refs/remotes/x"))
+    }
+
+    @Test
+    fun shortRefName_leavesATypedRefATagOrANonLeadingPrefixAsItIs() {
+        assertEquals("main", shortRefName("main"))
+        assertEquals("origin/main", shortRefName("origin/main"))
+        assertEquals("refs/tags/v1.2.0", shortRefName("refs/tags/v1.2.0"))
+        assertEquals("topic/refs/heads/main", shortRefName("topic/refs/heads/main"))
     }
 
     @Test
@@ -913,6 +935,22 @@ class GitChangesUiStateRebaseTest {
         assertEquals(
             "Rebase: future_outcome",
             rebaseOutcomeNotice(GitRebaseResponse("future_outcome"), "topic", null),
+        )
+    }
+
+    @Test
+    fun rebaseOutcomeNotice_namesABasePickedAsAFullRefByItsShortName() {
+        assertEquals(
+            "Rebased topic onto main.",
+            rebaseOutcomeNotice(GitRebaseResponse(GitRebaseResponse.OUTCOME_REBASED), "topic", "refs/heads/main"),
+        )
+        assertEquals(
+            "topic is already up to date with origin/main.",
+            rebaseOutcomeNotice(
+                GitRebaseResponse(GitRebaseResponse.OUTCOME_UP_TO_DATE),
+                "topic",
+                "refs/remotes/origin/main",
+            ),
         )
     }
 

@@ -696,13 +696,13 @@ final class GitChangesDisplayRebaseTests: XCTestCase {
         )
     }
 
-    private func target(_ value: String, _ label: String? = nil) -> GitChangesDisplay.RebaseTarget {
-        GitChangesDisplay.RebaseTarget(value: value, label: label ?? value)
+    private func target(_ value: String, _ label: String) -> GitChangesDisplay.RebaseTarget {
+        GitChangesDisplay.RebaseTarget(value: value, label: label)
     }
 
     // MARK: - Sheet
 
-    func testRebaseTargetsListLocalBranchesFirstThenRemoteOnesLabelledAsSuch() {
+    func testRebaseTargetsListLocalBranchesFirstThenRemoteOnesLabelledAsSuchEachSentAsAFullRef() {
         let items = [
             GitItem(kind: GitItem.kindRemoteBranch, branch: "origin/main", remote: "origin"),
             GitItem(kind: GitItem.kindBranchWithWorktree, branch: "topic-b", worktree_path: "/wt/b"),
@@ -712,7 +712,12 @@ final class GitChangesDisplayRebaseTests: XCTestCase {
 
         XCTAssertEqual(
             GitChangesDisplay.rebaseTargets(items, currentBranch: "topic"),
-            [target("topic-b"), target("main"), target("origin/main", "origin/main (remote)"), target("origin/topic", "origin/topic (remote)")]
+            [
+                target("refs/heads/topic-b", "topic-b"),
+                target("refs/heads/main", "main"),
+                target("refs/remotes/origin/main", "origin/main (remote)"),
+                target("refs/remotes/origin/topic", "origin/topic (remote)"),
+            ]
         )
     }
 
@@ -723,7 +728,7 @@ final class GitChangesDisplayRebaseTests: XCTestCase {
             GitItem(kind: GitItem.kindBranchWithWorktree, branch: "topic", worktree_path: "/wt/topic"),
         ]
 
-        XCTAssertEqual(GitChangesDisplay.rebaseTargets(items, currentBranch: "topic"), [target("main")])
+        XCTAssertEqual(GitChangesDisplay.rebaseTargets(items, currentBranch: "topic"), [target("refs/heads/main", "main")])
     }
 
     func testRebaseTargetsSkipOrphanWorktreesAndBranchlessRowsAndKeepEverythingOnADetachedHead() {
@@ -733,8 +738,22 @@ final class GitChangesDisplayRebaseTests: XCTestCase {
             GitItem(kind: GitItem.kindBranchOnly, branch: "main"),
         ]
 
-        XCTAssertEqual(GitChangesDisplay.rebaseTargets(items, currentBranch: nil), [target("main")])
+        XCTAssertEqual(GitChangesDisplay.rebaseTargets(items, currentBranch: nil), [target("refs/heads/main", "main")])
         XCTAssertEqual(GitChangesDisplay.rebaseTargets([], currentBranch: "main"), [])
+    }
+
+    func testShortRefNameDropsALeadingHeadsOrRemotesPrefixOnce() {
+        XCTAssertEqual(GitChangesDisplay.shortRefName("refs/heads/main"), "main")
+        XCTAssertEqual(GitChangesDisplay.shortRefName("refs/heads/feature/login"), "feature/login")
+        XCTAssertEqual(GitChangesDisplay.shortRefName("refs/remotes/origin/main"), "origin/main")
+        XCTAssertEqual(GitChangesDisplay.shortRefName("refs/heads/refs/remotes/x"), "refs/remotes/x")
+    }
+
+    func testShortRefNameLeavesATypedRefATagOrANonLeadingPrefixAsItIs() {
+        XCTAssertEqual(GitChangesDisplay.shortRefName("main"), "main")
+        XCTAssertEqual(GitChangesDisplay.shortRefName("origin/main"), "origin/main")
+        XCTAssertEqual(GitChangesDisplay.shortRefName("refs/tags/v1.2.0"), "refs/tags/v1.2.0")
+        XCTAssertEqual(GitChangesDisplay.shortRefName("topic/refs/heads/main"), "topic/refs/heads/main")
     }
 
     func testRebaseBlockerLetsACleanBranchWithCommitsRebaseUntrackedFilesAndAll() {
@@ -862,6 +881,23 @@ final class GitChangesDisplayRebaseTests: XCTestCase {
         XCTAssertEqual(
             GitChangesDisplay.rebaseOutcomeNotice(GitRebaseResponse(outcome: "future_outcome", rebase: nil, message: nil), branch: "topic", onto: nil),
             "Rebase: future_outcome"
+        )
+    }
+
+    func testRebaseOutcomeNoticeNamesABasePickedAsAFullRefByItsShortName() {
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseOutcomeNotice(
+                GitRebaseResponse(outcome: GitRebaseResponse.outcomeRebased, rebase: nil, message: nil), branch: "topic", onto: "refs/heads/main"
+            ),
+            "Rebased topic onto main."
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseOutcomeNotice(
+                GitRebaseResponse(outcome: GitRebaseResponse.outcomeUpToDate, rebase: nil, message: nil),
+                branch: "topic",
+                onto: "refs/remotes/origin/main"
+            ),
+            "topic is already up to date with origin/main."
         )
     }
 

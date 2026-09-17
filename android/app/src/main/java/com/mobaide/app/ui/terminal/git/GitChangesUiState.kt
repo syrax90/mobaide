@@ -593,13 +593,20 @@ internal fun rebaseTargets(items: List<GitItem>, currentBranch: String?): List<R
     val local = items
         .filter { it.kind == GitItem.KIND_BRANCH_ONLY || it.kind == GitItem.KIND_BRANCH_WITH_WORKTREE }
         .filter(::usable)
-        .map { RebaseTarget(it.branch.orEmpty(), it.branch.orEmpty()) }
+        .map { RebaseTarget("refs/heads/${it.branch}", it.branch.orEmpty()) }
     val remote = items
         .filter { it.kind == GitItem.KIND_REMOTE_BRANCH }
         .filter(::usable)
-        .map { RebaseTarget(it.branch.orEmpty(), "${it.branch} (remote)") }
+        .map { RebaseTarget("refs/remotes/${it.branch}", "${it.branch} (remote)") }
     return local + remote
 }
+
+/**
+ * A picked target's name for copy: the picker sends fully qualified refs so a
+ * tag of the same name cannot shadow the branch, but a notice reads the short one.
+ */
+internal fun shortRefName(ref: String): String =
+    ref.removePrefix("refs/heads/").takeIf { it != ref } ?: ref.removePrefix("refs/remotes/")
 
 /**
  * Why a rebase cannot start from this status, or null. Untracked files do not
@@ -680,12 +687,13 @@ internal fun rebaseStepPrompt(step: RebasePromptStep, repo: GitRepoInfo?): SyncP
  * The message a finished rebase call leaves. [onto] is what the user picked,
  * known only for a start; Continue and Skip finish without it.
  */
-internal fun rebaseOutcomeNotice(result: GitRebaseResponse, branch: String, onto: String?): String =
-    when (result.outcome) {
+internal fun rebaseOutcomeNotice(result: GitRebaseResponse, branch: String, onto: String?): String {
+    val ontoName = onto?.let(::shortRefName)
+    return when (result.outcome) {
         GitRebaseResponse.OUTCOME_REBASED ->
-            if (onto == null) "Rebase finished." else "Rebased $branch onto $onto."
+            if (ontoName == null) "Rebase finished." else "Rebased $branch onto $ontoName."
         GitRebaseResponse.OUTCOME_UP_TO_DATE ->
-            "$branch is already up to date with ${onto ?: "that branch"}."
+            "$branch is already up to date with ${ontoName ?: "that branch"}."
         GitRebaseResponse.OUTCOME_ABORTED -> "Rebase aborted — $branch is back where it started."
         GitRebaseResponse.OUTCOME_STOPPED -> result.message?.takeIf { it.isNotEmpty() }
             ?.let { "Rebase stopped: $it" }
@@ -694,6 +702,7 @@ internal fun rebaseOutcomeNotice(result: GitRebaseResponse, branch: String, onto
             ?: "Rebase stopped — resolve the conflicts, then Continue."
         else -> "Rebase: ${result.outcome}"
     }
+}
 
 /**
  * Copy for a failed rebase call: the rebase-specific readings of the shared
