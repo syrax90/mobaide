@@ -23,6 +23,8 @@ import com.mobaide.app.data.network.dto.GitMutationResponse
 import com.mobaide.app.data.network.dto.GitPathsRequest
 import com.mobaide.app.data.network.dto.GitPullRequest
 import com.mobaide.app.data.network.dto.GitPushRequest
+import com.mobaide.app.data.network.dto.GitRebaseRequest
+import com.mobaide.app.data.network.dto.GitRebaseResponse
 import com.mobaide.app.data.network.dto.GitStatusResponse
 import com.mobaide.app.data.network.dto.LinearLabelDto
 import com.mobaide.app.data.network.dto.LinearStateDto
@@ -323,6 +325,13 @@ class RestApi(
 
     suspend fun pushSessionGit(sessionId: String, body: GitPushRequest): GitJobResponse =
         postSessionGit(sessionId, "push", json.encodeToString(body))
+
+    suspend fun rebaseSessionGit(sessionId: String, body: GitRebaseRequest): GitRebaseResponse =
+        postSessionGit(sessionId, "rebase", json.encodeToString(body))
+
+    /** `step` is `continue`, `skip` or `abort`: `POST …/git/rebase/<step>`. */
+    suspend fun stepSessionGitRebase(sessionId: String, step: String): GitRebaseResponse =
+        postJson(sessionGitUrl(sessionId, "rebase").addPathSegment(step).build(), "{}")
 
     suspend fun getSessionGitJob(sessionId: String, jobId: String): GitJobResponse {
         val url = sessionGitUrl(sessionId, "jobs").addPathSegment(jobId).build()

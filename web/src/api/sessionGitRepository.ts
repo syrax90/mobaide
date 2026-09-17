@@ -1,8 +1,9 @@
 /**
  * The session-scoped git Changes routes — the agent's working-tree status and
  * per-file diff for the directory a session was spawned in, the
- * stage / unstage / discard / commit mutations of its staged set, and the
- * fetch / pull / push jobs with their snapshot and cancel routes.
+ * stage / unstage / discard / commit mutations of its staged set, the
+ * fetch / pull / push jobs with their snapshot and cancel routes, and the
+ * rebase start / continue / skip / abort routes.
  *
  * REST-only shapes, so the types come straight from the generated schema like
  * `gitRepository`'s (the `OWNER.generated` policy in
@@ -36,6 +37,10 @@ export type SessionGitCommitHead = components['schemas']['GitCommitHead'];
 export type SessionGitJob = components['schemas']['GitJobResponse'];
 export type SessionGitJobOp = SessionGitJob['op'];
 export type SessionGitPullMode = NonNullable<components['schemas']['GitPullRequest']['mode']>;
+export type SessionGitRebaseInfo = components['schemas']['GitRebaseInfo'];
+export type SessionGitRebaseResult = components['schemas']['GitRebaseResponse'];
+/** The three routes that act on a rebase already in progress. */
+export type SessionGitRebaseStep = 'continue' | 'skip' | 'abort';
 
 /** What one of the three start routes is asked to do. */
 export type SessionGitSyncRequest =
@@ -73,6 +78,15 @@ export const GIT_JOB_CODE_OPERATION_IN_PROGRESS = 'operation_in_progress';
 export const GIT_JOB_CODE_NO_UPSTREAM = 'no_upstream';
 export const GIT_JOB_CODE_NO_REMOTE = 'no_remote';
 export const GIT_JOB_CODE_DETACHED_HEAD = 'detached_head';
+/** The rebase routes' refusals; `detailMessage` is the ref, the state or the path. */
+export const GIT_CODE_UNKNOWN_REF = 'unknown_ref';
+export const GIT_CODE_NO_REBASE = 'no_rebase';
+export const GIT_CODE_CONFLICT_MARKERS = 'conflict_markers';
+/** `GitRebaseResponse.outcome`, an open vocabulary. */
+export const GIT_REBASE_REBASED = 'rebased';
+export const GIT_REBASE_UP_TO_DATE = 'up_to_date';
+export const GIT_REBASE_STOPPED = 'stopped';
+export const GIT_REBASE_ABORTED = 'aborted';
 
 export type SessionGitErrorKind = 'agentOutdated' | 'sessionGone' | 'git';
 
@@ -261,6 +275,36 @@ export async function commitSessionGit(
     '/api/sessions/{session_id}/git/commit',
     { params: { path: { session_id: sessionId } }, body: request },
   );
+  if (error !== undefined || data === undefined) throwSessionGitError(response, error);
+  return data;
+}
+
+export async function startSessionGitRebase(
+  agentId: string,
+  sessionId: string,
+  onto: string,
+): Promise<SessionGitRebaseResult> {
+  const { data, error, response } = await createAgentClient(agentId).POST(
+    '/api/sessions/{session_id}/git/rebase',
+    { params: { path: { session_id: sessionId } }, body: { onto } },
+  );
+  if (error !== undefined || data === undefined) throwSessionGitError(response, error);
+  return data;
+}
+
+export async function stepSessionGitRebase(
+  agentId: string,
+  sessionId: string,
+  step: SessionGitRebaseStep,
+): Promise<SessionGitRebaseResult> {
+  const client = createAgentClient(agentId);
+  const params = { path: { session_id: sessionId } };
+  const { data, error, response } =
+    step === 'continue'
+      ? await client.POST('/api/sessions/{session_id}/git/rebase/continue', { params })
+      : step === 'skip'
+        ? await client.POST('/api/sessions/{session_id}/git/rebase/skip', { params })
+        : await client.POST('/api/sessions/{session_id}/git/rebase/abort', { params });
   if (error !== undefined || data === undefined) throwSessionGitError(response, error);
   return data;
 }

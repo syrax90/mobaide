@@ -1,9 +1,10 @@
 """Session-scoped git endpoints backing the in-session Changes viewer:
 ``GET /api/sessions/{session_id}/git/status`` and ``.../git/diff`` read,
 ``POST .../git/stage|unstage|discard|commit`` plus ``GET .../git/commit/context``
-mutate the staged set, and ``POST .../git/fetch|pull|push`` start background
+mutate the staged set, ``POST .../git/fetch|pull|push`` start background
 jobs that ``GET .../git/jobs/{job_id}`` and ``POST .../git/jobs/{job_id}/cancel``
-follow.
+follow, and ``POST .../git/rebase`` plus ``.../rebase/continue|skip|abort``
+drive a rebase.
 
 The directory is the session's own spawn cwd (project root or linked
 worktree) — clients never send a path to run in. For the reads, repo
@@ -29,6 +30,8 @@ from .changes_models import (
     GitPathsRequest,
     GitPullRequest,
     GitPushRequest,
+    GitRebaseRequest,
+    GitRebaseResponse,
     GitStatusResponse,
 )
 from .changes_mutations import (
@@ -37,6 +40,12 @@ from .changes_mutations import (
     get_session_commit_context,
     stage_session_paths,
     unstage_session_paths,
+)
+from .changes_rebase import (
+    abort_session_rebase,
+    continue_session_rebase,
+    skip_session_rebase,
+    start_session_rebase,
 )
 from .changes_service import (
     get_session_git_diff,
@@ -250,6 +259,65 @@ async def session_git_push(
             project_name=project_name,
             event_bus=_event_bus(request),
             force=(body or GitPushRequest()).force,
+        )
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.post("/rebase", response_model=GitRebaseResponse)
+async def session_git_rebase(
+    session_id: str, request: Request, body: GitRebaseRequest
+) -> GitRebaseResponse:
+    cwd, project_name = await _session_target(request, session_id)
+    try:
+        return await start_session_rebase(
+            cwd=cwd,
+            onto=body.onto,
+            project_name=project_name,
+            event_bus=_event_bus(request),
+        )
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.post("/rebase/continue", response_model=GitRebaseResponse)
+async def session_git_rebase_continue(
+    session_id: str, request: Request
+) -> GitRebaseResponse:
+    cwd, project_name = await _session_target(request, session_id)
+    try:
+        return await continue_session_rebase(
+            cwd=cwd, project_name=project_name, event_bus=_event_bus(request)
+        )
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.post("/rebase/skip", response_model=GitRebaseResponse)
+async def session_git_rebase_skip(
+    session_id: str, request: Request
+) -> GitRebaseResponse:
+    cwd, project_name = await _session_target(request, session_id)
+    try:
+        return await skip_session_rebase(
+            cwd=cwd, project_name=project_name, event_bus=_event_bus(request)
+        )
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.post("/rebase/abort", response_model=GitRebaseResponse)
+async def session_git_rebase_abort(
+    session_id: str, request: Request
+) -> GitRebaseResponse:
+    cwd, project_name = await _session_target(request, session_id)
+    try:
+        return await abort_session_rebase(
+            cwd=cwd, project_name=project_name, event_bus=_event_bus(request)
         )
     except Exception as exc:
         _raise_mapped(exc)

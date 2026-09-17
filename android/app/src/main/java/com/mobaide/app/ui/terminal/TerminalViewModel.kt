@@ -293,6 +293,11 @@ class TerminalViewModel @Inject constructor(
         gitCapabilities.map { it.branches }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    /** Whether the `⋯` menu offers Rebase… (`capabilities.git.rebase`). */
+    val gitRebaseAvailable: StateFlow<Boolean> =
+        gitCapabilities.map { it.rebase }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 

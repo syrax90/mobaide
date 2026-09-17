@@ -89,6 +89,8 @@ extension SessionGitCopy {
             return "Another fetch, pull or push is still running."
         case SessionGitError.codeJobNotFound:
             return GitChangesDisplay.jobLostCopy
+        case SessionGitError.codeConflictMarkers:
+            return "\(message ?? "The file") still has conflict markers — finish resolving it first."
         default:
             return message.map { "git refused the request (\(code)): \($0)" }
                 ?? "git refused the request (\(code))."
@@ -103,6 +105,44 @@ extension SessionGitCopy {
             return "Staging needs git 2.26 or newer on the agent machine."
         }
         return errorMessage(for: error)
+    }
+
+    /// Copy for a failed rebase call: the rebase-specific readings of the
+    /// shared refusal codes, then the mutations' copy.
+    static func rebaseMessage(for error: any Error) -> String {
+        if case .git(let code, let message)? = error as? SessionGitError {
+            switch code {
+            case SessionGitError.codeUnknownRef:
+                if let message, !message.isEmpty { return "“\(message)” isn't a branch, tag or commit here." }
+                return "That isn't a branch, tag or commit here."
+            case SessionGitError.codeNoRebase:
+                return "No rebase is in progress anymore."
+            case GitJobResponse.codeDirtyWorktree:
+                return "Local changes are in the way — stage, commit or discard them first."
+            case GitJobResponse.codeOperationInProgress:
+                return "A rebase or merge is already in progress."
+            case SessionGitError.codeNoHead:
+                return "This branch has no commits yet."
+            case SessionGitError.codeHookFailed:
+                return "The pre-rebase hook refused the rebase."
+            case SessionGitError.codeGitTooOld:
+                return "Rebasing needs git 2.26 or newer on the agent machine."
+            case SessionGitError.codeGitTimeout:
+                return "The rebase took too long and was cut off — continue or abort it."
+            default:
+                break
+            }
+        }
+        return mutationMessage(for: error)
+    }
+
+    /// git's own output worth showing under the copy: which files, or what the hook said.
+    static func rebaseOutput(for error: any Error) -> String? {
+        guard case .git(let code, let message?)? = error as? SessionGitError,
+              code == GitJobResponse.codeDirtyWorktree || code == SessionGitError.codeHookFailed,
+              !message.isEmpty
+        else { return nil }
+        return message
     }
 
     /// The host-side fix shown with `identity_required`, verbatim for copying.

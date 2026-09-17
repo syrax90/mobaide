@@ -192,6 +192,19 @@ describe('gitCapabilities', () => {
       pull: false,
       push: false,
       branches: false,
+      rebase: false,
+      resolve: false,
+    });
+  });
+
+  it('reads rebase and resolve each on its own', () => {
+    expect(gitCapabilities(info({ git: { changes: true, stage: true, rebase: true } }))).toMatchObject({
+      rebase: true,
+      resolve: false,
+    });
+    expect(gitCapabilities(info({ git: { changes: true, stage: true, resolve: true } }))).toMatchObject({
+      rebase: false,
+      resolve: true,
     });
   });
 
@@ -205,6 +218,8 @@ describe('gitCapabilities', () => {
       pull: false,
       push: false,
       branches: false,
+      rebase: false,
+      resolve: false,
     });
   });
 });

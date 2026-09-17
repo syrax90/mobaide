@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 
 import pytest
 
@@ -25,6 +26,7 @@ from mobaide.core.git_exec import (
 )
 
 from .git_repo_support import (
+    GIT_BIN,
     add_submodule,
     commit_all,
     init_repo,
@@ -258,6 +260,180 @@ class TestRepoState:
 
         with pytest.raises(GitCommandError, match="unexpected git rev-parse --git-path"):
             await repo_state(str(tmp_path))
+
+
+def _rev(repo_dir: str, rev: str, *, short: bool = False) -> str:
+    args = ["rev-parse", *(["--short"] if short else []), rev]
+    return subprocess.run(
+        [GIT_BIN, *args], cwd=repo_dir, check=True, capture_output=True,
+        env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
+    ).stdout.decode().strip()
+
+
+async def _rebase_status(cwd: str):
+    return await get_session_git_status(session_id="s1", cwd=cwd, etag=None)
+
+
+@requires_git
+class TestRebaseInfo:
+    async def test_a_clean_repo_reports_no_rebase(self, repo):
+        resp = await _rebase_status(repo)
+
+        assert (resp.repo.state, resp.repo.rebase) == ("clean", None)
+
+    async def test_stopped_merge_backend_rebase_reports_branch_onto_stop_and_step(self, repo):
+        make_conflict_branches(repo)
+        run_git_sync(repo, "checkout", "other")
+        run_git_sync(repo, "rebase", "main", check=False)
+
+        resp = await _rebase_status(repo)
+
+        assert resp.repo.state == "rebasing"
+        assert resp.repo.head.detached is True
+        assert resp.repo.rebase.model_dump() == {
+            "branch": "other",
+            "onto_oid": _rev(repo, "main"),
+            "onto_short_oid": _rev(repo, "main", short=True),
+            "onto_ref": "main",
+            "stopped_on": {
+                "oid": _rev(repo, "other"),
+                "short_oid": _rev(repo, "other", short=True),
+                "subject": "other side",
+            },
+            "step": 1,
+            "total": 1,
+        }
+
+    async def test_apply_backend_counts_steps_from_next_and_last(self, repo):
+        make_conflict_branches(repo)
+        run_git_sync(repo, "checkout", "other")
+        write_file(repo, "later.txt", b"l\n")
+        commit_all(repo, "later")
+        run_git_sync(repo, "rebase", "--apply", "main", check=False)
+
+        rebase = (await _rebase_status(repo)).repo.rebase
+
+        assert (rebase.branch, rebase.onto_oid, rebase.onto_ref) == (
+            "other", _rev(repo, "main"), "main")
+        assert (rebase.step, rebase.total) == (1, 2)
+
+    async def test_a_git_am_session_is_rebasing_without_rebase_details(self, repo, tmp_path):
+        make_conflict_branches(repo)
+        patch = subprocess.run(
+            [GIT_BIN, "format-patch", "-1", "--stdout", "other"],
+            cwd=repo, check=True, capture_output=True,
+        ).stdout
+        patch_file = write_file(str(tmp_path), "other.patch", patch)
+        run_git_sync(repo, "am", "-3", patch_file, check=False)
+
+        resp = await _rebase_status(repo)
+
+        assert (resp.repo.state, resp.repo.rebase) == ("rebasing", None)
+
+    async def test_a_detached_head_rebase_has_no_branch(self, repo):
+        make_conflict_branches(repo)
+        run_git_sync(repo, "checkout", "--detach", "other")
+        run_git_sync(repo, "rebase", "main", check=False)
+
+        rebase = (await _rebase_status(repo)).repo.rebase
+
+        assert rebase.branch is None
+        assert (rebase.onto_ref, rebase.stopped_on.subject) == ("main", "other side")
+
+    async def test_onto_ref_prefers_a_local_branch_over_a_remote_tracking_one(self, repo):
+        make_conflict_branches(repo)
+        run_git_sync(repo, "update-ref", "refs/remotes/origin/main", "main")
+        run_git_sync(repo, "checkout", "other")
+        run_git_sync(repo, "rebase", "origin/main", check=False)
+
+        assert (await _rebase_status(repo)).repo.rebase.onto_ref == "main"
+
+    async def test_onto_ref_falls_back_to_a_remote_branch_and_skips_its_head_symref(
+        self, repo
+    ):
+        # ``origin/HEAD`` sorts before ``origin/feature`` and points at the
+        # same commit; naming the symref would read as a branch called HEAD.
+        make_conflict_branches(repo)
+        run_git_sync(repo, "update-ref", "refs/remotes/origin/feature", "main")
+        run_git_sync(
+            repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/feature"
+        )
+        onto = _rev(repo, "main")
+        run_git_sync(repo, "commit", "--allow-empty", "-q", "-m", "main moves on")
+        run_git_sync(repo, "checkout", "other")
+        run_git_sync(repo, "rebase", "origin/feature", check=False)
+
+        rebase = (await _rebase_status(repo)).repo.rebase
+
+        assert (rebase.onto_oid, rebase.onto_ref) == (onto, "origin/feature")
+
+    async def test_onto_with_no_branch_pointing_at_it_keeps_only_the_oid(self, repo):
+        make_conflict_branches(repo)
+        onto = _rev(repo, "main")
+        run_git_sync(repo, "commit", "--allow-empty", "-q", "-m", "main moves on")
+        run_git_sync(repo, "checkout", "other")
+        run_git_sync(repo, "rebase", onto, check=False)
+
+        rebase = (await _rebase_status(repo)).repo.rebase
+
+        assert (rebase.onto_oid, rebase.onto_short_oid, rebase.onto_ref) == (
+            onto, _rev(repo, onto, short=True), None)
+        assert rebase.stopped_on.subject == "other side"
+
+    async def test_unreadable_state_files_degrade_to_nulls(self, repo):
+        make_conflict_branches(repo)
+        run_git_sync(repo, "checkout", "other")
+        run_git_sync(repo, "rebase", "main", check=False)
+        state_dir = os.path.join(repo, ".git", "rebase-merge")
+        for name in ("head-name", "onto", "end"):
+            os.remove(os.path.join(state_dir, name))
+        write_file(state_dir, "msgnum", b"not a number\n")
+
+        resp = await _rebase_status(repo)
+
+        assert resp.repo.state == "rebasing"
+        assert resp.repo.rebase.model_dump() == {
+            "branch": None,
+            "onto_oid": None,
+            "onto_short_oid": None,
+            "onto_ref": None,
+            "stopped_on": {
+                "oid": _rev(repo, "other"),
+                "short_oid": _rev(repo, "other", short=True),
+                "subject": "other side",
+            },
+            "step": None,
+            "total": None,
+        }
+
+    async def test_a_new_stop_point_alone_changes_the_etag(self, repo):
+        # Porcelain and HEAD unchanged; only the rebase's progress moved.
+        make_conflict_branches(repo)
+        run_git_sync(repo, "checkout", "other")
+        run_git_sync(repo, "rebase", "main", check=False)
+        before = await _rebase_status(repo)
+        write_file(repo, ".git/rebase-merge/msgnum", b"2\n")
+        write_file(repo, ".git/rebase-merge/end", b"2\n")
+
+        after = await get_session_git_status(session_id="s1", cwd=repo, etag=before.etag)
+
+        assert after.unchanged is False
+        assert (after.repo.rebase.step, after.repo.rebase.total) == (2, 2)
+        assert after.entries == before.entries
+
+    async def test_a_linked_worktree_rebase_is_reported_only_in_that_worktree(
+        self, repo, tmp_path
+    ):
+        make_conflict_branches(repo)
+        wt = str(tmp_path / "wt")
+        run_git_sync(repo, "worktree", "add", wt, "other")
+        run_git_sync(wt, "rebase", "main", check=False)
+
+        linked = await _rebase_status(wt)
+        root = await _rebase_status(repo)
+
+        assert (linked.repo.rebase.branch, linked.repo.rebase.onto_ref) == ("other", "main")
+        assert (root.repo.state, root.repo.rebase) == ("clean", None)
 
 
 @requires_git

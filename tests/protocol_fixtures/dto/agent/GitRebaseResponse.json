@@ -1,0 +1,106 @@
+{
+  "type": "GitRebaseResponse",
+  "cases": [
+    {
+      "name": "rebased",
+      "wire": {
+        "outcome": "rebased",
+        "rebase": null,
+        "message": null
+      },
+      "decoded_canonical": {
+        "outcome": "rebased"
+      }
+    },
+    {
+      "name": "up_to_date",
+      "wire": {
+        "outcome": "up_to_date",
+        "rebase": null,
+        "message": null
+      },
+      "decoded_canonical": {
+        "outcome": "up_to_date"
+      }
+    },
+    {
+      "name": "stopped_on_conflict",
+      "wire": {
+        "outcome": "stopped",
+        "rebase": {
+          "branch": "topic",
+          "onto_oid": "89abcdef0123456789abcdef0123456789abcdef",
+          "onto_short_oid": "89abcde",
+          "onto_ref": "main",
+          "stopped_on": {
+            "oid": "fedcba9876543210fedcba9876543210fedcba98",
+            "short_oid": "fedcba9",
+            "subject": "Fix the login redirect"
+          },
+          "step": 2,
+          "total": 5
+        },
+        "message": null
+      },
+      "decoded_canonical": {
+        "outcome": "stopped",
+        "rebase": {
+          "branch": "topic",
+          "onto_oid": "89abcdef0123456789abcdef0123456789abcdef",
+          "onto_short_oid": "89abcde",
+          "onto_ref": "main",
+          "stopped_on": {
+            "oid": "fedcba9876543210fedcba9876543210fedcba98",
+            "short_oid": "fedcba9",
+            "subject": "Fix the login redirect"
+          },
+          "step": 2,
+          "total": 5
+        }
+      }
+    },
+    {
+      "name": "stopped_detached_without_details",
+      "wire": {
+        "outcome": "stopped",
+        "rebase": {
+          "branch": null,
+          "onto_oid": null,
+          "onto_short_oid": null,
+          "onto_ref": null,
+          "stopped_on": null,
+          "step": null,
+          "total": null
+        },
+        "message": "error: The following untracked working tree files would be overwritten by merge:"
+      },
+      "decoded_canonical": {
+        "outcome": "stopped",
+        "rebase": {},
+        "message": "error: The following untracked working tree files would be overwritten by merge:"
+      }
+    },
+    {
+      "name": "aborted",
+      "wire": {
+        "outcome": "aborted",
+        "rebase": null,
+        "message": null
+      },
+      "decoded_canonical": {
+        "outcome": "aborted"
+      }
+    },
+    {
+      "name": "unknown_outcome",
+      "wire": {
+        "outcome": "future_outcome",
+        "rebase": null,
+        "message": null
+      },
+      "decoded_canonical": {
+        "outcome": "future_outcome"
+      }
+    }
+  ]
+}

@@ -212,6 +212,26 @@ struct GitUpstream: Codable, Equatable, Sendable {
     let behind: Int?
 }
 
+struct GitRebaseCommit: Codable, Equatable, Sendable {
+    let oid: String
+    let short_oid: String
+    let subject: String
+}
+
+/// The rebase in progress: `branch` is nil for a detached HEAD, `onto_ref` a
+/// branch pointing at the base or nil, `stopped_on` the commit git stopped at.
+/// Every key can be nil — a rebase git was killed in need not have written
+/// every state file.
+struct GitRebaseInfo: Codable, Equatable, Sendable {
+    var branch: String?
+    var onto_oid: String?
+    var onto_short_oid: String?
+    var onto_ref: String?
+    var stopped_on: GitRebaseCommit?
+    var step: Int?
+    var total: Int?
+}
+
 struct GitRepoInfo: Codable, Equatable, Sendable {
     let toplevel: String
     let git_dir: String
@@ -220,6 +240,8 @@ struct GitRepoInfo: Codable, Equatable, Sendable {
     let head: GitHead
     let upstream: GitUpstream?
     let state: String
+    /// Set only while `state` is `rebasing`, by an agent with `capabilities.git.rebase`.
+    var rebase: GitRebaseInfo? = nil
 }
 
 struct GitStatusEntry: Codable, Equatable, Sendable {
@@ -424,6 +446,23 @@ struct GitPullRequest: Codable, Equatable, Sendable {
 
 struct GitPushRequest: Codable, Equatable, Sendable {
     let force: Bool
+}
+
+struct GitRebaseRequest: Codable, Equatable, Sendable {
+    let onto: String
+}
+
+/// What a rebase route did. `outcome` is an open vocabulary; `rebase` is set
+/// only when `stopped`, and `message` explains a stop that is not a conflict.
+struct GitRebaseResponse: Codable, Equatable, Sendable {
+    let outcome: String
+    let rebase: GitRebaseInfo?
+    let message: String?
+
+    static let outcomeRebased = "rebased"
+    static let outcomeUpToDate = "up_to_date"
+    static let outcomeStopped = "stopped"
+    static let outcomeAborted = "aborted"
 }
 
 /// One fetch / pull / push job: the body every job route answers and the

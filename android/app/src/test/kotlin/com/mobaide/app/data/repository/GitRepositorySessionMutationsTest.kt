@@ -12,6 +12,8 @@ import com.mobaide.app.data.network.dto.GitMutationResponse
 import com.mobaide.app.data.network.dto.GitPathsRequest
 import com.mobaide.app.data.network.dto.GitPullRequest
 import com.mobaide.app.data.network.dto.GitPushRequest
+import com.mobaide.app.data.network.dto.GitRebaseRequest
+import com.mobaide.app.data.network.dto.GitRebaseResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
 import io.mockk.coEvery
 import io.mockk.every
@@ -154,6 +156,77 @@ class GitRepositorySessionMutationsTest {
             assertEquals(SessionGitException.CODE_PATHSPEC_MISMATCH, e.code)
             assertEquals("fatal: pathspec 'x' did not match", e.detailMessage)
             assertSame(cause, e.cause)
+        }
+    }
+
+    @Test
+    fun gitCapabilities_readRebaseAndResolve_eachAsAnExplicitTrue() = runTest {
+        val (repo, restApi) = newRepo()
+        coEvery { restApi.getAgentVersion() } returns
+            version("""{"git":{"changes":true,"stage":true,"rebase":true,"resolve":"true"}}""")
+
+        assertEquals(GitCapabilities(stage = true, rebase = true, resolve = false), repo.gitCapabilities())
+
+        coEvery { restApi.getAgentVersion() } returns
+            version("""{"git":{"changes":true,"stage":true,"resolve":true}}""")
+
+        assertEquals(GitCapabilities(stage = true, rebase = false, resolve = true), repo.gitCapabilities())
+    }
+
+    @Test
+    fun rebaseSession_sendsTheBase_andStepSessionRebase_namesTheStep() = runTest {
+        val (repo, restApi) = newRepo()
+        val sent = slot<GitRebaseRequest>()
+        val stopped = GitRebaseResponse(GitRebaseResponse.OUTCOME_STOPPED)
+        val aborted = GitRebaseResponse(GitRebaseResponse.OUTCOME_ABORTED)
+        coEvery { restApi.rebaseSessionGit("s1", capture(sent)) } returns stopped
+        coEvery { restApi.stepSessionGitRebase("s1", "abort") } returns aborted
+
+        assertSame(stopped, repo.rebaseSession("s1", "origin/main"))
+        assertSame(aborted, repo.stepSessionRebase("s1", GitRepository.REBASE_ABORT))
+
+        assertEquals(GitRebaseRequest("origin/main"), sent.captured)
+        assertEquals(
+            listOf("continue", "skip", "abort"),
+            listOf(GitRepository.REBASE_CONTINUE, GitRepository.REBASE_SKIP, GitRepository.REBASE_ABORT),
+        )
+    }
+
+    @Test
+    fun aRebaseRefusal_isAGitError_withTheRefOrStateItNames() = runTest {
+        val (repo, restApi) = newRepo()
+        coEvery { restApi.rebaseSessionGit(any(), any()) } throws
+            ApiException(409, """{"detail":{"code":"unknown_ref","message":"mian"}}""")
+        coEvery { restApi.stepSessionGitRebase(any(), any()) } throws
+            ApiException(409, """{"detail":{"code":"no_rebase","message":"clean"}}""")
+
+        try {
+            repo.rebaseSession("s1", "mian")
+            fail("expected SessionGitException.GitError")
+        } catch (e: SessionGitException.GitError) {
+            assertEquals(SessionGitException.CODE_UNKNOWN_REF, e.code)
+            assertEquals("mian", e.detailMessage)
+        }
+        try {
+            repo.stepSessionRebase("s1", GitRepository.REBASE_SKIP)
+            fail("expected SessionGitException.GitError")
+        } catch (e: SessionGitException.GitError) {
+            assertEquals(SessionGitException.CODE_NO_REBASE, e.code)
+            assertEquals("clean", e.detailMessage)
+        }
+    }
+
+    @Test
+    fun anOldAgent404_onARebase_isAgentOutdated() = runTest {
+        val (repo, restApi) = newRepo()
+        coEvery { restApi.rebaseSessionGit(any(), any()) } throws
+            ApiException(404, """{"detail":"Unknown proxy route"}""")
+
+        try {
+            repo.rebaseSession("s1", "main")
+            fail("expected SessionGitException.AgentOutdated")
+        } catch (e: SessionGitException) {
+            assertTrue(e is SessionGitException.AgentOutdated)
         }
     }
 

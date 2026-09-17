@@ -6,7 +6,11 @@ import com.mobaide.app.data.network.dto.GitCommitHead
 import com.mobaide.app.data.network.dto.GitCommitResponse
 import com.mobaide.app.data.network.dto.GitDiscardRequest
 import com.mobaide.app.data.network.dto.GitHeadInfo
+import com.mobaide.app.data.network.dto.GitItem
 import com.mobaide.app.data.network.dto.GitJobResponse
+import com.mobaide.app.data.network.dto.GitRebaseCommit
+import com.mobaide.app.data.network.dto.GitRebaseInfo
+import com.mobaide.app.data.network.dto.GitRebaseResponse
 import com.mobaide.app.data.network.dto.GitRepoInfo
 import com.mobaide.app.data.network.dto.GitStatusCounts
 import com.mobaide.app.data.network.dto.GitStatusEntry
@@ -111,6 +115,32 @@ class GitChangesUiStateTest {
     }
 
     @Test
+    fun rowActions_markAConflictResolved_onlyOnAnAgentThatStagesAndGuardsTheMarkers() {
+        val resolving = allCaps.copy(resolve = true)
+
+        assertEquals(RowActions(resolve = true), rowActions(conflict, resolving))
+        assertEquals(RowActions.NONE, rowActions(conflict, resolving.copy(stage = false)))
+        assertEquals(RowActions.NONE, rowActions(conflict, allCaps))
+        assertFalse(rowActions(modified, resolving).resolve)
+        assertFalse(rowActions(rename, resolving).resolve)
+    }
+
+    @Test
+    fun resolve_staysOutOfTheSelection_andOfTheSelectMode() {
+        // Mark resolved is one file at a time: never a checkbox, never a toolbar action.
+        val resolving = allCaps.copy(resolve = true)
+        val onlyConflicts = ready(listOf(conflict), resolving)
+        val everything = onlyConflicts.sections.flatMap { it.keys }.toSet()
+
+        assertFalse(RowActions(resolve = true).any)
+        assertFalse(onlyConflicts.hasActionableRows)
+        assertEquals(
+            SelectionSubsets(),
+            selectionSubsets(onlyConflicts.sections, everything, resolving),
+        )
+    }
+
+    @Test
     fun rowActions_gateEachActionOnItsOwnCapability() {
         val discardOnly = GitCapabilities(stage = false, discard = true, commit = true)
         val stageOnly = GitCapabilities(stage = true, discard = false, commit = false)
@@ -118,6 +148,7 @@ class GitChangesUiStateTest {
         assertEquals(RowActions(discard = true), rowActions(modified, discardOnly))
         assertEquals(RowActions.NONE, rowActions(rename, discardOnly))
         assertEquals(RowActions(stage = true), rowActions(modified, stageOnly))
+        assertEquals(RowActions.NONE, rowActions(conflict, stageOnly))
         assertEquals(RowActions(unstage = true), rowActions(rename, stageOnly))
         assertEquals(RowActions.NONE, rowActions(modified, GitCapabilities.NONE))
         assertTrue(RowActions(discard = true).any)
@@ -316,6 +347,18 @@ class GitChangesUiStateTest {
             refusalCopy(SessionGitException.CODE_PATHSPEC_MISMATCH, null),
         )
         assertEquals("Enter a commit summary.", refusalCopy(SessionGitException.CODE_EMPTY_MESSAGE, null))
+    }
+
+    @Test
+    fun refusalCopy_namesTheFileThatStillHoldsConflictMarkers() {
+        assertEquals(
+            "src/login.py still has conflict markers — finish resolving it first.",
+            refusalCopy(SessionGitException.CODE_CONFLICT_MARKERS, "src/login.py"),
+        )
+        assertEquals(
+            "The file still has conflict markers — finish resolving it first.",
+            refusalCopy(SessionGitException.CODE_CONFLICT_MARKERS, null),
+        )
     }
 
     @Test
@@ -632,5 +675,327 @@ class GitChangesUiStateSyncTest {
         assertEquals("Another fetch, pull or push is still running.", refusalCopy("job_running", "ab12cd34"))
         assertEquals("Lost track of the job — refresh to see the result.", refusalCopy("job_not_found", null))
         assertEquals(6_000L, JOB_RESULT_DISMISS_MS)
+    }
+}
+
+/**
+ * The pure half of the rebase flow: the sheet's picker and blocker, the
+ * banner, the Skip / Abort confirmations and the outcome and error copy —
+ * the same strings as iOS and the web.
+ */
+class GitChangesUiStateRebaseTest {
+
+    private fun item(kind: String, branch: String?, isCurrent: Boolean = false) =
+        GitItem(kind = kind, branch = branch, is_current = isCurrent)
+
+    private val stopped = GitRebaseCommit(oid = "fedcba98", short_oid = "fedcba9", subject = "Fix the login redirect")
+
+    private fun info(
+        branch: String? = "topic",
+        ontoRef: String? = "main",
+        ontoShortOid: String? = "89abcde",
+        stoppedOn: GitRebaseCommit? = stopped,
+        step: Int? = 2,
+        total: Int? = 5,
+    ) = GitRebaseInfo(
+        branch = branch, onto_oid = "89abcdef0123", onto_short_oid = ontoShortOid,
+        onto_ref = ontoRef, stopped_on = stoppedOn, step = step, total = total,
+    )
+
+    private fun repo(
+        state: String = GitRepoInfo.STATE_CLEAN,
+        head: GitHeadInfo = GitHeadInfo(oid = "abc1234def", short_oid = "abc1234", branch = "topic"),
+        rebase: GitRebaseInfo? = null,
+    ) = GitRepoInfo(
+        toplevel = "/repo", git_dir = "/repo/.git", common_dir = "/repo/.git",
+        head = head, state = state, rebase = rebase,
+    )
+
+    private fun rebasing(rebase: GitRebaseInfo? = info()) = repo(
+        state = GitRepoInfo.STATE_REBASING,
+        head = GitHeadInfo(oid = "89abcdef", short_oid = "89abcde", detached = true),
+        rebase = rebase,
+    )
+
+    private fun status(repo: GitRepoInfo? = repo(), counts: GitStatusCounts? = GitStatusCounts()) =
+        GitStatusResponse(session_id = "s1", etag = "e1", repo = repo, counts = counts)
+
+    private fun gitError(code: String, message: String? = null) =
+        SessionGitException.GitError(code, message, ApiException(409, ""))
+
+    // MARK: - Sheet
+
+    @Test
+    fun rebaseTargets_listLocalBranchesFirst_thenRemoteOnesLabelledAsSuch() {
+        val items = listOf(
+            item(GitItem.KIND_REMOTE_BRANCH, "origin/main"),
+            item(GitItem.KIND_BRANCH_WITH_WORKTREE, "topic-b"),
+            item(GitItem.KIND_BRANCH_ONLY, "main"),
+            item(GitItem.KIND_REMOTE_BRANCH, "origin/topic"),
+        )
+
+        assertEquals(
+            listOf(
+                RebaseTarget("topic-b", "topic-b"),
+                RebaseTarget("main", "main"),
+                RebaseTarget("origin/main", "origin/main (remote)"),
+                RebaseTarget("origin/topic", "origin/topic (remote)"),
+            ),
+            rebaseTargets(items, currentBranch = "topic"),
+        )
+    }
+
+    @Test
+    fun rebaseTargets_leaveOutTheSessionsOwnBranchByName_notTheRootsCurrentRow() {
+        // A linked-worktree session on `topic`: the project root has `main` checked out.
+        val items = listOf(
+            item(GitItem.KIND_BRANCH_ONLY, "main", isCurrent = true),
+            item(GitItem.KIND_BRANCH_WITH_WORKTREE, "topic"),
+        )
+
+        assertEquals(listOf(RebaseTarget("main", "main")), rebaseTargets(items, currentBranch = "topic"))
+    }
+
+    @Test
+    fun rebaseTargets_skipOrphanWorktreesAndBranchlessRows_andKeepEverythingOnADetachedHead() {
+        val items = listOf(
+            item(GitItem.KIND_ORPHAN_WORKTREE, null),
+            item(GitItem.KIND_BRANCH_ONLY, null),
+            item(GitItem.KIND_BRANCH_ONLY, "main"),
+        )
+
+        assertEquals(listOf(RebaseTarget("main", "main")), rebaseTargets(items, currentBranch = null))
+        assertEquals(emptyList<RebaseTarget>(), rebaseTargets(emptyList(), currentBranch = "main"))
+    }
+
+    @Test
+    fun rebaseBlocker_letsACleanBranchWithCommitsRebase_untrackedFilesAndAll() {
+        assertNull(rebaseBlocker(status()))
+        assertNull(rebaseBlocker(status(counts = GitStatusCounts(untracked = 3, total = 3))))
+        assertNull(rebaseBlocker(status(counts = null)))
+    }
+
+    @Test
+    fun rebaseBlocker_namesWhatIsInTheWay_theRepositoryFirst() {
+        assertEquals("Repository unavailable.", rebaseBlocker(null))
+        assertEquals("Repository unavailable.", rebaseBlocker(status(repo = null)))
+        assertEquals(
+            "A rebase or merge is already in progress.",
+            rebaseBlocker(status(repo(state = GitRepoInfo.STATE_MERGING))),
+        )
+        assertEquals("A rebase or merge is already in progress.", rebaseBlocker(status(rebasing())))
+        assertEquals(
+            "This branch has no commits yet.",
+            rebaseBlocker(status(repo(head = GitHeadInfo(branch = "main", initial = true)))),
+        )
+        for (counts in listOf(
+            GitStatusCounts(staged = 1, total = 1),
+            GitStatusCounts(unstaged = 2, total = 2),
+            GitStatusCounts(conflicts = 1, total = 1),
+        )) {
+            assertEquals("Commit or discard your changes first.", rebaseBlocker(status(counts = counts)))
+        }
+    }
+
+    // MARK: - Banner
+
+    @Test
+    fun rebaseBanner_isAbsentUnlessTheRepositoryIsRebasing() {
+        assertNull(rebaseBanner(repo(), 0))
+        assertNull(rebaseBanner(repo(state = GitRepoInfo.STATE_MERGING), 1))
+        assertNull(rebaseBanner(null, 0))
+    }
+
+    @Test
+    fun rebaseBanner_namesTheBranchBaseStopAndStep_withAHintForTheConflictsLeft() {
+        assertEquals(
+            RebaseBanner(
+                title = "Rebasing topic onto main",
+                progress = "Stopped at fedcba9 Fix the login redirect · 2/5",
+                hint = "1 conflict — fix the files, then Mark resolved.",
+            ),
+            rebaseBanner(rebasing(), 1),
+        )
+        assertEquals("3 conflicts — fix the files, then Mark resolved.", rebaseBanner(rebasing(), 3)?.hint)
+        assertEquals("No conflicts left — Continue when ready.", rebaseBanner(rebasing(), 0)?.hint)
+    }
+
+    @Test
+    fun rebaseBanner_fallsBackToTheShortOid_thenDropsWhatTheAgentCouldNotRead() {
+        assertEquals("Rebasing topic onto 89abcde", rebaseBanner(rebasing(info(ontoRef = null)), 0)?.title)
+        assertEquals(
+            "Rebasing topic",
+            rebaseBanner(rebasing(info(ontoRef = null, ontoShortOid = null)), 0)?.title,
+        )
+        assertEquals("Rebasing onto main", rebaseBanner(rebasing(info(branch = null)), 0)?.title)
+        assertEquals("2/5", rebaseBanner(rebasing(info(stoppedOn = null)), 0)?.progress)
+        assertEquals(
+            "Stopped at fedcba9 Fix the login redirect",
+            rebaseBanner(rebasing(info(step = null)), 0)?.progress,
+        )
+    }
+
+    @Test
+    fun rebaseBanner_readsAsABareRebaseInProgress_forAnAgentThatSendsNoDetails() {
+        assertEquals(
+            RebaseBanner("Rebase in progress", null, "No conflicts left — Continue when ready."),
+            rebaseBanner(rebasing(null), 0),
+        )
+        assertEquals(
+            RebaseBanner("Rebase in progress", null, "2 conflicts — fix the files, then Mark resolved."),
+            rebaseBanner(rebasing(GitRebaseInfo()), 2),
+        )
+    }
+
+    // MARK: - Confirmations
+
+    @Test
+    fun rebaseStepPrompt_skipNamesTheCommitItLeavesOut_abortWarnsTheResolutionsGo() {
+        assertEquals(
+            SyncPrompt(
+                "Skip this commit?",
+                "fedcba9 “Fix the login redirect” will be left out of topic.",
+                "Skip commit",
+            ),
+            rebaseStepPrompt(RebasePromptStep.Skip, rebasing()),
+        )
+        assertEquals(
+            "The commit the rebase stopped at will be left out of topic.",
+            rebaseStepPrompt(RebasePromptStep.Skip, rebasing(info(stoppedOn = null))).body,
+        )
+        assertEquals(
+            SyncPrompt(
+                "Abort the rebase?",
+                "topic goes back to where it was before the rebase. Conflict resolutions made so far are discarded.",
+                "Abort rebase",
+            ),
+            rebaseStepPrompt(RebasePromptStep.Abort, rebasing()),
+        )
+    }
+
+    @Test
+    fun rebasedBranch_isTheRebasedOne_thenHeads_thenAGenericName() {
+        assertEquals("topic", rebasedBranch(rebasing()))
+        assertEquals("topic", rebasedBranch(repo()))
+        assertEquals("the branch", rebasedBranch(rebasing(null)))
+        assertEquals("the branch", rebasedBranch(null))
+        assertEquals(
+            "the branch goes back to where it was before the rebase. Conflict resolutions made so far are discarded.",
+            rebaseStepPrompt(RebasePromptStep.Abort, null).body,
+        )
+    }
+
+    // MARK: - Outcome and error copy
+
+    @Test
+    fun rebaseOutcomeNotice_reportsAFinishedStartWithTheBase_aFinishedStepWithoutIt() {
+        val rebased = GitRebaseResponse(GitRebaseResponse.OUTCOME_REBASED)
+
+        assertEquals("Rebased topic onto main.", rebaseOutcomeNotice(rebased, "topic", "main"))
+        assertEquals("Rebase finished.", rebaseOutcomeNotice(rebased, "topic", null))
+        assertEquals(
+            "topic is already up to date with main.",
+            rebaseOutcomeNotice(GitRebaseResponse(GitRebaseResponse.OUTCOME_UP_TO_DATE), "topic", "main"),
+        )
+        assertEquals(
+            "Rebase aborted — topic is back where it started.",
+            rebaseOutcomeNotice(GitRebaseResponse(GitRebaseResponse.OUTCOME_ABORTED), "topic", null),
+        )
+        assertEquals(
+            "Rebase: future_outcome",
+            rebaseOutcomeNotice(GitRebaseResponse("future_outcome"), "topic", null),
+        )
+    }
+
+    @Test
+    fun rebaseOutcomeNotice_reportsAStopOnItsSubject_orGitsExplanationWhenItWasNotAConflict() {
+        assertEquals(
+            "Rebase stopped at “Fix the login redirect” — resolve the conflicts, then Continue.",
+            rebaseOutcomeNotice(GitRebaseResponse(GitRebaseResponse.OUTCOME_STOPPED, info()), "topic", "main"),
+        )
+        assertEquals(
+            "Rebase stopped: error: The following untracked working tree files would be overwritten by merge:",
+            rebaseOutcomeNotice(
+                GitRebaseResponse(
+                    GitRebaseResponse.OUTCOME_STOPPED,
+                    info(),
+                    "error: The following untracked working tree files would be overwritten by merge:",
+                ),
+                "topic",
+                "main",
+            ),
+        )
+        assertEquals(
+            "Rebase stopped — resolve the conflicts, then Continue.",
+            rebaseOutcomeNotice(GitRebaseResponse(GitRebaseResponse.OUTCOME_STOPPED, null, ""), "topic", null),
+        )
+    }
+
+    @Test
+    fun rebaseErrorCopy_readsTheSharedRefusalCodesTheWayARebaseMeansThem() {
+        assertEquals(
+            "“nope” isn't a branch, tag or commit here.",
+            rebaseErrorCopy(gitError(SessionGitException.CODE_UNKNOWN_REF, "nope")),
+        )
+        assertEquals(
+            "That isn't a branch, tag or commit here.",
+            rebaseErrorCopy(gitError(SessionGitException.CODE_UNKNOWN_REF)),
+        )
+        assertEquals(
+            "No rebase is in progress anymore.",
+            rebaseErrorCopy(gitError(SessionGitException.CODE_NO_REBASE, "clean")),
+        )
+        assertEquals(
+            "Local changes are in the way — stage, commit or discard them first.",
+            rebaseErrorCopy(gitError(GitJobResponse.CODE_DIRTY_WORKTREE, "keep.txt")),
+        )
+        assertEquals(
+            "A rebase or merge is already in progress.",
+            rebaseErrorCopy(gitError(GitJobResponse.CODE_OPERATION_IN_PROGRESS, "merging")),
+        )
+        assertEquals("This branch has no commits yet.", rebaseErrorCopy(gitError(SessionGitException.CODE_NO_HEAD)))
+        assertEquals(
+            "The pre-rebase hook refused the rebase.",
+            rebaseErrorCopy(gitError(SessionGitException.CODE_HOOK_FAILED, "nope")),
+        )
+        assertEquals(
+            "Rebasing needs git 2.26 or newer on the agent machine.",
+            rebaseErrorCopy(gitError(SessionGitException.CODE_GIT_TOO_OLD)),
+        )
+        assertEquals(
+            "The rebase took too long and was cut off — continue or abort it.",
+            rebaseErrorCopy(gitError(SessionGitException.CODE_GIT_TIMEOUT)),
+        )
+    }
+
+    @Test
+    fun rebaseErrorCopy_fallsBackToTheMutationCopy_forEverythingElse() {
+        assertEquals(
+            "Resolve the conflicts first.",
+            rebaseErrorCopy(gitError(SessionGitException.CODE_UNMERGED, "unmerged paths in the index")),
+        )
+        assertEquals(
+            "Another fetch, pull or push is still running.",
+            rebaseErrorCopy(gitError(SessionGitException.CODE_JOB_RUNNING, "ab12")),
+        )
+        assertEquals(
+            "Could not reach the agent. Check the connection and try again.",
+            rebaseErrorCopy(SessionGitException.Network(IOException("down"))),
+        )
+    }
+
+    @Test
+    fun rebaseErrorOutput_showsGitsOutput_onlyForTheRefusalsItExplains() {
+        assertEquals(
+            "unstaged changes to tracked files",
+            rebaseErrorOutput(gitError(GitJobResponse.CODE_DIRTY_WORKTREE, "unstaged changes to tracked files")),
+        )
+        assertEquals(
+            "error: The pre-rebase hook refused to rebase.",
+            rebaseErrorOutput(gitError(SessionGitException.CODE_HOOK_FAILED, "error: The pre-rebase hook refused to rebase.")),
+        )
+        assertNull(rebaseErrorOutput(gitError(SessionGitException.CODE_HOOK_FAILED, "")))
+        assertNull(rebaseErrorOutput(gitError(SessionGitException.CODE_UNKNOWN_REF, "nope")))
+        assertNull(rebaseErrorOutput(SessionGitException.Network(IOException("down"))))
     }
 }

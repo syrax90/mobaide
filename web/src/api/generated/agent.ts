@@ -629,6 +629,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/git/rebase": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Rebase */
+        post: operations["session_git_rebase_api_sessions__session_id__git_rebase_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/rebase/abort": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Rebase Abort */
+        post: operations["session_git_rebase_abort_api_sessions__session_id__git_rebase_abort_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/rebase/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Rebase Continue */
+        post: operations["session_git_rebase_continue_api_sessions__session_id__git_rebase_continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/rebase/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Rebase Skip */
+        post: operations["session_git_rebase_skip_api_sessions__session_id__git_rebase_skip_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/git/stage": {
         parameters: {
             query?: never;
@@ -1501,6 +1569,57 @@ export interface components {
              */
             force: boolean;
         };
+        /** GitRebaseCommit */
+        GitRebaseCommit: {
+            /** Oid */
+            oid: string;
+            /** Short Oid */
+            short_oid: string;
+            /** Subject */
+            subject: string;
+        };
+        /**
+         * GitRebaseInfo
+         * @description The rebase in progress, read from git's state directory: ``branch`` is
+         *     null for a detached HEAD, ``onto_ref`` is a branch pointing at the base
+         *     (local first) or null, ``stopped_on`` is the commit git stopped at, and
+         *     ``step``/``total`` count the todo list. Any key can be null — a rebase
+         *     git was killed in need not have written every file.
+         */
+        GitRebaseInfo: {
+            /** Branch */
+            branch?: string | null;
+            /** Onto Oid */
+            onto_oid?: string | null;
+            /** Onto Ref */
+            onto_ref?: string | null;
+            /** Onto Short Oid */
+            onto_short_oid?: string | null;
+            /** Step */
+            step?: number | null;
+            stopped_on?: components["schemas"]["GitRebaseCommit"] | null;
+            /** Total */
+            total?: number | null;
+        };
+        /** GitRebaseRequest */
+        GitRebaseRequest: {
+            /** Onto */
+            onto: string;
+        };
+        /**
+         * GitRebaseResponse
+         * @description Outcome of a rebase route. ``outcome`` is an open vocabulary:
+         *     ``rebased`` | ``up_to_date`` | ``stopped`` | ``aborted``. ``rebase`` is set
+         *     only when ``stopped``; ``message`` is git's explanation of a stop that is
+         *     not a conflict (an untracked file in the way, an ``edit`` stop).
+         */
+        GitRebaseResponse: {
+            /** Message */
+            message?: string | null;
+            /** Outcome */
+            outcome: string;
+            rebase?: components["schemas"]["GitRebaseInfo"] | null;
+        };
         /** GitRepoInfo */
         GitRepoInfo: {
             /** Common Dir */
@@ -1513,6 +1632,7 @@ export interface components {
              * @default false
              */
             is_linked_worktree: boolean;
+            rebase?: components["schemas"]["GitRebaseInfo"] | null;
             /**
              * State
              * @default clean
@@ -2878,6 +2998,134 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_rebase_api_sessions__session_id__git_rebase_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitRebaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRebaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_rebase_abort_api_sessions__session_id__git_rebase_abort_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRebaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_rebase_continue_api_sessions__session_id__git_rebase_continue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRebaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_rebase_skip_api_sessions__session_id__git_rebase_skip_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRebaseResponse"];
                 };
             };
             /** @description Validation Error */

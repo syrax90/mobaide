@@ -141,6 +141,30 @@ data class GitUpstreamInfo(
 )
 
 @Serializable
+data class GitRebaseCommit(
+    val oid: String,
+    val short_oid: String,
+    val subject: String,
+)
+
+/**
+ * The rebase in progress: `branch` is null for a detached HEAD, `onto_ref` a
+ * branch pointing at the base or null, `stopped_on` the commit git stopped at.
+ * Every key can be null — a rebase git was killed in need not have written
+ * every state file.
+ */
+@Serializable
+data class GitRebaseInfo(
+    val branch: String? = null,
+    val onto_oid: String? = null,
+    val onto_short_oid: String? = null,
+    val onto_ref: String? = null,
+    val stopped_on: GitRebaseCommit? = null,
+    val step: Int? = null,
+    val total: Int? = null,
+)
+
+@Serializable
 data class GitRepoInfo(
     val toplevel: String,
     val git_dir: String,
@@ -149,6 +173,8 @@ data class GitRepoInfo(
     val head: GitHeadInfo,
     val upstream: GitUpstreamInfo? = null,
     val state: String = STATE_CLEAN,
+    /** Set only while `state` is `rebasing`, by an agent with `capabilities.git.rebase`. */
+    val rebase: GitRebaseInfo? = null,
 ) {
     companion object {
         const val STATE_CLEAN = "clean"
@@ -351,6 +377,27 @@ data class GitPullRequest(val mode: String = MODE_FF_ONLY) {
 
 @Serializable
 data class GitPushRequest(val force: Boolean = false)
+
+@Serializable
+data class GitRebaseRequest(val onto: String)
+
+/**
+ * What a rebase route did. `outcome` is an open vocabulary; `rebase` is set only
+ * when `stopped`, and `message` explains a stop that is not a conflict.
+ */
+@Serializable
+data class GitRebaseResponse(
+    val outcome: String,
+    val rebase: GitRebaseInfo? = null,
+    val message: String? = null,
+) {
+    companion object {
+        const val OUTCOME_REBASED = "rebased"
+        const val OUTCOME_UP_TO_DATE = "up_to_date"
+        const val OUTCOME_STOPPED = "stopped"
+        const val OUTCOME_ABORTED = "aborted"
+    }
+}
 
 /**
  * One fetch / pull / push job: the body every job route answers and the

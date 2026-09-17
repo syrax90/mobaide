@@ -72,6 +72,7 @@ from mobaide.agent.git.changes_models import (
     GitPathsRequest,
     GitPullRequest,
     GitPushRequest,
+    GitRebaseRequest,
 )
 from mobaide.agent.git.changes_mutations import (
     commit_session,
@@ -79,6 +80,12 @@ from mobaide.agent.git.changes_mutations import (
     get_session_commit_context,
     stage_session_paths,
     unstage_session_paths,
+)
+from mobaide.agent.git.changes_rebase import (
+    abort_session_rebase,
+    continue_session_rebase,
+    skip_session_rebase,
+    start_session_rebase,
 )
 from mobaide.agent.git.changes_service import (
     get_session_git_diff,
@@ -1900,7 +1907,8 @@ class RelayClient:
         m = re.match(
             r"^/api/sessions/([^/]+)/git/"
             r"(status|diff|stage|unstage|discard|commit|commit/context"
-            r"|fetch|pull|push|jobs/([^/]+)|jobs/([^/]+)/cancel)$",
+            r"|fetch|pull|push|jobs/([^/]+)|jobs/([^/]+)/cancel"
+            r"|rebase|rebase/continue|rebase/skip|rebase/abort)$",
             path,
         )
         if m is None:
@@ -1932,6 +1940,7 @@ class RelayClient:
             "commit": GitCommitRequest,
             "pull": GitPullRequest,
             "push": GitPushRequest,
+            "rebase": GitRebaseRequest,
         }
         req = None
         if route in request_models:
@@ -1975,6 +1984,23 @@ class RelayClient:
                 )
             elif route == "commit/context":
                 resp = await get_session_commit_context(cwd=cwd)
+            elif route == "rebase":
+                resp = await start_session_rebase(
+                    cwd=cwd, onto=req.onto, project_name=project_name,
+                    event_bus=event_bus,
+                )
+            elif route == "rebase/continue":
+                resp = await continue_session_rebase(
+                    cwd=cwd, project_name=project_name, event_bus=event_bus,
+                )
+            elif route == "rebase/skip":
+                resp = await skip_session_rebase(
+                    cwd=cwd, project_name=project_name, event_bus=event_bus,
+                )
+            elif route == "rebase/abort":
+                resp = await abort_session_rebase(
+                    cwd=cwd, project_name=project_name, event_bus=event_bus,
+                )
             elif route == "stage":
                 resp = await stage_session_paths(
                     cwd=cwd, paths=req.paths, project_name=project_name,

@@ -79,6 +79,32 @@ struct SyncPrompt: Equatable {
     let confirm: String
 }
 
+/// Where the rebase sheet's picker stands: no project types the ref instead.
+enum RebaseTargets: Equatable {
+    case loading
+    case ready([GitItem])
+    /// No project, or the list failed to load: the sheet asks for the ref as text.
+    case typed
+}
+
+struct RebaseSheetState: Equatable {
+    var targets: RebaseTargets = .loading
+    var isStarting = false
+    var error: CommitError?
+}
+
+/// The two rebase steps that go through a confirmation.
+enum RebasePromptStep: Equatable {
+    case skip, abort
+}
+
+struct RebasePrompt: Equatable {
+    let step: RebasePromptStep
+    let title: String
+    let body: String
+    let confirm: String
+}
+
 /// Session-scoped Changes screen state (Android `GitChangesViewModel` +
 /// `GitRepository.observeSessionGitStatus`).
 ///
@@ -125,6 +151,9 @@ final class GitChangesModel {
     var syncSheet: SyncSheetState?
     /// The follow-up confirmation; its `isPresented` setter clears only this.
     var syncPrompt: SyncPrompt?
+    var rebaseSheet: RebaseSheetState?
+    /// Skip or Abort waiting for its confirmation; the `isPresented` setter clears only this.
+    var rebasePrompt: RebasePrompt?
     var toast: ToastMessage?
     /// The fetch / pull / push this screen follows, until its result is
     /// dismissed. Adopted from wherever it surfaces — this screen's own start,
@@ -136,6 +165,8 @@ final class GitChangesModel {
     private(set) var openCommitOnAppear: Bool
     /// The same for the menu's Fetch / Pull / Push….
     private(set) var openSyncOnAppear: Bool
+    /// The same for the menu's Rebase….
+    private(set) var openRebaseOnAppear: Bool
 
     let sessionId: String
     private let agentAPI: AgentAPI
@@ -154,6 +185,9 @@ final class GitChangesModel {
     /// The follow-up a confirmation acts on, kept apart from `syncPrompt` for
     /// the same reason.
     private var pendingFollowUp: SyncFollowUp?
+    /// The rebase step a confirmation acts on, kept apart from `rebasePrompt`
+    /// for the same reason.
+    private var pendingRebaseStep: RebasePromptStep?
     /// A dismissed job's id, so a late frame does not re-adopt it.
     private var dismissedJobId: String?
 
@@ -164,7 +198,8 @@ final class GitChangesModel {
         projectName: @escaping @MainActor () -> String?,
         sleeper: any Sleeper = ContinuousSleeper(),
         openCommit: Bool = false,
-        openSync: Bool = false
+        openSync: Bool = false,
+        openRebase: Bool = false
     ) {
         self.sessionId = sessionId
         self.agentAPI = agentAPI
@@ -173,6 +208,7 @@ final class GitChangesModel {
         self.sleeper = sleeper
         self.openCommitOnAppear = openCommit
         self.openSyncOnAppear = openSync
+        self.openRebaseOnAppear = openRebase
     }
 
     var repo: GitRepoInfo? {
@@ -199,6 +235,16 @@ final class GitChangesModel {
     var stagedCount: Int {
         if case .ready(let status, _, _) = state { return status.counts?.staged ?? 0 }
         return 0
+    }
+
+    var conflictCount: Int {
+        if case .ready(let status, _, _) = state { return status.counts?.conflicts ?? 0 }
+        return 0
+    }
+
+    var status: GitStatusResponse? {
+        if case .ready(let status, _, _) = state { return status }
+        return nil
     }
 
     /// Whether any shown row has a Stage / Unstage / Discard to offer.
@@ -313,6 +359,108 @@ final class GitChangesModel {
         guard openSyncOnAppear else { return }
         openSyncOnAppear = false
         openSync()
+    }
+
+    /// The terminal menu's Rebase…, once.
+    func consumeOpenRebase() {
+        guard openRebaseOnAppear else { return }
+        openRebaseOnAppear = false
+        openRebase()
+    }
+
+    /// A project-backed session picks from the project's branches; any other
+    /// session — or a list that fails to load — types the ref.
+    func openRebase() {
+        rebaseSheet = RebaseSheetState()
+        Task { await loadRebaseTargets() }
+    }
+
+    func loadRebaseTargets() async {
+        guard rebaseSheet != nil else { return }
+        guard let name = projectName() else {
+            rebaseSheet?.targets = .typed
+            return
+        }
+        do {
+            let items = try await agentAPI.getGitItems(projectName: name).items
+            rebaseSheet?.targets = .ready(items)
+        } catch {
+            guard !SessionGitError.isCancellation(error) else { return }
+            rebaseSheet?.targets = .typed
+        }
+    }
+
+    func closeRebase() {
+        guard rebaseSheet?.isStarting != true else { return }
+        rebaseSheet = nil
+    }
+
+    func startRebase(onto: String) async {
+        let target = onto.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty, !isMutating, rebaseSheet != nil else { return }
+        // The branch is read before the call: HEAD is detached while a rebase runs.
+        let branch = GitChangesDisplay.rebasedBranch(repo)
+        isMutating = true
+        rebaseSheet?.isStarting = true
+        rebaseSheet?.error = nil
+        defer { isMutating = false }
+        do {
+            let result = try await agentAPI.rebaseSessionGit(sessionId: sessionId, onto: target)
+            rebaseSheet = nil
+            toast = GitChangesDisplay.rebaseOutcomeToast(result, branch: branch, onto: target)
+        } catch {
+            guard !SessionGitError.isCancellation(error) else { return }
+            let mapped = SessionGitError.map(error)
+            rebaseSheet?.isStarting = false
+            rebaseSheet?.error = CommitError(
+                message: SessionGitCopy.rebaseMessage(for: mapped),
+                output: SessionGitCopy.rebaseOutput(for: mapped)
+            )
+        }
+        await load()
+    }
+
+    func continueRebase() async {
+        await runRebaseStep("continue")
+    }
+
+    func requestRebaseStep(_ step: RebasePromptStep) {
+        pendingRebaseStep = step
+        rebasePrompt = GitChangesDisplay.rebaseStepPrompt(step, repo: repo)
+    }
+
+    /// The dialog went away without a choice: clears the prompt and the step
+    /// together (the `isPresented` binding must not call this).
+    func dismissRebaseStep() {
+        rebasePrompt = nil
+        pendingRebaseStep = nil
+    }
+
+    func confirmRebaseStep() async {
+        guard let step = pendingRebaseStep else { return }
+        pendingRebaseStep = nil
+        rebasePrompt = nil
+        await runRebaseStep(step == .skip ? "skip" : "abort")
+    }
+
+    private func runRebaseStep(_ step: String) async {
+        guard !isMutating else { return }
+        let branch = GitChangesDisplay.rebasedBranch(repo)
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            let result = try await agentAPI.stepSessionGitRebase(sessionId: sessionId, step: step)
+            toast = GitChangesDisplay.rebaseOutcomeToast(result, branch: branch, onto: nil)
+        } catch {
+            guard !SessionGitError.isCancellation(error) else { return }
+            toast = ToastMessage(text: SessionGitCopy.rebaseMessage(for: SessionGitError.map(error)), tone: .danger)
+        }
+        await load()
+    }
+
+    /// Stage a fixed conflict; the agent refuses a file that still holds markers.
+    func resolve(_ row: GitChangesRow) async {
+        await stage([row])
     }
 
     /// Every job the agent reports for this session, as the socket frames
@@ -736,15 +884,18 @@ enum GitChangesDisplay {
         return "List cut short after \(shown) entries."
     }
 
-    /// What a row can do: a staged entry is unstaged, a modified or untracked
-    /// one is staged or discarded, a conflict is resolved in the terminal
-    /// (marking it resolved from a phone would stage the markers). Each gated
-    /// on its capability, so an older agent shows no control that would 404.
+    /// What a row can do: a staged entry is unstaged, a modified or untracked one is staged or
+    /// discarded, a conflict is marked resolved once fixed — only on an agent that refuses to
+    /// stage leftover markers (`resolve`). Each gated on its capability, so an older agent
+    /// shows no control that would 404.
     struct RowActions: Equatable {
         var stage = false
         var unstage = false
         var discard = false
+        /// Stage a conflicted file once it is fixed; one file at a time, never from the selection.
+        var resolve = false
 
+        /// Whether the selection has anything for this row; `resolve` is per row only.
         var any: Bool { stage || unstage || discard }
         static let none = RowActions()
     }
@@ -755,6 +906,8 @@ enum GitChangesDisplay {
             return RowActions(unstage: capabilities.stage)
         case GitStatusEntry.groupUnstaged, GitStatusEntry.groupUntracked:
             return RowActions(stage: capabilities.stage, discard: capabilities.discard)
+        case GitStatusEntry.groupConflicts:
+            return RowActions(resolve: capabilities.stage && capabilities.resolve)
         default:
             return .none
         }
@@ -1065,5 +1218,132 @@ enum GitChangesDisplay {
                 confirm: "Force push"
             )
         }
+    }
+}
+
+extension GitChangesDisplay {
+    struct RebaseTarget: Equatable, Identifiable {
+        let value: String
+        let label: String
+
+        var id: String { value }
+    }
+
+    /// The rebase sheet's picker: local branches, then remote-tracking ones,
+    /// from the project Git screen's rows. The session's own branch is left
+    /// out by name — the rows' `is_current` is the project root's checkout,
+    /// which for a session in a linked worktree is usually the very branch it
+    /// wants to rebase onto.
+    static func rebaseTargets(_ items: [GitItem], currentBranch: String?) -> [RebaseTarget] {
+        func usable(_ item: GitItem) -> String? {
+            guard let branch = item.branch, branch != currentBranch else { return nil }
+            return branch
+        }
+        let local = items
+            .filter { $0.kind == GitItem.kindBranchOnly || $0.kind == GitItem.kindBranchWithWorktree }
+            .compactMap(usable)
+            .map { RebaseTarget(value: $0, label: $0) }
+        let remote = items
+            .filter { $0.kind == GitItem.kindRemoteBranch }
+            .compactMap(usable)
+            .map { RebaseTarget(value: $0, label: "\($0) (remote)") }
+        return local + remote
+    }
+
+    /// Why a rebase cannot start from this status, or nil. Untracked files do
+    /// not block: git refuses only the ones a pick would overwrite.
+    static func rebaseBlocker(_ status: GitStatusResponse?) -> String? {
+        guard let repo = status?.repo else { return "Repository unavailable." }
+        if repo.state != GitRepoInfo.stateClean { return "A rebase or merge is already in progress." }
+        if repo.head.initial { return "This branch has no commits yet." }
+        if let counts = status?.counts, counts.conflicts + counts.staged + counts.unstaged > 0 {
+            return "Commit or discard your changes first."
+        }
+        return nil
+    }
+
+    /// The branch a rebase acts on, for copy: the one being rebased, else HEAD's.
+    static func rebasedBranch(_ repo: GitRepoInfo?) -> String {
+        repo?.rebase?.branch ?? repo?.head.branch ?? "the branch"
+    }
+
+    struct RebaseBanner: Equatable {
+        let title: String
+        /// Where it stopped and how far along, when the agent could read it.
+        let progress: String?
+        let hint: String
+    }
+
+    /// The Changes screen's banner while the repository is rebasing.
+    static func rebaseBanner(_ repo: GitRepoInfo?, conflicts: Int) -> RebaseBanner? {
+        guard let repo, repo.state == GitRepoInfo.stateRebasing else { return nil }
+        let info = repo.rebase
+        let branch = info?.branch
+        let onto = info?.onto_ref ?? info?.onto_short_oid
+        let title: String
+        switch (branch, onto) {
+        case let (branch?, onto?): title = "Rebasing \(branch) onto \(onto)"
+        case let (branch?, nil): title = "Rebasing \(branch)"
+        case let (nil, onto?): title = "Rebasing onto \(onto)"
+        case (nil, nil): title = "Rebase in progress"
+        }
+        var parts: [String] = []
+        if let stopped = info?.stopped_on { parts.append("Stopped at \(stopped.short_oid) \(stopped.subject)") }
+        if let step = info?.step, let total = info?.total { parts.append("\(step)/\(total)") }
+        let hint = conflicts > 0
+            ? "\(conflicts) \(conflicts == 1 ? "conflict" : "conflicts") — fix the files, then Mark resolved."
+            : "No conflicts left — Continue when ready."
+        return RebaseBanner(title: title, progress: parts.isEmpty ? nil : parts.joined(separator: " · "), hint: hint)
+    }
+
+    static func rebaseStepPrompt(_ step: RebasePromptStep, repo: GitRepoInfo?) -> RebasePrompt {
+        let branch = rebasedBranch(repo)
+        switch step {
+        case .skip:
+            let commit = repo?.rebase?.stopped_on.map { "\($0.short_oid) “\($0.subject)”" }
+                ?? "The commit the rebase stopped at"
+            return RebasePrompt(
+                step: step,
+                title: "Skip this commit?",
+                body: "\(commit) will be left out of \(branch).",
+                confirm: "Skip commit"
+            )
+        case .abort:
+            return RebasePrompt(
+                step: step,
+                title: "Abort the rebase?",
+                body: "\(branch) goes back to where it was before the rebase. "
+                    + "Conflict resolutions made so far are discarded.",
+                confirm: "Abort rebase"
+            )
+        }
+    }
+
+    /// The message a finished rebase call leaves. `onto` is what the user
+    /// picked, known only for a start; Continue and Skip finish without it.
+    static func rebaseOutcomeNotice(_ result: GitRebaseResponse, branch: String, onto: String?) -> String {
+        switch result.outcome {
+        case GitRebaseResponse.outcomeRebased:
+            return onto.map { "Rebased \(branch) onto \($0)." } ?? "Rebase finished."
+        case GitRebaseResponse.outcomeUpToDate:
+            return "\(branch) is already up to date with \(onto ?? "that branch")."
+        case GitRebaseResponse.outcomeAborted:
+            return "Rebase aborted — \(branch) is back where it started."
+        case GitRebaseResponse.outcomeStopped:
+            if let message = result.message, !message.isEmpty { return "Rebase stopped: \(message)" }
+            if let subject = result.rebase?.stopped_on?.subject {
+                return "Rebase stopped at “\(subject)” — resolve the conflicts, then Continue."
+            }
+            return "Rebase stopped — resolve the conflicts, then Continue."
+        default:
+            return "Rebase: \(result.outcome)"
+        }
+    }
+
+    static func rebaseOutcomeToast(_ result: GitRebaseResponse, branch: String, onto: String?) -> ToastMessage {
+        ToastMessage(
+            text: rebaseOutcomeNotice(result, branch: branch, onto: onto),
+            tone: result.outcome == GitRebaseResponse.outcomeStopped ? .danger : .ok
+        )
     }
 }

@@ -10,6 +10,9 @@ import type {
   SessionGitDiscardScope,
   SessionGitEntry,
   SessionGitJob,
+  SessionGitRebaseInfo,
+  SessionGitRebaseResult,
+  SessionGitRebaseStep,
   SessionGitStatus,
   SessionGitSyncRequest,
 } from '../../../api/sessionGitRepository';
@@ -60,10 +63,24 @@ const api = vi.hoisted(() => ({
   jobError: undefined as Error | undefined,
   jobPolls: [] as string[],
   cancels: [] as string[],
+  /**
+   * The rebase routes: every start and step is recorded and answers
+   * `rebaseResult`, unless `refuseRebase` names a failure for the call.
+   */
+  rebases: [] as ({ kind: 'start'; onto: string } | { kind: SessionGitRebaseStep })[],
+  rebaseResult: undefined as SessionGitRebaseResult | undefined,
+  refuseRebase: undefined as Error | undefined,
 }));
 
 vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../api/sessionGitRepository')>();
+  const rebaseCall = (call: (typeof api.rebases)[number]): Promise<SessionGitRebaseResult> => {
+    api.rebases.push(call);
+    if (api.refuseRebase !== undefined) return Promise.reject(api.refuseRebase);
+    return api.rebaseResult === undefined
+      ? Promise.reject(new Error('no rebase result staged'))
+      : Promise.resolve(api.rebaseResult);
+  };
   const mutate = <T,>(call: MutationCall, result: () => T): Promise<T> => {
     api.mutations.push(call);
     const refusal = api.refuse?.(call.kind);
@@ -124,6 +141,10 @@ vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
         ? Promise.reject(new Error('no job staged'))
         : Promise.resolve(api.job);
     },
+    startSessionGitRebase: (_agentId: string, _sessionId: string, onto: string) =>
+      rebaseCall({ kind: 'start', onto }),
+    stepSessionGitRebase: (_agentId: string, _sessionId: string, step: SessionGitRebaseStep) =>
+      rebaseCall({ kind: step }),
     cancelSessionGitJob: (_agentId: string, _sessionId: string, jobId: string) => {
       api.cancels.push(jobId);
       if (api.job === undefined) return Promise.reject(new Error('no job staged'));
@@ -213,13 +234,14 @@ const wireFailure = (httpStatus: number, detail: unknown): unknown =>
 let client: QueryClient;
 const onClose = vi.fn<() => void>();
 
-const panel = (sessionId = 's1', commitRequest = 0, syncRequest = 0) => (
+const panel = (sessionId = 's1', commitRequest = 0, syncRequest = 0, rebaseRequest = 0) => (
   <QueryClientProvider client={client}>
     <GitChangesPanel
       agentId="a1"
       sessionId={sessionId}
       commitRequest={commitRequest}
       syncRequest={syncRequest}
+      rebaseRequest={rebaseRequest}
       onClose={onClose}
     />
   </QueryClientProvider>
@@ -325,6 +347,9 @@ beforeEach(() => {
   api.jobError = undefined;
   api.jobPolls.length = 0;
   api.cancels.length = 0;
+  api.rebases.length = 0;
+  api.rebaseResult = undefined;
+  api.refuseRebase = undefined;
 });
 
 afterEach(() => {
@@ -1341,5 +1366,272 @@ describe('GitChangesPanel sync', () => {
     expect(banner()).toBeNull();
     expect(screen.getByRole('button', { name: 'Stage src/app.py' })).toBeEnabled();
     expect(stageWhileLost).toBe(false);
+  });
+});
+
+describe('GitChangesPanel rebase', () => {
+  const ALL_REBASE = { ...ALL_GIT, rebase: true, resolve: true };
+
+  const info = (over: Partial<SessionGitRebaseInfo> = {}): SessionGitRebaseInfo => ({
+    branch: 'topic',
+    onto_oid: '89abcdef0123456789abcdef0123456789abcdef',
+    onto_short_oid: '89abcde',
+    onto_ref: 'main',
+    stopped_on: { oid: 'fedcba98', short_oid: 'fedcba9', subject: 'Fix the login redirect' },
+    step: 2,
+    total: 5,
+    ...over,
+  });
+
+  const conflict = (path: string): SessionGitEntry =>
+    entry({ group: 'conflicts', path, code: 'UU', index_status: 'U', worktree_status: 'U' });
+
+  /** A linked-worktree session stopped mid-rebase: HEAD detached, the branch in `rebase`. */
+  const rebasing = (etag: string, entries: SessionGitEntry[], over: Partial<SessionGitRebaseInfo> = {}): SessionGitStatus => ({
+    ...counted(etag, entries),
+    repo: {
+      toplevel: '/srv/p1',
+      git_dir: '/srv/p1/.git',
+      common_dir: '/srv/p1/.git',
+      head: { oid: '89abcdef', short_oid: '89abcde', branch: null, detached: true, initial: false },
+      upstream: null,
+      state: 'rebasing',
+      is_linked_worktree: false,
+      rebase: info(over),
+    },
+  });
+
+  /** The same repository once the rebase is over, back on `topic`. */
+  const onTopic = (etag: string, entries: SessionGitEntry[] = []): SessionGitStatus => ({
+    ...counted(etag, entries),
+    repo: {
+      toplevel: '/srv/p1',
+      git_dir: '/srv/p1/.git',
+      common_dir: '/srv/p1/.git',
+      head: { oid: 'abc1234def', short_oid: 'abc1234', branch: 'topic', detached: false, initial: false },
+      upstream: null,
+      state: 'clean',
+      is_linked_worktree: false,
+      rebase: null,
+    },
+  });
+
+  /** A rebase-route failure as the repository throws it, typed for the mock's reject. */
+  const rebaseFailure = (httpStatus: number, detail: unknown): Error => {
+    const error = wireFailure(httpStatus, detail);
+    if (!(error instanceof Error)) throw new Error('expected an Error off the wire');
+    return error;
+  };
+
+  const banner = (): HTMLElement | null => document.querySelector<HTMLElement>('.git-panel-rebase');
+  const shownBanner = (): HTMLElement => {
+    const strip = banner();
+    if (strip === null) throw new Error('no rebase banner');
+    return strip;
+  };
+  const notice = (): HTMLElement | null =>
+    document.querySelector<HTMLElement>('.git-panel-notice:not(.git-panel-rebase):not(.git-panel-job)');
+
+  const renderRebasing = async (next: SessionGitStatus, rebaseRequest = 0): Promise<void> => {
+    api.version = agentVersion(ALL_REBASE);
+    api.status = next;
+    render(panel('s1', 0, 0, rebaseRequest));
+    await waitFor(() => {
+      expect(shownBanner()).toBeInTheDocument();
+    });
+    await capabilitiesSettled();
+  };
+
+  it('shows where the rebase stopped, holds Continue while conflicts remain and offers Mark resolved', async () => {
+    await renderRebasing(rebasing('e1', [conflict('src/login.py')]));
+
+    expect(shownBanner()).toHaveTextContent('Rebasing topic onto main');
+    expect(shownBanner()).toHaveTextContent('Stopped at fedcba9 Fix the login redirect · 2/5');
+    expect(shownBanner()).toHaveTextContent('1 conflict — fix the files, then Mark resolved.');
+    const proceed = within(shownBanner()).getByRole('button', { name: 'Continue' });
+    expect(proceed).toBeDisabled();
+    expect(proceed).toHaveAttribute('title', 'Mark every conflict resolved first');
+    expect(within(shownBanner()).getByRole('button', { name: 'Skip…' })).toBeEnabled();
+    expect(within(shownBanner()).getByRole('button', { name: 'Abort…' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: 'Mark src/login.py resolved' })).toBeEnabled();
+    expect(screen.queryByRole('checkbox', { name: 'Select src/login.py' })).toBeNull();
+  });
+
+  it('marks a conflicted file resolved through the stage route and re-reads the tree', async () => {
+    await renderRebasing(rebasing('e1', [conflict('src/login.py')]));
+    const resolve = await screen.findByRole('button', { name: 'Mark src/login.py resolved' });
+
+    api.status = rebasing('e2', [entry({ group: 'staged', path: 'src/login.py', index_status: 'M', worktree_status: '.' })]);
+    fireEvent.click(resolve);
+
+    await waitFor(() => {
+      expect(api.mutations).toEqual([{ kind: 'stage', paths: ['src/login.py'] }]);
+    });
+    await waitFor(() => {
+      expect(within(shownBanner()).getByRole('button', { name: 'Continue' })).toBeEnabled();
+    });
+    expect(shownBanner()).toHaveTextContent('No conflicts left — Continue when ready.');
+  });
+
+  it('marks the file resolved from the diff pane too', async () => {
+    await renderRebasing(rebasing('e1', [conflict('src/login.py')]));
+
+    fireEvent.click(await screen.findByRole('button', { name: /login\.py/, pressed: false }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark resolved' }));
+
+    await waitFor(() => {
+      expect(api.mutations).toEqual([{ kind: 'stage', paths: ['src/login.py'] }]);
+    });
+  });
+
+  it('names the file that still holds conflict markers when the agent refuses', async () => {
+    await renderRebasing(rebasing('e1', [conflict('src/login.py')]));
+    api.refuse = (kind) =>
+      kind === 'stage' ? wireFailure(409, { code: 'conflict_markers', message: 'src/login.py' }) : undefined;
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark src/login.py resolved' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'src/login.py still has conflict markers — finish resolving it first.',
+    );
+  });
+
+  it('continues once nothing is left to resolve and reports the finished rebase', async () => {
+    await renderRebasing(rebasing('e1', []));
+    api.rebaseResult = { outcome: 'rebased', rebase: null, message: null };
+    api.status = onTopic('e2');
+
+    fireEvent.click(within(shownBanner()).getByRole('button', { name: 'Continue' }));
+
+    await waitFor(() => {
+      expect(api.rebases).toEqual([{ kind: 'continue' }]);
+    });
+    await waitFor(() => {
+      expect(notice()).toHaveTextContent('Rebase finished.');
+    });
+    await waitFor(() => {
+      expect(banner()).toBeNull();
+    });
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+  });
+
+  it('asks before skipping, with Cancel focused, and reports the next stop', async () => {
+    await renderRebasing(rebasing('e1', [conflict('src/login.py')]));
+    api.rebaseResult = {
+      outcome: 'stopped',
+      rebase: info({ stopped_on: { oid: 'aa', short_oid: 'aa11bb2', subject: 'Tidy the callback' }, step: 3 }),
+      message: null,
+    };
+
+    fireEvent.click(within(shownBanner()).getByRole('button', { name: 'Skip…' }));
+    const confirm = screen.getByRole('alertdialog', { name: 'Skip this commit?' });
+    expect(confirm).toHaveTextContent('fedcba9 “Fix the login redirect” will be left out of topic.');
+    expect(within(confirm).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(api.rebases).toEqual([]);
+
+    fireEvent.click(within(shownBanner()).getByRole('button', { name: 'Skip…' }));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: 'Skip this commit?' })).getByRole('button', {
+        name: 'Skip commit',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(api.rebases).toEqual([{ kind: 'skip' }]);
+    });
+    await waitFor(() => {
+      expect(notice()).toHaveTextContent(
+        'Rebase stopped at “Tidy the callback” — resolve the conflicts, then Continue.',
+      );
+    });
+    expect(notice()).toHaveAttribute('data-tone', 'danger');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('aborts after confirmation and names the branch it restored', async () => {
+    await renderRebasing(rebasing('e1', [conflict('src/login.py')]));
+    api.rebaseResult = { outcome: 'aborted', rebase: null, message: null };
+
+    fireEvent.click(within(shownBanner()).getByRole('button', { name: 'Abort…' }));
+    const confirm = screen.getByRole('alertdialog', { name: 'Abort the rebase?' });
+    expect(confirm).toHaveTextContent(
+      'topic goes back to where it was before the rebase. Conflict resolutions made so far are discarded.',
+    );
+    api.status = onTopic('e2');
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Abort rebase' }));
+
+    await waitFor(() => {
+      expect(api.rebases).toEqual([{ kind: 'abort' }]);
+    });
+    await waitFor(() => {
+      expect(notice()).toHaveTextContent('Rebase aborted — topic is back where it started.');
+    });
+    await waitFor(() => {
+      expect(banner()).toBeNull();
+    });
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+  });
+
+  it('reports a refused step with the rebase copy', async () => {
+    await renderRebasing(rebasing('e1', []));
+    api.refuseRebase = rebaseFailure(409, {
+      code: 'dirty_worktree',
+      message: 'unstaged changes to tracked files',
+    });
+
+    fireEvent.click(within(shownBanner()).getByRole('button', { name: 'Continue' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Local changes are in the way — stage, commit or discard them first.',
+    );
+    expect(shownBanner()).toBeInTheDocument();
+  });
+
+  it('keeps Escape for the step confirmation while it is open', async () => {
+    await renderRebasing(rebasing('e1', []));
+    fireEvent.click(within(shownBanner()).getByRole('button', { name: 'Abort…' }));
+
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Git changes' }), { key: 'Escape' });
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('shows the banner without controls on an agent that cannot rebase', async () => {
+    api.version = agentVersion(ALL_GIT);
+    api.status = rebasing('e1', [conflict('src/login.py')]);
+    renderPanel();
+    await waitFor(() => {
+      expect(shownBanner()).toHaveTextContent('Rebasing topic onto main');
+    });
+    await capabilitiesSettled();
+
+    expect(within(shownBanner()).queryByRole('button')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Mark src/login.py resolved' })).toBeNull();
+  });
+
+  it('opens the sheet from the terminal menu and reports the rebase it started', async () => {
+    api.version = agentVersion(ALL_REBASE);
+    api.status = onTopic('e1');
+    api.rebaseResult = { outcome: 'rebased', rebase: null, message: null };
+    render(panel('s1', 0, 0, 1));
+
+    const sheet = await screen.findByRole('dialog', { name: 'Rebase topic' });
+    fireEvent.change(within(sheet).getByLabelText('Onto'), { target: { value: 'main' } });
+    await waitFor(() => {
+      expect(within(sheet).getByRole('button', { name: 'Rebase' })).toBeEnabled();
+    });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Rebase' }));
+
+    await waitFor(() => {
+      expect(api.rebases).toEqual([{ kind: 'start', onto: 'main' }]);
+    });
+    await waitFor(() => {
+      expect(notice()).toHaveTextContent('Rebased topic onto main.');
+    });
+    expect(screen.queryByRole('dialog', { name: 'Rebase topic' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
   });
 });

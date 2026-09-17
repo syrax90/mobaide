@@ -16,7 +16,10 @@ clients render; unexpected failures stay ``git_error`` (``500``).
 """
 from __future__ import annotations
 
+import asyncio
+import os
 import re
+import stat as statmod
 from collections.abc import Sequence
 from typing import Any
 
@@ -34,12 +37,14 @@ from .changes_models import (
     GitMutationResponse,
 )
 from .changes_service import (
+    _BINARY_SNIFF,
     MIN_GIT_VERSION_MUTATE,
     GitBadRequestError,
     GitCommandError,
     GitRefusedError,
     ResolvedRepo,
     _check_result,
+    _contained,
     _fail,
     _lines,
     _lock_for,
@@ -66,6 +71,7 @@ _SMALL_OUTPUT = 64 * 1024
 _CLEAN_CHUNK = 100
 _PATHSPEC_FROM_STDIN = ("--pathspec-from-file=-", "--pathspec-file-nul")
 _IDENT_RE = re.compile(r"^(.*?) <([^>]*)> \d+ [+-]\d{4}$")
+_MARKER_RE = re.compile(rb"^(?:<{7,}|>{7,})(?:\s|$)")
 
 
 def _normalise_paths(paths: Sequence[str]) -> list[str]:
@@ -160,10 +166,13 @@ async def stage_session_paths(
     event_bus: Any | None,
 ) -> GitMutationResponse:
     """``git add -A`` limited to ``paths``: stages modifications, deletions,
-    type changes and untracked files alike."""
+    type changes and untracked files alike. For an unmerged path that is
+    "mark resolved", so it is refused while the file still holds conflict
+    markers."""
     rel = _normalise_paths(paths)
     repo = await _writable_repo(cwd)
     async with _lock_for(repo.toplevel):
+        await _refuse_conflict_markers(repo.toplevel, rel)
         await _run(
             ["add", "-A", *_PATHSPEC_FROM_STDIN],
             toplevel=repo.toplevel,
@@ -297,9 +306,9 @@ async def get_session_commit_context(*, cwd: str | None) -> GitCommitContextResp
     )
 
 
-async def _has_unmerged(toplevel: str) -> bool:
-    # Any output at all means unmerged, so a listing cut at the cap is a
-    # complete answer rather than a failure.
+async def _unmerged_paths(toplevel: str) -> set[str] | None:
+    """Repo-relative unmerged paths, or None when the listing was cut at the
+    cap (so every path has to be presumed unmerged)."""
     result = await run_git(
         ["ls-files", "-u", "-z"],
         cwd=toplevel,
@@ -308,10 +317,47 @@ async def _has_unmerged(toplevel: str) -> bool:
     )
     _check_result(result)
     if result.truncated:
-        return True
+        return None
     if result.rc != 0:
         raise _classify(result, "git ls-files failed")
-    return bool(result.stdout.strip(b"\0"))
+    # each record is "<mode> <oid> <stage>\t<path>", one per stage
+    return {
+        _text(record.partition(b"\t")[2])
+        for record in result.stdout.split(b"\0")
+        if record
+    }
+
+
+async def _has_unmerged(toplevel: str) -> bool:
+    paths = await _unmerged_paths(toplevel)
+    return paths is None or bool(paths)
+
+
+def _has_conflict_markers(toplevel: str, rel: str) -> bool:
+    """A ``<<<<<<<`` or ``>>>>>>>`` line in a regular text file. A deleted
+    file (resolving by removal), a symlink, a submodule or a binary file has
+    nothing to scan."""
+    full = os.path.join(toplevel, *rel.split("/"))
+    if not _contained(toplevel, full):
+        return False
+    try:
+        if not statmod.S_ISREG(os.lstat(full).st_mode):
+            return False
+        with open(full, "rb") as fh:
+            if b"\0" in fh.read(_BINARY_SNIFF):
+                return False
+            fh.seek(0)
+            return any(_MARKER_RE.match(line) for line in fh)
+    except OSError:
+        return False
+
+
+async def _refuse_conflict_markers(toplevel: str, rel: Sequence[str]) -> None:
+    unmerged = await _unmerged_paths(toplevel)
+    candidates = [path for path in rel if unmerged is None or path in unmerged]
+    for path in candidates:
+        if await asyncio.to_thread(_has_conflict_markers, toplevel, path):
+            raise GitRefusedError("conflict_markers", path)
 
 
 async def _has_staged(toplevel: str) -> bool:

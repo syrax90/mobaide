@@ -933,7 +933,21 @@ outcome with its follow-ups (Pull with rebase / merge after
 (with lease) after `rejected` or a non-fast-forward push), each behind a
 nested `alertdialog` whose initial focus sits on Cancel. The panel shows
 the same job as a `busy`-toned notice strip until its result is dismissed
-(a success clears itself after 6 s). Job state is one holder per panel
+(a success clears itself after 6 s). #678 adds an in-progress **rebase** the
+same way: the terminal menu's `⋯ → Git → Rebase…` (gated on
+`capabilities.git.rebase`) opens `GitRebaseDialog.tsx` over the panel — a
+project-backed session picks the target from `listGitItems` (the project's
+local and remote-tracking branches, minus the session's own by name), any
+other session or a list that fails to load types the ref instead, and
+nothing is preselected. While the status reports `repo.rebase` the panel
+shows a third strip with Continue (disabled while any conflict remains),
+Skip… and Abort…, the latter two behind an `alertdialog` confirmation with
+Cancel focused; `useSessionGitRebase` mirrors the sync mutations' shape. A
+conflict row's list entry and diff pane both gain a *Mark resolved* (✓)
+action, gated on `capabilities.git.{stage,resolve}` together, which stages
+the row the same way any other Stage does — only `resolve` certifies the
+agent refuses one still holding `<<<<<<<`/`>>>>>>>` markers. Job state is
+one holder per panel
 (`activeJobId`): the frames `git.job.progress` / `git.job.done` are
 *written* into `['agent', id, 'session-git', sid, 'job', jobId]` by
 `realtime/sessionGitJobCache.ts` (whole snapshots, monotonic — a `running`
@@ -946,9 +960,10 @@ cannot refetch it into a `404` after the agent's retention window), and
 `busy` — which gates every staged-set write, because the agent answers
 `job_running` meanwhile — includes a running job.
 Because a top-layer `<dialog>` still bubbles its `Escape` keydown to this DOM
-parent, the panel's own handler only closes it when neither the commit sheet,
-the sync sheet nor the discard confirmation is open, leaving those dialogs to
-handle their own Escape. The data layer is
+parent, the panel's own handler only closes it when none of the commit sheet,
+the sync sheet, the rebase sheet, a pending rebase-step confirmation nor the
+discard confirmation is open, leaving those dialogs to handle their own
+Escape. The data layer is
 `api/sessionGitRepository.ts` on the generated
 client (REST-only shapes, so no Zod mirror — the golden fixtures stay
 `OWNER.generated`, except `GitJobResponse`, which also rides the socket and

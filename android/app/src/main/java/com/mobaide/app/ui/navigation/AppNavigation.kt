@@ -302,6 +302,11 @@ fun AppNavigation(
                 onOpenGitBranches = { name ->
                     navController.navigate(Routes.gitManagement(name))
                 },
+                onOpenGitRebase = {
+                    entry.arguments?.getString("sessionId")?.let { sessionId ->
+                        navController.navigate(Routes.sessionGitChanges(sessionId, rebase = true))
+                    }
+                },
             )
         }
 
@@ -311,6 +316,7 @@ fun AppNavigation(
                 navArgument("sessionId") { type = NavType.StringType },
                 navArgument("commit") { type = NavType.BoolType; defaultValue = false },
                 navArgument("sync") { type = NavType.BoolType; defaultValue = false },
+                navArgument("rebase") { type = NavType.BoolType; defaultValue = false },
             ),
         ) {
             GitChangesScreen(

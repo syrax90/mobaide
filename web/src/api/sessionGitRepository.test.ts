@@ -36,6 +36,8 @@ const {
   isTerminalSessionGitError,
   stageSessionGit,
   startSessionGitJob,
+  startSessionGitRebase,
+  stepSessionGitRebase,
   toSessionGitError,
   unstageSessionGit,
 } = await import('./sessionGitRepository');
@@ -354,6 +356,84 @@ describe('commitSessionGit', () => {
     await expect(
       commitSessionGit('a1', 's1', { message: ' ', amend: false, no_verify: false }),
     ).rejects.toMatchObject({ kind: 'git', code: 'empty_message', detailMessage: null });
+  });
+});
+
+describe('startSessionGitRebase', () => {
+  it('POSTs the picked base and resolves to the outcome', async () => {
+    const stopped = {
+      outcome: 'stopped',
+      rebase: {
+        branch: 'topic',
+        onto_oid: '89abcdef0123456789abcdef0123456789abcdef',
+        onto_short_oid: '89abcde',
+        onto_ref: 'main',
+        stopped_on: { oid: 'fedcba98', short_oid: 'fedcba9', subject: 'Fix the login redirect' },
+        step: 2,
+        total: 5,
+      },
+      message: null,
+    };
+    ok(stopped);
+
+    await expect(startSessionGitRebase('a1', 's1', 'origin/main')).resolves.toEqual(stopped);
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      agentId: 'a1',
+      method: 'POST',
+      path: '/api/sessions/{session_id}/git/rebase',
+    });
+    expect(lastParams()).toEqual({ path: { session_id: 's1' } });
+    expect(lastBody()).toEqual({ onto: 'origin/main' });
+  });
+
+  it('types an unknown base with the ref it named', async () => {
+    refuse(409, { code: 'unknown_ref', message: 'nope' });
+
+    await expect(startSessionGitRebase('a1', 's1', 'nope')).rejects.toMatchObject({
+      kind: 'git',
+      code: 'unknown_ref',
+      detailMessage: 'nope',
+    });
+  });
+
+  it('types the 404 of an agent without the route as outdated', async () => {
+    refuse(404, 'Unknown proxy route');
+
+    await expect(startSessionGitRebase('a1', 's1', 'main')).rejects.toMatchObject({
+      kind: 'agentOutdated',
+    });
+  });
+});
+
+describe('stepSessionGitRebase', () => {
+  it.each([
+    ['continue', '/api/sessions/{session_id}/git/rebase/continue'],
+    ['skip', '/api/sessions/{session_id}/git/rebase/skip'],
+    ['abort', '/api/sessions/{session_id}/git/rebase/abort'],
+  ] as const)('POSTs %s to its own route with no body', async (step, path) => {
+    ok({ outcome: 'rebased', rebase: null, message: null });
+
+    await expect(stepSessionGitRebase('a1', 's1', step)).resolves.toEqual({
+      outcome: 'rebased',
+      rebase: null,
+      message: null,
+    });
+
+    expect(agent.requests).toHaveLength(1);
+    expect(agent.requests.at(-1)).toMatchObject({ agentId: 'a1', method: 'POST', path });
+    expect(lastParams()).toEqual({ path: { session_id: 's1' } });
+    expect(lastBody()).toBeUndefined();
+  });
+
+  it('types a refusal to continue with its code', async () => {
+    refuse(409, { code: 'unmerged', message: 'unmerged paths in the index' });
+
+    await expect(stepSessionGitRebase('a1', 's1', 'continue')).rejects.toMatchObject({
+      kind: 'git',
+      code: 'unmerged',
+      detailMessage: 'unmerged paths in the index',
+    });
   });
 });
 

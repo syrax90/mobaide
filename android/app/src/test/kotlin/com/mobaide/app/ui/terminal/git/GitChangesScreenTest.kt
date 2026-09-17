@@ -17,6 +17,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import com.mobaide.app.data.network.dto.GitHeadInfo
 import com.mobaide.app.data.network.dto.GitJobResponse
+import com.mobaide.app.data.network.dto.GitRebaseCommit
+import com.mobaide.app.data.network.dto.GitRebaseInfo
 import com.mobaide.app.data.network.dto.GitRepoInfo
 import com.mobaide.app.data.network.dto.GitStatusCounts
 import com.mobaide.app.data.network.dto.GitStatusEntry
@@ -529,5 +531,131 @@ class GitChangesScreenTest {
 
         composeRule.onNodeWithText("Discard 2 files?").assertIsDisplayed()
         composeRule.onNodeWithText("Discard").assertIsNotEnabled()
+    }
+}
+
+/** The rebase banner above the list and a conflict row's Mark resolved. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33], qualifiers = "w360dp-h800dp-xxhdpi")
+class GitChangesScreenRebaseTest {
+
+    @get:Rule
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    private val conflict = GitStatusEntry(
+        group = GitStatusEntry.GROUP_CONFLICTS, path = "src/login.py",
+        code = "UU", index_status = "U", worktree_status = "U",
+    )
+
+    private val rebaseCaps = GitCapabilities(stage = true, discard = true, commit = true, rebase = true, resolve = true)
+
+    private fun ready(
+        entries: List<GitStatusEntry> = listOf(conflict),
+        state: String = GitRepoInfo.STATE_REBASING,
+        capabilities: GitCapabilities = rebaseCaps,
+        busy: Boolean = false,
+    ): GitChangesUiState.Ready {
+        val status = GitStatusResponse(
+            session_id = "s1",
+            etag = "e1",
+            repo = GitRepoInfo(
+                toplevel = "/repo", git_dir = "/repo/.git", common_dir = "/repo/.git",
+                head = GitHeadInfo(oid = "89abcdef", short_oid = "89abcde", detached = true),
+                state = state,
+                rebase = GitRebaseInfo(
+                    branch = "topic",
+                    onto_short_oid = "89abcde",
+                    onto_ref = "main",
+                    stopped_on = GitRebaseCommit("fedcba98", "fedcba9", "Fix the login redirect"),
+                    step = 2,
+                    total = 5,
+                ).takeIf { state == GitRepoInfo.STATE_REBASING },
+            ),
+            entries = entries,
+            counts = GitStatusCounts(conflicts = entries.count { it.group == GitStatusEntry.GROUP_CONFLICTS }, total = entries.size),
+        )
+        return GitChangesUiState.Ready(
+            status, status.repo!!, sectionsFor(status), capabilities = capabilities, busy = busy,
+        )
+    }
+
+    private fun setContent(
+        state: GitChangesUiState,
+        onResolve: (GitStatusEntry) -> Unit = {},
+        onContinueRebase: () -> Unit = {},
+        onRebaseStep: (RebasePromptStep) -> Unit = {},
+    ) {
+        composeRule.setContent {
+            MobaideTheme(darkTheme = true) {
+                GitChangesContent(
+                    state = state,
+                    onEntryClick = {},
+                    onRetry = {},
+                    onResolve = onResolve,
+                    onContinueRebase = onContinueRebase,
+                    onRebaseStep = onRebaseStep,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun aStoppedRebase_bannersWhereItStopped_holdsContinue_andOffersSkipAbortAndMarkResolved() {
+        val steps = mutableListOf<RebasePromptStep>()
+        val resolved = mutableListOf<GitStatusEntry>()
+        setContent(ready(), onResolve = { resolved += it }, onRebaseStep = { steps += it })
+
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_TAG).assertIsDisplayed()
+        composeRule.onNodeWithText("Rebasing topic onto main").assertIsDisplayed()
+        composeRule.onNodeWithText("Stopped at fedcba9 Fix the login redirect · 2/5").assertIsDisplayed()
+        composeRule.onNodeWithText("1 conflict — fix the files, then Mark resolved.").assertIsDisplayed()
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_CONTINUE_TAG).assertIsNotEnabled()
+
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_SKIP_TAG).assertIsEnabled().performClick()
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_ABORT_TAG).assertIsEnabled().performClick()
+        composeRule.onNodeWithTag(gitChangesResolveTag(conflict)).assertIsEnabled().performClick()
+
+        assertEquals(listOf(RebasePromptStep.Skip, RebasePromptStep.Abort), steps)
+        assertEquals(listOf(conflict), resolved)
+        composeRule.onNodeWithTag(gitChangesStageTag(conflict)).assertDoesNotExist()
+    }
+
+    @Test
+    fun withNoConflictLeft_continueIsEnabled_andCallsBack() {
+        var continued = 0
+        setContent(ready(entries = emptyList()), onContinueRebase = { continued += 1 })
+
+        composeRule.onNodeWithText("No conflicts left — Continue when ready.").assertIsDisplayed()
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_CONTINUE_TAG).assertIsEnabled().performClick()
+
+        assertEquals(1, continued)
+    }
+
+    @Test
+    fun whileBusy_everyRebaseControlWaits() {
+        setContent(ready(entries = emptyList(), busy = true))
+
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_CONTINUE_TAG).assertIsNotEnabled()
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_SKIP_TAG).assertIsNotEnabled()
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_ABORT_TAG).assertIsNotEnabled()
+    }
+
+    @Test
+    fun anAgentWithoutTheCapabilities_showsTheBannerAlone() {
+        setContent(ready(capabilities = GitCapabilities(stage = true, discard = true, commit = true)))
+
+        composeRule.onNodeWithText("Rebasing topic onto main").assertIsDisplayed()
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_CONTINUE_TAG).assertDoesNotExist()
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_SKIP_TAG).assertDoesNotExist()
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_ABORT_TAG).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesResolveTag(conflict)).assertDoesNotExist()
+    }
+
+    @Test
+    fun aRepositoryThatIsNotRebasing_hasNoBanner() {
+        setContent(ready(state = GitRepoInfo.STATE_MERGING))
+
+        composeRule.onNodeWithTag(GIT_CHANGES_REBASE_TAG).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesResolveTag(conflict)).assertIsDisplayed()
     }
 }

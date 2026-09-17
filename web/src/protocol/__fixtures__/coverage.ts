@@ -50,7 +50,8 @@ const OWNER = {
    * `GitPullRequest` / `GitPushRequest` follow them here; `GitJobResponse`
    * rides `git.job.progress` / `git.job.done` and keeps its mirror. #677's
    * `GitBranchCreateRequest` / `GitCheckoutRequest` / `GitBranchResponse` are
-   * plain REST bodies of the project Git screen and follow the same call.
+   * plain REST bodies of the project Git screen and follow the same call, as
+   * do #678's `GitRebaseRequest` / `GitRebaseResponse` from the Changes panel.
    */
   generated: 'shipped — typed by the generated OpenAPI schema',
   /** Editing a custom agent type on web: CLA-231. */
@@ -125,6 +126,8 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/GitPathsRequest.json': OWNER.generated,
   'dto/agent/GitPullRequest.json': OWNER.generated,
   'dto/agent/GitPushRequest.json': OWNER.generated,
+  'dto/agent/GitRebaseRequest.json': OWNER.generated,
+  'dto/agent/GitRebaseResponse.json': OWNER.generated,
   'dto/agent/GitStatusResponse.json': OWNER.generated,
   'dto/agent/LinearLabelDto.json': OWNER.generated,
   'dto/agent/LinearStateDto.json': OWNER.generated,

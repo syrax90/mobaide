@@ -24,7 +24,7 @@ from mobaide.agent.git.changes_service import (
     get_session_git_status,
     http_error_for,
 )
-from mobaide.core.git_exec import GitCwdMissingError, reset_caches
+from mobaide.core.git_exec import CmdResult, GitCwdMissingError, reset_caches
 
 from .git_repo_support import (
     GIT_BIN,
@@ -258,6 +258,122 @@ class TestStage:
 
         assert held == [True]
         assert lock.locked() is False
+
+
+def _merge_conflict(repo_dir: str) -> None:
+    make_conflict_branches(repo_dir)
+    run_git_sync(repo_dir, "merge", "other", check=False)
+
+
+@requires_git
+class TestMarkResolved:
+    async def test_a_conflicted_file_still_holding_markers_is_refused_and_nothing_staged(
+        self, repo
+    ):
+        _merge_conflict(repo)
+        write_file(repo, "a.txt", b"a\n")
+        bus = FakeEventBus()
+
+        with pytest.raises(GitRefusedError) as info:
+            await _stage(repo, ["a.txt", "keep.txt"], project_name="proj", event_bus=bus)
+
+        assert (info.value.code, info.value.message) == ("conflict_markers", "keep.txt")
+        assert await _entries(repo) == [("conflicts", "keep.txt"), ("untracked", "a.txt")]
+        assert bus.published == []
+
+    async def test_a_fixed_file_is_marked_resolved(self, repo):
+        _merge_conflict(repo)
+        write_file(repo, "keep.txt", b"one\nBOTH\nthree\n")
+        bus = FakeEventBus()
+
+        resp = await _stage(repo, ["keep.txt"], project_name="proj", event_bus=bus)
+
+        assert resp.model_dump() == {"ok": True}
+        assert await _entries(repo) == [("staged", "keep.txt")]
+        assert bus.published == [_changed(repo, "proj")]
+
+    async def test_deleting_the_conflicted_file_resolves_it_as_a_removal(self, repo):
+        _merge_conflict(repo)
+        os.remove(os.path.join(repo, "keep.txt"))
+
+        await _stage(repo, ["keep.txt"])
+
+        assert await _entries(repo) == [("staged", "keep.txt")]
+        assert _git_out(repo, "ls-files", "-u") == ""
+
+    async def test_marker_lines_in_a_file_that_is_not_unmerged_stage_as_usual(self, repo):
+        _merge_conflict(repo)
+        write_file(repo, "docs/merging.md", b"Git writes\n<<<<<<< HEAD\nlike this\n")
+
+        await _stage(repo, ["docs/merging.md"])
+
+        assert await _entries(repo) == [
+            ("conflicts", "keep.txt"), ("staged", "docs/merging.md")]
+
+    @pytest.mark.parametrize(
+        ("content", "refused"),
+        [
+            (b"one\n<<<<<<< HEAD\nMAIN\n", True),
+            (b"one\n>>>>>>> 1234567 (other side)\n", True),
+            (b"one\n<<<<<<<\ntwo\n", True),
+            (b"one\n<<<<<<<<<<\ntwo\n", True),
+            (b"one\r\n<<<<<<< HEAD\r\ntwo\r\n", True),
+            (b"one\n>>>>>>>", True),
+            (b"one\n<<<<<<<x\ntwo\n", False),
+            (b"one\n<<<<<< HEAD\ntwo\n", False),
+            (b"one\n  <<<<<<< HEAD\ntwo\n", False),
+            (b"one\n=======\ntwo\n", False),
+            (b"one\n||||||| base\ntwo\n", False),
+        ],
+        ids=[
+            "ours-marker", "theirs-marker", "bare-marker", "long-marker", "crlf-marker",
+            "marker-at-eof", "marker-glued-to-text", "six-angles", "indented",
+            "separator-only", "base-marker-only",
+        ],
+    )
+    async def test_only_a_line_opening_with_seven_angle_brackets_counts_as_a_marker(
+        self, repo, content, refused
+    ):
+        _merge_conflict(repo)
+        write_file(repo, "keep.txt", content)
+
+        if refused:
+            with pytest.raises(GitRefusedError) as info:
+                await _stage(repo, ["keep.txt"])
+            assert info.value.code == "conflict_markers"
+            assert await _entries(repo) == [("conflicts", "keep.txt")]
+        else:
+            await _stage(repo, ["keep.txt"])
+            assert await _entries(repo) == [("staged", "keep.txt")]
+
+    async def test_a_binary_file_is_not_scanned(self, repo):
+        _merge_conflict(repo)
+        write_file(repo, "keep.txt", b"\0binary\n<<<<<<< HEAD\n")
+
+        await _stage(repo, ["keep.txt"])
+
+        assert await _entries(repo) == [("staged", "keep.txt")]
+
+    async def test_a_listing_cut_at_the_cap_presumes_every_path_unmerged(
+        self, repo, monkeypatch
+    ):
+        real_run_git = changes_mutations.run_git
+
+        async def cut_listing(args, **kwargs):
+            if args[:2] == ["ls-files", "-u"]:
+                return CmdResult(rc=-9, stdout=b"", stderr=b"", truncated=True)
+            return await real_run_git(args, **kwargs)
+
+        monkeypatch.setattr(changes_mutations, "run_git", cut_listing)
+        write_file(repo, "clean.txt", b"c\n")
+        write_file(repo, "marked.txt", b">>>>>>> theirs\n")
+
+        await _stage(repo, ["clean.txt"])
+        with pytest.raises(GitRefusedError) as info:
+            await _stage(repo, ["marked.txt"])
+
+        assert (info.value.code, info.value.message) == ("conflict_markers", "marked.txt")
+        assert await _entries(repo) == [("staged", "clean.txt"), ("untracked", "marked.txt")]
 
 
 @requires_git

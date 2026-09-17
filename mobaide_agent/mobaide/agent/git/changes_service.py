@@ -41,6 +41,8 @@ from .changes_models import (
     GitDiffLine,
     GitDiffResponse,
     GitHead,
+    GitRebaseCommit,
+    GitRebaseInfo,
     GitRepoInfo,
     GitStatusCounts,
     GitStatusEntry,
@@ -303,6 +305,13 @@ async def repo_state(toplevel: str) -> RepoState:
     to the cwd in the main worktree and absolute in linked ones, so they are
     joined against ``toplevel``; ``CHERRY_PICK_HEAD``/``REVERT_HEAD`` are
     checked as refs because reftable repos keep them out of the filesystem."""
+    state, _ = await operation_state(toplevel)
+    return state
+
+
+async def operation_state(toplevel: str) -> tuple[RepoState, str | None]:
+    """:func:`repo_state` plus the rebase state directory, set only while
+    ``rebasing``."""
     result = await run_git(
         [
             "rev-parse",
@@ -322,19 +331,116 @@ async def repo_state(toplevel: str) -> RepoState:
     if len(lines) != 4:
         raise GitCommandError("unexpected git rev-parse --git-path output")
     merge, bisect, rebase_merge, rebase_apply = (
-        os.path.exists(os.path.join(toplevel, p)) for p in lines
+        os.path.join(toplevel, p) for p in lines
     )
-    if rebase_merge or rebase_apply:
-        return "rebasing"
-    if merge:
-        return "merging"
+    for rebase_dir in (rebase_merge, rebase_apply):
+        if os.path.exists(rebase_dir):
+            return "rebasing", rebase_dir
+    if os.path.exists(merge):
+        return "merging", None
     if await _ref_exists(toplevel, "CHERRY_PICK_HEAD"):
-        return "cherry_picking"
+        return "cherry_picking", None
     if await _ref_exists(toplevel, "REVERT_HEAD"):
-        return "reverting"
-    if bisect:
-        return "bisecting"
-    return "clean"
+        return "reverting", None
+    if os.path.exists(bisect):
+        return "bisecting", None
+    return "clean", None
+
+
+def _read_state_file(rebase_dir: str, name: str) -> str | None:
+    try:
+        with open(os.path.join(rebase_dir, name), "rb") as fh:
+            value = _text(fh.read(_SMALL_OUTPUT)).strip()
+    except OSError:
+        return None
+    return value or None
+
+
+def _state_int(rebase_dir: str, name: str) -> int | None:
+    value = _read_state_file(rebase_dir, name)
+    return int(value) if value is not None and value.isdigit() else None
+
+
+async def rebase_info(toplevel: str, rebase_dir: str) -> GitRebaseInfo | None:
+    """Progress of the rebase whose state lives in ``rebase_dir``
+    (``rebase-merge`` or ``rebase-apply``), or None for a ``git am`` session,
+    which shares ``rebase-apply``. ``REBASE_HEAD`` is git's own record of
+    the commit it stopped at; everything unreadable stays null."""
+    merge_backend = os.path.basename(rebase_dir) == "rebase-merge"
+    if not merge_backend and os.path.exists(os.path.join(rebase_dir, "applying")):
+        return None
+    head_name = _read_state_file(rebase_dir, "head-name")
+    onto_oid = _read_state_file(rebase_dir, "onto")
+    info = GitRebaseInfo(
+        branch=head_name.removeprefix("refs/heads/")
+        if head_name and head_name.startswith("refs/heads/")
+        else None,
+        onto_oid=onto_oid,
+        step=_state_int(rebase_dir, "msgnum" if merge_backend else "next"),
+        total=_state_int(rebase_dir, "end" if merge_backend else "last"),
+    )
+    revs = [onto_oid] if onto_oid else []
+    commits = await run_git(
+        [
+            "log",
+            "--no-walk=unsorted",
+            "--ignore-missing",
+            "--no-color",
+            "--no-show-signature",
+            "--format=%H%x00%h%x00%s",
+            "--end-of-options",
+            *revs,
+            "REBASE_HEAD",
+        ],
+        cwd=toplevel,
+        timeout=_QUICK_TIMEOUT,
+        max_bytes=_SMALL_OUTPUT,
+    )
+    if commits.timed_out or commits.rc != 0:
+        return info
+    for line in _lines(commits.stdout):
+        parts = line.split("\0", 2)
+        if len(parts) != 3:
+            continue
+        oid, short_oid, subject = parts
+        if oid == onto_oid and info.onto_short_oid is None:
+            info.onto_short_oid = short_oid
+        else:
+            info.stopped_on = GitRebaseCommit(oid=oid, short_oid=short_oid, subject=subject)
+    if onto_oid:
+        info.onto_ref = await _ref_pointing_at(toplevel, onto_oid)
+    return info
+
+
+async def _ref_pointing_at(toplevel: str, oid: str) -> str | None:
+    """A branch name for ``oid``: a local branch first, then a remote-tracking
+    one (never a ``<remote>/HEAD`` symref)."""
+    result = await run_git(
+        [
+            "for-each-ref",
+            f"--points-at={oid}",
+            "--format=%(refname)%00%(symref)",
+            "refs/heads",
+            "refs/remotes",
+        ],
+        cwd=toplevel,
+        timeout=_QUICK_TIMEOUT,
+        max_bytes=_SMALL_OUTPUT,
+    )
+    if result.timed_out or (result.rc != 0 and not result.truncated):
+        return None
+    lines = _text(result.stdout).split("\n")
+    lines.pop()
+    remote: str | None = None
+    for line in lines:
+        refname, _, symref = line.partition("\0")
+        if symref:
+            continue
+        if refname.startswith("refs/heads/"):
+            return refname.removeprefix("refs/heads/")
+        if remote is None and refname.startswith("refs/remotes/"):
+            remote = refname.removeprefix("refs/remotes/")
+    return remote
 
 
 @dataclass
@@ -564,7 +670,8 @@ async def get_session_git_status(
 
     repo = probe.repo
     try:
-        state = await repo_state(repo.toplevel)
+        state, rebase_dir = await operation_state(repo.toplevel)
+        rebase = await rebase_info(repo.toplevel, rebase_dir) if rebase_dir else None
         result = await run_git(
             ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"],
             cwd=repo.toplevel,
@@ -576,7 +683,15 @@ async def get_session_git_status(
     _check_result(result)
     if result.rc != 0 and not result.truncated:
         raise _fail(result, "git status failed")
-    tag = _etag(result.stdout, repo.toplevel, repo.git_dir, state)
+    # Skipping a commit that conflicted in the same file as the next one
+    # leaves HEAD and the porcelain identical, so the stop point is hashed too.
+    tag = _etag(
+        result.stdout,
+        repo.toplevel,
+        repo.git_dir,
+        state,
+        rebase.model_dump_json() if rebase else "",
+    )
     if etag and etag == tag:
         return _unchanged(session_id, cwd, tag)
 
@@ -607,6 +722,7 @@ async def get_session_git_status(
             head=head,
             upstream=upstream,
             state=state,
+            rebase=rebase,
         ),
         entries=parsed.entries,
         counts=parsed.counts,

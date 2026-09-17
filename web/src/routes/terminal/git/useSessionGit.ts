@@ -27,11 +27,14 @@ import {
   isTerminalSessionGitError,
   stageSessionGit,
   startSessionGitJob,
+  startSessionGitRebase,
+  stepSessionGitRebase,
   unstageSessionGit,
   type SessionGitCommitRequest,
   type SessionGitDiffRequest,
   type SessionGitDiscardScope,
   type SessionGitJob,
+  type SessionGitRebaseStep,
   type SessionGitStatus,
   type SessionGitSyncRequest,
 } from '../../../api/sessionGitRepository';
@@ -178,6 +181,29 @@ export function useSessionGitMutations(agentId: string, sessionId: string) {
   });
   const busy = stage.isPending || unstage.isPending || discard.isPending || commit.isPending;
   return { stage, unstage, discard, commit, busy };
+}
+
+/**
+ * Start a rebase, and continue / skip / abort the one in progress. Each answer
+ * is final — the agent runs git to completion within the request — so the
+ * status re-read is all that follows; the banner comes from that status.
+ */
+export function useSessionGitRebase(agentId: string, sessionId: string) {
+  const queryClient = useQueryClient();
+  const settle = async (): Promise<void> => {
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.sessionGitStatus(agentId, sessionId),
+    });
+  };
+  const start = useMutation({
+    mutationFn: (onto: string) => startSessionGitRebase(agentId, sessionId, onto),
+    onSettled: settle,
+  });
+  const step = useMutation({
+    mutationFn: (which: SessionGitRebaseStep) => stepSessionGitRebase(agentId, sessionId, which),
+    onSettled: settle,
+  });
+  return { start, step, busy: start.isPending || step.isPending };
 }
 
 /**

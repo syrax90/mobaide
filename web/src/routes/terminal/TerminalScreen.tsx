@@ -152,6 +152,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // picked again, and only a new value re-opens its dialog.
   const [commitRequest, setCommitRequest] = useState(0);
   const [syncRequest, setSyncRequest] = useState(0);
+  const [rebaseRequest, setRebaseRequest] = useState(0);
   const moreRef = useRef<HTMLButtonElement>(null);
   // The menu's *Commit…* entry exists only on an agent that advertises
   // `capabilities.git.commit`, *Fetch / Pull / Push…* on any of the three
@@ -304,8 +305,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
         )}
         {/* Only once the row carries a cwd, as on both mobile clients: the
             git routes answer for the directory the session was spawned in,
-            and a row without one has nothing to show. Rebase… is the one
-            reserved slot left under the heading, after Branches…. */}
+            and a row without one has nothing to show. */}
         {session?.cwd !== undefined && (
           <MenuButton
             label="More options"
@@ -356,6 +356,18 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
                             void navigate(
                               `/agents/${encodeURIComponent(model.agentId)}/projects/${encodeURIComponent(branchesProject)}/git`,
                             );
+                          },
+                        },
+                      ]
+                    : []),
+                  ...(gitCapabilities.rebase
+                    ? [
+                        {
+                          id: 'rebase',
+                          label: 'Rebase…',
+                          onSelect: () => {
+                            setChangesOpen(true);
+                            setRebaseRequest((n) => n + 1);
                           },
                         },
                       ]
@@ -495,10 +507,13 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
           sessionId={model.sessionId}
           commitRequest={commitRequest}
           syncRequest={syncRequest}
+          rebaseRequest={rebaseRequest}
+          projectName={session?.project_name ?? null}
           onClose={() => {
             setChangesOpen(false);
             setCommitRequest(0);
             setSyncRequest(0);
+            setRebaseRequest(0);
             // Back to the menu button, not the grid: the viewer was reached
             // from the header, and a keyboard user is still up there.
             moreRef.current?.focus();

@@ -32,6 +32,10 @@ enum SessionGitError: Error, Equatable, Sendable {
     /// Another fetch / pull / push owns the repository; the message is its job id.
     static let codeJobRunning = "job_running"
     static let codeJobNotFound = "job_not_found"
+    /// The rebase refusals; the message is the ref, the state or the path.
+    static let codeUnknownRef = "unknown_ref"
+    static let codeNoRebase = "no_rebase"
+    static let codeConflictMarkers = "conflict_markers"
 
     /// Classify a thrown error; anything unrelated passes through unchanged.
     static func map(_ error: any Error) -> any Error {

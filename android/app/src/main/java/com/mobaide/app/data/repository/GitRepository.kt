@@ -22,6 +22,8 @@ import com.mobaide.app.data.network.dto.GitJobResponse
 import com.mobaide.app.data.network.dto.GitPathsRequest
 import com.mobaide.app.data.network.dto.GitPullRequest
 import com.mobaide.app.data.network.dto.GitPushRequest
+import com.mobaide.app.data.network.dto.GitRebaseRequest
+import com.mobaide.app.data.network.dto.GitRebaseResponse
 import com.mobaide.app.data.network.dto.GitRepoInfo
 import com.mobaide.app.data.network.dto.GitStatusResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
@@ -114,6 +116,10 @@ data class GitCapabilities(
     val push: Boolean = false,
     /** The project Git screen's remote rows, New branch and Check out. */
     val branches: Boolean = false,
+    /** *Rebase…* and the Changes screen's Continue / Skip / Abort. */
+    val rebase: Boolean = false,
+    /** `stage` refuses a conflicted file that still holds markers, so *Mark resolved* is safe. */
+    val resolve: Boolean = false,
 ) {
     /** The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three. */
     val hasSync: Boolean get() = fetch || pull || push
@@ -131,6 +137,8 @@ fun VersionInfoResponse.toGitCapabilities(): GitCapabilities = GitCapabilities(
     pull = gitCapability("pull"),
     push = gitCapability("push"),
     branches = gitCapability("branches"),
+    rebase = gitCapability("rebase"),
+    resolve = gitCapability("resolve"),
 )
 
 class GitRepository(
@@ -311,6 +319,13 @@ class GitRepository(
             restApi.commitSessionGit(sessionId, GitCommitRequest(message, amend, noVerify))
         }
 
+    suspend fun rebaseSession(sessionId: String, onto: String): GitRebaseResponse =
+        mapSessionGit { restApi.rebaseSessionGit(sessionId, GitRebaseRequest(onto)) }
+
+    /** `step` is [REBASE_CONTINUE], [REBASE_SKIP] or [REBASE_ABORT]. */
+    suspend fun stepSessionRebase(sessionId: String, step: String): GitRebaseResponse =
+        mapSessionGit { restApi.stepSessionGitRebase(sessionId, step) }
+
     /**
      * The session Changes feed: a status body per refresh trigger, for as long
      * as the flow is collected.
@@ -447,5 +462,9 @@ class GitRepository(
     companion object {
         val SESSION_GIT_POLL_INTERVAL: Duration = 10.seconds
         val SESSION_GIT_JOB_POLL_INTERVAL: Duration = 3.seconds
+
+        const val REBASE_CONTINUE = "continue"
+        const val REBASE_SKIP = "skip"
+        const val REBASE_ABORT = "abort"
     }
 }

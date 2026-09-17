@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.MaterialTheme
@@ -42,11 +43,12 @@ fun gitChangesStageTag(entry: GitStatusEntry): String = "git_changes_stage_${ent
 fun gitChangesUnstageTag(entry: GitStatusEntry): String = "git_changes_unstage_${entry.group}_${entry.path}"
 fun gitChangesSelectTag(entry: GitStatusEntry): String = "git_changes_select_${entry.group}_${entry.path}"
 fun gitChangesDiscardTag(entry: GitStatusEntry): String = "git_changes_discard_${entry.group}_${entry.path}"
+fun gitChangesResolveTag(entry: GitStatusEntry): String = "git_changes_resolve_${entry.group}_${entry.path}"
 
 /**
  * One Changes row. A tap opens the diff (or toggles the row while selecting),
  * a long press starts a selection, and the trailing 48dp buttons are the
- * one-tap Stage / Unstage plus a Discard that only opens the
+ * one-tap Stage / Unstage / Mark resolved plus a Discard that only opens the
  * confirmation — never a one-tap loss.
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -63,6 +65,7 @@ internal fun GitChangesRow(
     onStage: () -> Unit = {},
     onUnstage: () -> Unit = {},
     onDiscard: () -> Unit = {},
+    onResolve: () -> Unit = {},
 ) {
     val badge = badgeFor(entry)
     Row(
@@ -71,7 +74,7 @@ internal fun GitChangesRow(
             .testTag(gitChangesRowTag(entry))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .heightIn(min = 48.dp)
-            .padding(start = 16.dp, end = if (actions.any) 4.dp else 16.dp, top = 4.dp, bottom = 4.dp),
+            .padding(start = 16.dp, end = if (actions.any || actions.resolve) 4.dp else 16.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (inSelectionMode && actions.any) {
@@ -108,6 +111,15 @@ internal fun GitChangesRow(
                     PixelChip("submodule", tone = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+        }
+        if (!inSelectionMode && actions.resolve) {
+            PixelIconButton(
+                imageVector = Icons.Default.Check,
+                contentDescription = "Mark ${entry.path} resolved",
+                onClick = onResolve,
+                enabled = !busy,
+                modifier = Modifier.testTag(gitChangesResolveTag(entry)),
+            )
         }
         if (!inSelectionMode && actions.stage) {
             PixelIconButton(
@@ -205,6 +217,7 @@ private fun GitChangesRowPreviewContent() {
                 code = "UU", index_status = "U", worktree_status = "U",
             ),
             onClick = {},
+            actions = RowActions(resolve = true),
         )
         GitChangesRow(
             entry = GitStatusEntry(
