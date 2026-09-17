@@ -94,8 +94,8 @@ struct RootView: View {
             ProjectsScreen()
         case .gitManagement(let projectName):
             GitScreen(projectName: projectName)
-        case .sessionGitChanges(let sessionId, let commit, let sync):
-            GitChangesScreen(sessionId: sessionId, openCommit: commit, openSync: sync)
+        case .sessionGitChanges(let sessionId, let commit, let sync, let rebase):
+            GitChangesScreen(sessionId: sessionId, openCommit: commit, openSync: sync, openRebase: rebase)
         case .sessionGitDiff(let sessionId, let path, let scope, let origPath):
             GitDiffScreen(sessionId: sessionId, path: path, scope: scope, origPath: origPath)
         case .incompatibleServer:

@@ -3195,6 +3195,22 @@ body:has(dialog[open]) {
   gap: 0.3rem;
 }
 
+/* A rebase in progress: title, where it stopped, the next step, and its
+   three actions, which wrap under the text on a narrow panel. */
+.git-panel-rebase {
+  flex-wrap: wrap;
+}
+
+.git-panel-rebase .git-panel-job-body {
+  flex: 1 1 16rem;
+}
+
+.git-rebase-progress {
+  font-family: var(--font-code);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
 /* Two rectangles, no motion: git's percentage restarts at every phase and an
    animated fill would run backwards each time. */
 .git-sync-bar {

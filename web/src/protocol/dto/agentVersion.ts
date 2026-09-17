@@ -149,6 +149,10 @@ export interface GitCapabilities {
   push: boolean;
   /** The project Git screen's remote rows, New branch and Check out (#677). */
   branches: boolean;
+  /** *Rebase…* and the Changes screen's Continue / Skip / Abort. */
+  rebase: boolean;
+  /** `stage` refuses a conflicted file that still holds markers, so *Mark resolved* is safe. */
+  resolve: boolean;
 }
 
 export const NO_GIT_CAPABILITIES: GitCapabilities = {
@@ -159,6 +163,8 @@ export const NO_GIT_CAPABILITIES: GitCapabilities = {
   pull: false,
   push: false,
   branches: false,
+  rebase: false,
+  resolve: false,
 };
 
 /** The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three. */
@@ -189,5 +195,7 @@ export function gitCapabilities(info: AgentVersionInfo | undefined): GitCapabili
     pull: gitCapability(info, 'pull'),
     push: gitCapability(info, 'push'),
     branches: gitCapability(info, 'branches'),
+    rebase: gitCapability(info, 'rebase'),
+    resolve: gitCapability(info, 'resolve'),
   };
 }

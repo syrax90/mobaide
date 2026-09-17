@@ -216,6 +216,24 @@ struct AgentAPI: Sendable {
         }
     }
 
+    /// `POST /api/sessions/{id}/git/rebase` — runs the rebase to completion or its first stop.
+    func rebaseSessionGit(sessionId: String, onto: String) async throws -> GitRebaseResponse {
+        try await execute(
+            method: "POST",
+            url: "\(try await base())/api/sessions/\(sessionId)/git/rebase",
+            body: GitRebaseRequest(onto: onto)
+        )
+    }
+
+    /// `POST /api/sessions/{id}/git/rebase/continue|skip|abort`.
+    func stepSessionGitRebase(sessionId: String, step: String) async throws -> GitRebaseResponse {
+        try await execute(
+            method: "POST",
+            url: "\(try await base())/api/sessions/\(sessionId)/git/rebase/\(step)",
+            rawBody: Data()
+        )
+    }
+
     /// `GET /api/sessions/{id}/git/jobs/{job_id}` — the reconcile poll's snapshot.
     func getSessionGitJob(sessionId: String, jobId: String) async throws -> GitJobResponse {
         try await execute(method: "GET", url: "\(try await base())/api/sessions/\(sessionId)/git/jobs/\(jobId)")

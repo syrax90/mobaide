@@ -4191,6 +4191,8 @@ class TestProxyVersionCapabilities:
                 "pull": True,
                 "push": True,
                 "branches": True,
+                "rebase": True,
+                "resolve": True,
             },
         }
 
@@ -4220,6 +4222,8 @@ class TestProxyVersionCapabilities:
                 "pull": True,
                 "push": True,
                 "branches": True,
+                "rebase": True,
+                "resolve": True,
             },
         }
 

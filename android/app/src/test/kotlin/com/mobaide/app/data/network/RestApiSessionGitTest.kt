@@ -6,6 +6,8 @@ import com.mobaide.app.data.network.dto.GitDiscardRequest
 import com.mobaide.app.data.network.dto.GitPathsRequest
 import com.mobaide.app.data.network.dto.GitPullRequest
 import com.mobaide.app.data.network.dto.GitPushRequest
+import com.mobaide.app.data.network.dto.GitRebaseRequest
+import com.mobaide.app.data.network.dto.GitRebaseResponse
 import io.mockk.CapturingSlot
 import io.mockk.Runs
 import io.mockk.every
@@ -447,5 +449,84 @@ class RestApiSessionGitJobsTest {
         assertEquals(Json.parseToJsonElement("{}"), captured.captured.bodyJson())
         assertFalse(job.running)
         assertEquals("cancelled", job.error_code)
+    }
+}
+
+/** The rebase routes: start with the base, then continue / skip / abort under `rebase/`. */
+@OptIn(ExperimentalCoroutinesApi::class)
+class RestApiSessionGitRebaseTest {
+
+    private val jsonType = "application/json".toMediaType()
+
+    private fun responseFor(req: Request, bodyJson: String): Response = Response.Builder()
+        .request(req)
+        .protocol(Protocol.HTTP_1_1)
+        .code(200)
+        .message("OK")
+        .body(bodyJson.toResponseBody(jsonType))
+        .build()
+
+    private fun newExecuteApi(bodyJson: String): Pair<RestApi, CapturingSlot<Request>> {
+        val client = mockk<OkHttpClient>()
+        val tokenStore = mockk<TokenStore>()
+        every { tokenStore.getEffectiveBaseUrl() } returns "https://api.example.com"
+        val captured = slot<Request>()
+        val call = mockk<Call>()
+        every { client.newCall(capture(captured)) } returns call
+        every { call.execute() } answers { responseFor(captured.captured, bodyJson) }
+        return RestApi(client, tokenStore) to captured
+    }
+
+    private fun Request.bodyJson(): JsonElement {
+        val buffer = Buffer()
+        body!!.writeTo(buffer)
+        return Json.parseToJsonElement(buffer.readUtf8())
+    }
+
+    @Test
+    fun rebaseSessionGit_postsTheBase_andDecodesAStopWithItsProgress() = runTest {
+        val (api, captured) = newExecuteApi(
+            """{"outcome":"stopped","rebase":{"branch":"topic","onto_oid":"89abcdef","onto_short_oid":"89abcde",""" +
+                """"onto_ref":"main","stopped_on":{"oid":"fedcba98","short_oid":"fedcba9","subject":"Fix"},""" +
+                """"step":2,"total":5},"message":null}""",
+        )
+
+        val result = api.rebaseSessionGit("s1", GitRebaseRequest("origin/main"))
+
+        assertEquals("POST", captured.captured.method)
+        assertEquals("https://api.example.com/api/sessions/s1/git/rebase", captured.captured.url.toString())
+        assertEquals(Json.parseToJsonElement("""{"onto":"origin/main"}"""), captured.captured.bodyJson())
+        assertEquals(GitRebaseResponse.OUTCOME_STOPPED, result.outcome)
+        assertEquals("topic", result.rebase?.branch)
+        assertEquals("fedcba9", result.rebase?.stopped_on?.short_oid)
+        assertEquals(2, result.rebase?.step)
+        assertNull(result.message)
+    }
+
+    @Test
+    fun stepSessionGitRebase_postsAnEmptyObject_underEachStepsOwnLeaf() = runTest {
+        val (api, captured) = newExecuteApi("""{"outcome":"aborted","rebase":null,"message":null}""")
+
+        for (step in listOf("continue", "skip", "abort")) {
+            val result = api.stepSessionGitRebase("s1", step)
+
+            assertEquals("POST", captured.captured.method)
+            assertEquals(
+                "https://api.example.com/api/sessions/s1/git/rebase/$step",
+                captured.captured.url.toString(),
+            )
+            assertEquals(Json.parseToJsonElement("{}"), captured.captured.bodyJson())
+            assertEquals(GitRebaseResponse.OUTCOME_ABORTED, result.outcome)
+        }
+    }
+
+    @Test
+    fun stepSessionGitRebase_decodesAnOutcomeANewerAgentMaySend() = runTest {
+        val (api, _) = newExecuteApi("""{"outcome":"future_outcome"}""")
+
+        val result = api.stepSessionGitRebase("s1", "continue")
+
+        assertEquals("future_outcome", result.outcome)
+        assertNull(result.rebase)
     }
 }

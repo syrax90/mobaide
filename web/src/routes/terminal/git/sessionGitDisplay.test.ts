@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { toApiError } from '../../../api/errors';
+import type { GitItem } from '../../../api/gitRepository';
 import {
   SessionGitError,
   toSessionGitError,
@@ -8,6 +9,8 @@ import {
   type SessionGitHunk,
   type SessionGitJob,
   type SessionGitLine,
+  type SessionGitRebaseInfo,
+  type SessionGitRebaseResult,
   type SessionGitRepoInfo,
   type SessionGitStatus,
 } from '../../../api/sessionGitRepository';
@@ -41,6 +44,13 @@ import {
   jobTitle,
   mutationErrorCopy,
   pathsFor,
+  rebaseBanner,
+  rebaseBlocker,
+  rebaseErrorCopy,
+  rebaseErrorOutput,
+  rebaseOutcomeNotice,
+  rebaseStepPrompt,
+  rebaseTargets,
   refusalCopy,
   renderableText,
   repoStateLabel,
@@ -49,6 +59,7 @@ import {
   sectionsFor,
   selectionSubsets,
   sessionGitErrorCopy,
+  shortRefName,
   showsContextChoices,
   showsJobOutput,
   splitCommitMessage,
@@ -608,8 +619,10 @@ const ALL_GIT: GitCapabilities = {
   pull: true,
   push: true,
   branches: true,
+  rebase: true,
+  resolve: true,
 };
-const NO_ACTIONS = { stage: false, unstage: false, discard: false };
+const NO_ACTIONS = { stage: false, unstage: false, discard: false, resolve: false };
 
 const staged = (over: Partial<SessionGitEntry> = {}): SessionGitEntry =>
   entry({ group: 'staged', index_status: 'M', worktree_status: '.', ...over });
@@ -634,6 +647,15 @@ describe('refusalCopy', () => {
     expect(refusalCopy('index_locked', null)).toBe('Another git process is running — try again.');
     expect(refusalCopy('pathspec_mismatch', null)).toBe('That file changed under you — refreshed.');
     expect(refusalCopy('empty_message', null)).toBe('Enter a commit summary.');
+  });
+
+  it('names the file that still holds conflict markers', () => {
+    expect(refusalCopy('conflict_markers', 'src/login.py')).toBe(
+      'src/login.py still has conflict markers — finish resolving it first.',
+    );
+    expect(refusalCopy('conflict_markers', null)).toBe(
+      'The file still has conflict markers — finish resolving it first.',
+    );
   });
 
   it('names an unknown code, with the git output when there is any', () => {
@@ -669,15 +691,15 @@ describe('mutationErrorCopy', () => {
 });
 
 describe('rowActions', () => {
-  it('unstages a staged row, stages or discards a modified or untracked one, and leaves a conflict alone', () => {
-    expect(rowActions(staged(), ALL_GIT)).toEqual({ stage: false, unstage: true, discard: false });
-    expect(rowActions(entry(), ALL_GIT)).toEqual({ stage: true, unstage: false, discard: true });
+  it('unstages a staged row, stages or discards a modified or untracked one, and marks a conflict resolved', () => {
+    expect(rowActions(staged(), ALL_GIT)).toEqual({ ...NO_ACTIONS, unstage: true });
+    expect(rowActions(entry(), ALL_GIT)).toEqual({ ...NO_ACTIONS, stage: true, discard: true });
     expect(rowActions(untracked('n.txt'), ALL_GIT)).toEqual({
+      ...NO_ACTIONS,
       stage: true,
-      unstage: false,
       discard: true,
     });
-    expect(rowActions(conflict('c.py'), ALL_GIT)).toEqual(NO_ACTIONS);
+    expect(rowActions(conflict('c.py'), ALL_GIT)).toEqual({ ...NO_ACTIONS, resolve: true });
     expect(rowActions(entry({ group: foreignGroup('ignored') }), ALL_GIT)).toEqual(NO_ACTIONS);
   });
 
@@ -690,6 +712,8 @@ describe('rowActions', () => {
       pull: false,
       push: false,
       branches: false,
+      rebase: false,
+      resolve: false,
     };
     const stageOnly: GitCapabilities = {
       stage: true,
@@ -699,12 +723,31 @@ describe('rowActions', () => {
       pull: false,
       push: false,
       branches: false,
+      rebase: false,
+      resolve: false,
     };
 
-    expect(rowActions(entry(), discardOnly)).toEqual({ stage: false, unstage: false, discard: true });
+    expect(rowActions(entry(), discardOnly)).toEqual({ ...NO_ACTIONS, discard: true });
     expect(rowActions(staged(), discardOnly)).toEqual(NO_ACTIONS);
-    expect(rowActions(entry(), stageOnly)).toEqual({ stage: true, unstage: false, discard: false });
-    expect(rowActions(staged(), stageOnly)).toEqual({ stage: false, unstage: true, discard: false });
+    expect(rowActions(entry(), stageOnly)).toEqual({ ...NO_ACTIONS, stage: true });
+    expect(rowActions(staged(), stageOnly)).toEqual({ ...NO_ACTIONS, unstage: true });
+  });
+
+  it('offers Mark resolved only on an agent that both stages and guards against leftover markers', () => {
+    expect(rowActions(conflict('c.py'), { ...ALL_GIT, resolve: false })).toEqual(NO_ACTIONS);
+    expect(rowActions(conflict('c.py'), { ...ALL_GIT, stage: false })).toEqual(NO_ACTIONS);
+    expect(rowActions(entry(), { ...ALL_GIT, stage: false }).resolve).toBe(false);
+    expect(rowActions(staged(), ALL_GIT).resolve).toBe(false);
+  });
+
+  it('keeps conflicts out of the bulk selection even when they can be marked resolved', () => {
+    const sections = sectionsFor(status({ entries: [conflict('a.py'), conflict('b.py')] }));
+    const everything = new Set(sections.flatMap((section) => section.rows.map((row) => row.key)));
+
+    const subsets = selectionSubsets(sections, everything, ALL_GIT);
+
+    expect(subsets).toEqual({ stage: [], unstage: [], discard: [] });
+    expect(sectionAction(sections[0]!, ALL_GIT)).toBeNull();
   });
 });
 
@@ -806,6 +849,8 @@ describe('sectionAction', () => {
         pull: false,
         push: false,
         branches: false,
+        rebase: false,
+        resolve: false,
       }),
     ).toBeNull();
   });
@@ -871,6 +916,8 @@ const NO_SYNC: GitCapabilities = {
   pull: false,
   push: false,
   branches: false,
+  rebase: false,
+  resolve: false,
 };
 
 const job = (over: Partial<SessionGitJob> = {}): SessionGitJob => ({
@@ -1145,5 +1192,340 @@ describe('job copy', () => {
     expect(refusalCopy('job_not_found', null)).toBe(
       'Lost track of the job — refresh to see the result.',
     );
+  });
+});
+
+const gitItem = (over: Partial<GitItem> = {}): GitItem => ({
+  kind: 'branch_only',
+  branch: 'feature-a',
+  worktree_path: null,
+  ahead: 0,
+  behind: 0,
+  detached: false,
+  gone: false,
+  is_current: false,
+  locked: false,
+  locked_reason: null,
+  prunable: false,
+  upstream: null,
+  remote: null,
+  subject: null,
+  committed_at: null,
+  ...over,
+});
+
+const rebaseInfo = (over: Partial<SessionGitRebaseInfo> = {}): SessionGitRebaseInfo => ({
+  branch: 'topic',
+  onto_oid: '89abcdef0123456789abcdef0123456789abcdef',
+  onto_short_oid: '89abcde',
+  onto_ref: 'main',
+  stopped_on: { oid: 'fedcba98', short_oid: 'fedcba9', subject: 'Fix the login redirect' },
+  step: 2,
+  total: 5,
+  ...over,
+});
+
+const rebasing = (info: SessionGitRebaseInfo | null = rebaseInfo()): SessionGitRepoInfo =>
+  repo({
+    state: 'rebasing',
+    head: { oid: '89abcdef', short_oid: '89abcde', branch: null, detached: true, initial: false },
+    rebase: info,
+  });
+
+const rebaseResult = (over: Partial<SessionGitRebaseResult> = {}): SessionGitRebaseResult => ({
+  outcome: 'rebased',
+  rebase: null,
+  message: null,
+  ...over,
+});
+
+describe('rebaseTargets', () => {
+  it('lists local branches first, then remote ones labelled as such, each sent as a full ref', () => {
+    const items = [
+      gitItem({ kind: 'remote_branch', branch: 'origin/main', remote: 'origin' }),
+      gitItem({ kind: 'branch_with_worktree', branch: 'topic-b', worktree_path: '/wt/b' }),
+      gitItem({ kind: 'branch_only', branch: 'main' }),
+      gitItem({ kind: 'remote_branch', branch: 'origin/topic', remote: 'origin' }),
+    ];
+
+    expect(rebaseTargets(items, 'topic')).toEqual([
+      { value: 'refs/heads/topic-b', label: 'topic-b' },
+      { value: 'refs/heads/main', label: 'main' },
+      { value: 'refs/remotes/origin/main', label: 'origin/main (remote)' },
+      { value: 'refs/remotes/origin/topic', label: 'origin/topic (remote)' },
+    ]);
+  });
+
+  it("leaves out the session's own branch by name, not the project root's is_current row", () => {
+    // A linked-worktree session on `topic`: the root has `main` checked out.
+    const items = [
+      gitItem({ branch: 'main', is_current: true }),
+      gitItem({ kind: 'branch_with_worktree', branch: 'topic', worktree_path: '/wt/topic' }),
+    ];
+
+    expect(rebaseTargets(items, 'topic')).toEqual([{ value: 'refs/heads/main', label: 'main' }]);
+  });
+
+  it('skips orphan worktrees and rows without a branch, and keeps everything on a detached HEAD', () => {
+    const items = [
+      gitItem({ kind: 'orphan_worktree', branch: null, worktree_path: '/wt/x', detached: true }),
+      gitItem({ kind: 'branch_only', branch: null }),
+      gitItem({ kind: 'branch_only', branch: 'main' }),
+    ];
+
+    expect(rebaseTargets(items, null)).toEqual([{ value: 'refs/heads/main', label: 'main' }]);
+    expect(rebaseTargets([], 'main')).toEqual([]);
+  });
+});
+
+describe('shortRefName', () => {
+  it('drops a leading refs/heads/ or refs/remotes/, once', () => {
+    expect(shortRefName('refs/heads/main')).toBe('main');
+    expect(shortRefName('refs/heads/feature/login')).toBe('feature/login');
+    expect(shortRefName('refs/remotes/origin/main')).toBe('origin/main');
+    expect(shortRefName('refs/heads/refs/remotes/x')).toBe('refs/remotes/x');
+  });
+
+  it('leaves a typed ref, a tag or a prefix that is not leading as it is', () => {
+    expect(shortRefName('main')).toBe('main');
+    expect(shortRefName('origin/main')).toBe('origin/main');
+    expect(shortRefName('refs/tags/v1.2.0')).toBe('refs/tags/v1.2.0');
+    expect(shortRefName('topic/refs/heads/main')).toBe('topic/refs/heads/main');
+  });
+});
+
+describe('rebaseBlocker', () => {
+  const counts = (over: Partial<NonNullable<SessionGitStatus['counts']>> = {}) => ({
+    conflicts: 0,
+    staged: 0,
+    unstaged: 0,
+    untracked: 0,
+    total: 0,
+    ...over,
+  });
+
+  it('lets a clean branch with commits rebase, untracked files and all', () => {
+    expect(rebaseBlocker(status())).toBeNull();
+    expect(rebaseBlocker(status({ counts: counts({ untracked: 3, total: 3 }) }))).toBeNull();
+  });
+
+  it('names what is in the way, the repository first', () => {
+    expect(rebaseBlocker(undefined)).toBe('Repository unavailable.');
+    expect(rebaseBlocker(status({ repo: null, unavailable_reason: 'not_a_repo' }))).toBe(
+      'Repository unavailable.',
+    );
+    expect(rebaseBlocker(status({ repo: repo({ state: 'merging' }) }))).toBe(
+      'A rebase or merge is already in progress.',
+    );
+    expect(rebaseBlocker(status({ repo: rebasing() }))).toBe(
+      'A rebase or merge is already in progress.',
+    );
+    expect(
+      rebaseBlocker(
+        status({
+          repo: repo({ head: { oid: null, short_oid: null, branch: 'main', detached: false, initial: true } }),
+        }),
+      ),
+    ).toBe('This branch has no commits yet.');
+  });
+
+  it.each([
+    ['staged', counts({ staged: 1, total: 1 })],
+    ['unstaged', counts({ unstaged: 2, total: 2 })],
+    ['conflicts', counts({ conflicts: 1, total: 1 })],
+  ])('blocks on %s tracked changes', (_label, value) => {
+    expect(rebaseBlocker(status({ counts: value }))).toBe('Commit or discard your changes first.');
+  });
+});
+
+describe('rebaseBanner', () => {
+  it('is absent unless the repository is rebasing', () => {
+    expect(rebaseBanner(repo(), 0)).toBeNull();
+    expect(rebaseBanner(repo({ state: 'merging' }), 1)).toBeNull();
+    expect(rebaseBanner(null, 0)).toBeNull();
+    expect(rebaseBanner(undefined, 0)).toBeNull();
+  });
+
+  it('names the branch, the base, the stop and the step, with a hint for the conflicts left', () => {
+    expect(rebaseBanner(rebasing(), 1)).toEqual({
+      title: 'Rebasing topic onto main',
+      progress: 'Stopped at fedcba9 Fix the login redirect · 2/5',
+      hint: '1 conflict — fix the files, then Mark resolved.',
+      actionable: true,
+    });
+    expect(rebaseBanner(rebasing(), 3)?.hint).toBe('3 conflicts — fix the files, then Mark resolved.');
+    expect(rebaseBanner(rebasing(), 0)?.hint).toBe('No conflicts left — Continue when ready.');
+  });
+
+  it('falls back to the short oid for the base, then drops what the agent could not read', () => {
+    expect(rebaseBanner(rebasing(rebaseInfo({ onto_ref: null })), 0)?.title).toBe(
+      'Rebasing topic onto 89abcde',
+    );
+    expect(rebaseBanner(rebasing(rebaseInfo({ onto_ref: null, onto_short_oid: null })), 0)?.title).toBe(
+      'Rebasing topic',
+    );
+    expect(rebaseBanner(rebasing(rebaseInfo({ branch: null })), 0)?.title).toBe('Rebasing onto main');
+    expect(rebaseBanner(rebasing(rebaseInfo({ stopped_on: null })), 0)?.progress).toBe('2/5');
+    expect(rebaseBanner(rebasing(rebaseInfo({ step: null })), 0)?.progress).toBe(
+      'Stopped at fedcba9 Fix the login redirect',
+    );
+  });
+
+  it('sends a rebase with no details, as a git am session reports it, to the terminal whatever the conflicts', () => {
+    const toTerminal = {
+      title: 'Rebase in progress',
+      progress: null,
+      hint: 'Continue, skip or abort it in the terminal.',
+      actionable: false,
+    };
+    expect(rebaseBanner(rebasing(null), 0)).toEqual(toTerminal);
+    expect(rebaseBanner(rebasing(null), 2)).toEqual(toTerminal);
+  });
+
+  it('keeps the controls for a rebase whose details the agent could not read', () => {
+    expect(rebaseBanner(rebasing(rebaseInfo({ branch: null, onto_ref: null, onto_short_oid: null, stopped_on: null, step: null, total: null })), 2)).toEqual({
+      title: 'Rebase in progress',
+      progress: null,
+      hint: '2 conflicts — fix the files, then Mark resolved.',
+      actionable: true,
+    });
+  });
+});
+
+describe('rebaseStepPrompt', () => {
+  it('names the commit a skip leaves out of the branch being rebased', () => {
+    expect(rebaseStepPrompt('skip', rebasing())).toEqual({
+      title: 'Skip this commit?',
+      body: 'fedcba9 “Fix the login redirect” will be left out of topic.',
+      confirm: 'Skip commit',
+    });
+    expect(rebaseStepPrompt('skip', rebasing(rebaseInfo({ stopped_on: null }))).body).toBe(
+      'The commit the rebase stopped at will be left out of topic.',
+    );
+  });
+
+  it('warns that an abort discards the resolutions made so far', () => {
+    expect(rebaseStepPrompt('abort', rebasing())).toEqual({
+      title: 'Abort the rebase?',
+      body: 'topic goes back to where it was before the rebase. Conflict resolutions made so far are discarded.',
+      confirm: 'Abort rebase',
+    });
+  });
+
+  it("falls back to HEAD's branch, then to a generic name", () => {
+    expect(rebaseStepPrompt('abort', repo({ state: 'rebasing' })).body).toMatch(/^main goes back /);
+    expect(rebaseStepPrompt('abort', rebasing(null)).body).toMatch(/^the branch goes back /);
+    expect(rebaseStepPrompt('skip', undefined).body).toBe(
+      'The commit the rebase stopped at will be left out of the branch.',
+    );
+  });
+});
+
+describe('rebaseOutcomeNotice', () => {
+  it('reports a finished start with the branch and the picked base, a finished step without it', () => {
+    expect(rebaseOutcomeNotice(rebaseResult(), 'topic', 'main')).toEqual({
+      tone: 'ok',
+      text: 'Rebased topic onto main.',
+    });
+    expect(rebaseOutcomeNotice(rebaseResult(), 'topic', null)).toEqual({
+      tone: 'ok',
+      text: 'Rebase finished.',
+    });
+    expect(rebaseOutcomeNotice(rebaseResult({ outcome: 'up_to_date' }), 'topic', 'main')).toEqual({
+      tone: 'ok',
+      text: 'topic is already up to date with main.',
+    });
+    expect(rebaseOutcomeNotice(rebaseResult({ outcome: 'aborted' }), 'topic', null)).toEqual({
+      tone: 'ok',
+      text: 'Rebase aborted — topic is back where it started.',
+    });
+  });
+
+  it('names a base picked as a full ref by its short name', () => {
+    expect(rebaseOutcomeNotice(rebaseResult(), 'topic', 'refs/heads/main').text).toBe(
+      'Rebased topic onto main.',
+    );
+    expect(
+      rebaseOutcomeNotice(rebaseResult({ outcome: 'up_to_date' }), 'topic', 'refs/remotes/origin/main').text,
+    ).toBe('topic is already up to date with origin/main.');
+  });
+
+  it("reports a stop on the commit's subject, or git's own explanation when it was not a conflict", () => {
+    expect(
+      rebaseOutcomeNotice(rebaseResult({ outcome: 'stopped', rebase: rebaseInfo() }), 'topic', 'main'),
+    ).toEqual({
+      tone: 'danger',
+      text: 'Rebase stopped at “Fix the login redirect” — resolve the conflicts, then Continue.',
+    });
+    expect(
+      rebaseOutcomeNotice(
+        rebaseResult({
+          outcome: 'stopped',
+          rebase: rebaseInfo(),
+          message: 'error: The following untracked working tree files would be overwritten by merge:',
+        }),
+        'topic',
+        'main',
+      ),
+    ).toEqual({
+      tone: 'danger',
+      text: 'Rebase stopped: error: The following untracked working tree files would be overwritten by merge:',
+    });
+    expect(
+      rebaseOutcomeNotice(rebaseResult({ outcome: 'stopped', rebase: null, message: '' }), 'topic', null).text,
+    ).toBe('Rebase stopped — resolve the conflicts, then Continue.');
+  });
+
+  it('does not break on an outcome a newer agent may send', () => {
+    expect(rebaseOutcomeNotice(rebaseResult({ outcome: 'future_outcome' }), 'topic', null)).toEqual({
+      tone: 'ok',
+      text: 'Rebase: future_outcome',
+    });
+  });
+});
+
+describe('rebaseErrorCopy', () => {
+  it('reads the shared refusal codes the way a rebase means them', () => {
+    expect(rebaseErrorCopy(gitError('unknown_ref', 'nope'))).toBe(
+      '“nope” isn\'t a branch, tag or commit here.',
+    );
+    expect(rebaseErrorCopy(gitError('unknown_ref'))).toBe("That isn't a branch, tag or commit here.");
+    expect(rebaseErrorCopy(gitError('no_rebase', 'clean'))).toBe('No rebase is in progress anymore.');
+    expect(rebaseErrorCopy(gitError('dirty_worktree', 'keep.txt'))).toBe(
+      'Local changes are in the way — stage, commit or discard them first.',
+    );
+    expect(rebaseErrorCopy(gitError('operation_in_progress', 'merging'))).toBe(
+      'A rebase or merge is already in progress.',
+    );
+    expect(rebaseErrorCopy(gitError('no_head'))).toBe('This branch has no commits yet.');
+    expect(rebaseErrorCopy(gitError('hook_failed', 'nope'))).toBe('The pre-rebase hook refused the rebase.');
+    expect(rebaseErrorCopy(gitError('git_too_old'))).toBe(
+      'Rebasing needs git 2.26 or newer on the agent machine.',
+    );
+    expect(rebaseErrorCopy(gitError('git_timeout'))).toBe(
+      'The rebase took too long and was cut off — continue or abort it.',
+    );
+  });
+
+  it('falls back to the mutation copy for everything else', () => {
+    expect(rebaseErrorCopy(gitError('unmerged', 'unmerged paths in the index'))).toBe(
+      'Resolve the conflicts first.',
+    );
+    expect(rebaseErrorCopy(gitError('job_running', 'ab12'))).toBe(
+      'Another fetch, pull or push is still running.',
+    );
+    expect(rebaseErrorCopy(new TypeError('Failed to fetch'))).toBe(NETWORK_FAILURE_MESSAGE);
+  });
+
+  it("shows git's output only for the refusals it explains", () => {
+    expect(rebaseErrorOutput(gitError('dirty_worktree', 'unstaged changes to tracked files'))).toBe(
+      'unstaged changes to tracked files',
+    );
+    expect(rebaseErrorOutput(gitError('hook_failed', 'error: The pre-rebase hook refused to rebase.'))).toBe(
+      'error: The pre-rebase hook refused to rebase.',
+    );
+    expect(rebaseErrorOutput(gitError('hook_failed', ''))).toBeNull();
+    expect(rebaseErrorOutput(gitError('unknown_ref', 'nope'))).toBeNull();
+    expect(rebaseErrorOutput(new TypeError('Failed to fetch'))).toBeNull();
   });
 });

@@ -5,6 +5,7 @@ import {
   isSessionGitError,
   isSessionGitJobLost,
   type SessionGitCommitResult,
+  type SessionGitRebaseResult,
   type SessionGitSyncRequest,
 } from '../../../api/sessionGitRepository';
 import { Modal } from '../../../components/Modal';
@@ -13,6 +14,7 @@ import { NO_GIT_CAPABILITIES, hasGitSync } from '../../../protocol/dto/agentVers
 import { GitChangesList } from './GitChangesList';
 import { GitCommitDialog } from './GitCommitDialog';
 import { GitDiffPane } from './GitDiffPane';
+import { GitRebaseDialog } from './GitRebaseDialog';
 import { GitSyncDialog, SyncProgressBar } from './GitSyncDialog';
 import {
   DIFF_CONTEXT_DEFAULT,
@@ -25,8 +27,13 @@ import {
   jobTitle,
   mutationErrorCopy,
   pathsFor,
+  rebaseBanner,
+  rebaseErrorCopy,
+  rebaseOutcomeNotice,
+  rebaseStepPrompt,
   sectionsFor,
   type ChangesRow,
+  type RebasePromptStep,
   type RowAction,
 } from './sessionGitDisplay';
 import {
@@ -34,6 +41,7 @@ import {
   useSessionGitJob,
   useSessionGitLatestJob,
   useSessionGitMutations,
+  useSessionGitRebase,
   useSessionGitStatus,
   useSessionGitSync,
 } from './useSessionGit';
@@ -48,6 +56,10 @@ interface GitChangesPanelProps {
   commitRequest?: number;
   /** Bumped by the terminal menu's *Fetch / Pull / Push…*, the same way. */
   syncRequest?: number;
+  /** Bumped by the terminal menu's *Rebase…*, the same way. */
+  rebaseRequest?: number;
+  /** The session's project, whose branches the rebase sheet offers; null types the ref. */
+  projectName?: string | null;
   onClose: () => void;
 }
 
@@ -72,18 +84,22 @@ interface PanelNotice {
  * Mutation outcomes render in the panel's own notice strip: `.toast-viewport`
  * paints below the top layer, so a toast raised here would never be seen.
  * A fetch / pull / push job (#676) gets a second strip of the same kind while
- * it runs and until its result is dismissed.
+ * it runs and until its result is dismissed, and a rebase in progress a third,
+ * with Continue / Skip / Abort, for as long as the status says `rebasing`.
  */
 export function GitChangesPanel({
   agentId,
   sessionId,
   commitRequest = 0,
   syncRequest = 0,
+  rebaseRequest = 0,
+  projectName = null,
   onClose,
 }: GitChangesPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const cancelDiscardRef = useRef<HTMLButtonElement>(null);
+  const cancelRebaseStepRef = useRef<HTMLButtonElement>(null);
   const queryClient = useQueryClient();
   const [selection, setSelection] = useState<ChangesRow | null>(null);
   const [context, setContext] = useState(DIFF_CONTEXT_DEFAULT);
@@ -92,12 +108,15 @@ export function GitChangesPanel({
   const [discardRows, setDiscardRows] = useState<readonly ChangesRow[] | null>(null);
   const [commitOpen, setCommitOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
+  const [rebaseOpen, setRebaseOpen] = useState(false);
+  const [pendingRebaseStep, setPendingRebaseStep] = useState<RebasePromptStep | null>(null);
   const [notice, setNotice] = useState<PanelNotice | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const status = useSessionGitStatus(agentId, sessionId, true);
   const capabilities = useSessionGitCapabilities(agentId, true).data ?? NO_GIT_CAPABILITIES;
   const mutations = useSessionGitMutations(agentId, sessionId);
   const sync = useSessionGitSync(agentId, sessionId);
+  const rebase = useSessionGitRebase(agentId, sessionId);
 
   // The job this panel follows. Adopted from wherever it surfaces — this
   // panel's own start, a socket frame for a job another client started, or
@@ -118,7 +137,7 @@ export function GitChangesPanel({
   // is off limits (the agent answers `job_running`); the sync controls and
   // navigation are not. A job the agent has forgotten holds nothing.
   const jobRunning = !jobLost && job !== undefined && job.status !== 'done';
-  const busy = mutations.busy || sync.start.isPending || jobRunning;
+  const busy = mutations.busy || rebase.busy || sync.start.isPending || jobRunning;
 
   const dismissJob = (): void => {
     if (activeJobId !== null) setDismissedJobId(activeJobId);
@@ -142,6 +161,10 @@ export function GitChangesPanel({
     if (syncRequest > 0) setSyncOpen(true);
   }, [syncRequest]);
 
+  useEffect(() => {
+    if (rebaseRequest > 0) setRebaseOpen(true);
+  }, [rebaseRequest]);
+
   // A successful job clears its own banner; a failure stays until dismissed,
   // because its follow-ups live behind it.
   const jobDoneOk = job !== undefined && job.status === 'done' && job.ok === true;
@@ -160,14 +183,16 @@ export function GitChangesPanel({
   // After a commit the dialog's opener is the now-disabled Commit… button, so
   // the native close algorithm has nothing to hand focus back to and it would
   // fall to the body — taking Escape away from the panel. The sync sheet's
-  // opener can be disabled the same way. A passive effect, because the
+  // opener can be disabled the same way, and a rebase step's button vanishes
+  // with the banner once the rebase is over. A passive effect, because the
   // dialog closes from a layout-effect cleanup.
   const [focusCloseAfterDialog, setFocusCloseAfterDialog] = useState(false);
+  const dialogOpen = commitOpen || syncOpen || rebaseOpen || pendingRebaseStep !== null;
   useEffect(() => {
-    if (!focusCloseAfterDialog || commitOpen || syncOpen) return;
+    if (!focusCloseAfterDialog || dialogOpen) return;
     closeRef.current?.focus();
     setFocusCloseAfterDialog(false);
-  }, [focusCloseAfterDialog, commitOpen, syncOpen]);
+  }, [focusCloseAfterDialog, dialogOpen]);
 
   const invalidateDiffs = (): void => {
     void queryClient.invalidateQueries({
@@ -225,7 +250,7 @@ export function GitChangesPanel({
   // also tear the panel down; the dialogs handle their own Escape.
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key !== 'Escape') return;
-    if (commitOpen || syncOpen || discardRows !== null) return;
+    if (dialogOpen || discardRows !== null) return;
     event.preventDefault();
     onClose();
   };
@@ -333,7 +358,7 @@ export function GitChangesPanel({
 
   const onAction = (action: RowAction, rows: readonly ChangesRow[]): void => {
     if (rows.length === 0) return;
-    if (action === 'stage') void stage(rows);
+    if (action === 'stage' || action === 'resolve') void stage(rows);
     else if (action === 'unstage') void unstage(rows);
     else setDiscardRows(rows);
   };
@@ -344,7 +369,34 @@ export function GitChangesPanel({
     setNotice({ tone: 'ok', text: commitNotice(result) });
   };
 
+  // The branch name is read before the call: a finished rebase's status no
+  // longer carries the rebase, and HEAD is detached while it runs.
+  const rebasedBranch = (): string =>
+    body?.repo?.rebase?.branch ?? body?.repo?.head.branch ?? 'the branch';
+
+  const onRebased = (result: SessionGitRebaseResult, onto: string): void => {
+    setRebaseOpen(false);
+    setFocusCloseAfterDialog(true);
+    setNotice(rebaseOutcomeNotice(result, rebasedBranch(), onto));
+  };
+
+  const runRebaseStep = async (step: 'continue' | 'skip' | 'abort'): Promise<void> => {
+    setPendingRebaseStep(null);
+    setNotice(null);
+    const branch = rebasedBranch();
+    try {
+      setNotice(rebaseOutcomeNotice(await rebase.step.mutateAsync(step), branch, null));
+    } catch (error: unknown) {
+      setNotice({ tone: 'danger', text: rebaseErrorCopy(error) });
+    }
+    setFocusCloseAfterDialog(true);
+  };
+
   const stagedCount = body?.counts?.staged ?? 0;
+  const conflictCount = body?.counts?.conflicts ?? 0;
+  const banner = rebaseBanner(body?.repo, conflictCount);
+  const stepPrompt =
+    pendingRebaseStep === null ? null : rebaseStepPrompt(pendingRebaseStep, body?.repo);
   const prompt = discardRows === null ? null : discardPrompt(discardRows);
   const canSync = hasGitSync(capabilities);
   const jobTone = job === undefined || jobRunning ? 'busy' : job.ok === true ? 'ok' : 'danger';
@@ -458,6 +510,50 @@ export function GitChangesPanel({
           )}
         </div>
       )}
+      {banner !== null && (
+        <div className="git-panel-notice git-panel-rebase" data-tone="busy" role="status">
+          <span className="git-panel-job-body">
+            <strong>{banner.title}</strong>
+            {banner.progress !== null && <span className="git-rebase-progress">{banner.progress}</span>}
+            <span>{banner.hint}</span>
+          </span>
+          {capabilities.rebase && banner.actionable && (
+            <>
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={busy || conflictCount > 0}
+                title={conflictCount > 0 ? 'Mark every conflict resolved first' : 'Continue the rebase'}
+                onClick={() => {
+                  void runRebaseStep('continue');
+                }}
+              >
+                Continue
+              </button>
+              <button
+                type="button"
+                className="button"
+                disabled={busy}
+                onClick={() => {
+                  setPendingRebaseStep('skip');
+                }}
+              >
+                Skip…
+              </button>
+              <button
+                type="button"
+                className="button button-danger"
+                disabled={busy}
+                onClick={() => {
+                  setPendingRebaseStep('abort');
+                }}
+              >
+                Abort…
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {notice !== null && (
         <div
           className="git-panel-notice"
@@ -566,6 +662,56 @@ export function GitChangesPanel({
             setCommitOpen(false);
           }}
           onCommitted={onCommitted}
+        />
+      )}
+      {pendingRebaseStep !== null && stepPrompt !== null && (
+        <Modal
+          role="alertdialog"
+          labelledBy="git-rebase-step-title"
+          dismissible={!rebase.busy}
+          initialFocus={cancelRebaseStepRef}
+          onClose={() => {
+            setPendingRebaseStep(null);
+          }}
+        >
+          <h2 id="git-rebase-step-title">{stepPrompt.title}</h2>
+          <p>{stepPrompt.body}</p>
+          <div className="button-row">
+            <button
+              type="button"
+              className="button button-danger"
+              disabled={rebase.busy}
+              onClick={() => {
+                void runRebaseStep(pendingRebaseStep);
+              }}
+            >
+              {stepPrompt.confirm}
+            </button>
+            <button
+              type="button"
+              ref={cancelRebaseStepRef}
+              className="button"
+              disabled={rebase.busy}
+              onClick={() => {
+                setPendingRebaseStep(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      )}
+      {rebaseOpen && (
+        <GitRebaseDialog
+          agentId={agentId}
+          projectName={projectName}
+          status={body}
+          busy={rebase.start.isPending}
+          rebase={(onto) => rebase.start.mutateAsync(onto)}
+          onClose={() => {
+            setRebaseOpen(false);
+          }}
+          onDone={onRebased}
         />
       )}
       {syncOpen && (

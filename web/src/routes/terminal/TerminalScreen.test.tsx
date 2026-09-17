@@ -833,4 +833,51 @@ describe('TerminalScreen git changes', () => {
     expect(screen.getByRole('menuitem', { name: 'Commit…' })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'Fetch / Pull / Push…' })).toBeNull();
   });
+
+  it('offers Rebase… after Branches… only once the agent advertises capabilities.git.rebase', async () => {
+    agentVersion.capabilities = {
+      git: { changes: true, stage: true, discard: true, commit: true, branches: true, rebase: true },
+    };
+    await renderSynced(row({ cwd: '/srv/p1', project_name: 'p1' }));
+    await waitFor(() => {
+      expect(agentVersion.probes).toBe(1);
+    });
+    await flush();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'More options' }));
+
+    const labels = screen.getAllByRole('menuitem').map((item) => item.textContent);
+    expect(labels.slice(-2)).toEqual(['Branches…', 'Rebase…']);
+  });
+
+  it('keeps Rebase… off the menu of an agent that does not advertise it', async () => {
+    agentVersion.capabilities = {
+      git: { changes: true, stage: true, discard: true, commit: true, branches: true, resolve: true },
+    };
+    await renderSynced(row({ cwd: '/srv/p1', project_name: 'p1' }));
+    await waitFor(() => {
+      expect(agentVersion.probes).toBe(1);
+    });
+    await flush();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'More options' }));
+
+    expect(screen.getByRole('menuitem', { name: 'Branches…' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Rebase…' })).toBeNull();
+  });
+
+  it('opens the viewer with the rebase sheet already up from Rebase…', async () => {
+    agentVersion.capabilities = { git: { changes: true, stage: true, rebase: true } };
+    await renderSynced(row({ cwd: '/srv/p1' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'More options' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rebase…' }));
+
+    const panel = await screen.findByRole('dialog', { name: 'Git changes' });
+    const sheet = await screen.findByRole('dialog', { name: 'Rebase main' });
+    // No project on the row: the base is typed rather than picked.
+    expect(within(sheet).getByPlaceholderText('Branch, tag or commit')).toBeInTheDocument();
+    expect(await within(panel).findByText('app.py')).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem')).toBeNull();
+  });
 });

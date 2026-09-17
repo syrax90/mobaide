@@ -268,3 +268,86 @@ final class SessionGitErrorsJobRoutesTests: XCTestCase {
         )
     }
 }
+
+/// The rebase routes' refusals and the copy each resolves to — the same
+/// strings as Android and the web.
+final class SessionGitErrorsRebaseTests: XCTestCase {
+    private func git(_ code: String, _ message: String? = nil) -> SessionGitError {
+        .git(code: code, message: message)
+    }
+
+    func testTheRebaseRefusalsMapWithTheRefStateOrPathTheyName() {
+        XCTAssertEqual(
+            SessionGitError.map(APIError(code: 409, errorBody: #"{"detail":{"code":"unknown_ref","message":"mian"}}"#)) as? SessionGitError,
+            git(SessionGitError.codeUnknownRef, "mian")
+        )
+        XCTAssertEqual(
+            SessionGitError.map(APIError(code: 409, errorBody: #"{"detail":{"code":"conflict_markers","message":"src/login.py"}}"#)) as? SessionGitError,
+            git(SessionGitError.codeConflictMarkers, "src/login.py")
+        )
+        XCTAssertEqual(SessionGitError.codeNoRebase, "no_rebase")
+    }
+
+    func testRefusalCopyNamesTheFileThatStillHoldsConflictMarkers() {
+        XCTAssertEqual(
+            SessionGitCopy.refusal(SessionGitError.codeConflictMarkers, message: "src/login.py"),
+            "src/login.py still has conflict markers — finish resolving it first."
+        )
+        XCTAssertEqual(
+            SessionGitCopy.refusal(SessionGitError.codeConflictMarkers, message: nil),
+            "The file still has conflict markers — finish resolving it first."
+        )
+    }
+
+    func testRebaseMessageReadsTheSharedRefusalCodesTheWayARebaseMeansThem() {
+        XCTAssertEqual(SessionGitCopy.rebaseMessage(for: git(SessionGitError.codeUnknownRef, "nope")), "“nope” isn't a branch, tag or commit here.")
+        XCTAssertEqual(SessionGitCopy.rebaseMessage(for: git(SessionGitError.codeUnknownRef)), "That isn't a branch, tag or commit here.")
+        XCTAssertEqual(SessionGitCopy.rebaseMessage(for: git(SessionGitError.codeUnknownRef, "")), "That isn't a branch, tag or commit here.")
+        XCTAssertEqual(SessionGitCopy.rebaseMessage(for: git(SessionGitError.codeNoRebase, "clean")), "No rebase is in progress anymore.")
+        XCTAssertEqual(
+            SessionGitCopy.rebaseMessage(for: git(GitJobResponse.codeDirtyWorktree, "keep.txt")),
+            "Local changes are in the way — stage, commit or discard them first."
+        )
+        XCTAssertEqual(
+            SessionGitCopy.rebaseMessage(for: git(GitJobResponse.codeOperationInProgress, "merging")),
+            "A rebase or merge is already in progress."
+        )
+        XCTAssertEqual(SessionGitCopy.rebaseMessage(for: git(SessionGitError.codeNoHead)), "This branch has no commits yet.")
+        XCTAssertEqual(SessionGitCopy.rebaseMessage(for: git(SessionGitError.codeHookFailed, "nope")), "The pre-rebase hook refused the rebase.")
+        XCTAssertEqual(
+            SessionGitCopy.rebaseMessage(for: git(SessionGitError.codeGitTooOld)),
+            "Rebasing needs git 2.26 or newer on the agent machine."
+        )
+        XCTAssertEqual(
+            SessionGitCopy.rebaseMessage(for: git(SessionGitError.codeGitTimeout)),
+            "The rebase took too long and was cut off — continue or abort it."
+        )
+    }
+
+    func testRebaseMessageFallsBackToTheMutationCopyForEverythingElse() {
+        XCTAssertEqual(
+            SessionGitCopy.rebaseMessage(for: git(SessionGitError.codeUnmerged, "unmerged paths in the index")),
+            "Resolve the conflicts first."
+        )
+        XCTAssertEqual(SessionGitCopy.rebaseMessage(for: git(SessionGitError.codeJobRunning, "ab12")), "Another fetch, pull or push is still running.")
+        XCTAssertEqual(
+            SessionGitCopy.rebaseMessage(for: SessionGitError.network("x")),
+            "Could not reach the agent. Check the connection and try again."
+        )
+    }
+
+    func testRebaseOutputShowsGitsOutputOnlyForTheRefusalsItExplains() {
+        XCTAssertEqual(
+            SessionGitCopy.rebaseOutput(for: git(GitJobResponse.codeDirtyWorktree, "unstaged changes to tracked files")),
+            "unstaged changes to tracked files"
+        )
+        XCTAssertEqual(
+            SessionGitCopy.rebaseOutput(for: git(SessionGitError.codeHookFailed, "error: The pre-rebase hook refused to rebase.")),
+            "error: The pre-rebase hook refused to rebase."
+        )
+        XCTAssertNil(SessionGitCopy.rebaseOutput(for: git(SessionGitError.codeHookFailed, "")))
+        XCTAssertNil(SessionGitCopy.rebaseOutput(for: git(SessionGitError.codeHookFailed)))
+        XCTAssertNil(SessionGitCopy.rebaseOutput(for: git(SessionGitError.codeUnknownRef, "nope")))
+        XCTAssertNil(SessionGitCopy.rebaseOutput(for: SessionGitError.network("x")))
+    }
+}

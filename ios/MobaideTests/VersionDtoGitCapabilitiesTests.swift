@@ -105,3 +105,42 @@ final class VersionDtoGitSyncCapabilitiesTests: XCTestCase {
         XCTAssertTrue(probe.gitCapabilities.hasSync)
     }
 }
+
+/// `rebase` (the Rebase… entry and the banner's Continue / Skip / Abort) and
+/// `resolve` (Mark resolved on a conflict row), each read on its own.
+final class VersionDtoGitRebaseCapabilitiesTests: XCTestCase {
+    private func info(_ capabilities: JSONValue) -> VersionInfoResponse {
+        VersionInfoResponse(
+            name: "mobaide-agent",
+            server_version: "1.4.0",
+            protocol_versions: [7],
+            min_client_version: 1,
+            capabilities: capabilities
+        )
+    }
+
+    func testReadsRebaseAndResolveEachAsAnExplicitTrue() {
+        XCTAssertEqual(
+            info(["git": ["changes": true, "stage": true, "rebase": true, "resolve": "true"]]).gitCapabilities,
+            GitCapabilities(stage: true, rebase: true, resolve: false)
+        )
+        XCTAssertEqual(
+            info(["git": ["changes": true, "stage": true, "resolve": true]]).gitCapabilities,
+            GitCapabilities(stage: true, rebase: false, resolve: true)
+        )
+        XCTAssertFalse(GitCapabilities.none.rebase)
+        XCTAssertFalse(GitCapabilities.none.resolve)
+    }
+
+    func testADecodedProbeFromTheCurrentAgentReadsBoth() throws {
+        let wire = Data(#"""
+        {"name":"mobaide-agent","server_version":"1.4.0","protocol_versions":[7],"min_client_version":1,
+         "capabilities":{"git":{"changes":true,"stage":true,"discard":true,"commit":true,"fetch":true,"pull":true,"push":true,"branches":true,"rebase":true,"resolve":true}}}
+        """#.utf8)
+
+        let probe = try WireJSON.decoder().decode(VersionInfoResponse.self, from: wire)
+
+        XCTAssertTrue(probe.gitCapabilities.rebase)
+        XCTAssertTrue(probe.gitCapabilities.resolve)
+    }
+}

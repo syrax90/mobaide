@@ -638,3 +638,330 @@ final class GitChangesDisplaySyncTests: XCTestCase {
         XCTAssertEqual(GitChangesDisplay.jobLostCopy, "Lost track of the job — refresh to see the result.")
     }
 }
+
+/// The pure half of the rebase flow: the sheet's picker and blocker, the
+/// banner, the Skip / Abort confirmations, the outcome copy and Mark
+/// resolved — the same strings as Android and the web.
+final class GitChangesDisplayRebaseTests: XCTestCase {
+    private func status(_ name: String) throws -> GitStatusResponse {
+        try FixtureLoader.decodeCase(GitStatusResponse.self, path: "dto/agent/GitStatusResponse.json", name: name)
+    }
+
+    private let stopped = GitRebaseCommit(oid: "fedcba98", short_oid: "fedcba9", subject: "Fix the login redirect")
+
+    private func info(
+        branch: String? = "topic",
+        ontoRef: String? = "main",
+        ontoShortOid: String? = "89abcde",
+        stoppedOn: GitRebaseCommit?? = .none,
+        step: Int? = 2,
+        total: Int? = 5
+    ) -> GitRebaseInfo {
+        GitRebaseInfo(
+            branch: branch, onto_oid: "89abcdef0123", onto_short_oid: ontoShortOid, onto_ref: ontoRef,
+            stopped_on: stoppedOn ?? stopped, step: step, total: total
+        )
+    }
+
+    private func repo(
+        state: String = GitRepoInfo.stateClean,
+        head: GitHead = GitHead(oid: "abc1234def", short_oid: "abc1234", branch: "topic", detached: false, initial: false),
+        rebase: GitRebaseInfo? = nil
+    ) -> GitRepoInfo {
+        GitRepoInfo(
+            toplevel: "/repo", git_dir: "/repo/.git", common_dir: "/repo/.git", is_linked_worktree: false,
+            head: head, upstream: nil, state: state, rebase: rebase
+        )
+    }
+
+    private func rebasing(_ rebase: GitRebaseInfo?) -> GitRepoInfo {
+        repo(
+            state: GitRepoInfo.stateRebasing,
+            head: GitHead(oid: "89abcdef", short_oid: "89abcde", branch: nil, detached: true, initial: false),
+            rebase: rebase
+        )
+    }
+
+    private func counts(conflicts: Int = 0, staged: Int = 0, unstaged: Int = 0, untracked: Int = 0) -> GitStatusCounts {
+        GitStatusCounts(
+            conflicts: conflicts, staged: staged, unstaged: unstaged, untracked: untracked,
+            total: conflicts + staged + unstaged + untracked
+        )
+    }
+
+    private func status(repo: GitRepoInfo?, counts: GitStatusCounts?) -> GitStatusResponse {
+        GitStatusResponse(
+            session_id: "s1", cwd: "/repo", etag: "e", unchanged: false, unavailable_reason: nil,
+            repo: repo, entries: [], counts: counts, truncated: false, entry_limit: 5000
+        )
+    }
+
+    private func target(_ value: String, _ label: String) -> GitChangesDisplay.RebaseTarget {
+        GitChangesDisplay.RebaseTarget(value: value, label: label)
+    }
+
+    // MARK: - Sheet
+
+    func testRebaseTargetsListLocalBranchesFirstThenRemoteOnesLabelledAsSuchEachSentAsAFullRef() {
+        let items = [
+            GitItem(kind: GitItem.kindRemoteBranch, branch: "origin/main", remote: "origin"),
+            GitItem(kind: GitItem.kindBranchWithWorktree, branch: "topic-b", worktree_path: "/wt/b"),
+            GitItem(kind: GitItem.kindBranchOnly, branch: "main"),
+            GitItem(kind: GitItem.kindRemoteBranch, branch: "origin/topic", remote: "origin"),
+        ]
+
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseTargets(items, currentBranch: "topic"),
+            [
+                target("refs/heads/topic-b", "topic-b"),
+                target("refs/heads/main", "main"),
+                target("refs/remotes/origin/main", "origin/main (remote)"),
+                target("refs/remotes/origin/topic", "origin/topic (remote)"),
+            ]
+        )
+    }
+
+    func testRebaseTargetsLeaveOutTheSessionsOwnBranchByNameNotTheRootsCurrentRow() {
+        // A linked-worktree session on `topic`: the project root has `main` checked out.
+        let items = [
+            GitItem(kind: GitItem.kindBranchOnly, branch: "main", is_current: true),
+            GitItem(kind: GitItem.kindBranchWithWorktree, branch: "topic", worktree_path: "/wt/topic"),
+        ]
+
+        XCTAssertEqual(GitChangesDisplay.rebaseTargets(items, currentBranch: "topic"), [target("refs/heads/main", "main")])
+    }
+
+    func testRebaseTargetsSkipOrphanWorktreesAndBranchlessRowsAndKeepEverythingOnADetachedHead() {
+        let items = [
+            GitItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/wt/x", detached: true),
+            GitItem(kind: GitItem.kindBranchOnly),
+            GitItem(kind: GitItem.kindBranchOnly, branch: "main"),
+        ]
+
+        XCTAssertEqual(GitChangesDisplay.rebaseTargets(items, currentBranch: nil), [target("refs/heads/main", "main")])
+        XCTAssertEqual(GitChangesDisplay.rebaseTargets([], currentBranch: "main"), [])
+    }
+
+    func testShortRefNameDropsALeadingHeadsOrRemotesPrefixOnce() {
+        XCTAssertEqual(GitChangesDisplay.shortRefName("refs/heads/main"), "main")
+        XCTAssertEqual(GitChangesDisplay.shortRefName("refs/heads/feature/login"), "feature/login")
+        XCTAssertEqual(GitChangesDisplay.shortRefName("refs/remotes/origin/main"), "origin/main")
+        XCTAssertEqual(GitChangesDisplay.shortRefName("refs/heads/refs/remotes/x"), "refs/remotes/x")
+    }
+
+    func testShortRefNameLeavesATypedRefATagOrANonLeadingPrefixAsItIs() {
+        XCTAssertEqual(GitChangesDisplay.shortRefName("main"), "main")
+        XCTAssertEqual(GitChangesDisplay.shortRefName("origin/main"), "origin/main")
+        XCTAssertEqual(GitChangesDisplay.shortRefName("refs/tags/v1.2.0"), "refs/tags/v1.2.0")
+        XCTAssertEqual(GitChangesDisplay.shortRefName("topic/refs/heads/main"), "topic/refs/heads/main")
+    }
+
+    func testRebaseBlockerLetsACleanBranchWithCommitsRebaseUntrackedFilesAndAll() {
+        XCTAssertNil(GitChangesDisplay.rebaseBlocker(status(repo: repo(), counts: counts())))
+        XCTAssertNil(GitChangesDisplay.rebaseBlocker(status(repo: repo(), counts: counts(untracked: 3))))
+        XCTAssertNil(GitChangesDisplay.rebaseBlocker(status(repo: repo(), counts: nil)))
+    }
+
+    func testRebaseBlockerNamesWhatIsInTheWayTheRepositoryFirst() throws {
+        XCTAssertEqual(GitChangesDisplay.rebaseBlocker(nil), "Repository unavailable.")
+        XCTAssertEqual(GitChangesDisplay.rebaseBlocker(try status("not_a_repo")), "Repository unavailable.")
+        XCTAssertEqual(GitChangesDisplay.rebaseBlocker(try status("linked_worktree_full")), "A rebase or merge is already in progress.")
+        XCTAssertEqual(GitChangesDisplay.rebaseBlocker(try status("rebasing_stopped_on_conflict")), "A rebase or merge is already in progress.")
+        XCTAssertEqual(GitChangesDisplay.rebaseBlocker(try status("initial_repo_no_upstream")), "This branch has no commits yet.")
+        for tracked in [counts(staged: 1), counts(unstaged: 2), counts(conflicts: 1)] {
+            XCTAssertEqual(
+                GitChangesDisplay.rebaseBlocker(status(repo: repo(), counts: tracked)),
+                "Commit or discard your changes first."
+            )
+        }
+    }
+
+    // MARK: - Banner
+
+    func testRebaseBannerIsAbsentUnlessTheRepositoryIsRebasing() throws {
+        XCTAssertNil(GitChangesDisplay.rebaseBanner(repo(), conflicts: 0))
+        XCTAssertNil(GitChangesDisplay.rebaseBanner(try status("linked_worktree_full").repo, conflicts: 1))
+        XCTAssertNil(GitChangesDisplay.rebaseBanner(nil, conflicts: 0))
+    }
+
+    func testRebaseBannerFromTheStoppedFixtureNamesTheBranchBaseStopAndStep() throws {
+        let stoppedStatus = try status("rebasing_stopped_on_conflict")
+
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseBanner(stoppedStatus.repo, conflicts: stoppedStatus.counts?.conflicts ?? 0),
+            GitChangesDisplay.RebaseBanner(
+                title: "Rebasing topic onto origin/main",
+                progress: "Stopped at fedcba9 Fix the login redirect · 2/5",
+                hint: "1 conflict — fix the files, then Mark resolved.",
+                actionable: true
+            )
+        )
+        XCTAssertEqual(GitChangesDisplay.rebaseBanner(rebasing(info()), conflicts: 3)?.hint, "3 conflicts — fix the files, then Mark resolved.")
+        XCTAssertEqual(GitChangesDisplay.rebaseBanner(rebasing(info()), conflicts: 0)?.hint, "No conflicts left — Continue when ready.")
+    }
+
+    func testRebaseBannerFallsBackToTheShortOidThenDropsWhatTheAgentCouldNotRead() {
+        XCTAssertEqual(GitChangesDisplay.rebaseBanner(rebasing(info(ontoRef: nil)), conflicts: 0)?.title, "Rebasing topic onto 89abcde")
+        XCTAssertEqual(GitChangesDisplay.rebaseBanner(rebasing(info(ontoRef: nil, ontoShortOid: nil)), conflicts: 0)?.title, "Rebasing topic")
+        XCTAssertEqual(GitChangesDisplay.rebaseBanner(rebasing(info(branch: nil)), conflicts: 0)?.title, "Rebasing onto main")
+        XCTAssertEqual(GitChangesDisplay.rebaseBanner(rebasing(info(stoppedOn: .some(nil))), conflicts: 0)?.progress, "2/5")
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseBanner(rebasing(info(step: nil)), conflicts: 0)?.progress,
+            "Stopped at fedcba9 Fix the login redirect"
+        )
+    }
+
+    func testRebaseBannerWithNoDetailsAsAGitAmSessionReportsItPointsToTheTerminalWhateverTheConflicts() throws {
+        let toTerminal = GitChangesDisplay.RebaseBanner(
+            title: "Rebase in progress", progress: nil, hint: "Continue, skip or abort it in the terminal.", actionable: false
+        )
+
+        // `upstream_gone` is an older agent's rebasing body: no `rebase` key at all.
+        XCTAssertEqual(GitChangesDisplay.rebaseBanner(try status("upstream_gone").repo, conflicts: 0), toTerminal)
+        XCTAssertEqual(GitChangesDisplay.rebaseBanner(rebasing(nil), conflicts: 2), toTerminal)
+    }
+
+    func testRebaseBannerKeepsTheControlsForARebaseWhoseDetailsTheAgentCouldNotRead() {
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseBanner(rebasing(GitRebaseInfo()), conflicts: 2),
+            GitChangesDisplay.RebaseBanner(
+                title: "Rebase in progress", progress: nil, hint: "2 conflicts — fix the files, then Mark resolved.", actionable: true
+            )
+        )
+    }
+
+    // MARK: - Confirmations
+
+    func testRebaseStepPromptSkipNamesTheCommitAbortWarnsTheResolutionsGo() {
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseStepPrompt(.skip, repo: rebasing(info())),
+            RebasePrompt(step: .skip, title: "Skip this commit?", body: "fedcba9 “Fix the login redirect” will be left out of topic.", confirm: "Skip commit")
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseStepPrompt(.skip, repo: rebasing(info(stoppedOn: .some(nil)))).body,
+            "The commit the rebase stopped at will be left out of topic."
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseStepPrompt(.abort, repo: rebasing(info())),
+            RebasePrompt(
+                step: .abort,
+                title: "Abort the rebase?",
+                body: "topic goes back to where it was before the rebase. Conflict resolutions made so far are discarded.",
+                confirm: "Abort rebase"
+            )
+        )
+    }
+
+    func testRebasedBranchIsTheRebasedOneThenHeadsThenAGenericName() throws {
+        XCTAssertEqual(GitChangesDisplay.rebasedBranch(rebasing(info())), "topic")
+        XCTAssertEqual(GitChangesDisplay.rebasedBranch(try status("upstream_gone").repo), "topic")
+        XCTAssertEqual(GitChangesDisplay.rebasedBranch(rebasing(nil)), "the branch")
+        XCTAssertEqual(GitChangesDisplay.rebasedBranch(nil), "the branch")
+    }
+
+    // MARK: - Outcome copy
+
+    func testRebaseOutcomeNoticeReportsAFinishedStartWithTheBaseAFinishedStepWithoutIt() {
+        let rebased = GitRebaseResponse(outcome: GitRebaseResponse.outcomeRebased, rebase: nil, message: nil)
+
+        XCTAssertEqual(GitChangesDisplay.rebaseOutcomeNotice(rebased, branch: "topic", onto: "main"), "Rebased topic onto main.")
+        XCTAssertEqual(GitChangesDisplay.rebaseOutcomeNotice(rebased, branch: "topic", onto: nil), "Rebase finished.")
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseOutcomeNotice(
+                GitRebaseResponse(outcome: GitRebaseResponse.outcomeUpToDate, rebase: nil, message: nil), branch: "topic", onto: "main"
+            ),
+            "topic is already up to date with main."
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseOutcomeNotice(
+                GitRebaseResponse(outcome: GitRebaseResponse.outcomeAborted, rebase: nil, message: nil), branch: "topic", onto: nil
+            ),
+            "Rebase aborted — topic is back where it started."
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseOutcomeNotice(GitRebaseResponse(outcome: "future_outcome", rebase: nil, message: nil), branch: "topic", onto: nil),
+            "Rebase: future_outcome"
+        )
+    }
+
+    func testRebaseOutcomeNoticeNamesABasePickedAsAFullRefByItsShortName() {
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseOutcomeNotice(
+                GitRebaseResponse(outcome: GitRebaseResponse.outcomeRebased, rebase: nil, message: nil), branch: "topic", onto: "refs/heads/main"
+            ),
+            "Rebased topic onto main."
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseOutcomeNotice(
+                GitRebaseResponse(outcome: GitRebaseResponse.outcomeUpToDate, rebase: nil, message: nil),
+                branch: "topic",
+                onto: "refs/remotes/origin/main"
+            ),
+            "topic is already up to date with origin/main."
+        )
+    }
+
+    func testRebaseOutcomeToastReportsAStopAsDangerOnItsSubjectOrGitsExplanation() throws {
+        let conflict = try FixtureLoader.decodeCase(GitRebaseResponse.self, path: "dto/agent/GitRebaseResponse.json", name: "stopped_on_conflict")
+        let untracked = try FixtureLoader.decodeCase(
+            GitRebaseResponse.self, path: "dto/agent/GitRebaseResponse.json", name: "stopped_detached_without_details"
+        )
+        let bare = GitRebaseResponse(outcome: GitRebaseResponse.outcomeStopped, rebase: nil, message: "")
+
+        let conflictToast = GitChangesDisplay.rebaseOutcomeToast(conflict, branch: "topic", onto: "main")
+        XCTAssertEqual(conflictToast.text, "Rebase stopped at “Fix the login redirect” — resolve the conflicts, then Continue.")
+        XCTAssertEqual(conflictToast.tone, .danger)
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseOutcomeToast(untracked, branch: "topic", onto: "main").text,
+            "Rebase stopped: error: The following untracked working tree files would be overwritten by merge:"
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseOutcomeToast(bare, branch: "topic", onto: nil).text,
+            "Rebase stopped — resolve the conflicts, then Continue."
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseOutcomeToast(
+                GitRebaseResponse(outcome: GitRebaseResponse.outcomeRebased, rebase: nil, message: nil), branch: "topic", onto: nil
+            ).tone,
+            .ok
+        )
+    }
+
+    // MARK: - Mark resolved
+
+    private func conflict(_ path: String) -> GitStatusEntry {
+        GitStatusEntry(
+            group: GitStatusEntry.groupConflicts, path: path, orig_path: nil, code: "UU",
+            index_status: "U", worktree_status: "U", rename_score: nil, submodule: false
+        )
+    }
+
+    func testRowActionsMarkAConflictResolvedOnlyOnAnAgentThatStagesAndGuardsTheMarkers() {
+        let resolving = GitCapabilities(stage: true, discard: true, commit: true, resolve: true)
+        let modified = GitStatusEntry(
+            group: GitStatusEntry.groupUnstaged, path: "m.py", orig_path: nil, code: "M",
+            index_status: ".", worktree_status: "M", rename_score: nil, submodule: false
+        )
+
+        XCTAssertEqual(GitChangesDisplay.rowActions(conflict("c.py"), capabilities: resolving), GitChangesDisplay.RowActions(resolve: true))
+        XCTAssertEqual(GitChangesDisplay.rowActions(conflict("c.py"), capabilities: GitCapabilities(stage: false, resolve: true)), .none)
+        XCTAssertEqual(GitChangesDisplay.rowActions(conflict("c.py"), capabilities: GitCapabilities(stage: true)), .none)
+        XCTAssertFalse(GitChangesDisplay.rowActions(modified, capabilities: resolving).resolve)
+        XCTAssertFalse(GitChangesDisplay.RowActions(resolve: true).any, "Mark resolved is per row, never a selection action")
+    }
+
+    func testConflictsStayOutOfTheSelectionSubsetsEvenWhenTheyCanBeMarkedResolved() {
+        let resolving = GitCapabilities(stage: true, discard: true, commit: true, resolve: true)
+        let sections = GitChangesDisplay.sections(for: GitStatusResponse(
+            session_id: "s1", cwd: "/repo", etag: "e", unchanged: false, unavailable_reason: nil, repo: nil,
+            entries: [conflict("a.py"), conflict("b.py")], counts: nil, truncated: false, entry_limit: 5000
+        ))
+        let everything = Set(sections.flatMap(\.rows).map(\.id))
+
+        let subsets = GitChangesDisplay.selectionSubsets(sections, selection: everything, capabilities: resolving)
+
+        XCTAssertEqual(subsets.stage, [])
+        XCTAssertEqual(subsets.unstage, [])
+        XCTAssertEqual(subsets.discard, [])
+    }
+}

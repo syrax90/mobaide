@@ -341,7 +341,8 @@ range is rejected up front.
     },
     "git": {
       "changes": true, "stage": true, "discard": true, "commit": true,
-      "fetch": true, "pull": true, "push": true, "branches": true
+      "fetch": true, "pull": true, "push": true, "branches": true,
+      "rebase": true, "resolve": true
     }
   },
   "latest_agent_version": "0.1.0"
@@ -362,6 +363,15 @@ screen's Sync button exist on any of the three, each row on its own key.
 branch create/checkout routes and the `?remote=true` remote-tracking rows;
 clients gate the Git screen's *New branch* and *Check out* actions and the
 terminal menu's *Branches…* entry on it.
+`capabilities.git.rebase` — additive too — advertises the four session-scoped
+`.../git/rebase[/continue|skip|abort]` routes and `repo.rebase` on status;
+clients gate the terminal menu's *Rebase…* entry on it, and the Changes
+screen's Continue / Skip / Abort on it together with a non-null `repo.rebase`
+(a `rebasing` state without one — a `git am` session — gets a banner pointing
+to the terminal instead). `capabilities.git.resolve` certifies that
+`stage` refuses an unmerged path still holding conflict markers, which is
+what makes a conflict row's *Mark resolved* action (gated on `resolve` and
+`stage` together) safe to offer.
 `capabilities.cli` carries one `{ "available": <bool> }` entry per managed CLI
 the agent registers — additive, no `protocol_version` bump — and the Android
 mode-select screen disables a per-CLI button when its binary is absent. The

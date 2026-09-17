@@ -1,0 +1,17 @@
+{
+  "type": "GitRebaseRequest",
+  "cases": [
+    {
+      "name": "local_branch",
+      "wire": {
+        "onto": "main"
+      }
+    },
+    {
+      "name": "remote_tracking_branch",
+      "wire": {
+        "onto": "origin/main"
+      }
+    }
+  ]
+}

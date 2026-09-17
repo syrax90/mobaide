@@ -6,6 +6,13 @@
  */
 import { isApiError } from '../../../api/errors';
 import {
+  KIND_BRANCH_ONLY,
+  KIND_BRANCH_WITH_WORKTREE,
+  KIND_REMOTE_BRANCH,
+  type GitItem,
+} from '../../../api/gitRepository';
+import {
+  GIT_CODE_CONFLICT_MARKERS,
   GIT_CODE_EMPTY_MESSAGE,
   GIT_CODE_ERROR,
   GIT_CODE_HOOK_FAILED,
@@ -14,11 +21,13 @@ import {
   GIT_CODE_JOB_NOT_FOUND,
   GIT_CODE_JOB_RUNNING,
   GIT_CODE_NO_HEAD,
+  GIT_CODE_NO_REBASE,
   GIT_CODE_NOTHING_TO_COMMIT,
   GIT_CODE_PATHSPEC_MISMATCH,
   GIT_CODE_TIMEOUT,
   GIT_CODE_TOO_OLD,
   GIT_CODE_UNAVAILABLE,
+  GIT_CODE_UNKNOWN_REF,
   GIT_CODE_UNMERGED,
   GIT_JOB_CODE_AUTH_REQUIRED,
   GIT_JOB_CODE_CANCELLED,
@@ -32,6 +41,10 @@ import {
   GIT_JOB_CODE_OPERATION_IN_PROGRESS,
   GIT_JOB_CODE_REJECTED,
   GIT_JOB_CODE_REMOTE_NOT_FOUND,
+  GIT_REBASE_ABORTED,
+  GIT_REBASE_REBASED,
+  GIT_REBASE_STOPPED,
+  GIT_REBASE_UP_TO_DATE,
   isSessionGitError,
   type SessionGitCommitHead,
   type SessionGitCommitResult,
@@ -42,6 +55,7 @@ import {
   type SessionGitHunk,
   type SessionGitJob,
   type SessionGitJobOp,
+  type SessionGitRebaseResult,
   type SessionGitRepoInfo,
   type SessionGitStatus,
   type SessionGitSyncRequest,
@@ -432,6 +446,8 @@ export function refusalCopy(code: string, detailMessage: string | null): string 
       return 'Another fetch, pull or push is still running.';
     case GIT_CODE_JOB_NOT_FOUND:
       return JOB_LOST_COPY;
+    case GIT_CODE_CONFLICT_MARKERS:
+      return `${detailMessage ?? 'The file'} still has conflict markers — finish resolving it first.`;
     default:
       return detailMessage === null
         ? `git refused the request (${code}).`
@@ -457,21 +473,23 @@ export const IDENTITY_FIX_COMMANDS: readonly string[] = [
   'git config --global user.email "you@example.com"',
 ];
 
-export type RowAction = 'stage' | 'unstage' | 'discard';
+export type RowAction = 'stage' | 'unstage' | 'discard' | 'resolve';
 
 export interface RowActions {
   stage: boolean;
   unstage: boolean;
   discard: boolean;
+  /** Stage a conflicted file once it is fixed; the agent refuses one that still holds markers. */
+  resolve: boolean;
 }
 
-const NO_ACTIONS: RowActions = { stage: false, unstage: false, discard: false };
+const NO_ACTIONS: RowActions = { stage: false, unstage: false, discard: false, resolve: false };
 
 /**
  * What a row can do: a staged entry is unstaged, a modified or untracked one
- * is staged or discarded, a conflict is resolved in the terminal (marking it
- * resolved from a phone would stage the markers). Each gated on its
- * capability, so an older agent shows no control that would 404.
+ * is staged or discarded, a conflict is marked resolved once fixed — only on
+ * an agent that refuses to stage leftover markers (`resolve`). Each gated on
+ * its capability, so an older agent shows no control that would 404.
  */
 export function rowActions(entry: SessionGitEntry, capabilities: GitCapabilities): RowActions {
   switch (entry.group) {
@@ -480,6 +498,8 @@ export function rowActions(entry: SessionGitEntry, capabilities: GitCapabilities
     case 'unstaged':
     case 'untracked':
       return { ...NO_ACTIONS, stage: capabilities.stage, discard: capabilities.discard };
+    case 'conflicts':
+      return { ...NO_ACTIONS, resolve: capabilities.stage && capabilities.resolve };
     default:
       return NO_ACTIONS;
   }
@@ -826,4 +846,207 @@ export function followUpPrompt(
     body: `Overwrites ${ref} with your branch. Proceeds only if the remote hasn't moved since your last fetch.`,
     confirm: 'Force push',
   };
+}
+
+export interface RebaseTarget {
+  value: string;
+  label: string;
+}
+
+/**
+ * The rebase sheet's picker: local branches, then remote-tracking ones, from
+ * the project Git screen's rows. The session's own branch is left out by name
+ * — the rows' `is_current` is the project root's checkout, which for a session
+ * in a linked worktree is usually the very branch it wants to rebase onto.
+ */
+export function rebaseTargets(
+  items: readonly GitItem[],
+  currentBranch: string | null | undefined,
+): RebaseTarget[] {
+  const usable = (item: GitItem): item is GitItem & { branch: string } =>
+    item.branch !== null && item.branch !== undefined && item.branch !== currentBranch;
+  const local = items
+    .filter((item) => item.kind === KIND_BRANCH_ONLY || item.kind === KIND_BRANCH_WITH_WORKTREE)
+    .filter(usable)
+    .map((item) => ({ value: `refs/heads/${item.branch}`, label: item.branch }));
+  const remote = items
+    .filter((item) => item.kind === KIND_REMOTE_BRANCH)
+    .filter(usable)
+    .map((item) => ({ value: `refs/remotes/${item.branch}`, label: `${item.branch} (remote)` }));
+  return [...local, ...remote];
+}
+
+/**
+ * A picked target's name for copy: the picker sends fully qualified refs so a
+ * tag of the same name cannot shadow the branch, but a notice reads the short one.
+ */
+export function shortRefName(ref: string): string {
+  if (ref.startsWith('refs/heads/')) return ref.slice('refs/heads/'.length);
+  if (ref.startsWith('refs/remotes/')) return ref.slice('refs/remotes/'.length);
+  return ref;
+}
+
+/**
+ * Why a rebase cannot start from this status, or null. Untracked files do not
+ * block: git refuses only the ones a pick would overwrite.
+ */
+export function rebaseBlocker(status: SessionGitStatus | undefined): string | null {
+  const repo = status?.repo;
+  if (repo === undefined || repo === null) return 'Repository unavailable.';
+  if (repo.state !== 'clean') return 'A rebase or merge is already in progress.';
+  if (repo.head.initial) return 'This branch has no commits yet.';
+  const counts = status?.counts;
+  if (counts !== undefined && counts !== null && counts.conflicts + counts.staged + counts.unstaged > 0) {
+    return 'Commit or discard your changes first.';
+  }
+  return null;
+}
+
+/** The branch a rebase acts on, for copy: the one being rebased, else HEAD's. */
+function rebasedBranch(repo: SessionGitRepoInfo | null | undefined): string {
+  return repo?.rebase?.branch ?? repo?.head.branch ?? 'the branch';
+}
+
+export interface RebaseBanner {
+  title: string;
+  /** Where it stopped and how far along, when the agent could read it. */
+  progress: string | null;
+  hint: string;
+  /**
+   * Whether Continue / Skip / Abort can act on it: `repo.rebase` is null for a
+   * `git am` session (which reports `rebasing` too, and refuses all three) and
+   * from an agent that predates the rebase routes.
+   */
+  actionable: boolean;
+}
+
+/** The Changes screen's banner while the repository is rebasing. */
+export function rebaseBanner(
+  repo: SessionGitRepoInfo | null | undefined,
+  conflicts: number,
+): RebaseBanner | null {
+  if (repo === null || repo === undefined || repo.state !== 'rebasing') return null;
+  const info = repo.rebase ?? null;
+  const branch = info?.branch ?? null;
+  const onto = info?.onto_ref ?? info?.onto_short_oid ?? null;
+  const title =
+    branch !== null && onto !== null
+      ? `Rebasing ${branch} onto ${onto}`
+      : branch !== null
+        ? `Rebasing ${branch}`
+        : onto !== null
+          ? `Rebasing onto ${onto}`
+          : 'Rebase in progress';
+  const parts: string[] = [];
+  const stopped = info?.stopped_on ?? null;
+  if (stopped !== null) parts.push(`Stopped at ${stopped.short_oid} ${stopped.subject}`);
+  const step = info?.step ?? null;
+  const total = info?.total ?? null;
+  if (step !== null && total !== null) parts.push(`${String(step)}/${String(total)}`);
+  const actionable = info !== null;
+  const hint = !actionable
+    ? 'Continue, skip or abort it in the terminal.'
+    : conflicts > 0
+      ? `${String(conflicts)} ${conflicts === 1 ? 'conflict' : 'conflicts'} — fix the files, then Mark resolved.`
+      : 'No conflicts left — Continue when ready.';
+  return { title, progress: parts.length === 0 ? null : parts.join(' · '), hint, actionable };
+}
+
+export type RebasePromptStep = 'skip' | 'abort';
+
+export function rebaseStepPrompt(
+  step: RebasePromptStep,
+  repo: SessionGitRepoInfo | null | undefined,
+): { title: string; body: string; confirm: string } {
+  const branch = rebasedBranch(repo);
+  if (step === 'skip') {
+    const stopped = repo?.rebase?.stopped_on ?? null;
+    const commit = stopped === null ? 'The commit the rebase stopped at' : `${stopped.short_oid} “${stopped.subject}”`;
+    return {
+      title: 'Skip this commit?',
+      body: `${commit} will be left out of ${branch}.`,
+      confirm: 'Skip commit',
+    };
+  }
+  return {
+    title: 'Abort the rebase?',
+    body: `${branch} goes back to where it was before the rebase. Conflict resolutions made so far are discarded.`,
+    confirm: 'Abort rebase',
+  };
+}
+
+/**
+ * The notice a finished rebase call leaves. `onto` is what the user picked,
+ * known only for a start; Continue and Skip finish without it.
+ */
+export function rebaseOutcomeNotice(
+  result: SessionGitRebaseResult,
+  branch: string,
+  onto: string | null,
+): { tone: 'ok' | 'danger'; text: string } {
+  const ontoName = onto === null ? null : shortRefName(onto);
+  switch (result.outcome) {
+    case GIT_REBASE_REBASED:
+      return {
+        tone: 'ok',
+        text: ontoName === null ? 'Rebase finished.' : `Rebased ${branch} onto ${ontoName}.`,
+      };
+    case GIT_REBASE_UP_TO_DATE:
+      return { tone: 'ok', text: `${branch} is already up to date with ${ontoName ?? 'that branch'}.` };
+    case GIT_REBASE_ABORTED:
+      return { tone: 'ok', text: `Rebase aborted — ${branch} is back where it started.` };
+    case GIT_REBASE_STOPPED: {
+      const message = result.message ?? null;
+      if (message !== null && message !== '') return { tone: 'danger', text: `Rebase stopped: ${message}` };
+      const subject = result.rebase?.stopped_on?.subject ?? null;
+      return {
+        tone: 'danger',
+        text:
+          subject === null
+            ? 'Rebase stopped — resolve the conflicts, then Continue.'
+            : `Rebase stopped at “${subject}” — resolve the conflicts, then Continue.`,
+      };
+    }
+    default:
+      return { tone: 'ok', text: `Rebase: ${result.outcome}` };
+  }
+}
+
+/**
+ * Copy for a failed rebase call: the rebase-specific readings of the shared
+ * refusal codes, then the mutations' copy.
+ */
+export function rebaseErrorCopy(error: unknown): string {
+  if (isSessionGitError(error) && error.kind === 'git') {
+    switch (error.code) {
+      case GIT_CODE_UNKNOWN_REF:
+        return error.detailMessage === null || error.detailMessage === ''
+          ? "That isn't a branch, tag or commit here."
+          : `“${error.detailMessage}” isn't a branch, tag or commit here.`;
+      case GIT_CODE_NO_REBASE:
+        return 'No rebase is in progress anymore.';
+      case GIT_JOB_CODE_DIRTY_WORKTREE:
+        return 'Local changes are in the way — stage, commit or discard them first.';
+      case GIT_JOB_CODE_OPERATION_IN_PROGRESS:
+        return 'A rebase or merge is already in progress.';
+      case GIT_CODE_NO_HEAD:
+        return 'This branch has no commits yet.';
+      case GIT_CODE_HOOK_FAILED:
+        return 'The pre-rebase hook refused the rebase.';
+      case GIT_CODE_TOO_OLD:
+        return 'Rebasing needs git 2.26 or newer on the agent machine.';
+      case GIT_CODE_TIMEOUT:
+        return 'The rebase took too long and was cut off — continue or abort it.';
+      default:
+        break;
+    }
+  }
+  return mutationErrorCopy(error);
+}
+
+/** git's own output worth showing under the copy: which files, or what the hook said. */
+export function rebaseErrorOutput(error: unknown): string | null {
+  if (!isSessionGitError(error) || error.kind !== 'git') return null;
+  if (error.code !== GIT_JOB_CODE_DIRTY_WORKTREE && error.code !== GIT_CODE_HOOK_FAILED) return null;
+  return error.detailMessage === null || error.detailMessage === '' ? null : error.detailMessage;
 }

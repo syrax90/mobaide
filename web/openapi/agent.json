@@ -1587,6 +1587,161 @@
         "title": "GitPushRequest",
         "type": "object"
       },
+      "GitRebaseCommit": {
+        "properties": {
+          "oid": {
+            "title": "Oid",
+            "type": "string"
+          },
+          "short_oid": {
+            "title": "Short Oid",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "oid",
+          "short_oid",
+          "subject"
+        ],
+        "title": "GitRebaseCommit",
+        "type": "object"
+      },
+      "GitRebaseInfo": {
+        "description": "The rebase in progress, read from git's state directory: ``branch`` is\nnull for a detached HEAD, ``onto_ref`` is a branch pointing at the base\n(local first) or null, ``stopped_on`` is the commit git stopped at, and\n``step``/``total`` count the todo list. Any key can be null \u2014 a rebase\ngit was killed in need not have written every file.",
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch"
+          },
+          "onto_oid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Onto Oid"
+          },
+          "onto_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Onto Ref"
+          },
+          "onto_short_oid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Onto Short Oid"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "stopped_on": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitRebaseCommit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          }
+        },
+        "title": "GitRebaseInfo",
+        "type": "object"
+      },
+      "GitRebaseRequest": {
+        "properties": {
+          "onto": {
+            "minLength": 1,
+            "title": "Onto",
+            "type": "string"
+          }
+        },
+        "required": [
+          "onto"
+        ],
+        "title": "GitRebaseRequest",
+        "type": "object"
+      },
+      "GitRebaseResponse": {
+        "description": "Outcome of a rebase route. ``outcome`` is an open vocabulary:\n``rebased`` | ``up_to_date`` | ``stopped`` | ``aborted``. ``rebase`` is set\nonly when ``stopped``; ``message`` is git's explanation of a stop that is\nnot a conflict (an untracked file in the way, an ``edit`` stop).",
+        "properties": {
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "rebase": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitRebaseInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "GitRebaseResponse",
+        "type": "object"
+      },
       "GitRepoInfo": {
         "properties": {
           "common_dir": {
@@ -1604,6 +1759,16 @@
             "default": false,
             "title": "Is Linked Worktree",
             "type": "boolean"
+          },
+          "rebase": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitRebaseInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "state": {
             "default": "clean",
@@ -3990,6 +4155,184 @@
           }
         },
         "summary": "Session Git Push",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/rebase": {
+      "post": {
+        "operationId": "session_git_rebase_api_sessions__session_id__git_rebase_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitRebaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRebaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Rebase",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/rebase/abort": {
+      "post": {
+        "operationId": "session_git_rebase_abort_api_sessions__session_id__git_rebase_abort_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRebaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Rebase Abort",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/rebase/continue": {
+      "post": {
+        "operationId": "session_git_rebase_continue_api_sessions__session_id__git_rebase_continue_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRebaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Rebase Continue",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/rebase/skip": {
+      "post": {
+        "operationId": "session_git_rebase_skip_api_sessions__session_id__git_rebase_skip_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRebaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Rebase Skip",
         "tags": [
           "git"
         ]

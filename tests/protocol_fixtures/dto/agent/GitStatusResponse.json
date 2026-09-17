@@ -26,7 +26,8 @@
             "ahead": 2,
             "behind": 0
           },
-          "state": "merging"
+          "state": "merging",
+          "rebase": null
         },
         "entries": [
           {
@@ -208,7 +209,8 @@
             "initial": false
           },
           "upstream": null,
-          "state": "clean"
+          "state": "clean",
+          "rebase": null
         },
         "entries": [],
         "counts": {
@@ -272,7 +274,8 @@
             "initial": true
           },
           "upstream": null,
-          "state": "clean"
+          "state": "clean",
+          "rebase": null
         },
         "entries": [
           {
@@ -359,7 +362,8 @@
             "ahead": null,
             "behind": null
           },
-          "state": "rebasing"
+          "state": "rebasing",
+          "rebase": null
         },
         "entries": [
           {
@@ -419,6 +423,116 @@
           "conflicts": 0,
           "staged": 0,
           "unstaged": 1,
+          "untracked": 0,
+          "total": 1
+        },
+        "truncated": false,
+        "entry_limit": 5000
+      }
+    },
+    {
+      "name": "rebasing_stopped_on_conflict",
+      "wire": {
+        "session_id": "s7",
+        "cwd": "/home/user/proj/.worktrees/topic",
+        "etag": "d4e5f60718293a4b5c6d7e8f90123456789abc01",
+        "unchanged": false,
+        "unavailable_reason": null,
+        "repo": {
+          "toplevel": "/home/user/proj/.worktrees/topic",
+          "git_dir": "/home/user/proj/.git/worktrees/topic",
+          "common_dir": "/home/user/proj/.git",
+          "is_linked_worktree": true,
+          "head": {
+            "oid": "89abcdef0123456789abcdef0123456789abcdef",
+            "short_oid": "89abcde",
+            "branch": null,
+            "detached": true,
+            "initial": false
+          },
+          "upstream": null,
+          "state": "rebasing",
+          "rebase": {
+            "branch": "topic",
+            "onto_oid": "89abcdef0123456789abcdef0123456789abcdef",
+            "onto_short_oid": "89abcde",
+            "onto_ref": "origin/main",
+            "stopped_on": {
+              "oid": "fedcba9876543210fedcba9876543210fedcba98",
+              "short_oid": "fedcba9",
+              "subject": "Fix the login redirect"
+            },
+            "step": 2,
+            "total": 5
+          }
+        },
+        "entries": [
+          {
+            "group": "conflicts",
+            "path": "src/login.py",
+            "orig_path": null,
+            "code": "UU",
+            "index_status": "U",
+            "worktree_status": "U",
+            "rename_score": null,
+            "submodule": false
+          }
+        ],
+        "counts": {
+          "conflicts": 1,
+          "staged": 0,
+          "unstaged": 0,
+          "untracked": 0,
+          "total": 1
+        },
+        "truncated": false,
+        "entry_limit": 5000
+      },
+      "decoded_canonical": {
+        "session_id": "s7",
+        "cwd": "/home/user/proj/.worktrees/topic",
+        "etag": "d4e5f60718293a4b5c6d7e8f90123456789abc01",
+        "unchanged": false,
+        "repo": {
+          "toplevel": "/home/user/proj/.worktrees/topic",
+          "git_dir": "/home/user/proj/.git/worktrees/topic",
+          "common_dir": "/home/user/proj/.git",
+          "is_linked_worktree": true,
+          "head": {
+            "oid": "89abcdef0123456789abcdef0123456789abcdef",
+            "short_oid": "89abcde",
+            "detached": true,
+            "initial": false
+          },
+          "state": "rebasing",
+          "rebase": {
+            "branch": "topic",
+            "onto_oid": "89abcdef0123456789abcdef0123456789abcdef",
+            "onto_short_oid": "89abcde",
+            "onto_ref": "origin/main",
+            "stopped_on": {
+              "oid": "fedcba9876543210fedcba9876543210fedcba98",
+              "short_oid": "fedcba9",
+              "subject": "Fix the login redirect"
+            },
+            "step": 2,
+            "total": 5
+          }
+        },
+        "entries": [
+          {
+            "group": "conflicts",
+            "path": "src/login.py",
+            "code": "UU",
+            "index_status": "U",
+            "worktree_status": "U",
+            "submodule": false
+          }
+        ],
+        "counts": {
+          "conflicts": 1,
+          "staged": 0,
+          "unstaged": 0,
           "untracked": 0,
           "total": 1
         },
@@ -500,7 +614,8 @@
             "ahead": 0,
             "behind": 3
           },
-          "state": "clean"
+          "state": "clean",
+          "rebase": null
         },
         "entries": [
           {

@@ -111,6 +111,21 @@ class GitChangesDtoFixtureTest {
     }
 
     @Test
+    fun rebasingStoppedOnConflict_readsTheRebaseProgress_andOtherCasesCarryNone() {
+        val repo = status("rebasing_stopped_on_conflict").repo!!
+
+        assertEquals(GitRepoInfo.STATE_REBASING, repo.state)
+        assertTrue(repo.head.detached)
+        assertEquals("topic", repo.rebase?.branch)
+        assertEquals("origin/main", repo.rebase?.onto_ref)
+        assertEquals("89abcde", repo.rebase?.onto_short_oid)
+        assertEquals(GitRebaseCommit("fedcba9876543210fedcba9876543210fedcba98", "fedcba9", "Fix the login redirect"), repo.rebase?.stopped_on)
+        assertEquals(2, repo.rebase?.step)
+        assertEquals(5, repo.rebase?.total)
+        assertNull(status("linked_worktree_full").repo?.rebase)
+    }
+
+    @Test
     fun detachedHead_hasNoBranchAndNoUpstream() {
         val repo = status("detached_head").repo!!
         assertTrue(repo.head.detached)

@@ -12,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The Android arm of the six stage / discard / commit golden fixtures under
+ * The Android arm of the stage / discard / commit, job and rebase golden fixtures under
  * `tests/protocol_fixtures/dto/agent/`. The request shapes are what this
  * client sends, so they must also encode back to the wire; the responses
  * decode from `wire` and, where a case carries one, from `decoded_canonical`
@@ -64,6 +64,54 @@ class GitMutationDtoFixtureTest {
         fixture("GitPullRequest").assertCanonicalDecodesLikeWire(GitPullRequest.serializer())
         fixture("GitPushRequest").assertCanonicalDecodesLikeWire(GitPushRequest.serializer())
         fixture("GitJobResponse").assertCanonicalDecodesLikeWire(GitJobResponse.serializer())
+        fixture("GitRebaseRequest").assertCanonicalDecodesLikeWire(GitRebaseRequest.serializer())
+        fixture("GitRebaseResponse").assertCanonicalDecodesLikeWire(GitRebaseResponse.serializer())
+    }
+
+    @Test
+    fun rebaseRequest_carriesTheBase_andEncodesBackToTheWire() {
+        val fixture = fixture("GitRebaseRequest")
+
+        assertEquals("main", fixture.decode(GitRebaseRequest.serializer(), "local_branch").onto)
+        assertEquals("origin/main", fixture.decode(GitRebaseRequest.serializer(), "remote_tracking_branch").onto)
+        for (case in fixture.cases) {
+            val decoded = json.decodeFromJsonElement(GitRebaseRequest.serializer(), case.wire)
+            assertEquals(case.name, case.wire, json.encodeToJsonElement(GitRebaseRequest.serializer(), decoded))
+        }
+    }
+
+    @Test
+    fun rebaseResponse_readsEachOutcome_theStopsProgress_andAnOpenOutcome() {
+        val fixture = fixture("GitRebaseResponse")
+
+        val stopped = fixture.decode(GitRebaseResponse.serializer(), "stopped_on_conflict")
+        val bare = fixture.decode(GitRebaseResponse.serializer(), "stopped_detached_without_details")
+
+        assertEquals(GitRebaseResponse.OUTCOME_REBASED, fixture.decode(GitRebaseResponse.serializer(), "rebased").outcome)
+        assertEquals(GitRebaseResponse.OUTCOME_UP_TO_DATE, fixture.decode(GitRebaseResponse.serializer(), "up_to_date").outcome)
+        assertEquals(GitRebaseResponse.OUTCOME_ABORTED, fixture.decode(GitRebaseResponse.serializer(), "aborted").outcome)
+        assertEquals("future_outcome", fixture.decode(GitRebaseResponse.serializer(), "unknown_outcome").outcome)
+        assertEquals(GitRebaseResponse.OUTCOME_STOPPED, stopped.outcome)
+        assertEquals(
+            GitRebaseInfo(
+                branch = "topic",
+                onto_oid = "89abcdef0123456789abcdef0123456789abcdef",
+                onto_short_oid = "89abcde",
+                onto_ref = "main",
+                stopped_on = GitRebaseCommit(
+                    "fedcba9876543210fedcba9876543210fedcba98", "fedcba9", "Fix the login redirect",
+                ),
+                step = 2,
+                total = 5,
+            ),
+            stopped.rebase,
+        )
+        assertNull(stopped.message)
+        assertEquals(GitRebaseInfo(), bare.rebase)
+        assertEquals(
+            "error: The following untracked working tree files would be overwritten by merge:",
+            bare.message,
+        )
     }
 
     @Test

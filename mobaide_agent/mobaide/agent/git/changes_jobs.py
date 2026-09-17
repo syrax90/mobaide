@@ -132,14 +132,21 @@ _FAILURE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("unmerged", ("unmerged files", "Pulling is not possible")),
     (
         "operation_in_progress",
-        ("rebase in progress", "MERGE_HEAD exists", "not concluded your merge", "is in progress"),
+        (
+            "rebase in progress",
+            "MERGE_HEAD exists",
+            "not concluded your merge",
+            "is in progress",
+            "already a rebase-merge directory",
+            "already a rebase-apply directory",
+        ),
     ),
     ("no_upstream", ("has no upstream branch", "no tracking information", "no upstream configured")),
     ("no_remote", ("No configured push destination", "No remote repository specified")),
     ("detached_head", ("not currently on a branch",)),
     ("no_head", ("src refspec", "does not have any commits yet")),
     ("index_locked", ("index.lock",)),
-    ("hook_failed", ("hook declined", "pre-push hook")),
+    ("hook_failed", ("hook declined", "pre-push hook", "pre-rebase hook refused")),
     ("rejected", ("[rejected]", "[remote rejected]", "(stale info)")),
     ("hook_failed", ("failed to push some refs",)),
 )
@@ -225,12 +232,12 @@ def _squash(line: str) -> str:
 
 
 def classify_job_failure(
-    op: GitJobOp,
+    op: str,
     *,
     err_tail: Sequence[str],
     out_tail: Sequence[str],
 ) -> tuple[str, str]:
-    """Map a failed job's output to ``(error_code, message)``; the message
+    """Map a failed job's (or rebase's) output to ``(error_code, message)``; the message
     is git's own explanation (its error lines, else the last line)."""
     haystack = "\n".join([*out_tail, *err_tail])
     code = "git_error"

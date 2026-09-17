@@ -6,7 +6,9 @@ import com.mobaide.app.data.network.dto.GitCommitHead
 import com.mobaide.app.data.network.dto.GitCommitResponse
 import com.mobaide.app.data.network.dto.GitDiffResponse
 import com.mobaide.app.data.network.dto.GitDiscardRequest
+import com.mobaide.app.data.network.dto.GitItem
 import com.mobaide.app.data.network.dto.GitJobResponse
+import com.mobaide.app.data.network.dto.GitRebaseResponse
 import com.mobaide.app.data.network.dto.GitRepoInfo
 import com.mobaide.app.data.network.dto.GitStatusEntry
 import com.mobaide.app.data.network.dto.GitStatusResponse
@@ -79,15 +81,18 @@ sealed interface GitChangesEvent {
 
 /**
  * What a row can do: a staged entry is unstaged, a modified or untracked one
- * is staged or discarded, a conflict is resolved in the terminal (marking it
- * resolved from a phone would stage the markers). Each gated on its
- * capability, so an older agent shows no control that would 404.
+ * is staged or discarded, a conflict is marked resolved once fixed — only on
+ * an agent that refuses to stage leftover markers (`resolve`). Each gated on
+ * its capability, so an older agent shows no control that would 404.
  */
 data class RowActions(
     val stage: Boolean = false,
     val unstage: Boolean = false,
     val discard: Boolean = false,
+    /** Stage a conflicted file once it is fixed; one file at a time, never from the selection toolbar. */
+    val resolve: Boolean = false,
 ) {
+    /** Whether the selection toolbar has anything for this row; [resolve] is per row only. */
     val any: Boolean get() = stage || unstage || discard
 
     companion object {
@@ -100,6 +105,8 @@ internal fun rowActions(entry: GitStatusEntry, capabilities: GitCapabilities): R
         GitStatusEntry.GROUP_STAGED -> RowActions(unstage = capabilities.stage)
         GitStatusEntry.GROUP_UNSTAGED, GitStatusEntry.GROUP_UNTRACKED ->
             RowActions(stage = capabilities.stage, discard = capabilities.discard)
+        GitStatusEntry.GROUP_CONFLICTS ->
+            RowActions(resolve = capabilities.stage && capabilities.resolve)
         else -> RowActions.NONE
     }
 
@@ -371,6 +378,8 @@ internal fun refusalCopy(code: String, detailMessage: String?): String = when (c
     SessionGitException.CODE_EMPTY_MESSAGE -> "Enter a commit summary."
     SessionGitException.CODE_JOB_RUNNING -> "Another fetch, pull or push is still running."
     SessionGitException.CODE_JOB_NOT_FOUND -> JOB_LOST_COPY
+    SessionGitException.CODE_CONFLICT_MARKERS ->
+        "${detailMessage ?: "The file"} still has conflict markers — finish resolving it first."
     else -> detailMessage?.let { "git refused the request ($code): $it" }
         ?: "git refused the request ($code)."
 }
@@ -568,4 +577,176 @@ data class SyncSheetState(
     val error: String? = null,
     /** A follow-up waiting for its confirmation. */
     val pendingFollowUp: SyncFollowUp? = null,
+)
+
+/** One branch the rebase sheet offers. */
+data class RebaseTarget(val value: String, val label: String)
+
+/**
+ * The rebase sheet's picker: local branches, then remote-tracking ones, from
+ * the project Git screen's rows. The session's own branch is left out by name
+ * — the rows' `is_current` is the project root's checkout, which for a session
+ * in a linked worktree is usually the very branch it wants to rebase onto.
+ */
+internal fun rebaseTargets(items: List<GitItem>, currentBranch: String?): List<RebaseTarget> {
+    fun usable(item: GitItem) = item.branch != null && item.branch != currentBranch
+    val local = items
+        .filter { it.kind == GitItem.KIND_BRANCH_ONLY || it.kind == GitItem.KIND_BRANCH_WITH_WORKTREE }
+        .filter(::usable)
+        .map { RebaseTarget("refs/heads/${it.branch}", it.branch.orEmpty()) }
+    val remote = items
+        .filter { it.kind == GitItem.KIND_REMOTE_BRANCH }
+        .filter(::usable)
+        .map { RebaseTarget("refs/remotes/${it.branch}", "${it.branch} (remote)") }
+    return local + remote
+}
+
+/**
+ * A picked target's name for copy: the picker sends fully qualified refs so a
+ * tag of the same name cannot shadow the branch, but a notice reads the short one.
+ */
+internal fun shortRefName(ref: String): String =
+    ref.removePrefix("refs/heads/").takeIf { it != ref } ?: ref.removePrefix("refs/remotes/")
+
+/**
+ * Why a rebase cannot start from this status, or null. Untracked files do not
+ * block: git refuses only the ones a pick would overwrite.
+ */
+internal fun rebaseBlocker(status: GitStatusResponse?): String? {
+    val repo = status?.repo ?: return "Repository unavailable."
+    val counts = status.counts
+    return when {
+        repo.state != GitRepoInfo.STATE_CLEAN -> "A rebase or merge is already in progress."
+        repo.head.initial -> "This branch has no commits yet."
+        counts != null && counts.conflicts + counts.staged + counts.unstaged > 0 ->
+            "Commit or discard your changes first."
+        else -> null
+    }
+}
+
+/** The branch a rebase acts on, for copy: the one being rebased, else HEAD's. */
+internal fun rebasedBranch(repo: GitRepoInfo?): String =
+    repo?.rebase?.branch ?: repo?.head?.branch ?: "the branch"
+
+/**
+ * The Changes screen's banner while the repository is rebasing. [actionable]
+ * is false when `repo.rebase` is null — a `git am` session, which reports
+ * `rebasing` too and refuses Continue / Skip / Abort, or an agent that predates
+ * the rebase routes.
+ */
+data class RebaseBanner(val title: String, val progress: String?, val hint: String, val actionable: Boolean)
+
+internal fun rebaseBanner(repo: GitRepoInfo?, conflicts: Int): RebaseBanner? {
+    if (repo == null || repo.state != GitRepoInfo.STATE_REBASING) return null
+    val info = repo.rebase
+    val branch = info?.branch
+    val onto = info?.onto_ref ?: info?.onto_short_oid
+    val title = when {
+        branch != null && onto != null -> "Rebasing $branch onto $onto"
+        branch != null -> "Rebasing $branch"
+        onto != null -> "Rebasing onto $onto"
+        else -> "Rebase in progress"
+    }
+    val parts = mutableListOf<String>()
+    info?.stopped_on?.let { parts += "Stopped at ${it.short_oid} ${it.subject}" }
+    val step = info?.step
+    val total = info?.total
+    if (step != null && total != null) parts += "$step/$total"
+    val actionable = info != null
+    val hint = when {
+        !actionable -> "Continue, skip or abort it in the terminal."
+        conflicts > 0 ->
+            "$conflicts ${if (conflicts == 1) "conflict" else "conflicts"} — fix the files, then Mark resolved."
+        else -> "No conflicts left — Continue when ready."
+    }
+    return RebaseBanner(title, parts.takeIf { it.isNotEmpty() }?.joinToString(" · "), hint, actionable)
+}
+
+/** The two rebase steps that go through a confirmation. */
+enum class RebasePromptStep { Skip, Abort }
+
+internal fun rebaseStepPrompt(step: RebasePromptStep, repo: GitRepoInfo?): SyncPrompt {
+    val branch = rebasedBranch(repo)
+    return when (step) {
+        RebasePromptStep.Skip -> {
+            val stopped = repo?.rebase?.stopped_on
+            val commit = stopped?.let { "${it.short_oid} “${it.subject}”" }
+                ?: "The commit the rebase stopped at"
+            SyncPrompt("Skip this commit?", "$commit will be left out of $branch.", "Skip commit")
+        }
+        RebasePromptStep.Abort -> SyncPrompt(
+            "Abort the rebase?",
+            "$branch goes back to where it was before the rebase. " +
+                "Conflict resolutions made so far are discarded.",
+            "Abort rebase",
+        )
+    }
+}
+
+/**
+ * The message a finished rebase call leaves. [onto] is what the user picked,
+ * known only for a start; Continue and Skip finish without it.
+ */
+internal fun rebaseOutcomeNotice(result: GitRebaseResponse, branch: String, onto: String?): String {
+    val ontoName = onto?.let(::shortRefName)
+    return when (result.outcome) {
+        GitRebaseResponse.OUTCOME_REBASED ->
+            if (ontoName == null) "Rebase finished." else "Rebased $branch onto $ontoName."
+        GitRebaseResponse.OUTCOME_UP_TO_DATE ->
+            "$branch is already up to date with ${ontoName ?: "that branch"}."
+        GitRebaseResponse.OUTCOME_ABORTED -> "Rebase aborted — $branch is back where it started."
+        GitRebaseResponse.OUTCOME_STOPPED -> result.message?.takeIf { it.isNotEmpty() }
+            ?.let { "Rebase stopped: $it" }
+            ?: result.rebase?.stopped_on?.subject
+                ?.let { "Rebase stopped at “$it” — resolve the conflicts, then Continue." }
+            ?: "Rebase stopped — resolve the conflicts, then Continue."
+        else -> "Rebase: ${result.outcome}"
+    }
+}
+
+/**
+ * Copy for a failed rebase call: the rebase-specific readings of the shared
+ * refusal codes, then the mutations' copy.
+ */
+internal fun rebaseErrorCopy(error: Throwable): String {
+    if (error is SessionGitException.GitError) {
+        when (error.code) {
+            SessionGitException.CODE_UNKNOWN_REF -> return error.detailMessage?.takeIf { it.isNotEmpty() }
+                ?.let { "“$it” isn't a branch, tag or commit here." }
+                ?: "That isn't a branch, tag or commit here."
+            SessionGitException.CODE_NO_REBASE -> return "No rebase is in progress anymore."
+            GitJobResponse.CODE_DIRTY_WORKTREE ->
+                return "Local changes are in the way — stage, commit or discard them first."
+            GitJobResponse.CODE_OPERATION_IN_PROGRESS -> return "A rebase or merge is already in progress."
+            SessionGitException.CODE_NO_HEAD -> return "This branch has no commits yet."
+            SessionGitException.CODE_HOOK_FAILED -> return "The pre-rebase hook refused the rebase."
+            SessionGitException.CODE_GIT_TOO_OLD -> return "Rebasing needs git 2.26 or newer on the agent machine."
+            SessionGitException.CODE_GIT_TIMEOUT ->
+                return "The rebase took too long and was cut off — continue or abort it."
+        }
+    }
+    return mutationErrorCopy(error)
+}
+
+/** git's own output worth showing under the copy: which files, or what the hook said. */
+internal fun rebaseErrorOutput(error: Throwable): String? {
+    if (error !is SessionGitException.GitError) return null
+    if (error.code != GitJobResponse.CODE_DIRTY_WORKTREE && error.code != SessionGitException.CODE_HOOK_FAILED) {
+        return null
+    }
+    return error.detailMessage?.takeIf { it.isNotEmpty() }
+}
+
+/** Where the rebase sheet's picker stands: no project types the ref instead. */
+sealed interface RebaseTargetsState {
+    data object Loading : RebaseTargetsState
+    data class Ready(val items: List<GitItem>) : RebaseTargetsState
+    /** No project, or the list failed to load: the sheet asks for the ref as text. */
+    data object Typed : RebaseTargetsState
+}
+
+data class RebaseSheetState(
+    val targets: RebaseTargetsState = RebaseTargetsState.Typed,
+    val starting: Boolean = false,
+    val error: CommitError? = null,
 )

@@ -1,18 +1,23 @@
 import SwiftUI
 
 /// Session-scoped working-tree overview (Android `GitChangesScreen`), pushed
-/// from the terminal's `⋯ → Git → Changes…` (or `Commit…`, which opens the
-/// commit sheet over it).
+/// from the terminal's `⋯ → Git → Changes…` (or `Commit…`, `Fetch / Pull /
+/// Push…` and `Rebase…`, which open their sheet over it).
 struct GitChangesScreen: View {
     let sessionId: String
     var openCommit = false
     var openSync = false
+    var openRebase = false
     @Environment(\.appContainer) private var container
 
     var body: some View {
         if let container {
             GitChangesContent(
-                container: container, sessionId: sessionId, openCommit: openCommit, openSync: openSync
+                container: container,
+                sessionId: sessionId,
+                openCommit: openCommit,
+                openSync: openSync,
+                openRebase: openRebase
             )
         }
     }
@@ -28,7 +33,7 @@ private struct GitChangesContent: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.mobaideColors) private var colors
 
-    init(container: AppContainer, sessionId: String, openCommit: Bool, openSync: Bool) {
+    init(container: AppContainer, sessionId: String, openCommit: Bool, openSync: Bool, openRebase: Bool) {
         let sessionRepository = container.sessionRepository
         _model = State(initialValue: GitChangesModel(
             sessionId: sessionId,
@@ -38,7 +43,8 @@ private struct GitChangesContent: View {
                 sessionRepository.currentSessions.first { $0.session_id == sessionId }?.project_name
             },
             openCommit: openCommit,
-            openSync: openSync
+            openSync: openSync,
+            openRebase: openRebase
         ))
     }
 
@@ -70,6 +76,7 @@ private struct GitChangesContent: View {
                 await model.loadCapabilities()
                 model.consumeOpenCommit()
                 model.consumeOpenSync()
+                model.consumeOpenRebase()
             }
             .confirmationDialog(
                 model.discardPrompt?.title ?? "Discard?",
@@ -92,6 +99,22 @@ private struct GitChangesContent: View {
             }
             .sheet(isPresented: syncPresented) {
                 GitSyncSheet(model: model)
+            }
+            .sheet(isPresented: rebasePresented) {
+                GitRebaseSheet(model: model)
+            }
+            .confirmationDialog(
+                model.rebasePrompt?.title ?? "Confirm?",
+                isPresented: rebasePromptPresented,
+                titleVisibility: .visible,
+                presenting: model.rebasePrompt
+            ) { prompt in
+                Button(prompt.confirm, role: .destructive) {
+                    Task { await model.confirmRebaseStep() }
+                }
+                Button("Cancel", role: .cancel) { model.dismissRebaseStep() }
+            } message: { prompt in
+                Text(prompt.body)
             }
             .toast($model.toast)
             .onChange(of: editMode) { _, newValue in
@@ -136,6 +159,22 @@ private struct GitChangesContent: View {
         Binding(
             get: { model.syncSheet != nil },
             set: { if !$0 { model.closeSync() } }
+        )
+    }
+
+    private var rebasePresented: Binding<Bool> {
+        Binding(
+            get: { model.rebaseSheet != nil },
+            set: { if !$0 { model.closeRebase() } }
+        )
+    }
+
+    // Only the prompt: SwiftUI writes this false before the confirm action
+    // runs, and the step it acts on must survive that write.
+    private var rebasePromptPresented: Binding<Bool> {
+        Binding(
+            get: { model.rebasePrompt != nil },
+            set: { if !$0 { model.rebasePrompt = nil } }
         )
     }
 
@@ -232,6 +271,11 @@ private struct GitChangesContent: View {
                 headerCard(repo: repo, cwd: status.cwd)
                     .pixelListRow()
                     .selectionDisabled()
+                if let banner = GitChangesDisplay.rebaseBanner(repo, conflicts: model.conflictCount) {
+                    rebaseBanner(banner)
+                        .pixelListRow()
+                        .selectionDisabled()
+                }
                 if let staleError = model.staleError {
                     staleBanner(staleError)
                         .pixelListRow()
@@ -292,6 +336,12 @@ private struct GitChangesContent: View {
             }
             .buttonStyle(.plain)
             .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                if actions.resolve {
+                    Button { Task { await model.resolve(row) } } label: {
+                        Label("Mark resolved", systemImage: "checkmark")
+                    }
+                    .tint(colors.accent)
+                }
                 if actions.stage {
                     Button { Task { await model.stage([row]) } } label: {
                         Label("Stage", systemImage: "plus")
@@ -313,6 +363,11 @@ private struct GitChangesContent: View {
                 }
             }
             .contextMenu {
+                if actions.resolve {
+                    Button { Task { await model.resolve(row) } } label: {
+                        Label("Mark resolved", systemImage: "checkmark")
+                    }
+                }
                 if actions.stage {
                     Button { Task { await model.stage([row]) } } label: {
                         Label("Stage", systemImage: "plus")
@@ -337,7 +392,7 @@ private struct GitChangesContent: View {
                     }
                 }
             }
-            .disabled(model.isBusy && actions.any)
+            .disabled(model.isBusy && (actions.any || actions.resolve))
         }
     }
 
@@ -414,6 +469,50 @@ private struct GitChangesContent: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .pixelCard()
+    }
+
+    /// A rebase in progress, for as long as the status says so: where it
+    /// stopped and what to do next, with Continue (once no conflict is left)
+    /// and the two confirmed ways out.
+    private func rebaseBanner(_ banner: GitChangesDisplay.RebaseBanner) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(banner.title)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(colors.warning)
+                if let progress = banner.progress {
+                    Text(progress)
+                        .font(.caption)
+                        .monospaced()
+                        .foregroundStyle(colors.textMuted)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                }
+                Text(banner.hint)
+                    .font(.footnote)
+                    .foregroundStyle(colors.text)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .pixelInfoBanner()
+            if model.capabilities.rebase && banner.actionable {
+                HStack(spacing: 12) {
+                    Button("Continue") { Task { await model.continueRebase() } }
+                        .buttonStyle(.pixelSmall)
+                        .disabled(model.isBusy || model.conflictCount > 0)
+                        .accessibilityIdentifier("git-changes-rebase-continue")
+                    Button("Skip…") { model.requestRebaseStep(.skip) }
+                        .buttonStyle(.pixelSmall)
+                        .disabled(model.isBusy)
+                        .accessibilityIdentifier("git-changes-rebase-skip")
+                    Button("Abort…") { model.requestRebaseStep(.abort) }
+                        .buttonStyle(.pixelSmallDanger)
+                        .disabled(model.isBusy)
+                        .accessibilityIdentifier("git-changes-rebase-abort")
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("git-changes-rebase")
     }
 
     private func staleBanner(_ message: String) -> some View {

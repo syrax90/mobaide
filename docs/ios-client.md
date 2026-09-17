@@ -719,6 +719,27 @@ after `ConflictDetail.busyHolders`; the copy lives in `GitItemDisplay`. The
 terminal menu's *Branches…* entry routes to `.gitManagement(projectName:)`
 for a project-backed session.
 
+#678 adds an in-progress **rebase** to the Changes screen. The terminal
+menu's `⋯ → Git → Rebase…` (gated on `capabilities.git.rebase`,
+`Route.sessionGitChanges(sessionId:rebase:)`) presents `GitRebaseSheet`: a
+project-backed session picks the target from a `Picker` fed by `getGitItems`
+(its local and remote-tracking branches, sent as fully qualified
+`refs/heads/…` / `refs/remotes/…` refs so a same-named tag cannot shadow
+them, deliberately with no preselection), any other session — or a list that
+fails to load — types the ref in a `TextField`. While `GET …/git/status`
+reports `state: rebasing`, the list shows a banner (branch/onto title, an
+optional stopped-on / step line, a hint) above the repo header; with a
+non-null `repo.rebase` (not a `git am` session, not an older agent) it
+carries Continue (disabled while any conflict remains), Skip… and Abort…,
+else it points to the terminal. The latter two sit behind a
+`confirmationDialog` whose `isPresented` setter clears only `rebasePrompt`
+while `pendingRebaseStep` survives, the same split `syncPrompt` uses. A
+conflict row gets a leading swipe action and a context-menu entry, both
+*Mark resolved* — `GitChangesModel.resolve(_:)`, which simply stages the
+row, gated on `capabilities.git.{stage,resolve}` together, since only
+`resolve` certifies the agent refuses to stage a file still holding
+`<<<<<<<`/`>>>>>>>` markers.
+
 ## Device support
 
 `TARGETED_DEVICE_FAMILY = "1"` — iPhone only, on both the app and the test

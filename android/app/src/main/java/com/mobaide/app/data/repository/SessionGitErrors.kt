@@ -54,6 +54,10 @@ sealed class SessionGitException(message: String, cause: Throwable? = null) :
         /** Another fetch / pull / push owns the repository; [GitError.detailMessage] is its job id. */
         const val CODE_JOB_RUNNING = "job_running"
         const val CODE_JOB_NOT_FOUND = "job_not_found"
+        /** The rebase refusals; [GitError.detailMessage] is the ref, the state or the path. */
+        const val CODE_UNKNOWN_REF = "unknown_ref"
+        const val CODE_NO_REBASE = "no_rebase"
+        const val CODE_CONFLICT_MARKERS = "conflict_markers"
     }
 }
 

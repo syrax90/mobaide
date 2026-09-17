@@ -283,17 +283,18 @@ private fun JobResult(
     }
 }
 
-/** The confirmation every follow-up goes through, in the discard dialog's shape. */
+/** The confirmation every follow-up (and a rebase's Skip / Abort) goes through, in the discard dialog's shape. */
 @Composable
 internal fun GitSyncConfirmDialog(
     prompt: SyncPrompt,
     destructive: Boolean,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
+    tag: String = GIT_SYNC_CONFIRM_DIALOG_TAG,
 ) {
     PixelAlertDialog(
         onDismissRequest = onDismiss,
-        modifier = Modifier.testTag(GIT_SYNC_CONFIRM_DIALOG_TAG),
+        modifier = Modifier.testTag(tag),
         title = { Text(prompt.title) },
         text = { Text(prompt.body) },
         confirmButton = {

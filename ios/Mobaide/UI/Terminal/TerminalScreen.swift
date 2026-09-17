@@ -158,7 +158,7 @@ private struct TerminalScreenContent: View {
                 // appears once the cwd is known. Fixed order: a top-bar `Menu`
                 // otherwise renders its sections bottom-up. Branches… links to
                 // the project's Git screen, so it also needs a project-backed
-                // session; Rebase… is the one reserved slot left, after it.
+                // session.
                 if sessionRow?.cwd != nil {
                     Menu {
                         Section("Git") {
@@ -186,6 +186,13 @@ private struct TerminalScreenContent: View {
                                     router.navigate(to: .gitManagement(projectName: projectName))
                                 } label: {
                                     Label("Branches…", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                                }
+                            }
+                            if gitCapabilities.rebase {
+                                Button {
+                                    router.navigate(to: .sessionGitChanges(sessionId: sessionId, rebase: true))
+                                } label: {
+                                    Label("Rebase…", systemImage: "arrow.triangle.merge")
                                 }
                             }
                         }

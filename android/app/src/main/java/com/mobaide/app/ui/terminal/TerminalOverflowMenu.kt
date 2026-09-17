@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Commit
 import androidx.compose.material.icons.outlined.Difference
+import androidx.compose.material.icons.outlined.Merge
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -30,6 +31,7 @@ const val TERMINAL_MENU_GIT_CHANGES_TAG = "terminal_menu_git_changes"
 const val TERMINAL_MENU_GIT_COMMIT_TAG = "terminal_menu_git_commit"
 const val TERMINAL_MENU_GIT_SYNC_TAG = "terminal_menu_git_sync"
 const val TERMINAL_MENU_GIT_BRANCHES_TAG = "terminal_menu_git_branches"
+const val TERMINAL_MENU_GIT_REBASE_TAG = "terminal_menu_git_rebase"
 
 /**
  * The terminal top bar's `⋯` menu. `internal` (vs the screen file's usual
@@ -40,8 +42,8 @@ const val TERMINAL_MENU_GIT_BRANCHES_TAG = "terminal_menu_git_branches"
  * this is shaped for a mechanical swap once the BOM moves. Commit… exists only
  * on an agent that advertises `capabilities.git.commit`, Fetch / Pull / Push…
  * on any of the three job keys, Branches… (a link to the project's Git
- * screen) on `capabilities.git.branches` for a project-backed session;
- * Rebase… is the one reserved slot left under the heading, after Branches….
+ * screen) on `capabilities.git.branches` for a project-backed session, and
+ * Rebase… on `capabilities.git.rebase`.
  */
 @Composable
 internal fun TerminalOverflowMenu(
@@ -52,6 +54,8 @@ internal fun TerminalOverflowMenu(
     syncAvailable: Boolean = false,
     onOpenGitBranches: () -> Unit = {},
     branchesAvailable: Boolean = false,
+    onOpenGitRebase: () -> Unit = {},
+    rebaseAvailable: Boolean = false,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box {
@@ -100,6 +104,17 @@ internal fun TerminalOverflowMenu(
                     modifier = Modifier.testTag(TERMINAL_MENU_GIT_BRANCHES_TAG),
                 )
             }
+            if (rebaseAvailable) {
+                DropdownMenuItem(
+                    text = { Text("Rebase…") },
+                    onClick = {
+                        menuExpanded = false
+                        onOpenGitRebase()
+                    },
+                    leadingIcon = { Icon(Icons.Outlined.Merge, contentDescription = null) },
+                    modifier = Modifier.testTag(TERMINAL_MENU_GIT_REBASE_TAG),
+                )
+            }
         }
     }
 }
@@ -123,6 +138,7 @@ private fun TerminalOverflowMenuPreviewDark() {
             commitAvailable = true,
             syncAvailable = true,
             branchesAvailable = true,
+            rebaseAvailable = true,
         )
     }
 }

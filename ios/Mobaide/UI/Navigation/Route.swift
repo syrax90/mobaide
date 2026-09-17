@@ -25,8 +25,8 @@ enum Route: Hashable, Sendable {
     /// (Android `SESSION_GIT_CHANGES` / `SESSION_GIT_DIFF`).
     /// `commit` presents the commit sheet over the list on arrival (the
     /// terminal menu's Commit…), `sync` the Fetch / Pull / Push sheet (its
-    /// Fetch / Pull / Push…).
-    case sessionGitChanges(sessionId: String, commit: Bool = false, sync: Bool = false)
+    /// Fetch / Pull / Push…), `rebase` the Rebase sheet (its Rebase…).
+    case sessionGitChanges(sessionId: String, commit: Bool = false, sync: Bool = false, rebase: Bool = false)
     case sessionGitDiff(sessionId: String, path: String, scope: String, origPath: String?)
     case incompatibleServer
     case templates

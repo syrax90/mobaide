@@ -83,7 +83,10 @@ class RoutesGitDiffArgsTest {
 
     @Test
     fun theChangesRoute_matchesItsPattern() {
-        assertEquals("session_git_changes/abc-123?commit=false", Routes.sessionGitChanges("abc-123"))
+        assertEquals(
+            "session_git_changes/abc-123?commit=false&sync=false&rebase=false",
+            Routes.sessionGitChanges("abc-123"),
+        )
         assertEquals(
             Routes.SESSION_GIT_CHANGES.substringBefore('{'),
             Routes.sessionGitChanges("abc-123").substringBefore("abc-123"),
@@ -95,12 +98,11 @@ class RoutesGitDiffArgsTest {
         // `commit=true` is the terminal menu's Commit…: the screen opens with
         // the sheet already up. Every caller writes the flag so the pattern's
         // `{commit}` placeholder is always filled.
-        assertEquals("session_git_changes/abc-123?commit=false", Routes.sessionGitChanges("abc-123"))
+        assertEquals("false", Uri.parse(Routes.sessionGitChanges("abc-123")).getQueryParameter("commit"))
         assertEquals(
-            "session_git_changes/abc-123?commit=true",
+            "session_git_changes/abc-123?commit=true&sync=false&rebase=false",
             Routes.sessionGitChanges("abc-123", commit = true),
         )
-        assertEquals("session_git_changes/{sessionId}?commit={commit}", Routes.SESSION_GIT_CHANGES)
         assertEquals(
             "true",
             Uri.parse(Routes.sessionGitChanges("abc-123", commit = true)).getQueryParameter("commit"),
@@ -121,13 +123,38 @@ class RoutesGitChangesSyncArgTest {
         assertEquals("session_git_changes/s1", route.substringBefore('?'))
         assertEquals("true", uri.getQueryParameter("sync"))
         assertEquals("false", uri.getQueryParameter("commit"))
-        assertEquals(setOf("commit", "sync"), uri.queryParameterNames)
+        assertEquals("false", uri.getQueryParameter("rebase"))
+        assertEquals(setOf("commit", "sync", "rebase"), uri.queryParameterNames)
     }
 
     @Test
     fun theSyncFlag_defaultsToFalse_andThePatternNamesIt() {
         assertEquals("false", Uri.parse(Routes.sessionGitChanges("s1")).getQueryParameter("sync"))
         assertEquals("true", Uri.parse(Routes.sessionGitChanges("s1", commit = true)).getQueryParameter("commit"))
-        assertEquals("session_git_changes/{sessionId}?commit={commit}&sync={sync}", Routes.SESSION_GIT_CHANGES)
+        assertEquals(
+            "session_git_changes/{sessionId}?commit={commit}&sync={sync}&rebase={rebase}",
+            Routes.SESSION_GIT_CHANGES,
+        )
+    }
+}
+
+/** The `rebase` flag the terminal menu's *Rebase…* sets on the Changes route. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
+class RoutesGitChangesRebaseArgTest {
+
+    @Test
+    fun theChangesRoute_carriesTheRebaseFlag_asAQueryArg_besideTheOthers() {
+        val uri = Uri.parse(Routes.sessionGitChanges("s1", rebase = true))
+
+        assertEquals("true", uri.getQueryParameter("rebase"))
+        assertEquals("false", uri.getQueryParameter("commit"))
+        assertEquals("false", uri.getQueryParameter("sync"))
+    }
+
+    @Test
+    fun theRebaseFlag_defaultsToFalse_andThePatternNamesIt() {
+        assertEquals("false", Uri.parse(Routes.sessionGitChanges("s1")).getQueryParameter("rebase"))
+        assertTrue(Routes.SESSION_GIT_CHANGES.endsWith("&rebase={rebase}"))
     }
 }

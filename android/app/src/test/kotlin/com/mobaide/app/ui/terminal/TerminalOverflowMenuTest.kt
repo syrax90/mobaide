@@ -119,3 +119,51 @@ class TerminalOverflowMenuSyncTest {
         composeRule.onNodeWithTag(TERMINAL_MENU_GIT_COMMIT_TAG).assertDoesNotExist()
     }
 }
+
+/** The *Rebase…* entry, gated on `capabilities.git.rebase`. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33], qualifiers = "w360dp-h800dp-xxhdpi")
+class TerminalOverflowMenuRebaseTest {
+
+    @get:Rule
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    @Test
+    fun rebase_isAbsent_untilTheAgentAdvertisesIt() {
+        composeRule.setContent {
+            MobaideTheme(darkTheme = true) {
+                TerminalOverflowMenu(
+                    onOpenGitChanges = {},
+                    branchesAvailable = true,
+                    rebaseAvailable = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("More options").performClick()
+
+        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_BRANCHES_TAG).assertIsDisplayed()
+        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_REBASE_TAG).assertDoesNotExist()
+        composeRule.onNodeWithText("Rebase…").assertDoesNotExist()
+    }
+
+    @Test
+    fun rebase_isOffered_onAnAgentThatAdvertisesIt_evenWithoutAProjectForBranches() {
+        composeRule.setContent {
+            MobaideTheme(darkTheme = true) {
+                TerminalOverflowMenu(
+                    onOpenGitChanges = {},
+                    onOpenGitRebase = {},
+                    branchesAvailable = false,
+                    rebaseAvailable = true,
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("More options").performClick()
+
+        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_REBASE_TAG).assertIsDisplayed()
+        composeRule.onNodeWithText("Rebase…").assertIsDisplayed()
+        composeRule.onNodeWithTag(TERMINAL_MENU_GIT_BRANCHES_TAG).assertDoesNotExist()
+    }
+}

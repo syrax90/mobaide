@@ -9,7 +9,11 @@ import com.mobaide.app.data.network.dto.GitCommitHead
 import com.mobaide.app.data.network.dto.GitCommitResponse
 import com.mobaide.app.data.network.dto.GitDiffResponse
 import com.mobaide.app.data.network.dto.GitHeadInfo
+import com.mobaide.app.data.network.dto.GitItem
 import com.mobaide.app.data.network.dto.GitJobResponse
+import com.mobaide.app.data.network.dto.GitRebaseCommit
+import com.mobaide.app.data.network.dto.GitRebaseInfo
+import com.mobaide.app.data.network.dto.GitRebaseResponse
 import com.mobaide.app.data.network.dto.GitRepoInfo
 import com.mobaide.app.data.network.dto.GitStatusCounts
 import com.mobaide.app.data.network.dto.GitStatusEntry
@@ -89,6 +93,7 @@ class GitChangesViewModelTest {
         capabilities: GitCapabilities = GitCapabilities.NONE,
         commit: Boolean = false,
         sync: Boolean = false,
+        rebase: Boolean = false,
     ): Fixture {
         val repo = mockk<GitRepository>(relaxed = true)
         coEvery { repo.gitCapabilities() } returns capabilities
@@ -137,7 +142,9 @@ class GitChangesViewModelTest {
             )
         }
         val tracker = ForegroundSessionTracker()
-        val handle = SavedStateHandle(mapOf("sessionId" to "s1", "commit" to commit, "sync" to sync))
+        val handle = SavedStateHandle(
+            mapOf("sessionId" to "s1", "commit" to commit, "sync" to sync, "rebase" to rebase),
+        )
         val vm = GitChangesViewModel(
             savedStateHandle = handle,
             gitRepository = repo,
@@ -1399,5 +1406,309 @@ class GitChangesViewModelTest {
 
         val plain = newFixture(capabilities = syncCaps)
         assertNull(plain.vm.syncSheet.value)
+    }
+
+    // MARK: - Rebase
+
+    private val rebaseCaps = allCaps.copy(rebase = true, resolve = true)
+
+    /** Stopped mid-rebase: HEAD detached, the branch only in `rebase`. */
+    private fun rebasingStatus(entries: List<GitStatusEntry> = listOf(conflict)) = status(entries = entries).copy(
+        repo = GitRepoInfo(
+            toplevel = "/repo",
+            git_dir = "/repo/.git",
+            common_dir = "/repo/.git",
+            head = GitHeadInfo(oid = "89abcdef", short_oid = "89abcde", detached = true),
+            state = GitRepoInfo.STATE_REBASING,
+            rebase = GitRebaseInfo(
+                branch = "topic",
+                onto_short_oid = "89abcde",
+                onto_ref = "main",
+                stopped_on = GitRebaseCommit("fedcba98", "fedcba9", "Fix the login redirect"),
+                step = 2,
+                total = 5,
+            ),
+        ),
+        counts = GitStatusCounts(conflicts = entries.size, total = entries.size),
+    )
+
+    private suspend fun TestScope.rebasing(entries: List<GitStatusEntry> = listOf(conflict)): Fixture {
+        val f = newFixture(capabilities = rebaseCaps)
+        subscribe(f.vm)
+        f.loads.emit(SessionGitStatusLoad.Loaded(rebasingStatus(entries)))
+        runCurrent()
+        return f
+    }
+
+    private val branches = listOf(
+        GitItem(kind = GitItem.KIND_BRANCH_ONLY, branch = "main"),
+        GitItem(kind = GitItem.KIND_REMOTE_BRANCH, branch = "origin/main", remote = "origin"),
+    )
+
+    @Test
+    fun openRebase_forAProjectSession_loadsTheProjectsBranches() = runTest {
+        val f = loaded(capabilities = rebaseCaps)
+        val reply = CompletableDeferred<List<GitItem>>()
+        coEvery { f.repo.listGitItems("alpha") } coAnswers { reply.await() }
+
+        f.vm.openRebase()
+        assertEquals(RebaseSheetState(targets = RebaseTargetsState.Loading), f.vm.rebaseSheet.value)
+
+        reply.complete(branches)
+        runCurrent()
+
+        assertEquals(RebaseSheetState(targets = RebaseTargetsState.Ready(branches)), f.vm.rebaseSheet.value)
+    }
+
+    @Test
+    fun openRebase_typesTheRef_forASessionWithoutAProject_orWhenTheListFails() = runTest {
+        val noProject = newFixture(projectName = null, capabilities = rebaseCaps)
+        subscribe(noProject.vm)
+
+        noProject.vm.openRebase()
+        runCurrent()
+
+        assertEquals(RebaseTargetsState.Typed, noProject.vm.rebaseSheet.value?.targets)
+        coVerify(exactly = 0) { noProject.repo.listGitItems(any()) }
+
+        val failing = loaded(capabilities = rebaseCaps)
+        coEvery { failing.repo.listGitItems("alpha") } throws IOException("down")
+
+        failing.vm.openRebase()
+        runCurrent()
+
+        assertEquals(RebaseTargetsState.Typed, failing.vm.rebaseSheet.value?.targets)
+    }
+
+    @Test
+    fun startRebase_trimsTheRef_closesTheSheet_announcesTheOutcome_andPulls() = runTest {
+        val f = loaded(capabilities = rebaseCaps)
+        val pulls = countPulls(f)
+        coEvery { f.repo.rebaseSession("s1", "origin/main") } returns
+            GitRebaseResponse(GitRebaseResponse.OUTCOME_REBASED)
+        f.vm.openRebase()
+        runCurrent()
+
+        f.vm.events.test {
+            f.vm.startRebase(" origin/main ")
+            runCurrent()
+
+            assertEquals(GitChangesEvent.ShowMessage("Rebased main onto origin/main."), awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertNull(f.vm.rebaseSheet.value)
+        assertEquals(1, pulls.size)
+        assertFalse(ready(f.vm).busy)
+    }
+
+    @Test
+    fun startRebase_isBusyAtOnce_dropsASecondStart_andCannotBeClosedMeanwhile() = runTest {
+        val f = loaded(capabilities = rebaseCaps)
+        val reply = CompletableDeferred<GitRebaseResponse>()
+        coEvery { f.repo.rebaseSession("s1", any()) } coAnswers { reply.await() }
+        f.vm.openRebase()
+        runCurrent()
+
+        f.vm.startRebase("main")
+        f.vm.startRebase("origin/main")
+        runCurrent()
+
+        assertTrue(f.vm.rebaseSheet.value?.starting == true)
+        assertTrue(ready(f.vm).busy)
+        f.vm.closeRebase()
+        assertNotNull(f.vm.rebaseSheet.value)
+
+        reply.complete(GitRebaseResponse(GitRebaseResponse.OUTCOME_UP_TO_DATE))
+        runCurrent()
+
+        coVerify(exactly = 1) { f.repo.rebaseSession("s1", any()) }
+        coVerify(exactly = 1) { f.repo.rebaseSession("s1", "main") }
+        assertNull(f.vm.rebaseSheet.value)
+        assertFalse(ready(f.vm).busy)
+    }
+
+    @Test
+    fun aBlankRef_isNeverSent() = runTest {
+        val f = loaded(capabilities = rebaseCaps)
+        f.vm.openRebase()
+        runCurrent()
+
+        f.vm.startRebase("   ")
+        runCurrent()
+
+        coVerify(exactly = 0) { f.repo.rebaseSession(any(), any()) }
+        assertEquals(false, f.vm.rebaseSheet.value?.starting)
+    }
+
+    @Test
+    fun aRefusedStart_staysInTheSheet_withTheRebaseCopyAndGitsOutput_andPullsAnyway() = runTest {
+        val f = loaded(capabilities = rebaseCaps)
+        val pulls = countPulls(f)
+        coEvery { f.repo.rebaseSession("s1", "main") } throws
+            gitError(GitJobResponse.CODE_DIRTY_WORKTREE, "error: cannot rebase: You have unstaged changes.")
+        f.vm.openRebase()
+        runCurrent()
+
+        f.vm.startRebase("main")
+        runCurrent()
+
+        val sheet = f.vm.rebaseSheet.value
+        assertEquals(false, sheet?.starting)
+        assertEquals(
+            CommitError(
+                "Local changes are in the way — stage, commit or discard them first.",
+                "error: cannot rebase: You have unstaged changes.",
+            ),
+            sheet?.error,
+        )
+        assertEquals(1, pulls.size)
+        assertFalse(ready(f.vm).busy)
+
+        coEvery { f.repo.rebaseSession("s1", "mian") } throws gitError(SessionGitException.CODE_UNKNOWN_REF, "mian")
+        f.vm.startRebase("mian")
+        runCurrent()
+
+        assertEquals(
+            CommitError("“mian” isn't a branch, tag or commit here.", null),
+            f.vm.rebaseSheet.value?.error,
+        )
+    }
+
+    @Test
+    fun continueRebase_namesTheRebasedBranch_readBeforeTheCall_andPulls() = runTest {
+        val f = rebasing(entries = emptyList())
+        val pulls = countPulls(f)
+        coEvery { f.repo.stepSessionRebase("s1", GitRepository.REBASE_CONTINUE) } returns
+            GitRebaseResponse(
+                GitRebaseResponse.OUTCOME_STOPPED,
+                GitRebaseInfo(stopped_on = GitRebaseCommit("aa", "aa11bb2", "Tidy the callback")),
+            )
+
+        f.vm.events.test {
+            f.vm.continueRebase()
+            runCurrent()
+
+            assertEquals(
+                GitChangesEvent.ShowMessage(
+                    "Rebase stopped at “Tidy the callback” — resolve the conflicts, then Continue.",
+                ),
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(1, pulls.size)
+        assertFalse(ready(f.vm).busy)
+    }
+
+    @Test
+    fun aSecondStepWhileOneIsInFlight_isDropped() = runTest {
+        val f = rebasing(entries = emptyList())
+        val reply = CompletableDeferred<GitRebaseResponse>()
+        coEvery { f.repo.stepSessionRebase("s1", any()) } coAnswers { reply.await() }
+
+        f.vm.continueRebase()
+        f.vm.requestRebaseStep(RebasePromptStep.Abort)
+        f.vm.confirmRebaseStep()
+        runCurrent()
+        reply.complete(GitRebaseResponse(GitRebaseResponse.OUTCOME_REBASED))
+        runCurrent()
+
+        coVerify(exactly = 1) { f.repo.stepSessionRebase("s1", any()) }
+        coVerify(exactly = 1) { f.repo.stepSessionRebase("s1", GitRepository.REBASE_CONTINUE) }
+    }
+
+    @Test
+    fun skipAndAbort_goThroughThePrompt_andADismissSendsNothing() = runTest {
+        val f = rebasing()
+        coEvery { f.repo.stepSessionRebase("s1", GitRepository.REBASE_SKIP) } returns
+            GitRebaseResponse(GitRebaseResponse.OUTCOME_REBASED)
+        coEvery { f.repo.stepSessionRebase("s1", GitRepository.REBASE_ABORT) } returns
+            GitRebaseResponse(GitRebaseResponse.OUTCOME_ABORTED)
+
+        f.vm.confirmRebaseStep()
+        f.vm.requestRebaseStep(RebasePromptStep.Skip)
+        assertEquals(RebasePromptStep.Skip, f.vm.rebasePrompt.value)
+        f.vm.dismissRebaseStep()
+        assertNull(f.vm.rebasePrompt.value)
+        runCurrent()
+        coVerify(exactly = 0) { f.repo.stepSessionRebase(any(), any()) }
+
+        f.vm.events.test {
+            f.vm.requestRebaseStep(RebasePromptStep.Skip)
+            f.vm.confirmRebaseStep()
+            assertNull(f.vm.rebasePrompt.value)
+            runCurrent()
+            assertEquals(GitChangesEvent.ShowMessage("Rebase finished."), awaitItem())
+
+            f.vm.requestRebaseStep(RebasePromptStep.Abort)
+            f.vm.confirmRebaseStep()
+            runCurrent()
+            assertEquals(
+                GitChangesEvent.ShowMessage("Rebase aborted — topic is back where it started."),
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 1) { f.repo.stepSessionRebase("s1", GitRepository.REBASE_SKIP) }
+        coVerify(exactly = 1) { f.repo.stepSessionRebase("s1", GitRepository.REBASE_ABORT) }
+    }
+
+    @Test
+    fun aRefusedStep_isAToastWithTheRebaseCopy_andPullsAnyway() = runTest {
+        val f = rebasing()
+        val pulls = countPulls(f)
+        coEvery { f.repo.stepSessionRebase("s1", GitRepository.REBASE_CONTINUE) } throws
+            gitError(SessionGitException.CODE_NO_REBASE, "clean")
+
+        f.vm.events.test {
+            f.vm.continueRebase()
+            runCurrent()
+
+            assertEquals(GitChangesEvent.ShowMessage("No rebase is in progress anymore."), awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(1, pulls.size)
+        assertFalse(ready(f.vm).busy)
+    }
+
+    @Test
+    fun resolve_stagesTheOneConflictedFile() = runTest {
+        val f = rebasing()
+        val sent = slot<List<String>>()
+        coEvery { f.repo.stageSessionPaths("s1", capture(sent)) } returns Unit
+
+        f.vm.resolve(conflict)
+        runCurrent()
+
+        assertEquals(listOf("src/conflict.py"), sent.captured)
+    }
+
+    @Test
+    fun aMarkerRefusal_namesTheFile() = runTest {
+        val f = rebasing()
+        coEvery { f.repo.stageSessionPaths("s1", any()) } throws
+            gitError(SessionGitException.CODE_CONFLICT_MARKERS, "src/conflict.py")
+
+        f.vm.events.test {
+            f.vm.resolve(conflict)
+            runCurrent()
+
+            assertEquals(
+                GitChangesEvent.ShowMessage("src/conflict.py still has conflict markers — finish resolving it first."),
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun theRebaseRouteArg_opensTheSheetOnce_andIsConsumed() = runTest {
+        val f = newFixture(capabilities = rebaseCaps, rebase = true)
+
+        assertNotNull(f.vm.rebaseSheet.value)
+        assertEquals(false, f.handle.get<Boolean>("rebase"))
+
+        val plain = newFixture(capabilities = rebaseCaps)
+        assertNull(plain.vm.rebaseSheet.value)
     }
 }

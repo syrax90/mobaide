@@ -30,6 +30,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -40,6 +42,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 @HiltViewModel
@@ -150,6 +153,13 @@ class GitChangesViewModel @Inject constructor(
     private val _syncSheet = MutableStateFlow<SyncSheetState?>(null)
     val syncSheet: StateFlow<SyncSheetState?> = _syncSheet.asStateFlow()
 
+    private val _rebaseSheet = MutableStateFlow<RebaseSheetState?>(null)
+    val rebaseSheet: StateFlow<RebaseSheetState?> = _rebaseSheet.asStateFlow()
+
+    /** Skip or Abort waiting for its confirmation. */
+    private val _rebasePrompt = MutableStateFlow<RebasePromptStep?>(null)
+    val rebasePrompt: StateFlow<RebasePromptStep?> = _rebasePrompt.asStateFlow()
+
     private val _events = Channel<GitChangesEvent>(Channel.BUFFERED)
     val events: Flow<GitChangesEvent> = _events.receiveAsFlow()
 
@@ -164,6 +174,10 @@ class GitChangesViewModel @Inject constructor(
         if (savedStateHandle.get<Boolean>("sync") == true) {
             savedStateHandle["sync"] = false
             openSync()
+        }
+        if (savedStateHandle.get<Boolean>("rebase") == true) {
+            savedStateHandle["rebase"] = false
+            openRebase()
         }
         viewModelScope.launch {
             gitRepository.observeSessionGitJobFrames(sessionId).collect { job ->
@@ -396,6 +410,106 @@ class GitChangesViewModel @Inject constructor(
         }
     }
 
+    /**
+     * A project-backed session picks from the project's branches; any other
+     * session — or a list that fails to load — types the ref. Reached straight
+     * from the terminal menu, the session row may not have landed yet, so it
+     * is waited for briefly.
+     */
+    fun openRebase() {
+        _rebaseSheet.value = RebaseSheetState(targets = RebaseTargetsState.Loading)
+        viewModelScope.launch {
+            val projectName = withTimeoutOrNull(SESSION_ROW_WAIT_MS) {
+                sessionRow.filterNotNull().first()
+            }?.project_name
+            val targets = if (projectName == null) {
+                RebaseTargetsState.Typed
+            } else {
+                try {
+                    RebaseTargetsState.Ready(gitRepository.listGitItems(projectName))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    RebaseTargetsState.Typed
+                }
+            }
+            _rebaseSheet.update { it?.copy(targets = targets) }
+        }
+    }
+
+    fun closeRebase() {
+        if (_rebaseSheet.value?.starting == true) return
+        _rebaseSheet.value = null
+    }
+
+    fun startRebase(onto: String) {
+        val target = onto.trim()
+        if (target.isEmpty() || busy.value) return
+        // The branch is read before the call: HEAD is detached while a rebase runs.
+        val branch = rebasedBranch((uiState.value as? GitChangesUiState.Ready)?.repo)
+        busy.value = true
+        _rebaseSheet.update { it?.copy(starting = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val result = gitRepository.rebaseSession(sessionId, target)
+                _rebaseSheet.value = null
+                _events.send(GitChangesEvent.ShowMessage(rebaseOutcomeNotice(result, branch, target)))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _rebaseSheet.update {
+                    it?.copy(starting = false, error = CommitError(rebaseErrorCopy(e), rebaseErrorOutput(e)))
+                }
+            } finally {
+                busy.value = false
+                refreshRequests.tryEmit(Unit)
+            }
+        }
+    }
+
+    fun continueRebase() = runRebaseStep(GitRepository.REBASE_CONTINUE)
+
+    fun requestRebaseStep(step: RebasePromptStep) {
+        _rebasePrompt.value = step
+    }
+
+    fun dismissRebaseStep() {
+        _rebasePrompt.value = null
+    }
+
+    fun confirmRebaseStep() {
+        val step = _rebasePrompt.value ?: return
+        _rebasePrompt.value = null
+        runRebaseStep(
+            when (step) {
+                RebasePromptStep.Skip -> GitRepository.REBASE_SKIP
+                RebasePromptStep.Abort -> GitRepository.REBASE_ABORT
+            },
+        )
+    }
+
+    private fun runRebaseStep(step: String) {
+        if (busy.value) return
+        val branch = rebasedBranch((uiState.value as? GitChangesUiState.Ready)?.repo)
+        busy.value = true
+        viewModelScope.launch {
+            try {
+                val result = gitRepository.stepSessionRebase(sessionId, step)
+                _events.send(GitChangesEvent.ShowMessage(rebaseOutcomeNotice(result, branch, null)))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _events.send(GitChangesEvent.ShowMessage(rebaseErrorCopy(e)))
+            } finally {
+                busy.value = false
+                refreshRequests.tryEmit(Unit)
+            }
+        }
+    }
+
+    /** Stage a fixed conflict; the agent refuses a file that still holds markers. */
+    fun resolve(entry: GitStatusEntry) = stage(listOf(entry))
+
     fun holdWatch() = foregroundSessionTracker.holdWatch(sessionId)
 
     fun releaseWatch() = foregroundSessionTracker.releaseWatch(sessionId)
@@ -548,5 +662,9 @@ class GitChangesViewModel @Inject constructor(
             busy = inFlight || banner?.running == true,
             job = banner,
         )
+    }
+
+    private companion object {
+        const val SESSION_ROW_WAIT_MS = 2_000L
     }
 }

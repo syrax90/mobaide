@@ -88,6 +88,7 @@ fun TerminalScreen(
     onOpenGitCommit: () -> Unit = {},
     onOpenGitSync: () -> Unit = {},
     onOpenGitBranches: (projectName: String) -> Unit = {},
+    onOpenGitRebase: () -> Unit = {},
 ) {
     val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
     val sessionCwd by viewModel.sessionCwd.collectAsStateWithLifecycle()
@@ -95,6 +96,7 @@ fun TerminalScreen(
     val gitCommitAvailable by viewModel.gitCommitAvailable.collectAsStateWithLifecycle()
     val gitSyncAvailable by viewModel.gitSyncAvailable.collectAsStateWithLifecycle()
     val gitBranchesAvailable by viewModel.gitBranchesAvailable.collectAsStateWithLifecycle()
+    val gitRebaseAvailable by viewModel.gitRebaseAvailable.collectAsStateWithLifecycle()
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val followMode by viewModel.followMode.collectAsStateWithLifecycle()
@@ -230,6 +232,8 @@ fun TerminalScreen(
                                 if (branchesProject != null) onOpenGitBranches(branchesProject)
                             },
                             branchesAvailable = gitBranchesAvailable && branchesProject != null,
+                            onOpenGitRebase = onOpenGitRebase,
+                            rebaseAvailable = gitRebaseAvailable,
                         )
                     }
                 },

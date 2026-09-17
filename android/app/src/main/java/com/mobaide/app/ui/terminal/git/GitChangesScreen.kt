@@ -88,6 +88,11 @@ const val GIT_CHANGES_JOB_TAG = "git_changes_job"
 const val GIT_CHANGES_JOB_CANCEL_TAG = "git_changes_job_cancel"
 const val GIT_CHANGES_JOB_OPTIONS_TAG = "git_changes_job_options"
 const val GIT_CHANGES_JOB_DISMISS_TAG = "git_changes_job_dismiss"
+const val GIT_CHANGES_REBASE_TAG = "git_changes_rebase"
+const val GIT_CHANGES_REBASE_CONTINUE_TAG = "git_changes_rebase_continue"
+const val GIT_CHANGES_REBASE_SKIP_TAG = "git_changes_rebase_skip"
+const val GIT_CHANGES_REBASE_ABORT_TAG = "git_changes_rebase_abort"
+const val GIT_CHANGES_REBASE_DIALOG_TAG = "git_changes_rebase_dialog"
 
 fun gitChangesSectionActionTag(group: String): String = "git_changes_section_action_$group"
 
@@ -102,6 +107,8 @@ fun GitChangesScreen(
     val discardPrompt by viewModel.discardPrompt.collectAsStateWithLifecycle()
     val commitSheet by viewModel.commitSheet.collectAsStateWithLifecycle()
     val syncSheet by viewModel.syncSheet.collectAsStateWithLifecycle()
+    val rebaseSheet by viewModel.rebaseSheet.collectAsStateWithLifecycle()
+    val rebasePrompt by viewModel.rebasePrompt.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Keeps the covered terminal's socket attached for exactly as long as this
@@ -196,6 +203,9 @@ fun GitChangesScreen(
                 onSync = if (ready?.capabilities?.hasSync == true) viewModel::openSync else null,
                 onCancelJob = viewModel::cancelSync,
                 onDismissJob = viewModel::dismissJobResult,
+                onResolve = viewModel::resolve,
+                onContinueRebase = viewModel::continueRebase,
+                onRebaseStep = viewModel::requestRebaseStep,
             )
         }
     }
@@ -215,6 +225,25 @@ fun GitChangesScreen(
             stagedCount = ready?.stagedCount ?: 0,
             onDismiss = viewModel::closeCommit,
             onCommit = viewModel::commit,
+        )
+    }
+
+    rebaseSheet?.let { sheet ->
+        GitRebaseSheet(
+            state = sheet,
+            status = ready?.status,
+            onDismiss = viewModel::closeRebase,
+            onRebase = viewModel::startRebase,
+        )
+    }
+
+    rebasePrompt?.let { step ->
+        GitSyncConfirmDialog(
+            prompt = rebaseStepPrompt(step, ready?.repo),
+            destructive = true,
+            onConfirm = viewModel::confirmRebaseStep,
+            onDismiss = viewModel::dismissRebaseStep,
+            tag = GIT_CHANGES_REBASE_DIALOG_TAG,
         )
     }
 
@@ -327,6 +356,9 @@ internal fun GitChangesContent(
     onSync: (() -> Unit)? = null,
     onCancelJob: () -> Unit = {},
     onDismissJob: () -> Unit = {},
+    onResolve: (GitStatusEntry) -> Unit = {},
+    onContinueRebase: () -> Unit = {},
+    onRebaseStep: (RebasePromptStep) -> Unit = {},
 ) {
     when (state) {
         GitChangesUiState.Loading -> GitStateLoading(GIT_CHANGES_LOADING_TAG, modifier)
@@ -341,6 +373,9 @@ internal fun GitChangesContent(
             onSync = onSync,
             onCancelJob = onCancelJob,
             onDismissJob = onDismissJob,
+            onResolve = onResolve,
+            onContinueRebase = onContinueRebase,
+            onRebaseStep = onRebaseStep,
             modifier = modifier,
         )
         is GitChangesUiState.Unavailable -> {
@@ -390,6 +425,9 @@ private fun ChangesList(
     onSync: (() -> Unit)?,
     onCancelJob: () -> Unit,
     onDismissJob: () -> Unit,
+    onResolve: (GitStatusEntry) -> Unit,
+    onContinueRebase: () -> Unit,
+    onRebaseStep: (RebasePromptStep) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -406,6 +444,18 @@ private fun ChangesList(
                     onCancel = onCancelJob,
                     onOptions = onSync,
                     onDismiss = onDismissJob,
+                )
+            }
+        }
+        rebaseBanner(state.repo, state.status.counts?.conflicts ?: 0)?.let { banner ->
+            item(key = "rebase", contentType = "rebase") {
+                RebaseBannerRow(
+                    banner = banner,
+                    actionable = state.capabilities.rebase && banner.actionable,
+                    canContinue = !state.busy && (state.status.counts?.conflicts ?: 0) == 0,
+                    busy = state.busy,
+                    onContinue = onContinueRebase,
+                    onStep = onRebaseStep,
                 )
             }
         }
@@ -460,6 +510,7 @@ private fun ChangesList(
                     onStage = { onStage(listOf(entry)) },
                     onUnstage = { onUnstage(listOf(entry)) },
                     onDiscard = { onDiscard(listOf(entry)) },
+                    onResolve = { onResolve(entry) },
                 )
             }
         }
@@ -623,6 +674,74 @@ private fun SyncJobBanner(
                 modifier = Modifier.testTag(GIT_CHANGES_JOB_DISMISS_TAG),
             ) {
                 Icon(Icons.Default.Close, contentDescription = "Dismiss")
+            }
+        }
+    }
+}
+
+/**
+ * A rebase in progress, for as long as the status says so: where it stopped
+ * and what to do next, with Continue (once no conflict is left) and the two
+ * confirmed ways out.
+ */
+@Composable
+private fun RebaseBannerRow(
+    banner: RebaseBanner,
+    actionable: Boolean,
+    canContinue: Boolean,
+    busy: Boolean,
+    onContinue: () -> Unit,
+    onStep: (RebasePromptStep) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 4.dp)
+            .testTag(GIT_CHANGES_REBASE_TAG),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            text = banner.title,
+            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = ChromeFontFamily),
+            color = MaterialTheme.pixel.warning,
+            modifier = Modifier.padding(end = 12.dp),
+        )
+        banner.progress?.let { progress ->
+            Text(
+                text = progress,
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(end = 12.dp),
+            )
+        }
+        Text(
+            text = banner.hint,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(end = 12.dp),
+        )
+        if (actionable) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                PixelTextButton(
+                    onClick = { onStep(RebasePromptStep.Abort) },
+                    enabled = !busy,
+                    modifier = Modifier.testTag(GIT_CHANGES_REBASE_ABORT_TAG),
+                ) { Text("Abort…", color = MaterialTheme.colorScheme.error) }
+                PixelTextButton(
+                    onClick = { onStep(RebasePromptStep.Skip) },
+                    enabled = !busy,
+                    modifier = Modifier.testTag(GIT_CHANGES_REBASE_SKIP_TAG),
+                ) { Text("Skip…") }
+                PixelTextButton(
+                    onClick = onContinue,
+                    enabled = canContinue,
+                    modifier = Modifier.testTag(GIT_CHANGES_REBASE_CONTINUE_TAG),
+                ) { Text("Continue") }
             }
         }
     }

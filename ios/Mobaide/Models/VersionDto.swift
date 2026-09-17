@@ -113,6 +113,10 @@ struct GitCapabilities: Equatable, Sendable {
     var push = false
     /// The project Git screen's remote rows, New branch and Check out.
     var branches = false
+    /// *Rebase…* and the Changes screen's Continue / Skip / Abort.
+    var rebase = false
+    /// `stage` refuses a conflicted file that still holds markers, so *Mark resolved* is safe.
+    var resolve = false
 
     /// The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three.
     var hasSync: Bool { fetch || pull || push }
@@ -137,7 +141,9 @@ extension VersionInfoResponse {
             fetch: gitCapability("fetch"),
             pull: gitCapability("pull"),
             push: gitCapability("push"),
-            branches: gitCapability("branches")
+            branches: gitCapability("branches"),
+            rebase: gitCapability("rebase"),
+            resolve: gitCapability("resolve")
         )
     }
 }

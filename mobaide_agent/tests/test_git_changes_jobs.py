@@ -32,6 +32,12 @@ from mobaide.agent.git.changes_mutations import (
     get_session_commit_context,
     stage_session_paths,
 )
+from mobaide.agent.git.changes_rebase import (
+    abort_session_rebase,
+    continue_session_rebase,
+    skip_session_rebase,
+    start_session_rebase,
+)
 from mobaide.agent.git.changes_service import (
     GitNotFoundError,
     GitRefusedError,
@@ -339,6 +345,13 @@ class TestClassifyJobFailure:
              [], "unmerged"),
             (["fatal: You have not concluded your merge (MERGE_HEAD exists)."],
              [], "operation_in_progress"),
+            (["fatal: It seems that there is already a rebase-merge directory, and",
+              "I wonder if you are in the middle of another rebase.  If that is the"],
+             [], "operation_in_progress"),
+            (["fatal: It seems that there is already a rebase-apply directory, and",
+              "I wonder if you are in the middle of another rebase.  If that is the"],
+             [], "operation_in_progress"),
+            (["error: The pre-rebase hook refused to rebase."], [], "hook_failed"),
             (["There is no tracking information for the current branch."],
              [], "no_upstream"),
             (["fatal: No configured push destination."], [], "no_remote"),
@@ -406,6 +419,10 @@ class TestClassifyJobFailure:
     def test_message_defaults_when_git_said_nothing(self):
         assert classify_job_failure("fetch", err_tail=[], out_tail=[]) == (
             "git_error", "git fetch failed")
+
+    def test_rebase_is_classified_with_its_own_fallback_message(self):
+        assert classify_job_failure("rebase", err_tail=[], out_tail=[]) == (
+            "git_error", "git rebase failed")
 
     def test_message_is_capped(self):
         _, message = classify_job_failure(
@@ -1192,3 +1209,31 @@ class TestWritesDuringAJob:
         assert (committed.value.code, committed.value.message) == ("job_running", first.job_id)
         assert context.head.subject == "add a"
         assert [(e.group, e.path) for e in (await _status(local)).entries] == [("staged", "b.txt")]
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda cwd, bus: start_session_rebase(
+                cwd=cwd, onto="origin/main", project_name=None, event_bus=bus),
+            lambda cwd, bus: continue_session_rebase(cwd=cwd, project_name=None, event_bus=bus),
+            lambda cwd, bus: skip_session_rebase(cwd=cwd, project_name=None, event_bus=bus),
+            lambda cwd, bus: abort_session_rebase(cwd=cwd, project_name=None, event_bus=bus),
+        ],
+        ids=["start", "continue", "skip", "abort"],
+    )
+    async def test_rebase_routes_are_refused_while_a_job_owns_the_repo(self, local, call):
+        _install_sleeping_pre_push(local)
+        write_file(local, "a.txt", b"a\n")
+        commit_all(local, "add a")
+        head = _git_out(local, "rev-parse", "HEAD")
+        bus = FakeEventBus()
+        first = await _start("push", local)
+
+        with pytest.raises(GitRefusedError) as refused:
+            await call(local, bus)
+        await job_registry.cancel(first.job_id)
+
+        assert (refused.value.code, refused.value.message) == ("job_running", first.job_id)
+        assert _git_out(local, "rev-parse", "HEAD") == head
+        assert (await _status(local)).repo.state == "clean"
+        assert bus.published == []

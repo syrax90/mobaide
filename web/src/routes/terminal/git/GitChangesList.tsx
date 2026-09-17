@@ -156,12 +156,14 @@ export function GitChangesList({
               <ul className="git-changes-rows">
                 {section.rows.map((row) => {
                   const actions = rowActions(row.entry, capabilities);
-                  const hasActions = actions.stage || actions.unstage || actions.discard;
+                  const hasBulkActions = actions.stage || actions.unstage || actions.discard;
+                  const hasActions = hasBulkActions || actions.resolve;
                   return (
                     <li key={row.key} className="git-changes-item">
                       {/* A conflict has no checkbox rather than a disabled one: no
-                          toolbar action can apply to it, so a control would be noise. */}
-                      {selectable && hasActions && (
+                          toolbar action applies to it — Mark resolved is one file
+                          at a time — so a control would be noise. */}
+                      {selectable && hasBulkActions && (
                         <input
                           type="checkbox"
                           className="git-changes-select"
@@ -356,6 +358,20 @@ interface RowActionButtonsProps {
 function RowActionButtons({ entry, actions, busy, onAction }: RowActionButtonsProps) {
   return (
     <span className="git-changes-row-actions">
+      {actions.resolve && (
+        <button
+          type="button"
+          className="button button-icon"
+          disabled={busy}
+          aria-label={`Mark ${entry.path} resolved`}
+          title="Mark resolved"
+          onClick={() => {
+            onAction('resolve');
+          }}
+        >
+          ✓
+        </button>
+      )}
       {actions.stage && (
         <button
           type="button"

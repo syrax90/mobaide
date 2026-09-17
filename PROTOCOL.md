@@ -129,6 +129,102 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-09-17, in-session git rebase —
+  start, continue, skip, abort, and Mark resolved): **four additive REST
+  routes, one additive status field, one additive stage refusal, two
+  additive capability keys, no version bump.** A rebase is a working-tree
+  operation — git can only rebase the branch checked out in the directory
+  it runs in, and a linked worktree's branch only from inside that
+  worktree — so it lives on the session-scoped prefix next to the
+  mutations, both transports byte-identical:
+  * ``POST /api/sessions/{session_id}/git/rebase`` with ``GitRebaseRequest``
+    ``{onto}`` runs ``git rebase --no-autostash --end-of-options <onto>``.
+    Guards, in order: ``409 unknown_ref`` (message = ``onto``) for a
+    ``-``-leading or NUL-carrying ref, then ``job_running``, then under the
+    per-toplevel lock ``operation_in_progress`` (message = the state) unless
+    the state is ``clean``, ``no_head`` on an unborn branch, and
+    ``unknown_ref`` when ``rev-parse -q --verify --end-of-options
+    <onto>^{commit}`` fails. Whether the tree is too dirty to start is
+    git's own call (``dirty_worktree``: staged or unstaged changes to
+    tracked files, or an untracked file the checkout would overwrite);
+    ``--no-autostash`` keeps ``rebase.autoStash`` from stashing around it.
+    An empty ``onto`` is a ``422``. The clients' branch pickers send fully
+    qualified refs (``refs/heads/<name>``, ``refs/remotes/<remote>/<name>``)
+    so a tag of the same name cannot shadow the branch; a typed ref goes as
+    entered.
+  * ``POST …/git/rebase/continue`` (no body) runs ``git rebase
+    --continue``, refused with ``409 unmerged`` while ``ls-files -u`` lists
+    anything; ``POST …/git/rebase/skip`` runs ``--skip`` (drops the commit
+    git stopped at — for a rescheduled ``pick``/``reword``/``edit``, which
+    ``--skip`` alone would retry, the agent first removes that line from
+    ``git-rebase-todo`` under git's ``.lock`` and puts it back if the skip
+    then fails without git touching the todo; a held
+    ``git-rebase-todo.lock`` is ``409 index_locked``; a rescheduled
+    ``squash``/``fixup`` is left for git to retry, because dropping it would
+    corrupt the combined commit's message); ``POST …/git/rebase/abort`` runs
+    ``--abort`` (back to the branch as it was). All three refuse ``409
+    no_rebase`` (message = the state) unless the state is ``rebasing``, and
+    ``job_running`` first.
+  * All four answer ``GitRebaseResponse {"outcome", "rebase", "message"}``.
+    ``outcome`` is an open vocabulary: ``rebased`` (finished), ``up_to_date``
+    (a start that left HEAD where it was), ``stopped`` and ``aborted``.
+    ``stopped`` is decided from the repository, never from git's wording
+    (which quotes commit subjects and paths): the rebase is still in
+    progress when git exits and the call moved it — a start always does; a
+    continue, skip or abort did when it changed HEAD or ``REBASE_HEAD`` (the
+    commit git stopped at), or left unmerged paths where there were none (a
+    rescheduled pick — one an untracked file blocked — retried into a
+    conflict). Not the todo step, which git bumps on every retry of a
+    rescheduled pick, and never git's ``hint:`` lines, which quote the
+    rescheduled pick's subject. ``message`` is ``null`` while unmerged paths
+    explain the stop, else git's own reason (an untracked file in the way of a
+    later pick, say). ``rebase`` is the ``GitRebaseInfo`` below, set only when
+    ``stopped``. A call that fails without moving the rebase is a ``409``
+    with the fetch/pull/push jobs' classifier codes and git's explanation
+    as ``message``:
+    ``dirty_worktree`` (``--continue`` with unstaged changes is reported
+    this way too, although git words it like unmerged paths),
+    ``hook_failed`` (the ``pre-rebase`` hook refused),
+    ``operation_in_progress``, ``index_locked``, ``git_error``.
+  * Editors are disabled with ``GIT_EDITOR=:`` and ``GIT_SEQUENCE_EDITOR=:``
+    — ``:`` is git's own "no editor", so nothing is spawned on any OS and
+    ``--continue`` keeps the original commit message. Each call runs under
+    the per-toplevel lock with a 25 s budget (the relay gives a proxied
+    request 30 s); a rebase the timeout cuts off is left in progress
+    (``504 git_timeout``) for Abort to undo. ``git.changed {project_name,
+    toplevel, common_dir}`` is published whenever git ran, whatever it
+    answered. Repository hooks (``pre-rebase``, ``post-checkout``,
+    ``post-rewrite``) run under the agent's account, the same trust
+    boundary as commit.
+  * ``GET …/git/status`` ``repo`` gains ``rebase``: ``null`` unless the
+    state is ``rebasing``, else ``GitRebaseInfo {"branch", "onto_oid",
+    "onto_short_oid", "onto_ref", "stopped_on": {"oid", "short_oid",
+    "subject"} | null, "step", "total"}`` read from git's state directory
+    (``head-name``, ``onto``, ``msgnum``/``end`` for the merge backend,
+    ``next``/``last`` for the apply backend) and ``REBASE_HEAD``. ``branch``
+    is null for a detached HEAD, ``onto_ref`` is a branch pointing at the
+    base (a local branch first, then a remote-tracking one) or null, and
+    every key is nullable because a rebase git was killed in need not have
+    written every file. It stays ``null`` during a ``git am`` session, which
+    shares ``rebase-apply``. The etag covers it, so skipping one conflicted
+    commit to stop on another in the same file still reads as a change.
+  * ``POST …/git/stage`` now refuses ``409 conflict_markers`` (message = the
+    path) for an unmerged path whose working-tree file still holds a line
+    starting with ``<<<<<<<`` or ``>>>>>>>``; staging an unmerged path is
+    how a conflict is marked resolved. Binary files, symlinks, submodules
+    and a deleted file (resolving by removal) are not scanned.
+  * ``GET /api/version`` ``capabilities.git`` gains ``"rebase": true`` and
+    ``"resolve": true`` (both transports). Clients gate the terminal menu's
+    *Rebase…* entry on ``rebase``, the Changes screen's Continue / Skip /
+    Abort on ``rebase`` with a non-null ``repo.rebase`` — a ``rebasing`` state
+    without it (a ``git am`` session, or an older agent) gets a banner
+    pointing to the terminal instead — and a conflict row's *Mark resolved*
+    action on ``resolve`` (with ``stage``); an agent without ``resolve`` would
+    stage the markers.
+  * Golden fixtures: new ``tests/protocol_fixtures/dto/agent/{
+    GitRebaseRequest,GitRebaseResponse}.json``; ``GitStatusResponse.json``
+    gains ``rebase`` on every repo and a ``rebasing_stopped_on_conflict``
+    case — on the four registries.
 * Additive delta within proto-v7 (2026-09-16, project Git management —
   remote branches, create and check out): **one additive query flag, two
   additive REST routes, three additive row fields, one additive row kind,
@@ -161,7 +257,11 @@ cadence; they do **not** gate compatibility.
     refusing it), then asks ``git check-ref-format --branch``: ``400
     bad_branch_name``. ``409 exists`` when ``refs/heads/<name>`` resolves,
     ``409 unknown_start_point`` (message = the start point) when
-    ``rev-parse --verify --end-of-options <start>^{commit}`` fails.
+    ``rev-parse --verify --end-of-options <start>^{commit}`` fails. A start
+    point naming a local or remote-tracking branch is resolved as that
+    branch (``refs/heads/…`` first, then ``refs/remotes/…``), so a tag of the
+    same name cannot make it ambiguous; the item rows list local branches by
+    their exact name (``%(refname:lstrip=2)``).
     Tracking follows git's own ``branch.autoSetupMerge``.
   * ``POST /api/projects/{name}/git/checkout`` ``{"ref"}`` →
     ``GitBranchResponse {"branch", "checked_out": true, "created"}``.

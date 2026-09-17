@@ -602,16 +602,25 @@ async def _check_branch_name(project_root: str, name: str) -> None:
 
 
 async def _resolve_start_point(project_root: str, start_point: str | None) -> str:
+    """The start point as git should read it: a name that is a local or
+    remote-tracking branch is qualified first, because a tag of the same name
+    would make the bare name ambiguous and ``git branch`` refuses those."""
     start = start_point or "HEAD"
     if start.startswith("-") or "\0" in start:
         raise GitRefusedError("unknown_start_point", start)
+    qualified = start
+    if start_point:
+        for prefix in (_REFS_HEADS, _REFS_REMOTES):
+            if await _ref_exists(project_root, prefix + start):
+                qualified = prefix + start
+                break
     result = await _quick(
         project_root,
-        ["rev-parse", "-q", "--verify", "--end-of-options", f"{start}^{{commit}}"],
+        ["rev-parse", "-q", "--verify", "--end-of-options", f"{qualified}^{{commit}}"],
     )
     if result.rc != 0:
         raise GitRefusedError("unknown_start_point", start)
-    return start
+    return qualified
 
 
 async def _resolve_checkout(project_root: str, ref: str) -> tuple[str, str | None]:

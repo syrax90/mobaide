@@ -1,5 +1,6 @@
-"""``GET /api/sessions/{id}/git/status|diff|commit/context`` and
-``POST .../git/stage|unstage|discard|commit`` through the FastAPI app and the
+"""``GET /api/sessions/{id}/git/status|diff|commit/context``,
+``POST .../git/stage|unstage|discard|commit``, the fetch/pull/push jobs and
+``POST .../git/rebase[/continue|skip|abort]`` through the FastAPI app and the
 relay ``_dispatch_session_git`` dispatcher, asserting both transports answer
 byte-identically for every status code the contract defines."""
 from __future__ import annotations
@@ -7,6 +8,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 import types
 from unittest.mock import MagicMock
 
@@ -23,9 +25,11 @@ from mobaide.relay.client import RelayClient
 
 from .conftest import TEST_JWT_SECRET, TEST_PASSWORD, TEST_USERNAME
 from .git_repo_support import (
+    GIT_BIN,
     clone_repo,
     commit_all,
     init_repo,
+    make_conflict_branches,
     norm_path,
     posix_only,
     repo,  # noqa: F401 - pytest fixture
@@ -185,6 +189,8 @@ class TestAuthAndRouting:
             "pull": True,
             "push": True,
             "branches": True,
+            "rebase": True,
+            "resolve": True,
         }
 
 
@@ -361,6 +367,13 @@ class TestMutationRouting:
             ("GET", "commit"),
             ("POST", "commit/context"),
             ("POST", "commit/extra"),
+            ("GET", "rebase"),
+            ("GET", "rebase/continue"),
+            ("GET", "rebase/skip"),
+            ("GET", "rebase/abort"),
+            ("POST", "rebase/"),
+            ("POST", "rebase/restart"),
+            ("POST", "rebase/abort/extra"),
         ],
     )
     async def test_relay_ignores_the_wrong_method_per_route(self, relay, method, route):
@@ -377,6 +390,8 @@ class TestMutationRouting:
             ("commit", {"message": ""}, ["message"]),
             ("commit", {"message": "x" * (64 * 1024 + 1)}, ["message"]),
             ("commit", {"message": "x", "amend": "maybe"}, ["amend"]),
+            ("rebase", {}, ["onto"]),
+            ("rebase", {"onto": ""}, ["onto"]),
         ],
     )
     async def test_malformed_body_is_422_on_both_transports(
@@ -814,3 +829,176 @@ class TestJobRoutes:
             {"project_name": "proj", "toplevel": norm_path(local),
              "common_dir": norm_path(local) + "/.git"},
         )
+
+
+class TestRebaseRouting:
+    async def test_rebase_routes_require_auth(self, http):
+        started = await http.post(_git_url("rebase"), json={"onto": "main"})
+        aborted = await http.post(_git_url("rebase/abort"))
+
+        assert (started.status_code, aborted.status_code) == (401, 401)
+
+    @pytest.mark.parametrize(
+        ("route", "body"),
+        [
+            ("rebase", {"onto": "main"}),
+            ("rebase/continue", None),
+            ("rebase/skip", None),
+            ("rebase/abort", None),
+        ],
+    )
+    async def test_unknown_session_is_404_on_both_transports(
+        self, http, headers, relay, session_at, tmp_path, route, body
+    ):
+        session_at(str(tmp_path))
+
+        resp = await _assert_post_parity(http, headers, relay, _git_url(route, "nope"), body)
+
+        assert resp.status_code == 404
+        assert resp.json() == {"detail": "Session 'nope' not found"}
+
+    async def test_rebase_outside_a_repo_is_409_on_both_transports(
+        self, http, headers, relay, session_at, tmp_path
+    ):
+        session_at(str(tmp_path))
+
+        resp = await _assert_post_parity(
+            http, headers, relay, _git_url("rebase"), {"onto": "main"}
+        )
+
+        assert resp.status_code == 409
+        assert resp.json() == {"detail": {"code": "not_a_repo", "message": ""}}
+
+
+async def _post_via(transport, http, headers, relay, route, body=None):
+    if transport == "http":
+        resp = await http.post(_git_url(route), headers=headers, json=body)
+        return resp.status_code, resp.json()
+    dispatched = await relay._dispatch_session_git("POST", _git_url(route), None, body)
+    return dispatched["status"], dispatched["body"]
+
+
+def _head(repo_dir: str, rev: str = "HEAD") -> str:
+    return subprocess.run(
+        [GIT_BIN, "rev-parse", rev], cwd=repo_dir, check=True, capture_output=True,
+        env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
+    ).stdout.decode().strip()
+
+
+@pytest.fixture
+def stopped_repo(repo):
+    """``other`` checked out, one commit that conflicts with ``main``."""
+    make_conflict_branches(repo)
+    run_git_sync(repo, "checkout", "-q", "other")
+    return repo
+
+
+@requires_git
+class TestRebaseRoutes:
+    @pytest.mark.parametrize(
+        ("route", "body", "detail"),
+        [
+            ("rebase", {"onto": "no-such-branch"},
+             {"code": "unknown_ref", "message": "no-such-branch"}),
+            ("rebase", {"onto": "--root"}, {"code": "unknown_ref", "message": "--root"}),
+            ("rebase/continue", None, {"code": "no_rebase", "message": "clean"}),
+            ("rebase/skip", None, {"code": "no_rebase", "message": "clean"}),
+            ("rebase/abort", None, {"code": "no_rebase", "message": "clean"}),
+        ],
+    )
+    async def test_refusals_match_on_both_transports(
+        self, http, headers, relay, session_at, repo, route, body, detail
+    ):
+        session_at(repo)
+
+        resp = await _assert_post_parity(http, headers, relay, _git_url(route), body)
+
+        assert resp.status_code == 409
+        assert resp.json() == {"detail": detail}
+
+    async def test_up_to_date_matches_on_both_transports(
+        self, http, headers, relay, session_at, repo
+    ):
+        session_at(repo)
+
+        resp = await _assert_post_parity(
+            http, headers, relay, _git_url("rebase"), {"onto": "main"}
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"outcome": "up_to_date", "rebase": None, "message": None}
+
+    @pytest.mark.parametrize("transport", ["http", "relay"])
+    async def test_start_stops_then_continue_refuses_and_skip_finishes(
+        self, http, headers, relay, session_at, git_app, mock_app_state, stopped_repo,
+        transport,
+    ):
+        session_at(stopped_repo, project_name="proj")
+        bus = _FakeEventBus()
+        git_app.state.event_bus = bus
+        mock_app_state.event_bus = bus
+
+        started = await _post_via(
+            transport, http, headers, relay, "rebase", {"onto": "main"})
+        continued = await _post_via(transport, http, headers, relay, "rebase/continue")
+        skipped = await _post_via(transport, http, headers, relay, "rebase/skip")
+
+        assert started[0] == 200
+        assert started[1]["outcome"] == "stopped"
+        assert started[1]["message"] is None
+        assert set(started[1]["rebase"]) == {
+            "branch", "onto_oid", "onto_short_oid", "onto_ref", "stopped_on", "step", "total"}
+        assert (started[1]["rebase"]["branch"], started[1]["rebase"]["onto_ref"]) == (
+            "other", "main")
+        assert started[1]["rebase"]["stopped_on"]["subject"] == "other side"
+        assert continued == (409, {"detail": {
+            "code": "unmerged", "message": "unmerged paths in the index"}})
+        assert skipped == (200, {"outcome": "rebased", "rebase": None, "message": None})
+        assert _head(stopped_repo) == _head(stopped_repo, "main")
+        changed = ("git.changed", {"project_name": "proj", "toplevel": norm_path(stopped_repo),
+                                   "common_dir": norm_path(stopped_repo) + "/.git"})
+        assert bus.published == [changed, changed]
+
+    @pytest.mark.parametrize("transport", ["http", "relay"])
+    async def test_abort_restores_the_branch(
+        self, http, headers, relay, session_at, stopped_repo, transport
+    ):
+        session_at(stopped_repo)
+        before = _head(stopped_repo)
+        await _post_via(transport, http, headers, relay, "rebase", {"onto": "main"})
+
+        aborted = await _post_via(transport, http, headers, relay, "rebase/abort")
+
+        assert aborted == (200, {"outcome": "aborted", "rebase": None, "message": None})
+        assert _head(stopped_repo) == before
+        status = await http.get(_status_url(), headers=headers)
+        assert (status.json()["repo"]["state"], status.json()["repo"]["rebase"]) == (
+            "clean", None)
+
+    @pytest.mark.parametrize("transport", ["http", "relay"])
+    async def test_continue_after_a_resolution_finishes(
+        self, http, headers, relay, session_at, stopped_repo, transport
+    ):
+        session_at(stopped_repo)
+        await _post_via(transport, http, headers, relay, "rebase", {"onto": "main"})
+        write_file(stopped_repo, "keep.txt", b"one\nRESOLVED\nthree\n")
+        resolved = await _post_via(
+            transport, http, headers, relay, "stage", {"paths": ["keep.txt"]})
+
+        continued = await _post_via(transport, http, headers, relay, "rebase/continue")
+
+        assert resolved == (200, {"ok": True})
+        assert continued == (200, {"outcome": "rebased", "rebase": None, "message": None})
+        assert _head(stopped_repo, "HEAD~1") == _head(stopped_repo, "main")
+
+    @pytest.mark.parametrize("transport", ["http", "relay"])
+    async def test_marking_a_file_with_markers_resolved_is_409(
+        self, http, headers, relay, session_at, stopped_repo, transport
+    ):
+        session_at(stopped_repo)
+        await _post_via(transport, http, headers, relay, "rebase", {"onto": "main"})
+
+        refused = await _post_via(
+            transport, http, headers, relay, "stage", {"paths": ["keep.txt"]})
+
+        assert refused == (409, {"detail": {"code": "conflict_markers", "message": "keep.txt"}})

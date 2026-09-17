@@ -1,6 +1,6 @@
 """Pydantic wire models for the session-scoped git Changes API (status/diff
-reads, the stage/unstage/discard/commit mutations and the fetch/pull/push
-jobs).
+reads, the stage/unstage/discard/commit mutations, the fetch/pull/push
+jobs and the rebase routes).
 
 ``GET /api/sessions/{id}/git/status`` and ``.../git/diff`` share one parser
 on the agent so the three clients render dumb, pre-shaped JSON. Every key is
@@ -21,7 +21,10 @@ BYTE_LIMIT = 1024 * 1024
 # Clients render the Changes viewer on ``changes`` and gate every mutating
 # control on its own key, so an agent without a key degrades to read-only.
 # ``branches`` covers the project-scoped ``GET /items?remote=true``,
-# ``POST /branches`` and ``POST /checkout`` routes.
+# ``POST /branches`` and ``POST /checkout`` routes. ``rebase`` covers the four
+# ``POST .../git/rebase`` routes and ``repo.rebase`` on status; ``resolve``
+# certifies that ``stage`` refuses an unmerged path still holding conflict
+# markers, which is what makes a "Mark resolved" row action safe to offer.
 GIT_CAPABILITIES: dict[str, bool] = {
     "changes": True,
     "stage": True,
@@ -31,6 +34,8 @@ GIT_CAPABILITIES: dict[str, bool] = {
     "pull": True,
     "push": True,
     "branches": True,
+    "rebase": True,
+    "resolve": True,
 }
 MESSAGE_LIMIT = 64 * 1024
 JOB_LINE_LIMIT = 200
@@ -75,6 +80,28 @@ class GitUpstream(BaseModel):
     behind: int | None = None
 
 
+class GitRebaseCommit(BaseModel):
+    oid: str
+    short_oid: str
+    subject: str
+
+
+class GitRebaseInfo(BaseModel):
+    """The rebase in progress, read from git's state directory: ``branch`` is
+    null for a detached HEAD, ``onto_ref`` is a branch pointing at the base
+    (local first) or null, ``stopped_on`` is the commit git stopped at, and
+    ``step``/``total`` count the todo list. Any key can be null — a rebase
+    git was killed in need not have written every file."""
+
+    branch: str | None = None
+    onto_oid: str | None = None
+    onto_short_oid: str | None = None
+    onto_ref: str | None = None
+    stopped_on: GitRebaseCommit | None = None
+    step: int | None = None
+    total: int | None = None
+
+
 class GitRepoInfo(BaseModel):
     toplevel: str
     git_dir: str
@@ -83,6 +110,7 @@ class GitRepoInfo(BaseModel):
     head: GitHead
     upstream: GitUpstream | None = None
     state: RepoState = "clean"
+    rebase: GitRebaseInfo | None = None
 
 
 class GitStatusEntry(BaseModel):
@@ -200,6 +228,21 @@ class GitCommitContextResponse(BaseModel):
 
     author: GitCommitAuthor | None = None
     head: GitCommitHead | None = None
+
+
+class GitRebaseRequest(BaseModel):
+    onto: str = Field(min_length=1)
+
+
+class GitRebaseResponse(BaseModel):
+    """Outcome of a rebase route. ``outcome`` is an open vocabulary:
+    ``rebased`` | ``up_to_date`` | ``stopped`` | ``aborted``. ``rebase`` is set
+    only when ``stopped``; ``message`` is git's explanation of a stop that is
+    not a conflict (an untracked file in the way, an ``edit`` stop)."""
+
+    outcome: str
+    rebase: GitRebaseInfo | None = None
+    message: str | None = None
 
 
 class GitPullRequest(BaseModel):

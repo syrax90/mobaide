@@ -117,6 +117,18 @@ function GitDiffView({
               {actions.stage ? 'Stage' : 'Unstage'}
             </button>
           )}
+          {actions.resolve && (
+            <button
+              type="button"
+              className="button git-diff-action"
+              disabled={busy}
+              onClick={() => {
+                onAction('resolve', [selection]);
+              }}
+            >
+              Mark resolved
+            </button>
+          )}
         </div>
         <span className="git-diff-path">{entry.path}</span>
         {origPath !== null && <span className="git-diff-path">from {origPath}</span>}

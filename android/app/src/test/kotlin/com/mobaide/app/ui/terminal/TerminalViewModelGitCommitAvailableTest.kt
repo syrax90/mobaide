@@ -206,4 +206,19 @@ class TerminalViewModelGitSyncAvailableTest {
         assertTrue(vm.gitCommitAvailable.value)
         assertEquals(1, probes)
     }
+
+    @Test
+    fun gitRebaseAvailable_followsItsOwnKey() = runTest(testDispatcher) {
+        val rebasing = newViewModel { version("""{"git":{"changes":true,"stage":true,"rebase":true}}""") }
+        val older = newViewModel { version("""{"git":{"changes":true,"stage":true,"commit":true,"resolve":true}}""") }
+        val failing = newViewModel { throw IOException("down") }
+        for (vm in listOf(rebasing, older, failing)) {
+            backgroundScope.launch { vm.gitRebaseAvailable.collect { } }
+        }
+        runCurrent()
+
+        assertTrue(rebasing.gitRebaseAvailable.value)
+        assertFalse(older.gitRebaseAvailable.value)
+        assertFalse(failing.gitRebaseAvailable.value)
+    }
 }

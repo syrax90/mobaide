@@ -16,6 +16,8 @@ const ALL_GIT: GitCapabilities = {
   pull: true,
   push: true,
   branches: true,
+  rebase: true,
+  resolve: true,
 };
 
 const repo = (over: Partial<SessionGitRepoInfo> = {}): SessionGitRepoInfo => ({
