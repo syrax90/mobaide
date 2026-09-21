@@ -2,8 +2,9 @@
  * The session-scoped git Changes routes — the agent's working-tree status and
  * per-file diff for the directory a session was spawned in, the
  * stage / unstage / discard / commit mutations of its staged set, the
- * fetch / pull / push jobs with their snapshot and cancel routes, and the
- * rebase start / continue / skip / abort routes.
+ * fetch / pull / push jobs with their snapshot and cancel routes, the
+ * rebase start / continue / skip / abort routes, and the conflict resolver's
+ * read / resolve / take / restore routes.
  *
  * REST-only shapes, so the types come straight from the generated schema like
  * `gitRepository`'s (the `OWNER.generated` policy in
@@ -39,6 +40,11 @@ export type SessionGitJobOp = SessionGitJob['op'];
 export type SessionGitPullMode = NonNullable<components['schemas']['GitPullRequest']['mode']>;
 export type SessionGitRebaseInfo = components['schemas']['GitRebaseInfo'];
 export type SessionGitRebaseResult = components['schemas']['GitRebaseResponse'];
+export type SessionGitConflict = components['schemas']['GitConflictResponse'];
+export type SessionGitConflictSide = components['schemas']['GitConflictTakeRequest']['side'];
+export type SessionGitConflictStyle = NonNullable<
+  components['schemas']['GitConflictRestoreRequest']['style']
+>;
 /** The three routes that act on a rebase already in progress. */
 export type SessionGitRebaseStep = 'continue' | 'skip' | 'abort';
 
@@ -82,6 +88,16 @@ export const GIT_JOB_CODE_DETACHED_HEAD = 'detached_head';
 export const GIT_CODE_UNKNOWN_REF = 'unknown_ref';
 export const GIT_CODE_NO_REBASE = 'no_rebase';
 export const GIT_CODE_CONFLICT_MARKERS = 'conflict_markers';
+/** The conflict routes' refusals; `detailMessage` is the path. */
+export const GIT_CODE_NOT_CONFLICTED = 'not_conflicted';
+export const GIT_CODE_FILE_CHANGED = 'file_changed';
+export const GIT_CODE_FILE_BUSY = 'file_busy';
+export const GIT_CODE_NOT_RESTORABLE = 'not_restorable';
+export const GIT_CODE_UNSUPPORTED = 'unsupported';
+export const GIT_CODE_TOO_LARGE = 'too_large';
+export const GIT_CODE_BAD_CONTENT = 'bad_content';
+/** `GitConflictResponse.kind`, an open vocabulary; only `text` is editable. */
+export const GIT_CONFLICT_KIND_TEXT = 'text';
 /** `GitRebaseResponse.outcome`, an open vocabulary. */
 export const GIT_REBASE_REBASED = 'rebased';
 export const GIT_REBASE_UP_TO_DATE = 'up_to_date';
@@ -359,4 +375,82 @@ export async function cancelSessionGitJob(
   );
   if (error !== undefined || data === undefined) throwSessionGitError(response, error);
   return data;
+}
+
+export async function getSessionGitConflict(
+  agentId: string,
+  sessionId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<SessionGitConflict> {
+  const { data, error, response } = await createAgentClient(agentId).GET(
+    '/api/sessions/{session_id}/git/conflict',
+    { params: { path: { session_id: sessionId }, query: { path } }, signal },
+  );
+  if (error !== undefined || data === undefined) throwSessionGitError(response, error);
+  return data;
+}
+
+export interface SessionGitResolveRequest {
+  path: string;
+  /** `GitConflictResponse.token` of the text the edit started from. */
+  token: string;
+  content: string;
+  /** `false` saves a draft: the file is written, markers and all, and stays unmerged. */
+  markResolved: boolean;
+}
+
+export async function resolveSessionGitConflict(
+  agentId: string,
+  sessionId: string,
+  request: SessionGitResolveRequest,
+): Promise<void> {
+  const { error, response } = await createAgentClient(agentId).POST(
+    '/api/sessions/{session_id}/git/conflict/resolve',
+    {
+      params: { path: { session_id: sessionId } },
+      body: {
+        path: request.path,
+        token: request.token,
+        content: request.content,
+        mark_resolved: request.markResolved,
+      },
+    },
+  );
+  if (error !== undefined) throwSessionGitError(response, error);
+}
+
+export async function takeSessionGitConflict(
+  agentId: string,
+  sessionId: string,
+  path: string,
+  side: SessionGitConflictSide,
+): Promise<void> {
+  const { error, response } = await createAgentClient(agentId).POST(
+    '/api/sessions/{session_id}/git/conflict/take',
+    { params: { path: { session_id: sessionId } }, body: { path, side } },
+  );
+  if (error !== undefined) throwSessionGitError(response, error);
+}
+
+export interface SessionGitRestoreRequest {
+  path: string;
+  style: SessionGitConflictStyle;
+  /** Set when the rebuild discards a file the user has open, so a concurrent edit refuses it. */
+  token?: string;
+}
+
+export async function restoreSessionGitConflict(
+  agentId: string,
+  sessionId: string,
+  request: SessionGitRestoreRequest,
+): Promise<void> {
+  const { error, response } = await createAgentClient(agentId).POST(
+    '/api/sessions/{session_id}/git/conflict/restore',
+    {
+      params: { path: { session_id: sessionId } },
+      body: { path: request.path, style: request.style, token: request.token ?? null },
+    },
+  );
+  if (error !== undefined) throwSessionGitError(response, error);
 }

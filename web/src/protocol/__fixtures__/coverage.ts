@@ -51,7 +51,9 @@ const OWNER = {
    * rides `git.job.progress` / `git.job.done` and keeps its mirror. #677's
    * `GitBranchCreateRequest` / `GitCheckoutRequest` / `GitBranchResponse` are
    * plain REST bodies of the project Git screen and follow the same call, as
-   * do #678's `GitRebaseRequest` / `GitRebaseResponse` from the Changes panel.
+   * do #678's `GitRebaseRequest` / `GitRebaseResponse` from the Changes panel
+   * and the conflict resolver's `GitConflictResponse` and its three
+   * `GitConflict*Request` bodies.
    */
   generated: 'shipped — typed by the generated OpenAPI schema',
   /** Editing a custom agent type on web: CLA-231. */
@@ -118,6 +120,10 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/GitCommitContextResponse.json': OWNER.generated,
   'dto/agent/GitCommitRequest.json': OWNER.generated,
   'dto/agent/GitCommitResponse.json': OWNER.generated,
+  'dto/agent/GitConflictResolveRequest.json': OWNER.generated,
+  'dto/agent/GitConflictResponse.json': OWNER.generated,
+  'dto/agent/GitConflictRestoreRequest.json': OWNER.generated,
+  'dto/agent/GitConflictTakeRequest.json': OWNER.generated,
   'dto/agent/GitDiffResponse.json': OWNER.generated,
   'dto/agent/GitDiscardRequest.json': OWNER.generated,
   'dto/agent/GitItem.json': OWNER.generated,

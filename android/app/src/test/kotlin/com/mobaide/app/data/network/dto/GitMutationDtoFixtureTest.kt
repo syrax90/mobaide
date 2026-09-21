@@ -12,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The Android arm of the stage / discard / commit, job and rebase golden fixtures under
+ * The Android arm of the stage / discard / commit, job, rebase and conflict golden fixtures under
  * `tests/protocol_fixtures/dto/agent/`. The request shapes are what this
  * client sends, so they must also encode back to the wire; the responses
  * decode from `wire` and, where a case carries one, from `decoded_canonical`
@@ -66,6 +66,138 @@ class GitMutationDtoFixtureTest {
         fixture("GitJobResponse").assertCanonicalDecodesLikeWire(GitJobResponse.serializer())
         fixture("GitRebaseRequest").assertCanonicalDecodesLikeWire(GitRebaseRequest.serializer())
         fixture("GitRebaseResponse").assertCanonicalDecodesLikeWire(GitRebaseResponse.serializer())
+        fixture("GitConflictResponse").assertCanonicalDecodesLikeWire(GitConflictResponse.serializer())
+        fixture("GitConflictResolveRequest")
+            .assertCanonicalDecodesLikeWire(GitConflictResolveRequest.serializer())
+        fixture("GitConflictTakeRequest").assertCanonicalDecodesLikeWire(GitConflictTakeRequest.serializer())
+        fixture("GitConflictRestoreRequest")
+            .assertCanonicalDecodesLikeWire(GitConflictRestoreRequest.serializer())
+    }
+
+    @Test
+    fun conflictResponse_readsTheTextTheSidesAndTheToken() {
+        val fixture = fixture("GitConflictResponse")
+
+        val text = fixture.decode(GitConflictResponse.serializer(), "rebase_text_two_sides")
+        val diff3 = fixture.decode(GitConflictResponse.serializer(), "diff3_base_sections_non_ascii")
+
+        assertEquals("src/login.py", text.path)
+        assertEquals("UU", text.code)
+        assertEquals(GitRepoInfo.STATE_REBASING, text.state)
+        assertEquals(GitConflictResponse.KIND_TEXT, text.kind)
+        assertEquals(
+            "def login():\n<<<<<<< HEAD\n    return redirect(home)\n=======\n" +
+                "    return redirect(next_url)\n>>>>>>> fedcba9 (Fix the login redirect)\n",
+            text.content,
+        )
+        assertEquals("9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d", text.token)
+        assertEquals(1, text.markers)
+        assertFalse(text.has_base)
+        assertEquals(GitConflictSide("origin/main", true), text.ours)
+        assertEquals(GitConflictSide("fedcba9 Fix the login redirect", true), text.theirs)
+        assertEquals(262144, text.byte_limit)
+        assertTrue(diff3.has_base)
+        assertEquals(
+            "a\n<<<<<<< ours\nmain\n||||||| base\norig\n=======\ntopic – ж\n>>>>>>> theirs\n",
+            diff3.content,
+        )
+    }
+
+    @Test
+    fun conflictResponse_readsAnAbsentSide_missingLabels_andContentlessKinds() {
+        val fixture = fixture("GitConflictResponse")
+
+        val deletedByUs = fixture.decode(GitConflictResponse.serializer(), "deleted_by_us_no_markers")
+        val merging = fixture.decode(GitConflictResponse.serializer(), "merging_without_labels")
+        val bothDeleted = fixture.decode(GitConflictResponse.serializer(), "both_deleted_missing")
+
+        assertEquals("DU", deletedByUs.code)
+        assertFalse(deletedByUs.ours.present)
+        assertTrue(deletedByUs.theirs.present)
+        assertEquals("kept by the commit\n", deletedByUs.content)
+        assertEquals(GitRepoInfo.STATE_MERGING, merging.state)
+        assertEquals(GitConflictSide(null, true), merging.ours)
+        assertEquals(GitConflictSide(null, true), merging.theirs)
+        assertEquals(GitConflictResponse.KIND_MISSING, bothDeleted.kind)
+        assertFalse(bothDeleted.ours.present)
+        assertFalse(bothDeleted.theirs.present)
+        for ((name, kind) in listOf(
+            "binary" to GitConflictResponse.KIND_BINARY,
+            "too_large" to GitConflictResponse.KIND_TOO_LARGE,
+            "submodule" to GitConflictResponse.KIND_SUBMODULE,
+            "unknown_kind" to "hologram",
+        )) {
+            val decoded = fixture.decode(GitConflictResponse.serializer(), name)
+            assertEquals(name, kind, decoded.kind)
+            assertNull(name, decoded.content)
+            assertNull(name, decoded.token)
+        }
+    }
+
+    @Test
+    fun conflictResolveRequest_roundTripsADraft_andLeavesTheApplyDefaultToTheAgent() {
+        val fixture = fixture("GitConflictResolveRequest")
+
+        val apply = fixture.decode(GitConflictResolveRequest.serializer(), "apply_and_mark_resolved")
+        val draft = fixture.decode(GitConflictResolveRequest.serializer(), "save_draft_with_markers")
+
+        assertTrue(apply.mark_resolved)
+        assertEquals("def login():\n    return redirect(next_url)\n", apply.content)
+        assertEquals("9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d", apply.token)
+        assertFalse(draft.mark_resolved)
+        assertEquals("docs/notes with space.md", draft.path)
+        assertEquals(
+            fixture.cases.first { it.name == "save_draft_with_markers" }.wire,
+            json.encodeToJsonElement(GitConflictResolveRequest.serializer(), draft),
+        )
+        // The encoder drops defaults, which the agent's model supplies: an
+        // apply travels without `mark_resolved`, a draft must carry its `false`.
+        assertEquals(
+            setOf("path", "token", "content"),
+            (json.encodeToJsonElement(GitConflictResolveRequest.serializer(), apply) as JsonObject).keys,
+        )
+    }
+
+    @Test
+    fun conflictTakeRequest_carriesTheSide_andEncodesBackToTheWire() {
+        val fixture = fixture("GitConflictTakeRequest")
+
+        assertEquals(
+            GitConflictResponse.SIDE_OURS,
+            fixture.decode(GitConflictTakeRequest.serializer(), "take_ours").side,
+        )
+        assertEquals(
+            GitConflictTakeRequest("docs/old.md", GitConflictResponse.SIDE_THEIRS),
+            fixture.decode(GitConflictTakeRequest.serializer(), "take_theirs"),
+        )
+        for (case in fixture.cases) {
+            val decoded = json.decodeFromJsonElement(GitConflictTakeRequest.serializer(), case.wire)
+            assertEquals(
+                case.name, case.wire, json.encodeToJsonElement(GitConflictTakeRequest.serializer(), decoded),
+            )
+        }
+    }
+
+    @Test
+    fun conflictRestoreRequest_readsTheStyleAndToken_andEncodesOnlyWhatDiffersFromTheDefaults() {
+        val fixture = fixture("GitConflictRestoreRequest")
+
+        val resolved = fixture.decode(GitConflictRestoreRequest.serializer(), "restore_resolved_path")
+        val startOver =
+            fixture.decode(GitConflictRestoreRequest.serializer(), "start_over_with_original_lines")
+
+        assertEquals(GitConflictRestoreRequest("src/session.py"), resolved)
+        assertEquals(GitConflictRestoreRequest.STYLE_MERGE, resolved.style)
+        assertNull(resolved.token)
+        assertEquals(GitConflictRestoreRequest.STYLE_DIFF3, startOver.style)
+        assertEquals(
+            fixture.cases.first { it.name == "start_over_with_original_lines" }.decoded_canonical,
+            json.encodeToJsonElement(GitConflictRestoreRequest.serializer(), startOver),
+        )
+        assertEquals(
+            setOf("path"),
+            (json.encodeToJsonElement(GitConflictRestoreRequest.serializer(), resolved) as JsonObject).keys,
+        )
     }
 
     @Test

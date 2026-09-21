@@ -234,6 +234,57 @@ struct AgentAPI: Sendable {
         )
     }
 
+    /// `GET /api/sessions/{id}/git/conflict?path=` — one conflicted file for the resolver.
+    func getSessionGitConflict(sessionId: String, path: String) async throws -> GitConflictResponse {
+        let query = "?path=\(Self.encodeQueryValue(path))"
+        return try await execute(
+            method: "GET",
+            url: "\(try await base())/api/sessions/\(sessionId)/git/conflict\(query)"
+        )
+    }
+
+    /// `POST /api/sessions/{id}/git/conflict/resolve` — writes the file and,
+    /// unless it is a draft, marks it resolved.
+    func resolveSessionGitConflict(
+        sessionId: String,
+        path: String,
+        token: String,
+        content: String,
+        markResolved: Bool
+    ) async throws {
+        let _: GitMutationResponse = try await execute(
+            method: "POST",
+            url: "\(try await base())/api/sessions/\(sessionId)/git/conflict/resolve",
+            body: GitConflictResolveRequest(
+                path: path, token: token, content: content, mark_resolved: markResolved
+            )
+        )
+    }
+
+    /// `POST /api/sessions/{id}/git/conflict/take` — `side` is `ours` or `theirs`.
+    func takeSessionGitConflict(sessionId: String, path: String, side: String) async throws {
+        let _: GitMutationResponse = try await execute(
+            method: "POST",
+            url: "\(try await base())/api/sessions/\(sessionId)/git/conflict/take",
+            body: GitConflictTakeRequest(path: path, side: side)
+        )
+    }
+
+    /// `POST /api/sessions/{id}/git/conflict/restore` — rebuilds the conflict; a
+    /// `token` refuses it once the file moved on under an open editor.
+    func restoreSessionGitConflict(
+        sessionId: String,
+        path: String,
+        style: String = GitConflictRestoreRequest.styleMerge,
+        token: String? = nil
+    ) async throws {
+        let _: GitMutationResponse = try await execute(
+            method: "POST",
+            url: "\(try await base())/api/sessions/\(sessionId)/git/conflict/restore",
+            body: GitConflictRestoreRequest(path: path, style: style, token: token)
+        )
+    }
+
     /// `GET /api/sessions/{id}/git/jobs/{job_id}` — the reconcile poll's snapshot.
     func getSessionGitJob(sessionId: String, jobId: String) async throws -> GitJobResponse {
         try await execute(method: "GET", url: "\(try await base())/api/sessions/\(sessionId)/git/jobs/\(jobId)")

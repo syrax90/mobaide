@@ -142,7 +142,7 @@ export function GitSyncDialog({
             )
           ) : (
             <>
-              <span>{jobErrorCopy(job.error_code, job.message)}</span>
+              <span>{jobErrorCopy(job.error_code, job.message, capabilities.conflicts)}</span>
               {showsJobOutput(job) && <pre className="git-commit-output">{job.message}</pre>}
             </>
           )}

@@ -342,7 +342,7 @@ range is rejected up front.
     "git": {
       "changes": true, "stage": true, "discard": true, "commit": true,
       "fetch": true, "pull": true, "push": true, "branches": true,
-      "rebase": true, "resolve": true
+      "rebase": true, "resolve": true, "conflicts": true
     }
   },
   "latest_agent_version": "0.1.0"
@@ -371,7 +371,15 @@ screen's Continue / Skip / Abort on it together with a non-null `repo.rebase`
 to the terminal instead). `capabilities.git.resolve` certifies that
 `stage` refuses an unmerged path still holding conflict markers, which is
 what makes a conflict row's *Mark resolved* action (gated on `resolve` and
-`stage` together) safe to offer.
+`stage` together) safe to offer. `capabilities.git.conflicts` — additive
+too — advertises the four session-scoped
+`.../git/conflict[/resolve|take|restore]` routes and the top-level
+`resolved_paths` on status; with it a conflict row opens a full in-app
+resolver instead (read the file, edit and reapply it or save a draft, take
+a whole side, or rebuild the markers), and the Changes screen gains a
+*Resolved* section with a *Restore conflict…* action — without it a
+conflict row still opens the `HEAD` diff and *Mark resolved* is the only
+in-app action.
 `capabilities.cli` carries one `{ "available": <bool> }` entry per managed CLI
 the agent registers — additive, no `protocol_version` bump — and the Android
 mode-select screen disables a per-CLI button when its binary is absent. The

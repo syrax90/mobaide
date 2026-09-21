@@ -750,6 +750,26 @@ row, gated on `capabilities.git.{stage,resolve}` together, since only
 `resolve` certifies the agent refuses to stage a file still holding
 `<<<<<<<`/`>>>>>>>` markers.
 
+With `capabilities.git.conflicts`, tapping a conflict row
+(`GitChangesDisplay.opensResolver`) opens `GitConflictScreen` instead of the
+`HEAD` diff: a `.fullScreenCover(item: $model.conflictTarget)` with its own
+`NavigationStack` — a push cannot intercept the swipe-back gesture, and
+`.interactiveDismissDisabled(model.isDirty)` needs a cover to enforce.
+`GitConflictModel` (+ pure `GitConflictDisplay`) drives an editor built on
+the new `UI/Common/CodeTextView.swift`, a `UIViewRepresentable` over
+`UITextView` — iOS 17's `TextEditor` cannot disable smart quotes/dashes
+(which would corrupt source code) and exposes no selection/scroll API. The
+screen names the two sides by label and role behind a "Which side?"
+toggle, counts conflicts left with a Next action, and offers Apply & mark
+resolved / Save draft plus a `Menu` (`.menuOrder(.fixed)`) for the
+whole-file picks, Start over… and View diff; its confirmations — a
+whole-file pick, Start over, discarding unsaved edits on Close — are
+`.alert`, not `.confirmationDialog`. Closing the cover hands the Changes
+screen a result message (`GitChangesModel.resolverClosed(message:)`) shown
+as a toast. The Changes screen also gains a *Resolved* section from
+`GitStatusResponse.resolved_paths` (optional on iOS) with a *Restore
+conflict…* action behind its own `.alert`.
+
 ## Device support
 
 `TARGETED_DEVICE_FAMILY = "1"` — iPhone only, on both the app and the test

@@ -91,6 +91,20 @@ extension SessionGitCopy {
             return GitChangesDisplay.jobLostCopy
         case SessionGitError.codeConflictMarkers:
             return "\(message ?? "The file") still has conflict markers — finish resolving it first."
+        case SessionGitError.codeNotConflicted:
+            return "\(message ?? "The file") is no longer in conflict."
+        case SessionGitError.codeFileChanged:
+            return "\(message ?? "The file") changed on the agent machine since you opened it."
+        case SessionGitError.codeFileBusy:
+            return "\(message ?? "The file") is open in another program — close it and try again."
+        case SessionGitError.codeNotRestorable:
+            return "The conflict in \(message ?? "the file") can no longer be rebuilt."
+        case SessionGitError.codeUnsupported:
+            return "This conflict can't be resolved here — use the terminal."
+        case SessionGitError.codeTooLarge:
+            return "The text is too large to save from here."
+        case SessionGitError.codeBadContent:
+            return "The text contains characters that can't be saved."
         default:
             return message.map { "git refused the request (\(code)): \($0)" }
                 ?? "git refused the request (\(code))."

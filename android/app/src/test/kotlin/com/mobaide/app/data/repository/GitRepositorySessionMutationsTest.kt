@@ -6,6 +6,10 @@ import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.GitCommitContextResponse
 import com.mobaide.app.data.network.dto.GitCommitRequest
 import com.mobaide.app.data.network.dto.GitCommitResponse
+import com.mobaide.app.data.network.dto.GitConflictResolveRequest
+import com.mobaide.app.data.network.dto.GitConflictResponse
+import com.mobaide.app.data.network.dto.GitConflictRestoreRequest
+import com.mobaide.app.data.network.dto.GitConflictTakeRequest
 import com.mobaide.app.data.network.dto.GitDiscardRequest
 import com.mobaide.app.data.network.dto.GitJobResponse
 import com.mobaide.app.data.network.dto.GitMutationResponse
@@ -339,6 +343,122 @@ class GitRepositorySessionJobStartTest {
             } catch (e: SessionGitException.GitError) {
                 assertEquals(SessionGitException.CODE_JOB_NOT_FOUND, e.code)
             }
+        }
+    }
+}
+
+/** The conflict resolver's half of [GitRepository]: its capability key, the request each call builds and the refusals. */
+class GitRepositorySessionConflictTest {
+
+    private fun newRepo(): Pair<GitRepository, RestApi> {
+        val restApi = mockk<RestApi>(relaxed = true)
+        val bus = mockk<AgentEventBus>()
+        every { bus.events } returns MutableSharedFlow()
+        return GitRepository(restApi, bus) to restApi
+    }
+
+    private fun version(capabilities: String) = VersionInfoResponse(
+        name = "mobaide-agent",
+        server_version = "1.4.0",
+        protocol_versions = listOf(7),
+        min_client_version = 1,
+        capabilities = Json.parseToJsonElement(capabilities).jsonObject,
+    )
+
+    @Test
+    fun gitCapabilities_readConflicts_asAnExplicitTrue_notImpliedByResolve() = runTest {
+        val (repo, restApi) = newRepo()
+        coEvery { restApi.getAgentVersion() } returns
+            version("""{"git":{"changes":true,"conflicts":true}}""")
+
+        assertEquals(GitCapabilities(conflicts = true), repo.gitCapabilities())
+
+        coEvery { restApi.getAgentVersion() } returns
+            version("""{"git":{"changes":true,"rebase":true,"resolve":true,"conflicts":"true"}}""")
+
+        assertEquals(GitCapabilities(rebase = true, resolve = true, conflicts = false), repo.gitCapabilities())
+    }
+
+    @Test
+    fun sessionConflict_passesTheBodyThrough() = runTest {
+        val (repo, restApi) = newRepo()
+        val body = GitConflictResponse(path = "src/a b.py", code = "UU", kind = GitConflictResponse.KIND_TEXT)
+        coEvery { restApi.getSessionGitConflict("s1", "src/a b.py") } returns body
+
+        assertSame(body, repo.sessionConflict("s1", "src/a b.py"))
+    }
+
+    @Test
+    fun resolveTakeAndRestore_buildTheirRequests() = runTest {
+        val (repo, restApi) = newRepo()
+        val resolved = mutableListOf<GitConflictResolveRequest>()
+        val taken = slot<GitConflictTakeRequest>()
+        val restored = mutableListOf<GitConflictRestoreRequest>()
+        coEvery { restApi.resolveSessionGitConflict("s1", capture(resolved)) } returns GitMutationResponse()
+        coEvery { restApi.takeSessionGitConflict("s1", capture(taken)) } returns GitMutationResponse()
+        coEvery { restApi.restoreSessionGitConflict("s1", capture(restored)) } returns GitMutationResponse()
+
+        repo.resolveSessionConflict("s1", "src/login.py", "t1", "merged\n", markResolved = true)
+        repo.resolveSessionConflict("s1", "src/login.py", "t2", "<<<<<<< x\n", markResolved = false)
+        repo.takeSessionConflict("s1", "docs/old.md", GitConflictResponse.SIDE_THEIRS)
+        repo.restoreSessionConflict("s1", "src/session.py")
+        repo.restoreSessionConflict("s1", "src/login.py", GitConflictRestoreRequest.STYLE_DIFF3, "t1")
+
+        assertEquals(
+            listOf(
+                GitConflictResolveRequest("src/login.py", "t1", "merged\n", mark_resolved = true),
+                GitConflictResolveRequest("src/login.py", "t2", "<<<<<<< x\n", mark_resolved = false),
+            ),
+            resolved,
+        )
+        assertEquals(GitConflictTakeRequest("docs/old.md", "theirs"), taken.captured)
+        assertEquals(
+            listOf(
+                GitConflictRestoreRequest("src/session.py", "merge", null),
+                GitConflictRestoreRequest("src/login.py", "diff3", "t1"),
+            ),
+            restored,
+        )
+    }
+
+    @Test
+    fun aConflictRefusal_isAGitError_withTheCodeAndThePathItNames() = runTest {
+        val (repo, restApi) = newRepo()
+        coEvery { restApi.resolveSessionGitConflict(any(), any()) } throws
+            ApiException(409, """{"detail":{"code":"file_changed","message":"src/login.py"}}""")
+        coEvery { restApi.getSessionGitConflict(any(), any()) } throws
+            ApiException(409, """{"detail":{"code":"not_conflicted","message":"src/login.py"}}""")
+        coEvery { restApi.restoreSessionGitConflict(any(), any()) } throws
+            ApiException(400, """{"detail":{"code":"bad_path"}}""")
+
+        val refusals = listOf<Pair<String, suspend () -> Unit>>(
+            SessionGitException.CODE_FILE_CHANGED to
+                { repo.resolveSessionConflict("s1", "src/login.py", "t1", "x", markResolved = true) },
+            SessionGitException.CODE_NOT_CONFLICTED to { repo.sessionConflict("s1", "src/login.py") },
+            "bad_path" to { repo.restoreSessionConflict("s1", "src/login.py") },
+        )
+        for ((code, call) in refusals) {
+            try {
+                call()
+                fail("expected SessionGitException.GitError for $code")
+            } catch (e: SessionGitException.GitError) {
+                assertEquals(code, e.code)
+                assertEquals(if (code == "bad_path") null else "src/login.py", e.detailMessage)
+            }
+        }
+    }
+
+    @Test
+    fun anOldAgent404_onAConflictRoute_isAgentOutdated() = runTest {
+        val (repo, restApi) = newRepo()
+        coEvery { restApi.getSessionGitConflict(any(), any()) } throws
+            ApiException(404, """{"detail":"Unknown proxy route"}""")
+
+        try {
+            repo.sessionConflict("s1", "src/login.py")
+            fail("expected SessionGitException.AgentOutdated")
+        } catch (e: SessionGitException) {
+            assertTrue(e is SessionGitException.AgentOutdated)
         }
     }
 }

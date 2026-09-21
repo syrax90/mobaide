@@ -9,6 +9,10 @@ import com.mobaide.app.data.network.dto.BusyHolder
 import com.mobaide.app.data.network.dto.GitCommitContextResponse
 import com.mobaide.app.data.network.dto.GitCommitRequest
 import com.mobaide.app.data.network.dto.GitCommitResponse
+import com.mobaide.app.data.network.dto.GitConflictResolveRequest
+import com.mobaide.app.data.network.dto.GitConflictResponse
+import com.mobaide.app.data.network.dto.GitConflictRestoreRequest
+import com.mobaide.app.data.network.dto.GitConflictTakeRequest
 import com.mobaide.app.data.network.dto.GitDeleteItem
 import com.mobaide.app.data.network.dto.GitCheckoutRequest
 import com.mobaide.app.data.network.dto.GitBranchResponse
@@ -122,6 +126,8 @@ data class GitCapabilities(
     val resolve: Boolean = false,
     /** The project Git screen may delete remote-tracking rows (on the remote). */
     val deleteRemote: Boolean = false,
+    /** The conflict resolver's routes and `resolved_paths` on status. */
+    val conflicts: Boolean = false,
 ) {
     /** The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three. */
     val hasSync: Boolean get() = fetch || pull || push
@@ -142,6 +148,7 @@ fun VersionInfoResponse.toGitCapabilities(): GitCapabilities = GitCapabilities(
     rebase = gitCapability("rebase"),
     resolve = gitCapability("resolve"),
     deleteRemote = gitCapability("delete_remote"),
+    conflicts = gitCapability("conflicts"),
 )
 
 class GitRepository(
@@ -324,6 +331,45 @@ class GitRepository(
 
     suspend fun rebaseSession(sessionId: String, onto: String): GitRebaseResponse =
         mapSessionGit { restApi.rebaseSessionGit(sessionId, GitRebaseRequest(onto)) }
+
+    suspend fun sessionConflict(sessionId: String, path: String): GitConflictResponse =
+        mapSessionGit { restApi.getSessionGitConflict(sessionId, path) }
+
+    /** `markResolved = false` saves a draft: the file is written and stays unmerged. */
+    suspend fun resolveSessionConflict(
+        sessionId: String,
+        path: String,
+        token: String,
+        content: String,
+        markResolved: Boolean,
+    ) {
+        mapSessionGit {
+            restApi.resolveSessionGitConflict(
+                sessionId,
+                GitConflictResolveRequest(path, token, content, markResolved),
+            )
+        }
+    }
+
+    /** `side` is [GitConflictResponse.SIDE_OURS] or [GitConflictResponse.SIDE_THEIRS]. */
+    suspend fun takeSessionConflict(sessionId: String, path: String, side: String) {
+        mapSessionGit { restApi.takeSessionGitConflict(sessionId, GitConflictTakeRequest(path, side)) }
+    }
+
+    /** Rebuild the conflict; a `token` refuses it once the file moved on under an open editor. */
+    suspend fun restoreSessionConflict(
+        sessionId: String,
+        path: String,
+        style: String = GitConflictRestoreRequest.STYLE_MERGE,
+        token: String? = null,
+    ) {
+        mapSessionGit {
+            restApi.restoreSessionGitConflict(
+                sessionId,
+                GitConflictRestoreRequest(path, style, token),
+            )
+        }
+    }
 
     /** `step` is [REBASE_CONTINUE], [REBASE_SKIP] or [REBASE_ABORT]. */
     suspend fun stepSessionRebase(sessionId: String, step: String): GitRebaseResponse =

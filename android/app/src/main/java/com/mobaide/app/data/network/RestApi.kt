@@ -10,6 +10,10 @@ import com.mobaide.app.data.network.dto.ForceUpdateResponse
 import com.mobaide.app.data.network.dto.GitCommitContextResponse
 import com.mobaide.app.data.network.dto.GitCommitRequest
 import com.mobaide.app.data.network.dto.GitCommitResponse
+import com.mobaide.app.data.network.dto.GitConflictResolveRequest
+import com.mobaide.app.data.network.dto.GitConflictResponse
+import com.mobaide.app.data.network.dto.GitConflictRestoreRequest
+import com.mobaide.app.data.network.dto.GitConflictTakeRequest
 import com.mobaide.app.data.network.dto.GitDeleteRequest
 import com.mobaide.app.data.network.dto.GitCheckoutRequest
 import com.mobaide.app.data.network.dto.GitBranchResponse
@@ -332,6 +336,33 @@ class RestApi(
     /** `step` is `continue`, `skip` or `abort`: `POST …/git/rebase/<step>`. */
     suspend fun stepSessionGitRebase(sessionId: String, step: String): GitRebaseResponse =
         postJson(sessionGitUrl(sessionId, "rebase").addPathSegment(step).build(), "{}")
+
+    suspend fun getSessionGitConflict(sessionId: String, path: String): GitConflictResponse {
+        val url = sessionGitUrl(sessionId, "conflict").addQueryParameter("path", path).build()
+        return executeCancellable(Request.Builder().url(url).get().build())
+    }
+
+    suspend fun resolveSessionGitConflict(
+        sessionId: String,
+        body: GitConflictResolveRequest,
+    ): GitMutationResponse = postSessionGitConflict(sessionId, "resolve", json.encodeToString(body))
+
+    suspend fun takeSessionGitConflict(
+        sessionId: String,
+        body: GitConflictTakeRequest,
+    ): GitMutationResponse = postSessionGitConflict(sessionId, "take", json.encodeToString(body))
+
+    suspend fun restoreSessionGitConflict(
+        sessionId: String,
+        body: GitConflictRestoreRequest,
+    ): GitMutationResponse = postSessionGitConflict(sessionId, "restore", json.encodeToString(body))
+
+    private suspend fun postSessionGitConflict(
+        sessionId: String,
+        leaf: String,
+        payload: String,
+    ): GitMutationResponse =
+        postJson(sessionGitUrl(sessionId, "conflict").addPathSegment(leaf).build(), payload)
 
     suspend fun getSessionGitJob(sessionId: String, jobId: String): GitJobResponse {
         val url = sessionGitUrl(sessionId, "jobs").addPathSegment(jobId).build()

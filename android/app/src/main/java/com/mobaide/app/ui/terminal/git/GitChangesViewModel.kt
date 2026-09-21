@@ -147,6 +147,10 @@ class GitChangesViewModel @Inject constructor(
     private val _discardPrompt = MutableStateFlow<DiscardPrompt?>(null)
     val discardPrompt: StateFlow<DiscardPrompt?> = _discardPrompt.asStateFlow()
 
+    /** The resolved path whose *Restore conflict…* awaits confirmation. */
+    private val _restorePrompt = MutableStateFlow<String?>(null)
+    val restorePrompt: StateFlow<String?> = _restorePrompt.asStateFlow()
+
     private val _commitSheet = MutableStateFlow<CommitSheetState?>(null)
     val commitSheet: StateFlow<CommitSheetState?> = _commitSheet.asStateFlow()
 
@@ -304,7 +308,47 @@ class GitChangesViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            _events.send(GitChangesEvent.OpenDiff(sessionId, entry, diffScopeFor(entry)))
+            _events.send(
+                if (ready != null && opensResolver(entry, ready.capabilities)) {
+                    GitChangesEvent.OpenConflict(sessionId, entry.path)
+                } else {
+                    GitChangesEvent.OpenDiff(sessionId, entry, diffScopeFor(entry))
+                },
+            )
+        }
+    }
+
+    /** A message another screen left for this one: a resolved conflict's outcome. */
+    fun showMessage(text: String) {
+        viewModelScope.launch { _events.send(GitChangesEvent.ShowMessage(text)) }
+        refreshRequests.tryEmit(Unit)
+    }
+
+    fun requestRestore(path: String) {
+        _restorePrompt.value = path
+    }
+
+    fun dismissRestore() {
+        _restorePrompt.value = null
+    }
+
+    fun confirmRestore() {
+        val path = _restorePrompt.value ?: return
+        _restorePrompt.value = null
+        if (busy.value) return
+        viewModelScope.launch {
+            busy.value = true
+            try {
+                gitRepository.restoreSessionConflict(sessionId, path)
+                _events.send(GitChangesEvent.ShowMessage(restoredNotice(path)))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _events.send(GitChangesEvent.ShowMessage(mutationErrorCopy(e)))
+            } finally {
+                refreshRequests.tryEmit(Unit)
+                busy.value = false
+            }
         }
     }
 

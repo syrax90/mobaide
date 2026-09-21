@@ -182,6 +182,30 @@ final class SessionGitErrorsTests: XCTestCase {
         XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codeEmptyMessage, message: nil), "Enter a commit summary.")
     }
 
+    func testRefusalCopyPhrasesTheConflictResolversRefusalsAroundTheFileTheyName() {
+        XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codeNotConflicted, message: "src/login.py"), "src/login.py is no longer in conflict.")
+        XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codeNotConflicted, message: nil), "The file is no longer in conflict.")
+        XCTAssertEqual(
+            SessionGitCopy.refusal(SessionGitError.codeFileChanged, message: "src/login.py"),
+            "src/login.py changed on the agent machine since you opened it."
+        )
+        XCTAssertEqual(
+            SessionGitCopy.refusal(SessionGitError.codeFileBusy, message: "src/login.py"),
+            "src/login.py is open in another program — close it and try again."
+        )
+        XCTAssertEqual(
+            SessionGitCopy.refusal(SessionGitError.codeNotRestorable, message: "src/login.py"),
+            "The conflict in src/login.py can no longer be rebuilt."
+        )
+        XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codeNotRestorable, message: nil), "The conflict in the file can no longer be rebuilt.")
+        XCTAssertEqual(
+            SessionGitCopy.refusal(SessionGitError.codeUnsupported, message: "vendor/lib"),
+            "This conflict can't be resolved here — use the terminal."
+        )
+        XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codeTooLarge, message: nil), "The text is too large to save from here.")
+        XCTAssertEqual(SessionGitCopy.refusal(SessionGitError.codeBadContent, message: nil), "The text contains characters that can't be saved.")
+    }
+
     func testRefusalCopyNamesAnUnknownCodeWithTheGitOutputWhenThereIsAny() {
         XCTAssertEqual(SessionGitCopy.refusal("rate_limited", message: nil), "git refused the request (rate_limited).")
         XCTAssertEqual(SessionGitCopy.refusal("rate_limited", message: "slow down"), "git refused the request (rate_limited): slow down")

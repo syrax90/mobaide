@@ -554,6 +554,114 @@ class GitChangesViewModelTest {
         }
     }
 
+    @Test
+    fun onEntryClick_conflictOpensTheResolver_onAnAgentThatServesIt() = runTest {
+        val f = loaded(allCaps.copy(conflicts = true))
+        f.vm.events.test {
+            f.vm.onEntryClick(conflict)
+            f.vm.onEntryClick(unstaged)
+            runCurrent()
+
+            assertEquals(GitChangesEvent.OpenConflict("s1", "src/conflict.py"), awaitItem())
+            // every other row still opens its diff
+            assertSame(unstaged, (awaitItem() as GitChangesEvent.OpenDiff).entry)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onEntryClick_conflictKeepsTheHeadDiff_onAnAgentWithoutTheResolver() = runTest {
+        val f = loaded(allCaps.copy(rebase = true, resolve = true))
+        f.vm.events.test {
+            f.vm.onEntryClick(conflict)
+            runCurrent()
+
+            val event = awaitItem() as GitChangesEvent.OpenDiff
+            assertSame(conflict, event.entry)
+            assertEquals(GitDiffResponse.SCOPE_UNSTAGED, event.scope)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // MARK: - Restore conflict
+
+    @Test
+    fun restore_goesThroughThePrompt_thenRebuildsTheConflict_announcesIt_andPulls() = runTest {
+        val f = loaded(allCaps.copy(conflicts = true))
+        val pulls = countPulls(f)
+
+        f.vm.requestRestore("src/session.py")
+
+        assertEquals("src/session.py", f.vm.restorePrompt.value)
+        coVerify(exactly = 0) { f.repo.restoreSessionConflict(any(), any(), any(), any()) }
+
+        f.vm.events.test {
+            f.vm.confirmRestore()
+            runCurrent()
+
+            assertEquals(
+                GitChangesEvent.ShowMessage("Restored the conflict in src/session.py."),
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertNull(f.vm.restorePrompt.value)
+        // merge style, no token: nobody has the resolved file open
+        coVerify(exactly = 1) { f.repo.restoreSessionConflict("s1", "src/session.py", "merge", null) }
+        assertEquals(1, pulls.size)
+        assertFalse(ready(f.vm).busy)
+    }
+
+    @Test
+    fun dismissRestore_dropsThePrompt_withoutARequest() = runTest {
+        val f = loaded(allCaps.copy(conflicts = true))
+        f.vm.requestRestore("src/session.py")
+
+        f.vm.dismissRestore()
+        f.vm.confirmRestore()
+        runCurrent()
+
+        assertNull(f.vm.restorePrompt.value)
+        coVerify(exactly = 0) { f.repo.restoreSessionConflict(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun aRefusedRestore_showsItsCopy_pullsAnyway_andClearsBusy() = runTest {
+        val f = loaded(allCaps.copy(conflicts = true))
+        val pulls = countPulls(f)
+        coEvery { f.repo.restoreSessionConflict(any(), any(), any(), any()) } throws
+            gitError(SessionGitException.CODE_NOT_RESTORABLE, "src/session.py")
+        f.vm.requestRestore("src/session.py")
+
+        f.vm.events.test {
+            f.vm.confirmRestore()
+            runCurrent()
+
+            assertEquals(
+                GitChangesEvent.ShowMessage("The conflict in src/session.py can no longer be rebuilt."),
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(1, pulls.size)
+        assertFalse(ready(f.vm).busy)
+    }
+
+    @Test
+    fun showMessage_relaysTheResolversOutcome_andPullsTheList() = runTest {
+        val f = loaded(allCaps.copy(conflicts = true))
+        val pulls = countPulls(f)
+
+        f.vm.events.test {
+            f.vm.showMessage("Resolved src/conflict.py.")
+            runCurrent()
+
+            assertEquals(GitChangesEvent.ShowMessage("Resolved src/conflict.py."), awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(1, pulls.size)
+    }
+
     // MARK: - Repository wiring
 
     @Test
@@ -1225,7 +1333,7 @@ class GitChangesViewModelTest {
         f.jobLoads.emit(SessionGitJobLoad.Loaded(doneJob()))
         runCurrent()
 
-        assertEquals("Pushed · main -> main", ready(f.vm).job?.text)
+        assertEquals("Pushed · main -> main", ready(f.vm).job?.text())
         assertFalse(ready(f.vm).busy)
 
         advanceTimeBy(JOB_RESULT_DISMISS_MS - 1)
@@ -1251,7 +1359,7 @@ class GitChangesViewModelTest {
         val banner = ready(f.vm).job
         assertEquals("j1", banner?.jobId)
         assertTrue(banner!!.failed)
-        assertEquals("Push failed: The remote rejected the push.", banner.text)
+        assertEquals("Push failed: The remote rejected the push.", banner.text())
         assertFalse(ready(f.vm).busy)
 
         f.vm.dismissJobResult()
@@ -1273,7 +1381,7 @@ class GitChangesViewModelTest {
         f.frames.emit(job(percent = 99))
         runCurrent()
 
-        assertEquals("Pushed · main -> main", ready(f.vm).job?.text)
+        assertEquals("Pushed · main -> main", ready(f.vm).job?.text())
         assertEquals(listOf("j1"), f.observedJobIds)
     }
 
@@ -1288,7 +1396,7 @@ class GitChangesViewModelTest {
         runCurrent()
 
         val banner = ready(f.vm).job
-        assertEquals(JOB_LOST_COPY, banner?.text)
+        assertEquals(JOB_LOST_COPY, banner?.text())
         assertTrue(banner!!.failed)
         assertFalse(ready(f.vm).busy)
     }

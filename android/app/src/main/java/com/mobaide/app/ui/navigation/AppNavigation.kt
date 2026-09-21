@@ -33,7 +33,10 @@ import com.mobaide.app.ui.settings.SettingsScreen
 import com.mobaide.app.ui.support.SupportScreen
 import com.mobaide.app.ui.templates.TemplatesScreen
 import com.mobaide.app.ui.terminal.TerminalScreen
+import com.mobaide.app.data.network.dto.GitDiffResponse
 import com.mobaide.app.ui.terminal.git.GitChangesScreen
+import com.mobaide.app.ui.terminal.git.GitConflictScreen
+import com.mobaide.app.ui.terminal.git.GitConflictViewModel
 import com.mobaide.app.ui.terminal.git.GitDiffScreen
 import com.mobaide.app.ui.update.IncompatibleServerScreen
 
@@ -318,13 +321,53 @@ fun AppNavigation(
                 navArgument("sync") { type = NavType.BoolType; defaultValue = false },
                 navArgument("rebase") { type = NavType.BoolType; defaultValue = false },
             ),
-        ) {
+        ) { entry ->
+            val conflictMessage by entry.savedStateHandle
+                .getStateFlow<String?>(Routes.RESULT_GIT_CONFLICT_MESSAGE, null)
+                .collectAsStateWithLifecycle()
             GitChangesScreen(
                 viewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
-                onOpenDiff = { sessionId, entry, scope ->
+                onOpenDiff = { sessionId, row, scope ->
                     navController.navigate(
-                        Routes.sessionGitDiff(sessionId, entry.path, scope, entry.orig_path),
+                        Routes.sessionGitDiff(sessionId, row.path, scope, row.orig_path),
+                    )
+                },
+                onOpenConflict = { sessionId, path ->
+                    navController.navigate(Routes.sessionGitConflict(sessionId, path))
+                },
+                resultMessage = conflictMessage,
+                onResultMessageShown = {
+                    entry.savedStateHandle[Routes.RESULT_GIT_CONFLICT_MESSAGE] = null
+                },
+            )
+        }
+
+        composable(
+            route = Routes.SESSION_GIT_CONFLICT,
+            arguments = listOf(
+                navArgument("sessionId") { type = NavType.StringType },
+                navArgument("path") { type = NavType.StringType; defaultValue = "" },
+            ),
+        ) {
+            val viewModel: GitConflictViewModel = hiltViewModel()
+            GitConflictScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() },
+                onClosed = { message ->
+                    navController.previousBackStackEntry
+                        ?.savedStateHandle
+                        ?.set(Routes.RESULT_GIT_CONFLICT_MESSAGE, message)
+                    navController.popBackStack()
+                },
+                onViewDiff = {
+                    navController.navigate(
+                        Routes.sessionGitDiff(
+                            viewModel.sessionId,
+                            viewModel.path,
+                            GitDiffResponse.SCOPE_UNSTAGED,
+                            null,
+                        ),
                     )
                 },
             )

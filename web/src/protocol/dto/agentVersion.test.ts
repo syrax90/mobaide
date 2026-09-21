@@ -195,6 +195,7 @@ describe('gitCapabilities', () => {
       rebase: false,
       resolve: false,
       deleteRemote: false,
+      conflicts: false,
     });
   });
 
@@ -207,6 +208,17 @@ describe('gitCapabilities', () => {
       rebase: false,
       resolve: true,
     });
+  });
+
+  it('reads conflicts on its own, not implied by resolve or rebase', () => {
+    expect(gitCapabilities(info({ git: { changes: true, conflicts: true } }))).toMatchObject({
+      rebase: false,
+      resolve: false,
+      conflicts: true,
+    });
+    expect(
+      gitCapabilities(info({ git: { changes: true, rebase: true, resolve: true } })).conflicts,
+    ).toBe(false);
   });
 
   it('is all-off without a probe', () => {
@@ -222,6 +234,7 @@ describe('gitCapabilities', () => {
       rebase: false,
       resolve: false,
       deleteRemote: false,
+      conflicts: false,
     });
   });
 });

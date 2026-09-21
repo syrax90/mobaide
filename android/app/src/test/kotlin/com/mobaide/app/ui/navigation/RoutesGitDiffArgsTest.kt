@@ -158,3 +158,38 @@ class RoutesGitChangesRebaseArgTest {
         assertTrue(Routes.SESSION_GIT_CHANGES.endsWith("&rebase={rebase}"))
     }
 }
+
+/** The conflict resolver's route: the file's path travels as the one query argument. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
+class RoutesGitConflictArgsTest {
+
+    @Test
+    fun awkwardPaths_roundTripThroughTheQuery() {
+        for (path in listOf("notes/тест.md", "src/new name.py", "a%20b", "c#d", "a+b", "x&y=z")) {
+            val route = Routes.sessionGitConflict("s1", path)
+            val uri = Uri.parse(route)
+
+            assertEquals(path, "session_git_conflict/s1", route.substringBefore('?'))
+            assertEquals(path, path, uri.getQueryParameter("path"))
+            assertEquals(path, setOf("path"), uri.queryParameterNames)
+            val encodedPath = route.substringAfter("path=")
+            for (raw in listOf(' ', '#', '&', '=', '+', '/')) {
+                assertFalse("$path leaks a raw '$raw'", raw in encodedPath)
+            }
+        }
+    }
+
+    @Test
+    fun theWireShape_isPinned() {
+        assertEquals(
+            "session_git_conflict/s1?path=src%2Fnew%20name.py",
+            Routes.sessionGitConflict("s1", "src/new name.py"),
+        )
+        assertEquals("session_git_conflict/{sessionId}?path={path}", Routes.SESSION_GIT_CONFLICT)
+        assertEquals(
+            Routes.SESSION_GIT_CONFLICT.substringBefore('{'),
+            Routes.sessionGitConflict("s1", "a.py").substringBefore("s1"),
+        )
+    }
+}

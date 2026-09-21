@@ -43,11 +43,15 @@ final class GitRebaseModelTests: XCTestCase {
 
     /// `fixture` on screen with every git capability, the probe's and the
     /// load's traffic already forgotten.
-    private func loadedModel(_ fixture: String, projectName: String? = nil) async throws -> GitChangesModel {
+    private func loadedModel(
+        _ fixture: String,
+        projectName: String? = nil,
+        git: String? = nil
+    ) async throws -> GitChangesModel {
         let model = makeModel(projectName: projectName)
         StubURLProtocol.enqueue(
             status: 200,
-            body: #"{"name":"mobaide-agent","server_version":"1.4.0","protocol_versions":[7],"min_client_version":1,"capabilities":{"git":\#(allGit)}}"#
+            body: #"{"name":"mobaide-agent","server_version":"1.4.0","protocol_versions":[7],"min_client_version":1,"capabilities":{"git":\#(git ?? allGit)}}"#
         )
         await model.loadCapabilities()
         StubURLProtocol.enqueue(status: 200, body: try statusBody(fixture))
@@ -326,6 +330,98 @@ final class GitRebaseModelTests: XCTestCase {
 
         XCTAssertEqual(model.toast?.text, "src/login.py still has conflict markers — finish resolving it first.")
         XCTAssertEqual(model.toast?.tone, .danger)
+    }
+
+    // MARK: - Conflict resolver
+
+    private let resolverGit = #"{"changes":true,"stage":true,"discard":true,"commit":true,"rebase":true,"resolve":true,"conflicts":true}"#
+
+    func testAConflictRowOpensTheResolverOnlyOnAnAgentThatServesIt() async throws {
+        let withResolver = try await loadedModel("rebasing_stopped_on_conflict", git: resolverGit)
+        let without = try await loadedModel("rebasing_stopped_on_conflict")
+        let conflicted = try XCTUnwrap(withResolver.sections.flatMap(\.rows).first { $0.entry.group == GitStatusEntry.groupConflicts })
+
+        XCTAssertTrue(withResolver.opensResolver(conflicted.entry))
+        XCTAssertFalse(without.opensResolver(conflicted.entry))
+        XCTAssertNil(withResolver.conflictTarget)
+
+        withResolver.openResolver(for: conflicted.entry)
+
+        XCTAssertEqual(withResolver.conflictTarget, GitConflictTarget(sessionId: "s1", path: "src/login.py"))
+    }
+
+    func testResolvedPathsComeFromTheStatusOnlyOnAnAgentWithTheResolver() async throws {
+        let withResolver = try await loadedModel("rebasing_with_resolved_paths", git: resolverGit)
+        let without = try await loadedModel("rebasing_with_resolved_paths")
+        let plain = try await loadedModel("rebasing_stopped_on_conflict", git: resolverGit)
+
+        XCTAssertEqual(withResolver.resolvedPaths, ["docs/notes with space.md", "src/session.py"])
+        XCTAssertEqual(without.resolvedPaths, [], "no Restore that would 404")
+        XCTAssertEqual(plain.resolvedPaths, [])
+    }
+
+    func testTheResolverClosingShowsItsOutcomeAndReReadsTheList() async throws {
+        let model = try await loadedModel("rebasing_stopped_on_conflict", git: resolverGit)
+        let conflicted = try XCTUnwrap(model.sections.flatMap(\.rows).first)
+        model.openResolver(for: conflicted.entry)
+        StubURLProtocol.enqueue(status: 200, body: try statusBody("rebasing_with_resolved_paths"))
+
+        await model.resolverClosed(message: "Resolved src/login.py.")
+
+        XCTAssertNil(model.conflictTarget)
+        XCTAssertEqual(model.toast?.text, "Resolved src/login.py.")
+        XCTAssertEqual(model.toast?.tone, .ok)
+        XCTAssertEqual(requestURLs.count, 1)
+        XCTAssertTrue(requestURLs[0].hasPrefix(gitURL("status")))
+        XCTAssertEqual(model.resolvedPaths, ["docs/notes with space.md", "src/session.py"])
+    }
+
+    func testAResolverThatWasJustLeftSaysNothing() async throws {
+        let model = try await loadedModel("rebasing_stopped_on_conflict", git: resolverGit)
+        let conflicted = try XCTUnwrap(model.sections.flatMap(\.rows).first)
+        model.openResolver(for: conflicted.entry)
+        StubURLProtocol.enqueue(status: 200, body: try statusBody("unchanged"))
+
+        await model.resolverClosed(message: nil)
+
+        XCTAssertNil(model.conflictTarget)
+        XCTAssertNil(model.toast)
+    }
+
+    func testRestoreWaitsForItsConfirmationThenRebuildsTheConflictAndReReadsTheList() async throws {
+        let model = try await loadedModel("rebasing_with_resolved_paths", git: resolverGit)
+
+        model.requestRestore("src/session.py")
+
+        XCTAssertEqual(model.restorePrompt, "src/session.py")
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
+
+        StubURLProtocol.enqueue(status: 200, body: #"{"ok":true}"#)
+        StubURLProtocol.enqueue(status: 200, body: try statusBody("rebasing_stopped_on_conflict"))
+        await model.confirmRestore("src/session.py")
+
+        XCTAssertEqual(requestURLs.first, gitURL("conflict/restore"))
+        XCTAssertEqual(
+            try sentBody(GitConflictRestoreRequest.self, at: 0),
+            GitConflictRestoreRequest(path: "src/session.py", style: GitConflictRestoreRequest.styleMerge, token: nil)
+        )
+        XCTAssertEqual(model.toast?.text, "Restored the conflict in src/session.py.")
+        XCTAssertEqual(model.toast?.tone, .ok)
+        XCTAssertEqual(requestURLs.count, 2)
+        XCTAssertTrue(requestURLs[1].hasPrefix(gitURL("status")))
+        XCTAssertEqual(model.resolvedPaths, [])
+    }
+
+    func testARefusedRestoreShowsItsCopyAndReReadsTheListAnyway() async throws {
+        let model = try await loadedModel("rebasing_with_resolved_paths", git: resolverGit)
+        StubURLProtocol.enqueue(status: 409, body: #"{"detail":{"code":"not_restorable","message":"src/session.py"}}"#)
+        StubURLProtocol.enqueue(status: 200, body: try statusBody("unchanged"))
+
+        await model.confirmRestore("src/session.py")
+
+        XCTAssertEqual(model.toast?.text, "The conflict in src/session.py can no longer be rebuilt.")
+        XCTAssertEqual(model.toast?.tone, .danger)
+        XCTAssertEqual(requestURLs.count, 2)
     }
 
     func testTheBannerInputsComeFromTheLoadedStatus() async throws {

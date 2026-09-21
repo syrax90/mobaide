@@ -2,6 +2,10 @@ package com.mobaide.app.data.network
 
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.network.dto.GitCommitRequest
+import com.mobaide.app.data.network.dto.GitConflictResolveRequest
+import com.mobaide.app.data.network.dto.GitConflictResponse
+import com.mobaide.app.data.network.dto.GitConflictRestoreRequest
+import com.mobaide.app.data.network.dto.GitConflictTakeRequest
 import com.mobaide.app.data.network.dto.GitDiscardRequest
 import com.mobaide.app.data.network.dto.GitPathsRequest
 import com.mobaide.app.data.network.dto.GitPullRequest
@@ -528,5 +532,150 @@ class RestApiSessionGitRebaseTest {
 
         assertEquals("future_outcome", result.outcome)
         assertNull(result.rebase)
+    }
+}
+
+/** The conflict resolver's routes: a cancellable read by path, then resolve / take / restore under `conflict/`. */
+@OptIn(ExperimentalCoroutinesApi::class)
+class RestApiSessionGitConflictTest {
+
+    private val jsonType = "application/json".toMediaType()
+    private val okBody = """{"ok":true}"""
+
+    private fun responseFor(req: Request, bodyJson: String): Response = Response.Builder()
+        .request(req)
+        .protocol(Protocol.HTTP_1_1)
+        .code(200)
+        .message("OK")
+        .body(bodyJson.toResponseBody(jsonType))
+        .build()
+
+    private fun newExecuteApi(bodyJson: String): Pair<RestApi, CapturingSlot<Request>> {
+        val client = mockk<OkHttpClient>()
+        val tokenStore = mockk<TokenStore>()
+        every { tokenStore.getEffectiveBaseUrl() } returns "https://api.example.com"
+        val captured = slot<Request>()
+        val call = mockk<Call>()
+        every { client.newCall(capture(captured)) } returns call
+        every { call.execute() } answers { responseFor(captured.captured, bodyJson) }
+        return RestApi(client, tokenStore) to captured
+    }
+
+    private fun newEnqueueApi(bodyJson: String): Pair<RestApi, CapturingSlot<Request>> {
+        val client = mockk<OkHttpClient>()
+        val tokenStore = mockk<TokenStore>()
+        every { tokenStore.getEffectiveBaseUrl() } returns "https://api.example.com"
+        val captured = slot<Request>()
+        val call = mockk<Call>()
+        every { client.newCall(capture(captured)) } returns call
+        every { call.enqueue(any()) } answers {
+            firstArg<Callback>().onResponse(call, responseFor(captured.captured, bodyJson))
+        }
+        return RestApi(client, tokenStore) to captured
+    }
+
+    private fun Request.bodyJson(): JsonElement {
+        val buffer = Buffer()
+        body!!.writeTo(buffer)
+        return Json.parseToJsonElement(buffer.readUtf8())
+    }
+
+    @Test
+    fun getSessionGitConflict_encodesAnAwkwardPath_asTheOneQueryParameter_andDecodesTheFile() = runTest {
+        val path = "src/new name#1&x=y+z/тест 100%.py"
+        val (api, captured) = newEnqueueApi(
+            """{"path":"x","code":"DU","state":"rebasing","kind":"text","content":"kept\n","token":"t1",""" +
+                """"markers":0,"has_base":false,"ours":{"label":"main","present":false},""" +
+                """"theirs":{"label":null,"present":true},"byte_limit":262144}""",
+        )
+
+        val conflict = api.getSessionGitConflict("s1", path)
+
+        val url = captured.captured.url
+        assertEquals("GET", captured.captured.method)
+        assertEquals("/api/sessions/s1/git/conflict", url.encodedPath)
+        assertEquals(setOf("path"), url.queryParameterNames)
+        assertEquals(path, url.queryParameter("path"))
+        val encodedQuery = url.encodedQuery.orEmpty()
+        for (raw in listOf(' ', '#', '+')) {
+            assertFalse("raw '$raw' in $encodedQuery", raw in encodedQuery)
+        }
+        assertEquals(GitConflictResponse.KIND_TEXT, conflict.kind)
+        assertEquals("kept\n", conflict.content)
+        assertEquals("t1", conflict.token)
+        assertFalse(conflict.ours.present)
+        assertTrue(conflict.theirs.present)
+        assertNull(conflict.theirs.label)
+    }
+
+    @Test
+    fun resolveSessionGitConflict_postsADraft_withItsFalseFlag() = runTest {
+        val (api, captured) = newExecuteApi(okBody)
+
+        val resp = api.resolveSessionGitConflict(
+            "s1",
+            GitConflictResolveRequest("src/a b.py", "t1", "<<<<<<< x\nж\n", mark_resolved = false),
+        )
+
+        assertTrue(resp.ok)
+        assertEquals("POST", captured.captured.method)
+        assertEquals(
+            "https://api.example.com/api/sessions/s1/git/conflict/resolve",
+            captured.captured.url.toString(),
+        )
+        assertEquals(
+            Json.parseToJsonElement(
+                """{"path":"src/a b.py","token":"t1","content":"<<<<<<< x\nж\n","mark_resolved":false}""",
+            ),
+            captured.captured.bodyJson(),
+        )
+    }
+
+    @Test
+    fun resolveSessionGitConflict_leavesTheApplyDefaultToTheAgent() = runTest {
+        val (api, captured) = newExecuteApi(okBody)
+
+        api.resolveSessionGitConflict("s1", GitConflictResolveRequest("a.py", "t1", "x\n"))
+
+        assertEquals(
+            Json.parseToJsonElement("""{"path":"a.py","token":"t1","content":"x\n"}"""),
+            captured.captured.bodyJson(),
+        )
+    }
+
+    @Test
+    fun takeSessionGitConflict_postsTheSide_underItsOwnLeaf() = runTest {
+        val (api, captured) = newExecuteApi(okBody)
+
+        api.takeSessionGitConflict("s1", GitConflictTakeRequest("docs/old.md", GitConflictResponse.SIDE_THEIRS))
+
+        assertEquals("POST", captured.captured.method)
+        assertEquals(
+            "https://api.example.com/api/sessions/s1/git/conflict/take",
+            captured.captured.url.toString(),
+        )
+        assertEquals(
+            Json.parseToJsonElement("""{"path":"docs/old.md","side":"theirs"}"""),
+            captured.captured.bodyJson(),
+        )
+    }
+
+    @Test
+    fun restoreSessionGitConflict_carriesTheStyleAndToken_onlyWhenTheyAreSet() = runTest {
+        val (api, captured) = newExecuteApi(okBody)
+
+        api.restoreSessionGitConflict(
+            "s1", GitConflictRestoreRequest("src/login.py", GitConflictRestoreRequest.STYLE_DIFF3, "t1"),
+        )
+        val startOver = captured.captured.bodyJson()
+        val url = captured.captured.url.toString()
+        api.restoreSessionGitConflict("s1", GitConflictRestoreRequest("src/session.py"))
+
+        assertEquals("https://api.example.com/api/sessions/s1/git/conflict/restore", url)
+        assertEquals(
+            Json.parseToJsonElement("""{"path":"src/login.py","style":"diff3","token":"t1"}"""),
+            startOver,
+        )
+        assertEquals(Json.parseToJsonElement("""{"path":"src/session.py"}"""), captured.captured.bodyJson())
     }
 }

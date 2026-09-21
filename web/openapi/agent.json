@@ -860,6 +860,199 @@
         "title": "GitCommitResponse",
         "type": "object"
       },
+      "GitConflictResolveRequest": {
+        "description": "``content`` carries no length bound on purpose: a validation error\nechoes its input, so the size is checked by the service instead.",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "mark_resolved": {
+            "default": true,
+            "title": "Mark Resolved",
+            "type": "boolean"
+          },
+          "path": {
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "token": {
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "token",
+          "content"
+        ],
+        "title": "GitConflictResolveRequest",
+        "type": "object"
+      },
+      "GitConflictResponse": {
+        "description": "A conflicted path as the resolver shows it. ``ours`` is index stage 2\nand ``theirs`` stage 3 \u2014 during a rebase that is the branch being rebased\nonto and the commit being replayed. ``kind`` is an open vocabulary:\n``text`` | ``too_large`` | ``binary`` | ``encoding`` | ``missing`` |\n``symlink`` | ``submodule`` | ``unsupported``; only ``text`` carries\n``content`` (LF line endings, no BOM) and ``token``, the hash of the file\nas read that ``resolve`` must send back.",
+        "properties": {
+          "byte_limit": {
+            "default": 262144,
+            "title": "Byte Limit",
+            "type": "integer"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "has_base": {
+            "default": false,
+            "title": "Has Base",
+            "type": "boolean"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "markers": {
+            "default": 0,
+            "title": "Markers",
+            "type": "integer"
+          },
+          "ours": {
+            "$ref": "#/components/schemas/GitConflictSide"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "state": {
+            "default": "clean",
+            "enum": [
+              "clean",
+              "merging",
+              "rebasing",
+              "cherry_picking",
+              "reverting",
+              "bisecting"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "theirs": {
+            "$ref": "#/components/schemas/GitConflictSide"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          }
+        },
+        "required": [
+          "path",
+          "code",
+          "kind",
+          "ours",
+          "theirs"
+        ],
+        "title": "GitConflictResponse",
+        "type": "object"
+      },
+      "GitConflictRestoreRequest": {
+        "properties": {
+          "path": {
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "style": {
+            "default": "merge",
+            "enum": [
+              "merge",
+              "diff3"
+            ],
+            "title": "Style",
+            "type": "string"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "GitConflictRestoreRequest",
+        "type": "object"
+      },
+      "GitConflictSide": {
+        "description": "One side of a conflict. ``present`` is false when that side deleted\nthe file (or never had it); ``label`` names the side for the user and is\nnull when the agent cannot tell.",
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "present": {
+            "default": false,
+            "title": "Present",
+            "type": "boolean"
+          }
+        },
+        "title": "GitConflictSide",
+        "type": "object"
+      },
+      "GitConflictTakeRequest": {
+        "properties": {
+          "path": {
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "side": {
+            "enum": [
+              "ours",
+              "theirs"
+            ],
+            "title": "Side",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "side"
+        ],
+        "title": "GitConflictTakeRequest",
+        "type": "object"
+      },
       "GitDeleteItem": {
         "description": "One item in a delete request.\n\nThe wire shape mirrors :class:`GitItemRead`'s discriminator \u2014 clients\necho back the ``kind`` and the appropriate identifier (``branch`` for\nbranch kinds, ``worktree_path`` for worktree kinds; both for combined\ndeletions). ``force`` upgrades a branch delete from ``-d`` to ``-D`` and\nadds ``--force`` to a worktree removal so a worktree holding\nmodified/untracked files is deleted instead of refused.\n\n``orphan_worktree`` removes only the worktree at ``worktree_path``,\nwhatever row it came from: sent for a ``branch_with_worktree`` row it\nkeeps the branch. ``remote_branch`` carries the row's ``branch``\n(``<remote>/<name>``) verbatim and deletes that branch on the remote;\n``force`` does not apply to it.",
         "properties": {
@@ -1954,6 +2147,13 @@
                 "type": "null"
               }
             ]
+          },
+          "resolved_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Resolved Paths",
+            "type": "array"
           },
           "session_id": {
             "title": "Session Id",
@@ -3742,6 +3942,220 @@
           }
         },
         "summary": "Session Git Commit Context",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/conflict": {
+      "get": {
+        "operationId": "session_git_conflict_api_sessions__session_id__git_conflict_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitConflictResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Conflict",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/conflict/resolve": {
+      "post": {
+        "operationId": "session_git_conflict_resolve_api_sessions__session_id__git_conflict_resolve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitConflictResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Conflict Resolve",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/conflict/restore": {
+      "post": {
+        "operationId": "session_git_conflict_restore_api_sessions__session_id__git_conflict_restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitConflictRestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Conflict Restore",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/git/conflict/take": {
+      "post": {
+        "operationId": "session_git_conflict_take_api_sessions__session_id__git_conflict_take_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitConflictTakeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Git Conflict Take",
         "tags": [
           "git"
         ]

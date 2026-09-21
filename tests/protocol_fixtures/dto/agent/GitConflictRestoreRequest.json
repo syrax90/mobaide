@@ -1,0 +1,30 @@
+{
+  "type": "GitConflictRestoreRequest",
+  "cases": [
+    {
+      "name": "restore_resolved_path",
+      "wire": {
+        "path": "src/session.py",
+        "style": "merge",
+        "token": null
+      },
+      "decoded_canonical": {
+        "path": "src/session.py",
+        "style": "merge"
+      }
+    },
+    {
+      "name": "start_over_with_original_lines",
+      "wire": {
+        "path": "src/login.py",
+        "style": "diff3",
+        "token": "9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d"
+      },
+      "decoded_canonical": {
+        "path": "src/login.py",
+        "style": "diff3",
+        "token": "9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d"
+      }
+    }
+  ]
+}

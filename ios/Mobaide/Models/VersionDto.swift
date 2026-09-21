@@ -119,6 +119,8 @@ struct GitCapabilities: Equatable, Sendable {
     var resolve = false
     /// The project Git screen may delete remote-tracking rows (on the remote).
     var deleteRemote = false
+    /// The conflict resolver's routes and `resolved_paths` on status.
+    var conflicts = false
 
     /// The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three.
     var hasSync: Bool { fetch || pull || push }
@@ -146,7 +148,8 @@ extension VersionInfoResponse {
             branches: gitCapability("branches"),
             rebase: gitCapability("rebase"),
             resolve: gitCapability("resolve"),
-            deleteRemote: gitCapability("delete_remote")
+            deleteRemote: gitCapability("delete_remote"),
+            conflicts: gitCapability("conflicts")
         )
     }
 }

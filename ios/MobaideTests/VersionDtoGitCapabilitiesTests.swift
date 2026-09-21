@@ -132,6 +132,18 @@ final class VersionDtoGitRebaseCapabilitiesTests: XCTestCase {
         XCTAssertFalse(GitCapabilities.none.resolve)
     }
 
+    func testReadsConflictsAsAnExplicitTrueNotImpliedByResolve() {
+        XCTAssertEqual(
+            info(["git": ["changes": true, "conflicts": true]]).gitCapabilities,
+            GitCapabilities(conflicts: true)
+        )
+        XCTAssertEqual(
+            info(["git": ["changes": true, "rebase": true, "resolve": true, "conflicts": "true"]]).gitCapabilities,
+            GitCapabilities(rebase: true, resolve: true, conflicts: false)
+        )
+        XCTAssertFalse(GitCapabilities.none.conflicts)
+    }
+
     func testADecodedProbeFromTheCurrentAgentReadsBoth() throws {
         let wire = Data(#"""
         {"name":"mobaide-agent","server_version":"1.4.0","protocol_versions":[7],"min_client_version":1,

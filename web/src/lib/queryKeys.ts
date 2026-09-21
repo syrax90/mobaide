@@ -91,6 +91,14 @@ export const queryKeys = {
   /** The newest job of one session, as the socket frames report it — never fetched. */
   sessionGitLatestJob: (agentId: string, sessionId: string) =>
     ['agent', agentId, 'session-git', sessionId, 'latest-job'] as const,
+  /**
+   * One conflicted file as the resolver read it. Deliberately outside the
+   * `session-git` prefix: the text seeds an editor draft, so neither a
+   * `git.changed` echo nor the reconnect sweep may re-read it behind the
+   * user's back — only an explicit reload does.
+   */
+  sessionGitConflict: (agentId: string, sessionId: string, path: string) =>
+    ['agent', agentId, 'session-git-conflict', sessionId, path] as const,
   autoscan: (agentId: string) => ['agent', agentId, 'autoscan'] as const,
   /** Which CLIs the agent has installed, and the models each advertises. */
   agentCapabilities: (agentId: string) => ['agent', agentId, 'capabilities'] as const,

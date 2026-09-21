@@ -129,6 +129,113 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-09-21, in-session conflict resolver —
+  read a conflicted file, write its resolution, take one side, rebuild the
+  conflict): **four additive REST routes, one additive status field, one
+  additive capability key, no version bump.** Session-scoped next to the
+  rebase routes, both transports byte-identical. Every route names exactly
+  one repo-relative ``path`` and acts on it only while the index holds it
+  unmerged under that exact name — a literal pathspec still matches by
+  directory prefix, so the stages are compared byte for byte; that check is
+  what bounds the write route to a file git itself reports as conflicted.
+  ``ours`` is index stage 2 and ``theirs`` stage 3: during a rebase, the
+  branch being rebased onto (plus the commits already replayed) and the
+  commit being replayed.
+  * ``GET /api/sessions/{session_id}/git/conflict?path=`` answers
+    ``GitConflictResponse {"path", "code", "state", "kind", "content",
+    "token", "markers", "has_base", "ours": {"label", "present"}, "theirs":
+    {"label", "present"}, "byte_limit"}``. ``code`` is the porcelain pair
+    (``UU`` ``AA`` ``DU`` ``UD`` ``DD`` ``AU`` ``UA``); ``present`` is false
+    for a side that deleted the file or never had it. ``kind`` is an open
+    vocabulary — clients treat an unknown value as "not editable here":
+    ``text``; ``too_large`` (over ``byte_limit``, 256 KiB — the file travels
+    whole inside one tunnel frame, ``json.dumps`` escapes non-ASCII up to
+    6x, and a frame over the 4 MiB cap closes the tunnel for every
+    session); ``binary`` (a NUL byte); ``encoding`` (not UTF-8);
+    ``missing``; ``symlink``; ``submodule``; ``unsupported`` (a directory in
+    the file's place). Only ``text`` carries ``content`` — LF line endings,
+    BOM stripped — and ``token``, the SHA-256 of the file's bytes as read.
+    ``markers`` counts lines starting with ``<<<<<<<``; ``has_base`` tells
+    that the file holds ``|||||||`` sections (diff3 style). ``label`` names
+    a side for the user and is nullable: while ``rebasing``, ``ours`` is the
+    ``onto`` branch (else its short oid) and ``theirs`` is ``<short_oid>
+    <subject>`` of the stopped commit; while ``merging``, the current branch
+    and ``MERGE_HEAD``. Clients never print "ours"/"theirs" and never read
+    the label text inside the markers, which ``restore`` rewrites.
+    ``409 not_conflicted`` (message = the path) when the path is not
+    unmerged; ``400 bad_path`` also for any ``.git`` component.
+  * ``POST …/git/conflict/resolve`` with ``GitConflictResolveRequest
+    {"path", "token", "content", "mark_resolved": true}`` replaces the file
+    and stages it. Under the per-toplevel lock: ``not_conflicted``, then
+    ``409 unsupported`` for a submodule or symlink entry, then
+    ``409 file_changed`` unless ``token`` matches the file on disk — Claude
+    or the user may be editing it in the terminal — or the file already
+    holds exactly the bytes this request would write (a retry after a lost
+    answer or a failed ``git add``, which skips the write and still runs
+    ``git add``), then an atomic replace
+    (exclusive temporary beside the file, its permission bits kept, no
+    symlink followed at any level; ``409 file_busy`` when the platform
+    refuses the rename) and ``git add``. The file's own line-ending and BOM
+    convention is re-applied from the bytes on disk (a file mixing endings
+    gets its dominant one), since ``core.safecrlf`` would refuse an LF
+    rewrite of a CRLF file. With ``mark_resolved`` a ``content`` still
+    holding a ``<<<<<<<`` / ``>>>>>>>`` line is ``409 conflict_markers``
+    before anything is written; ``mark_resolved: false`` is a draft — it
+    writes the file, markers included, and leaves the path unmerged.
+    ``content`` is validated by the service, not the schema (a ``422`` echoes
+    its input): ``400 too_large`` over ``byte_limit``, ``400 bad_content``
+    for a NUL or an unencodable string.
+  * ``POST …/git/conflict/take`` with ``GitConflictTakeRequest {"path",
+    "side": "ours" | "theirs"}`` makes the path look like one side and
+    marks it resolved — the only resolution for a ``kind`` that is not
+    ``text``. A side that is ``present`` runs ``git checkout --<side>`` and
+    ``git add``; an absent side resolves by removal (``git rm -f``), which
+    is how a modify/delete conflict is settled as "delete". The choice is
+    read from the index stages, never from git's wording. ``409
+    unsupported`` for a submodule or a directory in the file's place.
+  * ``POST …/git/conflict/restore`` with ``GitConflictRestoreRequest
+    {"path", "style": "merge" | "diff3", "token"}`` runs ``git checkout
+    --merge --conflict=<style>``: it rebuilds the markers of a file still in
+    conflict (discarding edits made to it — ``diff3`` adds the original
+    lines), or of a path in ``resolved_paths``. ``--conflict`` is always
+    explicit, so ``merge.conflictStyle`` never decides. Git labels the
+    rebuilt markers ``ours`` / ``theirs``, which reads backwards during a
+    rebase, so the agent then swaps those two labels for the sides' names
+    (best effort; ``||||||| base`` stays). ``409
+    not_restorable`` unless the path is unmerged with both sides present or
+    listed in ``resolved_paths`` — on any other path ``checkout --merge``
+    silently overwrites the working file from the index, so this guard is a
+    safety check. An optional ``token`` adds the ``file_changed`` check.
+  * ``GitStatusResponse`` gains top-level ``resolved_paths`` (default
+    ``[]``, at most 200): paths marked resolved during the operation in
+    progress whose conflict git can still rebuild, read from the index's
+    resolve-undo records. Listed only while ``repo.state`` is not ``clean``
+    (the records outlive a finished rebase), only with both sides recorded
+    (``checkout --merge`` cannot rebuild a modify/delete conflict), never
+    while unmerged again, and only while "ours" is still ``HEAD``'s blob for
+    the path. It is a top-level list rather than an entry group because a
+    resolution equal to ``HEAD`` has no status entry at all and one that
+    differs already has a ``staged`` row. The etag covers it.
+  * All three mutations refuse ``job_running`` first, share one 25 s budget
+    across their git calls and publish ``git.changed`` whenever the file or
+    the index may have moved — also when ``git add`` fails after the write.
+    ``git checkout`` runs the repository's ``post-checkout`` hook and any
+    configured filters under the agent's account, the trust boundary the
+    rebase and stage routes already have.
+  * ``GET /api/version`` ``capabilities.git`` gains ``"conflicts": true``
+    (both transports). Clients open the resolver from a conflict row, show
+    the *Resolved* section and word their "resolve the conflicts" hints for
+    the app only with it; without it a conflict row keeps opening the
+    ``HEAD`` diff and the hints keep pointing to the terminal.
+  * Also: ``validate_repo_path`` now rejects ``\`` and ``:`` on Windows
+    agents (``400 bad_path`` on every session git route) — ``os.path.join``
+    honours the first as a separator and the second opens an alternate data
+    stream; git never reports either.
+  * Golden fixtures: new ``tests/protocol_fixtures/dto/agent/{
+    GitConflictResponse,GitConflictResolveRequest,GitConflictTakeRequest,
+    GitConflictRestoreRequest}.json``; ``GitStatusResponse.json`` gains
+    ``resolved_paths`` on every case and a ``rebasing_with_resolved_paths``
+    case — on the four registries.
 * Additive delta within proto-v7 (2026-09-21, project Git management —
   delete remote branches, remove a worktree and keep its branch): **one
   widened request enum, six additive per-item error codes, one additive

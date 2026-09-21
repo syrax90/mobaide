@@ -359,7 +359,7 @@ final class GitSyncModelTests: XCTestCase {
         await model.runJobReconcile()
 
         XCTAssertEqual(model.job?.lost, true)
-        XCTAssertEqual(model.job?.text, "Lost track of the job — refresh to see the result.")
+        XCTAssertEqual(model.job?.text(), "Lost track of the job — refresh to see the result.")
         XCTAssertEqual(model.job?.failed, true)
         XCTAssertFalse(model.isBusy)
         XCTAssertTrue(sleeper.durations.isEmpty, "nothing left to poll")
@@ -419,7 +419,7 @@ final class GitSyncModelTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests[0].httpMethod, "POST")
         XCTAssertEqual(model.job?.running, false)
         XCTAssertEqual(model.job?.job?.error_code, "cancelled")
-        XCTAssertEqual(model.job?.text, "Push failed: Cancelled.")
+        XCTAssertEqual(model.job?.text(), "Push failed: Cancelled.")
         XCTAssertFalse(model.isBusy)
     }
 

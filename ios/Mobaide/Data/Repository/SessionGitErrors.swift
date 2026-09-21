@@ -36,6 +36,14 @@ enum SessionGitError: Error, Equatable, Sendable {
     static let codeUnknownRef = "unknown_ref"
     static let codeNoRebase = "no_rebase"
     static let codeConflictMarkers = "conflict_markers"
+    /// The conflict routes' refusals; the message is the path.
+    static let codeNotConflicted = "not_conflicted"
+    static let codeFileChanged = "file_changed"
+    static let codeFileBusy = "file_busy"
+    static let codeNotRestorable = "not_restorable"
+    static let codeUnsupported = "unsupported"
+    static let codeTooLarge = "too_large"
+    static let codeBadContent = "bad_content"
 
     /// Classify a thrown error; anything unrelated passes through unchanged.
     static func map(_ error: any Error) -> any Error {

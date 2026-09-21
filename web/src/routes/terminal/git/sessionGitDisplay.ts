@@ -13,9 +13,12 @@ import {
   type GitItem,
 } from '../../../api/gitRepository';
 import {
+  GIT_CODE_BAD_CONTENT,
   GIT_CODE_CONFLICT_MARKERS,
   GIT_CODE_EMPTY_MESSAGE,
   GIT_CODE_ERROR,
+  GIT_CODE_FILE_BUSY,
+  GIT_CODE_FILE_CHANGED,
   GIT_CODE_HOOK_FAILED,
   GIT_CODE_IDENTITY_REQUIRED,
   GIT_CODE_INDEX_LOCKED,
@@ -23,13 +26,17 @@ import {
   GIT_CODE_JOB_RUNNING,
   GIT_CODE_NO_HEAD,
   GIT_CODE_NO_REBASE,
+  GIT_CODE_NOT_CONFLICTED,
+  GIT_CODE_NOT_RESTORABLE,
   GIT_CODE_NOTHING_TO_COMMIT,
   GIT_CODE_PATHSPEC_MISMATCH,
   GIT_CODE_TIMEOUT,
+  GIT_CODE_TOO_LARGE,
   GIT_CODE_TOO_OLD,
   GIT_CODE_UNAVAILABLE,
   GIT_CODE_UNKNOWN_REF,
   GIT_CODE_UNMERGED,
+  GIT_CODE_UNSUPPORTED,
   GIT_JOB_CODE_AUTH_REQUIRED,
   GIT_JOB_CODE_CANCELLED,
   GIT_JOB_CODE_CONFLICTS,
@@ -133,6 +140,21 @@ export function sectionsFor(status: SessionGitStatus): ChangesSection[] {
     .sort()
     .map((group) => ({ group, title: group.replace(/_/g, ' '), rows: byGroup.get(group) ?? [] }));
   return [...known, ...other];
+}
+
+export interface ResolvedRow {
+  /** `resolved:<path>` — a namespace no entry key (`group:occurrence:path`) can enter. */
+  key: string;
+  path: string;
+}
+
+/**
+ * The *Resolved* section: paths marked resolved during the operation in
+ * progress whose conflict the agent can still rebuild. Not entries — a
+ * resolution equal to HEAD has none — so they never join the selection.
+ */
+export function resolvedRowsFor(status: SessionGitStatus): ResolvedRow[] {
+  return (status.resolved_paths ?? []).map((path) => ({ key: `resolved:${path}`, path }));
 }
 
 /** Conflicted files are diffed against HEAD, which the agent serves as `unstaged`. */
@@ -449,6 +471,20 @@ export function refusalCopy(code: string, detailMessage: string | null): string 
       return JOB_LOST_COPY;
     case GIT_CODE_CONFLICT_MARKERS:
       return `${detailMessage ?? 'The file'} still has conflict markers — finish resolving it first.`;
+    case GIT_CODE_NOT_CONFLICTED:
+      return `${detailMessage ?? 'The file'} is no longer in conflict.`;
+    case GIT_CODE_FILE_CHANGED:
+      return `${detailMessage ?? 'The file'} changed on the agent machine since you opened it.`;
+    case GIT_CODE_FILE_BUSY:
+      return `${detailMessage ?? 'The file'} is open in another program — close it and try again.`;
+    case GIT_CODE_NOT_RESTORABLE:
+      return `The conflict in ${detailMessage ?? 'the file'} can no longer be rebuilt.`;
+    case GIT_CODE_UNSUPPORTED:
+      return "This conflict can't be resolved here — use the terminal.";
+    case GIT_CODE_TOO_LARGE:
+      return 'The text is too large to save from here.';
+    case GIT_CODE_BAD_CONTENT:
+      return "The text contains characters that can't be saved.";
     default:
       return detailMessage === null
         ? `git refused the request (${code}).`
@@ -485,6 +521,11 @@ export interface RowActions {
 }
 
 const NO_ACTIONS: RowActions = { stage: false, unstage: false, discard: false, resolve: false };
+
+/** Whether a row opens the conflict resolver instead of the HEAD diff. */
+export function opensResolver(entry: SessionGitEntry, capabilities: GitCapabilities): boolean {
+  return entry.group === 'conflicts' && capabilities.conflicts;
+}
 
 /**
  * What a row can do: a staged entry is unstaged, a modified or untracked one
@@ -721,7 +762,11 @@ export function jobDoneTitle(op: SessionGitJobOp, ok: boolean): string {
  * git's own explanation and is rendered beside it in monospace, so only an
  * unknown code falls back to it here.
  */
-export function jobErrorCopy(code: string | null | undefined, message: string | null | undefined): string {
+export function jobErrorCopy(
+  code: string | null | undefined,
+  message: string | null | undefined,
+  canResolveInApp = false,
+): string {
   switch (code ?? '') {
     case GIT_JOB_CODE_CANCELLED:
       return 'Cancelled.';
@@ -738,7 +783,9 @@ export function jobErrorCopy(code: string | null | undefined, message: string | 
     case GIT_JOB_CODE_NOT_FAST_FORWARD:
       return 'Your branch is behind the remote.';
     case GIT_JOB_CODE_CONFLICTS:
-      return 'Stopped on conflicts — resolve them in the terminal.';
+      return canResolveInApp
+        ? 'Stopped on conflicts — open a file under Conflicts to resolve it.'
+        : 'Stopped on conflicts — resolve them in the terminal.';
     case GIT_JOB_CODE_DIRTY_WORKTREE:
       return 'Commit or stash your changes first.';
     case GIT_CODE_UNMERGED:
@@ -763,7 +810,7 @@ export function jobErrorCopy(code: string | null | undefined, message: string | 
 }
 
 /** The banner's one line: title plus git's summary, or title plus the failure copy. */
-export function jobNotice(job: SessionGitJob): string {
+export function jobNotice(job: SessionGitJob, canResolveInApp = false): string {
   if (job.status !== 'done') return jobTitle(job.op);
   const ok = job.ok === true;
   const title = jobDoneTitle(job.op, ok);
@@ -772,7 +819,7 @@ export function jobNotice(job: SessionGitJob): string {
       ? title
       : `${title} · ${job.message}`;
   }
-  return `${title}: ${jobErrorCopy(job.error_code, job.message)}`;
+  return `${title}: ${jobErrorCopy(job.error_code, job.message, canResolveInApp)}`;
 }
 
 /** Whether the failure's `message` adds anything the copy did not already say. */
@@ -925,10 +972,15 @@ export interface RebaseBanner {
   actionable: boolean;
 }
 
-/** The Changes screen's banner while the repository is rebasing. */
+/**
+ * The Changes screen's banner while the repository is rebasing.
+ * `canResolveInApp` is the agent's `conflicts` capability: without it the
+ * files can only be fixed in the terminal, and the hint says so.
+ */
 export function rebaseBanner(
   repo: SessionGitRepoInfo | null | undefined,
   conflicts: number,
+  canResolveInApp = false,
 ): RebaseBanner | null {
   if (repo === null || repo === undefined || repo.state !== 'rebasing') return null;
   const info = repo.rebase ?? null;
@@ -952,7 +1004,9 @@ export function rebaseBanner(
   const hint = !actionable
     ? 'Continue, skip or abort it in the terminal.'
     : conflicts > 0
-      ? `${String(conflicts)} ${conflicts === 1 ? 'conflict' : 'conflicts'} — fix the files, then Mark resolved.`
+      ? `${String(conflicts)} ${conflicts === 1 ? 'conflict' : 'conflicts'} — ${
+          canResolveInApp ? 'open a file to resolve it.' : 'fix the files, then Mark resolved.'
+        }`
       : 'No conflicts left — Continue when ready.';
   return { title, progress: parts.length === 0 ? null : parts.join(' · '), hint, actionable };
 }

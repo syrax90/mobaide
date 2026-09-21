@@ -20,6 +20,7 @@ object Routes {
         "session_git_changes/{sessionId}?commit={commit}&sync={sync}&rebase={rebase}"
     const val SESSION_GIT_DIFF =
         "session_git_diff/{sessionId}?path={path}&scope={scope}&origPath={origPath}"
+    const val SESSION_GIT_CONFLICT = "session_git_conflict/{sessionId}?path={path}"
     const val INCOMPATIBLE_SERVER = "incompatible_server"
     const val TEMPLATES = "templates"
     const val DEVICES = "devices"
@@ -50,4 +51,10 @@ object Routes {
         val base = "session_git_diff/$sessionId?path=${Uri.encode(path)}&scope=${Uri.encode(scope)}"
         return if (origPath == null) base else "$base&origPath=${Uri.encode(origPath)}"
     }
+
+    fun sessionGitConflict(sessionId: String, path: String) =
+        "session_git_conflict/$sessionId?path=${Uri.encode(path)}"
+
+    /** Saved-state key the conflict resolver leaves its outcome under for the Changes screen. */
+    const val RESULT_GIT_CONFLICT_MESSAGE = "git_conflict_message"
 }

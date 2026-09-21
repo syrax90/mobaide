@@ -251,6 +251,12 @@ data class GitStatusResponse(
     val counts: GitStatusCounts? = null,
     val truncated: Boolean = false,
     val entry_limit: Int = 5000,
+    /**
+     * Paths marked resolved during the operation in progress whose conflict
+     * the agent can still rebuild. Not entries: a resolution equal to HEAD has
+     * no status row at all.
+     */
+    val resolved_paths: List<String> = emptyList(),
 ) {
     companion object {
         const val UNAVAILABLE_NOT_A_REPO = "not_a_repo"
@@ -388,6 +394,70 @@ data class GitPushRequest(val force: Boolean = false)
 
 @Serializable
 data class GitRebaseRequest(val onto: String)
+
+/** One side of a conflict; `present` is false when that side deleted the file or never had it. */
+@Serializable
+data class GitConflictSide(
+    val label: String? = null,
+    val present: Boolean = false,
+)
+
+/**
+ * A conflicted path as the resolver shows it. `ours` is index stage 2 and
+ * `theirs` stage 3 — during a rebase, the branch being rebased onto and the
+ * commit being replayed. `kind` is an open vocabulary; only [KIND_TEXT] carries
+ * `content` (LF line endings, no BOM) and `token`, which `resolve` sends back.
+ */
+@Serializable
+data class GitConflictResponse(
+    val path: String,
+    val code: String,
+    val state: String = GitRepoInfo.STATE_CLEAN,
+    val kind: String,
+    val content: String? = null,
+    val token: String? = null,
+    val markers: Int = 0,
+    val has_base: Boolean = false,
+    val ours: GitConflictSide = GitConflictSide(),
+    val theirs: GitConflictSide = GitConflictSide(),
+    val byte_limit: Int = 262144,
+) {
+    companion object {
+        const val KIND_TEXT = "text"
+        const val KIND_TOO_LARGE = "too_large"
+        const val KIND_BINARY = "binary"
+        const val KIND_ENCODING = "encoding"
+        const val KIND_MISSING = "missing"
+        const val KIND_SYMLINK = "symlink"
+        const val KIND_SUBMODULE = "submodule"
+        const val SIDE_OURS = "ours"
+        const val SIDE_THEIRS = "theirs"
+    }
+}
+
+/** `mark_resolved = false` saves a draft: the file is written, markers and all, and stays unmerged. */
+@Serializable
+data class GitConflictResolveRequest(
+    val path: String,
+    val token: String,
+    val content: String,
+    val mark_resolved: Boolean = true,
+)
+
+@Serializable
+data class GitConflictTakeRequest(val path: String, val side: String)
+
+@Serializable
+data class GitConflictRestoreRequest(
+    val path: String,
+    val style: String = STYLE_MERGE,
+    val token: String? = null,
+) {
+    companion object {
+        const val STYLE_MERGE = "merge"
+        const val STYLE_DIFF3 = "diff3"
+    }
+}
 
 /**
  * What a rebase route did. `outcome` is an open vocabulary; `rebase` is set only

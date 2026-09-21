@@ -271,6 +271,60 @@ final class AgentAPITests: XCTestCase {
         )
     }
 
+    func testSessionGitConflictEncodesEveryReservedQueryCharacterOfThePath() async throws {
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"path":"x","code":"DU","state":"rebasing","kind":"text","content":"kept\n","token":"t1","markers":0,"has_base":false,"ours":{"label":"main","present":false},"theirs":{"label":null,"present":true},"byte_limit":262144}"#
+        )
+
+        let conflict = try await makeAPI().getSessionGitConflict(sessionId: "s1", path: "dir/a b+c&d#e.txt")
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "http://agent.example.com/api/sessions/s1/git/conflict?path=dir%2Fa%20b%2Bc%26d%23e.txt"
+        )
+        XCTAssertEqual(conflict.content, "kept\n")
+        XCTAssertEqual(conflict.ours, GitConflictSide(label: "main", present: false))
+        XCTAssertEqual(conflict.theirs, GitConflictSide(label: nil, present: true))
+    }
+
+    func testSessionGitConflictWritesPostTheirBodiesUnderTheirOwnLeaves() async throws {
+        for _ in 0..<4 { StubURLProtocol.enqueue(status: 200, body: #"{"ok":true}"#) }
+        let api = makeAPI()
+
+        try await api.resolveSessionGitConflict(
+            sessionId: "s1", path: "src/a b.py", token: "t1", content: "<<<<<<< x\nж\n", markResolved: false
+        )
+        try await api.takeSessionGitConflict(sessionId: "s1", path: "docs/old.md", side: GitConflictResponse.sideTheirs)
+        try await api.restoreSessionGitConflict(sessionId: "s1", path: "src/session.py")
+        try await api.restoreSessionGitConflict(
+            sessionId: "s1", path: "src/login.py", style: GitConflictRestoreRequest.styleDiff3, token: "t1"
+        )
+
+        XCTAssertEqual(
+            StubURLProtocol.requests.map { "\($0.httpMethod ?? "?") \($0.url?.absoluteString ?? "?")" },
+            [
+                "POST http://agent.example.com/api/sessions/s1/git/conflict/resolve",
+                "POST http://agent.example.com/api/sessions/s1/git/conflict/take",
+                "POST http://agent.example.com/api/sessions/s1/git/conflict/restore",
+                "POST http://agent.example.com/api/sessions/s1/git/conflict/restore",
+            ]
+        )
+        let bodies = try StubURLProtocol.bodies.map { try WireJSON.decoder().decode(JSONValue.self, from: $0) }
+        XCTAssertEqual(
+            bodies,
+            [
+                ["path": "src/a b.py", "token": "t1", "content": "<<<<<<< x\nж\n", "mark_resolved": false],
+                ["path": "docs/old.md", "side": "theirs"],
+                // nobody has the resolved file open: merge style, and no token key at all
+                ["path": "src/session.py", "style": "merge"],
+                ["path": "src/login.py", "style": "diff3", "token": "t1"],
+            ]
+        )
+    }
+
     func testEncodeQueryValueKeepsOnlyTheUnreservedSet() {
         XCTAssertEqual(AgentAPI.encodeQueryValue("a-b_c.d*e9"), "a-b_c.d*e9")
         XCTAssertEqual(AgentAPI.encodeQueryValue("a b+c/d&e#f?g=h"), "a%20b%2Bc%2Fd%26e%23f%3Fg%3Dh")

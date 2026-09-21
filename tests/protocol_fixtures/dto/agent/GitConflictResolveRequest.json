@@ -1,0 +1,23 @@
+{
+  "type": "GitConflictResolveRequest",
+  "cases": [
+    {
+      "name": "apply_and_mark_resolved",
+      "wire": {
+        "path": "src/login.py",
+        "token": "9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
+        "content": "def login():\n    return redirect(next_url)\n",
+        "mark_resolved": true
+      }
+    },
+    {
+      "name": "save_draft_with_markers",
+      "wire": {
+        "path": "docs/notes with space.md",
+        "token": "0a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef",
+        "content": "<<<<<<< ours\nж\n=======\n>>>>>>> theirs\n",
+        "mark_resolved": false
+      }
+    }
+  ]
+}

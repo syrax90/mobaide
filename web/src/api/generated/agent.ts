@@ -510,6 +510,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/git/conflict": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Session Git Conflict */
+        get: operations["session_git_conflict_api_sessions__session_id__git_conflict_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/conflict/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Conflict Resolve */
+        post: operations["session_git_conflict_resolve_api_sessions__session_id__git_conflict_resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/conflict/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Conflict Restore */
+        post: operations["session_git_conflict_restore_api_sessions__session_id__git_conflict_restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/git/conflict/take": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Session Git Conflict Take */
+        post: operations["session_git_conflict_take_api_sessions__session_id__git_conflict_take_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/git/diff": {
         parameters: {
             query?: never;
@@ -1233,6 +1301,107 @@ export interface components {
             subject: string;
         };
         /**
+         * GitConflictResolveRequest
+         * @description ``content`` carries no length bound on purpose: a validation error
+         *     echoes its input, so the size is checked by the service instead.
+         */
+        GitConflictResolveRequest: {
+            /** Content */
+            content: string;
+            /**
+             * Mark Resolved
+             * @default true
+             */
+            mark_resolved: boolean;
+            /** Path */
+            path: string;
+            /** Token */
+            token: string;
+        };
+        /**
+         * GitConflictResponse
+         * @description A conflicted path as the resolver shows it. ``ours`` is index stage 2
+         *     and ``theirs`` stage 3 — during a rebase that is the branch being rebased
+         *     onto and the commit being replayed. ``kind`` is an open vocabulary:
+         *     ``text`` | ``too_large`` | ``binary`` | ``encoding`` | ``missing`` |
+         *     ``symlink`` | ``submodule`` | ``unsupported``; only ``text`` carries
+         *     ``content`` (LF line endings, no BOM) and ``token``, the hash of the file
+         *     as read that ``resolve`` must send back.
+         */
+        GitConflictResponse: {
+            /**
+             * Byte Limit
+             * @default 262144
+             */
+            byte_limit: number;
+            /** Code */
+            code: string;
+            /** Content */
+            content?: string | null;
+            /**
+             * Has Base
+             * @default false
+             */
+            has_base: boolean;
+            /** Kind */
+            kind: string;
+            /**
+             * Markers
+             * @default 0
+             */
+            markers: number;
+            ours: components["schemas"]["GitConflictSide"];
+            /** Path */
+            path: string;
+            /**
+             * State
+             * @default clean
+             * @enum {string}
+             */
+            state: "clean" | "merging" | "rebasing" | "cherry_picking" | "reverting" | "bisecting";
+            theirs: components["schemas"]["GitConflictSide"];
+            /** Token */
+            token?: string | null;
+        };
+        /** GitConflictRestoreRequest */
+        GitConflictRestoreRequest: {
+            /** Path */
+            path: string;
+            /**
+             * Style
+             * @default merge
+             * @enum {string}
+             */
+            style: "merge" | "diff3";
+            /** Token */
+            token?: string | null;
+        };
+        /**
+         * GitConflictSide
+         * @description One side of a conflict. ``present`` is false when that side deleted
+         *     the file (or never had it); ``label`` names the side for the user and is
+         *     null when the agent cannot tell.
+         */
+        GitConflictSide: {
+            /** Label */
+            label?: string | null;
+            /**
+             * Present
+             * @default false
+             */
+            present: boolean;
+        };
+        /** GitConflictTakeRequest */
+        GitConflictTakeRequest: {
+            /** Path */
+            path: string;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "ours" | "theirs";
+        };
+        /**
          * GitDeleteItem
          * @description One item in a delete request.
          *
@@ -1726,6 +1895,8 @@ export interface components {
             /** Etag */
             etag: string;
             repo?: components["schemas"]["GitRepoInfo"] | null;
+            /** Resolved Paths */
+            resolved_paths?: string[];
             /** Session Id */
             session_id: string;
             /**
@@ -2773,6 +2944,144 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitCommitContextResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_conflict_api_sessions__session_id__git_conflict_get: {
+        parameters: {
+            query?: {
+                path?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitConflictResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_conflict_resolve_api_sessions__session_id__git_conflict_resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitConflictResolveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_conflict_restore_api_sessions__session_id__git_conflict_restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitConflictRestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitMutationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_git_conflict_take_api_sessions__session_id__git_conflict_take_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitConflictTakeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitMutationResponse"];
                 };
             };
             /** @description Validation Error */

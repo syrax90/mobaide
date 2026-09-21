@@ -4194,6 +4194,7 @@ class TestProxyVersionCapabilities:
                 "rebase": True,
                 "resolve": True,
                 "delete_remote": True,
+                "conflicts": True,
             },
         }
 
@@ -4226,6 +4227,7 @@ class TestProxyVersionCapabilities:
                 "rebase": True,
                 "resolve": True,
                 "delete_remote": True,
+                "conflicts": True,
             },
         }
 

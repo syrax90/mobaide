@@ -154,7 +154,11 @@ struct GitSyncSheet: View {
                             .foregroundStyle(colors.textMuted)
                     }
                 } else {
-                    Text(GitChangesDisplay.jobErrorCopy(job.error_code, message: job.message))
+                    Text(GitChangesDisplay.jobErrorCopy(
+                        job.error_code,
+                        message: job.message,
+                        canResolveInApp: model.capabilities.conflicts
+                    ))
                         .font(.footnote)
                         .foregroundStyle(colors.text)
                     if GitChangesDisplay.showsJobOutput(job), let output = job.message {

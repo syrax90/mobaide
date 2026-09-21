@@ -155,7 +155,7 @@ internal fun GitSyncForm(
             if (banner.running) {
                 JobProgress(banner, onCancelJob)
             } else {
-                JobResult(banner, repo, locked, onFollowUp)
+                JobResult(banner, repo, locked, capabilities.conflicts, onFollowUp)
             }
         }
         Row(
@@ -217,6 +217,7 @@ private fun JobResult(
     banner: GitJobBanner,
     repo: GitRepoInfo?,
     locked: Boolean,
+    canResolveInApp: Boolean,
     onFollowUp: (SyncFollowUp) -> Unit,
 ) {
     val job = banner.job
@@ -249,7 +250,7 @@ private fun JobResult(
                 }
             } else {
                 Text(
-                    text = jobErrorCopy(job.error_code, job.message),
+                    text = jobErrorCopy(job.error_code, job.message, canResolveInApp),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (showsJobOutput(job)) {

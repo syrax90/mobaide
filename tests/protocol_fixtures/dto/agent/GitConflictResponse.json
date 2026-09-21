@@ -1,0 +1,362 @@
+{
+  "type": "GitConflictResponse",
+  "cases": [
+    {
+      "name": "rebase_text_two_sides",
+      "wire": {
+        "path": "src/login.py",
+        "code": "UU",
+        "state": "rebasing",
+        "kind": "text",
+        "content": "def login():\n<<<<<<< HEAD\n    return redirect(home)\n=======\n    return redirect(next_url)\n>>>>>>> fedcba9 (Fix the login redirect)\n",
+        "token": "9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
+        "markers": 1,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": true
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      },
+      "decoded_canonical": {
+        "path": "src/login.py",
+        "code": "UU",
+        "state": "rebasing",
+        "kind": "text",
+        "content": "def login():\n<<<<<<< HEAD\n    return redirect(home)\n=======\n    return redirect(next_url)\n>>>>>>> fedcba9 (Fix the login redirect)\n",
+        "token": "9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
+        "markers": 1,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": true
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      }
+    },
+    {
+      "name": "diff3_base_sections_non_ascii",
+      "wire": {
+        "path": "src/login.py",
+        "code": "UU",
+        "state": "rebasing",
+        "kind": "text",
+        "content": "a\n<<<<<<< ours\nmain\n||||||| base\norig\n=======\ntopic – ж\n>>>>>>> theirs\n",
+        "token": "0a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef",
+        "markers": 1,
+        "has_base": true,
+        "ours": {
+          "label": "origin/main",
+          "present": true
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      },
+      "decoded_canonical": {
+        "path": "src/login.py",
+        "code": "UU",
+        "state": "rebasing",
+        "kind": "text",
+        "content": "a\n<<<<<<< ours\nmain\n||||||| base\norig\n=======\ntopic – ж\n>>>>>>> theirs\n",
+        "token": "0a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef",
+        "markers": 1,
+        "has_base": true,
+        "ours": {
+          "label": "origin/main",
+          "present": true
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      }
+    },
+    {
+      "name": "deleted_by_us_no_markers",
+      "wire": {
+        "path": "docs/old.md",
+        "code": "DU",
+        "state": "rebasing",
+        "kind": "text",
+        "content": "kept by the commit\n",
+        "token": "1111111111111111111111111111111111111111111111111111111111111111",
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": false
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      },
+      "decoded_canonical": {
+        "path": "docs/old.md",
+        "code": "DU",
+        "state": "rebasing",
+        "kind": "text",
+        "content": "kept by the commit\n",
+        "token": "1111111111111111111111111111111111111111111111111111111111111111",
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": false
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      }
+    },
+    {
+      "name": "merging_without_labels",
+      "wire": {
+        "path": "src/login.py",
+        "code": "UU",
+        "state": "merging",
+        "kind": "text",
+        "content": "x\n",
+        "token": "2222222222222222222222222222222222222222222222222222222222222222",
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "label": null,
+          "present": true
+        },
+        "theirs": {
+          "label": null,
+          "present": true
+        },
+        "byte_limit": 262144
+      },
+      "decoded_canonical": {
+        "path": "src/login.py",
+        "code": "UU",
+        "state": "merging",
+        "kind": "text",
+        "content": "x\n",
+        "token": "2222222222222222222222222222222222222222222222222222222222222222",
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "present": true
+        },
+        "theirs": {
+          "present": true
+        },
+        "byte_limit": 262144
+      }
+    },
+    {
+      "name": "binary",
+      "wire": {
+        "path": "assets/logo.png",
+        "code": "UU",
+        "state": "rebasing",
+        "kind": "binary",
+        "content": null,
+        "token": null,
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": true
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      },
+      "decoded_canonical": {
+        "path": "assets/logo.png",
+        "code": "UU",
+        "state": "rebasing",
+        "kind": "binary",
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": true
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      }
+    },
+    {
+      "name": "too_large",
+      "wire": {
+        "path": "data/big.sql",
+        "code": "UU",
+        "state": "rebasing",
+        "kind": "too_large",
+        "content": null,
+        "token": null,
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": true
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      },
+      "decoded_canonical": {
+        "path": "data/big.sql",
+        "code": "UU",
+        "state": "rebasing",
+        "kind": "too_large",
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": true
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      }
+    },
+    {
+      "name": "both_deleted_missing",
+      "wire": {
+        "path": "old/name.txt",
+        "code": "DD",
+        "state": "rebasing",
+        "kind": "missing",
+        "content": null,
+        "token": null,
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": false
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": false
+        },
+        "byte_limit": 262144
+      },
+      "decoded_canonical": {
+        "path": "old/name.txt",
+        "code": "DD",
+        "state": "rebasing",
+        "kind": "missing",
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": false
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": false
+        },
+        "byte_limit": 262144
+      }
+    },
+    {
+      "name": "submodule",
+      "wire": {
+        "path": "vendor/lib",
+        "code": "UU",
+        "state": "rebasing",
+        "kind": "submodule",
+        "content": null,
+        "token": null,
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": true
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      },
+      "decoded_canonical": {
+        "path": "vendor/lib",
+        "code": "UU",
+        "state": "rebasing",
+        "kind": "submodule",
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": true
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      }
+    },
+    {
+      "name": "unknown_kind",
+      "wire": {
+        "path": "src/login.py",
+        "code": "UU",
+        "state": "clean",
+        "kind": "hologram",
+        "content": null,
+        "token": null,
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": true
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      },
+      "decoded_canonical": {
+        "path": "src/login.py",
+        "code": "UU",
+        "state": "clean",
+        "kind": "hologram",
+        "markers": 0,
+        "has_base": false,
+        "ours": {
+          "label": "origin/main",
+          "present": true
+        },
+        "theirs": {
+          "label": "fedcba9 Fix the login redirect",
+          "present": true
+        },
+        "byte_limit": 262144
+      }
+    }
+  ]
+}

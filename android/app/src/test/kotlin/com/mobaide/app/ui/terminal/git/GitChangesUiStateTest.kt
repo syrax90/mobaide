@@ -362,6 +362,57 @@ class GitChangesUiStateTest {
     }
 
     @Test
+    fun refusalCopy_phrasesTheConflictResolversRefusals_aroundTheFileTheyName() {
+        assertEquals(
+            "src/login.py is no longer in conflict.",
+            refusalCopy(SessionGitException.CODE_NOT_CONFLICTED, "src/login.py"),
+        )
+        assertEquals(
+            "The file is no longer in conflict.",
+            refusalCopy(SessionGitException.CODE_NOT_CONFLICTED, null),
+        )
+        assertEquals(
+            "src/login.py changed on the agent machine since you opened it.",
+            refusalCopy(SessionGitException.CODE_FILE_CHANGED, "src/login.py"),
+        )
+        assertEquals(
+            "src/login.py is open in another program — close it and try again.",
+            refusalCopy(SessionGitException.CODE_FILE_BUSY, "src/login.py"),
+        )
+        assertEquals(
+            "The conflict in src/login.py can no longer be rebuilt.",
+            refusalCopy(SessionGitException.CODE_NOT_RESTORABLE, "src/login.py"),
+        )
+        assertEquals(
+            "The conflict in the file can no longer be rebuilt.",
+            refusalCopy(SessionGitException.CODE_NOT_RESTORABLE, null),
+        )
+        assertEquals(
+            "This conflict can't be resolved here — use the terminal.",
+            refusalCopy(SessionGitException.CODE_UNSUPPORTED, "vendor/lib"),
+        )
+        assertEquals(
+            "The text is too large to save from here.",
+            refusalCopy(SessionGitException.CODE_TOO_LARGE, null),
+        )
+        assertEquals(
+            "The text contains characters that can't be saved.",
+            refusalCopy(SessionGitException.CODE_BAD_CONTENT, null),
+        )
+    }
+
+    @Test
+    fun opensResolver_onlyForAConflictRow_ofAnAgentThatServesTheResolver() {
+        val withResolver = allCaps.copy(rebase = true, resolve = true, conflicts = true)
+
+        assertTrue(opensResolver(conflict, withResolver))
+        assertFalse(opensResolver(conflict, withResolver.copy(conflicts = false)))
+        assertFalse(opensResolver(modified, withResolver))
+        assertFalse(opensResolver(rename, withResolver))
+        assertFalse(opensResolver(notes, withResolver))
+    }
+
+    @Test
     fun refusalCopy_namesAnUnknownCode_withTheGitOutputWhenThereIsAny() {
         assertEquals("git refused the request (rate_limited).", refusalCopy("rate_limited", null))
         assertEquals(
@@ -649,16 +700,16 @@ class GitChangesUiStateSyncTest {
         val running = GitJobBanner("j1", job())
         assertTrue(running.running)
         assertFalse(running.failed)
-        assertEquals("Pushing…", running.text)
+        assertEquals("Pushing…", running.text())
 
         val waiting = GitJobBanner("j1", null)
         assertTrue(waiting.running)
-        assertEquals("Syncing…", waiting.text)
+        assertEquals("Syncing…", waiting.text())
 
         val ok = GitJobBanner("j1", done())
         assertFalse(ok.running)
         assertFalse(ok.failed)
-        assertEquals("Pushed · main -> main", ok.text)
+        assertEquals("Pushed · main -> main", ok.text())
 
         val rejected = GitJobBanner("j1", failed("rejected"))
         assertFalse(rejected.running)
@@ -667,7 +718,35 @@ class GitChangesUiStateSyncTest {
         val lost = GitJobBanner("j1", job(), lost = true)
         assertFalse(lost.running)
         assertTrue(lost.failed)
-        assertEquals("Lost track of the job — refresh to see the result.", lost.text)
+        assertEquals("Lost track of the job — refresh to see the result.", lost.text())
+    }
+
+    @Test
+    fun aConflictStop_pointsAtTheConflictsSection_onlyWhenTheAgentResolvesInTheApp() {
+        val stopped = failed("conflicts", op = GitJobResponse.OP_PULL)
+
+        assertEquals(
+            "Stopped on conflicts — open a file under Conflicts to resolve it.",
+            jobErrorCopy("conflicts", null, canResolveInApp = true),
+        )
+        assertEquals(
+            "Stopped on conflicts — resolve them in the terminal.",
+            jobErrorCopy("conflicts", null, canResolveInApp = false),
+        )
+        assertEquals(
+            "Pull failed: Stopped on conflicts — open a file under Conflicts to resolve it.",
+            jobNotice(stopped, canResolveInApp = true),
+        )
+        assertEquals(
+            "Pull failed: Stopped on conflicts — open a file under Conflicts to resolve it.",
+            GitJobBanner("j1", stopped).text(canResolveInApp = true),
+        )
+        assertEquals(
+            "Pull failed: Stopped on conflicts — resolve them in the terminal.",
+            GitJobBanner("j1", stopped).text(),
+        )
+        // every other code reads the same either way
+        assertEquals("Resolve the conflicts first.", jobErrorCopy("unmerged", null, canResolveInApp = true))
     }
 
     @Test
@@ -857,6 +936,26 @@ class GitChangesUiStateRebaseTest {
         )
         assertEquals("3 conflicts — fix the files, then Mark resolved.", rebaseBanner(rebasing(), 3)?.hint)
         assertEquals("No conflicts left — Continue when ready.", rebaseBanner(rebasing(), 0)?.hint)
+    }
+
+    @Test
+    fun rebaseBanner_pointsAtTheFilesThemselves_whenTheAgentResolvesInTheApp() {
+        assertEquals(
+            "1 conflict — open a file to resolve it.",
+            rebaseBanner(rebasing(), 1, canResolveInApp = true)?.hint,
+        )
+        assertEquals(
+            "3 conflicts — open a file to resolve it.",
+            rebaseBanner(rebasing(), 3, canResolveInApp = true)?.hint,
+        )
+        assertEquals(
+            "No conflicts left — Continue when ready.",
+            rebaseBanner(rebasing(), 0, canResolveInApp = true)?.hint,
+        )
+        assertEquals(
+            "Continue, skip or abort it in the terminal.",
+            rebaseBanner(rebasing(null), 2, canResolveInApp = true)?.hint,
+        )
     }
 
     @Test
