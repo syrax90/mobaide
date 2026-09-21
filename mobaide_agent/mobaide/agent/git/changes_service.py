@@ -62,6 +62,7 @@ _BINARY_SNIFF = 8000
 _MAX_ERROR_DETAIL = 500
 _CONTEXT_DEFAULT = 3
 _LS_TREE_CHUNK = 50
+_GITLINK_MODE = "160000"
 # At LINE_LIMIT context a file with more than LINE_LIMIT lines on either side
 # already overflows the line cap, so an untruncated diff at this ceiling is
 # always the whole file as one hunk — the clients' "Full file" view.
@@ -654,16 +655,29 @@ async def _resolve_undo_raw(toplevel: str) -> bytes:
     return result.stdout
 
 
-def _parse_resolve_undo(raw: bytes) -> dict[str, dict[int, str]]:
-    """``path -> {stage: oid}``; each record is ``<mode> <oid> <stage>\t<path>``,
-    one per stage the conflict had."""
-    out: dict[str, dict[int, str]] = {}
+class _Stage(NamedTuple):
+    """One index stage of a conflicted path, live or as resolve-undo kept it."""
+
+    mode: str
+    oid: str
+
+
+def _is_gitlink(stages: dict[int, _Stage]) -> bool:
+    return any(stage.mode == _GITLINK_MODE for stage in stages.values())
+
+
+def _parse_resolve_undo(raw: bytes) -> dict[str, dict[int, _Stage]]:
+    """``path -> {stage: (mode, oid)}``; each record is
+    ``<mode> <oid> <stage>\t<path>``, one per stage the conflict had."""
+    out: dict[str, dict[int, _Stage]] = {}
     for record in raw.split(b"\0"):
         meta, tab, path = record.partition(b"\t")
         fields = meta.split(b" ")
         if not tab or len(fields) != 3 or not fields[2].isdigit():
             continue
-        out.setdefault(_text(path), {})[int(fields[2])] = _text(fields[1])
+        out.setdefault(_text(path), {})[int(fields[2])] = _Stage(
+            _text(fields[0]), _text(fields[1])
+        )
     return out
 
 
@@ -695,7 +709,8 @@ async def restorable_paths(
     toplevel: str, raw: bytes, *, unmerged: set[str]
 ) -> list[str]:
     """Resolved paths whose conflict ``git checkout --merge`` can rebuild:
-    both sides recorded, not unmerged again, and "ours" still ``HEAD``'s blob.
+    both sides recorded, no submodule among them (git cannot merge a gitlink
+    back into markers), not unmerged again, and "ours" still ``HEAD``'s blob.
     That last check drops records a finished operation left in the index —
     the next pick rewrites the index and with it the records, but the last
     pick of a rebase does not."""
@@ -703,12 +718,12 @@ async def restorable_paths(
     candidates = sorted(
         path
         for path, stages in records.items()
-        if 2 in stages and 3 in stages and path not in unmerged
+        if 2 in stages and 3 in stages and path not in unmerged and not _is_gitlink(stages)
     )[:RESOLVED_LIMIT]
     if not candidates:
         return []
     head = await _head_blobs(toplevel, candidates)
-    return [path for path in candidates if head.get(path) == records[path][2]]
+    return [path for path in candidates if head.get(path) == records[path][2].oid]
 
 
 def _etag(*parts: bytes | str) -> str:

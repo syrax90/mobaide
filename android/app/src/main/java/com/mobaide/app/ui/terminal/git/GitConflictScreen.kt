@@ -179,7 +179,7 @@ fun GitConflictScreen(
             onReloadFile = viewModel::reloadFile,
             onKeepMyEdits = viewModel::keepMyEdits,
             onTake = { dialog = ConflictDialog.Take(it) },
-            onClose = onBack,
+            onClose = { leave(onBack) },
             // The action bar rides above the keyboard, so the IME inset is
             // consumed here rather than left to a resize the edge-to-edge
             // window never performs.

@@ -189,10 +189,16 @@ cadence; they do **not** gate compatibility.
     "side": "ours" | "theirs"}`` makes the path look like one side and
     marks it resolved — the only resolution for a ``kind`` that is not
     ``text``. A side that is ``present`` runs ``git checkout --<side>`` and
-    ``git add``; an absent side resolves by removal (``git rm -f``), which
-    is how a modify/delete conflict is settled as "delete". The choice is
-    read from the index stages, never from git's wording. ``409
-    unsupported`` for a submodule or a directory in the file's place.
+    ``git add``; an absent side resolves by removal, which is how a
+    modify/delete conflict is settled as "delete": the agent unlinks the
+    file itself without following a symlink and then drops the index entry
+    with ``git rm --cached`` — plain ``git rm`` unlinks by path and would
+    follow a symlinked parent directory out of the repository. The choice
+    is read from the index stages, never from git's wording. ``409
+    unsupported`` for a submodule, a directory in the file's place, a
+    symlink (or non-directory) where a parent directory should be, or a file
+    the no-follow walk cannot reach; ``409 file_busy`` when the platform
+    refuses the unlink.
   * ``POST …/git/conflict/restore`` with ``GitConflictRestoreRequest
     {"path", "style": "merge" | "diff3", "token"}`` runs ``git checkout
     --merge --conflict=<style>``: it rebuilds the markers of a file still in
@@ -212,6 +218,7 @@ cadence; they do **not** gate compatibility.
     resolve-undo records. Listed only while ``repo.state`` is not ``clean``
     (the records outlive a finished rebase), only with both sides recorded
     (``checkout --merge`` cannot rebuild a modify/delete conflict), never
+    for a submodule (git cannot merge a gitlink back into markers), never
     while unmerged again, and only while "ours" is still ``HEAD``'s blob for
     the path. It is a top-level list rather than an entry group because a
     resolution equal to ``HEAD`` has no status entry at all and one that

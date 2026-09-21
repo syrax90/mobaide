@@ -33,6 +33,7 @@ from .git_repo_support import (
     init_repo,
     make_conflict_branches,
     make_modify_delete_branches,
+    make_submodule_conflict,
     norm_path,
     posix_only,
     repo,  # noqa: F401 - pytest fixture
@@ -651,9 +652,14 @@ class TestSessionGitStatus:
             await get_session_git_status(session_id="s1", cwd=repo, etag=None)
 
 
-def _resolve_undo_record(path: str, stages: dict[int, str]) -> bytes:
+def _resolve_undo_record(
+    path: str, stages: dict[int, str], *, gitlink: tuple[int, ...] = ()
+) -> bytes:
+    """The record git keeps per stage; the stages in ``gitlink`` carry a
+    submodule's mode instead of a file's."""
     return b"".join(
-        f"100644 {oid} {stage}\t{path}\0".encode() for stage, oid in stages.items()
+        f"{'160000' if stage in gitlink else '100644'} {oid} {stage}\t{path}\0".encode()
+        for stage, oid in stages.items()
     )
 
 
@@ -873,6 +879,48 @@ class TestResolvedPaths:
         listed = await restorable_paths(repo, raw, unmerged={"c.txt"})
 
         assert listed == ["keep.txt"]
+
+    @pytest.mark.parametrize(
+        ("gitlink", "listed"),
+        [
+            ((), ["keep.txt"]),
+            ((1,), []),
+            ((2,), []),
+            ((3,), []),
+            ((1, 2, 3), []),
+        ],
+    )
+    async def test_a_record_with_a_submodule_on_any_stage_is_never_restorable(
+        self, repo, gitlink, listed
+    ):
+        # Stage 2 equals HEAD's entry in every case, so only the mode decides.
+        other = "1" * 40
+        raw = _resolve_undo_record(
+            "keep.txt",
+            {1: other, 2: _rev(repo, "HEAD:keep.txt"), 3: other},
+            gitlink=gitlink,
+        )
+
+        assert await restorable_paths(repo, raw, unmerged=set()) == listed
+
+    async def test_a_resolved_submodule_conflict_is_not_listed(self, repo, tmp_path):
+        # ``git add sub`` with the submodule on main's commit resolves as
+        # "ours": the record's stage 2 is HEAD's gitlink, and ``checkout
+        # --merge`` on it dies with "unable to read blob object".
+        make_submodule_conflict(repo, str(tmp_path))
+        before = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+        run_git_sync(repo, "add", "sub")
+        records = subprocess.run(
+            [GIT_BIN, "ls-files", "--resolve-undo"], cwd=repo, check=True, capture_output=True
+        ).stdout.decode()
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert [(e.group, e.path) for e in before.entries] == [("conflicts", "sub")]
+        assert f"160000 {_rev(repo, 'HEAD:sub')} 2\tsub" in records
+        assert resp.repo.state == "merging"
+        assert [e.path for e in resp.entries if e.group == "conflicts"] == []
+        assert resp.resolved_paths == []
 
     async def test_the_list_is_capped_in_path_order(self, repo, monkeypatch):
         for name in ("c", "a", "b"):

@@ -137,6 +137,28 @@ def add_submodule(repo: str, tmp_root: str, name: str = "sub") -> str:
     return source
 
 
+def make_submodule_conflict(repo: str, tmp_root: str, name: str = "sub") -> None:
+    """``main`` and ``other`` each move the submodule at ``<name>`` to a commit
+    the other side lacks, and ``other`` is merged into ``main``: the merge
+    stops with gitlink entries at stages 1-3 of ``<name>``. The submodule's
+    worktree stays on ``main``'s commit, so ``git add <name>`` resolves the
+    conflict as "ours"."""
+    add_submodule(repo, tmp_root, name)
+    commit_all(repo, "adds the submodule")
+    sub = os.path.join(repo, name)
+    run_git_sync(repo, "checkout", "-q", "-b", "other")
+    run_git_sync(sub, "checkout", "-q", "-b", "other-side")
+    write_file(sub, "keep.txt", b"one\nOTHER\nthree\n")
+    commit_all(sub, "other side")
+    commit_all(repo, "other moves the submodule")
+    run_git_sync(repo, "checkout", "-q", "main")
+    run_git_sync(sub, "checkout", "-q", "-b", "main-side", "main")
+    write_file(sub, "keep.txt", b"one\nMAIN\nthree\n")
+    commit_all(sub, "main side")
+    commit_all(repo, "main moves the submodule")
+    run_git_sync(repo, "merge", "other", check=False)
+
+
 def norm_path(path: str) -> str:
     """The form ``resolve_repo`` reports: realpath, forward slashes on Windows only."""
     resolved = os.path.realpath(path)

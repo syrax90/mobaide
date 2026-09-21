@@ -205,7 +205,7 @@ private struct GitConflictContent: View {
 
     private var goneStrip: some View {
         strip(GitConflictDisplay.resolvedElsewhereNotice(model.path)) {
-            Button("Close") { onClosed(nil) }
+            Button("Close", action: close)
                 .buttonStyle(.pixelSmall)
         }
     }

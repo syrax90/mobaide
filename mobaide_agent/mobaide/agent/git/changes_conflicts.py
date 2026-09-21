@@ -41,7 +41,7 @@ import sys
 import time
 from collections.abc import Generator, Sequence
 from dataclasses import dataclass
-from typing import Any, NamedTuple
+from typing import Any
 
 from mobaide.core.git_exec import run_git
 
@@ -69,8 +69,10 @@ from .changes_service import (
     GitBadRequestError,
     GitCommandError,
     GitRefusedError,
+    _is_gitlink,
     _lock_for,
     _resolve_undo_raw,
+    _Stage,
     _text,
     operation_state,
     rebase_info,
@@ -90,7 +92,6 @@ __all__ = [
 # on this single budget.
 _REQUEST_BUDGET = 25.0
 _LABEL_LIMIT = 200
-_GITLINK_MODE = "160000"
 _SYMLINK_MODE = "120000"
 _BOM = b"\xef\xbb\xbf"
 _START_RE = re.compile(rb"^<{7,}(?:\s|$)")
@@ -118,11 +119,6 @@ _CODES = {
     frozenset({2}): "AU",
     frozenset({3}): "UA",
 }
-
-
-class _Stage(NamedTuple):
-    mode: str
-    oid: str
 
 
 class _Deadline:
@@ -437,10 +433,6 @@ def _require_conflict(stages: dict[int, _Stage], rel: str) -> None:
         raise GitRefusedError("not_conflicted", rel)
 
 
-def _is_gitlink(stages: dict[int, _Stage]) -> bool:
-    return any(stage.mode == _GITLINK_MODE for stage in stages.values())
-
-
 def _is_symlink(stages: dict[int, _Stage]) -> bool:
     return any(stage.mode == _SYMLINK_MODE for stage in stages.values())
 
@@ -577,14 +569,75 @@ async def resolve_session_conflict(
     return GitMutationResponse()
 
 
-def _is_directory(toplevel: str, rel: str) -> bool:
+def _parent_unsafe(toplevel: str, rel: str) -> bool:
+    """A symlink or a non-directory where one of the file's parent
+    directories should be. A parent that is simply missing is not unsafe:
+    a side that deleted the file may have taken its directory along."""
+    current = toplevel
+    for part in _parts(rel)[:-1]:
+        current = os.path.join(current, part)
+        try:
+            mode = os.lstat(current).st_mode
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+        if not statmod.S_ISDIR(mode):
+            return True
+    return False
+
+
+def _unwalkable(toplevel: str, rel: str) -> bool:
+    """The no-follow walk refused the parent, yet the file is there by path:
+    something on the way is not a plain directory this agent may enter (a
+    directory junction, an unreadable directory). A parent that is simply
+    missing leaves nothing at the path and is fine. Only "not found" counts
+    as missing: ``os.path.lexists`` would also read a parent without search
+    permission as nothing there."""
+    try:
+        os.lstat(os.path.join(toplevel, *_parts(rel)))
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _take_blocked(toplevel: str, rel: str) -> bool:
+    """Whether a whole-file pick must be refused: git would act through a
+    symlinked parent, the walk cannot reach a file that exists, or a
+    directory sits where the file should be."""
+    if _parent_unsafe(toplevel, rel):
+        return True
     with _open_target(toplevel, rel) as target:
         if target is None:
-            return False
+            return _unwalkable(toplevel, rel)
         try:
             return statmod.S_ISDIR(target.lstat().st_mode)
         except OSError:
             return False
+
+
+def _remove_worktree_file(toplevel: str, rel: str) -> None:
+    """Unlink the working-tree file through the no-follow walk. ``git rm``
+    is not used for this: it unlinks by path and follows a symlinked parent
+    directory out of the repository."""
+    with _open_target(toplevel, rel) as target:
+        if target is None:
+            # never drop the index entry of a file that was left on disk
+            if _unwalkable(toplevel, rel):
+                raise GitRefusedError("unsupported", rel)
+            return
+        try:
+            if statmod.S_ISDIR(target.lstat().st_mode):
+                raise GitRefusedError("unsupported", rel)
+            target.unlink(target.leaf)
+        except FileNotFoundError:
+            return
+        except PermissionError as exc:
+            raise GitRefusedError("file_busy", rel) from exc
+        except OSError as exc:
+            raise GitCommandError(f"could not remove {rel}: {exc.strerror or exc}") from exc
 
 
 async def take_session_conflict(
@@ -597,7 +650,9 @@ async def take_session_conflict(
     """Make the path look like one side and mark it resolved. Which command
     that takes is read from the index stages: a side that deleted the file
     (or never had it) resolves by removal, since ``checkout --ours`` has no
-    version to check out."""
+    version to check out. The removal unlinks the file itself and only then
+    drops the index entry with ``git rm --cached``, which never touches the
+    working tree."""
     rel = validate_repo_path(request.path)
     _parts(rel)
     repo = await _writable_repo(cwd)
@@ -606,7 +661,7 @@ async def take_session_conflict(
     async with _lock_for(toplevel):
         stages = await _conflict_stages(toplevel, rel, deadline)
         _require_conflict(stages, rel)
-        if _is_gitlink(stages) or await asyncio.to_thread(_is_directory, toplevel, rel):
+        if _is_gitlink(stages) or await asyncio.to_thread(_take_blocked, toplevel, rel):
             raise GitRefusedError("unsupported", rel)
         try:
             if (2 if request.side == "ours" else 3) in stages:
@@ -624,8 +679,9 @@ async def take_session_conflict(
                     stdin=_pathspec_stdin([rel]),
                 )
             else:
+                await asyncio.to_thread(_remove_worktree_file, toplevel, rel)
                 await _git(
-                    ["rm", "-q", "-f", "--", rel],
+                    ["rm", "--cached", "-q", "-f", "--", rel],
                     toplevel=toplevel,
                     deadline=deadline,
                     fallback="git rm failed",
