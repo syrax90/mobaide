@@ -575,8 +575,8 @@ def _remote_failures(
     return [(index, _remote_failure(item, code, detail)) for index, item in targets]
 
 
-async def _fetch_refspecs(project_root: str, remote: str) -> list[str]:
-    result = await _quick(project_root, ["config", "--get-all", f"remote.{remote}.fetch"])
+async def _config_values(project_root: str, key: str) -> list[str]:
+    result = await _quick(project_root, ["config", "--get-all", key])
     return _lines(result.stdout) if result.rc == 0 else []
 
 
@@ -588,7 +588,17 @@ async def _push_remote_deletes(
     """Delete ``targets`` (all tracking ``remote``) with one ``git push``."""
     from .changes_jobs import _JOB_ENV, classify_job_failure
 
-    refspecs = await _fetch_refspecs(ctx.project_root, remote)
+    # git pushes to every pushurl, else to every url, so any other destination (a fork)
+    # would lose the branch too and still report `-`. Raw config values are compared, so
+    # `pushInsteadOf` rewrites are not checked (an https-fetch / ssh-push setup of one
+    # repository keeps working).
+    urls = await _config_values(ctx.project_root, f"remote.{remote}.url")
+    push_urls = await _config_values(ctx.project_root, f"remote.{remote}.pushurl")
+    if set(push_urls or urls) != set(urls[:1]):
+        detail = f"remote '{remote}' pushes to a different repository than it fetches from"
+        return [(index, _remote_failure(item, "error", detail)) for index, item in targets]
+
+    refspecs = await _config_values(ctx.project_root, f"remote.{remote}.fetch")
     done: list[tuple[int, GitDeleteResultItem]] = []
     pending: list[tuple[int, GitDeleteItem, str]] = []
     for index, item in targets:

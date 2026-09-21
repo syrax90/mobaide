@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -110,6 +111,14 @@ def _add_linked_worktree(local: str, branch: str) -> str:
     run_git_sync(local, "branch", branch)
     path = os.path.join(local, "wt", branch)
     run_git_sync(local, "worktree", "add", "-q", path, branch)
+    return path
+
+
+def _fork(bare: str, tmp_path) -> str:
+    """A bare copy of ``bare`` at ``<tmp_path>/fork.git`` with every branch
+    ``bare`` has now."""
+    path = str(tmp_path / "fork.git")
+    run_git_sync(str(tmp_path), "clone", "-q", "--bare", bare, path)
     return path
 
 
@@ -267,7 +276,7 @@ class TestDeleteRemoteBranch:
 
     async def test_an_unreachable_push_url_is_network(self, bare, local):
         _publish(local, "feature/x")
-        run_git_sync(local, "config", "remote.origin.pushurl", "https://127.0.0.1:9/x.git")
+        run_git_sync(local, "remote", "set-url", "origin", "https://127.0.0.1:9/x.git")
 
         response = await _delete(local, _remote("origin/feature/x"))
 
@@ -298,6 +307,130 @@ class TestDeleteRemoteBranch:
         assert _outcomes(response) == [("remote_branch", "up/stream/feature/x", True, None)]
         assert "refs/heads/feature/x" not in _refs(bare, "refs/heads/")
         assert "refs/remotes/up/stream/feature/x" not in _refs(local, "refs/remotes/")
+
+
+@requires_git
+class TestPushUrlGuard:
+    @pytest.mark.parametrize("also_fetch_url", [False, True], ids=["fork", "fetch-url-and-fork"])
+    async def test_a_push_url_to_another_repository_refuses_every_item_of_the_remote(
+        self, bare, local, tmp_path, also_fetch_url
+    ):
+        _publish(local, "feature/x")
+        _publish(local, "feature/y")
+        fork = _fork(bare, tmp_path)
+        if also_fetch_url:
+            run_git_sync(
+                local, "config", "--add", "remote.origin.pushurl",
+                _git_out(local, "config", "remote.origin.url"),
+            )
+        run_git_sync(local, "config", "--add", "remote.origin.pushurl", fork)
+        bus = FakeEventBus()
+
+        response = await _delete(
+            local, _remote("origin/feature/x"), _remote("origin/feature/y"), bus=bus
+        )
+
+        assert _outcomes(response) == [
+            ("remote_branch", "origin/feature/x", False, "error"),
+            ("remote_branch", "origin/feature/y", False, "error"),
+        ]
+        for result in response.results:
+            assert "remote 'origin' pushes to a different repository" in (
+                result.error_detail or "")
+        for repo in (bare, fork):
+            assert {"refs/heads/feature/x", "refs/heads/feature/y"} <= set(
+                _refs(repo, "refs/heads/"))
+        assert {"refs/remotes/origin/feature/x", "refs/remotes/origin/feature/y"} <= set(
+            _refs(local, "refs/remotes/"))
+        assert bus.published == []
+
+    async def test_a_second_url_without_a_push_url_refuses_every_item_of_the_remote(
+        self, bare, local, tmp_path
+    ):
+        _publish(local, "feature/x")
+        _publish(local, "feature/y")
+        fork = _fork(bare, tmp_path)
+        run_git_sync(local, "remote", "set-url", "--add", "origin", fork)
+        bus = FakeEventBus()
+
+        response = await _delete(
+            local, _remote("origin/feature/x"), _remote("origin/feature/y"), bus=bus
+        )
+
+        assert _outcomes(response) == [
+            ("remote_branch", "origin/feature/x", False, "error"),
+            ("remote_branch", "origin/feature/y", False, "error"),
+        ]
+        for result in response.results:
+            assert "remote 'origin' pushes to a different repository" in (
+                result.error_detail or "")
+        for repo in (bare, fork):
+            assert {"refs/heads/feature/x", "refs/heads/feature/y"} <= set(
+                _refs(repo, "refs/heads/"))
+        assert {"refs/remotes/origin/feature/x", "refs/remotes/origin/feature/y"} <= set(
+            _refs(local, "refs/remotes/"))
+        assert bus.published == []
+
+    async def test_a_push_url_equal_to_the_fetch_url_deletes(self, bare, local):
+        _publish(local, "feature/x")
+        run_git_sync(
+            local, "config", "remote.origin.pushurl",
+            _git_out(local, "config", "remote.origin.url"),
+        )
+
+        response = await _delete(local, _remote("origin/feature/x"))
+
+        assert _outcomes(response) == [("remote_branch", "origin/feature/x", True, None)]
+        assert "refs/heads/feature/x" not in _refs(bare, "refs/heads/")
+        assert "refs/remotes/origin/feature/x" not in _refs(local, "refs/remotes/")
+
+    async def test_a_push_insteadof_rewrite_of_the_fetch_url_deletes(self, bare, local):
+        _publish(local, "feature/x")
+        fetch_url = Path(bare).as_uri()
+        run_git_sync(local, "remote", "set-url", "origin", fetch_url)
+        run_git_sync(local, "config", f"url.{bare}.pushInsteadOf", fetch_url)
+        assert _git_out(local, "remote", "get-url", "origin") == fetch_url
+        assert _git_out(local, "remote", "get-url", "--push", "origin") == bare
+
+        response = await _delete(local, _remote("origin/feature/x"))
+
+        assert _outcomes(response) == [("remote_branch", "origin/feature/x", True, None)]
+        assert "refs/heads/feature/x" not in _refs(bare, "refs/heads/")
+        assert "refs/remotes/origin/feature/x" not in _refs(local, "refs/remotes/")
+
+    async def test_only_the_remote_pushing_elsewhere_is_refused_in_a_batch(
+        self, bare, local, tmp_path
+    ):
+        _publish(local, "feature/x")
+        _publish(local, "feature/y")
+        fork = _fork(bare, tmp_path)
+        other = seed_remote(str(tmp_path / "other"))
+        run_git_sync(local, "remote", "add", "other", other)
+        run_git_sync(local, "push", "-q", "other", "main:refs/heads/topic")
+        run_git_sync(local, "config", "remote.origin.pushurl", fork)
+        bus = FakeEventBus()
+
+        response = await _delete(
+            local,
+            _remote("origin/feature/x"),
+            _remote("other/topic"),
+            _remote("origin/feature/y"),
+            bus=bus,
+        )
+
+        assert _outcomes(response) == [
+            ("remote_branch", "origin/feature/x", False, "error"),
+            ("remote_branch", "other/topic", True, None),
+            ("remote_branch", "origin/feature/y", False, "error"),
+        ]
+        assert "remote 'origin' pushes to a different repository" in (
+            response.results[2].error_detail or "")
+        assert "refs/heads/topic" not in _refs(other, "refs/heads/")
+        assert "refs/remotes/other/topic" not in _refs(local, "refs/remotes/")
+        for repo in (bare, fork):
+            assert {"refs/heads/feature/x", "refs/heads/feature/y"} <= set(
+                _refs(repo, "refs/heads/"))
+        assert bus.published == [_changed(local, "proj")]
 
 
 @requires_git

@@ -144,9 +144,17 @@ cadence; they do **not** gate compatibility.
     ``<remote>/HEAD`` symref), ``error`` unless the remote's fetch
     refspecs map the tracking ref back to exactly one ``refs/heads/``
     branch (a name-based guess would delete the wrong branch under a
-    custom refspec). The survivors go out as one ``git push --porcelain --
-    <remote> :refs/heads/<name>…`` per remote, the remotes in parallel with
-    the batch's local deletes, under the fetch/pull/push jobs' never-prompt
+    custom refspec), and ``error`` for every item of a remote whose
+    configured push destinations — every ``remote.<r>.pushurl``, else
+    every ``remote.<r>.url`` — are not exactly its one ``remote.<r>.url``
+    (the row describes the fetch side; a push to another repository would
+    delete there and still report success). The raw config strings are
+    compared: a ``pushurl`` naming the same repository in another URL
+    form is refused too, while ``url.<base>.pushInsteadOf`` rewrites are
+    not checked, so an https-fetch / ssh-push setup written that way keeps
+    working. The survivors go out as one ``git push --porcelain -- <remote>
+    :refs/heads/<name>…`` per remote, the remotes in parallel with the
+    batch's local deletes, under the fetch/pull/push jobs' never-prompt
     environment and a 20 s budget (inside the relay's 30 s). Hooks run. A
     ``-`` ref line is ``ok`` (git drops the tracking ref; a branch already
     gone on the remote reports the same and clears the stale ref); a ``!``
