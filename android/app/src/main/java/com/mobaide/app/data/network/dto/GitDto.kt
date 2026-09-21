@@ -50,9 +50,17 @@ data class GitItem(
             else -> "$kind:${branch.orEmpty()}|${worktree_path.orEmpty()}"
         }
 
-    /** False for the checked-out branch (git refuses) and for remote-tracking rows. */
-    val isDeletable: Boolean
-        get() = !is_current && kind != KIND_REMOTE_BRANCH
+    /**
+     * False for the checked-out branch (git refuses); a remote-tracking row only
+     * with [deleteRemote] (`capabilities.git.delete_remote`) — an older agent
+     * answers the whole batch with a 422.
+     */
+    fun isDeletable(deleteRemote: Boolean): Boolean =
+        !is_current && (kind != KIND_REMOTE_BRANCH || deleteRemote)
+
+    /** *Remove worktree* keeps the branch: a worktree-backed row other than the project root's checkout. */
+    val canRemoveWorktree: Boolean
+        get() = !is_current && kind == KIND_BRANCH_WITH_WORKTREE && !worktree_path.isNullOrEmpty()
 
     /**
      * Check out is offered for a branch nothing has checked out: a `branch_only`

@@ -622,4 +622,228 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertNil(model.undoToast)
         XCTAssertEqual(model.visibleItems.count, 4)
     }
+
+    // MARK: - Remote delete, Remove worktree, folders
+
+    /// `branchesBody` on screen with `delete_remote` advertised or not, the
+    /// probe's and the load's traffic already forgotten.
+    private func remoteDeleteModel(deleteRemote: Bool = true) async -> (GitScreenModel, ManualSleeper) {
+        let sleeper = ManualSleeper()
+        let (model, _, _) = makeModel(sleeper: sleeper)
+        StubURLProtocol.enqueue(status: 200, body: versionBody(#"{"branches":true,"delete_remote":\#(deleteRemote)}"#))
+        await model.loadCapabilities()
+        StubURLProtocol.enqueue(status: 200, body: branchesBody)
+        await model.load()
+        StubURLProtocol.reset()
+        return (model, sleeper)
+    }
+
+    private func itemsBody(_ branches: [String]) -> String {
+        let rows = branches.map { #"{"kind":"branch_only","branch":"\#($0)"}"# }
+        return #"{"items":[\#(rows.joined(separator: ","))]}"#
+    }
+
+    private let worktreeOnlyTopic = GitDeleteItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/repo/wt/topic")
+
+    /// The confirm action must also survive SwiftUI clearing `remoteDeletePrompt`
+    /// when the dialog dismisses, which can land before the button action runs.
+    func testARemoteDeleteIsConfirmedBeforeTheUndoWindowThenSendsTheRemoteQualifiedName() async throws {
+        let (model, sleeper) = await remoteDeleteModel()
+        XCTAssertTrue(model.capabilities.deleteRemote)
+        let remote = try row(model, "origin/feature-x")
+
+        model.delete(remote)
+
+        XCTAssertEqual(model.remoteDeletePrompt?.map(\.branch), ["origin/feature-x"])
+        XCTAssertNil(model.undoToast, "nothing is queued before the confirmation")
+        XCTAssertEqual(model.visibleItems.count, 4)
+
+        StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"remote_branch","target":"origin/feature-x","ok":true}]}"#)
+        model.remoteDeletePrompt = nil
+        model.confirmRemoteDelete()
+
+        XCTAssertEqual(model.undoToast?.message, "Deleting 1 item(s)…")
+        XCTAssertFalse(model.visibleItems.contains(remote))
+        await waitUntil { sleeper.durations.contains(.seconds(5)) }
+        XCTAssertEqual(requestURLs, [], "the delete must not fire during the 5s window")
+
+        sleeper.release()
+        await waitUntil { StubURLProtocol.requests.count == 1 }
+        XCTAssertEqual(
+            try sentBody(GitDeleteRequest.self, at: 0),
+            GitDeleteRequest(items: [GitDeleteItem(kind: GitItem.kindRemoteBranch, branch: "origin/feature-x")])
+        )
+    }
+
+    func testDismissingTheRemoteDeletePromptQueuesAndSendsNothing() async throws {
+        let (model, sleeper) = await remoteDeleteModel()
+        model.delete(try row(model, "origin/feature-x"))
+
+        model.dismissRemoteDeletePrompt()
+        model.confirmRemoteDelete()
+        sleeper.release()
+        try await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertNil(model.remoteDeletePrompt)
+        XCTAssertNil(model.undoToast)
+        XCTAssertEqual(model.visibleItems.count, 4)
+        XCTAssertEqual(requestURLs, [])
+    }
+
+    func testAMixedSelectionIsConfirmedWholeAndSentInOneBatch() async throws {
+        let (model, sleeper) = await remoteDeleteModel()
+        let stale = try row(model, "stale")
+        let remote = try row(model, "origin/feature-x")
+        model.select(stale)
+        model.select(remote)
+
+        model.requestDelete()
+
+        XCTAssertEqual(model.remoteDeletePrompt?.map(\.branch), ["stale", "origin/feature-x"])
+        XCTAssertEqual(model.selected, [stale.id, remote.id], "the selection waits on the confirmation")
+        XCTAssertNil(model.undoToast)
+
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"results":[{"kind":"branch_only","target":"stale","ok":true},{"kind":"remote_branch","target":"origin/feature-x","ok":true}]}"#
+        )
+        model.confirmRemoteDelete()
+        XCTAssertTrue(model.selected.isEmpty)
+        XCTAssertEqual(model.undoToast?.message, "Deleting 2 item(s)…")
+        sleeper.release()
+        await waitUntil { StubURLProtocol.requests.count == 1 }
+
+        XCTAssertEqual(try sentItems(inBodyAt: 0).compactMap { $0["branch"]?.stringValue }, ["stale", "origin/feature-x"])
+    }
+
+    func testCancellingTheRemoteDeletePromptReturnsToTheSelection() async throws {
+        let (model, sleeper) = await remoteDeleteModel()
+        let stale = try row(model, "stale")
+        let remote = try row(model, "origin/feature-x")
+        model.select(stale)
+        model.select(remote)
+        model.requestDelete()
+
+        model.dismissRemoteDeletePrompt()
+        sleeper.release()
+        try await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertNil(model.remoteDeletePrompt)
+        XCTAssertEqual(model.selected, [stale.id, remote.id])
+        XCTAssertNil(model.undoToast)
+        XCTAssertEqual(requestURLs, [])
+
+        model.requestDelete()
+
+        XCTAssertEqual(model.remoteDeletePrompt?.map(\.branch), ["stale", "origin/feature-x"])
+    }
+
+    func testARemoteRowWithoutTheCapabilityOpensNoPrompt() async throws {
+        let (model, _) = await remoteDeleteModel(deleteRemote: false)
+
+        model.delete(try row(model, "origin/feature-x"))
+
+        XCTAssertNil(model.remoteDeletePrompt)
+        XCTAssertNil(model.undoToast)
+    }
+
+    func testRemoveWorktreeHidesTheRowForTheUndoWindowThenSendsAWorktreeOnlyRemoval() async throws {
+        let (model, sleeper) = await remoteDeleteModel()
+        let topic = try row(model, "topic")
+        StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"orphan_worktree","target":"/repo/wt/topic","ok":true}]}"#)
+
+        model.removeWorktree(topic)
+
+        XCTAssertNil(model.remoteDeletePrompt, "a worktree removal needs no remote confirmation")
+        XCTAssertEqual(model.undoToast?.message, "Deleting 1 item(s)…")
+        XCTAssertFalse(model.visibleItems.contains(topic))
+        sleeper.release()
+        await waitUntil { StubURLProtocol.requests.count == 1 }
+        XCTAssertEqual(try sentBody(GitDeleteRequest.self, at: 0), GitDeleteRequest(items: [worktreeOnlyTopic]))
+    }
+
+    func testRemoveWorktreeIsANoOpOnRowsWithoutARemovableWorktree() async throws {
+        let (model, _, _) = makeModel(sleeper: ManualSleeper())
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"""
+            {"items":[{"kind":"branch_with_worktree","branch":"main","worktree_path":"/repo","is_current":true},{"kind":"branch_only","branch":"stale"},{"kind":"orphan_worktree","worktree_path":"/repo/wt/orphan"}]}
+            """#
+        )
+        await model.load()
+
+        for item in model.items {
+            model.removeWorktree(item)
+        }
+
+        XCTAssertNil(model.undoToast)
+        XCTAssertEqual(model.visibleItems.count, 3)
+    }
+
+    func testADirtyWorktreeRemovalPromptsWithThePathThenResendsOnlyTheRemovalWithForce() async throws {
+        let (model, sleeper) = await remoteDeleteModel()
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"results":[{"kind":"orphan_worktree","target":"/repo/wt/topic","ok":false,"error":"force_required"}]}"#
+        )
+        model.removeWorktree(try row(model, "topic"))
+        sleeper.release()
+        await waitUntil { model.forcePrompt != nil }
+
+        XCTAssertEqual(model.forcePrompt?.refs, ["/repo/wt/topic"])
+
+        StubURLProtocol.enqueue(status: 200, body: #"{"results":[{"kind":"orphan_worktree","target":"/repo/wt/topic","ok":true}]}"#)
+        model.confirmForceDelete()
+        await waitUntil { StubURLProtocol.requests.count == 2 }
+
+        let forced = GitDeleteItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/repo/wt/topic", force: true)
+        XCTAssertEqual(try sentBody(GitDeleteRequest.self, at: 1), GitDeleteRequest(items: [forced]))
+    }
+
+    func testToggleFolderOpensAndClosesALocalFolderAndSurvivesAReload() async throws {
+        let (model, _, _) = makeModel(sleeper: ManualSleeper())
+        let body = itemsBody(["feature/a", "feature/b", "main"])
+        StubURLProtocol.enqueue(status: 200, body: body)
+        await model.load()
+        XCTAssertEqual(
+            model.localRows.first,
+            .folder(id: "dir:local:feature", name: "feature", depth: 0, count: 2, expanded: false)
+        )
+        XCTAssertEqual(model.localRows.count, 2)
+
+        model.toggleFolder("dir:local:feature")
+        XCTAssertEqual(model.toggledFolders, ["dir:local:feature"])
+        XCTAssertEqual(model.localRows.count, 4)
+
+        StubURLProtocol.enqueue(status: 200, body: body)
+        await model.load()
+        XCTAssertEqual(model.localRows.count, 4, "a git.changed reload keeps the folder open")
+
+        model.toggleFolder("dir:local:feature")
+        XCTAssertTrue(model.toggledFolders.isEmpty)
+        XCTAssertEqual(model.localRows.count, 2)
+    }
+
+    func testToggleFolderIsIgnoredWhileAFilterHoldsTheFoldersOpenButNotForStaleTextBelowTheThreshold() async throws {
+        let (model, _, _) = makeModel(sleeper: ManualSleeper())
+        StubURLProtocol.enqueue(status: 200, body: itemsBody((1...7).map { "feature/\($0)" } + ["main"]))
+        await model.load()
+        model.filter = "feature/3"
+        XCTAssertTrue(model.filterActive)
+        XCTAssertEqual(
+            model.localRows.first,
+            .folder(id: "dir:local:feature", name: "feature", depth: 0, count: 1, expanded: true)
+        )
+
+        model.toggleFolder("dir:local:feature")
+        XCTAssertTrue(model.toggledFolders.isEmpty)
+
+        let (small, _, _) = makeModel(sleeper: ManualSleeper())
+        StubURLProtocol.enqueue(status: 200, body: itemsBody(["feature/a", "main"]))
+        await small.load()
+        small.filter = "feature"
+        XCTAssertFalse(small.filterActive, "the field is hidden below eight rows")
+        small.toggleFolder("dir:local:feature")
+        XCTAssertEqual(small.toggledFolders, ["dir:local:feature"])
+    }
 }

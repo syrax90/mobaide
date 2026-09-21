@@ -41,14 +41,14 @@ final class DTOFixtureTests: XCTestCase {
     func testGitItemComputedPropertiesAreDerivedNotSerialized() throws {
         let withWorktree = GitItem(kind: GitItem.kindBranchWithWorktree, branch: "b", worktree_path: "/wt/b")
         XCTAssertEqual(withWorktree.id, "branch_with_worktree:b")
-        XCTAssertTrue(withWorktree.isDeletable)
+        XCTAssertTrue(withWorktree.isDeletable(deleteRemote: false))
 
         let orphan = GitItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/wt/x")
         XCTAssertEqual(orphan.id, "orphan_worktree:/wt/x")
 
         let unknownKind = GitItem(kind: "future_kind", branch: "b", worktree_path: "/wt/b", is_current: true)
         XCTAssertEqual(unknownKind.id, "future_kind:b|/wt/b")
-        XCTAssertFalse(unknownKind.isDeletable)
+        XCTAssertFalse(unknownKind.isDeletable(deleteRemote: true))
 
         let encoded = try WireJSON.encoder().encode(withWorktree)
         let tree = try WireJSON.decoder().decode(JSONValue.self, from: encoded)

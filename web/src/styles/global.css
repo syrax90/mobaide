@@ -3852,3 +3852,45 @@ body:has(dialog[open]) {
   margin-top: 0.5rem;
 }
 /* endregion */
+
+/* region Project Git: branch folder tree */
+.git-tree-row {
+  margin-inline-start: calc(var(--git-depth, 0) * 16px);
+}
+
+.git-folder-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-family: var(--font-chrome);
+  text-align: left;
+  cursor: pointer;
+}
+
+.git-folder-toggle:disabled {
+  cursor: default;
+}
+
+.git-folder-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.git-folder-chevron {
+  color: var(--accent);
+}
+
+.git-folder-name {
+  overflow-wrap: anywhere;
+}
+
+.git-folder-count {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+/* endregion */

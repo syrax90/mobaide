@@ -6,6 +6,16 @@
       "name": "force_defaults_false",
       "wire": { "kind": "branch_only", "branch": "b" },
       "decoded_canonical": { "kind": "branch_only", "branch": "b", "force": false }
+    },
+    {
+      "name": "remote_branch",
+      "wire": { "kind": "remote_branch", "branch": "origin/feature/x" },
+      "decoded_canonical": { "kind": "remote_branch", "branch": "origin/feature/x", "force": false }
+    },
+    {
+      "name": "worktree_only_removal",
+      "wire": { "kind": "orphan_worktree", "worktree_path": "/wt/b" },
+      "decoded_canonical": { "kind": "orphan_worktree", "worktree_path": "/wt/b", "force": false }
     }
   ]
 }

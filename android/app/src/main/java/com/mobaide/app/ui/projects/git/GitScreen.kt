@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
@@ -21,6 +22,9 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
 import com.mobaide.app.ui.theme.ChromeFontFamily
@@ -57,6 +61,7 @@ import com.mobaide.app.ui.common.DeleteSwipeBackground
 const val GIT_NEW_BRANCH_BUTTON_TAG = "git_new_branch_button"
 const val GIT_FILTER_TAG = "git_filter"
 const val GIT_REMOTE_HEADER_TAG = "git_remote_header"
+const val GIT_FOLDER_ROW_TAG = "git_folder_row"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -174,6 +179,8 @@ fun GitScreen(
                 else -> {
                     val localItems = state.localItems
                     val remoteItems = state.remoteItems
+                    val localRows = state.localRows
+                    val remoteRows = if (state.remoteOpen) state.remoteRows else emptyList()
                     LazyColumn(
                         contentPadding = PaddingValues(vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -202,8 +209,8 @@ fun GitScreen(
                                 )
                             }
                         }
-                        items(localItems, key = { it.id }) { item ->
-                            SwipeableGitRow(item = item, state = state, viewModel = viewModel)
+                        items(localRows, key = { it.key }) { row ->
+                            GitTreeLine(row = row, state = state, viewModel = viewModel)
                         }
                         if (remoteItems.isNotEmpty()) {
                             item(key = "remote-header") {
@@ -213,10 +220,8 @@ fun GitScreen(
                                     onToggle = viewModel::toggleRemote,
                                 )
                             }
-                            if (state.remoteOpen) {
-                                items(remoteItems, key = { it.id }) { item ->
-                                    SwipeableGitRow(item = item, state = state, viewModel = viewModel)
-                                }
+                            items(remoteRows, key = { it.key }) { row ->
+                                GitTreeLine(row = row, state = state, viewModel = viewModel)
                             }
                         }
                     }
@@ -260,6 +265,22 @@ fun GitScreen(
         )
     }
 
+    val remotePrompt = state.remoteDeletePrompt
+    if (remotePrompt != null) {
+        val refs = remotePrompt.filter { it.kind == GitItem.KIND_REMOTE_BRANCH }.map(::primaryLabel)
+        PixelAlertDialog(
+            onDismissRequest = viewModel::dismissRemoteDeletePrompt,
+            title = { Text("Delete on the remote?") },
+            text = { Text(remoteDeleteMessage(refs)) },
+            confirmButton = {
+                PixelTextButton(onClick = viewModel::confirmRemoteDelete) { Text("Delete") }
+            },
+            dismissButton = {
+                PixelTextButton(onClick = viewModel::dismissRemoteDeletePrompt) { Text("Cancel") }
+            },
+        )
+    }
+
     val forcePrompt = state.forceDeletePrompt
     if (forcePrompt != null) {
         PixelAlertDialog(
@@ -282,18 +303,83 @@ fun GitScreen(
     }
 }
 
+@Composable
+private fun GitTreeLine(
+    row: GitTreeRow,
+    state: GitUiState,
+    viewModel: GitViewModel,
+) {
+    when (row) {
+        is GitTreeRow.Folder -> GitFolderRow(
+            folder = row,
+            enabled = !state.filterActive,
+            onToggle = { viewModel.toggleFolder(row.id) },
+        )
+        is GitTreeRow.Leaf -> SwipeableGitRow(
+            item = row.item,
+            label = row.label,
+            depth = row.depth,
+            state = state,
+            viewModel = viewModel,
+        )
+    }
+}
+
+/** A branch-name folder: toggles its rows, never selectable or deletable itself. */
+@Composable
+private fun GitFolderRow(
+    folder: GitTreeRow.Folder,
+    enabled: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, role = Role.Button, onClick = onToggle)
+            .semantics { stateDescription = if (folder.expanded) "Expanded" else "Collapsed" }
+            .padding(start = 16.dp + TREE_INDENT * folder.depth, end = 16.dp, top = 8.dp, bottom = 8.dp)
+            .testTag(GIT_FOLDER_ROW_TAG),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            imageVector = if (folder.expanded) {
+                Icons.Default.ExpandMore
+            } else {
+                Icons.AutoMirrored.Filled.KeyboardArrowRight
+            },
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            text = folder.name,
+            style = MaterialTheme.typography.bodyLarge.copy(fontFamily = ChromeFontFamily),
+        )
+        Text(
+            text = "(${folder.count})",
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = ChromeFontFamily),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SwipeableGitRow(
     item: GitItem,
+    label: String,
+    depth: Int,
     state: GitUiState,
     viewModel: GitViewModel,
 ) {
     val row: @Composable () -> Unit = {
         GitItemRow(
             item = item,
+            label = label,
+            indent = TREE_INDENT * depth,
             selected = item.id in state.selected,
             inSelectionMode = state.inSelectionMode,
+            deletable = state.canDelete(item),
             onTap = {
                 if (state.inSelectionMode) viewModel.toggle(item.id)
             },
@@ -301,9 +387,11 @@ private fun SwipeableGitRow(
             checkoutEnabled = state.branchesEnabled,
             busy = state.rowBusy,
             onCheckout = { viewModel.requestCheckout(item.id) },
+            onRemoveWorktree = { viewModel.removeWorktree(item.id) },
+            onDelete = { viewModel.deleteItem(item.id) },
         )
     }
-    if (item.isDeletable && !state.inSelectionMode) {
+    if (state.canDelete(item) && !state.inSelectionMode) {
         val dismissState = rememberSwipeToDismissBoxState(
             confirmValueChange = { value ->
                 if (value == SwipeToDismissBoxValue.EndToStart) {

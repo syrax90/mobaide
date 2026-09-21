@@ -1230,7 +1230,7 @@ extension GitChangesDisplay {
     }
 
     /// The rebase sheet's picker: local branches, then remote-tracking ones,
-    /// from the project Git screen's rows. The session's own branch is left
+    /// each A→Z, from the project Git screen's rows. The session's own branch is left
     /// out by name — the rows' `is_current` is the project root's checkout,
     /// which for a session in a linked worktree is usually the very branch it
     /// wants to rebase onto.
@@ -1242,10 +1242,12 @@ extension GitChangesDisplay {
         let local = items
             .filter { $0.kind == GitItem.kindBranchOnly || $0.kind == GitItem.kindBranchWithWorktree }
             .compactMap(usable)
+            .sorted(by: GitRefOrder.precedes)
             .map { RebaseTarget(value: "refs/heads/\($0)", label: $0) }
         let remote = items
             .filter { $0.kind == GitItem.kindRemoteBranch }
             .compactMap(usable)
+            .sorted(by: GitRefOrder.precedes)
             .map { RebaseTarget(value: "refs/remotes/\($0)", label: "\($0) (remote)") }
         return local + remote
     }

@@ -27,11 +27,15 @@ struct GitNewBranchSheet: View {
     private var localItems: [GitItem] {
         model.visibleItems.filter {
             $0.branch != nil && ($0.kind == GitItem.kindBranchOnly || $0.kind == GitItem.kindBranchWithWorktree)
-        }
+        }.sorted(by: Self.byName)
     }
 
     private var remoteItems: [GitItem] {
-        model.visibleItems.filter { $0.kind == GitItem.kindRemoteBranch }
+        model.visibleItems.filter { $0.kind == GitItem.kindRemoteBranch }.sorted(by: Self.byName)
+    }
+
+    private static func byName(_ lhs: GitItem, _ rhs: GitItem) -> Bool {
+        GitRefOrder.precedes(lhs.branch ?? "", rhs.branch ?? "")
     }
 
     var body: some View {

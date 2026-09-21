@@ -621,6 +621,7 @@ const ALL_GIT: GitCapabilities = {
   branches: true,
   rebase: true,
   resolve: true,
+  deleteRemote: true,
 };
 const NO_ACTIONS = { stage: false, unstage: false, discard: false, resolve: false };
 
@@ -714,6 +715,7 @@ describe('rowActions', () => {
       branches: false,
       rebase: false,
       resolve: false,
+      deleteRemote: false,
     };
     const stageOnly: GitCapabilities = {
       stage: true,
@@ -725,6 +727,7 @@ describe('rowActions', () => {
       branches: false,
       rebase: false,
       resolve: false,
+      deleteRemote: false,
     };
 
     expect(rowActions(entry(), discardOnly)).toEqual({ ...NO_ACTIONS, discard: true });
@@ -851,6 +854,7 @@ describe('sectionAction', () => {
         branches: false,
         rebase: false,
         resolve: false,
+        deleteRemote: false,
       }),
     ).toBeNull();
   });
@@ -918,6 +922,7 @@ const NO_SYNC: GitCapabilities = {
   branches: false,
   rebase: false,
   resolve: false,
+  deleteRemote: false,
 };
 
 const job = (over: Partial<SessionGitJob> = {}): SessionGitJob => ({
@@ -1249,8 +1254,8 @@ describe('rebaseTargets', () => {
     ];
 
     expect(rebaseTargets(items, 'topic')).toEqual([
-      { value: 'refs/heads/topic-b', label: 'topic-b' },
       { value: 'refs/heads/main', label: 'main' },
+      { value: 'refs/heads/topic-b', label: 'topic-b' },
       { value: 'refs/remotes/origin/main', label: 'origin/main (remote)' },
       { value: 'refs/remotes/origin/topic', label: 'origin/topic (remote)' },
     ]);
@@ -1275,6 +1280,24 @@ describe('rebaseTargets', () => {
 
     expect(rebaseTargets(items, null)).toEqual([{ value: 'refs/heads/main', label: 'main' }]);
     expect(rebaseTargets([], 'main')).toEqual([]);
+  });
+
+  it('sorts the local and the remote group each A→Z, ignoring case', () => {
+    const items = [
+      gitItem({ kind: 'remote_branch', branch: 'origin/Zed', remote: 'origin' }),
+      gitItem({ branch: 'zeta' }),
+      gitItem({ kind: 'remote_branch', branch: 'origin/apple', remote: 'origin' }),
+      gitItem({ kind: 'branch_with_worktree', branch: 'Beta', worktree_path: '/wt/b' }),
+      gitItem({ branch: 'alpha' }),
+    ];
+
+    expect(rebaseTargets(items, null).map((target) => target.label)).toEqual([
+      'alpha',
+      'Beta',
+      'zeta',
+      'origin/apple (remote)',
+      'origin/Zed (remote)',
+    ]);
   });
 });
 

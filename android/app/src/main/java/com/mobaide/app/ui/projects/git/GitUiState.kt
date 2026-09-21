@@ -5,7 +5,9 @@ import com.mobaide.app.data.network.dto.GitBranchResponse
 import com.mobaide.app.data.network.dto.GitDeleteItem
 import com.mobaide.app.data.network.dto.GitDeleteResultItem
 import com.mobaide.app.data.network.dto.GitItem
+import com.mobaide.app.data.network.dto.GitJobResponse
 import com.mobaide.app.data.repository.SessionGitException
+import com.mobaide.app.ui.terminal.git.jobErrorCopy
 import com.mobaide.app.ui.terminal.git.sessionGitErrorCopy
 
 /** Below this many rows a filter field would take more space than it saves. */
@@ -24,7 +26,11 @@ data class GitUiState(
 
     /** `capabilities.git.branches`: gates New branch and the row's Check out. */
     val branchesEnabled: Boolean = false,
+    /** `capabilities.git.delete_remote`: gates deleting remote-tracking rows. */
+    val deleteRemoteEnabled: Boolean = false,
     val remoteExpanded: Boolean = false,
+    /** Tree folders the user flipped away from their default open/closed state. */
+    val toggledFolders: Set<String> = emptySet(),
     val filter: String = "",
     /** When non-null, the New branch sheet is open. */
     val newBranch: NewBranchSheetState? = null,
@@ -47,22 +53,36 @@ data class GitUiState(
 
     /** When non-null, the screen renders the force-delete confirmation. */
     val forceDeletePrompt: ForceDeletePrompt? = null,
+
+    /** When non-null, the screen confirms this batch, which holds remote rows. */
+    val remoteDeletePrompt: List<GitItem>? = null,
 ) {
     val visibleItems: List<GitItem> get() = items.filterNot { it.id in pendingDeleteIds }
 
-    val hasDeletableItems: Boolean get() = visibleItems.any { it.isDeletable }
+    fun canDelete(item: GitItem): Boolean = item.isDeletable(deleteRemoteEnabled)
+
+    val hasDeletableItems: Boolean get() = visibleItems.any(::canDelete)
 
     val filterable: Boolean get() = visibleItems.size >= FILTER_THRESHOLD
 
+    /** Text left in the field after the list shrank below the threshold is invisible, so it never counts. */
+    val filterActive: Boolean get() = filterable && filter.isNotBlank()
+
     private val shownItems: List<GitItem>
-        get() = if (filterable) visibleItems.filter { matchesFilter(it, filter) } else visibleItems
+        get() = if (filterActive) visibleItems.filter { matchesFilter(it, filter) } else visibleItems
 
     val localItems: List<GitItem> get() = shownItems.filterNot { it.kind == GitItem.KIND_REMOTE_BRANCH }
 
     val remoteItems: List<GitItem> get() = shownItems.filter { it.kind == GitItem.KIND_REMOTE_BRANCH }
 
-    /** A non-empty filter opens the remote section: hidden matches would read as "not found". */
-    val remoteOpen: Boolean get() = remoteExpanded || filter.isNotBlank()
+    val localRows: List<GitTreeRow>
+        get() = gitTreeRows(localItems, GitTreeScope.LOCAL, toggledFolders, filterActive)
+
+    val remoteRows: List<GitTreeRow>
+        get() = gitTreeRows(remoteItems, GitTreeScope.REMOTE, toggledFolders, filterActive)
+
+    /** An active filter opens the remote section: hidden matches would read as "not found". */
+    val remoteOpen: Boolean get() = remoteExpanded || filterActive
 
     val rowBusy: Boolean get() = deleting || checkingOut
 }
@@ -110,14 +130,24 @@ internal fun deleteFailureMessage(failures: List<GitDeleteResultItem>): String {
  * snackbar can't turn into a wall of text.
  */
 internal fun deleteFailureReason(failure: GitDeleteResultItem): String {
+    // A remote delete's push failures share the fetch/pull/push vocabulary; git's
+    // own wording for a disabled prompt says nothing about what to fix.
+    if (failure.error == GitJobResponse.CODE_AUTH_REQUIRED) return jobErrorCopy(failure.error, null)
     val detail = failure.error_detail?.lineSequence()?.firstOrNull()?.trim().orEmpty()
     if (detail.isNotEmpty()) return detail.take(120)
     return when (failure.error) {
         "locked" -> "the worktree is locked"
         "not_found" -> "it no longer exists"
         "invalid" -> "the request was invalid"
+        SessionGitException.CODE_GIT_TIMEOUT -> jobErrorCopy(failure.error, null)
         else -> "unknown error"
     }
+}
+
+internal fun remoteDeleteMessage(refs: List<String>): String {
+    val what = refs.singleOrNull() ?: "${refs.size} branches"
+    val pronoun = if (refs.size == 1) "it" else "them"
+    return "Delete $what on the remote? This removes $pronoun for everyone with access to the remote."
 }
 
 internal fun primaryLabel(item: GitItem): String = when (item.kind) {

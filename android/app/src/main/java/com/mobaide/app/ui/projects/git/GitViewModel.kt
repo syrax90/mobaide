@@ -32,7 +32,9 @@ import javax.inject.Inject
  *    `git.changed` event that flows back through [GitRepository.changed] and
  *    re-fetches the list. The screen never mutates [GitUiState.items] locally.
  *  - Rows are deleted by swipe, or in bulk from selection mode (entered by
- *    long-press or the "Select" action; a back press exits it).
+ *    long-press or the "Select" action; a back press exits it). A batch
+ *    holding a remote-tracking row is confirmed first — it reaches everyone
+ *    using the remote. *Remove worktree* rides the same undo window.
  *  - A delete hides its rows at once and opens a 5s undo window owned here, not
  *    by the snackbar: a delete raised while the window is open joins the pending
  *    batch instead of replacing it. Undo cancels the window entirely — no
@@ -83,7 +85,12 @@ class GitViewModel @Inject constructor(
     private suspend fun loadCapabilities() {
         try {
             val capabilities = gitRepository.gitCapabilities()
-            _uiState.update { it.copy(branchesEnabled = capabilities.branches) }
+            _uiState.update {
+                it.copy(
+                    branchesEnabled = capabilities.branches,
+                    deleteRemoteEnabled = capabilities.deleteRemote,
+                )
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -130,7 +137,8 @@ class GitViewModel @Inject constructor(
 
     fun enterSelection(itemId: String) {
         _uiState.update {
-            if (it.visibleItems.firstOrNull { item -> item.id == itemId }?.isDeletable != true) it
+            val item = it.visibleItems.firstOrNull { row -> row.id == itemId }
+            if (item == null || !it.canDelete(item)) it
             else it.copy(inSelectionMode = true, selected = it.selected + itemId)
         }
     }
@@ -143,7 +151,7 @@ class GitViewModel @Inject constructor(
     fun toggle(itemId: String) {
         _uiState.update { state ->
             val item = state.visibleItems.firstOrNull { it.id == itemId } ?: return@update state
-            if (!item.isDeletable) return@update state
+            if (!state.canDelete(item)) return@update state
             val newSelected = if (itemId in state.selected) {
                 state.selected - itemId
             } else {
@@ -165,27 +173,77 @@ class GitViewModel @Inject constructor(
         _uiState.update { it.copy(forceDeletePrompt = null) }
     }
 
-    /** Single-row delete from a swipe. */
+    /** Single-row delete from a swipe or the row menu. */
     fun deleteItem(itemId: String) {
         val item = _uiState.value.items.firstOrNull { it.id == itemId } ?: return
-        enqueue(listOf(item))
+        queue(listOf(item))
     }
 
-    /** Batch delete of the current selection. */
+    /**
+     * Batch delete of the current selection. The selection survives while the
+     * remote confirmation is open, so Cancel returns to it.
+     */
     fun requestDelete() {
         val state = _uiState.value
-        val targets = state.visibleItems.filter { it.id in state.selected && it.isDeletable }
+        val targets = state.visibleItems.filter { it.id in state.selected && state.canDelete(it) }
+        if (queue(targets)) return
         _uiState.update { it.copy(inSelectionMode = false, selected = emptySet()) }
-        enqueue(targets)
+    }
+
+    /** True when the batch waits on the remote confirmation instead of queuing. */
+    private fun queue(targets: List<GitItem>): Boolean {
+        val state = _uiState.value
+        val deletable = targets.filter(state::canDelete)
+        if (deletable.any { it.kind == GitItem.KIND_REMOTE_BRANCH }) {
+            _uiState.update { it.copy(remoteDeletePrompt = deletable) }
+            return true
+        }
+        enqueue(deletable)
+        return false
+    }
+
+    fun confirmRemoteDelete() {
+        val targets = _uiState.value.remoteDeletePrompt ?: return
+        _uiState.update {
+            it.copy(remoteDeletePrompt = null, inSelectionMode = false, selected = emptySet())
+        }
+        enqueue(targets.filter(_uiState.value::canDelete))
+    }
+
+    fun dismissRemoteDeletePrompt() {
+        _uiState.update { it.copy(remoteDeletePrompt = null) }
+    }
+
+    /**
+     * *Remove worktree*: an `orphan_worktree` item removes only the worktree at
+     * its path, whatever row it came from, so the branch survives and the row
+     * comes back as a plain branch on the `git.changed` reload.
+     */
+    fun removeWorktree(itemId: String) {
+        val item = _uiState.value.items.firstOrNull { it.id == itemId } ?: return
+        val path = item.worktree_path
+        if (!item.canRemoveWorktree || path.isNullOrEmpty()) return
+        enqueueEntries(
+            listOf(
+                PendingDelete(
+                    item.id,
+                    GitDeleteItem(kind = GitItem.KIND_ORPHAN_WORKTREE, worktree_path = path),
+                ),
+            ),
+        )
     }
 
     private fun enqueue(targets: List<GitItem>) {
+        enqueueEntries(targets.map { PendingDelete(it.id, toDeleteItem(it)) })
+    }
+
+    private fun enqueueEntries(entries: List<PendingDelete>) {
         val hidden = _uiState.value.pendingDeleteIds
-        val queued = targets.filter { it.isDeletable && it.id !in hidden }
+        val queued = entries.filter { it.id !in hidden }
         if (queued.isEmpty()) return
-        pendingBatch = pendingBatch + queued.map { PendingDelete(it.id, toDeleteItem(it)) }
+        pendingBatch = pendingBatch + queued
         undoSequence += 1
-        val queuedIds = queued.map(GitItem::id).toSet()
+        val queuedIds = queued.map(PendingDelete::id).toSet()
         _uiState.update {
             it.copy(
                 pendingDeleteIds = it.pendingDeleteIds + queuedIds,
@@ -316,6 +374,15 @@ class GitViewModel @Inject constructor(
 
     fun toggleRemote() {
         _uiState.update { it.copy(remoteExpanded = !it.remoteExpanded) }
+    }
+
+    /** Ignored while a filter holds every matching folder open. */
+    fun toggleFolder(folderId: String) {
+        _uiState.update {
+            if (it.filterActive) it
+            else if (folderId in it.toggledFolders) it.copy(toggledFolders = it.toggledFolders - folderId)
+            else it.copy(toggledFolders = it.toggledFolders + folderId)
+        }
     }
 
     fun setFilter(text: String) {

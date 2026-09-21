@@ -24,7 +24,9 @@ vi.mock('./clients', () => ({
 const {
   GitBusyError,
   canCheckOut,
+  canRemoveWorktree,
   checkoutGitRef,
+  compareRefNames,
   createGitBranch,
   isDeletable,
   listGitItems,
@@ -166,13 +168,15 @@ describe('checkoutGitRef', () => {
 });
 
 describe('row eligibility', () => {
-  it('offers delete to every local row but the current branch, never to a remote one', () => {
-    expect(isDeletable(item())).toBe(true);
-    expect(isDeletable(item({ kind: 'branch_with_worktree', worktree_path: '/wt' }))).toBe(true);
-    expect(isDeletable(item({ is_current: true }))).toBe(false);
-    expect(isDeletable(item({ kind: 'remote_branch', branch: 'origin/x', remote: 'origin' }))).toBe(
-      false,
+  it('offers delete to every local row but the current branch, never to a remote one without delete_remote', () => {
+    expect(isDeletable(item(), false)).toBe(true);
+    expect(isDeletable(item({ kind: 'branch_with_worktree', worktree_path: '/wt' }), false)).toBe(
+      true,
     );
+    expect(isDeletable(item({ is_current: true }), false)).toBe(false);
+    expect(
+      isDeletable(item({ kind: 'remote_branch', branch: 'origin/x', remote: 'origin' }), false),
+    ).toBe(false);
   });
 
   it('offers check out only where nothing has the branch checked out', () => {
@@ -185,5 +189,63 @@ describe('row eligibility', () => {
     expect(
       canCheckOut(item({ kind: 'orphan_worktree', branch: null, worktree_path: '/wt' })),
     ).toBe(false);
+  });
+});
+
+describe('remote delete and worktree removal eligibility', () => {
+  const remote = item({ kind: 'remote_branch', branch: 'origin/x', remote: 'origin' });
+
+  it('offers delete on a remote-tracking row only behind delete_remote', () => {
+    expect(isDeletable(remote, true)).toBe(true);
+    expect(isDeletable(remote, false)).toBe(false);
+    expect(isDeletable(item(), false)).toBe(true);
+    expect(isDeletable(item({ is_current: true }), true)).toBe(false);
+  });
+
+  it('offers Remove worktree only on a worktree row that is not the project checkout', () => {
+    expect(canRemoveWorktree(item({ kind: 'branch_with_worktree', worktree_path: '/wt' }))).toBe(true);
+    expect(
+      canRemoveWorktree(
+        item({ kind: 'branch_with_worktree', worktree_path: '/repo', is_current: true }),
+      ),
+    ).toBe(false);
+    expect(canRemoveWorktree(item({ kind: 'branch_with_worktree', worktree_path: '' }))).toBe(false);
+    expect(canRemoveWorktree(item({ kind: 'branch_with_worktree', worktree_path: null }))).toBe(false);
+    expect(canRemoveWorktree(item())).toBe(false);
+    expect(
+      canRemoveWorktree(item({ kind: 'orphan_worktree', branch: null, worktree_path: '/wt' })),
+    ).toBe(false);
+    expect(canRemoveWorktree(remote)).toBe(false);
+  });
+});
+
+describe('compareRefNames', () => {
+  it('sorts case-insensitively, the raw name breaking a tie', () => {
+    const names = ['main', 'Feature/x', 'feature/a', 'develop', 'fix/b', 'alpha', 'b', 'B'];
+
+    expect([...names].sort(compareRefNames)).toEqual([
+      'alpha',
+      'B',
+      'b',
+      'develop',
+      'feature/a',
+      'Feature/x',
+      'fix/b',
+      'main',
+    ]);
+    expect(compareRefNames('main', 'main')).toBe(0);
+  });
+
+  it('compares UTF-16 code units, as Kotlin and Swift do, not code points or locale order', () => {
+    // U+1F600 is above U+FF5E as a code point, but its lead surrogate 0xD83D is below it.
+    expect(compareRefNames('\u{1F600}', '\uFF5E')).toBeLessThan(0);
+    // Punctuation and digits keep their code-unit place before letters.
+    expect(['b', '_x', '1'].sort(compareRefNames)).toEqual(['1', '_x', 'b']);
+  });
+
+  it('keeps two spellings of the same marks in code-unit order of their lowercased names', () => {
+    // Canonically equivalent, but distinct refs to git: no normalisation may merge them.
+    expect(compareRefNames('ą́', 'Ą́')).toBeLessThan(0);
+    expect(compareRefNames('Ą́', 'ą́')).toBeGreaterThan(0);
   });
 });

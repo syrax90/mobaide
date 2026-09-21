@@ -961,15 +961,46 @@ class TestGitBranchEndpoints:
         )
         assert resp.status_code == 422
 
-    async def test_post_items_delete_rejects_a_remote_branch_row(
+    async def test_post_items_delete_reports_a_remote_branch_row_with_no_such_remote(
         self, client_git, auth_headers_g,
     ):
+        """``alpha`` has no ``origin`` remote configured, so the delete is
+        attempted and reported as a per-item failure inside the normal 200
+        response."""
         resp = await client_git.post(
             "/api/projects/alpha/git/items:delete",
             headers=auth_headers_g,
             json={"items": [{"kind": "remote_branch", "branch": "origin/main"}]},
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 200, resp.text
+        assert [
+            (r["kind"], r["target"], r["ok"], r["error"])
+            for r in resp.json()["results"]
+        ] == [("remote_branch", "origin/main", False, "not_found")]
+
+    async def test_post_items_delete_removes_a_remote_branch_on_the_remote(
+        self, client_git, auth_headers_g, app_with_git, tmp_path,
+    ):
+        clone = clone_repo(seed_remote(str(tmp_path)), str(tmp_path / "beta"))
+        _run_git_sync(clone, "push", "-q", "origin", "main:refs/heads/feature/x")
+        app_with_git.state.projects_store.create(ProjectRecord(name="beta", path=clone))
+
+        resp = await client_git.post(
+            "/api/projects/beta/git/items:delete",
+            headers=auth_headers_g,
+            json={"items": [{"kind": "remote_branch", "branch": "origin/feature/x"}]},
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert [
+            (r["kind"], r["target"], r["ok"], r["error"]) for r in resp.json()["results"]
+        ] == [("remote_branch", "origin/feature/x", True, None)]
+        listed = await client_git.get(
+            "/api/projects/beta/git/items", params={"remote": "true"}, headers=auth_headers_g,
+        )
+        assert [
+            i["branch"] for i in listed.json()["items"] if i["kind"] == "remote_branch"
+        ] == ["origin/main"]
 
     async def test_post_branches_creates_and_lists_the_branch(
         self, client_git, auth_headers_g,

@@ -43,6 +43,7 @@ async def test_get_version(client) -> None:
             "branches": True,
             "rebase": True,
             "resolve": True,
+            "delete_remote": True,
         },
     }
     # The signed manifest body now travels inline over the relay WebSocket

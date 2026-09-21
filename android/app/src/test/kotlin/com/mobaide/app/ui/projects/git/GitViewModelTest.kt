@@ -678,6 +678,10 @@ class GitViewModelTest {
             deleteFailureMessage(listOf(failedResult(GitItem.KIND_BRANCH_ONLY, "b", "invalid"))),
         )
         assertEquals(
+            "Couldn't delete b: git took too long to answer. Try again.",
+            deleteFailureMessage(listOf(failedResult(GitItem.KIND_BRANCH_ONLY, "b", "git_timeout"))),
+        )
+        assertEquals(
             "Couldn't delete b: unknown error",
             deleteFailureMessage(listOf(failedResult(GitItem.KIND_BRANCH_ONLY, "b", "error"))),
         )
@@ -1018,6 +1022,315 @@ class GitViewModelTest {
         f.vm.setFilter("nothing-matches")
         assertFalse(f.vm.uiState.value.filterable)
         assertEquals(4, f.vm.uiState.value.localItems.size)
+    }
+
+    // MARK: - Remote delete, Remove worktree, folders
+
+    /** [branchesFixture]'s rows with `delete_remote` advertised (or not). */
+    private fun remoteDeleteFixture(deleteRemote: Boolean = true): Fixture = newFixture(
+        initialItems = listOf(
+            branchOnly("main", isCurrent = true),
+            branchOnly("stale"),
+            branchWithWorktree("topic", "/repo/wt/topic"),
+            remoteBranch("feature-x"),
+        ),
+        capabilities = GitCapabilities(branches = true, deleteRemote = deleteRemote),
+    )
+
+    private val worktreeOnlyTopic =
+        GitDeleteItem(kind = GitItem.KIND_ORPHAN_WORKTREE, worktree_path = "/repo/wt/topic")
+
+    @Test
+    fun deleteItem_remoteRow_confirmsBeforeTheUndoWindow_thenSendsTheRemoteQualifiedName() = runTest {
+        val f = remoteDeleteFixture()
+        advanceUntilIdle()
+        assertTrue(f.vm.uiState.value.deleteRemoteEnabled)
+        val payload = slot<List<GitDeleteItem>>()
+        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload)) } returns GitDeleteResponse(
+            results = listOf(okResult(GitItem.KIND_REMOTE_BRANCH, "origin/feature-x")),
+        )
+
+        f.vm.deleteItem(remoteId)
+
+        var state = f.vm.uiState.value
+        assertEquals(listOf("origin/feature-x"), state.remoteDeletePrompt?.map { it.branch })
+        assertNull("nothing is queued before the confirmation", state.undoPrompt)
+        assertTrue(state.pendingDeleteIds.isEmpty())
+
+        f.vm.confirmRemoteDelete()
+
+        state = f.vm.uiState.value
+        assertNull(state.remoteDeletePrompt)
+        assertEquals(setOf(remoteId), state.pendingDeleteIds)
+        assertEquals(1, state.undoPrompt?.count)
+        advanceTimeBy(4_000)
+        runCurrent()
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+
+        advanceUntilIdle()
+        assertEquals(
+            listOf(GitDeleteItem(kind = GitItem.KIND_REMOTE_BRANCH, branch = "origin/feature-x")),
+            payload.captured,
+        )
+    }
+
+    @Test
+    fun dismissRemoteDeletePrompt_queuesNothing_andSendsNothing() = runTest {
+        val f = remoteDeleteFixture()
+        advanceUntilIdle()
+        f.vm.deleteItem(remoteId)
+
+        f.vm.dismissRemoteDeletePrompt()
+        advanceUntilIdle()
+
+        val state = f.vm.uiState.value
+        assertNull(state.remoteDeletePrompt)
+        assertNull(state.undoPrompt)
+        assertTrue(state.visibleItems.any { it.id == remoteId })
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+    }
+
+    @Test
+    fun requestDelete_mixedSelection_isConfirmedWhole_andSentInOneBatch() = runTest {
+        val f = remoteDeleteFixture()
+        advanceUntilIdle()
+        val payload = slot<List<GitDeleteItem>>()
+        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload)) } returns GitDeleteResponse(
+            results = listOf(
+                okResult(GitItem.KIND_BRANCH_ONLY, "stale"),
+                okResult(GitItem.KIND_REMOTE_BRANCH, "origin/feature-x"),
+            ),
+        )
+        f.vm.enterSelection(staleId)
+        f.vm.toggle(remoteId)
+
+        f.vm.requestDelete()
+
+        var state = f.vm.uiState.value
+        assertEquals(listOf("stale", "origin/feature-x"), state.remoteDeletePrompt?.map { it.branch })
+        assertTrue(state.pendingDeleteIds.isEmpty())
+        assertTrue("the selection waits on the confirmation", state.inSelectionMode)
+        assertEquals(setOf(staleId, remoteId), state.selected)
+
+        f.vm.confirmRemoteDelete()
+
+        state = f.vm.uiState.value
+        assertFalse(state.inSelectionMode)
+        assertTrue(state.selected.isEmpty())
+        assertEquals(setOf(staleId, remoteId), state.pendingDeleteIds)
+        advanceUntilIdle()
+
+        assertEquals(listOf("stale", "origin/feature-x"), payload.captured.map { it.branch })
+    }
+
+    @Test
+    fun dismissRemoteDeletePrompt_afterABatchDelete_returnsToTheSelection() = runTest {
+        val f = remoteDeleteFixture()
+        advanceUntilIdle()
+        f.vm.enterSelection(staleId)
+        f.vm.toggle(remoteId)
+        f.vm.requestDelete()
+
+        f.vm.dismissRemoteDeletePrompt()
+        advanceUntilIdle()
+
+        val state = f.vm.uiState.value
+        assertNull(state.remoteDeletePrompt)
+        assertTrue(state.inSelectionMode)
+        assertEquals(setOf(staleId, remoteId), state.selected)
+        assertTrue(state.pendingDeleteIds.isEmpty())
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+
+        f.vm.requestDelete()
+
+        assertEquals(
+            listOf("stale", "origin/feature-x"),
+            f.vm.uiState.value.remoteDeletePrompt?.map { it.branch },
+        )
+    }
+
+    @Test
+    fun remoteRow_withoutTheCapability_canBeNeitherSelectedNorDeleted() = runTest {
+        val f = remoteDeleteFixture(deleteRemote = false)
+        advanceUntilIdle()
+        assertFalse(f.vm.uiState.value.deleteRemoteEnabled)
+
+        f.vm.enterSelection(remoteId)
+        assertFalse(f.vm.uiState.value.inSelectionMode)
+        f.vm.deleteItem(remoteId)
+        advanceUntilIdle()
+
+        val state = f.vm.uiState.value
+        assertNull(state.remoteDeletePrompt)
+        assertTrue(state.pendingDeleteIds.isEmpty())
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+    }
+
+    @Test
+    fun removeWorktree_hidesTheRowForTheUndoWindow_thenSendsAWorktreeOnlyRemoval() = runTest {
+        val f = remoteDeleteFixture()
+        advanceUntilIdle()
+        val payload = slot<List<GitDeleteItem>>()
+        coEvery { f.repo.deleteGitItems(eq("alpha"), capture(payload)) } returns GitDeleteResponse(
+            results = listOf(okResult(GitItem.KIND_ORPHAN_WORKTREE, "/repo/wt/topic")),
+        )
+
+        f.vm.removeWorktree(topicId)
+
+        val state = f.vm.uiState.value
+        assertNull("a worktree removal needs no remote confirmation", state.remoteDeletePrompt)
+        assertEquals(setOf(topicId), state.pendingDeleteIds)
+        assertEquals(1, state.undoPrompt?.count)
+
+        advanceUntilIdle()
+        assertEquals(listOf(worktreeOnlyTopic), payload.captured)
+    }
+
+    @Test
+    fun removeWorktree_isANoOpOnRowsWithoutARemovableWorktree() = runTest {
+        val f = newFixture(
+            initialItems = listOf(
+                branchWithWorktree("main", "/repo", isCurrent = true),
+                branchOnly("stale"),
+                orphanWorktree("/repo/wt/orphan"),
+            ),
+        )
+        advanceUntilIdle()
+
+        f.vm.removeWorktree("${GitItem.KIND_BRANCH_WITH_WORKTREE}:main")
+        f.vm.removeWorktree(staleId)
+        f.vm.removeWorktree(orphanId)
+        advanceUntilIdle()
+
+        assertTrue(f.vm.uiState.value.pendingDeleteIds.isEmpty())
+        assertNull(f.vm.uiState.value.undoPrompt)
+        coVerify(exactly = 0) { f.repo.deleteGitItems(any(), any()) }
+    }
+
+    @Test
+    fun removeWorktree_dirty_promptsWithThePath_thenReissuesOnlyTheRemovalWithForce() = runTest {
+        val f = remoteDeleteFixture()
+        advanceUntilIdle()
+        coEvery { f.repo.deleteGitItems("alpha", listOf(worktreeOnlyTopic)) } returns GitDeleteResponse(
+            results = listOf(
+                failedResult(GitItem.KIND_ORPHAN_WORKTREE, "/repo/wt/topic", "force_required"),
+            ),
+        )
+        f.vm.removeWorktree(topicId)
+        advanceUntilIdle()
+
+        assertEquals(listOf("/repo/wt/topic"), f.vm.uiState.value.forceDeletePrompt?.refs)
+
+        val forced = listOf(worktreeOnlyTopic.copy(force = true))
+        coEvery { f.repo.deleteGitItems("alpha", forced) } returns GitDeleteResponse(
+            results = listOf(okResult(GitItem.KIND_ORPHAN_WORKTREE, "/repo/wt/topic")),
+        )
+        f.vm.confirmForceDelete()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", forced) }
+        assertNull(f.vm.uiState.value.forceDeletePrompt)
+    }
+
+    @Test
+    fun toggleFolder_opensAndClosesALocalFolder() = runTest {
+        val f = newFixture(
+            initialItems = listOf(branchOnly("feature/a"), branchOnly("feature/b"), branchOnly("main")),
+        )
+        advanceUntilIdle()
+        val folder = f.vm.uiState.value.localRows.first() as GitTreeRow.Folder
+        assertEquals("dir:local:feature", folder.id)
+        assertFalse(folder.expanded)
+        assertEquals(2, f.vm.uiState.value.localRows.size)
+
+        f.vm.toggleFolder(folder.id)
+
+        assertEquals(setOf("dir:local:feature"), f.vm.uiState.value.toggledFolders)
+        assertEquals(4, f.vm.uiState.value.localRows.size)
+
+        f.vm.toggleFolder(folder.id)
+
+        assertTrue(f.vm.uiState.value.toggledFolders.isEmpty())
+        assertEquals(2, f.vm.uiState.value.localRows.size)
+    }
+
+    @Test
+    fun toggleFolder_isIgnoredWhileAFilterHoldsTheFoldersOpen_butNotForStaleTextBelowTheThreshold() = runTest {
+        val f = newFixture(initialItems = (1..7).map { branchOnly("feature/$it") } + branchOnly("main"))
+        advanceUntilIdle()
+        f.vm.setFilter("feature/3")
+        assertTrue(f.vm.uiState.value.filterActive)
+        assertEquals(
+            listOf(true),
+            f.vm.uiState.value.localRows.filterIsInstance<GitTreeRow.Folder>().map { it.expanded },
+        )
+
+        f.vm.toggleFolder("dir:local:feature")
+
+        assertTrue(f.vm.uiState.value.toggledFolders.isEmpty())
+
+        val small = newFixture(initialItems = listOf(branchOnly("feature/a"), branchOnly("main")))
+        advanceUntilIdle()
+        small.vm.setFilter("feature")
+        assertFalse("the field is hidden below eight rows", small.vm.uiState.value.filterActive)
+        small.vm.toggleFolder("dir:local:feature")
+        assertEquals(setOf("dir:local:feature"), small.vm.uiState.value.toggledFolders)
+    }
+
+    @Test
+    fun deleteFailureReason_givesAuthRequiredItsOwnCopy_andKeepsTheRemoteReasonOtherwise() {
+        assertEquals(
+            "No credentials for this remote. Configure a credential helper or SSH agent on the agent host.",
+            deleteFailureReason(
+                GitDeleteResultItem(
+                    kind = GitItem.KIND_REMOTE_BRANCH,
+                    target = "origin/feature-x",
+                    ok = false,
+                    error = "auth_required",
+                    error_detail = "fatal: could not read Username for 'https://example.com': terminal prompts disabled",
+                ),
+            ),
+        )
+        assertEquals(
+            "[remote rejected] (deletion of the current branch prohibited)",
+            deleteFailureReason(
+                GitDeleteResultItem(
+                    kind = GitItem.KIND_REMOTE_BRANCH,
+                    target = "origin/main",
+                    ok = false,
+                    error = "rejected",
+                    error_detail = "[remote rejected] (deletion of the current branch prohibited)",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun remoteDeleteMessage_namesOneBranch_andCountsSeveral() {
+        assertEquals(
+            "Delete origin/a on the remote? This removes it for everyone with access to the remote.",
+            remoteDeleteMessage(listOf("origin/a")),
+        )
+        assertEquals(
+            "Delete 2 branches on the remote? This removes them for everyone with access to the remote.",
+            remoteDeleteMessage(listOf("origin/a", "origin/b")),
+        )
+    }
+
+    @Test
+    fun gitItem_deletableAndRemovableRows() {
+        val remote = remoteBranch("feature-x")
+        assertTrue(remote.isDeletable(deleteRemote = true))
+        assertFalse(remote.isDeletable(deleteRemote = false))
+        assertFalse(branchOnly("main", isCurrent = true).isDeletable(deleteRemote = true))
+        assertTrue(branchOnly("stale").isDeletable(deleteRemote = false))
+
+        assertTrue(branchWithWorktree("topic", "/wt/topic").canRemoveWorktree)
+        assertFalse(branchWithWorktree("main", "/repo", isCurrent = true).canRemoveWorktree)
+        assertFalse(branchWithWorktree("topic", "").canRemoveWorktree)
+        assertFalse(branchOnly("stale").canRemoveWorktree)
+        assertFalse(orphanWorktree("/wt/x").canRemoveWorktree)
+        assertFalse(remote.canRemoveWorktree)
     }
 
     // MARK: - Row and refusal copy

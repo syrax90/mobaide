@@ -13,12 +13,18 @@ import {
   KIND_BRANCH_WITH_WORKTREE,
   KIND_ORPHAN_WORKTREE,
   KIND_REMOTE_BRANCH,
+  compareRefNames,
   type GitBranchResult,
   type GitDeleteResult,
   type GitItem,
 } from '../../../api/gitRepository';
-import { GIT_CODE_JOB_RUNNING, isSessionGitError } from '../../../api/sessionGitRepository';
-import { sessionGitErrorCopy } from '../../terminal/git/sessionGitDisplay';
+import {
+  GIT_CODE_JOB_RUNNING,
+  GIT_CODE_TIMEOUT,
+  GIT_JOB_CODE_AUTH_REQUIRED,
+  isSessionGitError,
+} from '../../../api/sessionGitRepository';
+import { jobErrorCopy, sessionGitErrorCopy } from '../../terminal/git/sessionGitDisplay';
 
 /** Below this many rows a filter field would take more space than it saves. */
 export const FILTER_THRESHOLD = 8;
@@ -71,6 +77,133 @@ export function matchesFilter(item: GitItem, filter: string): boolean {
   );
 }
 
+export type GitTreeScope = 'local' | 'remote';
+
+export interface GitFolderRow {
+  type: 'folder';
+  id: string;
+  name: string;
+  depth: number;
+  /** The rows below it that the current filter shows. */
+  count: number;
+  expanded: boolean;
+}
+
+export interface GitLeafRow {
+  type: 'item';
+  item: GitItem;
+  depth: number;
+  /** The last path segment; dialogs and accessible names keep `primaryLabel`. */
+  label: string;
+}
+
+export type GitTreeRow = GitFolderRow | GitLeafRow;
+
+interface TreeNode {
+  segments: string[];
+  folders: Map<string, TreeNode>;
+  leaves: GitLeafRow[];
+}
+
+/**
+ * Where a row sits in the tree: its branch split on `/`, a remote-tracking row
+ * under a top folder named by its `remote` (which may itself contain `/`).
+ */
+export function treeSegments(item: GitItem): string[] {
+  const branch = item.branch ?? '';
+  const remote = item.remote ?? '';
+  if (item.kind === KIND_REMOTE_BRANCH && remote !== '' && branch.startsWith(`${remote}/`)) {
+    return [remote, ...splitPath(branch.slice(remote.length + 1))];
+  }
+  return splitPath(branch);
+}
+
+function splitPath(name: string): string[] {
+  return name.split('/').filter((segment) => segment !== '');
+}
+
+/**
+ * `:` is illegal in ref and remote names, so it separates a remote from the
+ * path below it: remotes `a` and `a/b` never share a folder id, and no folder
+ * id can equal a row id (`<kind>:…`).
+ */
+export function folderId(scope: GitTreeScope, segments: readonly string[]): string {
+  if (scope === 'remote') {
+    return `dir:remote:${segments[0] ?? ''}:${segments.slice(1).join('/')}`;
+  }
+  return `dir:local:${segments.join('/')}`;
+}
+
+/** Remote-name folders start open — the collapsed section is that level already. */
+function expandedByDefault(scope: GitTreeScope, depth: number): boolean {
+  return scope === 'remote' && depth === 0;
+}
+
+/**
+ * The visible rows of one section as a flattened tree: at each level folders
+ * A→Z, then rows A→Z. `toggled` holds the folders the user flipped away from
+ * their default; an active filter opens every folder (the rows passed in are
+ * already filtered, so a folder without a match never appears). Orphan
+ * worktrees have no branch to file them under and follow the local tree by path.
+ */
+export function gitTreeRows(
+  items: readonly GitItem[],
+  scope: GitTreeScope,
+  toggled: ReadonlySet<string>,
+  filterActive: boolean,
+): GitTreeRow[] {
+  const root: TreeNode = { segments: [], folders: new Map(), leaves: [] };
+  const orphans: GitItem[] = [];
+  for (const item of items) {
+    if (item.kind === KIND_ORPHAN_WORKTREE) {
+      orphans.push(item);
+      continue;
+    }
+    const segments = treeSegments(item);
+    let node = root;
+    for (const segment of segments.slice(0, -1)) {
+      let child = node.folders.get(segment);
+      if (child === undefined) {
+        child = { segments: [...node.segments, segment], folders: new Map(), leaves: [] };
+        node.folders.set(segment, child);
+      }
+      node = child;
+    }
+    node.leaves.push({
+      type: 'item',
+      item,
+      depth: node.segments.length,
+      label: segments.at(-1) ?? primaryLabel(item),
+    });
+  }
+
+  const rows: GitTreeRow[] = [];
+  const visit = (node: TreeNode): void => {
+    const folders = [...node.folders.entries()].sort(([a], [b]) => compareRefNames(a, b));
+    for (const [name, folder] of folders) {
+      const depth = node.segments.length;
+      const id = folderId(scope, folder.segments);
+      const expanded = filterActive || expandedByDefault(scope, depth) !== toggled.has(id);
+      rows.push({ type: 'folder', id, name, depth, count: leafCount(folder), expanded });
+      if (expanded) visit(folder);
+    }
+    const leaves = [...node.leaves].sort((a, b) => compareRefNames(a.label, b.label));
+    rows.push(...leaves);
+  };
+  visit(root);
+
+  orphans
+    .sort((a, b) => compareRefNames(primaryLabel(a), primaryLabel(b)))
+    .forEach((item) => rows.push({ type: 'item', item, depth: 0, label: primaryLabel(item) }));
+  return rows;
+}
+
+function leafCount(node: TreeNode): number {
+  let count = node.leaves.length;
+  for (const child of node.folders.values()) count += leafCount(child);
+  return count;
+}
+
 /** Fixed order; `upstream` is deliberately not rendered, as on both mobile clients. */
 export function chips(item: GitItem): Chip[] {
   const result: Chip[] = [];
@@ -105,6 +238,9 @@ export function deleteFailureMessage(failures: readonly GitDeleteResult[]): stri
  * cannot turn into a wall of text.
  */
 export function deleteFailureReason(failure: GitDeleteResult): string {
+  // A remote delete's push failures share the fetch/pull/push vocabulary; git's
+  // own wording for a disabled prompt says nothing about what to fix.
+  if (failure.error === GIT_JOB_CODE_AUTH_REQUIRED) return jobErrorCopy(failure.error, null);
   const detail = failure.error_detail?.split('\n')[0]?.trim() ?? '';
   if (detail !== '') return detail.slice(0, 120);
   switch (failure.error) {
@@ -114,9 +250,19 @@ export function deleteFailureReason(failure: GitDeleteResult): string {
       return 'it no longer exists';
     case 'invalid':
       return 'the request was invalid';
+    case GIT_CODE_TIMEOUT:
+      return jobErrorCopy(failure.error, null);
     default:
       return 'unknown error';
   }
+}
+
+export function remoteDeleteMessage(refs: readonly string[]): string {
+  const what = refs.length === 1 ? (refs[0] ?? '') : `${String(refs.length)} branches`;
+  return (
+    `Delete ${what} on the remote? This removes ${refs.length === 1 ? 'it' : 'them'} ` +
+    'for everyone with access to the remote.'
+  );
 }
 
 export function forceDeleteMessage(refs: readonly string[]): string {

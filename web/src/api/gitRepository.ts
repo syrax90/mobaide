@@ -47,12 +47,42 @@ export function gitItemId(item: Pick<GitItem, 'kind' | 'branch' | 'worktree_path
   }
 }
 
-/** A row a delete batch may carry: never a remote-tracking one. */
+/** A row a delete batch may carry. */
 export type DeletableGitItem = GitItem & { kind: GitDeleteItem['kind'] };
 
-/** The checked-out branch cannot be deleted, nor can a remote-tracking row; everything else can. */
-export function isDeletable(item: GitItem): item is DeletableGitItem {
-  return !item.is_current && item.kind !== KIND_REMOTE_BRANCH;
+/**
+ * The checked-out branch cannot be deleted; a remote-tracking row only when the
+ * agent advertises `capabilities.git.delete_remote` — an older one answers the
+ * whole batch with a 422.
+ */
+export function isDeletable(item: GitItem, deleteRemote: boolean): item is DeletableGitItem {
+  if (item.is_current) return false;
+  return item.kind !== KIND_REMOTE_BRANCH || deleteRemote;
+}
+
+/**
+ * *Remove worktree* keeps the branch: offered on a worktree-backed row other
+ * than the project root's own checkout.
+ */
+export function canRemoveWorktree(item: GitItem): boolean {
+  return (
+    !item.is_current &&
+    item.kind === KIND_BRANCH_WITH_WORKTREE &&
+    (item.worktree_path ?? '') !== ''
+  );
+}
+
+/**
+ * Branch-list order on all three clients: lowercased names by UTF-16 code
+ * unit — deliberately not `localeCompare`, whose collation Kotlin and Swift do
+ * not share — with the raw name as tiebreak.
+ */
+export function compareRefNames(a: string, b: string): number {
+  const lowerA = a.toLowerCase();
+  const lowerB = b.toLowerCase();
+  if (lowerA !== lowerB) return lowerA < lowerB ? -1 : 1;
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
 }
 
 /**

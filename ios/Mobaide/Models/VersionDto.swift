@@ -117,6 +117,8 @@ struct GitCapabilities: Equatable, Sendable {
     var rebase = false
     /// `stage` refuses a conflicted file that still holds markers, so *Mark resolved* is safe.
     var resolve = false
+    /// The project Git screen may delete remote-tracking rows (on the remote).
+    var deleteRemote = false
 
     /// The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three.
     var hasSync: Bool { fetch || pull || push }
@@ -143,7 +145,8 @@ extension VersionInfoResponse {
             push: gitCapability("push"),
             branches: gitCapability("branches"),
             rebase: gitCapability("rebase"),
-            resolve: gitCapability("resolve")
+            resolve: gitCapability("resolve"),
+            deleteRemote: gitCapability("delete_remote")
         )
     }
 }

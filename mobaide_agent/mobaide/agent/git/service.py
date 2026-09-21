@@ -9,13 +9,15 @@ Responsibilities:
 * Enforce a busy-guard against active terminal sessions and auto-scan
   work items before allowing destructive operations.
 * Drive per-item deletes (branch / worktree / branch+worktree) with the
-  per-repo lock owned by the manager, audit each outcome, and publish
-  ``git.changed`` after any successful delete.
+  per-repo lock owned by the manager, delete remote branches with one
+  ``git push`` per remote, audit each outcome, and publish ``git.changed``
+  after any successful delete.
 * Create branches and check them out in the project root through the
   hardened runner, with the refusal vocabulary the session mutations use.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from collections.abc import Callable, Iterable, Sequence
@@ -41,6 +43,7 @@ from .changes_service import (
     GitChangesError,
     GitNotFoundError,
     GitRefusedError,
+    GitTimeoutError,
     ResolvedRepo,
     _check_result,
     _fail,
@@ -69,6 +72,12 @@ logger = get_logger(__name__)
 
 _LOCKED_PATTERNS = ("is locked",)
 _MUTATE_TIMEOUT = 15.0
+# Leaves headroom inside the relay's 30 s proxied-request budget; the local
+# deletes of the same batch run alongside, not before.
+_REMOTE_DELETE_TIMEOUT = 20.0
+_REMOTE_DELETE_ERRORS = frozenset(
+    {"auth_required", "network", "remote_not_found", "rejected", "hook_failed"}
+)
 _MAX_BRANCH_NAME_BYTES = 255
 _REFS_HEADS = "refs/heads/"
 _REFS_REMOTES = "refs/remotes/"
@@ -508,6 +517,176 @@ async def _delete_one(
     return _result(kind=item.kind, target="", ok=False, error="invalid"), False
 
 
+def _tracking_source(tracking_ref: str, refspecs: Iterable[str]) -> str | None:
+    """The remote branch ``tracking_ref`` is fetched from, read back through
+    the remote's fetch refspecs; ``None`` unless exactly one ``refs/heads/``
+    source maps to it — a guess from the name alone would delete the wrong
+    branch under a non-default refspec."""
+    sources: set[str] = set()
+    for raw in refspecs:
+        spec = raw.strip().removeprefix("+")
+        if spec.startswith("^") or spec.count(":") != 1:
+            continue
+        src, dst = spec.split(":")
+        if "*" not in dst:
+            if dst == tracking_ref:
+                sources.add(src)
+            continue
+        if dst.count("*") != 1 or src.count("*") != 1:
+            continue
+        head, tail = dst.split("*")
+        if (
+            len(tracking_ref) > len(head) + len(tail)
+            and tracking_ref.startswith(head)
+            and tracking_ref.endswith(tail)
+        ):
+            sources.add(src.replace("*", tracking_ref[len(head):len(tracking_ref) - len(tail)]))
+    if len(sources) != 1:
+        return None
+    source = sources.pop()
+    return source if source.startswith(_REFS_HEADS) and "*" not in source else None
+
+
+def _push_outcomes(stdout: bytes) -> dict[str, tuple[str, str]]:
+    """``remote ref -> (flag, summary)`` from ``git push --porcelain``, whose
+    ref lines read ``<flag>\t<from>:<to>\t<summary>``."""
+    outcomes: dict[str, tuple[str, str]] = {}
+    for line in _lines(stdout):
+        parts = line.split("\t")
+        if len(parts) != 3 or len(parts[0]) != 1 or ":" not in parts[1]:
+            continue
+        outcomes[parts[1].split(":", 1)[1]] = (parts[0], parts[2])
+    return outcomes
+
+
+def _remote_failure(item: GitDeleteItem, code: str, detail: str | None) -> GitDeleteResultItem:
+    return _result(
+        kind="remote_branch", target=item.branch or "", ok=False,
+        error=code, error_detail=detail,
+    )
+
+
+def _remote_failures(
+    targets: list[tuple[int, GitDeleteItem]], exc: Exception
+) -> list[tuple[int, GitDeleteResultItem]]:
+    logger.warning("git.remote_delete_failed", exc_info=True)
+    code = "git_timeout" if isinstance(exc, GitTimeoutError) else "error"
+    detail = getattr(exc, "message", None) or str(exc) or None
+    return [(index, _remote_failure(item, code, detail)) for index, item in targets]
+
+
+async def _fetch_refspecs(project_root: str, remote: str) -> list[str]:
+    result = await _quick(project_root, ["config", "--get-all", f"remote.{remote}.fetch"])
+    return _lines(result.stdout) if result.rc == 0 else []
+
+
+async def _push_remote_deletes(
+    ctx: _RepoContext,
+    remote: str,
+    targets: list[tuple[int, GitDeleteItem]],
+) -> list[tuple[int, GitDeleteResultItem]]:
+    """Delete ``targets`` (all tracking ``remote``) with one ``git push``."""
+    from .changes_jobs import _JOB_ENV, classify_job_failure
+
+    refspecs = await _fetch_refspecs(ctx.project_root, remote)
+    done: list[tuple[int, GitDeleteResultItem]] = []
+    pending: list[tuple[int, GitDeleteItem, str]] = []
+    for index, item in targets:
+        source = _tracking_source(_REFS_REMOTES + (item.branch or ""), refspecs)
+        if source is None:
+            done.append((index, _remote_failure(
+                item, "error",
+                f"the fetch refspecs of '{remote}' do not map {item.branch} to exactly one branch",
+            )))
+        else:
+            pending.append((index, item, source))
+    if not pending:
+        return done
+
+    result = await run_git(
+        ["push", "--porcelain", "--", remote, *(":" + source for _, _, source in pending)],
+        cwd=ctx.project_root,
+        timeout=_REMOTE_DELETE_TIMEOUT,
+        max_bytes=_STATUS_MAX_BYTES,
+        env_extra=_JOB_ENV,
+    )
+    if result.timed_out:
+        return done + [
+            (index, _remote_failure(item, "git_timeout", None)) for index, item, _ in pending
+        ]
+    outcomes = _push_outcomes(result.stdout)
+    failure: tuple[str, str] | None = None
+    for index, item, source in pending:
+        flag, summary = outcomes.get(source, ("", ""))
+        if flag == "-":
+            audit_event(
+                "audit.git.delete",
+                actor=ctx.actor,
+                target=item.branch,
+                outcome="ok",
+                kind=item.kind,
+                project=ctx.project_name,
+                remote=remote,
+            )
+            done.append((index, _result(kind=item.kind, target=item.branch or "", ok=True)))
+        elif flag == "!":
+            code = "hook_failed" if "hook declined" in summary else "rejected"
+            done.append((index, _remote_failure(item, code, summary)))
+        else:
+            if failure is None:
+                code, message = classify_job_failure(
+                    "push", err_tail=_lines(result.stderr), out_tail=_lines(result.stdout),
+                )
+                failure = (code if code in _REMOTE_DELETE_ERRORS else "error", message)
+            done.append((index, _remote_failure(item, *failure)))
+    return done
+
+
+async def _delete_remote_group(
+    ctx: _RepoContext,
+    remote: str,
+    targets: list[tuple[int, GitDeleteItem]],
+) -> list[tuple[int, GitDeleteResultItem]]:
+    """:func:`_push_remote_deletes` that never raises: the batch's local
+    deletes may already have happened, so a failure must stay per item."""
+    try:
+        return await _push_remote_deletes(ctx, remote, targets)
+    except Exception as exc:
+        return _remote_failures(targets, exc)
+
+
+async def _delete_remote_items(
+    entries: list[tuple[int, GitDeleteItem]],
+    ctx: _RepoContext,
+) -> list[tuple[int, GitDeleteResultItem]]:
+    """Resolve each ``remote_branch`` item against the refs the listing
+    offers, then push the deletions, one ``git push`` per remote, the
+    remotes in parallel."""
+    try:
+        remotes = await _remote_names(ctx.project_root)
+        _, remote_refs = await _ref_tips(ctx.project_root)
+    except Exception as exc:
+        return _remote_failures(entries, exc)
+    listed = set(remote_refs)
+    done: list[tuple[int, GitDeleteResultItem]] = []
+    groups: dict[str, list[tuple[int, GitDeleteItem]]] = {}
+    for index, item in entries:
+        branch = item.branch
+        if not branch or "\0" in branch:
+            done.append((index, _remote_failure(item, "invalid", None)))
+            continue
+        split = _split_remote_ref(branch, remotes)
+        if split is None or _REFS_REMOTES + branch not in listed:
+            done.append((index, _remote_failure(item, "not_found", None)))
+            continue
+        groups.setdefault(split[0], []).append((index, item))
+    for group in await asyncio.gather(
+        *(_delete_remote_group(ctx, remote, targets) for remote, targets in groups.items())
+    ):
+        done.extend(group)
+    return done
+
+
 def _publish_git_changed(
     event_bus: Any | None,
     project_name: str,
@@ -545,9 +724,10 @@ async def delete_git_items(
 
     Raises :class:`GitItemBusyError` if any worktree path in the batch is
     held by a session or auto-scan work item — the entire batch is rejected
-    and the caller maps to HTTP 409. Otherwise each item is processed in
-    order under the manager's per-repo lock; per-item failures are recorded
-    in the response without aborting the batch.
+    and the caller maps to HTTP 409. Otherwise each local item is processed
+    in order under the manager's per-repo lock while the ``remote_branch``
+    items are pushed alongside; per-item failures are recorded in the
+    response, at the item's position, without aborting the batch.
     """
     affected = _affected_paths(request.items)
     busy = await _busy_holders(affected, session_manager, autoscan_manager)
@@ -563,14 +743,30 @@ async def delete_git_items(
         event_bus=event_bus,
         actor=actor,
     )
-    results: list[GitDeleteResultItem] = []
-    any_change = False
-    for item in request.items:
-        result, did_change = await _delete_one(item, ctx)
-        results.append(result)
-        any_change = any_change or did_change
+    local = [(i, item) for i, item in enumerate(request.items) if item.kind != "remote_branch"]
+    remote = [(i, item) for i, item in enumerate(request.items) if item.kind == "remote_branch"]
+    slots: list[GitDeleteResultItem | None] = [None] * len(request.items)
 
-    if any_change:
+    async def delete_local() -> bool:
+        changed = False
+        for index, item in local:
+            result, did_change = await _delete_one(item, ctx)
+            slots[index] = result
+            changed = changed or did_change
+        return changed
+
+    async def delete_remote() -> bool:
+        if not remote:
+            return False
+        outcomes = await _delete_remote_items(remote, ctx)
+        for index, result in outcomes:
+            slots[index] = result
+        return any(result.ok for _, result in outcomes)
+
+    local_changed, remote_changed = await asyncio.gather(delete_local(), delete_remote())
+    results = [slot for slot in slots if slot is not None]
+
+    if local_changed or remote_changed:
         toplevel, common_dir = await resolve_repo_dirs(project_root)
         _publish_git_changed(
             event_bus, project_name, toplevel=toplevel, common_dir=common_dir

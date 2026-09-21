@@ -16,6 +16,7 @@ import com.mobaide.app.data.network.dto.GitUpstreamInfo
 import com.mobaide.app.data.repository.GitCapabilities
 import com.mobaide.app.data.repository.SessionGitException
 import com.mobaide.app.data.repository.extractDetail
+import com.mobaide.app.ui.projects.git.RefNameOrder
 
 sealed interface GitChangesUiState {
     data object Loading : GitChangesUiState
@@ -583,20 +584,23 @@ data class SyncSheetState(
 data class RebaseTarget(val value: String, val label: String)
 
 /**
- * The rebase sheet's picker: local branches, then remote-tracking ones, from
- * the project Git screen's rows. The session's own branch is left out by name
+ * The rebase sheet's picker: local branches, then remote-tracking ones, each
+ * A→Z, from the project Git screen's rows. The session's own branch is left out by name
  * — the rows' `is_current` is the project root's checkout, which for a session
  * in a linked worktree is usually the very branch it wants to rebase onto.
  */
 internal fun rebaseTargets(items: List<GitItem>, currentBranch: String?): List<RebaseTarget> {
     fun usable(item: GitItem) = item.branch != null && item.branch != currentBranch
+    val byName = compareBy(RefNameOrder) { item: GitItem -> item.branch.orEmpty() }
     val local = items
         .filter { it.kind == GitItem.KIND_BRANCH_ONLY || it.kind == GitItem.KIND_BRANCH_WITH_WORKTREE }
         .filter(::usable)
+        .sortedWith(byName)
         .map { RebaseTarget("refs/heads/${it.branch}", it.branch.orEmpty()) }
     val remote = items
         .filter { it.kind == GitItem.KIND_REMOTE_BRANCH }
         .filter(::usable)
+        .sortedWith(byName)
         .map { RebaseTarget("refs/remotes/${it.branch}", "${it.branch} (remote)") }
     return local + remote
 }

@@ -1242,6 +1242,12 @@ export interface components {
          *     deletions). ``force`` upgrades a branch delete from ``-d`` to ``-D`` and
          *     adds ``--force`` to a worktree removal so a worktree holding
          *     modified/untracked files is deleted instead of refused.
+         *
+         *     ``orphan_worktree`` removes only the worktree at ``worktree_path``,
+         *     whatever row it came from: sent for a ``branch_with_worktree`` row it
+         *     keeps the branch. ``remote_branch`` carries the row's ``branch``
+         *     (``<remote>/<name>``) verbatim and deletes that branch on the remote;
+         *     ``force`` does not apply to it.
          */
         GitDeleteItem: {
             /** Branch */
@@ -1255,7 +1261,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "branch_with_worktree" | "branch_only" | "orphan_worktree";
+            kind: "branch_with_worktree" | "branch_only" | "orphan_worktree" | "remote_branch";
             /** Worktree Path */
             worktree_path?: string | null;
         };
@@ -1279,6 +1285,11 @@ export interface components {
          *         * ``locked`` — worktree is locked.
          *         * ``not_found`` — branch or worktree no longer exists.
          *         * ``invalid`` — request payload missing the required identifier.
+         *         * ``auth_required`` / ``network`` / ``remote_not_found`` — a
+         *           ``remote_branch`` push could not reach or log in to the remote.
+         *         * ``rejected`` / ``hook_failed`` — the remote, or a hook, refused
+         *           the deletion.
+         *         * ``git_timeout`` — the push outlasted its budget.
          *         * ``error`` — other git failure (full message in ``error_detail``).
          */
         GitDeleteResultItem: {

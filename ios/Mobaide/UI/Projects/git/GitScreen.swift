@@ -1,13 +1,16 @@
 import SwiftUI
 
 /// Git branches/worktrees management (Android `GitScreen`), the real body for
-/// the `gitManagement` route. A row is deleted by swipe or from its context
-/// menu; "Select" enters edit mode for a batch delete. Every delete runs through
-/// a 5s Undo window, then branches on `force_required` (re-prompt + re-send with
-/// force) and 409-busy (holder list). Once the agent advertises
-/// `capabilities.git.branches` the remote-tracking branches sit in a collapsed
-/// section, "+" opens the New branch sheet, and a `branch_only` or remote row
-/// offers Check out (leading swipe or context menu) behind a confirmation.
+/// the `gitManagement` route. Rows sit in a folder tree (a branch name splits on
+/// `/`). A row is deleted by swipe or from its context menu; "Select" enters
+/// edit mode for a batch delete. Every delete runs through a 5s Undo window,
+/// then branches on `force_required` (re-prompt + re-send with force) and
+/// 409-busy (holder list); a worktree-backed row's context menu also offers
+/// Remove worktree. Once the agent advertises `capabilities.git.branches` the
+/// remote-tracking branches sit in a collapsed section, "+" opens the New
+/// branch sheet, and a `branch_only` or remote row offers Check out (leading
+/// swipe or context menu) behind a confirmation; `delete_remote` makes remote
+/// rows deletable behind a confirmation.
 struct GitScreen: View {
     let projectName: String
 
@@ -44,6 +47,24 @@ private struct GitContent: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
             .refreshable { await model.load() }
+            .confirmationDialog(
+                "Delete on the remote?",
+                isPresented: remoteDeletePresented,
+                titleVisibility: .visible,
+                presenting: model.remoteDeletePrompt
+            ) { _ in
+                Button("Delete", role: .destructive) {
+                    withAnimation {
+                        model.confirmRemoteDelete()
+                        editMode = .inactive
+                    }
+                }
+                Button("Cancel", role: .cancel) { model.dismissRemoteDeletePrompt() }
+            } message: { targets in
+                Text(GitItemDisplay.remoteDeleteMessage(
+                    targets.filter { $0.kind == GitItem.kindRemoteBranch }.map(GitItemDisplay.primaryLabel)
+                ))
+            }
             .confirmationDialog(
                 "Force delete?",
                 isPresented: forcePresented,
@@ -111,7 +132,9 @@ private struct GitContent: View {
                 Button("Delete", role: .destructive) {
                     withAnimation {
                         model.requestDelete()
-                        editMode = .inactive
+                        // A batch with remote rows waits on its confirmation
+                        // in edit mode, so Cancel returns to the selection.
+                        if model.remoteDeletePrompt == nil { editMode = .inactive }
                     }
                 }
                 .disabled(model.selected.isEmpty)
@@ -168,24 +191,72 @@ private struct GitContent: View {
     private var list: some View {
         List(selection: $model.selected) {
             Section {
-                ForEach(model.localItems, id: \.id) { item in
-                    row(item)
-                        .pixelCard(selected: editMode.isEditing && model.selected.contains(item.id))
-                        .pixelListRow()
+                ForEach(model.localRows, id: \.key) { line in
+                    switch line {
+                    case .folder:
+                        folderRow(line)
+                            .pixelListRow()
+                    case .leaf(let item, let depth, let label):
+                        row(item, label: label)
+                            .pixelCard(selected: editMode.isEditing && model.selected.contains(item.id))
+                            .padding(.leading, Self.indent(depth))
+                            .pixelListRow()
+                    }
                 }
             }
             if !model.remoteItems.isEmpty {
                 Section(header: remoteHeader) {
                     if model.remoteOpen {
-                        ForEach(model.remoteItems, id: \.id) { item in
-                            row(item)
-                                .pixelListRow()
+                        ForEach(model.remoteRows, id: \.key) { line in
+                            switch line {
+                            case .folder:
+                                folderRow(line)
+                                    .pixelListRow()
+                            case .leaf(let item, let depth, let label):
+                                row(item, label: label)
+                                    .padding(.leading, Self.indent(depth))
+                                    .pixelListRow()
+                            }
                         }
                     }
                 }
             }
         }
         .pixelList()
+    }
+
+    private static func indent(_ depth: Int) -> CGFloat { CGFloat(depth) * 16 }
+
+    /// A branch-name folder: toggles its rows, never selectable or deletable
+    /// itself. Disabled while a filter holds every matching folder open.
+    @ViewBuilder
+    private func folderRow(_ line: GitTreeRow) -> some View {
+        if case .folder(let id, let name, let depth, let count, let expanded) = line {
+            Button {
+                withAnimation { model.toggleFolder(id) }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .foregroundStyle(colors.accent)
+                    Text(name)
+                        .chromeText()
+                        .foregroundStyle(colors.text)
+                    Text("(\(count))")
+                        .chromeText()
+                        .foregroundStyle(colors.textMuted)
+                    Spacer()
+                }
+                .padding(.leading, Self.indent(depth))
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(model.filterActive)
+            .selectionDisabled()
+            .accessibilityLabel("\(name), \(count) branches")
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier("git-folder")
+        }
     }
 
     private var remoteHeader: some View {
@@ -208,23 +279,25 @@ private struct GitContent: View {
         .accessibilityIdentifier("git-remote-header")
     }
 
-    /// In edit mode the row is plain content so the `List` owns the tap; a
-    /// remote-tracking row is never selectable. Outside it, a deletable row
-    /// keeps its trailing Delete swipe, and every row that can be checked out
-    /// gets a leading Check out swipe plus the same entry in its context menu.
+    /// In edit mode the row is plain content so the `List` owns the tap; a row
+    /// that cannot be deleted is never selectable. Outside it, a deletable row
+    /// keeps its trailing Delete swipe, every row that can be checked out gets
+    /// a leading Check out swipe plus the same entry in its context menu.
     @ViewBuilder
-    private func row(_ item: GitItem) -> some View {
+    private func row(_ item: GitItem, label: String) -> some View {
         let checkoutable = model.canManageBranches && item.canCheckOut
+        let deletable = model.canDelete(item)
+        let removable = item.canRemoveWorktree
         if editMode.isEditing {
-            if item.isDeletable {
-                GitItemRow(item: item)
+            if deletable {
+                GitItemRow(item: item, label: label)
             } else {
-                GitItemRow(item: item)
+                GitItemRow(item: item, label: label)
                     .selectionDisabled()
             }
-        } else if item.isDeletable || checkoutable {
-            GitItemRow(item: item)
-                .selectionDisabled(!item.isDeletable)
+        } else if deletable || checkoutable || removable {
+            GitItemRow(item: item, label: label)
+                .selectionDisabled(!deletable)
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
                     if checkoutable {
                         checkoutButton(item)
@@ -232,7 +305,7 @@ private struct GitContent: View {
                     }
                 }
                 .swipeActions(edge: .trailing) {
-                    if item.isDeletable {
+                    if deletable {
                         Button(role: .destructive) {
                             withAnimation { model.delete(item) }
                         } label: {
@@ -244,11 +317,21 @@ private struct GitContent: View {
                     if checkoutable {
                         checkoutButton(item)
                     }
-                    if item.isDeletable {
+                    if removable {
+                        Button {
+                            withAnimation { model.removeWorktree(item) }
+                        } label: {
+                            Label("Remove worktree", systemImage: "folder.badge.minus")
+                        }
+                    }
+                    if deletable {
                         Button(role: .destructive) {
                             withAnimation { model.delete(item) }
                         } label: {
-                            Label("Delete", systemImage: "trash")
+                            Label(
+                                item.kind == GitItem.kindBranchWithWorktree ? "Delete branch and worktree" : "Delete",
+                                systemImage: "trash"
+                            )
                         }
                         Button {
                             model.select(item)
@@ -260,7 +343,7 @@ private struct GitContent: View {
                 }
                 .disabled(model.isCheckingOut && checkoutable)
         } else {
-            GitItemRow(item: item)
+            GitItemRow(item: item, label: label)
                 .selectionDisabled()
         }
     }
@@ -279,6 +362,15 @@ private struct GitContent: View {
             // this binding on dismissal, which may land before the action runs.
             get: { model.forcePrompt != nil },
             set: { if !$0 { model.forcePrompt = nil } }
+        )
+    }
+
+    private var remoteDeletePresented: Binding<Bool> {
+        Binding(
+            // Clears only the prompt: the batch stays in the model until
+            // Delete or Cancel runs.
+            get: { model.remoteDeletePrompt != nil },
+            set: { if !$0 { model.remoteDeletePrompt = nil } }
         )
     }
 

@@ -194,6 +194,7 @@ describe('gitCapabilities', () => {
       branches: false,
       rebase: false,
       resolve: false,
+      deleteRemote: false,
     });
   });
 
@@ -220,6 +221,7 @@ describe('gitCapabilities', () => {
       branches: false,
       rebase: false,
       resolve: false,
+      deleteRemote: false,
     });
   });
 });

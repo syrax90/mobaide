@@ -153,6 +153,8 @@ export interface GitCapabilities {
   rebase: boolean;
   /** `stage` refuses a conflicted file that still holds markers, so *Mark resolved* is safe. */
   resolve: boolean;
+  /** The project Git screen may delete remote-tracking rows (on the remote). */
+  deleteRemote: boolean;
 }
 
 export const NO_GIT_CAPABILITIES: GitCapabilities = {
@@ -165,6 +167,7 @@ export const NO_GIT_CAPABILITIES: GitCapabilities = {
   branches: false,
   rebase: false,
   resolve: false,
+  deleteRemote: false,
 };
 
 /** The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three. */
@@ -197,5 +200,6 @@ export function gitCapabilities(info: AgentVersionInfo | undefined): GitCapabili
     branches: gitCapability(info, 'branches'),
     rebase: gitCapability(info, 'rebase'),
     resolve: gitCapability(info, 'resolve'),
+    deleteRemote: gitCapability(info, 'delete_remote'),
   };
 }

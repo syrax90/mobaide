@@ -861,7 +861,7 @@
         "type": "object"
       },
       "GitDeleteItem": {
-        "description": "One item in a delete request.\n\nThe wire shape mirrors :class:`GitItemRead`'s discriminator \u2014 clients\necho back the ``kind`` and the appropriate identifier (``branch`` for\nbranch kinds, ``worktree_path`` for worktree kinds; both for combined\ndeletions). ``force`` upgrades a branch delete from ``-d`` to ``-D`` and\nadds ``--force`` to a worktree removal so a worktree holding\nmodified/untracked files is deleted instead of refused.",
+        "description": "One item in a delete request.\n\nThe wire shape mirrors :class:`GitItemRead`'s discriminator \u2014 clients\necho back the ``kind`` and the appropriate identifier (``branch`` for\nbranch kinds, ``worktree_path`` for worktree kinds; both for combined\ndeletions). ``force`` upgrades a branch delete from ``-d`` to ``-D`` and\nadds ``--force`` to a worktree removal so a worktree holding\nmodified/untracked files is deleted instead of refused.\n\n``orphan_worktree`` removes only the worktree at ``worktree_path``,\nwhatever row it came from: sent for a ``branch_with_worktree`` row it\nkeeps the branch. ``remote_branch`` carries the row's ``branch``\n(``<remote>/<name>``) verbatim and deletes that branch on the remote;\n``force`` does not apply to it.",
         "properties": {
           "branch": {
             "anyOf": [
@@ -883,7 +883,8 @@
             "enum": [
               "branch_with_worktree",
               "branch_only",
-              "orphan_worktree"
+              "orphan_worktree",
+              "remote_branch"
             ],
             "title": "Kind",
             "type": "string"
@@ -936,7 +937,7 @@
         "type": "object"
       },
       "GitDeleteResultItem": {
-        "description": "Per-item outcome.\n\n``error`` codes:\n    * ``force_required`` \u2014 branch is unmerged, or worktree holds\n      modified/untracked files; retry with ``force=True``.\n    * ``locked`` \u2014 worktree is locked.\n    * ``not_found`` \u2014 branch or worktree no longer exists.\n    * ``invalid`` \u2014 request payload missing the required identifier.\n    * ``error`` \u2014 other git failure (full message in ``error_detail``).",
+        "description": "Per-item outcome.\n\n``error`` codes:\n    * ``force_required`` \u2014 branch is unmerged, or worktree holds\n      modified/untracked files; retry with ``force=True``.\n    * ``locked`` \u2014 worktree is locked.\n    * ``not_found`` \u2014 branch or worktree no longer exists.\n    * ``invalid`` \u2014 request payload missing the required identifier.\n    * ``auth_required`` / ``network`` / ``remote_not_found`` \u2014 a\n      ``remote_branch`` push could not reach or log in to the remote.\n    * ``rejected`` / ``hook_failed`` \u2014 the remote, or a hook, refused\n      the deletion.\n    * ``git_timeout`` \u2014 the push outlasted its budget.\n    * ``error`` \u2014 other git failure (full message in ``error_detail``).",
         "properties": {
           "error": {
             "anyOf": [

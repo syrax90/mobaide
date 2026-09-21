@@ -795,10 +795,13 @@ alongside the string-shaped project conflicts, which is the split
 `capabilities.git.branches` is advertised — probed with the terminal's
 `useSessionGitCapabilities`, which is per agent despite its name. The list
 always asks for `?remote=true` (the flag shields *older clients* from the
-`remote_branch` kind; an older agent ignores it) and renders the remote rows
-inside a `<details className="advanced">` under the local ones, closed until
-opened or until the filter — a plain `type="search"` input that appears at
-eight rows — is non-empty. Rows show the tip commit's subject and a
+`remote_branch` kind; an older agent ignores it) and renders both the local
+and remote rows as an A→Z folder tree (`gitTreeRows`: a branch name split on
+`/`, a remote row nested under a folder per remote), the remote rows inside a
+`<details className="advanced">` under the local ones, closed until opened or
+until the filter — a plain `type="search"` input that appears at eight rows —
+is non-empty, which also forces every matching folder open. Rows show the tip
+commit's subject and a
 `YYYY-MM-DD` prefix of `committed_at` (a slice, never a parse, so the day is
 the committer's own on all three clients). *New branch…* opens
 `GitNewBranchDialog` (name, a `SelectField` start point defaulting to the
@@ -810,9 +813,13 @@ existing "Item is in use" dialog, every coded detail becomes a
 `SessionGitError` whose copy `gitDisplay.ts` maps (`dirty`,
 `checked_out_elsewhere`, `operation_in_progress`, `job_running`,
 `ref_not_found`, and `exists` / `bad_branch_name` / `unknown_start_point`
-inline in the dialog). `isDeletable` is now a type guard, so the delete
-machine's batch can never carry a remote row. The terminal's `⋯` menu gains
-*Branches…* after *Fetch / Pull / Push…* for a project-backed session,
+inline in the dialog). `isDeletable` is now a type guard gated on
+`capabilities.git.delete_remote` (an older agent answers the whole batch with
+a `422`): a remote row is deletable only behind it, and a batch holding one
+opens a "Delete on the remote?" confirmation before it enters the undo
+window. A `branch_with_worktree` row also gets a *Remove worktree* action
+that drops only the worktree and keeps the branch (`enqueueWorktreeRemoval`).
+The terminal's `⋯` menu gains *Branches…* after *Fetch / Pull / Push…* for a project-backed session,
 navigating to `/agents/:agentId/projects/:projectName/git`.
 
 **Templates** add create/edit/delete to the picker's existing list/touch/

@@ -9,6 +9,7 @@ import {
   KIND_BRANCH_ONLY,
   KIND_BRANCH_WITH_WORKTREE,
   KIND_REMOTE_BRANCH,
+  compareRefNames,
   type GitItem,
 } from '../../../api/gitRepository';
 import {
@@ -854,8 +855,8 @@ export interface RebaseTarget {
 }
 
 /**
- * The rebase sheet's picker: local branches, then remote-tracking ones, from
- * the project Git screen's rows. The session's own branch is left out by name
+ * The rebase sheet's picker: local branches, then remote-tracking ones, each
+ * A→Z, from the project Git screen's rows. The session's own branch is left out by name
  * — the rows' `is_current` is the project root's checkout, which for a session
  * in a linked worktree is usually the very branch it wants to rebase onto.
  */
@@ -865,13 +866,17 @@ export function rebaseTargets(
 ): RebaseTarget[] {
   const usable = (item: GitItem): item is GitItem & { branch: string } =>
     item.branch !== null && item.branch !== undefined && item.branch !== currentBranch;
+  const byName = (a: { branch: string }, b: { branch: string }) =>
+    compareRefNames(a.branch, b.branch);
   const local = items
     .filter((item) => item.kind === KIND_BRANCH_ONLY || item.kind === KIND_BRANCH_WITH_WORKTREE)
     .filter(usable)
+    .sort(byName)
     .map((item) => ({ value: `refs/heads/${item.branch}`, label: item.branch }));
   const remote = items
     .filter((item) => item.kind === KIND_REMOTE_BRANCH)
     .filter(usable)
+    .sort(byName)
     .map((item) => ({ value: `refs/remotes/${item.branch}`, label: `${item.branch} (remote)` }));
   return [...local, ...remote];
 }
