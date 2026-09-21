@@ -20,7 +20,12 @@ import type {
   GitDeleteResult,
   GitItem,
 } from '../../../api/gitRepository';
-import { gitItemId, isDeletable } from '../../../api/gitRepository';
+import {
+  canRemoveWorktree,
+  gitItemId,
+  isDeletable,
+  KIND_ORPHAN_WORKTREE,
+} from '../../../api/gitRepository';
 
 export interface PendingDelete {
   id: string;
@@ -61,21 +66,52 @@ export function visibleItems(
   return items.filter((item) => !state.hidden.has(gitItemId(item)));
 }
 
-/** Queue rows for deletion. Already-hidden and non-deletable targets are ignored. */
-export function enqueue(state: GitDeleteState, targets: readonly GitItem[]): GitDeleteState {
-  const queued = targets
-    .filter(isDeletable)
-    .filter((item) => !state.hidden.has(gitItemId(item)));
+/**
+ * *Remove worktree*: an `orphan_worktree` item removes only the worktree at
+ * its path, whatever row it came from, so the branch survives.
+ */
+function toWorktreeRemoval(worktreePath: string): GitDeleteItem {
+  return { kind: KIND_ORPHAN_WORKTREE, branch: null, worktree_path: worktreePath, force: false };
+}
+
+function enqueueEntries(state: GitDeleteState, entries: readonly PendingDelete[]): GitDeleteState {
+  const queued = entries.filter((entry) => !state.hidden.has(entry.id));
   if (queued.length === 0) return state;
 
   const hidden = new Set(state.hidden);
   const pending = [...state.pending];
-  for (const target of queued) {
-    const id = gitItemId(target);
-    hidden.add(id);
-    pending.push({ id, item: toDeleteItem(target) });
+  for (const entry of queued) {
+    hidden.add(entry.id);
+    pending.push(entry);
   }
   return { ...state, hidden, pending };
+}
+
+/**
+ * Queue rows for deletion. Already-hidden and non-deletable targets are
+ * ignored; `deleteRemote` is `capabilities.git.delete_remote`.
+ */
+export function enqueue(
+  state: GitDeleteState,
+  targets: readonly GitItem[],
+  deleteRemote: boolean,
+): GitDeleteState {
+  return enqueueEntries(
+    state,
+    targets
+      .filter((item) => isDeletable(item, deleteRemote))
+      .map((item) => ({ id: gitItemId(item), item: toDeleteItem(item) })),
+  );
+}
+
+/**
+ * Queue a worktree-backed row's worktree for removal. The row hides like any
+ * delete and comes back as a plain branch once `git.changed` reloads the list.
+ */
+export function enqueueWorktreeRemoval(state: GitDeleteState, target: GitItem): GitDeleteState {
+  const path = target.worktree_path ?? '';
+  if (!canRemoveWorktree(target) || path === '') return state;
+  return enqueueEntries(state, [{ id: gitItemId(target), item: toWorktreeRemoval(path) }]);
 }
 
 /** Take the batch for sending, leaving the rows hidden until results land. */

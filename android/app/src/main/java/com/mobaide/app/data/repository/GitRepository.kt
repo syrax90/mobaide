@@ -120,6 +120,8 @@ data class GitCapabilities(
     val rebase: Boolean = false,
     /** `stage` refuses a conflicted file that still holds markers, so *Mark resolved* is safe. */
     val resolve: Boolean = false,
+    /** The project Git screen may delete remote-tracking rows (on the remote). */
+    val deleteRemote: Boolean = false,
 ) {
     /** The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three. */
     val hasSync: Boolean get() = fetch || pull || push
@@ -139,6 +141,7 @@ fun VersionInfoResponse.toGitCapabilities(): GitCapabilities = GitCapabilities(
     branches = gitCapability("branches"),
     rebase = gitCapability("rebase"),
     resolve = gitCapability("resolve"),
+    deleteRemote = gitCapability("delete_remote"),
 )
 
 class GitRepository(

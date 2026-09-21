@@ -2,15 +2,19 @@ import SwiftUI
 
 /// One git branch/worktree row (Android `GitItemRow`): the primary/secondary
 /// labels and status chips. Selection is rendered by the enclosing `List`.
+/// `label` is the tree's leaf name; the full name stays in dialogs and the
+/// accessibility label.
 struct GitItemRow: View {
     let item: GitItem
+    var label: String?
 
     @Environment(\.mobaideColors) private var colors
 
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(GitItemDisplay.primaryLabel(item))
+                Text(label ?? GitItemDisplay.primaryLabel(item))
+                    .accessibilityLabel(GitItemDisplay.primaryLabel(item))
                     .font(.body.weight(.semibold))
                     .foregroundStyle(colors.text)
                 if let secondary = GitItemDisplay.secondaryLabel(item) {

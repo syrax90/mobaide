@@ -713,8 +713,8 @@ final class GitChangesDisplayRebaseTests: XCTestCase {
         XCTAssertEqual(
             GitChangesDisplay.rebaseTargets(items, currentBranch: "topic"),
             [
-                target("refs/heads/topic-b", "topic-b"),
                 target("refs/heads/main", "main"),
+                target("refs/heads/topic-b", "topic-b"),
                 target("refs/remotes/origin/main", "origin/main (remote)"),
                 target("refs/remotes/origin/topic", "origin/topic (remote)"),
             ]
@@ -740,6 +740,21 @@ final class GitChangesDisplayRebaseTests: XCTestCase {
 
         XCTAssertEqual(GitChangesDisplay.rebaseTargets(items, currentBranch: nil), [target("refs/heads/main", "main")])
         XCTAssertEqual(GitChangesDisplay.rebaseTargets([], currentBranch: "main"), [])
+    }
+
+    func testRebaseTargetsSortTheLocalAndTheRemoteGroupEachAToZIgnoringCase() {
+        let items = [
+            GitItem(kind: GitItem.kindRemoteBranch, branch: "origin/Zed", remote: "origin"),
+            GitItem(kind: GitItem.kindBranchOnly, branch: "zeta"),
+            GitItem(kind: GitItem.kindRemoteBranch, branch: "origin/apple", remote: "origin"),
+            GitItem(kind: GitItem.kindBranchWithWorktree, branch: "Beta", worktree_path: "/wt/b"),
+            GitItem(kind: GitItem.kindBranchOnly, branch: "alpha"),
+        ]
+
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseTargets(items, currentBranch: nil).map(\.label),
+            ["alpha", "Beta", "zeta", "origin/apple (remote)", "origin/Zed (remote)"]
+        )
     }
 
     func testShortRefNameDropsALeadingHeadsOrRemotesPrefixOnce() {

@@ -70,9 +70,17 @@ struct GitItem: Codable, Equatable, Sendable {
         }
     }
 
-    /// False for the checked-out branch (git refuses) and for remote-tracking rows.
-    var isDeletable: Bool {
-        !is_current && kind != Self.kindRemoteBranch
+    /// False for the checked-out branch (git refuses); a remote-tracking row
+    /// only with `deleteRemote` (`capabilities.git.delete_remote`) — an older
+    /// agent answers the whole batch with a 422.
+    func isDeletable(deleteRemote: Bool) -> Bool {
+        !is_current && (kind != Self.kindRemoteBranch || deleteRemote)
+    }
+
+    /// *Remove worktree* keeps the branch: a worktree-backed row other than the
+    /// project root's checkout.
+    var canRemoveWorktree: Bool {
+        !is_current && kind == Self.kindBranchWithWorktree && !(worktree_path ?? "").isEmpty
     }
 
     /// Check out is offered for a branch nothing has checked out: a `branch_only`

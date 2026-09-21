@@ -191,6 +191,7 @@ class TestAuthAndRouting:
             "branches": True,
             "rebase": True,
             "resolve": True,
+            "delete_remote": True,
         }
 
 

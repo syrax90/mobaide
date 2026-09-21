@@ -9,6 +9,7 @@ import {
   confirmForce,
   dismissForce,
   enqueue,
+  enqueueWorktreeRemoval,
   initialGitDeleteState,
   reconcile,
   restore,
@@ -53,7 +54,7 @@ describe('enqueue', () => {
   it('hides the queued rows and remembers what to send', () => {
     const items = [branch('feature-a'), branch('feature-b')];
 
-    const state = enqueue(initialGitDeleteState, [items[0] as GitItem]);
+    const state = enqueue(initialGitDeleteState, [items[0] as GitItem], false);
 
     expect(visibleItems(items, state).map((item) => item.branch)).toEqual(['feature-b']);
     expect(state.pending).toEqual([
@@ -65,9 +66,9 @@ describe('enqueue', () => {
   });
 
   it('appends to an open batch instead of replacing it', () => {
-    const first = enqueue(initialGitDeleteState, [branch('feature-a')]);
+    const first = enqueue(initialGitDeleteState, [branch('feature-a')], false);
 
-    const second = enqueue(first, [branch('feature-b')]);
+    const second = enqueue(first, [branch('feature-b')], false);
 
     expect(second.pending.map((entry) => entry.id)).toEqual([
       'branch_only:feature-a',
@@ -76,9 +77,9 @@ describe('enqueue', () => {
   });
 
   it('ignores the checked-out branch and rows already queued', () => {
-    const queued = enqueue(initialGitDeleteState, [branch('feature-a')]);
+    const queued = enqueue(initialGitDeleteState, [branch('feature-a')], false);
 
-    const again = enqueue(queued, [branch('feature-a'), branch('main', { is_current: true })]);
+    const again = enqueue(queued, [branch('feature-a'), branch('main', { is_current: true })], false);
 
     expect(again).toBe(queued);
   });
@@ -86,9 +87,9 @@ describe('enqueue', () => {
   it('never lets a remote-tracking row into a batch', () => {
     const items = [remoteBranch('feature-a'), branch('feature-b')];
 
-    expect(enqueue(initialGitDeleteState, [items[0] as GitItem])).toBe(initialGitDeleteState);
+    expect(enqueue(initialGitDeleteState, [items[0] as GitItem], false)).toBe(initialGitDeleteState);
 
-    const mixed = enqueue(initialGitDeleteState, items);
+    const mixed = enqueue(initialGitDeleteState, items, false);
     expect(mixed.pending.map((entry) => entry.id)).toEqual(['branch_only:feature-b']);
     expect(visibleItems(items, mixed).map((item) => item.branch)).toEqual(['origin/feature-a']);
   });
@@ -97,7 +98,7 @@ describe('enqueue', () => {
 describe('undo', () => {
   it('un-hides the batch and sends nothing', () => {
     const items = [branch('feature-a'), branch('feature-b')];
-    const queued = enqueue(initialGitDeleteState, items);
+    const queued = enqueue(initialGitDeleteState, items, false);
 
     const state = undo(queued);
 
@@ -108,7 +109,7 @@ describe('undo', () => {
 
 describe('takePending', () => {
   it('drains the batch while the rows stay hidden', () => {
-    const queued = enqueue(initialGitDeleteState, [branch('feature-a')]);
+    const queued = enqueue(initialGitDeleteState, [branch('feature-a')], false);
 
     const { state, batch } = takePending(queued);
 
@@ -121,7 +122,7 @@ describe('takePending', () => {
 describe('applyResults', () => {
   const queueThree = () => {
     const items = [branch('a'), branch('b'), branch('c')];
-    return { items, ...takePending(enqueue(initialGitDeleteState, items)) };
+    return { items, ...takePending(enqueue(initialGitDeleteState, items, false)) };
   };
 
   it('leaves every deleted row hidden and prompts for nothing', () => {
@@ -198,7 +199,7 @@ describe('applyResults', () => {
 describe('confirmForce', () => {
   it('re-hides the prompted rows and re-sends them with force set', () => {
     const items = [branch('a'), branch('b')];
-    const taken = takePending(enqueue(initialGitDeleteState, items));
+    const taken = takePending(enqueue(initialGitDeleteState, items, false));
     const prompted = applyResults(taken.state, taken.batch, [
       result('a'),
       result('b', { ok: false, error: 'force_required' }),
@@ -225,7 +226,7 @@ describe('confirmForce', () => {
 
   it('leaves the rows visible when the prompt is dismissed', () => {
     const items = [branch('a')];
-    const taken = takePending(enqueue(initialGitDeleteState, items));
+    const taken = takePending(enqueue(initialGitDeleteState, items, false));
     const prompted = applyResults(taken.state, taken.batch, [
       result('a', { ok: false, error: 'force_required' }),
     ]).state;
@@ -240,7 +241,7 @@ describe('confirmForce', () => {
 describe('restore', () => {
   it('brings back the whole batch after an all-or-nothing busy conflict', () => {
     const items = [branch('a'), branch('b')];
-    const { state, batch } = takePending(enqueue(initialGitDeleteState, items));
+    const { state, batch } = takePending(enqueue(initialGitDeleteState, items, false));
 
     expect(visibleItems(items, restore(state, batch))).toEqual(items);
   });
@@ -248,7 +249,7 @@ describe('restore', () => {
 
 describe('reconcile', () => {
   it('forgets rows the server no longer lists, in both the hide-set and the batch', () => {
-    const queued = enqueue(initialGitDeleteState, [branch('a'), branch('b')]);
+    const queued = enqueue(initialGitDeleteState, [branch('a'), branch('b')], false);
 
     const state = reconcile(queued, [branch('a')]);
 
@@ -257,7 +258,7 @@ describe('reconcile', () => {
   });
 
   it('returns the same state when the reload changed nothing', () => {
-    const queued = enqueue(initialGitDeleteState, [branch('a')]);
+    const queued = enqueue(initialGitDeleteState, [branch('a')], false);
 
     expect(reconcile(queued, [branch('a'), branch('b')])).toBe(queued);
   });
@@ -277,5 +278,73 @@ describe('gitItemId', () => {
   it('keys a remote-tracking row on the kind and its remote-qualified name', () => {
     expect(gitItemId(remoteBranch('a'))).toBe('remote_branch:origin/a|');
     expect(gitItemId(remoteBranch('a'))).not.toBe(gitItemId(branch('origin/a')));
+  });
+});
+
+describe('enqueue with delete_remote', () => {
+  it('lets a remote-tracking row in, sent as its remote-qualified name', () => {
+    const items = [remoteBranch('feature-a'), branch('feature-b')];
+
+    const state = enqueue(initialGitDeleteState, items, true);
+
+    expect(state.pending).toEqual([
+      {
+        id: 'remote_branch:origin/feature-a|',
+        item: { kind: 'remote_branch', branch: 'origin/feature-a', worktree_path: null, force: false },
+      },
+      {
+        id: 'branch_only:feature-b',
+        item: { kind: 'branch_only', branch: 'feature-b', worktree_path: null, force: false },
+      },
+    ]);
+    expect(visibleItems(items, state)).toEqual([]);
+  });
+});
+
+describe('enqueueWorktreeRemoval', () => {
+  const topic = branch('topic', { kind: 'branch_with_worktree', worktree_path: '/wt/topic' });
+  const worktreeOnly = { kind: 'orphan_worktree', branch: null, worktree_path: '/wt/topic' } as const;
+
+  it("hides the row and queues only its worktree under the row's id", () => {
+    const items = [topic, branch('feature-a')];
+
+    const state = enqueueWorktreeRemoval(initialGitDeleteState, topic);
+
+    expect(state.pending).toEqual([
+      { id: 'branch_with_worktree:topic', item: { ...worktreeOnly, force: false } },
+    ]);
+    expect(visibleItems(items, state).map((item) => item.branch)).toEqual(['feature-a']);
+  });
+
+  it('joins an open batch and ignores rows without a removable worktree', () => {
+    const queued = enqueue(initialGitDeleteState, [branch('feature-a')], false);
+
+    const state = enqueueWorktreeRemoval(queued, topic);
+
+    expect(state.pending.map((entry) => entry.id)).toEqual([
+      'branch_only:feature-a',
+      'branch_with_worktree:topic',
+    ]);
+    expect(enqueueWorktreeRemoval(state, topic)).toBe(state);
+    expect(enqueueWorktreeRemoval(queued, branch('feature-b'))).toBe(queued);
+    expect(enqueueWorktreeRemoval(queued, { ...topic, is_current: true })).toBe(queued);
+    expect(
+      enqueueWorktreeRemoval(queued, branch('x', { kind: 'orphan_worktree', worktree_path: '/wt/x' })),
+    ).toBe(queued);
+  });
+
+  it('prompts by path for a dirty worktree and re-sends only the worktree removal with force', () => {
+    const taken = takePending(enqueueWorktreeRemoval(initialGitDeleteState, topic));
+    const prompted = applyResults(taken.state, taken.batch, [
+      result('/wt/topic', { kind: 'orphan_worktree', ok: false, error: 'force_required' }),
+    ]).state;
+
+    expect(prompted.force?.refs).toEqual(['/wt/topic']);
+
+    const { batch } = confirmForce(prompted);
+
+    expect(batch).toEqual([
+      { id: 'branch_with_worktree:topic', item: { ...worktreeOnly, force: true } },
+    ]);
   });
 });

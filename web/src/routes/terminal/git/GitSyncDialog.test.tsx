@@ -18,6 +18,7 @@ const ALL_GIT: GitCapabilities = {
   branches: true,
   rebase: true,
   resolve: true,
+  deleteRemote: true,
 };
 
 const repo = (over: Partial<SessionGitRepoInfo> = {}): SessionGitRepoInfo => ({

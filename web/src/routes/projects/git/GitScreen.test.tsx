@@ -329,8 +329,14 @@ describe('GitScreen remote branches', () => {
     const section = summary.closest('details');
     expect(section).not.toBeNull();
     expect(section?.open).toBe(false);
-    expect(within(section as HTMLElement).getByText('origin/feature-x')).toBeInTheDocument();
-    expect(within(section as HTMLElement).getAllByText('origin')).toHaveLength(2);
+    // The remote items share one remote, so they file under an "origin"
+    // folder (open by default) with just their tail as the visible label —
+    // the full name survives in the title and the accessible names below.
+    expect(
+      within(section as HTMLElement).getByText('origin', { selector: '.git-folder-name' }),
+    ).toBeInTheDocument();
+    expect(within(section as HTMLElement).getByText('feature-x')).toBeInTheDocument();
+    expect(within(section as HTMLElement).getAllByText('origin')).toHaveLength(3);
     expect(screen.queryByRole('button', { name: 'Delete origin/feature-x' })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: 'Select origin/feature-x' })).toBeNull();
   });
@@ -557,8 +563,8 @@ describe('GitScreen new branch', () => {
       .map((option) => option.textContent);
     expect(options).toEqual([
       'HEAD (current commit)',
-      'main',
       'feature-a',
+      'main',
       'origin/feature-x (remote)',
     ]);
   });
@@ -579,9 +585,232 @@ describe('GitScreen new branch', () => {
       .map((option) => option.textContent);
     expect(options).toEqual([
       'HEAD (current commit)',
-      'main',
       'feature-a',
+      'main',
       'origin/feature-x (remote)',
     ]);
+  });
+});
+
+describe('GitScreen new branch start points', () => {
+  it('sorts the local and the remote rows each A→Z, ignoring case', async () => {
+    api.items = [
+      remoteBranch('Zed'),
+      branch('main', { is_current: true }),
+      branch('Zeta'),
+      remoteBranch('apple'),
+      branch('alpha'),
+    ];
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'New branch…' }));
+
+    const options = within(screen.getByRole('dialog'))
+      .getAllByRole('option')
+      .map((option) => option.textContent);
+    expect(options).toEqual([
+      'HEAD (current commit)',
+      'alpha',
+      'main',
+      'Zeta',
+      'origin/apple (remote)',
+      'origin/Zed (remote)',
+    ]);
+  });
+});
+
+describe('GitScreen remote delete', () => {
+  beforeEach(() => {
+    api.version = agentVersion({ branches: true, delete_remote: true });
+    api.items = [branch('feature-a'), remoteBranch('feature-x')];
+  });
+
+  it('confirms before the undo window, then sends the remote-qualified name', async () => {
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete origin/feature-x' }));
+
+    const prompt = await screen.findByRole('alertdialog');
+    expect(within(prompt).getByText('Delete on the remote?')).toBeInTheDocument();
+    expect(
+      within(prompt).getByText(
+        'Delete origin/feature-x on the remote? ' +
+          'This removes it for everyone with access to the remote.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Delete origin/feature-x' })).toBeInTheDocument();
+
+    fireEvent.click(within(prompt).getByRole('button', { name: 'Delete' }));
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete origin/feature-x' })).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
+
+    await waitFor(() => {
+      expect(api.calls).toEqual([
+        [{ kind: 'remote_branch', branch: 'origin/feature-x', worktree_path: null, force: false }],
+      ]);
+    });
+  });
+
+  it('sends nothing and hides nothing when the confirmation is cancelled', async () => {
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete origin/feature-x' }));
+
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Delete origin/feature-x' })).toBeInTheDocument();
+    expect(api.calls).toEqual([]);
+  });
+
+  it('confirms a mixed selection naming only its remote rows, then queues all of it', async () => {
+    renderScreen();
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select feature-a' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select origin/feature-x' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete selected' }));
+
+    const prompt = await screen.findByRole('alertdialog');
+    expect(
+      within(prompt).getByText(
+        'Delete origin/feature-x on the remote? ' +
+          'This removes it for everyone with access to the remote.',
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(within(prompt).getByRole('button', { name: 'Delete' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
+
+    await waitFor(() => {
+      expect(api.calls).toHaveLength(1);
+    });
+    expect(api.calls[0]?.map((item) => item.branch)).toEqual(['feature-a', 'origin/feature-x']);
+  });
+
+  it('keeps the selection when the confirmation is cancelled and clears it once confirmed', async () => {
+    renderScreen();
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select feature-a' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select origin/feature-x' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete selected' }));
+
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select feature-a' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select origin/feature-x' })).toBeChecked();
+    expect(api.calls).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete selected' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Delete' }));
+
+    expect(screen.queryByText('2 selected')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+  });
+
+  it('offers no delete on a remote row when the agent lacks delete_remote', async () => {
+    api.version = agentVersion({ branches: true });
+    renderScreen();
+    await screen.findByRole('button', { name: 'Delete feature-a' });
+
+    expect(screen.queryByRole('button', { name: 'Delete origin/feature-x' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'Select origin/feature-x' })).toBeNull();
+  });
+});
+
+describe('GitScreen remove worktree', () => {
+  beforeEach(() => {
+    api.items = [
+      branch('main', { is_current: true, kind: 'branch_with_worktree', worktree_path: '/repo' }),
+      branch('topic', { kind: 'branch_with_worktree', worktree_path: '/wt/topic' }),
+      branch('feature-a'),
+    ];
+  });
+
+  it('offers it beside a relabelled delete on a linked worktree row only', async () => {
+    renderScreen();
+
+    expect(await screen.findByRole('button', { name: 'Remove worktree of topic' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Delete branch and worktree topic' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove worktree of main' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove worktree of feature-a' })).toBeNull();
+  });
+
+  it('hides the row for the undo window, then sends a worktree-only removal', async () => {
+    renderScreen();
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove worktree of topic' }));
+
+    expect(screen.queryByRole('button', { name: 'Remove worktree of topic' })).toBeNull();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
+
+    await waitFor(() => {
+      expect(api.calls).toEqual([
+        [{ kind: 'orphan_worktree', branch: null, worktree_path: '/wt/topic', force: false }],
+      ]);
+    });
+  });
+});
+
+describe('GitScreen folders', () => {
+  /** A folder toggle's accessible name: its name and visible-row count (the chevron is hidden). */
+  const folderName = (name: string, count: number) =>
+    new RegExp(`^${name}\\s*\\(${String(count)}\\)$`);
+
+  it('starts a branch folder collapsed and toggles it open and shut', async () => {
+    api.items = [branch('feature/a'), branch('feature/b'), branch('main')];
+    renderScreen();
+
+    const folder = await screen.findByRole('button', { name: folderName('feature', 2) });
+    expect(folder).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: 'Delete feature/a' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Delete main' })).toBeInTheDocument();
+
+    fireEvent.click(folder);
+
+    expect(folder).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Delete feature/a' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete feature/b' })).toBeInTheDocument();
+
+    fireEvent.click(folder);
+
+    expect(folder).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: 'Delete feature/a' })).toBeNull();
+  });
+
+  it('opens the remote-name folder by default', async () => {
+    api.items = [branch('main'), remoteBranch('feature/x')];
+    renderScreen();
+
+    const section = (await screen.findByText('Remote branches (1)')).closest('details');
+    const remoteFolder = within(section as HTMLElement).getByRole('button', { name: folderName('origin', 1) });
+    expect(remoteFolder).toHaveAttribute('aria-expanded', 'true');
+    expect(
+      within(section as HTMLElement).getByRole('button', { name: folderName('feature', 1) }),
+    ).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('holds every matching folder open while filtering, with the toggle disabled', async () => {
+    api.items = [
+      ...['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((suffix) => branch(`feature/${suffix}`)),
+      branch('main'),
+    ];
+    renderScreen();
+    const filter = await screen.findByRole('searchbox', { name: 'Filter branches' });
+
+    fireEvent.change(filter, { target: { value: 'feature/c' } });
+
+    const folder = screen.getByRole('button', { name: folderName('feature', 1) });
+    expect(folder).toHaveAttribute('aria-expanded', 'true');
+    expect(folder).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Delete feature/c' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete main' })).toBeNull();
+
+    fireEvent.change(filter, { target: { value: '' } });
+
+    expect(screen.getByRole('button', { name: folderName('feature', 7) })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
   });
 });

@@ -4,6 +4,7 @@ import {
   KIND_BRANCH_ONLY,
   KIND_BRANCH_WITH_WORKTREE,
   KIND_REMOTE_BRANCH,
+  compareRefNames,
   type GitBranchCreateRequest,
   type GitBranchResult,
   type GitItem,
@@ -16,7 +17,7 @@ import { TextField } from '../../../components/form/TextField';
 import { createBranchErrorCopy, primaryLabel } from './gitDisplay';
 
 interface GitNewBranchDialogProps {
-  /** The listed rows: local branches then remote ones feed the start-point picker. */
+  /** The listed rows: local branches then remote ones, each A→Z, feed the start-point picker. */
   items: readonly GitItem[];
   projectName: string;
   busy: boolean;
@@ -49,12 +50,15 @@ export function GitNewBranchDialog({
 
   // Only rows whose branch ref exists can start a branch: an orphan worktree
   // still names a branch git already deleted, and its label is a path.
-  const local = items.filter(
-    (item) =>
-      item.branch !== null &&
-      (item.kind === KIND_BRANCH_ONLY || item.kind === KIND_BRANCH_WITH_WORKTREE),
-  );
-  const remote = items.filter((item) => item.kind === KIND_REMOTE_BRANCH);
+  const byName = (a: GitItem, b: GitItem) => compareRefNames(a.branch ?? '', b.branch ?? '');
+  const local = items
+    .filter(
+      (item) =>
+        item.branch !== null &&
+        (item.kind === KIND_BRANCH_ONLY || item.kind === KIND_BRANCH_WITH_WORKTREE),
+    )
+    .sort(byName);
+  const remote = items.filter((item) => item.kind === KIND_REMOTE_BRANCH).sort(byName);
   const options: SelectOption[] = [
     { value: null, label: 'HEAD (current commit)' },
     ...local.map((item) => ({ value: item.branch ?? '', label: primaryLabel(item) })),

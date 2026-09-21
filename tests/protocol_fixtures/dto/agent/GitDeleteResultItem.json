@@ -2,6 +2,7 @@
   "type": "GitDeleteResultItem",
   "cases": [
     { "name": "ok", "wire": { "kind": "branch_only", "target": "b", "ok": true } },
-    { "name": "failed_with_detail", "wire": { "kind": "orphan_worktree", "target": "/wt/x", "ok": false, "error": "busy", "error_detail": "session s1 is running in it" } }
+    { "name": "failed_with_detail", "wire": { "kind": "orphan_worktree", "target": "/wt/x", "ok": false, "error": "busy", "error_detail": "session s1 is running in it" } },
+    { "name": "remote_auth_required", "wire": { "kind": "remote_branch", "target": "origin/feature/x", "ok": false, "error": "auth_required", "error_detail": "fatal: could not read Username for 'https://example.com': terminal prompts disabled" } }
   ]
 }

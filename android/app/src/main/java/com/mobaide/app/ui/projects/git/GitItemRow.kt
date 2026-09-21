@@ -31,18 +31,27 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.data.network.dto.GitItem
 
 const val GIT_ROW_ACTIONS_TAG = "git_row_actions"
 const val GIT_ROW_CHECKOUT_TAG = "git_row_checkout"
+const val GIT_ROW_REMOVE_WORKTREE_TAG = "git_row_remove_worktree"
+const val GIT_ROW_DELETE_TAG = "git_row_delete"
+
+/** Per-level indent of the branch folder tree. */
+internal val TREE_INDENT = 16.dp
 
 /**
  * One list row. The overflow menu carries Check out for the rows that can
- * take it (`GitItem.canCheckOut`) once the agent advertises the capability;
- * selection mode hides it so the row is one tap target.
+ * take it (`GitItem.canCheckOut`) once the agent advertises the capability,
+ * and a worktree-backed row's *Remove worktree* next to its *Delete branch
+ * and worktree*; selection mode hides it so the row is one tap target.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -53,14 +62,21 @@ fun GitItemRow(
     onTap: () -> Unit,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
+    label: String = primaryLabel(item),
+    indent: Dp = 0.dp,
+    deletable: Boolean = item.isDeletable(deleteRemote = false),
     checkoutEnabled: Boolean = false,
     busy: Boolean = false,
     onCheckout: () -> Unit = {},
+    onRemoveWorktree: () -> Unit = {},
+    onDelete: () -> Unit = {},
 ) {
+    val checkoutable = checkoutEnabled && item.canCheckOut
+    val removable = item.canRemoveWorktree
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .padding(start = 12.dp + indent, end = 12.dp, top = 4.dp, bottom = 4.dp)
             .combinedClickable(
                 onClick = onTap,
                 onLongClick = onLongPress,
@@ -81,14 +97,15 @@ fun GitItemRow(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (inSelectionMode && item.isDeletable) {
+            if (inSelectionMode && deletable) {
                 PixelCheckbox(checked = selected, onCheckedChange = { onTap() })
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = primaryLabel(item),
+                    text = label,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Medium,
+                    modifier = Modifier.semantics { contentDescription = primaryLabel(item) },
                 )
                 secondaryLabel(item)?.let { secondary ->
                     Text(
@@ -114,15 +131,25 @@ fun GitItemRow(
                     }
                 }
             }
-            if (checkoutEnabled && item.canCheckOut && !inSelectionMode) {
-                RowActions(busy = busy, onCheckout = onCheckout)
+            if ((checkoutable || removable) && !inSelectionMode) {
+                RowActions(
+                    busy = busy,
+                    onCheckout = onCheckout.takeIf { checkoutable },
+                    onRemoveWorktree = onRemoveWorktree.takeIf { removable },
+                    onDelete = onDelete.takeIf { removable && deletable },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun RowActions(busy: Boolean, onCheckout: () -> Unit) {
+private fun RowActions(
+    busy: Boolean,
+    onCheckout: (() -> Unit)?,
+    onRemoveWorktree: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
+) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         PixelIconButton(
@@ -134,14 +161,36 @@ private fun RowActions(busy: Boolean, onCheckout: () -> Unit) {
             modifier = Modifier.testTag(GIT_ROW_ACTIONS_TAG),
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                text = { Text("Check out…") },
-                onClick = {
-                    expanded = false
-                    onCheckout()
-                },
-                modifier = Modifier.testTag(GIT_ROW_CHECKOUT_TAG),
-            )
+            if (onCheckout != null) {
+                DropdownMenuItem(
+                    text = { Text("Check out…") },
+                    onClick = {
+                        expanded = false
+                        onCheckout()
+                    },
+                    modifier = Modifier.testTag(GIT_ROW_CHECKOUT_TAG),
+                )
+            }
+            if (onRemoveWorktree != null) {
+                DropdownMenuItem(
+                    text = { Text("Remove worktree") },
+                    onClick = {
+                        expanded = false
+                        onRemoveWorktree()
+                    },
+                    modifier = Modifier.testTag(GIT_ROW_REMOVE_WORKTREE_TAG),
+                )
+            }
+            if (onDelete != null) {
+                DropdownMenuItem(
+                    text = { Text("Delete branch and worktree") },
+                    onClick = {
+                        expanded = false
+                        onDelete()
+                    },
+                    modifier = Modifier.testTag(GIT_ROW_DELETE_TAG),
+                )
+            }
         }
     }
 }

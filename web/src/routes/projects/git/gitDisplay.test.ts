@@ -11,11 +11,16 @@ import {
   createBranchErrorCopy,
   deleteFailureMessage,
   deleteFailureReason,
+  folderId,
+  gitTreeRows,
   matchesFilter,
   primaryLabel,
+  remoteDeleteMessage,
   secondaryLabel,
   shortDate,
   tipLine,
+  treeSegments,
+  type GitTreeRow,
 } from './gitDisplay';
 
 const item = (over: Partial<GitItem> = {}): GitItem => ({
@@ -287,6 +292,7 @@ describe('deleteFailureReason', () => {
     ['locked', 'the worktree is locked'],
     ['not_found', 'it no longer exists'],
     ['invalid', 'the request was invalid'],
+    ['git_timeout', 'git took too long to answer. Try again.'],
     ['something_new', 'unknown error'],
   ])('falls back to the %s wording when stderr is empty', (error, expected) => {
     expect(deleteFailureReason(failure({ error, error_detail: '   ' }))).toBe(expected);
@@ -304,5 +310,232 @@ describe('deleteFailureMessage', () => {
     expect(deleteFailureMessage([failure(), failure({ target: 'feature-b' })])).toBe(
       '2 item(s) failed to delete',
     );
+  });
+});
+
+describe('treeSegments', () => {
+  it('splits a branch on its slashes, dropping empty segments', () => {
+    expect(treeSegments(item({ branch: 'feature/login/x' }))).toEqual(['feature', 'login', 'x']);
+    expect(
+      treeSegments(item({ kind: 'branch_with_worktree', branch: 'fix/a', worktree_path: '/wt/a' })),
+    ).toEqual(['fix', 'a']);
+    expect(treeSegments(item({ branch: 'a//b/' }))).toEqual(['a', 'b']);
+  });
+
+  it('files a remote-tracking row under its whole remote name', () => {
+    expect(treeSegments(remoteBranch({ branch: 'origin/feature/x' }))).toEqual([
+      'origin',
+      'feature',
+      'x',
+    ]);
+    expect(treeSegments(remoteBranch({ branch: 'up/stream/main', remote: 'up/stream' }))).toEqual([
+      'up/stream',
+      'main',
+    ]);
+    expect(treeSegments(remoteBranch({ branch: 'origin/main', remote: null }))).toEqual([
+      'origin',
+      'main',
+    ]);
+  });
+});
+
+describe('folderId', () => {
+  it('keys local folders on their path and remote ones on the remote, then the path below', () => {
+    expect(folderId('local', ['feature', 'login'])).toBe('dir:local:feature/login');
+    expect(folderId('remote', ['origin'])).toBe('dir:remote:origin:');
+    expect(folderId('remote', ['origin', 'feature', 'x'])).toBe('dir:remote:origin:feature/x');
+  });
+
+  it('never gives remotes a and a/b the same folder', () => {
+    expect(folderId('remote', ['a', 'b'])).not.toBe(folderId('remote', ['a/b']));
+  });
+});
+
+describe('gitTreeRows', () => {
+  const none: ReadonlySet<string> = new Set();
+
+  /** One line per row, two spaces per depth: `▸ name (count)` / `▾ …` for folders, the label for rows. */
+  const outline = (rows: readonly GitTreeRow[]): string[] =>
+    rows.map((row) =>
+      row.type === 'folder'
+        ? `${'  '.repeat(row.depth)}${row.expanded ? '▾' : '▸'} ${row.name} (${String(row.count)})`
+        : `${'  '.repeat(row.depth)}${row.label}`,
+    );
+
+  const branches = (...names: string[]): GitItem[] => names.map((name) => item({ branch: name }));
+
+  it('puts collapsed folders first, then rows, each level A→Z ignoring case', () => {
+    const rows = gitTreeRows(
+      branches('main', 'Feature/x', 'feature/a', 'develop', 'fix/b', 'alpha'),
+      'local',
+      none,
+      false,
+    );
+
+    expect(outline(rows)).toEqual([
+      '▸ Feature (1)',
+      '▸ feature (1)',
+      '▸ fix (1)',
+      'alpha',
+      'develop',
+      'main',
+    ]);
+  });
+
+  it('opens only the folders toggled away from their default, counting every row below', () => {
+    const items = branches('feature/login/a', 'feature/login/b', 'feature/zeta', 'feature/Alpha', 'main');
+
+    expect(outline(gitTreeRows(items, 'local', new Set(['dir:local:feature']), false))).toEqual([
+      '▾ feature (4)',
+      '  ▸ login (2)',
+      '  Alpha',
+      '  zeta',
+      'main',
+    ]);
+
+    const rows = gitTreeRows(
+      items,
+      'local',
+      new Set(['dir:local:feature', 'dir:local:feature/login']),
+      false,
+    );
+    expect(outline(rows)).toEqual([
+      '▾ feature (4)',
+      '  ▾ login (2)',
+      '    a',
+      '    b',
+      '  Alpha',
+      '  zeta',
+      'main',
+    ]);
+    expect(rows[1]).toMatchObject({ type: 'folder', id: 'dir:local:feature/login' });
+    expect(rows[2]).toMatchObject({ type: 'item', depth: 2, item: { branch: 'feature/login/a' } });
+  });
+
+  it('trails the local tree with the orphan worktrees by path, whatever branch they name', () => {
+    const orphan = (path: string, name: string | null = null) =>
+      item({ kind: 'orphan_worktree', branch: name, worktree_path: path });
+
+    const rows = gitTreeRows(
+      [orphan('/wt/b'), item({ branch: 'main' }), orphan('/wt/gone', 'feature/gone'), orphan('/wt/A'), item({ branch: 'z/x' })],
+      'local',
+      none,
+      false,
+    );
+
+    expect(outline(rows)).toEqual(['▸ z (1)', 'main', '/wt/A', '/wt/b', '/wt/gone']);
+    expect(rows.at(-1)).toMatchObject({ type: 'item', depth: 0 });
+  });
+
+  it('opens the remote-name folders by default and keeps their sub-folders collapsed', () => {
+    const rows = gitTreeRows(
+      [
+        remoteBranch({ branch: 'origin/main' }),
+        remoteBranch({ branch: 'up/stream/main', remote: 'up/stream' }),
+        remoteBranch({ branch: 'origin/feature/x' }),
+      ],
+      'remote',
+      none,
+      false,
+    );
+
+    expect(outline(rows)).toEqual([
+      '▾ origin (2)',
+      '  ▸ feature (1)',
+      '  main',
+      '▾ up/stream (1)',
+      '  main',
+    ]);
+    expect(rows.filter((row) => row.type === 'folder').map((row) => row.id)).toEqual([
+      'dir:remote:origin:',
+      'dir:remote:origin:feature',
+      'dir:remote:up/stream:',
+    ]);
+  });
+
+  it('toggles remotes a and a/b independently', () => {
+    const items = [
+      remoteBranch({ branch: 'a/b/x', remote: 'a' }),
+      remoteBranch({ branch: 'a/b/y', remote: 'a/b' }),
+    ];
+
+    expect(outline(gitTreeRows(items, 'remote', none, false))).toEqual([
+      '▾ a (1)',
+      '  ▸ b (1)',
+      '▾ a/b (1)',
+      '  y',
+    ]);
+    expect(outline(gitTreeRows(items, 'remote', new Set(['dir:remote:a:b']), false))).toEqual([
+      '▾ a (1)',
+      '  ▾ b (1)',
+      '    x',
+      '▾ a/b (1)',
+      '  y',
+    ]);
+    expect(outline(gitTreeRows(items, 'remote', new Set(['dir:remote:a/b:']), false))).toEqual([
+      '▾ a (1)',
+      '  ▸ b (1)',
+      '▸ a/b (1)',
+    ]);
+  });
+
+  it('opens every folder while a filter is active, toggled or not', () => {
+    expect(outline(gitTreeRows(branches('feature/login/a', 'main'), 'local', none, true))).toEqual([
+      '▾ feature (1)',
+      '  ▾ login (1)',
+      '    a',
+      'main',
+    ]);
+    expect(
+      outline(
+        gitTreeRows(
+          [remoteBranch({ branch: 'origin/feature/x' })],
+          'remote',
+          new Set(['dir:remote:origin:']),
+          true,
+        ),
+      ),
+    ).toEqual(['▾ origin (1)', '  ▾ feature (1)', '    x']);
+  });
+});
+
+describe('remoteDeleteMessage', () => {
+  it('names a single branch and counts several', () => {
+    expect(remoteDeleteMessage(['origin/feature-a'])).toBe(
+      'Delete origin/feature-a on the remote? ' +
+        'This removes it for everyone with access to the remote.',
+    );
+    expect(remoteDeleteMessage(['origin/feature-a', 'origin/feature-b'])).toBe(
+      'Delete 2 branches on the remote? This removes them for everyone with access to the remote.',
+    );
+  });
+});
+
+describe('deleteFailureReason for a remote delete', () => {
+  it("replaces git's prompt wording with what to fix on the agent host", () => {
+    expect(
+      deleteFailureReason(
+        failure({
+          kind: 'remote_branch',
+          target: 'origin/feature-a',
+          error: 'auth_required',
+          error_detail: "fatal: could not read Username for 'https://example.com': terminal prompts disabled",
+        }),
+      ),
+    ).toBe(
+      'No credentials for this remote. Configure a credential helper or SSH agent on the agent host.',
+    );
+  });
+
+  it("keeps the remote's own reason for the other codes", () => {
+    expect(
+      deleteFailureReason(
+        failure({
+          kind: 'remote_branch',
+          error: 'rejected',
+          error_detail: '[remote rejected] (deletion of the current branch prohibited)',
+        }),
+      ),
+    ).toBe('[remote rejected] (deletion of the current branch prohibited)');
   });
 });

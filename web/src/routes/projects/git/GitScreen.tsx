@@ -10,6 +10,7 @@ import {
   isDeletable,
   KIND_REMOTE_BRANCH,
   listGitItems,
+  type DeletableGitItem,
   type GitBranchCreateRequest,
   type GitItem,
 } from '../../../api/gitRepository';
@@ -25,7 +26,7 @@ import { ErrorState } from '../../../components/ErrorState';
 import { Modal } from '../../../components/Modal';
 import { UndoBar } from '../../../components/UndoBar';
 import { useSessionGitCapabilities } from '../../terminal/git/useSessionGit';
-import { GitItemRow } from './GitItemRow';
+import { GitFolderRow, GitItemRow } from './GitItemRow';
 import { GitNewBranchDialog } from './GitNewBranchDialog';
 import {
   FILTER_THRESHOLD,
@@ -35,14 +36,18 @@ import {
   checkoutErrorCopy,
   deleteFailureMessage,
   forceDeleteMessage,
+  gitTreeRows,
   matchesFilter,
   primaryLabel,
+  remoteDeleteMessage,
+  type GitTreeRow,
 } from './gitDisplay';
 import {
   applyResults,
   confirmForce,
   dismissForce,
   enqueue,
+  enqueueWorktreeRemoval,
   initialGitDeleteState,
   reconcile,
   restore,
@@ -54,9 +59,11 @@ import {
 } from './gitDeleteMachine';
 
 /**
- * Branches and worktrees for one project, the remote-tracking branches in a
- * collapsed section under them, plus New branch and Check out once the agent
- * advertises `capabilities.git.branches`.
+ * Branches and worktrees for one project as a folder tree (a branch name
+ * splits on `/`), the remote-tracking branches in a collapsed section under
+ * them, plus New branch and Check out once the agent advertises
+ * `capabilities.git.branches` and remote deletes behind
+ * `capabilities.git.delete_remote`.
  *
  * Delete is deferred: rows hide at once and the request goes out only after the
  * undo window closes, so Undo cancels before anything reaches the server. A
@@ -79,6 +86,9 @@ export function GitScreen() {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [busyDialog, setBusyDialog] = useState<BusyHolder[] | null>(null);
   const [remoteOpen, setRemoteOpen] = useState(false);
+  const [toggled, setToggled] = useState<ReadonlySet<string>>(new Set());
+  const [remotePrompt, setRemotePrompt] = useState<DeletableGitItem[] | null>(null);
+  const remoteCancelRef = useRef<HTMLButtonElement>(null);
   const [filter, setFilter] = useState('');
   const [newBranchOpen, setNewBranchOpen] = useState(false);
   const [checkoutPrompt, setCheckoutPrompt] = useState<GitItem | null>(null);
@@ -95,8 +105,10 @@ export function GitScreen() {
   useAgentEvents(agentId);
 
   // The same probe the terminal uses: it is per agent, not per session.
-  const branchesEnabled =
-    (useSessionGitCapabilities(agentId, agentId !== '').data ?? NO_GIT_CAPABILITIES).branches;
+  const capabilities =
+    useSessionGitCapabilities(agentId, agentId !== '').data ?? NO_GIT_CAPABILITIES;
+  const branchesEnabled = capabilities.branches;
+  const deleteRemote = capabilities.deleteRemote;
 
   const items = useQuery({
     queryKey: queryKeys.gitItems(agentId, projectName),
@@ -198,9 +210,8 @@ export function GitScreen() {
   // Stable identities, so the memoised rows only re-render when their own item
   // or selection changes rather than on every keystroke elsewhere on the screen.
   const { schedule } = deferred;
-  const queue = useCallback(
-    (targets: readonly GitItem[]) => {
-      const next = enqueue(machineRef.current, targets);
+  const startWindow = useCallback(
+    (next: GitDeleteState) => {
       if (next === machineRef.current) return;
       setMachine(next);
       setSelected(new Set());
@@ -208,6 +219,35 @@ export function GitScreen() {
     },
     [schedule],
   );
+
+  // A remote delete reaches everyone using the remote, so a batch holding one
+  // is confirmed before it enters the undo window.
+  const queue = useCallback(
+    (targets: readonly GitItem[]) => {
+      const deletable = targets.filter((item) => isDeletable(item, deleteRemote));
+      if (deletable.some((item) => item.kind === KIND_REMOTE_BRANCH)) {
+        setRemotePrompt(deletable);
+        return;
+      }
+      startWindow(enqueue(machineRef.current, deletable, deleteRemote));
+    },
+    [startWindow, deleteRemote],
+  );
+
+  const removeWorktree = useCallback(
+    (target: GitItem) => {
+      startWindow(enqueueWorktreeRemoval(machineRef.current, target));
+    },
+    [startWindow],
+  );
+
+  const toggleFolder = useCallback((id: string) => {
+    setToggled((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }, []);
 
   const toggleSelected = useCallback((id: string, isSelected: boolean) => {
     setSelected((previous) => {
@@ -230,26 +270,38 @@ export function GitScreen() {
   }, []);
 
   const visible = visibleItems(items.data ?? [], machine);
-  const selectable = visible.filter(isDeletable);
+  const selectable = visible.filter((item) => isDeletable(item, deleteRemote));
   const selectedItems = selectable.filter((item) => selected.has(gitItemId(item)));
   const filterable = visible.length >= FILTER_THRESHOLD;
-  const shown = filterable ? visible.filter((item) => matchesFilter(item, filter)) : visible;
-  const localRows = shown.filter((item) => item.kind !== KIND_REMOTE_BRANCH);
-  const remoteRows = shown.filter((item) => item.kind === KIND_REMOTE_BRANCH);
+  // Text left in the field after the list shrank below the threshold is
+  // invisible, so it must neither filter nor force folders open.
+  const filterActive = filterable && filter.trim() !== '';
+  const shown = filterActive ? visible.filter((item) => matchesFilter(item, filter)) : visible;
+  const localItems = shown.filter((item) => item.kind !== KIND_REMOTE_BRANCH);
+  const remoteItems = shown.filter((item) => item.kind === KIND_REMOTE_BRANCH);
+  const localRows = gitTreeRows(localItems, 'local', toggled, filterActive);
+  const remoteRows = gitTreeRows(remoteItems, 'remote', toggled, filterActive);
   const rowBusy = del.isPending || checkout.isPending;
 
-  const renderRow = (item: GitItem) => (
-    <GitItemRow
-      key={gitItemId(item)}
-      item={item}
-      selected={selected.has(gitItemId(item))}
-      busy={rowBusy}
-      checkoutEnabled={branchesEnabled}
-      onToggle={toggleSelected}
-      onDelete={queueOne}
-      onCheckout={askCheckout}
-    />
-  );
+  const renderRow = (row: GitTreeRow) =>
+    row.type === 'folder' ? (
+      <GitFolderRow key={row.id} folder={row} disabled={filterActive} onToggle={toggleFolder} />
+    ) : (
+      <GitItemRow
+        key={gitItemId(row.item)}
+        item={row.item}
+        label={row.label}
+        depth={row.depth}
+        selected={selected.has(gitItemId(row.item))}
+        busy={rowBusy}
+        checkoutEnabled={branchesEnabled}
+        deleteRemote={deleteRemote}
+        onToggle={toggleSelected}
+        onDelete={queueOne}
+        onRemoveWorktree={removeWorktree}
+        onCheckout={askCheckout}
+      />
+    );
 
   return (
     <section className="page">
@@ -319,20 +371,20 @@ export function GitScreen() {
               }}
             />
           )}
-          {localRows.length === 0 && remoteRows.length === 0 ? (
+          {localItems.length === 0 && remoteItems.length === 0 ? (
             <p className="empty-state">No matching branches or worktrees.</p>
           ) : (
-            localRows.length > 0 && <ul className="git-list">{localRows.map(renderRow)}</ul>
+            localItems.length > 0 && <ul className="git-list">{localRows.map(renderRow)}</ul>
           )}
-          {remoteRows.length > 0 && (
+          {remoteItems.length > 0 && (
             <details
               className="advanced git-remote-section"
-              open={remoteOpen || filter.trim() !== ''}
+              open={remoteOpen || filterActive}
               onToggle={(event) => {
                 setRemoteOpen(event.currentTarget.open);
               }}
             >
-              <summary>Remote branches ({remoteRows.length})</summary>
+              <summary>Remote branches ({remoteItems.length})</summary>
               <ul className="git-list">{remoteRows.map(renderRow)}</ul>
             </details>
           )}
@@ -348,6 +400,49 @@ export function GitScreen() {
           }}
           onDismiss={deferred.commitNow}
         />
+      )}
+
+      {remotePrompt !== null && (
+        <Modal
+          role="alertdialog"
+          labelledBy="remote-delete-title"
+          initialFocus={remoteCancelRef}
+          onClose={() => {
+            setRemotePrompt(null);
+          }}
+        >
+          <h2 id="remote-delete-title">Delete on the remote?</h2>
+          <p>
+            {remoteDeleteMessage(
+              remotePrompt
+                .filter((item) => item.kind === KIND_REMOTE_BRANCH)
+                .map(primaryLabel),
+            )}
+          </p>
+          <div className="button-row">
+            <button
+              type="button"
+              className="button button-danger"
+              onClick={() => {
+                const targets = remotePrompt;
+                setRemotePrompt(null);
+                startWindow(enqueue(machineRef.current, targets, deleteRemote));
+              }}
+            >
+              Delete
+            </button>
+            <button
+              type="button"
+              ref={remoteCancelRef}
+              className="button"
+              onClick={() => {
+                setRemotePrompt(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </Modal>
       )}
 
       {machine.force !== null && (

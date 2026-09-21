@@ -25,6 +25,7 @@ BYTE_LIMIT = 1024 * 1024
 # ``POST .../git/rebase`` routes and ``repo.rebase`` on status; ``resolve``
 # certifies that ``stage`` refuses an unmerged path still holding conflict
 # markers, which is what makes a "Mark resolved" row action safe to offer.
+# ``delete_remote`` lets ``POST /items:delete`` take ``remote_branch`` items.
 GIT_CAPABILITIES: dict[str, bool] = {
     "changes": True,
     "stage": True,
@@ -36,6 +37,7 @@ GIT_CAPABILITIES: dict[str, bool] = {
     "branches": True,
     "rebase": True,
     "resolve": True,
+    "delete_remote": True,
 }
 MESSAGE_LIMIT = 64 * 1024
 JOB_LINE_LIMIT = 200

@@ -129,6 +129,61 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-09-21, project Git management —
+  delete remote branches, remove a worktree and keep its branch): **one
+  widened request enum, six additive per-item error codes, one additive
+  capability key, no version bump.** Same project-scoped
+  ``POST /api/projects/{name}/git/items:delete``, both transports
+  byte-identical (the relay already validates the body with
+  ``GitDeleteRequest``):
+  * ``GitDeleteItem.kind`` accepts ``remote_branch`` again, with the row's
+    ``branch`` (``<remote>/<name>``) verbatim; ``force`` does not apply.
+    The agent answers per item: ``invalid`` for a missing or NUL-bearing
+    ``branch``, ``not_found`` unless it is one of the rows ``GET
+    /items?remote=true`` lists (a configured remote, not the
+    ``<remote>/HEAD`` symref), ``error`` unless the remote's fetch
+    refspecs map the tracking ref back to exactly one ``refs/heads/``
+    branch (a name-based guess would delete the wrong branch under a
+    custom refspec), and ``error`` for every item of a remote whose
+    configured push destinations — every ``remote.<r>.pushurl``, else
+    every ``remote.<r>.url`` — are not exactly its one ``remote.<r>.url``
+    (the row describes the fetch side; a push to another repository would
+    delete there and still report success). The raw config strings are
+    compared: a ``pushurl`` naming the same repository in another URL
+    form is refused too, while ``url.<base>.pushInsteadOf`` rewrites are
+    not checked, so an https-fetch / ssh-push setup written that way keeps
+    working. The survivors go out as one ``git push --porcelain -- <remote>
+    :refs/heads/<name>…`` per remote, the remotes in parallel with the
+    batch's local deletes, under the fetch/pull/push jobs' never-prompt
+    environment and a 20 s budget (inside the relay's 30 s). Hooks run. A
+    ``-`` ref line is ``ok`` (git drops the tracking ref; a branch already
+    gone on the remote reports the same and clears the stale ref); a ``!``
+    line is ``rejected``, or ``hook_failed`` for a declining remote hook,
+    with git's summary as ``error_detail``; a ref git never reported on
+    takes the jobs' classifier, narrowed to ``auth_required`` /
+    ``network`` / ``remote_not_found`` / ``rejected`` / ``hook_failed``
+    (else ``error``), and a timeout is ``git_timeout``. These codes never
+    fail the batch: ``results`` stays one entry per request item, in
+    request order, as before. No busy guard (no worktree is touched).
+    Each success is audited (``audit.git.delete``, ``kind=remote_branch``)
+    and any success publishes ``git.changed``.
+  * An ``orphan_worktree`` item removes only the worktree at
+    ``worktree_path`` whatever row it came from — every agent already
+    behaved this way — so clients send it for a ``branch_with_worktree``
+    row's *Remove worktree* action and the branch survives as a
+    ``branch_only`` row. *Delete* on that row keeps removing both.
+  * ``GET /api/version`` ``capabilities.git`` gains ``"delete_remote":
+    true`` (both transports). Clients offer delete on ``remote_branch``
+    rows only behind it — an older agent answers ``422`` for the whole
+    batch — and confirm a batch holding remote rows before it enters the
+    undo window. *Remove worktree* needs no gate.
+  * Clients render the Git screen's rows as a folder tree: a branch name
+    splits on ``/`` (a remote row under a top folder named by its
+    ``remote``), folders first then rows, each A→Z by lowercased UTF-16
+    code units with the raw name as tiebreak; ``orphan_worktree`` rows
+    follow the local tree by path. The New-branch start-point and rebase
+    ``onto`` pickers use the same order. Presentation only — the wire order
+    of ``GET /items`` is unchanged.
 * Additive delta within proto-v7 (2026-09-17, in-session git rebase —
   start, continue, skip, abort, and Mark resolved): **four additive REST
   routes, one additive status field, one additive stage refusal, two

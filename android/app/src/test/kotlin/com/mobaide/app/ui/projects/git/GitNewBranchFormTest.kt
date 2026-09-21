@@ -148,11 +148,34 @@ class GitNewBranchFormTest {
         assertEquals(
             listOf(
                 null to "HEAD (current commit)",
-                "main" to "main",
                 "feature-a" to "feature-a",
+                "main" to "main",
                 "origin/feature-x" to "origin/feature-x (remote)",
             ),
             startPointOptions(items).map { it.value to it.label },
+        )
+    }
+
+    @Test
+    fun startPointOptions_sortTheLocalAndTheRemoteRowsEachAToZ_ignoringCase() {
+        val items = listOf(
+            GitItem(kind = GitItem.KIND_REMOTE_BRANCH, branch = "origin/Zed", remote = "origin"),
+            GitItem(kind = GitItem.KIND_BRANCH_ONLY, branch = "Zeta"),
+            GitItem(kind = GitItem.KIND_REMOTE_BRANCH, branch = "origin/apple", remote = "origin"),
+            GitItem(kind = GitItem.KIND_BRANCH_WITH_WORKTREE, branch = "main", worktree_path = "/repo"),
+            GitItem(kind = GitItem.KIND_BRANCH_ONLY, branch = "alpha"),
+        )
+
+        assertEquals(
+            listOf(
+                "HEAD (current commit)",
+                "alpha",
+                "main",
+                "Zeta",
+                "origin/apple (remote)",
+                "origin/Zed (remote)",
+            ),
+            startPointOptions(items).map { it.label },
         )
     }
 

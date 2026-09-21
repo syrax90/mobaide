@@ -62,7 +62,7 @@ class GitDtoFixtureTest {
     }
 
     @Test
-    fun remoteBranchRow_isNeitherDeletableNorCurrent_butCanBeCheckedOut() {
+    fun remoteBranchRow_isDeletableOnlyBehindDeleteRemote_notCurrent_butCanBeCheckedOut() {
         val remote = fixture("GitItem").decode(GitItem.serializer(), "remote_branch")
 
         assertEquals(GitItem.KIND_REMOTE_BRANCH, remote.kind)
@@ -71,7 +71,8 @@ class GitDtoFixtureTest {
         assertEquals("Fix the login redirect", remote.subject)
         assertEquals("2026-09-16T10:11:12+02:00", remote.committed_at)
         assertFalse(remote.is_current)
-        assertFalse(remote.isDeletable)
+        assertFalse(remote.isDeletable(deleteRemote = false))
+        assertTrue(remote.isDeletable(deleteRemote = true))
         assertTrue(remote.canCheckOut)
     }
 
@@ -83,11 +84,12 @@ class GitDtoFixtureTest {
         val minimal = fixture.decode(GitItem.serializer(), "minimal_defaults_materialize")
 
         assertEquals("Fix the login redirect", current.subject)
-        assertFalse(current.isDeletable)
+        assertFalse(current.isDeletable(deleteRemote = false))
+        assertFalse(current.isDeletable(deleteRemote = true))
         assertFalse(current.canCheckOut)
         assertNull(minimal.subject)
         assertNull(minimal.remote)
-        assertTrue(minimal.isDeletable)
+        assertTrue(minimal.isDeletable(deleteRemote = false))
         assertTrue(minimal.canCheckOut)
     }
 

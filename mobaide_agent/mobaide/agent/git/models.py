@@ -10,7 +10,8 @@ The unified ``items`` array carries four row kinds, distinguished by the
   longer exists.
 * ``remote_branch`` — remote-tracking branch, only when the client asked for
   it with ``?remote=true``; clients that predate the kind never receive a
-  row they would offer for delete.
+  row they would offer for delete, and newer ones offer it only behind
+  ``capabilities.git.delete_remote``.
 
 Server resolves the relationship between branches and worktrees so the
 client never has to.
@@ -21,7 +22,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-DeletableKind = Literal["branch_with_worktree", "branch_only", "orphan_worktree"]
 ItemKind = Literal[
     "branch_with_worktree", "branch_only", "orphan_worktree", "remote_branch"
 ]
@@ -77,9 +77,15 @@ class GitDeleteItem(BaseModel):
     deletions). ``force`` upgrades a branch delete from ``-d`` to ``-D`` and
     adds ``--force`` to a worktree removal so a worktree holding
     modified/untracked files is deleted instead of refused.
+
+    ``orphan_worktree`` removes only the worktree at ``worktree_path``,
+    whatever row it came from: sent for a ``branch_with_worktree`` row it
+    keeps the branch. ``remote_branch`` carries the row's ``branch``
+    (``<remote>/<name>``) verbatim and deletes that branch on the remote;
+    ``force`` does not apply to it.
     """
 
-    kind: DeletableKind
+    kind: ItemKind
     branch: str | None = None
     worktree_path: str | None = None
     force: bool = False
@@ -98,6 +104,11 @@ class GitDeleteResultItem(BaseModel):
         * ``locked`` — worktree is locked.
         * ``not_found`` — branch or worktree no longer exists.
         * ``invalid`` — request payload missing the required identifier.
+        * ``auth_required`` / ``network`` / ``remote_not_found`` — a
+          ``remote_branch`` push could not reach or log in to the remote.
+        * ``rejected`` / ``hook_failed`` — the remote, or a hook, refused
+          the deletion.
+        * ``git_timeout`` — the push outlasted its budget.
         * ``error`` — other git failure (full message in ``error_detail``).
     """
 

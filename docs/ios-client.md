@@ -706,7 +706,11 @@ The project Git screen (`UI/Projects/git`) grew #677's branch management on
 top of the delete flow. `GitScreenModel.loadCapabilities()` runs from the
 screen's own `.task` — the model tests pin the request sequence by index, so
 `load()` stays exactly the items read, which always ask for `?remote=true`.
-The remote-tracking rows sit in a `Section` whose header button toggles
+Local and remote rows alike render as an A→Z folder tree (a branch name split
+on `/`, a remote row nested under a folder named by its `remote`), local
+folders starting collapsed and remote-name folders expanded; a non-empty
+filter forces every matching folder open. The remote-tracking rows sit in a
+`Section` whose header button toggles
 `remoteExpanded` (a non-empty `.searchable` filter, shown at eight rows,
 forces it open), "+" presents `GitNewBranchSheet` (a `Picker` start point
 defaulting to the checked-out branch, `nil` for the agent's `HEAD`, a checkout
@@ -714,8 +718,14 @@ defaulting to the checked-out branch, `nil` for the agent's `HEAD`, a checkout
 `branch_only` / `remote_branch` rows behind a `confirmationDialog` whose
 `isPresented` setter clears only the prompt — the row lives in
 `pendingCheckout` until Check out or Cancel runs, the same split the
-force-delete and discard dialogs use. Errors reuse `SessionGitError.map`
-after `ConflictDetail.busyHolders`; the copy lives in `GitItemDisplay`. The
+force-delete and discard dialogs use. `canDelete(item)` now also allows a
+`remote_branch` row once `capabilities.git.delete_remote` is advertised,
+confirming a batch that holds one ("Delete on the remote?") before it leaves
+edit mode; a `branch_with_worktree` row's context menu also offers Remove
+worktree, which drops only the worktree and keeps the branch (Delete on that
+row is relabelled "Delete branch and worktree"). Errors reuse
+`SessionGitError.map` after `ConflictDetail.busyHolders`; the copy lives in
+`GitItemDisplay`. The
 terminal menu's *Branches…* entry routes to `.gitManagement(projectName:)`
 for a project-backed session.
 

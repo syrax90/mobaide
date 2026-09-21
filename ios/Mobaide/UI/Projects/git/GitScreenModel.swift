@@ -9,7 +9,9 @@ import Observation
 /// open joins the pending batch instead of replacing it. A `force_required`
 /// per-item result re-prompts and re-sends with `force=true`; a 409 lists the
 /// busy holders and restores every row, because the server rejects the batch
-/// whole. New branch and Check out are pessimistic: a typed or confirmed
+/// whole. A batch holding a remote-tracking row is confirmed first — it reaches
+/// everyone using the remote — and *Remove worktree* rides the same Undo
+/// window. New branch and Check out are pessimistic: a typed or confirmed
 /// request whose outcome the list shows through the same `git.changed` reload.
 @MainActor
 @Observable
@@ -45,6 +47,10 @@ final class GitScreenModel {
     /// request sequence by index.
     private(set) var capabilities = GitCapabilities.none
     var remoteExpanded = false
+    /// Tree folders the user flipped away from their default open/closed state.
+    private(set) var toggledFolders: Set<String> = []
+    /// When non-nil, the screen confirms this batch, which holds remote rows.
+    var remoteDeletePrompt: [GitItem]?
     var filter = ""
     var newBranch: NewBranchSheetState?
     var checkoutPrompt: GitItem?
@@ -71,6 +77,9 @@ final class GitScreenModel {
     /// because SwiftUI writes the dialog's `isPresented` binding on dismissal,
     /// which can clear `forcePrompt` before the confirm action runs.
     private var pendingForce: [PendingDelete] = []
+    /// The confirmed remote batch, apart from `remoteDeletePrompt` for the same
+    /// dismissal-binding reason as `pendingForce`.
+    private var pendingRemoteDelete: [GitItem] = []
     private var deferredCommit: Task<Void, Never>?
     private var loadGeneration = 0
 
@@ -83,7 +92,11 @@ final class GitScreenModel {
 
     var visibleItems: [GitItem] { items.filter { !hiddenIDs.contains($0.id) } }
 
-    var hasDeletableItems: Bool { visibleItems.contains(where: \.isDeletable) }
+    func canDelete(_ item: GitItem) -> Bool {
+        item.isDeletable(deleteRemote: capabilities.deleteRemote)
+    }
+
+    var hasDeletableItems: Bool { visibleItems.contains(where: canDelete) }
 
     var isEmpty: Bool { visibleItems.isEmpty && !isLoading }
 
@@ -91,16 +104,30 @@ final class GitScreenModel {
 
     var filterable: Bool { visibleItems.count >= GitItemDisplay.filterThreshold }
 
+    /// Text left in the field after the list shrank below the threshold is
+    /// invisible, so it never counts.
+    var filterActive: Bool {
+        filterable && !filter.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
     private var shownItems: [GitItem] {
-        filterable ? visibleItems.filter { GitItemDisplay.matchesFilter($0, filter) } : visibleItems
+        filterActive ? visibleItems.filter { GitItemDisplay.matchesFilter($0, filter) } : visibleItems
     }
 
     var localItems: [GitItem] { shownItems.filter { $0.kind != GitItem.kindRemoteBranch } }
 
     var remoteItems: [GitItem] { shownItems.filter { $0.kind == GitItem.kindRemoteBranch } }
 
-    /// A non-empty filter opens the remote section: hidden matches would read as "not found".
-    var remoteOpen: Bool { remoteExpanded || !filter.trimmingCharacters(in: .whitespaces).isEmpty }
+    var localRows: [GitTreeRow] {
+        GitTree.rows(localItems, scope: .local, toggled: toggledFolders, filterActive: filterActive)
+    }
+
+    var remoteRows: [GitTreeRow] {
+        GitTree.rows(remoteItems, scope: .remote, toggled: toggledFolders, filterActive: filterActive)
+    }
+
+    /// An active filter opens the remote section: hidden matches would read as "not found".
+    var remoteOpen: Bool { remoteExpanded || filterActive }
 
     /// One `GET /api/version` per screen visit. An unreadable probe keeps the
     /// delete-only screen older agents get.
@@ -150,7 +177,7 @@ final class GitScreenModel {
     // MARK: - Selection
 
     func select(_ item: GitItem) {
-        guard item.isDeletable, !hiddenIDs.contains(item.id) else { return }
+        guard canDelete(item), !hiddenIDs.contains(item.id) else { return }
         selected.insert(item.id)
     }
 
@@ -162,30 +189,77 @@ final class GitScreenModel {
 
     /// Single-row delete from a swipe or the context menu.
     func delete(_ item: GitItem) {
-        enqueue([item])
+        queue([item])
     }
 
     /// Batch delete of the current selection.
+    /// Keeps the selection while the remote confirmation is open, so Cancel
+    /// returns to it; every other path clears it.
     func requestDelete() {
-        let targets = visibleItems.filter { selected.contains($0.id) && $0.isDeletable }
+        let targets = visibleItems.filter { selected.contains($0.id) && canDelete($0) }
+        queue(targets)
+        if remoteDeletePrompt == nil { selected = [] }
+    }
+
+    private func queue(_ targets: [GitItem]) {
+        let deletable = targets.filter(canDelete)
+        if deletable.contains(where: { $0.kind == GitItem.kindRemoteBranch }) {
+            pendingRemoteDelete = deletable
+            remoteDeletePrompt = deletable
+            return
+        }
+        enqueue(deletable)
+    }
+
+    func confirmRemoteDelete() {
+        let targets = pendingRemoteDelete.filter(canDelete)
+        pendingRemoteDelete = []
+        remoteDeletePrompt = nil
         selected = []
         enqueue(targets)
     }
 
+    func dismissRemoteDeletePrompt() {
+        pendingRemoteDelete = []
+        remoteDeletePrompt = nil
+    }
+
+    /// *Remove worktree*: an `orphan_worktree` item removes only the worktree at
+    /// its path, whatever row it came from, so the branch survives and the row
+    /// comes back as a plain branch on the `git.changed` reload.
+    func removeWorktree(_ item: GitItem) {
+        guard item.canRemoveWorktree, let path = item.worktree_path else { return }
+        enqueueEntries([PendingDelete(
+            id: item.id,
+            item: GitDeleteItem(kind: GitItem.kindOrphanWorktree, worktree_path: path)
+        )])
+    }
+
+    /// Ignored while a filter holds every matching folder open.
+    func toggleFolder(_ id: String) {
+        guard !filterActive else { return }
+        if toggledFolders.contains(id) {
+            toggledFolders.remove(id)
+        } else {
+            toggledFolders.insert(id)
+        }
+    }
+
     private func enqueue(_ targets: [GitItem]) {
-        let queued = targets.filter { $0.isDeletable && !hiddenIDs.contains($0.id) }
+        enqueueEntries(targets.map {
+            PendingDelete(
+                id: $0.id,
+                item: GitDeleteItem(kind: $0.kind, branch: $0.branch, worktree_path: $0.worktree_path, force: false)
+            )
+        })
+    }
+
+    private func enqueueEntries(_ entries: [PendingDelete]) {
+        let queued = entries.filter { !hiddenIDs.contains($0.id) }
         guard !queued.isEmpty else { return }
-        for target in queued {
-            hiddenIDs.insert(target.id)
-            pendingBatch.append(PendingDelete(
-                id: target.id,
-                item: GitDeleteItem(
-                    kind: target.kind,
-                    branch: target.branch,
-                    worktree_path: target.worktree_path,
-                    force: false
-                )
-            ))
+        for entry in queued {
+            hiddenIDs.insert(entry.id)
+            pendingBatch.append(entry)
         }
         selected.subtract(hiddenIDs)
 
@@ -475,6 +549,11 @@ enum GitItemDisplay {
     /// `error_detail` is raw git stderr — first line, capped, so the single-line
     /// toast can't turn into a wall of text.
     static func deleteFailureReason(_ failure: GitDeleteResultItem) -> String {
+        // A remote delete's push failures share the fetch/pull/push vocabulary;
+        // git's own wording for a disabled prompt says nothing about what to fix.
+        if failure.error == GitJobResponse.codeAuthRequired {
+            return GitChangesDisplay.jobErrorCopy(failure.error, message: nil)
+        }
         let detail = failure.error_detail?
             .split(separator: "\n").first
             .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
@@ -483,12 +562,19 @@ enum GitItemDisplay {
         case "locked": return "the worktree is locked"
         case "not_found": return "it no longer exists"
         case "invalid": return "the request was invalid"
+        case SessionGitError.codeGitTimeout: return GitChangesDisplay.jobErrorCopy(failure.error, message: nil)
         default: return "unknown error"
         }
     }
 }
 
 extension GitItemDisplay {
+    static func remoteDeleteMessage(_ refs: [String]) -> String {
+        let what = refs.count == 1 ? refs[0] : "\(refs.count) branches"
+        let pronoun = refs.count == 1 ? "it" : "them"
+        return "Delete \(what) on the remote? This removes \(pronoun) for everyone with access to the remote."
+    }
+
     static func checkoutConfirmMessage(branch: String, projectName: String) -> String {
         "Check out \(branch) in the project folder of \(projectName)? "
             + "Sessions started in that folder afterwards use this branch."

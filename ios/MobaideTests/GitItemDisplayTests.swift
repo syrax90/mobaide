@@ -159,6 +159,10 @@ final class GitItemDisplayTests: XCTestCase {
             "Couldn't delete b: the request was invalid"
         )
         XCTAssertEqual(
+            GitItemDisplay.deleteFailureMessage([failure(target: "b", error: "git_timeout")]),
+            "Couldn't delete b: git took too long to answer. Try again."
+        )
+        XCTAssertEqual(
             GitItemDisplay.deleteFailureMessage([failure(target: "b", error: "error")]),
             "Couldn't delete b: unknown error"
         )
@@ -272,7 +276,7 @@ final class GitItemDisplayTests: XCTestCase {
         XCTAssertFalse(GitItem(kind: GitItem.kindBranchOnly, branch: "b", is_current: true).canCheckOut)
         XCTAssertFalse(GitItem(kind: GitItem.kindBranchWithWorktree, branch: "b", worktree_path: "/wt").canCheckOut)
         XCTAssertFalse(GitItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/wt").canCheckOut)
-        XCTAssertFalse(remoteBranch().isDeletable)
+        XCTAssertFalse(remoteBranch().isDeletable(deleteRemote: false))
         XCTAssertEqual(remoteBranch().id, "remote_branch:origin/feature-a|")
     }
 
@@ -353,6 +357,63 @@ final class GitItemDisplayTests: XCTestCase {
         XCTAssertEqual(
             GitItemDisplay.createBranchErrorCopy(gitError("checked_out_elsewhere", "/wt"), name: "feature-a"),
             "feature-a is already checked out in another worktree (/wt)."
+        )
+    }
+
+    // MARK: - Remote delete and Remove worktree
+
+    func testRemoteRowsDeleteOnlyBehindTheCapabilityAndOnlyLinkedWorktreesCanBeRemoved() {
+        XCTAssertTrue(remoteBranch().isDeletable(deleteRemote: true))
+        XCTAssertFalse(remoteBranch().isDeletable(deleteRemote: false))
+        XCTAssertFalse(GitItem(kind: GitItem.kindBranchOnly, branch: "main", is_current: true).isDeletable(deleteRemote: true))
+        XCTAssertTrue(GitItem(kind: GitItem.kindBranchOnly, branch: "b").isDeletable(deleteRemote: false))
+
+        XCTAssertTrue(GitItem(kind: GitItem.kindBranchWithWorktree, branch: "b", worktree_path: "/wt/b").canRemoveWorktree)
+        XCTAssertFalse(
+            GitItem(kind: GitItem.kindBranchWithWorktree, branch: "main", worktree_path: "/repo", is_current: true)
+                .canRemoveWorktree
+        )
+        XCTAssertFalse(GitItem(kind: GitItem.kindBranchWithWorktree, branch: "b", worktree_path: "").canRemoveWorktree)
+        XCTAssertFalse(GitItem(kind: GitItem.kindBranchOnly, branch: "b").canRemoveWorktree)
+        XCTAssertFalse(GitItem(kind: GitItem.kindOrphanWorktree, worktree_path: "/wt/x").canRemoveWorktree)
+        XCTAssertFalse(remoteBranch().canRemoveWorktree)
+    }
+
+    func testRemoteDeleteMessageNamesOneBranchAndCountsSeveral() {
+        XCTAssertEqual(
+            GitItemDisplay.remoteDeleteMessage(["origin/a"]),
+            "Delete origin/a on the remote? This removes it for everyone with access to the remote."
+        )
+        XCTAssertEqual(
+            GitItemDisplay.remoteDeleteMessage(["origin/a", "origin/b"]),
+            "Delete 2 branches on the remote? This removes them for everyone with access to the remote."
+        )
+    }
+
+    func testDeleteFailureReasonGivesAuthRequiredItsOwnCopyAndKeepsTheRemoteReasonOtherwise() {
+        XCTAssertEqual(
+            GitItemDisplay.deleteFailureReason(
+                GitDeleteResultItem(
+                    kind: GitItem.kindRemoteBranch,
+                    target: "origin/feature-a",
+                    ok: false,
+                    error: "auth_required",
+                    error_detail: "fatal: could not read Username for 'https://example.com': terminal prompts disabled"
+                )
+            ),
+            "No credentials for this remote. Configure a credential helper or SSH agent on the agent host."
+        )
+        XCTAssertEqual(
+            GitItemDisplay.deleteFailureReason(
+                GitDeleteResultItem(
+                    kind: GitItem.kindRemoteBranch,
+                    target: "origin/main",
+                    ok: false,
+                    error: "rejected",
+                    error_detail: "[remote rejected] (deletion of the current branch prohibited)"
+                )
+            ),
+            "[remote rejected] (deletion of the current branch prohibited)"
         )
     }
 }

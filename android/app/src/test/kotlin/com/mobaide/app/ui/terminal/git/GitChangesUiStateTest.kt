@@ -736,8 +736,8 @@ class GitChangesUiStateRebaseTest {
 
         assertEquals(
             listOf(
-                RebaseTarget("refs/heads/topic-b", "topic-b"),
                 RebaseTarget("refs/heads/main", "main"),
+                RebaseTarget("refs/heads/topic-b", "topic-b"),
                 RebaseTarget("refs/remotes/origin/main", "origin/main (remote)"),
                 RebaseTarget("refs/remotes/origin/topic", "origin/topic (remote)"),
             ),
@@ -772,6 +772,22 @@ class GitChangesUiStateRebaseTest {
             rebaseTargets(items, currentBranch = null),
         )
         assertEquals(emptyList<RebaseTarget>(), rebaseTargets(emptyList(), currentBranch = "main"))
+    }
+
+    @Test
+    fun rebaseTargets_sortTheLocalAndTheRemoteGroupEachAToZ_ignoringCase() {
+        val items = listOf(
+            item(GitItem.KIND_REMOTE_BRANCH, "origin/Zed"),
+            item(GitItem.KIND_BRANCH_ONLY, "zeta"),
+            item(GitItem.KIND_REMOTE_BRANCH, "origin/apple"),
+            item(GitItem.KIND_BRANCH_WITH_WORKTREE, "Beta"),
+            item(GitItem.KIND_BRANCH_ONLY, "alpha"),
+        )
+
+        assertEquals(
+            listOf("alpha", "Beta", "zeta", "origin/apple (remote)", "origin/Zed (remote)"),
+            rebaseTargets(items, currentBranch = null).map { it.label },
+        )
     }
 
     @Test
