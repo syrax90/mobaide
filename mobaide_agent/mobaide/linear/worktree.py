@@ -300,6 +300,13 @@ _WORKTREE_DIRTY_PATTERNS = (
 )
 
 
+def _same_dir(a: str, b: str) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
 class WorktreeManager:
     """Create and manage git worktrees and local branches for a project.
 
@@ -374,6 +381,10 @@ class WorktreeManager:
         verbatim, with no prefix applied, so the user's entered branch name
         actually becomes the git branch name.
 
+        A branch already checked out in another linked worktree reopens that
+        worktree (``is_new=False``) rather than failing git's one-checkout
+        rule.
+
         Raises ``WorktreeCreationError`` if the worktree cannot be created.
         The launcher surfaces this as HTTP 400 so the user sees the real
         git stderr instead of silently landing in the project root.
@@ -412,6 +423,25 @@ class WorktreeManager:
         if os.path.exists(wt_dir):
             logger.warning("Worktree already exists at %s, reusing it", wt_dir)
             return WorktreeResult(path=wt_dir, is_new=False, branch=branch_name)
+
+        # git refuses to check a branch out twice, so a branch already living in
+        # a worktree outside ``wt_dir`` (an earlier ``worktree_base``, or made by
+        # hand) reopens it; a registration whose directory is gone is pruned.
+        existing = await self._find_branch_worktree(project_root, branch_name)
+        if existing is not None:
+            if not existing.prunable and os.path.isdir(existing.path):
+                path = os.path.normpath(existing.path)
+                logger.info(
+                    "Branch %s is already checked out at %s, reusing it",
+                    branch_name, path,
+                )
+                return WorktreeResult(path=path, is_new=False, branch=branch_name)
+            if existing.prunable and not existing.locked:
+                logger.info(
+                    "Pruning stale worktree %s that still holds branch %s",
+                    existing.path, branch_name,
+                )
+                await _run_git("worktree", "prune", cwd=project_root)
 
         await _run_git("config", "core.longpaths", "true", cwd=project_root)
 
@@ -469,6 +499,26 @@ class WorktreeManager:
         raise WorktreeCreationError(
             branch=branch_name, path=wt_dir, stderr=combined_stderr,
         )
+
+    async def _find_branch_worktree(
+        self, project_root: str, branch_name: str,
+    ) -> WorktreeInfo | None:
+        """Return the linked worktree that has ``branch_name`` checked out.
+
+        The main worktree and ``project_root`` itself are skipped: a worktree
+        session must never land in the project's own checkout. A failed
+        listing yields ``None`` so creation proceeds and git reports the error.
+        """
+        try:
+            worktrees = await self.list_worktrees(project_root)
+        except RuntimeError as exc:
+            logger.warning("Could not list worktrees of %s: %s", project_root, exc)
+            return None
+        ref = f"refs/heads/{branch_name}"
+        for wt in worktrees[1:]:
+            if wt.branch == ref and not _same_dir(wt.path, project_root):
+                return wt
+        return None
 
     @log_call(name="worktree.cleanup_worktree", log_args=("path",))
     async def cleanup_worktree(self, path: str, project_root: str) -> bool:

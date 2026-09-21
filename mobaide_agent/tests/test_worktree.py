@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,6 +16,8 @@ from mobaide.linear.worktree import (
     convert_to_worktree_slug,
     create_standard_worktree,
 )
+
+from .git_repo_support import init_repo, requires_git, run_git_sync
 
 
 # -- convert_to_worktree_slug --
@@ -167,6 +171,7 @@ class TestWorktreeManager:
         os.makedirs(project_root)
 
         mock_git.side_effect = [
+            (0, "", ""),              # git worktree list (no match)
             (0, "", ""),              # git config core.longpaths
             (0, "", ""),              # git fetch origin
             (0, "", ""),              # git rev-parse origin/main  (exists)
@@ -176,9 +181,9 @@ class TestWorktreeManager:
         result = await manager.create_worktree("cla-8-test", project_root)
         assert result.is_new is True
         assert result.branch == "feature/mobaide/cla-8-test"
-        assert mock_git.call_count == 4
+        assert mock_git.call_count == 5
 
-        worktree_add_call = mock_git.call_args_list[3]
+        worktree_add_call = mock_git.call_args_list[4]
         assert "--no-track" in worktree_add_call.args
         assert "-b" in worktree_add_call.args
         assert "origin/main" in worktree_add_call.args
@@ -192,6 +197,7 @@ class TestWorktreeManager:
         os.makedirs(project_root)
 
         mock_git.side_effect = [
+            (0, "", ""),              # git worktree list (no match)
             (0, "", ""),              # git config
             (0, "", ""),              # git fetch
             (0, "", ""),              # git rev-parse origin/main
@@ -202,7 +208,7 @@ class TestWorktreeManager:
             "my-dir", project_root, branch_name="feature/user-typed",
         )
         assert result.branch == "feature/user-typed"
-        worktree_add_call = mock_git.call_args_list[3]
+        worktree_add_call = mock_git.call_args_list[4]
         assert "feature/user-typed" in worktree_add_call.args
         # The prefix must NOT be applied when branch_name is given explicitly.
         assert "feature/mobaide/my-dir" not in worktree_add_call.args
@@ -236,6 +242,7 @@ class TestWorktreeManager:
         os.makedirs(project_root)
 
         mock_git.side_effect = [
+            (0, "", ""),                    # git worktree list (no match)
             (0, "", ""),                    # git config
             (128, "", "network error"),     # git fetch (ignored)
             (128, "", "no origin/main"),    # rev-parse origin/main (missing)
@@ -245,7 +252,7 @@ class TestWorktreeManager:
 
         result = await manager.create_worktree("cla-1", project_root)
         assert result.is_new is True
-        worktree_add_call = mock_git.call_args_list[4]
+        worktree_add_call = mock_git.call_args_list[5]
         assert "main" in worktree_add_call.args
         assert "origin/main" not in worktree_add_call.args
 
@@ -259,6 +266,7 @@ class TestWorktreeManager:
         os.makedirs(project_root)
 
         mock_git.side_effect = [
+            (0, "", ""),                   # git worktree list (no match)
             (0, "", ""),                   # git config
             (128, "", "no remote"),        # git fetch
             (128, "", "no origin/main"),   # rev-parse origin/main
@@ -268,7 +276,7 @@ class TestWorktreeManager:
 
         result = await manager.create_worktree("cla-1", project_root)
         assert result.is_new is True
-        worktree_add_call = mock_git.call_args_list[4]
+        worktree_add_call = mock_git.call_args_list[5]
         assert "HEAD" in worktree_add_call.args
 
     @patch("mobaide.linear.worktree._run_git")
@@ -280,6 +288,7 @@ class TestWorktreeManager:
         os.makedirs(project_root)
 
         mock_git.side_effect = [
+            (0, "", ""),                                  # git worktree list (no match)
             (0, "", ""),                                  # git config
             (0, "", ""),                                  # git fetch
             (0, "", ""),                                  # rev-parse origin/main
@@ -289,7 +298,7 @@ class TestWorktreeManager:
 
         result = await manager.create_worktree("cla-8-test", project_root)
         assert result.is_new is True
-        assert mock_git.call_count == 5
+        assert mock_git.call_count == 6
 
     @patch("mobaide.linear.worktree._run_git")
     async def test_create_worktree_raises_on_total_failure(
@@ -302,6 +311,7 @@ class TestWorktreeManager:
         os.makedirs(project_root)
 
         mock_git.side_effect = [
+            (0, "", ""),                   # git worktree list (no match)
             (0, "", ""),                   # git config
             (0, "", ""),                   # git fetch
             (0, "", ""),                   # rev-parse origin/main
@@ -319,3 +329,66 @@ class TestWorktreeManager:
         mock_git.return_value = (0, "", "")
         success = await manager.cleanup_worktree("/some/path", str(tmp_path))
         assert success is True
+
+
+@requires_git
+class TestCreateWorktreeReopensBranchWorktree:
+    """Real-git coverage: asking for a branch that is already checked out in
+    another linked worktree reopens that worktree instead of failing git's
+    one-checkout-per-branch rule."""
+
+    @pytest.fixture
+    def repo(self, tmp_path):
+        return init_repo(str(tmp_path / "project"))
+
+    @staticmethod
+    def _manager(worktree_base: str = "claude_worktree") -> WorktreeManager:
+        return WorktreeManager(
+            worktree_base=worktree_base,
+            branch_prefix="feature/mobaide",
+            main_branch="main",
+        )
+
+    async def test_reuses_worktree_created_under_another_base(self, repo):
+        first = await self._manager("mobaide_worktree").create_worktree(
+            "claude-session-56a3f247", repo, branch_name="claude-session-56a3f247",
+        )
+
+        result = await self._manager("claude_worktree").create_worktree(
+            "claude-session-56a3f247", repo, branch_name="claude-session-56a3f247",
+        )
+
+        assert result.is_new is False
+        assert os.path.samefile(result.path, first.path)
+        assert result.branch == "claude-session-56a3f247"
+        assert not os.path.exists(
+            os.path.join(repo, "claude_worktree", "claude-session-56a3f247")
+        )
+
+    async def test_prunes_deleted_worktree_and_checks_branch_out_again(self, repo):
+        stale = os.path.join(repo, "old", "topic")
+        run_git_sync(repo, "worktree", "add", "-q", "-b", "topic", stale)
+        shutil.rmtree(stale)
+
+        result = await self._manager().create_worktree(
+            "topic", repo, branch_name="topic",
+        )
+
+        assert result.is_new is True
+        assert result.path == os.path.join(repo, "claude_worktree", "topic")
+        head = subprocess.run(
+            ["git", "symbolic-ref", "--short", "HEAD"],
+            cwd=result.path, capture_output=True, text=True, check=True,
+        )
+        assert head.stdout.strip() == "topic"
+
+    async def test_branch_checked_out_in_project_root_still_fails(self, repo):
+        with pytest.raises(WorktreeCreationError, match="already used by worktree"):
+            await self._manager().create_worktree("main", repo, branch_name="main")
+
+    async def test_project_registered_at_linked_worktree_is_not_reused(self, repo):
+        linked = os.path.join(repo, "linked")
+        run_git_sync(repo, "worktree", "add", "-q", "-b", "topic", linked)
+
+        with pytest.raises(WorktreeCreationError, match="already used by worktree"):
+            await self._manager().create_worktree("topic", linked, branch_name="topic")
