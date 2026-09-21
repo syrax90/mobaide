@@ -165,7 +165,7 @@ class GitConflictViewModelTest {
     @Test
     fun saveDraft_keepsTheText_adoptsTheFilesNewToken_andSaysSo() = runTest {
         val draft = "a\n<<<<<<< HEAD\nhalf\n=======\ntopic\n>>>>>>> x\nz\n"
-        val repo = repoServing(conflict(), conflict(content = "THE AGENT COPY", token = "t2"))
+        val repo = repoServing(conflict(), conflict(content = draft, token = "t2"))
         val vm = newViewModel(repo)
         type(vm, draft)
 
@@ -180,9 +180,35 @@ class GitConflictViewModelTest {
         }
 
         coVerify(exactly = 1) { repo.resolveSessionConflict("s1", path, "t1", draft, false) }
+        coVerify(exactly = 2) { repo.sessionConflict("s1", path) }
         assertEquals(draft, vm.editor.text.toString())
         assertFalse(ready(vm).dirty)
         assertFalse(ready(vm).canSaveDraft)
+        assertFalse(ready(vm).overwriteWarning)
+
+        type(vm, "a\nmerged\nz\n")
+        vm.apply()
+        runCurrent()
+
+        coVerify(exactly = 1) { repo.resolveSessionConflict("s1", path, "t2", "a\nmerged\nz\n", true) }
+    }
+
+    @Test
+    fun saveDraft_whenTheFileReadBackIsNotTheDraft_keepsTheDraft_andWarnsBeforeApplyOverwrites() = runTest {
+        val draft = "a\n<<<<<<< HEAD\nhalf\n=======\ntopic\n>>>>>>> x\nz\n"
+        // Someone wrote the file between the save and the read that follows it.
+        val repo = repoServing(conflict(), conflict(content = "a\nsomeone else\nz\n", token = "t2"))
+        val vm = newViewModel(repo)
+        type(vm, draft)
+
+        vm.saveDraft()
+        runCurrent()
+
+        val saved = ready(vm)
+        assertEquals(draft, vm.editor.text.toString())
+        assertTrue(saved.overwriteWarning)
+        assertFalse(saved.stale)
+        assertFalse(saved.dirty)
 
         type(vm, "a\nmerged\nz\n")
         vm.apply()

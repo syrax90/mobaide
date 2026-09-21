@@ -183,8 +183,10 @@ cadence; they do **not** gate compatibility.
     before anything is written; ``mark_resolved: false`` is a draft — it
     writes the file, markers included, and leaves the path unmerged.
     ``content`` is validated by the service, not the schema (a ``422`` echoes
-    its input): ``400 too_large`` over ``byte_limit``, ``400 bad_content``
-    for a NUL or an unencodable string.
+    its input): ``400 too_large`` over ``byte_limit`` — measured on the
+    request's LF text and again on the bytes that would land on disk, since
+    CRLF and a BOM grow it — and ``400 bad_content`` for a NUL or an
+    unencodable string.
   * ``POST …/git/conflict/take`` with ``GitConflictTakeRequest {"path",
     "side": "ours" | "theirs"}`` makes the path look like one side and
     marks it resolved — the only resolution for a ``kind`` that is not
@@ -215,14 +217,20 @@ cadence; they do **not** gate compatibility.
   * ``GitStatusResponse`` gains top-level ``resolved_paths`` (default
     ``[]``, at most 200): paths marked resolved during the operation in
     progress whose conflict git can still rebuild, read from the index's
-    resolve-undo records. Listed only while ``repo.state`` is not ``clean``
-    (the records outlive a finished rebase), only with both sides recorded
-    (``checkout --merge`` cannot rebuild a modify/delete conflict), never
-    for a submodule (git cannot merge a gitlink back into markers), never
-    while unmerged again, and only while "ours" is still ``HEAD``'s blob for
-    the path. It is a top-level list rather than an entry group because a
-    resolution equal to ``HEAD`` has no status entry at all and one that
-    differs already has a ``staged`` row. The etag covers it.
+    resolve-undo records. Listed only while ``repo.state`` is ``merging``,
+    ``cherry_picking`` or ``reverting``, or ``rebasing`` with
+    ``repo.rebase.stopped_on`` set — the stops whose own index rewrite
+    cleared every older record; the records outlive a finished rebase or
+    merge and a pick already committed, so a ``bisecting`` (or ``clean``)
+    repository, a ``git am`` session and a rebase stopped on ``exec`` or
+    ``break`` would offer a conflict nobody is in — only with both sides
+    recorded (``checkout --merge`` cannot rebuild a modify/delete
+    conflict), never for a submodule (git cannot merge a gitlink back into
+    markers), never while unmerged again, and only while "ours" is still
+    ``HEAD``'s blob for the path. It is a top-level list rather than an
+    entry group because a resolution equal to ``HEAD`` has no status entry
+    at all and one that differs already has a ``staged`` row. The etag
+    covers it.
   * All three mutations refuse ``job_running`` first, share one 25 s budget
     across their git calls and publish ``git.changed`` whenever the file or
     the index may have moved — also when ``git add`` fails after the write.

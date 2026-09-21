@@ -71,6 +71,7 @@ from .changes_service import (
     GitRefusedError,
     _is_gitlink,
     _lock_for,
+    _resolve_undo_live,
     _resolve_undo_raw,
     _Stage,
     _text,
@@ -320,6 +321,10 @@ def _replace_file(
         if target is None or current.data is None:
             raise GitRefusedError("file_changed", rel)
         data = _encode_like(current.data, content) if encode else content
+        # CRLF and a BOM grow the text; a file written past the cap could not
+        # be opened in the resolver again.
+        if encode and len(data) > EDIT_BYTE_LIMIT:
+            raise GitBadRequestError("too_large")
         # A retry after a lost answer or a failed ``git add`` still carries the
         # token from before its own write: the file already holds the text.
         if current.data == data:
@@ -696,8 +701,9 @@ async def _restorable(
 ) -> bool:
     if stages:
         return 2 in stages and 3 in stages and not _is_gitlink(stages)
-    state, _ = await operation_state(toplevel)
-    if state == "clean":
+    state, rebase_dir = await operation_state(toplevel)
+    rebase = await rebase_info(toplevel, rebase_dir) if rebase_dir else None
+    if not _resolve_undo_live(state, rebase):
         return False
     raw = await _resolve_undo_raw(toplevel)
     return rel in await restorable_paths(toplevel, raw, unmerged=set())

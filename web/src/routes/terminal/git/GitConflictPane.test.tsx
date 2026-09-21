@@ -380,7 +380,7 @@ describe('GitConflictPane apply and draft', () => {
     const draft = 'a\n<<<<<<< HEAD\nhalf\n=======\ntopic\n>>>>>>> x\nz\n';
     await openPane();
     // What the agent reads back is the draft, under a new token.
-    api.file = conflict({ content: 'THE AGENT COPY', token: 't2' });
+    api.file = conflict({ content: draft, token: 't2' });
     type(draft);
 
     fireEvent.click(saveDraft());
@@ -405,12 +405,43 @@ describe('GitConflictPane apply and draft', () => {
     await waitFor(() => {
       expect(apply()).toBeEnabled();
     });
+    // Read in the same tick as the click that sends `t2`: the re-read is in.
+    expect(screen.queryByText('Applying will overwrite the other change.')).toBeNull();
     fireEvent.click(apply());
 
     await waitFor(() => {
       expect(api.writes).toHaveLength(2);
     });
     expect(api.writes[1]).toMatchObject({ request: { token: 't2', markResolved: true } });
+  });
+
+  it('warns that Apply will overwrite when the file read back after a draft save is not the draft', async () => {
+    const draft = 'a\n<<<<<<< HEAD\nhalf\n=======\ntopic\n>>>>>>> x\nz\n';
+    await openPane();
+    // Someone wrote the file between the save and the read that follows it.
+    api.file = conflict({ content: 'a\nsomeone else\nz\n', token: 't2', markers: 0 });
+    type(draft);
+
+    fireEvent.click(saveDraft());
+
+    expect(await screen.findByText('Applying will overwrite the other change.')).toBeInTheDocument();
+    expect(editor().value).toBe(draft);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+
+    type('a\nmerged\nz\n');
+    await waitFor(() => {
+      expect(apply()).toBeEnabled();
+    });
+    fireEvent.click(apply());
+
+    await waitFor(() => {
+      expect(api.writes).toHaveLength(2);
+    });
+    expect(api.writes[1]).toEqual({
+      kind: 'resolve',
+      request: { path: 'src/login.py', token: 't2', content: 'a\nmerged\nz\n', markResolved: true },
+    });
   });
 
   it('shows any other refusal inline and lets it be dismissed', async () => {

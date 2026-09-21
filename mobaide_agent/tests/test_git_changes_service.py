@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 from mobaide.agent.git import changes_service
+from mobaide.agent.git.changes_models import GitRebaseCommit, GitRebaseInfo
 from mobaide.agent.git.changes_service import (
     GitCommandError,
     GitTimeoutError,
@@ -30,6 +31,7 @@ from .git_repo_support import (
     GIT_BIN,
     add_submodule,
     commit_all,
+    finish_merge_as_ours,
     init_repo,
     make_conflict_branches,
     make_modify_delete_branches,
@@ -39,6 +41,8 @@ from .git_repo_support import (
     repo,  # noqa: F401 - pytest fixture
     requires_git,
     run_git_sync,
+    start_failing_am_after_a_merge_as_ours,
+    stop_rebase_on_exec_after_a_pick_as_ours,
     stub_git,
     write_file,
 )
@@ -689,11 +693,7 @@ class TestResolvedPaths:
         assert (resp.entries, resp.resolved_paths) == ([], ["keep.txt"])
 
     async def test_a_record_left_by_a_finished_operation_is_not_listed(self, repo):
-        make_conflict_branches(repo)
-        run_git_sync(repo, "merge", "other", check=False)
-        run_git_sync(repo, "checkout", "--ours", "--", "keep.txt")
-        run_git_sync(repo, "add", "keep.txt")
-        run_git_sync(repo, "commit", "-q", "--no-edit")
+        finish_merge_as_ours(repo)
         records = subprocess.run(
             [GIT_BIN, "ls-files", "--resolve-undo"], cwd=repo, check=True, capture_output=True
         ).stdout
@@ -702,6 +702,56 @@ class TestResolvedPaths:
 
         assert b"keep.txt" in records
         assert (resp.repo.state, resp.resolved_paths) == ("clean", [])
+
+    async def test_a_record_left_by_a_finished_merge_is_not_listed_during_a_bisect(
+        self, repo
+    ):
+        # Resolved as "ours" and untouched since, the record's stage 2 is still
+        # HEAD's blob, and a bisect is an operation in progress.
+        finish_merge_as_ours(repo)
+        write_file(repo, "later.txt", b"unrelated\n")
+        commit_all(repo, "unrelated work")
+        run_git_sync(repo, "bisect", "start", "HEAD")
+        records = subprocess.run(
+            [GIT_BIN, "ls-files", "--resolve-undo"], cwd=repo, check=True, capture_output=True
+        ).stdout
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert b"keep.txt" in records
+        assert (resp.repo.state, resp.resolved_paths) == ("bisecting", [])
+
+    async def test_a_record_left_by_a_finished_merge_is_not_listed_during_a_git_am(
+        self, repo, tmp_path
+    ):
+        # ``rebasing`` without a rebase: the session never rewrote the index, so
+        # the record is the finished merge's, its stage 2 still HEAD's blob.
+        start_failing_am_after_a_merge_as_ours(repo, str(tmp_path / "patches"))
+        records = subprocess.run(
+            [GIT_BIN, "ls-files", "--resolve-undo"], cwd=repo, check=True, capture_output=True
+        ).stdout
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert b"keep.txt" in records
+        assert (resp.repo.state, resp.repo.rebase) == ("rebasing", None)
+        assert resp.resolved_paths == []
+
+    async def test_a_record_of_a_pick_already_committed_is_not_listed_at_an_exec_stop(
+        self, repo
+    ):
+        # The rebase stopped on a failed ``exec``, not on a pick: the record is
+        # the committed pick's, its stage 2 still HEAD's blob.
+        stop_rebase_on_exec_after_a_pick_as_ours(repo)
+        records = subprocess.run(
+            [GIT_BIN, "ls-files", "--resolve-undo"], cwd=repo, check=True, capture_output=True
+        ).stdout
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert b"keep.txt" in records
+        assert (resp.repo.state, resp.repo.rebase.stopped_on) == ("rebasing", None)
+        assert resp.resolved_paths == []
 
     async def test_a_vanished_record_changes_the_etag(self, repo):
         make_conflict_branches(repo)
@@ -939,3 +989,28 @@ class TestResolvedPaths:
 
     async def test_no_records_never_asks_git(self, tmp_path):
         assert await restorable_paths(str(tmp_path / "gone"), b"", unmerged=set()) == []
+
+
+_STOPPED_ON = GitRebaseCommit(oid="1" * 40, short_oid="1" * 7, subject="other side")
+
+
+class TestResolveUndoLive:
+    @pytest.mark.parametrize(
+        ("state", "rebase", "live"),
+        [
+            ("merging", None, True),
+            ("cherry_picking", None, True),
+            ("reverting", None, True),
+            ("bisecting", None, False),
+            ("clean", None, False),
+            # a ``git am`` session
+            ("rebasing", None, False),
+            # a rebase stopped on ``exec`` or ``break``: no REBASE_HEAD
+            ("rebasing", GitRebaseInfo(branch="other", step=1, total=2), False),
+            ("rebasing", GitRebaseInfo(stopped_on=_STOPPED_ON), True),
+        ],
+    )
+    def test_records_are_live_only_while_stopped_on_a_conflicting_step(
+        self, state, rebase, live
+    ):
+        assert changes_service._resolve_undo_live(state, rebase) is live

@@ -164,7 +164,10 @@ export function GitConflictPane({
     if (!isEditableConflict(fetched)) return;
     setToken(fetched.token ?? null);
     if (mode !== 'seed') {
-      setOverwriteWarning(mode === 'token-warn');
+      // After a draft save the file should be the draft. If it is not, someone
+      // wrote in between, and this token would let Apply overwrite it unseen.
+      const movedOn = mode === 'token' && (fetched.content ?? '') !== baseText.current;
+      setOverwriteWarning(mode === 'token-warn' || movedOn);
       return;
     }
     const text = fetched.content ?? '';

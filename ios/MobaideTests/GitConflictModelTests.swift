@@ -224,7 +224,7 @@ final class GitConflictModelTests: XCTestCase {
         let model = try await loadedModel()
         type(draft, into: model)
         StubURLProtocol.enqueue(status: 200, body: ok)
-        StubURLProtocol.enqueue(status: 200, body: try conflictBody(content: "THE AGENT COPY", token: "t2"))
+        StubURLProtocol.enqueue(status: 200, body: try conflictBody(content: draft, token: "t2"))
 
         await model.saveDraft()
 
@@ -236,6 +236,7 @@ final class GitConflictModelTests: XCTestCase {
         XCTAssertNil(model.outcome)
         XCTAssertEqual(model.buffer.text, draft)
         XCTAssertFalse(model.isDirty)
+        XCTAssertFalse(model.overwriteWarning)
         XCTAssertEqual(model.toast?.text, "Saved src/login.py — the conflict is still open.")
         XCTAssertEqual(model.toast?.tone, .ok)
 
@@ -245,6 +246,32 @@ final class GitConflictModelTests: XCTestCase {
         await model.apply()
 
         XCTAssertEqual(try sentBody(GitConflictResolveRequest.self, at: 0).token, "t2")
+    }
+
+    func testSaveDraftWhenTheFileReadBackIsNotTheDraftKeepsTheDraftAndWarnsBeforeApplyOverwrites() async throws {
+        let draft = "a\n<<<<<<< HEAD\nhalf\n=======\ntopic\n>>>>>>> x\nz\n"
+        let model = try await loadedModel()
+        type(draft, into: model)
+        StubURLProtocol.enqueue(status: 200, body: ok)
+        // Someone wrote the file between the save and the read that follows it.
+        StubURLProtocol.enqueue(status: 200, body: try conflictBody(content: "a\nsomeone else\nz\n", token: "t2"))
+
+        await model.saveDraft()
+
+        XCTAssertEqual(model.buffer.text, draft)
+        XCTAssertTrue(model.overwriteWarning)
+        XCTAssertFalse(model.isStale)
+        XCTAssertFalse(model.isDirty)
+
+        StubURLProtocol.reset()
+        type("a\nmerged\nz\n", into: model)
+        StubURLProtocol.enqueue(status: 200, body: ok)
+        await model.apply()
+
+        XCTAssertEqual(
+            try sentBody(GitConflictResolveRequest.self, at: 0),
+            GitConflictResolveRequest(path: path, token: "t2", content: "a\nmerged\nz\n", mark_resolved: true)
+        )
     }
 
     func testAnyOtherRefusalIsAToastAndTheDraftStays() async throws {

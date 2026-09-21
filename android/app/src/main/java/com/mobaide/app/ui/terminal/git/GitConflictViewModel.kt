@@ -195,10 +195,14 @@ class GitConflictViewModel @Inject constructor(
                 busy = previous?.busy == true,
             )
         } else {
+            // After a draft save the file should be the draft. If it is not,
+            // someone wrote in between, and this token would let Apply
+            // overwrite it unseen.
+            val movedOn = mode == LoadMode.Token && conflict.content != baseText
             _uiState.value = previous.copy(
                 conflict = conflict,
                 stale = false,
-                overwriteWarning = mode == LoadMode.TokenWithWarning,
+                overwriteWarning = mode == LoadMode.TokenWithWarning || movedOn,
             )
         }
     }

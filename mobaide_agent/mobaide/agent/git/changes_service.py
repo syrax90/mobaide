@@ -63,6 +63,13 @@ _MAX_ERROR_DETAIL = 500
 _CONTEXT_DEFAULT = 3
 _LS_TREE_CHUNK = 50
 _GITLINK_MODE = "160000"
+# The operations that leave conflicts in the index. ``bisecting`` is not one: a
+# bisect keeps the resolve-undo records of a merge finished long ago, and
+# rebuilding one of those would overwrite the working file with a conflict
+# nobody is in.
+_CONFLICT_STATES: frozenset[str] = frozenset(
+    {"merging", "rebasing", "cherry_picking", "reverting"}
+)
 # At LINE_LIMIT context a file with more than LINE_LIMIT lines on either side
 # already overflows the line cap, so an untruncated diff at this ceiling is
 # always the whole file as one hunk — the clients' "Full file" view.
@@ -413,6 +420,16 @@ async def rebase_info(toplevel: str, rebase_dir: str) -> GitRebaseInfo | None:
     if onto_oid:
         info.onto_ref = await _ref_pointing_at(toplevel, onto_oid)
     return info
+
+
+def _resolve_undo_live(state: RepoState, rebase: GitRebaseInfo | None) -> bool:
+    """Whether the index's resolve-undo records belong to the conflict the
+    repository is stopped on. Starting a merge, a cherry-pick, a revert or a rebase
+    pick rewrites the index and clears every older record; a ``git am`` session and
+    a rebase stopped on ``exec`` or ``break`` (no ``REBASE_HEAD``) do not."""
+    if state == "rebasing":
+        return rebase is not None and rebase.stopped_on is not None
+    return state in _CONFLICT_STATES
 
 
 async def _ref_pointing_at(toplevel: str, oid: str) -> str | None:
@@ -767,7 +784,9 @@ async def get_session_git_status(
         state, rebase_dir = await operation_state(repo.toplevel)
         rebase = await rebase_info(repo.toplevel, rebase_dir) if rebase_dir else None
         resolve_undo = (
-            await _resolve_undo_raw(repo.toplevel) if state != "clean" else b""
+            await _resolve_undo_raw(repo.toplevel)
+            if _resolve_undo_live(state, rebase)
+            else b""
         )
         result = await run_git(
             ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"],

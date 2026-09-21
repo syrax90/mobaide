@@ -42,6 +42,7 @@ from mobaide.core.git_exec import CmdResult, reset_caches
 from .git_repo_support import (
     GIT_BIN,
     commit_all,
+    finish_merge_as_ours,
     make_conflict_branches,
     make_modify_delete_branches,
     make_submodule_conflict,
@@ -50,6 +51,8 @@ from .git_repo_support import (
     repo,  # noqa: F401 - pytest fixture
     requires_git,
     run_git_sync,
+    start_failing_am_after_a_merge_as_ours,
+    stop_rebase_on_exec_after_a_pick_as_ours,
     write_file,
 )
 
@@ -135,6 +138,36 @@ def _stop_rebase(repo_dir: str) -> None:
 def _stop_merge(repo_dir: str) -> None:
     make_conflict_branches(repo_dir)
     run_git_sync(repo_dir, "merge", "other", check=False)
+
+
+def _stop_cherry_pick(repo_dir: str) -> None:
+    make_conflict_branches(repo_dir)
+    run_git_sync(repo_dir, "cherry-pick", "other", check=False)
+
+
+def _stop_revert(repo_dir: str) -> None:
+    """Reverting ``main``'s older rewrite of line 2 of ``keep.txt`` stops on
+    the newer one."""
+    write_file(repo_dir, "keep.txt", b"one\nFIRST\nthree\n")
+    commit_all(repo_dir, "first rewrite")
+    write_file(repo_dir, "keep.txt", b"one\nSECOND\nthree\n")
+    commit_all(repo_dir, "second rewrite")
+    run_git_sync(repo_dir, "revert", "--no-edit", "HEAD~1", check=False)
+
+
+def _finish_merge_as_ours_then_bisect(repo_dir: str) -> None:
+    """A merge resolved as "ours" and committed, unrelated work on top, then a
+    bisect: the merge's resolve-undo record outlives all of it, and its stage
+    2 is still ``HEAD``'s blob of ``keep.txt``."""
+    finish_merge_as_ours(repo_dir)
+    for name in ("later.txt", "latest.txt"):
+        write_file(repo_dir, name, b"unrelated\n")
+        commit_all(repo_dir, f"adds {name}")
+    run_git_sync(repo_dir, "bisect", "start", "HEAD")
+
+
+_LF_CONFLICT = b"one\n<<<<<<< HEAD\nMAIN\n=======\nOTHER\n>>>>>>> other\n"
+_CRLF_CONFLICT = _LF_CONFLICT.replace(b"\n", b"\r\n")
 
 
 def _stop_merge_at(repo_dir: str, rel: str) -> None:
@@ -653,6 +686,50 @@ class TestResolve:
         await _resolve(repo, "one\r\nRESOLVED\r\nthree\r\n")
 
         assert _read(repo, "keep.txt") == b"one\nRESOLVED\nthree\n"
+
+    @pytest.mark.parametrize("mark_resolved", [True, False])
+    @pytest.mark.parametrize(
+        ("original", "content"),
+        [
+            # 134 bytes as sent, 201 once every line ending is CRLF again
+            (_CRLF_CONFLICT, "x\n" * 66 + "abc"),
+            # 198 bytes as sent, 201 behind the file's BOM
+            (b"\xef\xbb\xbf" + _LF_CONFLICT, "x" * 198),
+        ],
+        ids=["crlf", "bom"],
+    )
+    async def test_text_that_outgrows_the_limit_in_the_files_own_encoding_is_refused_unwritten(
+        self, repo, monkeypatch, original, content, mark_resolved
+    ):
+        monkeypatch.setattr(changes_conflicts, "EDIT_BYTE_LIMIT", 200)
+        _stop_merge(repo)
+        write_file(repo, "keep.txt", original)
+        listing = sorted(os.listdir(repo))
+        bus = FakeEventBus()
+
+        with pytest.raises(GitBadRequestError) as info:
+            await _resolve(repo, content, mark_resolved=mark_resolved, event_bus=bus)
+
+        assert info.value.code == "too_large"
+        assert _read(repo, "keep.txt") == original
+        assert sorted(os.listdir(repo)) == listing
+        assert _unmerged(repo) == ["keep.txt"]
+        assert bus.published == []
+        assert (await _get(repo)).kind == "text"
+
+    @pytest.mark.parametrize("mark_resolved", [True, False])
+    async def test_text_of_exactly_the_limit_in_the_files_own_encoding_is_written(
+        self, repo, monkeypatch, mark_resolved
+    ):
+        monkeypatch.setattr(changes_conflicts, "EDIT_BYTE_LIMIT", 200)
+        _stop_merge(repo)
+        write_file(repo, "keep.txt", _CRLF_CONFLICT)
+
+        await _resolve(repo, "x\n" * 66 + "ab", mark_resolved=mark_resolved)
+
+        assert _read(repo, "keep.txt") == b"x\r\n" * 66 + b"ab"
+        assert len(_read(repo, "keep.txt")) == 200
+        assert _unmerged(repo) == ([] if mark_resolved else ["keep.txt"])
 
     @posix_only
     async def test_the_files_permission_bits_survive_the_replace(self, repo):
@@ -1219,6 +1296,98 @@ class TestRestore:
         assert info.value.code == "not_restorable"
         assert _read(repo, "keep.txt") == b"one\nNEW WORK\nthree\n"
         assert _unmerged(repo) == []
+
+    async def test_a_record_left_by_a_finished_merge_restores_nothing_during_a_bisect(
+        self, repo
+    ):
+        # The repository is not clean, and the record's stage 2 is still HEAD's
+        # blob: only the kind of operation keeps ``checkout --merge`` off the file.
+        _finish_merge_as_ours_then_bisect(repo)
+        write_file(repo, "keep.txt", b"one\nNEW WORK\nthree\n")
+        bus = FakeEventBus()
+
+        with pytest.raises(GitRefusedError) as info:
+            await _restore(repo, event_bus=bus)
+
+        status = await _status(repo)
+        assert "keep.txt" in _git_out(repo, "ls-files", "--resolve-undo")
+        assert (status.repo.state, status.resolved_paths) == ("bisecting", [])
+        assert (info.value.code, info.value.message) == ("not_restorable", "keep.txt")
+        assert _read(repo, "keep.txt") == b"one\nNEW WORK\nthree\n"
+        assert _unmerged(repo) == []
+        assert bus.published == []
+
+    async def test_a_record_left_by_a_finished_merge_restores_nothing_during_a_git_am(
+        self, repo, tmp_path
+    ):
+        # ``rebasing`` is a state that conflicts, yet a ``git am`` session never
+        # rewrote the index: the record is the finished merge's, and its stage 2
+        # is still HEAD's blob.
+        start_failing_am_after_a_merge_as_ours(repo, str(tmp_path / "patches"))
+        write_file(repo, "keep.txt", b"one\nNEW WORK\nthree\n")
+        bus = FakeEventBus()
+
+        with pytest.raises(GitRefusedError) as info:
+            await _restore(repo, event_bus=bus)
+
+        status = await _status(repo)
+        assert os.path.exists(os.path.join(repo, ".git", "rebase-apply", "applying"))
+        assert "keep.txt" in _git_out(repo, "ls-files", "--resolve-undo")
+        assert (status.repo.state, status.repo.rebase) == ("rebasing", None)
+        assert status.resolved_paths == []
+        assert (info.value.code, info.value.message) == ("not_restorable", "keep.txt")
+        assert _read(repo, "keep.txt") == b"one\nNEW WORK\nthree\n"
+        assert _unmerged(repo) == []
+        assert bus.published == []
+
+    async def test_a_record_of_a_pick_already_committed_restores_nothing_at_an_exec_stop(
+        self, repo
+    ):
+        # The rebase is still running, but on a failed ``exec``: no pick is
+        # stopped on (no REBASE_HEAD), and the record is the committed pick's,
+        # its stage 2 still HEAD's blob.
+        stop_rebase_on_exec_after_a_pick_as_ours(repo)
+        write_file(repo, "keep.txt", b"one\nNEW WORK\nthree\n")
+        bus = FakeEventBus()
+
+        with pytest.raises(GitRefusedError) as info:
+            await _restore(repo, event_bus=bus)
+
+        status = await _status(repo)
+        rebase_head = run_git_sync(
+            repo, "rev-parse", "-q", "--verify", "REBASE_HEAD", check=False
+        )
+        assert rebase_head.returncode == 1
+        assert "keep.txt" in _git_out(repo, "ls-files", "--resolve-undo")
+        assert (status.repo.state, status.repo.rebase.stopped_on) == ("rebasing", None)
+        assert status.resolved_paths == []
+        assert (info.value.code, info.value.message) == ("not_restorable", "keep.txt")
+        assert _read(repo, "keep.txt") == b"one\nNEW WORK\nthree\n"
+        assert _unmerged(repo) == []
+        assert bus.published == []
+
+    @pytest.mark.parametrize(
+        ("state", "stop"),
+        [
+            ("merging", _stop_merge),
+            ("rebasing", _stop_rebase),
+            ("cherry_picking", _stop_cherry_pick),
+            ("reverting", _stop_revert),
+        ],
+    )
+    async def test_a_path_resolved_in_any_operation_that_conflicts_is_listed_and_rebuilt(
+        self, repo, state, stop
+    ):
+        stop(repo)
+        await _resolve(repo, "one\nRESOLVED\nthree\n")
+        listed = await _status(repo)
+
+        await _restore(repo)
+
+        assert (listed.repo.state, listed.resolved_paths) == (state, ["keep.txt"])
+        assert _read(repo, "keep.txt").count(b"\n<<<<<<< ") == 1
+        assert _unmerged(repo) == ["keep.txt"]
+        assert (await _status(repo)).resolved_paths == []
 
     async def test_a_conflict_with_a_deleted_side_cannot_be_rebuilt(self, repo):
         make_modify_delete_branches(repo, ours_deletes=True)

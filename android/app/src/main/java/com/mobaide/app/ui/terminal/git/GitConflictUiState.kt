@@ -23,7 +23,10 @@ sealed interface GitConflictUiState {
         val busy: Boolean = false,
         /** The agent refused a write because the file moved on under the editor. */
         val stale: Boolean = false,
-        /** "Keep my edits" was chosen: the next Apply overwrites the other change. */
+        /**
+         * The next Apply overwrites a change the editor never showed: "Keep my edits"
+         * was chosen, or the file read back after a draft save was not the draft.
+         */
         val overwriteWarning: Boolean = false,
         /** The path left the conflict state without this screen's doing. */
         val gone: Boolean = false,

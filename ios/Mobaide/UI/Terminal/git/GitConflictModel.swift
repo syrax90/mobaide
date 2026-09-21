@@ -59,7 +59,8 @@ final class GitConflictModel {
     private(set) var isBusy = false
     /// The agent refused a write because the file moved on under the editor.
     private(set) var isStale = false
-    /// "Keep my edits" was chosen: the next Apply overwrites the other change.
+    /// The next Apply overwrites a change the editor never showed: "Keep my edits"
+    /// was chosen, or the file read back after a draft save was not the draft.
     private(set) var overwriteWarning = false
     /// The path left the conflict state without this screen's doing.
     private(set) var isGone = false
@@ -267,7 +268,11 @@ final class GitConflictModel {
             isDirty = false
             overwriteWarning = false
         } else {
-            overwriteWarning = mode == .tokenWithWarning
+            // After a draft save the file should be the draft. If it is not,
+            // someone wrote in between, and this token would let Apply
+            // overwrite it unseen.
+            let movedOn = mode == .token && (fresh.content ?? "") != baseText
+            overwriteWarning = mode == .tokenWithWarning || movedOn
         }
     }
 }
