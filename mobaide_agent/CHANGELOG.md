@@ -1,5 +1,45 @@
 # mobaide_agent Changelog
 
+## [0.3.12](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.11...agent-v0.3.12) (2026-09-22)
+
+
+### Features
+
+* **agent,android,ios,web:** delete remote branches, remove worktrees and show branches as an A→Z folder tree on the project Git screen ([fec2fab](https://github.com/syrax90/claude_mobile/commit/fec2fabf8405ae14153bc38d91c4874081c7682e))
+* **agent,android,ios,web:** delete remote branches, remove worktrees and show branches as an A→Z folder tree on the project Git screen ([1f6de49](https://github.com/syrax90/claude_mobile/commit/1f6de49d16b956b0bf1e1ed0ede6f1a5b300202a))
+* **agent,android,ios,web:** fetch, pull and push as background jobs with streamed progress from the in-session Changes screen ([20bd4f1](https://github.com/syrax90/claude_mobile/commit/20bd4f1d42a78c8b27d98f4ecef3899ad982c225))
+* **agent,android,ios,web:** fetch, pull and push as background jobs with streamed progress from the in-session Changes screen ([f72f22d](https://github.com/syrax90/claude_mobile/commit/f72f22d5c5885885c796b6e5fdc82b58e3228073))
+* **agent,android,ios,web:** manage branches from the project Git screen — remote branches, create and check out ([97fe98f](https://github.com/syrax90/claude_mobile/commit/97fe98f6481a1f576e54663bac8c8dafff7a2815))
+* **agent,android,ios,web:** manage branches from the project Git screen — remote branches, create and check out ([e5c5953](https://github.com/syrax90/claude_mobile/commit/e5c59537944ae94f2b18f68d6a2bddf43a1725c6)), closes [#677](https://github.com/syrax90/claude_mobile/issues/677)
+* **agent,android,ios,web:** rebase onto a branch with continue/abort driven by the reported repo state ([c68e318](https://github.com/syrax90/claude_mobile/commit/c68e31897e3def04ef560534c30ae9dd4474b498))
+* **agent,android,ios,web:** rebase onto a branch with continue/abort driven by the reported repo state ([f6db316](https://github.com/syrax90/claude_mobile/commit/f6db316b2fecaf619716421b1e960e383765a2a2)), closes [#678](https://github.com/syrax90/claude_mobile/issues/678)
+* **agent,android,ios,web:** resolve rebase conflicts in the app with a whole-file editor, whole-file picks and Restore conflict ([f411e87](https://github.com/syrax90/claude_mobile/commit/f411e87cd7698961fc9cc0a36de9cd86a475e6e5))
+* **agent,android,ios,web:** resolve rebase conflicts in the app with a whole-file editor, whole-file picks and Restore conflict ([58fca0e](https://github.com/syrax90/claude_mobile/commit/58fca0e1e461cfeaf644715ac12758fe700cad4a))
+* **agent,android,ios,web:** stage, unstage, discard and commit from the in-session Changes screen ([0721ebb](https://github.com/syrax90/claude_mobile/commit/0721ebba30bb299eae9c4f05e387f9574d948c5d))
+* **agent,android,ios,web:** stage, unstage, discard and commit from the in-session Changes screen ([58ec5bb](https://github.com/syrax90/claude_mobile/commit/58ec5bb165b68a2cb7a64826a7e97371de018e00))
+
+
+### Bug Fixes
+
+* **agent,android,ios,web:** decide rebase stops from repository state and hide rebase actions without rebase details ([66c7c1c](https://github.com/syrax90/claude_mobile/commit/66c7c1c3df50847354a3d1b4a6fd3301ac685926))
+* **agent,android,ios,web:** offer Restore conflict only at a live conflict stop, cap the resolver's write on the encoded bytes and warn when a saved draft was overwritten ([53dabf1](https://github.com/syrax90/claude_mobile/commit/53dabf1f79a513487b2611f85f7cf89e3b8a3f17))
+* **agent,android,ios,web:** pick rebase targets by full ref and list branches by exact name ([49480d9](https://github.com/syrax90/claude_mobile/commit/49480d9808da111b162695838aa1aa80e85d5c82))
+* **agent,android,ios,web:** recreate a pruned upstream on push and hide pull follow-ups without one ([1d15359](https://github.com/syrax90/claude_mobile/commit/1d153598c5b5deb31af45b2be331f94ffef4d145))
+* **agent,android,ios:** keep the conflict resolver's delete pick inside the repository and never offer a submodule conflict for restore ([a814b88](https://github.com/syrax90/claude_mobile/commit/a814b883d3ccbb957aedff67842d34e3f7c2a792))
+* **agent:** drop a rescheduled pick on rebase skip instead of retrying it ([d35eb05](https://github.com/syrax90/claude_mobile/commit/d35eb05fb1ce022ac2fa94079bf4ae497928d8cd))
+* **agent:** keep the complete rows of a ref listing cut at the byte cap ([6b3107f](https://github.com/syrax90/claude_mobile/commit/6b3107f7d90bff69eaff65c96c75a8e67e4653de))
+* **agent:** refuse a remote branch delete when the remote pushes to a different repository than it fetches from ([194d978](https://github.com/syrax90/claude_mobile/commit/194d9783f83367e2aaafeb0f927da05ba4a50edd))
+* **agent:** reopen a branch's existing worktree instead of failing to create a second one ([7320c62](https://github.com/syrax90/claude_mobile/commit/7320c62cd683921db607b68cc9b6f7ee3d2ad1ff))
+* **agent:** reopen a branch's existing worktree instead of failing to create a second one ([d5e8fe9](https://github.com/syrax90/claude_mobile/commit/d5e8fe9622042d6a3217f98966ebe152505a9ddc))
+* **agent:** report a git job's real outcome when a cancel lands after git exited ([0d86eae](https://github.com/syrax90/claude_mobile/commit/0d86eaeb06060c5363e4cddadbacd7869fc51b71))
+* **agent:** report a timed-out git job pre-step as git_timeout ([f038b73](https://github.com/syrax90/claude_mobile/commit/f038b7343b4bb31c29871d37ccbb608ac4c68db2))
+* **agent:** skip remote-tracking refs with no configured remote and refuse to check them out ([60f8742](https://github.com/syrax90/claude_mobile/commit/60f87425a3632ea85fa2de8b6f1344d04e3d554a))
+
+
+### Documentation
+
+* UPDATED (PROTOCOL.md). ([0d86eae](https://github.com/syrax90/claude_mobile/commit/0d86eaeb06060c5363e4cddadbacd7869fc51b71))
+
 ## [0.3.11](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.10...agent-v0.3.11) (2026-09-14)
 
 
