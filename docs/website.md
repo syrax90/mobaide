@@ -448,7 +448,7 @@ for the admin dashboard.
 
 ## Screenshots and the platform switch
 
-`#screens` carries **two panels of seven captures each**, Android and iOS, behind an
+`#screens` carries **two panels of nine captures each**, Android and iOS, behind an
 `aria` tab pair. The phone body around every capture is drawn by `.device` in CSS, so
 the files must stay **bare app captures** — a screenshot with a frame already baked in
 double-frames.
@@ -456,7 +456,7 @@ double-frames.
 **The switch degrades to both panels.** The markup ships with the tablist at
 `display: none` and *neither* panel `hidden`, so with scripting off — or if `site.js`
 fails to load, or `setUpShotSwitch()` returns early because an id does not resolve — the
-page shows all fourteen screenshots under their `On Android` / `On iOS` headings.
+page shows all eighteen screenshots under their `On Android` / `On iOS` headings.
 `setUpShotSwitch()` adds `is-live` to `[data-shots-switch]` only after both tabs are
 wired, and that class is what reveals the tablist and hides the now-redundant headings.
 This is the `can-copy` pattern, and the same reasoning as the accessibility invariant
