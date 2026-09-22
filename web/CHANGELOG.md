@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.1.8](https://github.com/syrax90/claude_mobile/compare/web-v0.1.7...web-v0.1.8) (2026-09-22)
+
+
+### Features
+
+* **agent,android,ios,web:** delete remote branches, remove worktrees and show branches as an A→Z folder tree on the project Git screen ([fec2fab](https://github.com/syrax90/claude_mobile/commit/fec2fabf8405ae14153bc38d91c4874081c7682e))
+* **agent,android,ios,web:** delete remote branches, remove worktrees and show branches as an A→Z folder tree on the project Git screen ([1f6de49](https://github.com/syrax90/claude_mobile/commit/1f6de49d16b956b0bf1e1ed0ede6f1a5b300202a))
+* **agent,android,ios,web:** fetch, pull and push as background jobs with streamed progress from the in-session Changes screen ([20bd4f1](https://github.com/syrax90/claude_mobile/commit/20bd4f1d42a78c8b27d98f4ecef3899ad982c225))
+* **agent,android,ios,web:** fetch, pull and push as background jobs with streamed progress from the in-session Changes screen ([f72f22d](https://github.com/syrax90/claude_mobile/commit/f72f22d5c5885885c796b6e5fdc82b58e3228073))
+* **agent,android,ios,web:** manage branches from the project Git screen — remote branches, create and check out ([97fe98f](https://github.com/syrax90/claude_mobile/commit/97fe98f6481a1f576e54663bac8c8dafff7a2815))
+* **agent,android,ios,web:** manage branches from the project Git screen — remote branches, create and check out ([e5c5953](https://github.com/syrax90/claude_mobile/commit/e5c59537944ae94f2b18f68d6a2bddf43a1725c6)), closes [#677](https://github.com/syrax90/claude_mobile/issues/677)
+* **agent,android,ios,web:** rebase onto a branch with continue/abort driven by the reported repo state ([c68e318](https://github.com/syrax90/claude_mobile/commit/c68e31897e3def04ef560534c30ae9dd4474b498))
+* **agent,android,ios,web:** rebase onto a branch with continue/abort driven by the reported repo state ([f6db316](https://github.com/syrax90/claude_mobile/commit/f6db316b2fecaf619716421b1e960e383765a2a2)), closes [#678](https://github.com/syrax90/claude_mobile/issues/678)
+* **agent,android,ios,web:** resolve rebase conflicts in the app with a whole-file editor, whole-file picks and Restore conflict ([f411e87](https://github.com/syrax90/claude_mobile/commit/f411e87cd7698961fc9cc0a36de9cd86a475e6e5))
+* **agent,android,ios,web:** resolve rebase conflicts in the app with a whole-file editor, whole-file picks and Restore conflict ([58fca0e](https://github.com/syrax90/claude_mobile/commit/58fca0e1e461cfeaf644715ac12758fe700cad4a))
+* **agent,android,ios,web:** stage, unstage, discard and commit from the in-session Changes screen ([0721ebb](https://github.com/syrax90/claude_mobile/commit/0721ebba30bb299eae9c4f05e387f9574d948c5d))
+* **agent,android,ios,web:** stage, unstage, discard and commit from the in-session Changes screen ([58ec5bb](https://github.com/syrax90/claude_mobile/commit/58ec5bb165b68a2cb7a64826a7e97371de018e00))
+
+
+### Bug Fixes
+
+* **agent,android,ios,web:** decide rebase stops from repository state and hide rebase actions without rebase details ([66c7c1c](https://github.com/syrax90/claude_mobile/commit/66c7c1c3df50847354a3d1b4a6fd3301ac685926))
+* **agent,android,ios,web:** offer Restore conflict only at a live conflict stop, cap the resolver's write on the encoded bytes and warn when a saved draft was overwritten ([53dabf1](https://github.com/syrax90/claude_mobile/commit/53dabf1f79a513487b2611f85f7cf89e3b8a3f17))
+* **agent,android,ios,web:** pick rebase targets by full ref and list branches by exact name ([49480d9](https://github.com/syrax90/claude_mobile/commit/49480d9808da111b162695838aa1aa80e85d5c82))
+* **agent,android,ios,web:** recreate a pruned upstream on push and hide pull follow-ups without one ([1d15359](https://github.com/syrax90/claude_mobile/commit/1d153598c5b5deb31af45b2be331f94ffef4d145))
+* **android,ios,web:** offer only branch-backed rows as a new branch's start point ([739c131](https://github.com/syrax90/claude_mobile/commit/739c131ed3af95ecb3e8908baa881985306c9fbf))
+
 ## [0.1.7](https://github.com/syrax90/claude_mobile/compare/web-v0.1.6...web-v0.1.7) (2026-09-14)
 
 
