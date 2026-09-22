@@ -111,7 +111,7 @@ python deploy/prod/deploy_web.py --diagnose-tls
 
 ### Deploying the web SPA (app.mobaide.com)
 
-The browser client (`web/`) is served by **Caddy from disk** at `app.mobaide.com` — its own origin, same host. The site block reverse-proxies `/api`, `/ws`, `/relay` and `/proxy` to central-server (mirroring `web/vite.config.ts`'s dev proxy), so the SPA is fully same-origin with the relay and CORS never enters the picture. Everything else falls through to `try_files {path} /index.html` (client-side routing) with `Cache-Control: no-cache, must-revalidate` on `index.html` and unhashed public files, and `public, max-age=31536000, immutable` on Vite's content-hashed `/assets/*`.
+The browser client (`web/`) is served by **Caddy from disk** at `app.mobaide.com` — its own origin, same host. The site block reverse-proxies `/api`, `/ws`, `/relay` and `/proxy` to central-server (mirroring `web/vite.config.ts`'s dev proxy), so the SPA is fully same-origin with the relay and CORS never enters the picture. Everything else falls through to `try_files {path} /index.html` (client-side routing) with `Cache-Control: no-cache, must-revalidate` on `index.html` and unhashed public files, and `public, max-age=31536000, immutable` on Vite's content-hashed `/assets/*`. Because that fallback gives every path the same document, `web/index.html` declares `<link rel="canonical" href="https://app.mobaide.com/">`, which keeps Search Console from reporting `/login` and the other SPA routes as "Duplicate without user-selected canonical".
 
 ```bash
 python deploy/prod/deploy_web.py                # npm run build + ship

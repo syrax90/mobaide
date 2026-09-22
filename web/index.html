@@ -31,6 +31,15 @@
       192 + 512 — and closing that properly is CLA-252.
     -->
     <link rel="manifest" href="/manifest.webmanifest" />
+    <!--
+      Caddy's SPA fallback answers every path with this one file, so a crawler
+      sees `/login`, `/register` and every signed-in route as the same page as
+      `/`. Declaring `/` stops Search Console reporting them as "Duplicate
+      without user-selected canonical". Absolute and hard-coded: the SPA only
+      ever deploys to app.mobaide.com (deploy_web.py), and a dev server
+      pointing here is never crawled.
+    -->
+    <link rel="canonical" href="https://app.mobaide.com/" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>Mobaide</title>
