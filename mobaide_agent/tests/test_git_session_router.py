@@ -1,6 +1,7 @@
 """``GET /api/sessions/{id}/git/status|diff|commit/context``,
-``POST .../git/stage|unstage|discard|commit``, the fetch/pull/push jobs and
-``POST .../git/rebase[/continue|skip|abort]`` through the FastAPI app and the
+``POST .../git/stage|unstage|discard|commit``, the fetch/pull/push jobs,
+``POST .../git/rebase[/continue|skip|abort]`` and ``GET .../git/conflict`` plus
+``POST .../git/conflict/resolve|take|restore`` through the FastAPI app and the
 relay ``_dispatch_session_git`` dispatcher, asserting both transports answer
 byte-identically for every status code the contract defines."""
 from __future__ import annotations
@@ -192,6 +193,7 @@ class TestAuthAndRouting:
             "rebase": True,
             "resolve": True,
             "delete_remote": True,
+            "conflicts": True,
         }
 
 
@@ -375,6 +377,13 @@ class TestMutationRouting:
             ("POST", "rebase/"),
             ("POST", "rebase/restart"),
             ("POST", "rebase/abort/extra"),
+            ("POST", "conflict"),
+            ("GET", "conflict/resolve"),
+            ("GET", "conflict/take"),
+            ("GET", "conflict/restore"),
+            ("POST", "conflict/"),
+            ("POST", "conflict/undo"),
+            ("POST", "conflict/take/extra"),
         ],
     )
     async def test_relay_ignores_the_wrong_method_per_route(self, relay, method, route):
@@ -393,6 +402,14 @@ class TestMutationRouting:
             ("commit", {"message": "x", "amend": "maybe"}, ["amend"]),
             ("rebase", {}, ["onto"]),
             ("rebase", {"onto": ""}, ["onto"]),
+            ("conflict/resolve", {"path": "a.txt", "content": "x"}, ["token"]),
+            ("conflict/resolve", {"path": "a.txt", "token": "t"}, ["content"]),
+            ("conflict/resolve", {"path": "", "token": "t", "content": "x"}, ["path"]),
+            ("conflict/resolve", {"path": "a.txt", "token": "", "content": "x"}, ["token"]),
+            ("conflict/take", {"path": "a.txt"}, ["side"]),
+            ("conflict/take", {"path": "a.txt", "side": "mine"}, ["side"]),
+            ("conflict/restore", {}, ["path"]),
+            ("conflict/restore", {"path": "a.txt", "style": "zdiff3"}, ["style"]),
         ],
     )
     async def test_malformed_body_is_422_on_both_transports(
@@ -1003,3 +1020,242 @@ class TestRebaseRoutes:
             transport, http, headers, relay, "stage", {"paths": ["keep.txt"]})
 
         assert refused == (409, {"detail": {"code": "conflict_markers", "message": "keep.txt"}})
+
+
+def _conflict_url(session_id: str = SESSION_ID) -> str:
+    return _git_url("conflict", session_id)
+
+
+def _read(repo_dir: str, rel: str) -> bytes:
+    with open(os.path.join(repo_dir, *rel.split("/")), "rb") as fh:
+        return fh.read()
+
+
+@pytest.fixture
+def merging_repo(repo):
+    """``main`` stopped merging ``other``: ``keep.txt`` is in conflict."""
+    make_conflict_branches(repo)
+    run_git_sync(repo, "merge", "other", check=False)
+    return repo
+
+
+class TestConflictRouting:
+    async def test_conflict_routes_require_auth(self, http):
+        read = await http.get(_conflict_url(), params={"path": "a.txt"})
+        resolved = await http.post(
+            _git_url("conflict/resolve"), json={"path": "a.txt", "token": "t", "content": "x"})
+        taken = await http.post(
+            _git_url("conflict/take"), json={"path": "a.txt", "side": "ours"})
+        restored = await http.post(_git_url("conflict/restore"), json={"path": "a.txt"})
+
+        assert [r.status_code for r in (read, resolved, taken, restored)] == [401] * 4
+
+    async def test_unknown_session_read_is_404_on_both_transports(
+        self, http, headers, relay, session_at, tmp_path
+    ):
+        session_at(str(tmp_path))
+
+        resp = await _assert_parity(
+            http, headers, relay, _conflict_url("nope"), {"path": "a.txt"})
+
+        assert resp.status_code == 404
+        assert resp.json() == {"detail": "Session 'nope' not found"}
+
+    @pytest.mark.parametrize(
+        ("route", "body"),
+        [
+            ("conflict/resolve", {"path": "a.txt", "token": "t", "content": "x"}),
+            ("conflict/take", {"path": "a.txt", "side": "ours"}),
+            ("conflict/restore", {"path": "a.txt"}),
+        ],
+    )
+    async def test_unknown_session_write_is_404_on_both_transports(
+        self, http, headers, relay, session_at, tmp_path, route, body
+    ):
+        session_at(str(tmp_path))
+
+        resp = await _assert_post_parity(http, headers, relay, _git_url(route, "nope"), body)
+
+        assert resp.status_code == 404
+        assert resp.json() == {"detail": "Session 'nope' not found"}
+
+    @pytest.mark.parametrize(
+        "query", [None, {}, {"path": ""}, {"path": "../a.txt"}, {"path": ".git/config"}]
+    )
+    async def test_a_missing_or_bad_path_is_400_on_both_transports(
+        self, http, headers, relay, session_at, tmp_path, query
+    ):
+        session_at(str(tmp_path))
+
+        resp = await _assert_parity(http, headers, relay, _conflict_url(), query)
+
+        assert resp.status_code == 400
+        assert resp.json() == {"detail": {"code": "bad_path"}}
+
+    async def test_a_read_outside_a_repo_is_400_and_a_write_409(
+        self, http, headers, relay, session_at, tmp_path
+    ):
+        session_at(str(tmp_path))
+
+        read = await _assert_parity(http, headers, relay, _conflict_url(), {"path": "a.txt"})
+        taken = await _assert_post_parity(
+            http, headers, relay, _git_url("conflict/take"), {"path": "a.txt", "side": "ours"})
+
+        assert (read.status_code, read.json()) == (400, {"detail": {"code": "not_a_repo"}})
+        assert (taken.status_code, taken.json()) == (
+            409, {"detail": {"code": "not_a_repo", "message": ""}})
+
+
+@requires_git
+class TestConflictRoutes:
+    async def test_read_body_matches_on_both_transports(
+        self, http, headers, relay, session_at, merging_repo
+    ):
+        session_at(merging_repo)
+
+        resp = await _assert_parity(
+            http, headers, relay, _conflict_url(), {"path": "keep.txt"})
+
+        body = resp.json()
+        assert resp.status_code == 200
+        assert set(body) == {
+            "path", "code", "state", "kind", "content", "token", "markers", "has_base",
+            "ours", "theirs", "byte_limit"}
+        assert (body["path"], body["code"], body["state"], body["kind"]) == (
+            "keep.txt", "UU", "merging", "text")
+        assert body["content"] == _read(merging_repo, "keep.txt").decode()
+        assert (body["markers"], body["has_base"], body["byte_limit"]) == (1, False, 262144)
+        assert body["ours"] == {"label": "main", "present": True}
+        assert body["theirs"]["present"] is True
+        assert body["theirs"]["label"].endswith(" other side")
+
+    async def test_a_file_without_text_carries_nulls_on_both_transports(
+        self, http, headers, relay, session_at, merging_repo
+    ):
+        session_at(merging_repo)
+        write_file(merging_repo, "keep.txt", b"\0\1\2")
+
+        resp = await _assert_parity(
+            http, headers, relay, _conflict_url(), {"path": "keep.txt"})
+
+        body = resp.json()
+        assert (body["kind"], body["content"], body["token"]) == ("binary", None, None)
+
+    @pytest.mark.parametrize(
+        ("route", "body", "status", "detail"),
+        [
+            ("conflict/resolve", {"path": "README.md", "token": "t", "content": "x\n"},
+             409, {"code": "not_conflicted", "message": "README.md"}),
+            ("conflict/resolve", {"path": "keep.txt", "token": "stale", "content": "x\n"},
+             409, {"code": "file_changed", "message": "keep.txt"}),
+            ("conflict/resolve",
+             {"path": "keep.txt", "token": "t", "content": "<<<<<<< a\nx\n>>>>>>> b\n"},
+             409, {"code": "conflict_markers", "message": "keep.txt"}),
+            ("conflict/resolve",
+             {"path": "keep.txt", "token": "t", "content": "x" * (256 * 1024 + 1)},
+             400, {"code": "too_large"}),
+            ("conflict/resolve", {"path": "keep.txt", "token": "t", "content": "a\0b"},
+             400, {"code": "bad_content"}),
+            ("conflict/resolve", {"path": ".git/config", "token": "t", "content": "x"},
+             400, {"code": "bad_path"}),
+            ("conflict/take", {"path": "README.md", "side": "theirs"},
+             409, {"code": "not_conflicted", "message": "README.md"}),
+            ("conflict/take", {"path": "../x", "side": "theirs"}, 400, {"code": "bad_path"}),
+            ("conflict/restore", {"path": "README.md"},
+             409, {"code": "not_restorable", "message": "README.md"}),
+            ("conflict/restore", {"path": "keep.txt", "token": "stale"},
+             409, {"code": "file_changed", "message": "keep.txt"}),
+            ("conflict/restore", {"path": "a/.git/x"}, 400, {"code": "bad_path"}),
+        ],
+    )
+    async def test_refusals_and_bad_requests_match_on_both_transports(
+        self, http, headers, relay, session_at, merging_repo, route, body, status, detail
+    ):
+        session_at(merging_repo)
+        before = _read(merging_repo, "keep.txt")
+
+        resp = await _assert_post_parity(http, headers, relay, _git_url(route), body)
+
+        assert resp.status_code == status
+        assert resp.json() == {"detail": detail}
+        assert _read(merging_repo, "keep.txt") == before
+
+    async def test_a_not_conflicted_read_is_409_on_both_transports(
+        self, http, headers, relay, session_at, merging_repo
+    ):
+        session_at(merging_repo)
+
+        resp = await _assert_parity(
+            http, headers, relay, _conflict_url(), {"path": "README.md"})
+
+        assert resp.status_code == 409
+        assert resp.json() == {"detail": {"code": "not_conflicted", "message": "README.md"}}
+
+    @pytest.mark.parametrize("transport", ["http", "relay"])
+    async def test_resolve_then_restore_then_take_walks_the_file_through_the_resolver(
+        self, http, headers, relay, session_at, git_app, mock_app_state, merging_repo,
+        transport,
+    ):
+        session_at(merging_repo, project_name="proj")
+        bus = _FakeEventBus()
+        git_app.state.event_bus = bus
+        mock_app_state.event_bus = bus
+        read = await http.get(_conflict_url(), headers=headers, params={"path": "keep.txt"})
+
+        resolved = await _post_via(transport, http, headers, relay, "conflict/resolve", {
+            "path": "keep.txt", "token": read.json()["token"],
+            "content": "one\nRESOLVED\nthree\n"})
+        after_resolve = (await http.get(_status_url(), headers=headers)).json()
+        restored = await _post_via(
+            transport, http, headers, relay, "conflict/restore",
+            {"path": "keep.txt", "style": "diff3"})
+        after_restore = (await http.get(_status_url(), headers=headers)).json()
+        reread = await http.get(_conflict_url(), headers=headers, params={"path": "keep.txt"})
+        taken = await _post_via(
+            transport, http, headers, relay, "conflict/take",
+            {"path": "keep.txt", "side": "theirs"})
+
+        assert resolved == (200, {"ok": True})
+        assert after_resolve["resolved_paths"] == ["keep.txt"]
+        assert [(e["group"], e["path"]) for e in after_resolve["entries"]] == [
+            ("staged", "keep.txt")]
+        assert restored == (200, {"ok": True})
+        assert after_restore["resolved_paths"] == []
+        assert [(e["group"], e["path"]) for e in after_restore["entries"]] == [
+            ("conflicts", "keep.txt")]
+        assert (reread.json()["markers"], reread.json()["has_base"]) == (1, True)
+        assert taken == (200, {"ok": True})
+        assert _read(merging_repo, "keep.txt") == b"one\nOTHER\nthree\n"
+        changed = ("git.changed", {"project_name": "proj", "toplevel": norm_path(merging_repo),
+                                   "common_dir": norm_path(merging_repo) + "/.git"})
+        assert bus.published == [changed, changed, changed]
+
+    @pytest.mark.parametrize("transport", ["http", "relay"])
+    async def test_a_draft_defaults_to_apply_unless_mark_resolved_is_false(
+        self, http, headers, relay, session_at, merging_repo, transport
+    ):
+        session_at(merging_repo)
+        read = await http.get(_conflict_url(), headers=headers, params={"path": "keep.txt"})
+        draft = "one\n<<<<<<< main\nhalf\n=======\nOTHER\n>>>>>>> other\nthree\n"
+
+        saved = await _post_via(transport, http, headers, relay, "conflict/resolve", {
+            "path": "keep.txt", "token": read.json()["token"], "content": draft,
+            "mark_resolved": False})
+        applied = await _post_via(transport, http, headers, relay, "conflict/resolve", {
+            "path": "keep.txt", "token": read.json()["token"], "content": draft})
+
+        assert saved == (200, {"ok": True})
+        assert _read(merging_repo, "keep.txt") == draft.encode()
+        assert await _groups(http, headers) == [("conflicts", "keep.txt")]
+        assert applied == (409, {"detail": {"code": "conflict_markers", "message": "keep.txt"}})
+
+    async def test_status_carries_resolved_paths_on_both_transports(
+        self, http, headers, relay, session_at, merging_repo
+    ):
+        session_at(merging_repo)
+        write_file(merging_repo, "keep.txt", b"one\nRESOLVED\nthree\n")
+        run_git_sync(merging_repo, "add", "keep.txt")
+
+        resp = await _assert_parity(http, headers, relay, _status_url())
+
+        assert resp.json()["resolved_paths"] == ["keep.txt"]

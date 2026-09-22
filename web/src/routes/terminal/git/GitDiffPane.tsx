@@ -13,6 +13,7 @@ import {
   diffScopeFor,
   diffView,
   fileName,
+  opensResolver,
   rowActions,
   sessionGitErrorCopy,
   showsContextChoices,
@@ -34,6 +35,8 @@ interface GitDiffPaneProps {
   busy: boolean;
   /** Stage or unstage the shown file from the review; the panel re-targets the selection. */
   onAction: (action: RowAction, rows: readonly ChangesRow[]) => void;
+  /** Back to the conflict resolver from a conflicted file's HEAD diff. */
+  onResolve: (row: ChangesRow) => void;
 }
 
 export function GitDiffPane({
@@ -46,6 +49,7 @@ export function GitDiffPane({
   capabilities,
   busy,
   onAction,
+  onResolve,
 }: GitDiffPaneProps) {
   if (selection === null) {
     return <p className="git-diff-placeholder empty-state">Select a file to see its changes</p>;
@@ -65,6 +69,7 @@ export function GitDiffPane({
       capabilities={capabilities}
       busy={busy}
       onAction={onAction}
+      onResolve={onResolve}
     />
   );
 }
@@ -83,6 +88,7 @@ function GitDiffView({
   capabilities,
   busy,
   onAction,
+  onResolve,
 }: GitDiffViewProps) {
   const entry = selection.entry;
   const actions = rowActions(entry, capabilities);
@@ -115,6 +121,17 @@ function GitDiffView({
               }}
             >
               {actions.stage ? 'Stage' : 'Unstage'}
+            </button>
+          )}
+          {opensResolver(entry, capabilities) && (
+            <button
+              type="button"
+              className="button git-diff-action"
+              onClick={() => {
+                onResolve(selection);
+              }}
+            >
+              Resolve…
             </button>
           )}
           {actions.resolve && (

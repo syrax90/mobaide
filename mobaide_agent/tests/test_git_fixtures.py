@@ -2,11 +2,12 @@
 web clients.
 
 The session git shapes (status, diff, the stage/discard/commit request and
-response shapes, the fetch/pull/push job shapes and the rebase request and
-response) follow the strict rule: every case must survive ``model_validate``
-→ ``model_dump(mode="json")`` unchanged, and ``decoded_canonical`` (the shape
-Swift's ``JSONEncoder`` re-emits, with nil optionals dropped) must equal the
-wire with null-valued keys recursively stripped.
+response shapes, the fetch/pull/push job shapes, the rebase request and
+response and the conflict resolver bodies) follow the strict rule: every case
+must survive ``model_validate`` → ``model_dump(mode="json")`` unchanged, and
+``decoded_canonical`` (the shape Swift's ``JSONEncoder`` re-emits, with nil
+optionals dropped) must equal the wire with null-valued keys recursively
+stripped.
 
 The project git shapes (the items list, delete batch and the branch create /
 checkout bodies) predate that rule and were written the Swift way — a
@@ -28,6 +29,10 @@ from mobaide.agent.git.changes_models import (
     GitCommitContextResponse,
     GitCommitRequest,
     GitCommitResponse,
+    GitConflictResolveRequest,
+    GitConflictResponse,
+    GitConflictRestoreRequest,
+    GitConflictTakeRequest,
     GitDiffResponse,
     GitDiscardRequest,
     GitJobResponse,
@@ -71,6 +76,10 @@ _MODELS = {
     "GitJobResponse": GitJobResponse,
     "GitRebaseRequest": GitRebaseRequest,
     "GitRebaseResponse": GitRebaseResponse,
+    "GitConflictResponse": GitConflictResponse,
+    "GitConflictResolveRequest": GitConflictResolveRequest,
+    "GitConflictTakeRequest": GitConflictTakeRequest,
+    "GitConflictRestoreRequest": GitConflictRestoreRequest,
 }
 _MATERIALISING_MODELS = {
     "GitItem": GitItemRead,

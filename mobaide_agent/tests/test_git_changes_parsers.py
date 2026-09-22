@@ -3,6 +3,8 @@ splitting, porcelain v2 and unified-diff parsers, request validation and the
 HTTP error map."""
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from mobaide.agent.git.changes_models import GitStatusEntry, LINE_LIMIT, GitStatusCounts
@@ -384,6 +386,26 @@ class TestValidateRepoPath:
         with pytest.raises(GitBadRequestError) as info:
             validate_repo_path(raw)
         assert info.value.code == "bad_path"
+
+    @pytest.mark.parametrize(
+        "raw", ["dir\\..\\..\\x.txt", "a\\b.txt", "notes.txt:stream", "dir/a:b"]
+    )
+    def test_rejects_backslashes_and_colons_on_windows(self, monkeypatch, raw):
+        # ``os.path.join`` takes the backslash for a separator there, and a
+        # colon opens an alternate data stream.
+        monkeypatch.setattr(sys, "platform", "win32")
+
+        with pytest.raises(GitBadRequestError) as info:
+            validate_repo_path(raw)
+        assert info.value.code == "bad_path"
+
+    @pytest.mark.parametrize("raw", ["a\\b.txt", "notes.txt:stream", "dir/a:b"])
+    def test_keeps_backslashes_and_colons_where_they_are_file_name_bytes(
+        self, monkeypatch, raw
+    ):
+        monkeypatch.setattr(sys, "platform", "linux")
+
+        assert validate_repo_path(raw) == raw
 
 
 class TestClampContext:

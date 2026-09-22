@@ -20,21 +20,28 @@ import {
   commitSessionGit,
   discardSessionGit,
   getSessionGitCommitContext,
+  getSessionGitConflict,
   getSessionGitDiff,
   getSessionGitJob,
   getSessionGitStatus,
   isSessionGitJobLost,
   isTerminalSessionGitError,
+  resolveSessionGitConflict,
+  restoreSessionGitConflict,
   stageSessionGit,
   startSessionGitJob,
   startSessionGitRebase,
   stepSessionGitRebase,
+  takeSessionGitConflict,
   unstageSessionGit,
   type SessionGitCommitRequest,
+  type SessionGitConflictSide,
   type SessionGitDiffRequest,
   type SessionGitDiscardScope,
   type SessionGitJob,
   type SessionGitRebaseStep,
+  type SessionGitResolveRequest,
+  type SessionGitRestoreRequest,
   type SessionGitStatus,
   type SessionGitSyncRequest,
 } from '../../../api/sessionGitRepository';
@@ -204,6 +211,59 @@ export function useSessionGitRebase(agentId: string, sessionId: string) {
     onSettled: settle,
   });
   return { start, step, busy: start.isPending || step.isPending };
+}
+
+/**
+ * One conflicted file, read once. The text seeds the resolver's draft, so the
+ * query never goes stale and never refetches on its own — a reload is the
+ * user's call (`refetch`), and the entry is dropped as soon as the pane
+ * closes so the next open reads the file again.
+ */
+export function useSessionGitConflict(agentId: string, sessionId: string, path: string) {
+  return useQuery({
+    queryKey: queryKeys.sessionGitConflict(agentId, sessionId, path),
+    queryFn: ({ signal }) => getSessionGitConflict(agentId, sessionId, path, signal),
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: false,
+    meta: { silent: true },
+  });
+}
+
+export interface TakeVariables {
+  path: string;
+  side: SessionGitConflictSide;
+}
+
+/** Write a resolution (or a draft), take one side whole, or rebuild the conflict. */
+export function useSessionGitConflictMutations(agentId: string, sessionId: string) {
+  const queryClient = useQueryClient();
+  const settle = async (): Promise<void> => {
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.sessionGitStatus(agentId, sessionId),
+    });
+  };
+  const resolve = useMutation({
+    mutationFn: (request: SessionGitResolveRequest) =>
+      resolveSessionGitConflict(agentId, sessionId, request),
+    onSettled: settle,
+  });
+  const take = useMutation({
+    mutationFn: ({ path, side }: TakeVariables) =>
+      takeSessionGitConflict(agentId, sessionId, path, side),
+    onSettled: settle,
+  });
+  const restore = useMutation({
+    mutationFn: (request: SessionGitRestoreRequest) =>
+      restoreSessionGitConflict(agentId, sessionId, request),
+    onSettled: settle,
+  });
+  return {
+    resolve,
+    take,
+    restore,
+    busy: resolve.isPending || take.isPending || restore.isPending,
+  };
 }
 
 /**

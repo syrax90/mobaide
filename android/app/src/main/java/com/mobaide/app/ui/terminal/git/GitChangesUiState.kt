@@ -76,9 +76,16 @@ sealed interface GitChangesEvent {
         val scope: String,
     ) : GitChangesEvent
 
+    /** A conflict row on an agent with the resolver: the editor, not the HEAD diff. */
+    data class OpenConflict(val sessionId: String, val path: String) : GitChangesEvent
+
     /** A transient outcome for the snackbar: a commit's short SHA, a refused mutation. */
     data class ShowMessage(val text: String) : GitChangesEvent
 }
+
+/** Whether a row opens the conflict resolver instead of the HEAD diff. */
+internal fun opensResolver(entry: GitStatusEntry, capabilities: GitCapabilities): Boolean =
+    entry.group == GitStatusEntry.GROUP_CONFLICTS && capabilities.conflicts
 
 /**
  * What a row can do: a staged entry is unstaged, a modified or untracked one
@@ -381,6 +388,16 @@ internal fun refusalCopy(code: String, detailMessage: String?): String = when (c
     SessionGitException.CODE_JOB_NOT_FOUND -> JOB_LOST_COPY
     SessionGitException.CODE_CONFLICT_MARKERS ->
         "${detailMessage ?: "The file"} still has conflict markers — finish resolving it first."
+    SessionGitException.CODE_NOT_CONFLICTED -> "${detailMessage ?: "The file"} is no longer in conflict."
+    SessionGitException.CODE_FILE_CHANGED ->
+        "${detailMessage ?: "The file"} changed on the agent machine since you opened it."
+    SessionGitException.CODE_FILE_BUSY ->
+        "${detailMessage ?: "The file"} is open in another program — close it and try again."
+    SessionGitException.CODE_NOT_RESTORABLE ->
+        "The conflict in ${detailMessage ?: "the file"} can no longer be rebuilt."
+    SessionGitException.CODE_UNSUPPORTED -> "This conflict can't be resolved here — use the terminal."
+    SessionGitException.CODE_TOO_LARGE -> "The text is too large to save from here."
+    SessionGitException.CODE_BAD_CONTENT -> "The text contains characters that can't be saved."
     else -> detailMessage?.let { "git refused the request ($code): $it" }
         ?: "git refused the request ($code)."
 }
@@ -466,7 +483,11 @@ internal fun jobDoneTitle(op: String, ok: Boolean): String = when (op) {
  * git's own explanation and is rendered beside it in monospace, so only an
  * unknown code falls back to it here.
  */
-internal fun jobErrorCopy(code: String?, message: String?): String = when (code) {
+internal fun jobErrorCopy(
+    code: String?,
+    message: String?,
+    canResolveInApp: Boolean = false,
+): String = when (code) {
     GitJobResponse.CODE_CANCELLED -> "Cancelled."
     SessionGitException.CODE_GIT_TIMEOUT -> "git took too long to answer. Try again."
     GitJobResponse.CODE_AUTH_REQUIRED ->
@@ -475,7 +496,9 @@ internal fun jobErrorCopy(code: String?, message: String?): String = when (code)
     GitJobResponse.CODE_REMOTE_NOT_FOUND -> "The remote doesn't exist."
     GitJobResponse.CODE_REJECTED -> "The remote rejected the push."
     GitJobResponse.CODE_NOT_FAST_FORWARD -> "Your branch is behind the remote."
-    GitJobResponse.CODE_CONFLICTS -> "Stopped on conflicts — resolve them in the terminal."
+    GitJobResponse.CODE_CONFLICTS ->
+        if (canResolveInApp) "Stopped on conflicts — open a file under Conflicts to resolve it."
+        else "Stopped on conflicts — resolve them in the terminal."
     GitJobResponse.CODE_DIRTY_WORKTREE -> "Commit or stash your changes first."
     SessionGitException.CODE_UNMERGED -> "Resolve the conflicts first."
     GitJobResponse.CODE_OPERATION_IN_PROGRESS -> "A rebase or merge is already in progress."
@@ -489,12 +512,12 @@ internal fun jobErrorCopy(code: String?, message: String?): String = when (code)
 }
 
 /** The banner's one line: the title plus git's summary, or the title plus the failure copy. */
-internal fun jobNotice(job: GitJobResponse): String {
+internal fun jobNotice(job: GitJobResponse, canResolveInApp: Boolean = false): String {
     if (job.running) return jobTitle(job.op)
     val ok = job.ok == true
     val title = jobDoneTitle(job.op, ok)
     if (ok) return job.message?.takeIf { it.isNotEmpty() }?.let { "$title · $it" } ?: title
-    return "$title: ${jobErrorCopy(job.error_code, job.message)}"
+    return "$title: ${jobErrorCopy(job.error_code, job.message, canResolveInApp)}"
 }
 
 /** Whether the failure's `message` adds anything the copy did not already say. */
@@ -564,12 +587,12 @@ internal fun followUpPrompt(followUp: SyncFollowUp, repo: GitRepoInfo?): SyncPro
 data class GitJobBanner(val jobId: String, val job: GitJobResponse?, val lost: Boolean = false) {
     val running: Boolean get() = !lost && (job == null || job.running)
     val failed: Boolean get() = lost || job?.ok == false
-    val text: String
-        get() = when {
-            lost -> JOB_LOST_COPY
-            job == null -> "Syncing…"
-            else -> jobNotice(job)
-        }
+    /** [canResolveInApp] is the agent's `conflicts` capability, which words a conflict stop. */
+    fun text(canResolveInApp: Boolean = false): String = when {
+        lost -> JOB_LOST_COPY
+        job == null -> "Syncing…"
+        else -> jobNotice(job, canResolveInApp)
+    }
 }
 
 data class SyncSheetState(
@@ -640,7 +663,15 @@ internal fun rebasedBranch(repo: GitRepoInfo?): String =
  */
 data class RebaseBanner(val title: String, val progress: String?, val hint: String, val actionable: Boolean)
 
-internal fun rebaseBanner(repo: GitRepoInfo?, conflicts: Int): RebaseBanner? {
+/**
+ * [canResolveInApp] is the agent's `conflicts` capability: without it the files
+ * can only be fixed in the terminal, and the hint says so.
+ */
+internal fun rebaseBanner(
+    repo: GitRepoInfo?,
+    conflicts: Int,
+    canResolveInApp: Boolean = false,
+): RebaseBanner? {
     if (repo == null || repo.state != GitRepoInfo.STATE_REBASING) return null
     val info = repo.rebase
     val branch = info?.branch
@@ -660,7 +691,8 @@ internal fun rebaseBanner(repo: GitRepoInfo?, conflicts: Int): RebaseBanner? {
     val hint = when {
         !actionable -> "Continue, skip or abort it in the terminal."
         conflicts > 0 ->
-            "$conflicts ${if (conflicts == 1) "conflict" else "conflicts"} — fix the files, then Mark resolved."
+            "$conflicts ${if (conflicts == 1) "conflict" else "conflicts"} — " +
+                if (canResolveInApp) "open a file to resolve it." else "fix the files, then Mark resolved."
         else -> "No conflicts left — Continue when ready."
     }
     return RebaseBanner(title, parts.takeIf { it.isNotEmpty() }?.joinToString(" · "), hint, actionable)

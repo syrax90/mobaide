@@ -110,6 +110,44 @@ def make_conflict_branches(repo: str) -> None:
     commit_all(repo, "main side")
 
 
+def finish_merge_as_ours(repo: str) -> None:
+    """``other`` merged into ``main`` with the conflict on ``keep.txt`` resolved
+    as "ours" and committed: the index keeps the merge's resolve-undo record,
+    and its stage 2 is still ``HEAD``'s blob of ``keep.txt``."""
+    make_conflict_branches(repo)
+    run_git_sync(repo, "merge", "other", check=False)
+    run_git_sync(repo, "checkout", "--ours", "--", "keep.txt")
+    run_git_sync(repo, "add", "keep.txt")
+    run_git_sync(repo, "commit", "-q", "--no-edit")
+
+
+def start_failing_am_after_a_merge_as_ours(repo: str, patch_dir: str) -> None:
+    """:func:`finish_merge_as_ours`, then ``git am`` (no ``-3``) of ``other``'s
+    commit, which no longer applies: the session stays open in
+    ``rebase-apply`` without ever rewriting the index, so the merge's
+    resolve-undo record is still there."""
+    finish_merge_as_ours(repo)
+    run_git_sync(repo, "format-patch", "-q", "-1", "-o", patch_dir, "other")
+    (patch,) = os.listdir(patch_dir)
+    run_git_sync(repo, "am", os.path.join(patch_dir, patch), check=False)
+
+
+def stop_rebase_on_exec_after_a_pick_as_ours(repo: str) -> None:
+    """``other`` replayed onto ``main`` with a failing ``exec`` after the pick:
+    the pick's conflict on ``keep.txt`` is resolved as "ours" and committed by
+    ``--continue``, then the rebase stops on the ``exec``. ``REBASE_HEAD`` is
+    gone, and the pick's resolve-undo record is still in the index."""
+    make_conflict_branches(repo)
+    run_git_sync(repo, "checkout", "-q", "other")
+    write_file(repo, "extra.txt", b"extra\n")
+    run_git_sync(repo, "add", "extra.txt")
+    run_git_sync(repo, "commit", "-q", "--amend", "--no-edit")
+    run_git_sync(repo, "rebase", "--no-autostash", "-x", "false", "main", check=False)
+    run_git_sync(repo, "checkout", "--ours", "--", "keep.txt")
+    run_git_sync(repo, "add", "keep.txt")
+    run_git_sync(repo, "-c", "core.editor=true", "rebase", "--continue", check=False)
+
+
 def make_modify_delete_branches(repo: str, *, ours_deletes: bool) -> None:
     """``main`` and ``other`` disagree on ``keep.txt``: one side deletes it,
     the other rewrites line 2, so merging ``other`` into ``main`` stops with a
@@ -135,6 +173,28 @@ def add_submodule(repo: str, tmp_root: str, name: str = "sub") -> str:
         repo, "-c", "protocol.file.allow=always", "submodule", "add", source, name
     )
     return source
+
+
+def make_submodule_conflict(repo: str, tmp_root: str, name: str = "sub") -> None:
+    """``main`` and ``other`` each move the submodule at ``<name>`` to a commit
+    the other side lacks, and ``other`` is merged into ``main``: the merge
+    stops with gitlink entries at stages 1-3 of ``<name>``. The submodule's
+    worktree stays on ``main``'s commit, so ``git add <name>`` resolves the
+    conflict as "ours"."""
+    add_submodule(repo, tmp_root, name)
+    commit_all(repo, "adds the submodule")
+    sub = os.path.join(repo, name)
+    run_git_sync(repo, "checkout", "-q", "-b", "other")
+    run_git_sync(sub, "checkout", "-q", "-b", "other-side")
+    write_file(sub, "keep.txt", b"one\nOTHER\nthree\n")
+    commit_all(sub, "other side")
+    commit_all(repo, "other moves the submodule")
+    run_git_sync(repo, "checkout", "-q", "main")
+    run_git_sync(sub, "checkout", "-q", "-b", "main-side", "main")
+    write_file(sub, "keep.txt", b"one\nMAIN\nthree\n")
+    commit_all(sub, "main side")
+    commit_all(repo, "main moves the submodule")
+    run_git_sync(repo, "merge", "other", check=False)
 
 
 def norm_path(path: str) -> str:

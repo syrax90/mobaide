@@ -126,6 +126,23 @@ class GitChangesDtoFixtureTest {
     }
 
     @Test
+    fun rebasingWithResolvedPaths_listsThem_andAStatusWithoutTheKeyListsNone() {
+        val case = statusFixture.cases.first { it.name == "rebasing_with_resolved_paths" }
+        // An agent that predates the resolver sends no such key.
+        val older = JsonObject(case.wire - "resolved_paths")
+
+        assertEquals(
+            listOf("docs/notes with space.md", "src/session.py"),
+            status("rebasing_with_resolved_paths").resolved_paths,
+        )
+        assertEquals(emptyList<String>(), status("rebasing_stopped_on_conflict").resolved_paths)
+        assertEquals(
+            emptyList<String>(),
+            json.decodeFromJsonElement(GitStatusResponse.serializer(), older).resolved_paths,
+        )
+    }
+
+    @Test
     fun detachedHead_hasNoBranchAndNoUpstream() {
         val repo = status("detached_head").repo!!
         assertTrue(repo.head.detached)

@@ -5,6 +5,8 @@ import type {
   SessionGitCommitContext,
   SessionGitCommitRequest,
   SessionGitCommitResult,
+  SessionGitConflict,
+  SessionGitConflictSide,
   SessionGitDiff,
   SessionGitDiffRequest,
   SessionGitDiscardScope,
@@ -13,6 +15,8 @@ import type {
   SessionGitRebaseInfo,
   SessionGitRebaseResult,
   SessionGitRebaseStep,
+  SessionGitResolveRequest,
+  SessionGitRestoreRequest,
   SessionGitStatus,
   SessionGitSyncRequest,
 } from '../../../api/sessionGitRepository';
@@ -23,6 +27,12 @@ type MutationCall =
   | { kind: 'stage' | 'unstage'; paths: string[] }
   | { kind: 'discard'; paths: string[]; scope: SessionGitDiscardScope }
   | { kind: 'commit'; request: SessionGitCommitRequest };
+
+/** One write of the conflict resolver as the panel issued it. */
+type ConflictCall =
+  | { kind: 'resolve'; request: SessionGitResolveRequest }
+  | { kind: 'take'; path: string; side: SessionGitConflictSide }
+  | { kind: 'restore'; request: SessionGitRestoreRequest };
 
 // The network functions shadowed, as in `useSessionGit.test.tsx`: the status
 // the next poll answers with is whatever `api.status` holds, and every diff
@@ -70,6 +80,15 @@ const api = vi.hoisted(() => ({
   rebases: [] as ({ kind: 'start'; onto: string } | { kind: SessionGitRebaseStep })[],
   rebaseResult: undefined as SessionGitRebaseResult | undefined,
   refuseRebase: undefined as Error | undefined,
+  /**
+   * The conflict resolver: a read answers `conflictFile` and records the path
+   * it asked for; every write is recorded and succeeds unless
+   * `refuseConflict` holds a failure.
+   */
+  conflictFile: undefined as SessionGitConflict | undefined,
+  conflictReads: [] as string[],
+  conflictCalls: [] as ConflictCall[],
+  refuseConflict: undefined as Error | undefined,
 }));
 
 vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
@@ -80,6 +99,10 @@ vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
     return api.rebaseResult === undefined
       ? Promise.reject(new Error('no rebase result staged'))
       : Promise.resolve(api.rebaseResult);
+  };
+  const conflictCall = (call: ConflictCall): Promise<void> => {
+    api.conflictCalls.push(call);
+    return api.refuseConflict === undefined ? Promise.resolve() : Promise.reject(api.refuseConflict);
   };
   const mutate = <T,>(call: MutationCall, result: () => T): Promise<T> => {
     api.mutations.push(call);
@@ -145,6 +168,28 @@ vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
       rebaseCall({ kind: 'start', onto }),
     stepSessionGitRebase: (_agentId: string, _sessionId: string, step: SessionGitRebaseStep) =>
       rebaseCall({ kind: step }),
+    getSessionGitConflict: (_agentId: string, _sessionId: string, path: string) => {
+      api.conflictReads.push(path);
+      return api.conflictFile === undefined
+        ? Promise.reject(new Error('no conflict staged'))
+        : Promise.resolve(api.conflictFile);
+    },
+    resolveSessionGitConflict: (
+      _agentId: string,
+      _sessionId: string,
+      request: SessionGitResolveRequest,
+    ) => conflictCall({ kind: 'resolve', request }),
+    takeSessionGitConflict: (
+      _agentId: string,
+      _sessionId: string,
+      path: string,
+      side: SessionGitConflictSide,
+    ) => conflictCall({ kind: 'take', path, side }),
+    restoreSessionGitConflict: (
+      _agentId: string,
+      _sessionId: string,
+      request: SessionGitRestoreRequest,
+    ) => conflictCall({ kind: 'restore', request }),
     cancelSessionGitJob: (_agentId: string, _sessionId: string, jobId: string) => {
       api.cancels.push(jobId);
       if (api.job === undefined) return Promise.reject(new Error('no job staged'));
@@ -350,6 +395,10 @@ beforeEach(() => {
   api.rebases.length = 0;
   api.rebaseResult = undefined;
   api.refuseRebase = undefined;
+  api.conflictFile = undefined;
+  api.conflictReads.length = 0;
+  api.conflictCalls.length = 0;
+  api.refuseConflict = undefined;
 });
 
 afterEach(() => {
@@ -1648,5 +1697,395 @@ describe('GitChangesPanel rebase', () => {
     });
     expect(screen.queryByRole('dialog', { name: 'Rebase topic' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+  });
+});
+
+describe('GitChangesPanel conflict resolver', () => {
+  const ALL_CONFLICTS = { ...ALL_GIT, rebase: true, resolve: true, conflicts: true };
+  const CONFLICTED = 'a\n<<<<<<< HEAD\nmain\n=======\ntopic\n>>>>>>> fedcba9 (Fix the login redirect)\n';
+
+  const conflictEntry = (path: string): SessionGitEntry =>
+    entry({ group: 'conflicts', path, code: 'UU', index_status: 'U', worktree_status: 'U' });
+
+  const file = (over: Partial<SessionGitConflict> = {}): SessionGitConflict => ({
+    path: 'src/login.py',
+    code: 'UU',
+    state: 'rebasing',
+    kind: 'text',
+    content: CONFLICTED,
+    token: 't1',
+    markers: 1,
+    has_base: false,
+    ours: { label: 'main', present: true },
+    theirs: { label: 'fedcba9 Fix the login redirect', present: true },
+    byte_limit: 262144,
+    ...over,
+  });
+
+  /** Stopped mid-rebase, with the paths the agent can still restore. */
+  const stopped = (
+    etag: string,
+    entries: SessionGitEntry[],
+    resolvedPaths: string[] = [],
+  ): SessionGitStatus => ({
+    ...counted(etag, entries),
+    resolved_paths: resolvedPaths,
+    repo: {
+      toplevel: '/srv/p1',
+      git_dir: '/srv/p1/.git',
+      common_dir: '/srv/p1/.git',
+      head: { oid: '89abcdef', short_oid: '89abcde', branch: null, detached: true, initial: false },
+      upstream: null,
+      state: 'rebasing',
+      is_linked_worktree: false,
+      rebase: {
+        branch: 'topic',
+        onto_oid: '89abcdef0123456789abcdef0123456789abcdef',
+        onto_short_oid: '89abcde',
+        onto_ref: 'main',
+        stopped_on: { oid: 'fedcba98', short_oid: 'fedcba9', subject: 'Fix the login redirect' },
+        step: 2,
+        total: 5,
+      },
+    },
+  });
+
+  const failure = (httpStatus: number, detail: unknown): Error => {
+    const error = wireFailure(httpStatus, detail);
+    if (!(error instanceof Error)) throw new Error('expected an Error off the wire');
+    return error;
+  };
+
+  const editor = (): HTMLTextAreaElement =>
+    screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Contents of src/login.py' });
+  const queryEditor = (): HTMLElement | null =>
+    screen.queryByRole('textbox', { name: 'Contents of src/login.py' });
+  const type = (text: string): void => {
+    fireEvent.input(editor(), { target: { value: text } });
+  };
+  const notice = (): HTMLElement | null =>
+    document.querySelector<HTMLElement>('.git-panel-notice:not(.git-panel-rebase):not(.git-panel-job)');
+  /** The modified file's row itself: its Stage and Discard buttons carry the path too. */
+  const otherRow = (): HTMLElement => screen.getByRole('button', { name: /app\.py/, pressed: false });
+
+  const renderStopped = async (
+    next: SessionGitStatus,
+    git: Record<string, unknown> = ALL_CONFLICTS,
+  ): Promise<void> => {
+    api.version = agentVersion(git);
+    api.status = next;
+    api.conflictFile = file();
+    renderPanel();
+    await screen.findByText('Rebasing topic onto main');
+    await capabilitiesSettled();
+  };
+
+  /** The resolver open on `src/login.py`, beside an ordinary modified file. */
+  const openResolver = async (): Promise<void> => {
+    await renderStopped(stopped('e1', [conflictEntry('src/login.py'), entry()]));
+    fireEvent.click(screen.getByRole('button', { name: /login\.py/, pressed: false }));
+    await waitFor(() => {
+      expect(queryEditor()).not.toBeNull();
+    });
+  };
+
+  it('opens a conflict row in the resolver, not in a diff, and says so in the banner', async () => {
+    await openResolver();
+
+    expect(editor().value).toBe(CONFLICTED);
+    expect(api.conflictReads).toEqual(['src/login.py']);
+    expect(api.diffs).toEqual([]);
+    expect(document.querySelector('.git-panel-rebase')).toHaveTextContent(
+      '1 conflict — open a file to resolve it.',
+    );
+    expect(screen.getByRole('button', { name: 'Continue' })).toHaveAttribute(
+      'title',
+      'Resolve every conflict first',
+    );
+  });
+
+  it('keeps the HEAD diff, with no Resolve… button, on an agent without the resolver', async () => {
+    await renderStopped(stopped('e1', [conflictEntry('src/login.py')]), {
+      ...ALL_GIT,
+      rebase: true,
+      resolve: true,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /login\.py/, pressed: false }));
+
+    await waitFor(() => {
+      expect(api.diffs).toHaveLength(1);
+    });
+    expect(api.conflictReads).toEqual([]);
+    expect(queryEditor()).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Resolve…' })).toBeNull();
+    expect(document.querySelector('.git-panel-rebase')).toHaveTextContent(
+      '1 conflict — fix the files, then Mark resolved.',
+    );
+  });
+
+  it('goes to the HEAD diff from the menu and back through Resolve…', async () => {
+    await openResolver();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More conflict actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'View diff' }));
+
+    await waitFor(() => {
+      expect(api.diffs.map((request) => [request.path, request.scope])).toEqual([
+        ['src/login.py', 'unstaged'],
+      ]);
+    });
+    expect(queryEditor()).toBeNull();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resolve…' }));
+
+    await waitFor(() => {
+      expect(queryEditor()).not.toBeNull();
+    });
+    expect(api.conflictReads).toEqual(['src/login.py', 'src/login.py']);
+  });
+
+  it('closes on Apply, reports the resolved file and hands focus back to Close', async () => {
+    await openResolver();
+    type('a\nmerged\n');
+    const apply = screen.getByRole('button', { name: 'Apply & mark resolved' });
+    await waitFor(() => {
+      expect(apply).toBeEnabled();
+    });
+    api.status = stopped('e2', [entry()], ['src/login.py']);
+
+    fireEvent.click(apply);
+
+    await waitFor(() => {
+      expect(notice()).toHaveTextContent('Resolved src/login.py.');
+    });
+    expect(api.conflictCalls).toEqual([
+      {
+        kind: 'resolve',
+        request: { path: 'src/login.py', token: 't1', content: 'a\nmerged\n', markResolved: true },
+      },
+    ]);
+    expect(queryEditor()).toBeNull();
+    expect(layout()).toHaveAttribute('data-view', 'list');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+    });
+  });
+
+  describe('with unsaved edits', () => {
+    const dirtyResolver = async (): Promise<void> => {
+      await openResolver();
+      type('half done\n');
+    };
+
+    it('asks before another row replaces the editor, with Keep editing focused', async () => {
+      await dirtyResolver();
+
+      fireEvent.click(otherRow());
+
+      const confirm = screen.getByRole('alertdialog', { name: 'Discard your edits?' });
+      expect(confirm).toHaveTextContent('Your changes to login.py have not been saved.');
+      expect(within(confirm).getByRole('button', { name: 'Keep editing' })).toHaveFocus();
+      expect(api.diffs).toEqual([]);
+
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Keep editing' }));
+
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(editor().value).toBe('half done\n');
+      expect(api.diffs).toEqual([]);
+    });
+
+    it('switches to the other row once the edits are given up', async () => {
+      await dirtyResolver();
+      fireEvent.click(otherRow());
+
+      fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+
+      await waitFor(() => {
+        expect(api.diffs.map((request) => request.path)).toEqual(['src/app.py']);
+      });
+      expect(queryEditor()).toBeNull();
+    });
+
+    it.each([
+      ['Escape', () => fireEvent.keyDown(layout(), { key: 'Escape' })],
+      ['the Close button', () => fireEvent.click(screen.getByRole('button', { name: 'Close' }))],
+    ])('asks before %s closes the panel, and closes only on Discard', async (_name, leave) => {
+      await dirtyResolver();
+
+      leave();
+
+      const confirm = screen.getByRole('alertdialog', { name: 'Discard your edits?' });
+      expect(onClose).not.toHaveBeenCalled();
+
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Discard' }));
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks before View diff leaves the editor', async () => {
+      await dirtyResolver();
+
+      fireEvent.click(screen.getByRole('button', { name: 'More conflict actions' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'View diff' }));
+
+      expect(screen.getByRole('alertdialog', { name: 'Discard your edits?' })).toBeInTheDocument();
+      expect(queryEditor()).not.toBeNull();
+    });
+
+    it('takes a click on its own row as no way out: no question, the draft kept and still guarded', async () => {
+      await dirtyResolver();
+
+      fireEvent.click(screen.getByRole('button', { name: /login\.py/, pressed: true }));
+
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(editor().value).toBe('half done\n');
+      expect(layout()).toHaveAttribute('data-view', 'diff');
+      expect(api.conflictReads).toEqual(['src/login.py']);
+      expect(api.diffs).toEqual([]);
+
+      fireEvent.keyDown(layout(), { key: 'Escape' });
+
+      expect(screen.getByRole('alertdialog', { name: 'Discard your edits?' })).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('stays open, and says why, when the file leaves Conflicts underneath it', async () => {
+      await dirtyResolver();
+
+      await pollWith(stopped('e2', [entry()], ['src/login.py']));
+
+      const strip = await screen.findByRole('alert');
+      expect(strip).toHaveTextContent('login.py is no longer in conflict.');
+      expect(within(strip).getByRole('button', { name: 'Copy my text' })).toBeInTheDocument();
+      expect(editor().value).toBe('half done\n');
+    });
+  });
+
+  it('closes a clean resolver without a question', async () => {
+    await openResolver();
+
+    fireEvent.keyDown(layout(), { key: 'Escape' });
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['a clean editor', null],
+    ['unsaved edits', 'half done\n'],
+  ])('keeps Escape for the open ⋯ menu over %s, then gives it back', async (_name, edit) => {
+    await openResolver();
+    if (edit !== null) type(edit);
+    const trigger = screen.getByRole('button', { name: 'More conflict actions' });
+    fireEvent.click(trigger);
+
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: 'View diff' }), { key: 'Escape' });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(queryEditor()).not.toBeNull();
+    expect(trigger).toHaveFocus();
+
+    fireEvent.keyDown(trigger, { key: 'Escape' });
+
+    if (edit === null) expect(onClose).toHaveBeenCalledTimes(1);
+    else expect(screen.getByRole('alertdialog', { name: 'Discard your edits?' })).toBeInTheDocument();
+  });
+
+  it('closes a clean resolver, with a notice, when the file is resolved elsewhere', async () => {
+    await openResolver();
+
+    await pollWith(stopped('e2', [entry()], ['src/login.py']));
+
+    await waitFor(() => {
+      expect(queryEditor()).toBeNull();
+    });
+    expect(notice()).toHaveTextContent('login.py is no longer in conflict.');
+    expect(layout()).toHaveAttribute('data-view', 'list');
+  });
+
+  describe('Resolved section', () => {
+    const restoreButton = (): HTMLElement =>
+      screen.getByRole('button', { name: 'Restore the conflict in src/session.py' });
+
+    it('lists the restorable paths right under Conflicts, outside the selection', async () => {
+      await renderStopped(
+        stopped('e1', [conflictEntry('src/login.py'), entry()], ['src/session.py']),
+      );
+
+      const titles = [...document.querySelectorAll('.git-changes-section h3 > span:first-child')].map(
+        (node) => node.textContent,
+      );
+      expect(titles).toEqual(['Conflicts', 'Resolved', 'Changes']);
+      expect(sectionOf(restoreButton())).toHaveTextContent('session.py');
+      expect(screen.queryByRole('checkbox', { name: 'Select src/session.py' })).toBeNull();
+    });
+
+    it('stands alone, instead of "Working tree clean", when the resolutions equal HEAD', async () => {
+      await renderStopped(stopped('e1', [], ['src/session.py']));
+
+      expect(restoreButton()).toBeInTheDocument();
+      expect(screen.queryByText('Working tree clean')).toBeNull();
+    });
+
+    it('is absent on an agent without the resolver, whatever the status carries', async () => {
+      await renderStopped(stopped('e1', [entry()], ['src/session.py']), {
+        ...ALL_GIT,
+        rebase: true,
+        resolve: true,
+      });
+
+      expect(screen.queryByText('Resolved')).toBeNull();
+      expect(screen.queryByRole('button', { name: /Restore the conflict/ })).toBeNull();
+    });
+
+    it('asks first, with Cancel focused, then rebuilds the conflict and reports it', async () => {
+      await renderStopped(stopped('e1', [entry()], ['src/session.py']));
+
+      fireEvent.click(restoreButton());
+
+      const confirm = screen.getByRole('alertdialog', { name: 'Restore the conflict?' });
+      expect(confirm).toHaveTextContent(
+        'session.py goes back to its conflicted state. The resolution you applied is discarded.',
+      );
+      expect(within(confirm).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+      expect(api.conflictCalls).toEqual([]);
+
+      api.status = stopped('e2', [conflictEntry('src/session.py'), entry()]);
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Restore conflict' }));
+
+      await waitFor(() => {
+        expect(notice()).toHaveTextContent('Restored the conflict in src/session.py.');
+      });
+      expect(api.conflictCalls).toEqual([
+        { kind: 'restore', request: { path: 'src/session.py', style: 'merge' } },
+      ]);
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(await screen.findByRole('button', { name: /session\.py/, pressed: false })).toBeInTheDocument();
+    });
+
+    it('cancels without a request', async () => {
+      await renderStopped(stopped('e1', [entry()], ['src/session.py']));
+      fireEvent.click(restoreButton());
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(api.conflictCalls).toEqual([]);
+    });
+
+    it('reports a conflict git can no longer rebuild', async () => {
+      await renderStopped(stopped('e1', [entry()], ['src/session.py']));
+      api.refuseConflict = failure(409, { code: 'not_restorable', message: 'src/session.py' });
+      fireEvent.click(restoreButton());
+
+      fireEvent.click(screen.getByRole('button', { name: 'Restore conflict' }));
+
+      await waitFor(() => {
+        expect(notice()).toHaveTextContent('The conflict in src/session.py can no longer be rebuilt.');
+      });
+      expect(notice()).toHaveAttribute('data-tone', 'danger');
+    });
   });
 });

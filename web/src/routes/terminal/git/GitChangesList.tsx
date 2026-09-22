@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import {
   isSessionGitError,
   isTerminalSessionGitError,
@@ -12,6 +13,7 @@ import {
   fileName,
   headLabel,
   repoStateLabel,
+  resolvedRowsFor,
   rowActions,
   sectionAction,
   sectionsFor,
@@ -22,6 +24,7 @@ import {
   upstreamLabel,
   type ChangesRow,
   type ChangesSection,
+  type ResolvedRow,
   type RowAction,
   type RowActions,
 } from './sessionGitDisplay';
@@ -42,6 +45,8 @@ interface GitChangesListProps {
   onAction: (action: RowAction, rows: readonly ChangesRow[]) => void;
   /** Opens the Fetch / Pull / Push sheet; absent on an agent without the jobs. */
   onSync?: (() => void) | undefined;
+  /** Asks to rebuild a resolved file's conflict; absent on an agent without the resolver. */
+  onRestore?: ((path: string) => void) | undefined;
 }
 
 /**
@@ -67,6 +72,7 @@ export function GitChangesList({
   onClearSelection,
   onAction,
   onSync,
+  onRestore,
 }: GitChangesListProps) {
   if (isTerminalSessionGitError(error) && isSessionGitError(error)) {
     return error.kind === 'agentOutdated' ? (
@@ -104,6 +110,13 @@ export function GitChangesList({
   }
 
   const sections = sectionsFor(status);
+  const resolved = onRestore === undefined ? [] : resolvedRowsFor(status);
+  // *Resolved* sits right under *Conflicts*: it is where a conflict row goes.
+  const resolvedAfter = sections.findIndex((section) => section.group === 'conflicts');
+  const resolvedSection =
+    onRestore === undefined ? null : (
+      <ResolvedSection rows={resolved} busy={busy} onRestore={onRestore} />
+    );
   const truncated = truncatedEntriesNotice(status);
   const selectable = capabilities.stage || capabilities.discard;
   return (
@@ -130,77 +143,135 @@ export function GitChangesList({
           onClear={onClearSelection}
         />
       )}
+      {resolvedAfter < 0 && resolvedSection}
       {sections.length === 0 ? (
-        <p className="empty-state">Working tree clean</p>
+        resolved.length === 0 && <p className="empty-state">Working tree clean</p>
       ) : (
-        sections.map((section) => {
+        sections.map((section, index) => {
           const bulk = sectionAction(section, capabilities);
           return (
-            <section key={section.group} className="git-changes-section">
-              <h3>
-                <span>{section.title}</span>
-                <span className="git-changes-count">{section.rows.length}</span>
-                {bulk !== null && (
-                  <button
-                    type="button"
-                    className="button"
-                    disabled={busy}
-                    onClick={() => {
-                      onAction(bulk.action, section.rows);
-                    }}
-                  >
-                    {bulk.label}
-                  </button>
-                )}
-              </h3>
-              <ul className="git-changes-rows">
-                {section.rows.map((row) => {
-                  const actions = rowActions(row.entry, capabilities);
-                  const hasBulkActions = actions.stage || actions.unstage || actions.discard;
-                  const hasActions = hasBulkActions || actions.resolve;
-                  return (
-                    <li key={row.key} className="git-changes-item">
-                      {/* A conflict has no checkbox rather than a disabled one: no
-                          toolbar action applies to it — Mark resolved is one file
-                          at a time — so a control would be noise. */}
-                      {selectable && hasBulkActions && (
-                        <input
-                          type="checkbox"
-                          className="git-changes-select"
-                          checked={selectedKeys.has(row.key)}
-                          disabled={busy}
-                          aria-label={`Select ${row.entry.path}`}
-                          onChange={(event) => {
-                            onToggleRow(row, event.target.checked);
-                          }}
-                        />
-                      )}
-                      <EntryRow
-                        entry={row.entry}
-                        selected={row.key === selectedKey}
-                        onClick={() => {
-                          onSelect(row);
-                        }}
-                      />
-                      {hasActions && (
-                        <RowActionButtons
+            <Fragment key={section.group}>
+              <section className="git-changes-section">
+                <h3>
+                  <span>{section.title}</span>
+                  <span className="git-changes-count">{section.rows.length}</span>
+                  {bulk !== null && (
+                    <button
+                      type="button"
+                      className="button"
+                      disabled={busy}
+                      onClick={() => {
+                        onAction(bulk.action, section.rows);
+                      }}
+                    >
+                      {bulk.label}
+                    </button>
+                  )}
+                </h3>
+                <ul className="git-changes-rows">
+                  {section.rows.map((row) => {
+                    const actions = rowActions(row.entry, capabilities);
+                    const hasBulkActions = actions.stage || actions.unstage || actions.discard;
+                    const hasActions = hasBulkActions || actions.resolve;
+                    return (
+                      <li key={row.key} className="git-changes-item">
+                        {/* A conflict has no checkbox rather than a disabled one: no
+                            toolbar action applies to it — Mark resolved is one file
+                            at a time — so a control would be noise. */}
+                        {selectable && hasBulkActions && (
+                          <input
+                            type="checkbox"
+                            className="git-changes-select"
+                            checked={selectedKeys.has(row.key)}
+                            disabled={busy}
+                            aria-label={`Select ${row.entry.path}`}
+                            onChange={(event) => {
+                              onToggleRow(row, event.target.checked);
+                            }}
+                          />
+                        )}
+                        <EntryRow
                           entry={row.entry}
-                          actions={actions}
-                          busy={busy}
-                          onAction={(action) => {
-                            onAction(action, [row]);
+                          selected={row.key === selectedKey}
+                          onClick={() => {
+                            onSelect(row);
                           }}
                         />
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
+                        {hasActions && (
+                          <RowActionButtons
+                            entry={row.entry}
+                            actions={actions}
+                            busy={busy}
+                            onAction={(action) => {
+                              onAction(action, [row]);
+                            }}
+                          />
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+              {index === resolvedAfter && resolvedSection}
+            </Fragment>
           );
         })
       )}
     </>
+  );
+}
+
+interface ResolvedSectionProps {
+  rows: readonly ResolvedRow[];
+  busy: boolean;
+  onRestore: (path: string) => void;
+}
+
+/**
+ * Files marked resolved during the operation in progress. Not selectable and
+ * not a link to a diff — a resolution equal to HEAD has no diff — so the row
+ * is plain text and its one action, *Restore conflict…*, is always visible.
+ */
+function ResolvedSection({ rows, busy, onRestore }: ResolvedSectionProps) {
+  if (rows.length === 0) return null;
+  return (
+    <section className="git-changes-section">
+      <h3>
+        <span>Resolved</span>
+        <span className="git-changes-count">{rows.length}</span>
+      </h3>
+      <ul className="git-changes-rows">
+        {rows.map((row) => {
+          const dir = directory(row.path);
+          return (
+            <li key={row.key} className="git-changes-item git-changes-item-static">
+              <span className="git-changes-row git-changes-row-static">
+                <span className="git-badge git-badge-added" aria-label="resolved">
+                  ✓
+                </span>
+                <span className="git-changes-text">
+                  <span className="git-changes-name">{fileName(row.path)}</span>
+                  {dir !== null && <span className="git-changes-dir">{dir}</span>}
+                </span>
+              </span>
+              <span className="git-changes-row-actions">
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy}
+                  aria-label={`Restore the conflict in ${row.path}`}
+                  onClick={() => {
+                    onRestore(row.path);
+                  }}
+                >
+                  Restore conflict…
+                </button>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

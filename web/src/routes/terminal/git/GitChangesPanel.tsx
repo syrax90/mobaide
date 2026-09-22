@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   GIT_CODE_JOB_RUNNING,
@@ -9,13 +16,21 @@ import {
   type SessionGitSyncRequest,
 } from '../../../api/sessionGitRepository';
 import { Modal } from '../../../components/Modal';
+import { useUnloadGuard } from '../../../keyboard/useUnloadGuard';
 import { queryKeys } from '../../../lib/queryKeys';
 import { NO_GIT_CAPABILITIES, hasGitSync } from '../../../protocol/dto/agentVersion';
 import { GitChangesList } from './GitChangesList';
 import { GitCommitDialog } from './GitCommitDialog';
+import { GitConflictPane, type ConflictPaneNotice } from './GitConflictPane';
 import { GitDiffPane } from './GitDiffPane';
 import { GitRebaseDialog } from './GitRebaseDialog';
 import { GitSyncDialog, SyncProgressBar } from './GitSyncDialog';
+import {
+  discardEditsPrompt,
+  resolvedElsewhereNotice,
+  restorePrompt,
+  restoredNotice,
+} from './sessionGitConflictDisplay';
 import {
   DIFF_CONTEXT_DEFAULT,
   JOB_LOST_COPY,
@@ -26,6 +41,7 @@ import {
   jobNotice,
   jobTitle,
   mutationErrorCopy,
+  opensResolver,
   pathsFor,
   rebaseBanner,
   rebaseErrorCopy,
@@ -38,6 +54,7 @@ import {
 } from './sessionGitDisplay';
 import {
   useSessionGitCapabilities,
+  useSessionGitConflictMutations,
   useSessionGitJob,
   useSessionGitLatestJob,
   useSessionGitMutations,
@@ -86,6 +103,12 @@ interface PanelNotice {
  * A fetch / pull / push job (#676) gets a second strip of the same kind while
  * it runs and until its result is dismissed, and a rebase in progress a third,
  * with Continue / Skip / Abort, for as long as the status says `rebasing`.
+ *
+ * A conflict row opens the resolver in the diff's place. It is pinned by path,
+ * not by the selected row: the file leaves *Conflicts* the moment it is
+ * resolved — here, or by `git add` in the terminal — and an editor with unsaved
+ * text must not vanish with its row. Every way out of a dirty editor (another
+ * row, View diff, Escape, Close) asks first.
  */
 export function GitChangesPanel({
   agentId,
@@ -100,6 +123,8 @@ export function GitChangesPanel({
   const closeRef = useRef<HTMLButtonElement>(null);
   const cancelDiscardRef = useRef<HTMLButtonElement>(null);
   const cancelRebaseStepRef = useRef<HTMLButtonElement>(null);
+  const cancelLeaveRef = useRef<HTMLButtonElement>(null);
+  const cancelRestoreRef = useRef<HTMLButtonElement>(null);
   const queryClient = useQueryClient();
   const [selection, setSelection] = useState<ChangesRow | null>(null);
   const [context, setContext] = useState(DIFF_CONTEXT_DEFAULT);
@@ -112,11 +137,18 @@ export function GitChangesPanel({
   const [pendingRebaseStep, setPendingRebaseStep] = useState<RebasePromptStep | null>(null);
   const [notice, setNotice] = useState<PanelNotice | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [conflictPath, setConflictPath] = useState<string | null>(null);
+  const [conflictDirty, setConflictDirty] = useState(false);
+  const [conflictDialogOpen, setConflictDialogOpen] = useState(false);
+  const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
+  const [restorePath, setRestorePath] = useState<string | null>(null);
   const status = useSessionGitStatus(agentId, sessionId, true);
   const capabilities = useSessionGitCapabilities(agentId, true).data ?? NO_GIT_CAPABILITIES;
   const mutations = useSessionGitMutations(agentId, sessionId);
   const sync = useSessionGitSync(agentId, sessionId);
   const rebase = useSessionGitRebase(agentId, sessionId);
+  const conflictMutations = useSessionGitConflictMutations(agentId, sessionId);
+  useUnloadGuard(conflictDirty);
 
   // The job this panel follows. Adopted from wherever it surfaces — this
   // panel's own start, a socket frame for a job another client started, or
@@ -137,7 +169,10 @@ export function GitChangesPanel({
   // is off limits (the agent answers `job_running`); the sync controls and
   // navigation are not. A job the agent has forgotten holds nothing.
   const jobRunning = !jobLost && job !== undefined && job.status !== 'done';
-  const busy = mutations.busy || rebase.busy || sync.start.isPending || jobRunning;
+  // What holds the repository apart from the resolver's own requests, which
+  // the resolver pane counts itself.
+  const repoBusy = mutations.busy || rebase.busy || sync.start.isPending || jobRunning;
+  const busy = repoBusy || conflictMutations.busy;
 
   const dismissJob = (): void => {
     if (activeJobId !== null) setDismissedJobId(activeJobId);
@@ -187,7 +222,14 @@ export function GitChangesPanel({
   // with the banner once the rebase is over. A passive effect, because the
   // dialog closes from a layout-effect cleanup.
   const [focusCloseAfterDialog, setFocusCloseAfterDialog] = useState(false);
-  const dialogOpen = commitOpen || syncOpen || rebaseOpen || pendingRebaseStep !== null;
+  const dialogOpen =
+    commitOpen ||
+    syncOpen ||
+    rebaseOpen ||
+    pendingRebaseStep !== null ||
+    pendingLeave !== null ||
+    restorePath !== null ||
+    conflictDialogOpen;
   useEffect(() => {
     if (!focusCloseAfterDialog || dialogOpen) return;
     closeRef.current?.focus();
@@ -237,8 +279,61 @@ export function GitChangesPanel({
       rows.find((row) => row.entry.path === path) ??
       null;
     setSelection(next);
-    if (next === null) setView('list');
-  }, [body, selection]);
+    if (next === null && conflictPath === null) setView('list');
+  }, [body, selection, conflictPath]);
+
+  // The resolver's file left *Conflicts* without this pane's doing. With no
+  // unsaved text there is nothing to keep open; with some, the pane stays and
+  // says so itself.
+  const conflictStillOpen =
+    conflictPath !== null &&
+    (body?.entries ?? []).some(
+      (entry) => entry.group === 'conflicts' && entry.path === conflictPath,
+    );
+  useEffect(() => {
+    if (conflictPath === null || body === undefined || conflictStillOpen || conflictDirty) return;
+    setNotice({ tone: 'ok', text: resolvedElsewhereNotice(conflictPath) });
+    setConflictPath(null);
+    setView('list');
+  }, [conflictPath, body, conflictStillOpen, conflictDirty]);
+
+  /** Run `action` now, or after the user agrees to drop the resolver's unsaved text. */
+  const guardLeave = (action: () => void): void => {
+    if (conflictPath !== null && conflictDirty) setPendingLeave(() => action);
+    else action();
+  };
+
+  const closeResolver = (): void => {
+    setConflictPath(null);
+    setConflictDirty(false);
+  };
+
+  const onConflictDone = (result: ConflictPaneNotice): void => {
+    closeResolver();
+    setSelection(null);
+    setView('list');
+    setNotice(result);
+    setFocusCloseAfterDialog(true);
+  };
+
+  const onConflictDirty = useCallback((dirty: boolean): void => {
+    setConflictDirty(dirty);
+  }, []);
+  const onConflictDialog = useCallback((open: boolean): void => {
+    setConflictDialogOpen(open);
+  }, []);
+
+  const restoreConflict = async (path: string): Promise<void> => {
+    setRestorePath(null);
+    setNotice(null);
+    try {
+      await conflictMutations.restore.mutateAsync({ path, style: 'merge' });
+      setNotice({ tone: 'ok', text: restoredNotice(path) });
+    } catch (error: unknown) {
+      setNotice({ tone: 'danger', text: mutationErrorCopy(error) });
+    }
+    setFocusCloseAfterDialog(true);
+  };
 
   const refresh = (): void => {
     void status.refetch();
@@ -250,9 +345,11 @@ export function GitChangesPanel({
   // also tear the panel down; the dialogs handle their own Escape.
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key !== 'Escape') return;
+    // The resolver's ⋯ menu closes itself on Escape and marks the event handled.
+    if (event.defaultPrevented) return;
     if (dialogOpen || discardRows !== null) return;
     event.preventDefault();
-    onClose();
+    guardLeave(onClose);
   };
 
   const startSync = async (request: SessionGitSyncRequest): Promise<void> => {
@@ -394,7 +491,9 @@ export function GitChangesPanel({
 
   const stagedCount = body?.counts?.staged ?? 0;
   const conflictCount = body?.counts?.conflicts ?? 0;
-  const banner = rebaseBanner(body?.repo, conflictCount);
+  const banner = rebaseBanner(body?.repo, conflictCount, capabilities.conflicts);
+  const leavePrompt = conflictPath === null ? null : discardEditsPrompt(conflictPath);
+  const restoreCopy = restorePath === null ? null : restorePrompt(restorePath);
   const stepPrompt =
     pendingRebaseStep === null ? null : rebaseStepPrompt(pendingRebaseStep, body?.repo);
   const prompt = discardRows === null ? null : discardPrompt(discardRows);
@@ -451,7 +550,9 @@ export function GitChangesPanel({
           className="button button-icon"
           aria-label="Close"
           title="Close"
-          onClick={onClose}
+          onClick={() => {
+            guardLeave(onClose);
+          }}
         >
           ✕
         </button>
@@ -469,7 +570,7 @@ export function GitChangesPanel({
                 ? JOB_LOST_COPY
                 : job === undefined
                   ? 'Syncing…'
-                  : jobNotice(job)}
+                  : jobNotice(job, capabilities.conflicts)}
             </span>
             {job !== undefined && jobRunning && (
               <>
@@ -523,7 +624,13 @@ export function GitChangesPanel({
                 type="button"
                 className="button button-primary"
                 disabled={busy || conflictCount > 0}
-                title={conflictCount > 0 ? 'Mark every conflict resolved first' : 'Continue the rebase'}
+                title={
+                  conflictCount === 0
+                    ? 'Continue the rebase'
+                    : capabilities.conflicts
+                      ? 'Resolve every conflict first'
+                      : 'Mark every conflict resolved first'
+                }
                 onClick={() => {
                   void runRebaseStep('continue');
                 }}
@@ -581,9 +688,28 @@ export function GitChangesPanel({
             error={status.error}
             selectedKey={selection?.key ?? null}
             onSelect={(row) => {
-              setSelection(row);
-              setView('diff');
+              // The open resolver's own row: nothing is left, so nothing is
+              // guarded — a confirmed "Discard" would otherwise clear the dirty
+              // flag of a pane that never remounts and still holds the draft.
+              if (conflictPath === row.entry.path && opensResolver(row.entry, capabilities)) {
+                setSelection(row);
+                setView('diff');
+                return;
+              }
+              guardLeave(() => {
+                closeResolver();
+                setSelection(row);
+                if (opensResolver(row.entry, capabilities)) setConflictPath(row.entry.path);
+                setView('diff');
+              });
             }}
+            onRestore={
+              capabilities.conflicts
+                ? (path) => {
+                    setRestorePath(path);
+                  }
+                : undefined
+            }
             onRetry={() => {
               void status.refetch();
             }}
@@ -599,19 +725,47 @@ export function GitChangesPanel({
           />
         </div>
         <div className="git-panel-diff">
-          <GitDiffPane
-            agentId={agentId}
-            sessionId={sessionId}
-            selection={selection}
-            context={context}
-            onContextChange={setContext}
-            onBack={() => {
-              setView('list');
-            }}
-            capabilities={capabilities}
-            busy={busy}
-            onAction={onAction}
-          />
+          {conflictPath !== null ? (
+            <GitConflictPane
+              // A fresh mount per session and file, like the diff's.
+              key={JSON.stringify([agentId, sessionId, conflictPath])}
+              agentId={agentId}
+              sessionId={sessionId}
+              path={conflictPath}
+              conflicted={conflictStillOpen}
+              busy={repoBusy}
+              onBack={() => {
+                guardLeave(() => {
+                  closeResolver();
+                  setView('list');
+                });
+              }}
+              onViewDiff={() => {
+                guardLeave(closeResolver);
+              }}
+              onDirtyChange={onConflictDirty}
+              onDone={onConflictDone}
+              onNotice={setNotice}
+              onDialogChange={onConflictDialog}
+            />
+          ) : (
+            <GitDiffPane
+              agentId={agentId}
+              sessionId={sessionId}
+              selection={selection}
+              context={context}
+              onContextChange={setContext}
+              onBack={() => {
+                setView('list');
+              }}
+              capabilities={capabilities}
+              busy={busy}
+              onAction={onAction}
+              onResolve={(row) => {
+                setConflictPath(row.entry.path);
+              }}
+            />
+          )}
         </div>
       </div>
       {discardRows !== null && prompt !== null && (
@@ -644,6 +798,80 @@ export function GitChangesPanel({
               disabled={mutations.busy}
               onClick={() => {
                 setDiscardRows(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      )}
+      {pendingLeave !== null && leavePrompt !== null && (
+        <Modal
+          role="alertdialog"
+          labelledBy="git-conflict-leave-title"
+          initialFocus={cancelLeaveRef}
+          onClose={() => {
+            setPendingLeave(null);
+          }}
+        >
+          <h2 id="git-conflict-leave-title">{leavePrompt.title}</h2>
+          <p>{leavePrompt.body}</p>
+          <div className="button-row">
+            <button
+              type="button"
+              className="button button-danger"
+              onClick={() => {
+                const leave = pendingLeave;
+                setPendingLeave(null);
+                setConflictDirty(false);
+                leave();
+              }}
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              ref={cancelLeaveRef}
+              className="button"
+              onClick={() => {
+                setPendingLeave(null);
+              }}
+            >
+              Keep editing
+            </button>
+          </div>
+        </Modal>
+      )}
+      {restorePath !== null && restoreCopy !== null && (
+        <Modal
+          role="alertdialog"
+          labelledBy="git-conflict-restore-title"
+          dismissible={!conflictMutations.busy}
+          initialFocus={cancelRestoreRef}
+          onClose={() => {
+            setRestorePath(null);
+          }}
+        >
+          <h2 id="git-conflict-restore-title">{restoreCopy.title}</h2>
+          <p>{restoreCopy.body}</p>
+          <div className="button-row">
+            <button
+              type="button"
+              className="button button-danger"
+              disabled={conflictMutations.busy}
+              onClick={() => {
+                void restoreConflict(restorePath);
+              }}
+            >
+              {restoreCopy.confirm}
+            </button>
+            <button
+              type="button"
+              ref={cancelRestoreRef}
+              className="button"
+              disabled={conflictMutations.busy}
+              onClick={() => {
+                setRestorePath(null);
               }}
             >
               Cancel

@@ -99,7 +99,8 @@
           "total": 6
         },
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       },
       "decoded_canonical": {
         "session_id": "s1",
@@ -185,7 +186,8 @@
           "total": 6
         },
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       }
     },
     {
@@ -221,7 +223,8 @@
           "total": 0
         },
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       },
       "decoded_canonical": {
         "session_id": "s2",
@@ -250,7 +253,8 @@
           "total": 0
         },
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       }
     },
     {
@@ -297,7 +301,8 @@
           "total": 1
         },
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       },
       "decoded_canonical": {
         "session_id": "s3",
@@ -334,7 +339,8 @@
           "total": 1
         },
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       }
     },
     {
@@ -385,7 +391,8 @@
           "total": 1
         },
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       },
       "decoded_canonical": {
         "session_id": "s4",
@@ -427,7 +434,8 @@
           "total": 1
         },
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       }
     },
     {
@@ -486,7 +494,8 @@
           "total": 1
         },
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       },
       "decoded_canonical": {
         "session_id": "s7",
@@ -537,7 +546,144 @@
           "total": 1
         },
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
+      }
+    },
+    {
+      "name": "rebasing_with_resolved_paths",
+      "wire": {
+        "session_id": "s8",
+        "cwd": "/home/user/proj/.worktrees/topic",
+        "etag": "e5f60718293a4b5c6d7e8f90123456789abc01d4",
+        "unchanged": false,
+        "unavailable_reason": null,
+        "repo": {
+          "toplevel": "/home/user/proj/.worktrees/topic",
+          "git_dir": "/home/user/proj/.git/worktrees/topic",
+          "common_dir": "/home/user/proj/.git",
+          "is_linked_worktree": true,
+          "head": {
+            "oid": "89abcdef0123456789abcdef0123456789abcdef",
+            "short_oid": "89abcde",
+            "branch": null,
+            "detached": true,
+            "initial": false
+          },
+          "upstream": null,
+          "state": "rebasing",
+          "rebase": {
+            "branch": "topic",
+            "onto_oid": "89abcdef0123456789abcdef0123456789abcdef",
+            "onto_short_oid": "89abcde",
+            "onto_ref": "origin/main",
+            "stopped_on": {
+              "oid": "fedcba9876543210fedcba9876543210fedcba98",
+              "short_oid": "fedcba9",
+              "subject": "Fix the login redirect"
+            },
+            "step": 2,
+            "total": 5
+          }
+        },
+        "entries": [
+          {
+            "group": "conflicts",
+            "path": "src/login.py",
+            "orig_path": null,
+            "code": "UU",
+            "index_status": "U",
+            "worktree_status": "U",
+            "rename_score": null,
+            "submodule": false
+          },
+          {
+            "group": "staged",
+            "path": "src/session.py",
+            "orig_path": null,
+            "code": "M",
+            "index_status": "M",
+            "worktree_status": ".",
+            "rename_score": null,
+            "submodule": false
+          }
+        ],
+        "counts": {
+          "conflicts": 1,
+          "staged": 1,
+          "unstaged": 0,
+          "untracked": 0,
+          "total": 2
+        },
+        "truncated": false,
+        "entry_limit": 5000,
+        "resolved_paths": [
+          "docs/notes with space.md",
+          "src/session.py"
+        ]
+      },
+      "decoded_canonical": {
+        "session_id": "s8",
+        "cwd": "/home/user/proj/.worktrees/topic",
+        "etag": "e5f60718293a4b5c6d7e8f90123456789abc01d4",
+        "unchanged": false,
+        "repo": {
+          "toplevel": "/home/user/proj/.worktrees/topic",
+          "git_dir": "/home/user/proj/.git/worktrees/topic",
+          "common_dir": "/home/user/proj/.git",
+          "is_linked_worktree": true,
+          "head": {
+            "oid": "89abcdef0123456789abcdef0123456789abcdef",
+            "short_oid": "89abcde",
+            "detached": true,
+            "initial": false
+          },
+          "state": "rebasing",
+          "rebase": {
+            "branch": "topic",
+            "onto_oid": "89abcdef0123456789abcdef0123456789abcdef",
+            "onto_short_oid": "89abcde",
+            "onto_ref": "origin/main",
+            "stopped_on": {
+              "oid": "fedcba9876543210fedcba9876543210fedcba98",
+              "short_oid": "fedcba9",
+              "subject": "Fix the login redirect"
+            },
+            "step": 2,
+            "total": 5
+          }
+        },
+        "entries": [
+          {
+            "group": "conflicts",
+            "path": "src/login.py",
+            "code": "UU",
+            "index_status": "U",
+            "worktree_status": "U",
+            "submodule": false
+          },
+          {
+            "group": "staged",
+            "path": "src/session.py",
+            "code": "M",
+            "index_status": "M",
+            "worktree_status": ".",
+            "submodule": false
+          }
+        ],
+        "counts": {
+          "conflicts": 1,
+          "staged": 1,
+          "unstaged": 0,
+          "untracked": 0,
+          "total": 2
+        },
+        "truncated": false,
+        "entry_limit": 5000,
+        "resolved_paths": [
+          "docs/notes with space.md",
+          "src/session.py"
+        ]
       }
     },
     {
@@ -552,7 +698,8 @@
         "entries": [],
         "counts": null,
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       },
       "decoded_canonical": {
         "session_id": "s1",
@@ -561,7 +708,8 @@
         "unchanged": true,
         "entries": [],
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       }
     },
     {
@@ -576,7 +724,8 @@
         "entries": [],
         "counts": null,
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       },
       "decoded_canonical": {
         "session_id": "s5",
@@ -586,7 +735,8 @@
         "unavailable_reason": "not_a_repo",
         "entries": [],
         "truncated": false,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       }
     },
     {
@@ -647,7 +797,8 @@
           "total": 6001
         },
         "truncated": true,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       },
       "decoded_canonical": {
         "session_id": "s6",
@@ -699,7 +850,8 @@
           "total": 6001
         },
         "truncated": true,
-        "entry_limit": 5000
+        "entry_limit": 5000,
+        "resolved_paths": []
       }
     }
   ]

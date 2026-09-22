@@ -282,6 +282,10 @@ struct GitStatusResponse: Codable, Equatable, Sendable {
     let counts: GitStatusCounts?
     let truncated: Bool
     let entry_limit: Int
+    /// Paths marked resolved during the operation in progress whose conflict
+    /// the agent can still rebuild. Not entries: a resolution equal to HEAD has
+    /// no status row at all. Absent from an agent without the resolver.
+    var resolved_paths: [String]? = nil
 }
 
 struct GitDiffLine: Codable, Equatable, Sendable {
@@ -458,6 +462,64 @@ struct GitPushRequest: Codable, Equatable, Sendable {
 
 struct GitRebaseRequest: Codable, Equatable, Sendable {
     let onto: String
+}
+
+/// One side of a conflict; `present` is false when that side deleted the file
+/// or never had it.
+struct GitConflictSide: Codable, Equatable, Sendable {
+    let label: String?
+    let present: Bool
+}
+
+/// A conflicted path as the resolver shows it. `ours` is index stage 2 and
+/// `theirs` stage 3 — during a rebase, the branch being rebased onto and the
+/// commit being replayed. `kind` is an open vocabulary; only `kindText` carries
+/// `content` (LF line endings, no BOM) and `token`, which `resolve` sends back.
+struct GitConflictResponse: Codable, Equatable, Sendable {
+    let path: String
+    let code: String
+    let state: String
+    let kind: String
+    let content: String?
+    let token: String?
+    let markers: Int
+    let has_base: Bool
+    let ours: GitConflictSide
+    let theirs: GitConflictSide
+    let byte_limit: Int
+
+    static let kindText = "text"
+    static let kindTooLarge = "too_large"
+    static let kindBinary = "binary"
+    static let kindEncoding = "encoding"
+    static let kindMissing = "missing"
+    static let kindSymlink = "symlink"
+    static let kindSubmodule = "submodule"
+    static let sideOurs = "ours"
+    static let sideTheirs = "theirs"
+}
+
+/// `mark_resolved = false` saves a draft: the file is written, markers and
+/// all, and stays unmerged.
+struct GitConflictResolveRequest: Codable, Equatable, Sendable {
+    let path: String
+    let token: String
+    let content: String
+    let mark_resolved: Bool
+}
+
+struct GitConflictTakeRequest: Codable, Equatable, Sendable {
+    let path: String
+    let side: String
+}
+
+struct GitConflictRestoreRequest: Codable, Equatable, Sendable {
+    let path: String
+    let style: String
+    var token: String? = nil
+
+    static let styleMerge = "merge"
+    static let styleDiff3 = "diff3"
 }
 
 /// What a rebase route did. `outcome` is an open vocabulary; `rebase` is set

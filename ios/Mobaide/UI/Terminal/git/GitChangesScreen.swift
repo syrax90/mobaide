@@ -103,6 +103,25 @@ private struct GitChangesContent: View {
             .sheet(isPresented: rebasePresented) {
                 GitRebaseSheet(model: model)
             }
+            .fullScreenCover(item: $model.conflictTarget) { target in
+                GitConflictScreen(target: target) { message in
+                    Task { await model.resolverClosed(message: message) }
+                }
+            }
+            // `presenting:` hands the path to the action closure: SwiftUI
+            // clears `isPresented` before that closure runs.
+            .alert(
+                GitConflictDisplay.restorePrompt(model.restorePrompt ?? "").title,
+                isPresented: restorePresented,
+                presenting: model.restorePrompt
+            ) { path in
+                Button(GitConflictDisplay.restorePrompt(path).confirm, role: .destructive) {
+                    Task { await model.confirmRestore(path) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { path in
+                Text(GitConflictDisplay.restorePrompt(path).body)
+            }
             .confirmationDialog(
                 model.rebasePrompt?.title ?? "Confirm?",
                 isPresented: rebasePromptPresented,
@@ -124,6 +143,10 @@ private struct GitChangesContent: View {
                 if !newValue { editMode = .inactive }
             }
             .holdsSessionWatch(model.sessionId)
+    }
+
+    private var restorePresented: Binding<Bool> {
+        Binding(get: { model.restorePrompt != nil }, set: { if !$0 { model.restorePrompt = nil } })
     }
 
     private var title: String {
@@ -271,7 +294,11 @@ private struct GitChangesContent: View {
                 headerCard(repo: repo, cwd: status.cwd)
                     .pixelListRow()
                     .selectionDisabled()
-                if let banner = GitChangesDisplay.rebaseBanner(repo, conflicts: model.conflictCount) {
+                if let banner = GitChangesDisplay.rebaseBanner(
+                    repo,
+                    conflicts: model.conflictCount,
+                    canResolveInApp: model.capabilities.conflicts
+                ) {
                     rebaseBanner(banner)
                         .pixelListRow()
                         .selectionDisabled()
@@ -295,11 +322,15 @@ private struct GitChangesContent: View {
                         .pixelListRow()
                         .selectionDisabled()
                 }
-                if sections.isEmpty {
+                if sections.isEmpty && model.resolvedPaths.isEmpty {
                     PixelEmptyState("Working tree clean", systemImage: "checkmark.circle")
                         .pixelListRow()
                         .selectionDisabled()
                 }
+            }
+            // *Resolved* sits right under *Conflicts*: it is where a conflict row goes.
+            if !sections.contains(where: { $0.group == GitStatusEntry.groupConflicts }) {
+                resolvedSection
             }
             ForEach(sections) { section in
                 Section(header: sectionHeader(section)) {
@@ -309,9 +340,56 @@ private struct GitChangesContent: View {
                             .pixelListRow()
                     }
                 }
+                if section.group == GitStatusEntry.groupConflicts {
+                    resolvedSection
+                }
             }
         }
         .pixelList()
+    }
+
+    /// Files marked resolved during the operation in progress. Not entries — a
+    /// resolution equal to HEAD has no status row — so they are never
+    /// selectable and open nothing; the one action rebuilds the conflict.
+    @ViewBuilder
+    private var resolvedSection: some View {
+        let paths = model.resolvedPaths
+        if !paths.isEmpty {
+            Section {
+                ForEach(paths, id: \.self) { path in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(GitStatusEntry.fileName(of: path))
+                                .font(.body)
+                                .foregroundStyle(colors.text)
+                                .lineLimit(1)
+                            if let directory = GitStatusEntry.directory(of: path) {
+                                Text(directory)
+                                    .font(.caption)
+                                    .foregroundStyle(colors.textMuted)
+                                    .lineLimit(1)
+                            }
+                        }
+                        Spacer()
+                        Button("Restore conflict…") { model.requestRestore(path) }
+                            .buttonStyle(.pixelSmall)
+                            .disabled(model.isBusy)
+                            .accessibilityLabel("Restore the conflict in \(path)")
+                    }
+                    .pixelCard()
+                    .pixelListRow()
+                    .selectionDisabled()
+                }
+            } header: {
+                HStack {
+                    PixelSectionHeader("Resolved")
+                    Spacer()
+                    Text("\(paths.count)")
+                        .chromeText()
+                        .foregroundStyle(colors.textMuted)
+                }
+            }
+        }
     }
 
     /// A tap opens the diff, a leading swipe stages or unstages (a full swipe
@@ -330,7 +408,11 @@ private struct GitChangesContent: View {
             }
         } else {
             Button {
-                router.navigate(to: model.diffRoute(for: row.entry))
+                if model.opensResolver(row.entry) {
+                    model.openResolver(for: row.entry)
+                } else {
+                    router.navigate(to: model.diffRoute(for: row.entry))
+                }
             } label: {
                 GitChangesRowView(entry: row.entry, chevron: true)
             }
@@ -530,9 +612,9 @@ private struct GitChangesContent: View {
     private func jobBanner(_ banner: GitJobBanner) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if banner.failed {
-                PixelErrorBanner(banner.text)
+                PixelErrorBanner(banner.text(canResolveInApp: model.capabilities.conflicts))
             } else {
-                Text(banner.text)
+                Text(banner.text(canResolveInApp: model.capabilities.conflicts))
                     .font(.footnote)
                     .foregroundStyle(banner.running ? colors.text : colors.ok)
                     .frame(maxWidth: .infinity, alignment: .leading)

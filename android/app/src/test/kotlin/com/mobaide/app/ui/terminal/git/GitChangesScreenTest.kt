@@ -548,6 +548,7 @@ class GitChangesScreenRebaseTest {
     )
 
     private val rebaseCaps = GitCapabilities(stage = true, discard = true, commit = true, rebase = true, resolve = true)
+    private val resolverCaps = rebaseCaps.copy(conflicts = true)
 
     private fun ready(
         entries: List<GitStatusEntry> = listOf(conflict),
@@ -555,6 +556,7 @@ class GitChangesScreenRebaseTest {
         capabilities: GitCapabilities = rebaseCaps,
         busy: Boolean = false,
         withDetails: Boolean = true,
+        resolvedPaths: List<String> = emptyList(),
     ): GitChangesUiState.Ready {
         val status = GitStatusResponse(
             session_id = "s1",
@@ -574,6 +576,7 @@ class GitChangesScreenRebaseTest {
             ),
             entries = entries,
             counts = GitStatusCounts(conflicts = entries.count { it.group == GitStatusEntry.GROUP_CONFLICTS }, total = entries.size),
+            resolved_paths = resolvedPaths,
         )
         return GitChangesUiState.Ready(
             status, status.repo!!, sectionsFor(status), capabilities = capabilities, busy = busy,
@@ -585,6 +588,7 @@ class GitChangesScreenRebaseTest {
         onResolve: (GitStatusEntry) -> Unit = {},
         onContinueRebase: () -> Unit = {},
         onRebaseStep: (RebasePromptStep) -> Unit = {},
+        onRestore: (String) -> Unit = {},
     ) {
         composeRule.setContent {
             MobaideTheme(darkTheme = true) {
@@ -595,6 +599,7 @@ class GitChangesScreenRebaseTest {
                     onResolve = onResolve,
                     onContinueRebase = onContinueRebase,
                     onRebaseStep = onRebaseStep,
+                    onRestore = onRestore,
                 )
             }
         }
@@ -661,6 +666,56 @@ class GitChangesScreenRebaseTest {
         composeRule.onNodeWithTag(GIT_CHANGES_REBASE_CONTINUE_TAG).assertDoesNotExist()
         composeRule.onNodeWithTag(GIT_CHANGES_REBASE_SKIP_TAG).assertDoesNotExist()
         composeRule.onNodeWithTag(GIT_CHANGES_REBASE_ABORT_TAG).assertDoesNotExist()
+    }
+
+    @Test
+    fun anAgentWithTheResolver_pointsTheBannerAtTheFiles_andKeepsMarkResolved() {
+        setContent(ready(capabilities = resolverCaps))
+
+        composeRule.onNodeWithText("1 conflict — open a file to resolve it.").assertIsDisplayed()
+        composeRule.onNodeWithTag(gitChangesResolveTag(conflict)).assertIsDisplayed()
+    }
+
+    @Test
+    fun resolvedPaths_listUnderConflicts_eachWithItsRestore() {
+        val restored = mutableListOf<String>()
+        setContent(
+            ready(capabilities = resolverCaps, resolvedPaths = listOf("docs/notes.md", "README.md")),
+            onRestore = { restored += it },
+        )
+
+        composeRule.onNodeWithTag(GIT_CHANGES_RESOLVED_SECTION_TAG).assertIsDisplayed()
+        composeRule.onNodeWithText("notes.md").assertIsDisplayed()
+        composeRule.onNodeWithText("docs").assertIsDisplayed()
+        composeRule.onNodeWithTag(gitChangesRestoreTag("README.md")).assertIsEnabled()
+
+        composeRule.onNodeWithTag(gitChangesRestoreTag("docs/notes.md")).assertIsEnabled().performClick()
+
+        assertEquals(listOf("docs/notes.md"), restored)
+    }
+
+    @Test
+    fun resolvedPaths_standAlone_whenEveryResolutionEqualsHead() {
+        setContent(ready(entries = emptyList(), capabilities = resolverCaps, resolvedPaths = listOf("src/session.py")))
+
+        composeRule.onNodeWithTag(GIT_CHANGES_RESOLVED_SECTION_TAG).assertIsDisplayed()
+        composeRule.onNodeWithTag(gitChangesRestoreTag("src/session.py")).assertIsDisplayed()
+        composeRule.onNodeWithTag(GIT_CHANGES_EMPTY_TAG).assertDoesNotExist()
+    }
+
+    @Test
+    fun resolvedPaths_areHidden_onAnAgentWithoutTheResolver() {
+        setContent(ready(resolvedPaths = listOf("src/session.py")))
+
+        composeRule.onNodeWithTag(GIT_CHANGES_RESOLVED_SECTION_TAG).assertDoesNotExist()
+        composeRule.onNodeWithTag(gitChangesRestoreTag("src/session.py")).assertDoesNotExist()
+    }
+
+    @Test
+    fun whileBusy_restoreWaits() {
+        setContent(ready(capabilities = resolverCaps, busy = true, resolvedPaths = listOf("src/session.py")))
+
+        composeRule.onNodeWithTag(gitChangesRestoreTag("src/session.py")).assertIsNotEnabled()
     }
 
     @Test

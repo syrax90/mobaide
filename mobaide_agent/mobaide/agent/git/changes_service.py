@@ -35,6 +35,7 @@ from .changes_models import (
     BYTE_LIMIT,
     ENTRY_LIMIT,
     LINE_LIMIT,
+    RESOLVED_LIMIT,
     DiffChange,
     DiffScope,
     GitDiffHunk,
@@ -60,6 +61,15 @@ _SMALL_OUTPUT = 64 * 1024
 _BINARY_SNIFF = 8000
 _MAX_ERROR_DETAIL = 500
 _CONTEXT_DEFAULT = 3
+_LS_TREE_CHUNK = 50
+_GITLINK_MODE = "160000"
+# The operations that leave conflicts in the index. ``bisecting`` is not one: a
+# bisect keeps the resolve-undo records of a merge finished long ago, and
+# rebuilding one of those would overwrite the working file with a conflict
+# nobody is in.
+_CONFLICT_STATES: frozenset[str] = frozenset(
+    {"merging", "rebasing", "cherry_picking", "reverting"}
+)
 # At LINE_LIMIT context a file with more than LINE_LIMIT lines on either side
 # already overflows the line cap, so an untruncated diff at this ceiling is
 # always the whole file as one hunk — the clients' "Full file" view.
@@ -412,6 +422,16 @@ async def rebase_info(toplevel: str, rebase_dir: str) -> GitRebaseInfo | None:
     return info
 
 
+def _resolve_undo_live(state: RepoState, rebase: GitRebaseInfo | None) -> bool:
+    """Whether the index's resolve-undo records belong to the conflict the
+    repository is stopped on. Starting a merge, a cherry-pick, a revert or a rebase
+    pick rewrites the index and clears every older record; a ``git am`` session and
+    a rebase stopped on ``exec`` or ``break`` (no ``REBASE_HEAD``) do not."""
+    if state == "rebasing":
+        return rebase is not None and rebase.stopped_on is not None
+    return state in _CONFLICT_STATES
+
+
 async def _ref_pointing_at(toplevel: str, oid: str) -> str | None:
     """A branch name for ``oid``: a local branch first, then a remote-tracking
     one (never a ``<remote>/HEAD`` symref)."""
@@ -632,6 +652,97 @@ def _walk_porcelain_v2(
             yield entry
 
 
+async def _resolve_undo_raw(toplevel: str) -> bytes:
+    """``ls-files --resolve-undo -z``, or nothing when git cannot answer: the
+    Resolved list is an extra and must never fail a status read."""
+    try:
+        result = await run_git(
+            ["ls-files", "--resolve-undo", "-z"],
+            cwd=toplevel,
+            timeout=_QUICK_TIMEOUT,
+            max_bytes=_SMALL_OUTPUT,
+        )
+    except Exception:
+        return b""
+    # the runner kills git once the cap is hit, so a cut listing exits non-zero
+    if result.timed_out or (result.rc != 0 and not result.truncated):
+        return b""
+    if result.truncated:
+        return result.stdout[: result.stdout.rfind(b"\0") + 1]
+    return result.stdout
+
+
+class _Stage(NamedTuple):
+    """One index stage of a conflicted path, live or as resolve-undo kept it."""
+
+    mode: str
+    oid: str
+
+
+def _is_gitlink(stages: dict[int, _Stage]) -> bool:
+    return any(stage.mode == _GITLINK_MODE for stage in stages.values())
+
+
+def _parse_resolve_undo(raw: bytes) -> dict[str, dict[int, _Stage]]:
+    """``path -> {stage: (mode, oid)}``; each record is
+    ``<mode> <oid> <stage>\t<path>``, one per stage the conflict had."""
+    out: dict[str, dict[int, _Stage]] = {}
+    for record in raw.split(b"\0"):
+        meta, tab, path = record.partition(b"\t")
+        fields = meta.split(b" ")
+        if not tab or len(fields) != 3 or not fields[2].isdigit():
+            continue
+        out.setdefault(_text(path), {})[int(fields[2])] = _Stage(
+            _text(fields[0]), _text(fields[1])
+        )
+    return out
+
+
+async def _head_blobs(toplevel: str, paths: list[str]) -> dict[str, str]:
+    """``HEAD``'s blob per path, in argv chunks (Windows caps a command line
+    at 32 767 characters); a chunk git cannot answer contributes nothing."""
+    blobs: dict[str, str] = {}
+    for start in range(0, len(paths), _LS_TREE_CHUNK):
+        try:
+            result = await run_git(
+                ["ls-tree", "-z", "HEAD", "--", *paths[start : start + _LS_TREE_CHUNK]],
+                cwd=toplevel,
+                timeout=_QUICK_TIMEOUT,
+                max_bytes=_SMALL_OUTPUT,
+            )
+        except Exception:
+            continue
+        if result.timed_out or result.rc != 0 or result.truncated:
+            continue
+        for record in result.stdout.split(b"\0"):
+            meta, tab, path = record.partition(b"\t")
+            fields = meta.split(b" ")
+            if tab and len(fields) == 3:
+                blobs[_text(path)] = _text(fields[2])
+    return blobs
+
+
+async def restorable_paths(
+    toplevel: str, raw: bytes, *, unmerged: set[str]
+) -> list[str]:
+    """Resolved paths whose conflict ``git checkout --merge`` can rebuild:
+    both sides recorded, no submodule among them (git cannot merge a gitlink
+    back into markers), not unmerged again, and "ours" still ``HEAD``'s blob.
+    That last check drops records a finished operation left in the index —
+    the next pick rewrites the index and with it the records, but the last
+    pick of a rebase does not."""
+    records = _parse_resolve_undo(raw)
+    candidates = sorted(
+        path
+        for path, stages in records.items()
+        if 2 in stages and 3 in stages and path not in unmerged and not _is_gitlink(stages)
+    )[:RESOLVED_LIMIT]
+    if not candidates:
+        return []
+    head = await _head_blobs(toplevel, candidates)
+    return [path for path in candidates if head.get(path) == records[path][2].oid]
+
+
 def _etag(*parts: bytes | str) -> str:
     digest = hashlib.sha1()
     for part in parts:
@@ -672,6 +783,11 @@ async def get_session_git_status(
     try:
         state, rebase_dir = await operation_state(repo.toplevel)
         rebase = await rebase_info(repo.toplevel, rebase_dir) if rebase_dir else None
+        resolve_undo = (
+            await _resolve_undo_raw(repo.toplevel)
+            if _resolve_undo_live(state, rebase)
+            else b""
+        )
         result = await run_git(
             ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"],
             cwd=repo.toplevel,
@@ -691,6 +807,7 @@ async def get_session_git_status(
         repo.git_dir,
         state,
         rebase.model_dump_json() if rebase else "",
+        resolve_undo,
     )
     if etag and etag == tag:
         return _unchanged(session_id, cwd, tag)
@@ -710,6 +827,15 @@ async def get_session_git_status(
         if parsed.upstream
         else None
     )
+    resolved = (
+        await restorable_paths(
+            repo.toplevel,
+            resolve_undo,
+            unmerged={e.path for e in parsed.entries if e.group == "conflicts"},
+        )
+        if resolve_undo
+        else []
+    )
     return GitStatusResponse(
         session_id=session_id,
         cwd=cwd,
@@ -727,6 +853,7 @@ async def get_session_git_status(
         entries=parsed.entries,
         counts=parsed.counts,
         truncated=result.truncated or parsed.counts.total > ENTRY_LIMIT,
+        resolved_paths=resolved,
     )
 
 
@@ -741,6 +868,10 @@ def validate_repo_path(raw: str | None) -> str:
         or ".." in norm.split("/")
         or _DRIVE_RE.match(norm)
     ):
+        raise GitBadRequestError("bad_path")
+    # On Windows ``os.path.join`` honours a backslash as a separator and a
+    # colon opens an alternate data stream; git itself never reports either.
+    if sys.platform == "win32" and ("\\" in norm or ":" in norm):
         raise GitBadRequestError("bad_path")
     return norm
 

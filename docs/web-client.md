@@ -957,7 +957,20 @@ confirmation with Cancel focused;
 list entry and diff pane both gain a *Mark resolved* (✓) action, gated on
 `capabilities.git.{stage,resolve}` together, which stages the row the same
 way any other Stage does — only `resolve` certifies the agent refuses one
-still holding `<<<<<<<`/`>>>>>>>` markers. Job state is one holder per panel
+still holding `<<<<<<<`/`>>>>>>>` markers. With `capabilities.git.conflicts`
+a conflict row opens `GitConflictPane.tsx` in the diff pane's place instead
+— pinned by path rather than the selected row, since the file leaves
+*Conflicts* the moment it is resolved here or in the terminal: a whole-file
+uncontrolled `<textarea wrap="off">` editor naming the two sides by label
+and role (never "ours"/"theirs"), a live conflicts-left counter with Next
+conflict, Apply & mark resolved (Ctrl/⌘+Enter) and Save draft, a ⋯ menu for
+the whole-file picks and Start over…/View diff, and an unsaved-edits guard
+on every way out (another row, View diff, Escape, Close, tab close via
+`useUnloadGuard`). A file resolved this way lists in a *Resolved* section
+under Conflicts with a confirmed *Restore conflict…*, and a conflict row's
+`HEAD` diff gains its own *Resolve…* button; `queryKeys.sessionGitConflict`
+deliberately sits outside the `session-git` prefix so neither `git.changed`
+nor the reconnect sweep re-reads the file under a draft. Job state is one holder per panel
 (`activeJobId`): the frames `git.job.progress` / `git.job.done` are
 *written* into `['agent', id, 'session-git', sid, 'job', jobId]` by
 `realtime/sessionGitJobCache.ts` (whole snapshots, monotonic — a `running`

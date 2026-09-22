@@ -28,16 +28,20 @@ const {
   commitSessionGit,
   discardSessionGit,
   getSessionGitCommitContext,
+  getSessionGitConflict,
   getSessionGitDiff,
   getSessionGitJob,
   getSessionGitStatus,
   isSessionGitError,
   isSessionGitJobLost,
   isTerminalSessionGitError,
+  resolveSessionGitConflict,
+  restoreSessionGitConflict,
   stageSessionGit,
   startSessionGitJob,
   startSessionGitRebase,
   stepSessionGitRebase,
+  takeSessionGitConflict,
   toSessionGitError,
   unstageSessionGit,
 } = await import('./sessionGitRepository');
@@ -588,5 +592,176 @@ describe('getSessionGitJob / cancelSessionGitJob', () => {
     });
     expect(lastParams()).toEqual({ path: { session_id: 's1', job_id: 'j1' } });
     expect(lastBody()).toBeUndefined();
+  });
+});
+
+describe('getSessionGitConflict', () => {
+  const conflict = {
+    path: 'src/a b.py',
+    code: 'UU',
+    state: 'rebasing',
+    kind: 'text',
+    content: '<<<<<<< HEAD\nmain\n=======\ntopic\n>>>>>>> fedcba9\n',
+    token: 't1',
+    markers: 1,
+    has_base: false,
+    ours: { label: 'main', present: true },
+    theirs: { label: 'fedcba9 Fix', present: true },
+    byte_limit: 262144,
+  };
+
+  it('GETs the file by its path as a query, carrying the abort signal', async () => {
+    ok(conflict);
+    const controller = new AbortController();
+
+    await expect(
+      getSessionGitConflict('a1', 's1', 'src/a b.py', controller.signal),
+    ).resolves.toEqual(conflict);
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      agentId: 'a1',
+      method: 'GET',
+      path: '/api/sessions/{session_id}/git/conflict',
+    });
+    expect(lastParams()).toEqual({ path: { session_id: 's1' }, query: { path: 'src/a b.py' } });
+    expect((agent.requests.at(-1)?.init as { signal?: AbortSignal }).signal).toBe(
+      controller.signal,
+    );
+  });
+
+  it('types the 409 of a file resolved elsewhere with the path it names', async () => {
+    refuse(409, { code: 'not_conflicted', message: 'src/a b.py' });
+
+    await expect(getSessionGitConflict('a1', 's1', 'src/a b.py')).rejects.toMatchObject({
+      name: 'SessionGitError',
+      kind: 'git',
+      code: 'not_conflicted',
+      detailMessage: 'src/a b.py',
+    });
+  });
+
+  it('types the 404 of an agent without the route as outdated', async () => {
+    refuse(404, 'Unknown proxy route');
+
+    await expect(getSessionGitConflict('a1', 's1', 'x')).rejects.toMatchObject({
+      kind: 'agentOutdated',
+    });
+  });
+});
+
+describe('resolveSessionGitConflict', () => {
+  it.each([
+    ['an apply', true],
+    ['a draft', false],
+  ])('POSTs %s with the token the edit started from, in the wire\'s snake case', async (_case, markResolved) => {
+    ok({ ok: true });
+
+    await expect(
+      resolveSessionGitConflict('a1', 's1', {
+        path: 'src/login.py',
+        token: 't1',
+        content: 'resolved\n',
+        markResolved,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      agentId: 'a1',
+      method: 'POST',
+      path: '/api/sessions/{session_id}/git/conflict/resolve',
+    });
+    expect(lastParams()).toEqual({ path: { session_id: 's1' } });
+    expect(lastBody()).toEqual({
+      path: 'src/login.py',
+      token: 't1',
+      content: 'resolved\n',
+      mark_resolved: markResolved,
+    });
+  });
+
+  it.each([
+    [409, 'file_changed', 'src/login.py'],
+    [409, 'conflict_markers', 'src/login.py'],
+  ])('types the %i %s refusal with the path', async (status, code, message) => {
+    refuse(status, { code, message });
+
+    await expect(
+      resolveSessionGitConflict('a1', 's1', {
+        path: 'src/login.py',
+        token: 't1',
+        content: 'x',
+        markResolved: true,
+      }),
+    ).rejects.toMatchObject({ kind: 'git', code, detailMessage: message });
+  });
+
+  it('types the 400 of text the agent will not write, which carries no message', async () => {
+    refuse(400, { code: 'too_large' });
+
+    await expect(
+      resolveSessionGitConflict('a1', 's1', {
+        path: 'src/login.py',
+        token: 't1',
+        content: 'x',
+        markResolved: true,
+      }),
+    ).rejects.toMatchObject({ kind: 'git', code: 'too_large', detailMessage: null });
+  });
+});
+
+describe('takeSessionGitConflict', () => {
+  it.each(['ours', 'theirs'] as const)('POSTs the %s side for the path', async (side) => {
+    ok({ ok: true });
+
+    await expect(takeSessionGitConflict('a1', 's1', 'docs/old.md', side)).resolves.toBeUndefined();
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      method: 'POST',
+      path: '/api/sessions/{session_id}/git/conflict/take',
+    });
+    expect(lastParams()).toEqual({ path: { session_id: 's1' } });
+    expect(lastBody()).toEqual({ path: 'docs/old.md', side });
+  });
+
+  it('types a submodule refusal', async () => {
+    refuse(409, { code: 'unsupported', message: 'vendor/lib' });
+
+    await expect(takeSessionGitConflict('a1', 's1', 'vendor/lib', 'ours')).rejects.toMatchObject({
+      kind: 'git',
+      code: 'unsupported',
+    });
+  });
+});
+
+describe('restoreSessionGitConflict', () => {
+  it('sends a null token for a resolved file nobody has open', async () => {
+    ok({ ok: true });
+
+    await expect(
+      restoreSessionGitConflict('a1', 's1', { path: 'src/session.py', style: 'merge' }),
+    ).resolves.toBeUndefined();
+
+    expect(agent.requests.at(-1)).toMatchObject({
+      method: 'POST',
+      path: '/api/sessions/{session_id}/git/conflict/restore',
+    });
+    expect(lastParams()).toEqual({ path: { session_id: 's1' } });
+    expect(lastBody()).toEqual({ path: 'src/session.py', style: 'merge', token: null });
+  });
+
+  it('carries the open file\'s token and the original-lines style when starting over', async () => {
+    ok({ ok: true });
+
+    await restoreSessionGitConflict('a1', 's1', { path: 'src/login.py', style: 'diff3', token: 't1' });
+
+    expect(lastBody()).toEqual({ path: 'src/login.py', style: 'diff3', token: 't1' });
+  });
+
+  it('types the refusal of a conflict git can no longer rebuild', async () => {
+    refuse(409, { code: 'not_restorable', message: 'src/session.py' });
+
+    await expect(
+      restoreSessionGitConflict('a1', 's1', { path: 'src/session.py', style: 'merge' }),
+    ).rejects.toMatchObject({ kind: 'git', code: 'not_restorable', detailMessage: 'src/session.py' });
   });
 });

@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -51,6 +53,8 @@ import com.mobaide.app.data.network.dto.GitStatusCounts
 import com.mobaide.app.data.network.dto.GitStatusEntry
 import com.mobaide.app.data.network.dto.GitStatusResponse
 import com.mobaide.app.data.network.dto.GitUpstreamInfo
+import com.mobaide.app.data.network.dto.gitPathDirectory
+import com.mobaide.app.data.network.dto.gitPathFileName
 import com.mobaide.app.data.repository.GitCapabilities
 import com.mobaide.app.ui.common.pixel.PixelAlertDialog
 import com.mobaide.app.ui.common.pixel.PixelCard
@@ -82,6 +86,10 @@ const val GIT_CHANGES_SELECTION_STAGE_TAG = "git_changes_selection_stage"
 const val GIT_CHANGES_SELECTION_UNSTAGE_TAG = "git_changes_selection_unstage"
 const val GIT_CHANGES_SELECTION_DISCARD_TAG = "git_changes_selection_discard"
 const val GIT_CHANGES_DISCARD_DIALOG_TAG = "git_changes_discard_dialog"
+const val GIT_CHANGES_RESTORE_DIALOG_TAG = "git_changes_restore_dialog"
+const val GIT_CHANGES_RESOLVED_SECTION_TAG = "git_changes_resolved_section"
+
+fun gitChangesRestoreTag(path: String) = "git_changes_restore_$path"
 const val GIT_CHANGES_SYNC_TAG = "git_changes_sync"
 const val GIT_CHANGES_UPSTREAM_TAG = "git_changes_upstream"
 const val GIT_CHANGES_JOB_TAG = "git_changes_job"
@@ -102,9 +110,14 @@ fun GitChangesScreen(
     viewModel: GitChangesViewModel,
     onBack: () -> Unit,
     onOpenDiff: (sessionId: String, entry: GitStatusEntry, scope: String) -> Unit,
+    onOpenConflict: (sessionId: String, path: String) -> Unit = { _, _ -> },
+    /** What the conflict resolver left behind on closing, shown once. */
+    resultMessage: String? = null,
+    onResultMessageShown: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val discardPrompt by viewModel.discardPrompt.collectAsStateWithLifecycle()
+    val restorePrompt by viewModel.restorePrompt.collectAsStateWithLifecycle()
     val commitSheet by viewModel.commitSheet.collectAsStateWithLifecycle()
     val syncSheet by viewModel.syncSheet.collectAsStateWithLifecycle()
     val rebaseSheet by viewModel.rebaseSheet.collectAsStateWithLifecycle()
@@ -122,10 +135,18 @@ fun GitChangesScreen(
         viewModel.events.collect { event ->
             when (event) {
                 is GitChangesEvent.OpenDiff -> onOpenDiff(event.sessionId, event.entry, event.scope)
+                is GitChangesEvent.OpenConflict -> onOpenConflict(event.sessionId, event.path)
                 // Its own coroutine: `showSnackbar` suspends for the snackbar's
                 // lifetime and must not hold up the next navigation event.
                 is GitChangesEvent.ShowMessage -> launch { snackbarHostState.showSnackbar(event.text) }
             }
+        }
+    }
+
+    LaunchedEffect(resultMessage) {
+        if (resultMessage != null) {
+            viewModel.showMessage(resultMessage)
+            onResultMessageShown()
         }
     }
 
@@ -206,8 +227,27 @@ fun GitChangesScreen(
                 onResolve = viewModel::resolve,
                 onContinueRebase = viewModel::continueRebase,
                 onRebaseStep = viewModel::requestRebaseStep,
+                onRestore = viewModel::requestRestore,
             )
         }
+    }
+
+    restorePrompt?.let { path ->
+        val prompt = restorePrompt(path)
+        PixelAlertDialog(
+            onDismissRequest = viewModel::dismissRestore,
+            modifier = Modifier.testTag(GIT_CHANGES_RESTORE_DIALOG_TAG),
+            title = { Text(prompt.title) },
+            text = { Text(prompt.body) },
+            confirmButton = {
+                PixelTextButton(onClick = viewModel::confirmRestore, enabled = ready?.busy != true) {
+                    Text(prompt.confirm, color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                PixelTextButton(onClick = viewModel::dismissRestore) { Text("Cancel") }
+            },
+        )
     }
 
     discardPrompt?.let { prompt ->
@@ -359,6 +399,7 @@ internal fun GitChangesContent(
     onResolve: (GitStatusEntry) -> Unit = {},
     onContinueRebase: () -> Unit = {},
     onRebaseStep: (RebasePromptStep) -> Unit = {},
+    onRestore: (String) -> Unit = {},
 ) {
     when (state) {
         GitChangesUiState.Loading -> GitStateLoading(GIT_CHANGES_LOADING_TAG, modifier)
@@ -376,6 +417,7 @@ internal fun GitChangesContent(
             onResolve = onResolve,
             onContinueRebase = onContinueRebase,
             onRebaseStep = onRebaseStep,
+            onRestore = onRestore,
             modifier = modifier,
         )
         is GitChangesUiState.Unavailable -> {
@@ -428,8 +470,13 @@ private fun ChangesList(
     onResolve: (GitStatusEntry) -> Unit,
     onContinueRebase: () -> Unit,
     onRebaseStep: (RebasePromptStep) -> Unit,
+    onRestore: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val canResolveInApp = state.capabilities.conflicts
+    // *Resolved* sits right under *Conflicts*: it is where a conflict row goes.
+    val resolvedPaths = if (canResolveInApp) state.status.resolved_paths else emptyList()
+    val resolvedAfter = state.sections.indexOfFirst { it.group == GitStatusEntry.GROUP_CONFLICTS }
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 24.dp),
@@ -441,13 +488,14 @@ private fun ChangesList(
             item(key = "job", contentType = "job") {
                 SyncJobBanner(
                     banner = banner,
+                    canResolveInApp = canResolveInApp,
                     onCancel = onCancelJob,
                     onOptions = onSync,
                     onDismiss = onDismissJob,
                 )
             }
         }
-        rebaseBanner(state.repo, state.status.counts?.conflicts ?: 0)?.let { banner ->
+        rebaseBanner(state.repo, state.status.counts?.conflicts ?: 0, canResolveInApp)?.let { banner ->
             item(key = "rebase", contentType = "rebase") {
                 RebaseBannerRow(
                     banner = banner,
@@ -472,7 +520,7 @@ private fun ChangesList(
                 )
             }
         }
-        if (state.sections.isEmpty()) {
+        if (state.sections.isEmpty() && resolvedPaths.isEmpty()) {
             item(key = "empty", contentType = "empty") {
                 PixelEmptyState(
                     text = "Working tree clean",
@@ -482,7 +530,8 @@ private fun ChangesList(
                 )
             }
         }
-        state.sections.forEach { section ->
+        if (resolvedAfter < 0) resolvedSection(resolvedPaths, state.busy, onRestore)
+        state.sections.forEachIndexed { sectionIndex, section ->
             stickyHeader(key = "section:${section.group}", contentType = "section") {
                 SectionHeader(
                     section = section,
@@ -513,6 +562,75 @@ private fun ChangesList(
                     onResolve = { onResolve(entry) },
                 )
             }
+            if (sectionIndex == resolvedAfter) resolvedSection(resolvedPaths, state.busy, onRestore)
+        }
+    }
+}
+
+/**
+ * Files marked resolved during the operation in progress. Not entries — a
+ * resolution equal to HEAD has no status row — so they are never selectable
+ * and open nothing; the one action rebuilds the conflict.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+private fun LazyListScope.resolvedSection(
+    paths: List<String>,
+    busy: Boolean,
+    onRestore: (String) -> Unit,
+) {
+    if (paths.isEmpty()) return
+    stickyHeader(key = "section:resolved", contentType = "section") {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .heightIn(min = 40.dp)
+                .testTag(GIT_CHANGES_RESOLVED_SECTION_TAG),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Resolved".chromeCaps(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = paths.size.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    items(items = paths, key = { "resolved:$it" }, contentType = { "resolved" }) { path ->
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = gitPathFileName(path),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                gitPathDirectory(path)?.let { dir ->
+                    Text(
+                        text = dir,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            PixelTextButton(
+                onClick = { onRestore(path) },
+                enabled = !busy,
+                modifier = Modifier.testTag(gitChangesRestoreTag(path)),
+            ) { Text("Restore conflict…") }
         }
     }
 }
@@ -618,6 +736,7 @@ private fun SectionHeader(
 @Composable
 private fun SyncJobBanner(
     banner: GitJobBanner,
+    canResolveInApp: Boolean,
     onCancel: () -> Unit,
     onOptions: (() -> Unit)?,
     onDismiss: () -> Unit,
@@ -636,7 +755,7 @@ private fun SyncJobBanner(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
-                text = banner.text,
+                text = banner.text(canResolveInApp),
                 style = MaterialTheme.typography.bodySmall,
                 color = when {
                     banner.failed -> MaterialTheme.colorScheme.error

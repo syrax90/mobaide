@@ -3,8 +3,9 @@
 ``POST .../git/stage|unstage|discard|commit`` plus ``GET .../git/commit/context``
 mutate the staged set, ``POST .../git/fetch|pull|push`` start background
 jobs that ``GET .../git/jobs/{job_id}`` and ``POST .../git/jobs/{job_id}/cancel``
-follow, and ``POST .../git/rebase`` plus ``.../rebase/continue|skip|abort``
-drive a rebase.
+follow, ``POST .../git/rebase`` plus ``.../rebase/continue|skip|abort``
+drive a rebase, and ``GET .../git/conflict`` plus
+``POST .../git/conflict/resolve|take|restore`` resolve a conflicted file.
 
 The directory is the session's own spawn cwd (project root or linked
 worktree) — clients never send a path to run in. For the reads, repo
@@ -18,11 +19,21 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from ..auth.dependencies import get_current_user
+from .changes_conflicts import (
+    get_session_conflict,
+    resolve_session_conflict,
+    restore_session_conflict,
+    take_session_conflict,
+)
 from .changes_jobs import job_registry
 from .changes_models import (
     GitCommitContextResponse,
     GitCommitRequest,
     GitCommitResponse,
+    GitConflictResolveRequest,
+    GitConflictResponse,
+    GitConflictRestoreRequest,
+    GitConflictTakeRequest,
     GitDiffResponse,
     GitDiscardRequest,
     GitJobResponse,
@@ -318,6 +329,69 @@ async def session_git_rebase_abort(
     try:
         return await abort_session_rebase(
             cwd=cwd, project_name=project_name, event_bus=_event_bus(request)
+        )
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.get("/conflict", response_model=GitConflictResponse)
+async def session_git_conflict(
+    session_id: str, request: Request, path: str | None = None
+) -> GitConflictResponse:
+    cwd = await _session_cwd(request, session_id)
+    try:
+        return await get_session_conflict(cwd=cwd, path=path)
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.post("/conflict/resolve", response_model=GitMutationResponse)
+async def session_git_conflict_resolve(
+    session_id: str, request: Request, body: GitConflictResolveRequest
+) -> GitMutationResponse:
+    cwd, project_name = await _session_target(request, session_id)
+    try:
+        return await resolve_session_conflict(
+            cwd=cwd,
+            request=body,
+            project_name=project_name,
+            event_bus=_event_bus(request),
+        )
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.post("/conflict/take", response_model=GitMutationResponse)
+async def session_git_conflict_take(
+    session_id: str, request: Request, body: GitConflictTakeRequest
+) -> GitMutationResponse:
+    cwd, project_name = await _session_target(request, session_id)
+    try:
+        return await take_session_conflict(
+            cwd=cwd,
+            request=body,
+            project_name=project_name,
+            event_bus=_event_bus(request),
+        )
+    except Exception as exc:
+        _raise_mapped(exc)
+        raise
+
+
+@router.post("/conflict/restore", response_model=GitMutationResponse)
+async def session_git_conflict_restore(
+    session_id: str, request: Request, body: GitConflictRestoreRequest
+) -> GitMutationResponse:
+    cwd, project_name = await _session_target(request, session_id)
+    try:
+        return await restore_session_conflict(
+            cwd=cwd,
+            request=body,
+            project_name=project_name,
+            event_bus=_event_bus(request),
         )
     except Exception as exc:
         _raise_mapped(exc)

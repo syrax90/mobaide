@@ -3,6 +3,7 @@ import { act, cleanup, render, waitFor, type RenderResult } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   SessionGitCommitResult,
+  SessionGitConflict,
   SessionGitJob,
   SessionGitStatus,
 } from '../../../api/sessionGitRepository';
@@ -25,7 +26,19 @@ const api = vi.hoisted(() => ({
   jobPolls: [] as string[],
   startJob: undefined as (() => Promise<SessionGitJob>) | undefined,
   cancelJob: undefined as (() => Promise<SessionGitJob>) | undefined,
+  /** What each read of a conflicted file answers, and the paths it was asked for. */
+  conflicts: [] as (() => Promise<SessionGitConflict>)[],
+  conflictReads: [] as string[],
+  /** What the next resolve / take / restore answers; one slot, as for `stage`. */
+  conflictWrite: undefined as (() => Promise<void>) | undefined,
 }));
+
+const conflictWrite = vi.hoisted(
+  () => (): Promise<void> =>
+    api.conflictWrite === undefined
+      ? Promise.reject(new Error('the conflict routes are not under test'))
+      : api.conflictWrite(),
+);
 
 vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../api/sessionGitRepository')>();
@@ -56,6 +69,14 @@ vi.mock('../../../api/sessionGitRepository', async (importOriginal) => {
       api.cancelJob === undefined
         ? Promise.reject(new Error('cancel is not under test'))
         : api.cancelJob(),
+    getSessionGitConflict: (_agentId: string, _sessionId: string, path: string) => {
+      api.conflictReads.push(path);
+      const next = api.conflicts.shift();
+      return next === undefined ? Promise.reject(new Error('unexpected conflict read')) : next();
+    },
+    resolveSessionGitConflict: () => conflictWrite(),
+    takeSessionGitConflict: () => conflictWrite(),
+    restoreSessionGitConflict: () => conflictWrite(),
   };
 });
 
@@ -70,6 +91,8 @@ const { observeWindowFocus } = await import('../../../realtime/windowFocus');
 const {
   SESSION_GIT_JOB_POLL_MS,
   SESSION_GIT_POLL_MS,
+  useSessionGitConflict,
+  useSessionGitConflictMutations,
   useSessionGitJob,
   useSessionGitLatestJob,
   useSessionGitMutations,
@@ -220,6 +243,9 @@ beforeEach(() => {
   api.jobPolls.length = 0;
   api.startJob = undefined;
   api.cancelJob = undefined;
+  api.conflicts.length = 0;
+  api.conflictReads.length = 0;
+  api.conflictWrite = undefined;
   latestJob = undefined;
   latestPointer = undefined;
   latestSync = undefined;
@@ -880,5 +906,222 @@ describe('useSessionGitSync', () => {
     });
     expect(jobHook().fetchStatus).toBe('idle');
     expect(api.jobPolls).toEqual(['j1']);
+  });
+});
+
+const conflictBody = (token: string): SessionGitConflict => ({
+  path: 'src/login.py',
+  code: 'UU',
+  state: 'rebasing',
+  kind: 'text',
+  content: '<<<<<<< HEAD\nmain\n=======\ntopic\n>>>>>>> fedcba9\n',
+  token,
+  markers: 1,
+  has_base: false,
+  ours: { label: 'main', present: true },
+  theirs: { label: 'fedcba9 Fix', present: true },
+  byte_limit: 262144,
+});
+
+const answerConflict = (conflict: SessionGitConflict): void => {
+  api.conflicts.push(() => Promise.resolve(conflict));
+};
+
+let latestConflict: ReturnType<typeof useSessionGitConflict> | undefined;
+let latestConflictMutations: ReturnType<typeof useSessionGitConflictMutations> | undefined;
+
+function ConflictHarness({ path }: { path: string }) {
+  const query = useSessionGitConflict('a1', 's1', path);
+  // read during render, so the observer tracks them
+  void query.data;
+  void query.error;
+  void query.fetchStatus;
+  latestConflict = query;
+  return null;
+}
+
+const conflictSubject = (path: string | null) => (
+  <QueryClientProvider client={client}>{path === null ? null : <ConflictHarness path={path} />}</QueryClientProvider>
+);
+
+const conflictHook = (): ReturnType<typeof useSessionGitConflict> => {
+  if (latestConflict === undefined) throw new Error('conflict hook not rendered');
+  return latestConflict;
+};
+
+describe('useSessionGitConflict', () => {
+  it('reads the file once and is not re-read by the git.changed or reconnect sweeps', async () => {
+    // The text seeds an editor draft: a refetch behind the user's back would
+    // offer a new token for text they never saw.
+    answerConflict(conflictBody('t1'));
+    render(conflictSubject('src/login.py'));
+    await waitFor(() => {
+      expect(conflictHook().data?.token).toBe('t1');
+    });
+
+    await invalidateSession();
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: queryKeys.sessionGitRoot('a1') });
+    });
+    await flush();
+
+    expect(api.conflictReads).toEqual(['src/login.py']);
+    expect(conflictHook().data?.token).toBe('t1');
+  });
+
+  it('re-reads when the user asks for a reload', async () => {
+    answerConflict(conflictBody('t1'));
+    answerConflict(conflictBody('t2'));
+    render(conflictSubject('src/login.py'));
+    await waitFor(() => {
+      expect(conflictHook().data?.token).toBe('t1');
+    });
+
+    await act(async () => {
+      await conflictHook().refetch();
+    });
+
+    await waitFor(() => {
+      expect(conflictHook().data?.token).toBe('t2');
+    });
+    expect(api.conflictReads).toEqual(['src/login.py', 'src/login.py']);
+  });
+
+  it('forgets the file when the pane closes, so the next open reads it again', async () => {
+    answerConflict(conflictBody('t1'));
+    answerConflict(conflictBody('t2'));
+    const view = render(conflictSubject('src/login.py'));
+    await waitFor(() => {
+      expect(conflictHook().data?.token).toBe('t1');
+    });
+
+    view.rerender(conflictSubject(null));
+    await flush();
+    expect(
+      client.getQueryData(queryKeys.sessionGitConflict('a1', 's1', 'src/login.py')),
+    ).toBeUndefined();
+    view.rerender(conflictSubject('src/login.py'));
+
+    await waitFor(() => {
+      expect(conflictHook().data?.token).toBe('t2');
+    });
+  });
+
+  it('surfaces a refusal without retrying, and out of the global error toast', async () => {
+    api.conflicts.push(() =>
+      Promise.reject(wireFailure(409, { code: 'not_conflicted', message: 'src/login.py' })),
+    );
+    render(conflictSubject('src/login.py'));
+
+    await waitFor(() => {
+      expect(conflictHook().error).toMatchObject({ kind: 'git', code: 'not_conflicted' });
+    });
+    await flush();
+
+    expect(api.conflictReads).toEqual(['src/login.py']);
+    expect(
+      client.getQueryCache().find({
+        queryKey: queryKeys.sessionGitConflict('a1', 's1', 'src/login.py'),
+      })?.meta,
+    ).toEqual({ silent: true });
+  });
+});
+
+/** The poll and an open conflict beside the resolver's mutations, as the panel mounts them. */
+function ConflictMutationsHarness() {
+  const { data, error, fetchStatus } = useSessionGitStatus('a1', 's1', true);
+  latest = { data, error, fetchStatus };
+  latestConflictMutations = useSessionGitConflictMutations('a1', 's1');
+  return <ConflictHarness path="src/login.py" />;
+}
+
+const conflictMutations = (): ReturnType<typeof useSessionGitConflictMutations> => {
+  if (latestConflictMutations === undefined) throw new Error('conflict mutations not rendered');
+  return latestConflictMutations;
+};
+
+describe('useSessionGitConflictMutations', () => {
+  const renderConflictMutations = async (): Promise<void> => {
+    answer(body('e1'));
+    answer(body('e2'));
+    answerConflict(conflictBody('t1'));
+    render(
+      <QueryClientProvider client={client}>
+        <ConflictMutationsHarness />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(hook().data?.etag).toBe('e1');
+      expect(conflictHook().data?.token).toBe('t1');
+    });
+  };
+
+  const RUNS: [string, () => Promise<void>][] = [
+    [
+      'resolve',
+      () =>
+        conflictMutations().resolve.mutateAsync({
+          path: 'src/login.py',
+          token: 't1',
+          content: 'x\n',
+          markResolved: true,
+        }),
+    ],
+    ['take', () => conflictMutations().take.mutateAsync({ path: 'src/login.py', side: 'ours' })],
+    ['restore', () => conflictMutations().restore.mutateAsync({ path: 'src/login.py', style: 'merge' })],
+  ];
+
+  it.each(RUNS)('re-reads the status, but never the open file, once a %s has settled', async (_name, run) => {
+    api.conflictWrite = () => Promise.resolve();
+    await renderConflictMutations();
+
+    await act(async () => {
+      await run();
+    });
+
+    await waitFor(() => {
+      expect(hook().data?.etag).toBe('e2');
+    });
+    expect(api.etags).toEqual([undefined, 'e1']);
+    expect(api.conflictReads).toEqual(['src/login.py']);
+  });
+
+  it.each(RUNS)('re-reads the status after a refused %s as well', async (_name, run) => {
+    api.conflictWrite = () =>
+      Promise.reject(wireFailure(409, { code: 'file_changed', message: 'src/login.py' }));
+    await renderConflictMutations();
+
+    await act(async () => {
+      await expect(run()).rejects.toMatchObject({ kind: 'git', code: 'file_changed' });
+    });
+
+    await waitFor(() => {
+      expect(hook().data?.etag).toBe('e2');
+    });
+  });
+
+  it('reports one busy flag while any of the three is in flight', async () => {
+    let release: (() => void) | undefined;
+    api.conflictWrite = () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    await renderConflictMutations();
+    expect(conflictMutations().busy).toBe(false);
+
+    act(() => {
+      void conflictMutations().take.mutateAsync({ path: 'src/login.py', side: 'theirs' });
+    });
+    await waitFor(() => {
+      expect(conflictMutations().busy).toBe(true);
+    });
+
+    await act(async () => {
+      release?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(conflictMutations().busy).toBe(false);
+    });
   });
 });

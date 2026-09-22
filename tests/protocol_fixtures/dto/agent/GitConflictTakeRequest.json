@@ -1,0 +1,19 @@
+{
+  "type": "GitConflictTakeRequest",
+  "cases": [
+    {
+      "name": "take_ours",
+      "wire": {
+        "path": "src/login.py",
+        "side": "ours"
+      }
+    },
+    {
+      "name": "take_theirs",
+      "wire": {
+        "path": "docs/old.md",
+        "side": "theirs"
+      }
+    }
+  ]
+}

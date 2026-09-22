@@ -64,10 +64,19 @@ from mobaide.agent.projects.service import (
     update_project,
 )
 
+from mobaide.agent.git.changes_conflicts import (
+    get_session_conflict,
+    resolve_session_conflict,
+    restore_session_conflict,
+    take_session_conflict,
+)
 from mobaide.agent.git.changes_jobs import job_registry
 from mobaide.agent.git.changes_models import (
     GIT_CAPABILITIES,
     GitCommitRequest,
+    GitConflictResolveRequest,
+    GitConflictRestoreRequest,
+    GitConflictTakeRequest,
     GitDiscardRequest,
     GitPathsRequest,
     GitPullRequest,
@@ -1908,7 +1917,8 @@ class RelayClient:
             r"^/api/sessions/([^/]+)/git/"
             r"(status|diff|stage|unstage|discard|commit|commit/context"
             r"|fetch|pull|push|jobs/([^/]+)|jobs/([^/]+)/cancel"
-            r"|rebase|rebase/continue|rebase/skip|rebase/abort)$",
+            r"|rebase|rebase/continue|rebase/skip|rebase/abort"
+            r"|conflict|conflict/resolve|conflict/take|conflict/restore)$",
             path,
         )
         if m is None:
@@ -1918,7 +1928,9 @@ class RelayClient:
         if job_id is not None:
             route = "jobs/cancel" if route.endswith("/cancel") else "jobs"
         expected = (
-            "GET" if route in ("status", "diff", "commit/context", "jobs") else "POST"
+            "GET"
+            if route in ("status", "diff", "commit/context", "jobs", "conflict")
+            else "POST"
         )
         if method != expected:
             return None
@@ -1941,6 +1953,9 @@ class RelayClient:
             "pull": GitPullRequest,
             "push": GitPushRequest,
             "rebase": GitRebaseRequest,
+            "conflict/resolve": GitConflictResolveRequest,
+            "conflict/take": GitConflictTakeRequest,
+            "conflict/restore": GitConflictRestoreRequest,
         }
         req = None
         if route in request_models:
@@ -2000,6 +2015,23 @@ class RelayClient:
             elif route == "rebase/abort":
                 resp = await abort_session_rebase(
                     cwd=cwd, project_name=project_name, event_bus=event_bus,
+                )
+            elif route == "conflict":
+                resp = await get_session_conflict(cwd=cwd, path=q.get("path"))
+            elif route == "conflict/resolve":
+                resp = await resolve_session_conflict(
+                    cwd=cwd, request=req, project_name=project_name,
+                    event_bus=event_bus,
+                )
+            elif route == "conflict/take":
+                resp = await take_session_conflict(
+                    cwd=cwd, request=req, project_name=project_name,
+                    event_bus=event_bus,
+                )
+            elif route == "conflict/restore":
+                resp = await restore_session_conflict(
+                    cwd=cwd, request=req, project_name=project_name,
+                    event_bus=event_bus,
                 )
             elif route == "stage":
                 resp = await stage_session_paths(

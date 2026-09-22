@@ -616,16 +616,16 @@ final class GitChangesDisplaySyncTests: XCTestCase {
         let running = GitJobBanner(jobId: "j1", job: job())
         XCTAssertTrue(running.running)
         XCTAssertFalse(running.failed)
-        XCTAssertEqual(running.text, "Pushing…")
+        XCTAssertEqual(running.text(), "Pushing…")
 
         let waiting = GitJobBanner(jobId: "j1", job: nil)
         XCTAssertTrue(waiting.running)
-        XCTAssertEqual(waiting.text, "Syncing…")
+        XCTAssertEqual(waiting.text(), "Syncing…")
 
         let ok = GitJobBanner(jobId: "j1", job: done())
         XCTAssertFalse(ok.running)
         XCTAssertFalse(ok.failed)
-        XCTAssertEqual(ok.text, "Pushed · main -> main")
+        XCTAssertEqual(ok.text(), "Pushed · main -> main")
 
         let rejected = GitJobBanner(jobId: "j1", job: failed("rejected"))
         XCTAssertFalse(rejected.running)
@@ -634,8 +634,35 @@ final class GitChangesDisplaySyncTests: XCTestCase {
         let lost = GitJobBanner(jobId: "j1", job: job(), lost: true)
         XCTAssertFalse(lost.running)
         XCTAssertTrue(lost.failed)
-        XCTAssertEqual(lost.text, "Lost track of the job — refresh to see the result.")
+        XCTAssertEqual(lost.text(), "Lost track of the job — refresh to see the result.")
         XCTAssertEqual(GitChangesDisplay.jobLostCopy, "Lost track of the job — refresh to see the result.")
+    }
+
+    func testAConflictStopPointsAtTheConflictsSectionOnlyWhenTheAgentResolvesInTheApp() {
+        let stopped = failed("conflicts", op: GitJobResponse.opPull)
+
+        XCTAssertEqual(
+            GitChangesDisplay.jobErrorCopy("conflicts", message: nil, canResolveInApp: true),
+            "Stopped on conflicts — open a file under Conflicts to resolve it."
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.jobErrorCopy("conflicts", message: nil, canResolveInApp: false),
+            "Stopped on conflicts — resolve them in the terminal."
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.jobNotice(stopped, canResolveInApp: true),
+            "Pull failed: Stopped on conflicts — open a file under Conflicts to resolve it."
+        )
+        XCTAssertEqual(
+            GitJobBanner(jobId: "j1", job: stopped).text(canResolveInApp: true),
+            "Pull failed: Stopped on conflicts — open a file under Conflicts to resolve it."
+        )
+        XCTAssertEqual(
+            GitJobBanner(jobId: "j1", job: stopped).text(),
+            "Pull failed: Stopped on conflicts — resolve them in the terminal."
+        )
+        // every other code reads the same either way
+        XCTAssertEqual(GitChangesDisplay.jobErrorCopy("unmerged", message: nil, canResolveInApp: true), "Resolve the conflicts first.")
     }
 }
 
@@ -815,6 +842,25 @@ final class GitChangesDisplayRebaseTests: XCTestCase {
         XCTAssertEqual(GitChangesDisplay.rebaseBanner(rebasing(info()), conflicts: 0)?.hint, "No conflicts left — Continue when ready.")
     }
 
+    func testRebaseBannerPointsAtTheFilesThemselvesWhenTheAgentResolvesInTheApp() {
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseBanner(rebasing(info()), conflicts: 1, canResolveInApp: true)?.hint,
+            "1 conflict — open a file to resolve it."
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseBanner(rebasing(info()), conflicts: 3, canResolveInApp: true)?.hint,
+            "3 conflicts — open a file to resolve it."
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseBanner(rebasing(info()), conflicts: 0, canResolveInApp: true)?.hint,
+            "No conflicts left — Continue when ready."
+        )
+        XCTAssertEqual(
+            GitChangesDisplay.rebaseBanner(rebasing(nil), conflicts: 2, canResolveInApp: true)?.hint,
+            "Continue, skip or abort it in the terminal."
+        )
+    }
+
     func testRebaseBannerFallsBackToTheShortOidThenDropsWhatTheAgentCouldNotRead() {
         XCTAssertEqual(GitChangesDisplay.rebaseBanner(rebasing(info(ontoRef: nil)), conflicts: 0)?.title, "Rebasing topic onto 89abcde")
         XCTAssertEqual(GitChangesDisplay.rebaseBanner(rebasing(info(ontoRef: nil, ontoShortOid: nil)), conflicts: 0)?.title, "Rebasing topic")
@@ -963,6 +1009,20 @@ final class GitChangesDisplayRebaseTests: XCTestCase {
         XCTAssertEqual(GitChangesDisplay.rowActions(conflict("c.py"), capabilities: GitCapabilities(stage: true)), .none)
         XCTAssertFalse(GitChangesDisplay.rowActions(modified, capabilities: resolving).resolve)
         XCTAssertFalse(GitChangesDisplay.RowActions(resolve: true).any, "Mark resolved is per row, never a selection action")
+    }
+
+    func testOpensResolverOnlyForAConflictRowOfAnAgentThatServesTheResolver() {
+        let withResolver = GitCapabilities(stage: true, discard: true, commit: true, rebase: true, resolve: true, conflicts: true)
+        var withoutResolver = withResolver
+        withoutResolver.conflicts = false
+        let modified = GitStatusEntry(
+            group: GitStatusEntry.groupUnstaged, path: "m.py", orig_path: nil, code: "M",
+            index_status: ".", worktree_status: "M", rename_score: nil, submodule: false
+        )
+
+        XCTAssertTrue(GitChangesDisplay.opensResolver(conflict("c.py"), capabilities: withResolver))
+        XCTAssertFalse(GitChangesDisplay.opensResolver(conflict("c.py"), capabilities: withoutResolver))
+        XCTAssertFalse(GitChangesDisplay.opensResolver(modified, capabilities: withResolver))
     }
 
     func testConflictsStayOutOfTheSelectionSubsetsEvenWhenTheyCanBeMarkedResolved() {

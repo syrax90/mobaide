@@ -58,6 +58,14 @@ sealed class SessionGitException(message: String, cause: Throwable? = null) :
         const val CODE_UNKNOWN_REF = "unknown_ref"
         const val CODE_NO_REBASE = "no_rebase"
         const val CODE_CONFLICT_MARKERS = "conflict_markers"
+        /** The conflict routes' refusals; [GitError.detailMessage] is the path. */
+        const val CODE_NOT_CONFLICTED = "not_conflicted"
+        const val CODE_FILE_CHANGED = "file_changed"
+        const val CODE_FILE_BUSY = "file_busy"
+        const val CODE_NOT_RESTORABLE = "not_restorable"
+        const val CODE_UNSUPPORTED = "unsupported"
+        const val CODE_TOO_LARGE = "too_large"
+        const val CODE_BAD_CONTENT = "bad_content"
     }
 }
 

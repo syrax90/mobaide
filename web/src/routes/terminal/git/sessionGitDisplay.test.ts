@@ -43,6 +43,7 @@ import {
   jobNotice,
   jobTitle,
   mutationErrorCopy,
+  opensResolver,
   pathsFor,
   rebaseBanner,
   rebaseBlocker,
@@ -54,6 +55,7 @@ import {
   refusalCopy,
   renderableText,
   repoStateLabel,
+  resolvedRowsFor,
   rowActions,
   sectionAction,
   sectionsFor,
@@ -258,6 +260,20 @@ describe('sectionsFor', () => {
   it('returns no sections for a clean tree, entries absent or empty', () => {
     expect(sectionsFor(status({ entries: [] }))).toEqual([]);
     expect(sectionsFor(status({ entries: undefined }))).toEqual([]);
+  });
+});
+
+describe('resolvedRowsFor', () => {
+  it('lists the resolved paths in the agent\'s order, keyed apart from every entry row', () => {
+    expect(resolvedRowsFor(status({ resolved_paths: ['src/b.py', 'a b/日本.txt'] }))).toEqual([
+      { key: 'resolved:src/b.py', path: 'src/b.py' },
+      { key: 'resolved:a b/日本.txt', path: 'a b/日本.txt' },
+    ]);
+  });
+
+  it('is empty for an agent that predates the key', () => {
+    expect(resolvedRowsFor(status())).toEqual([]);
+    expect(resolvedRowsFor(status({ resolved_paths: [] }))).toEqual([]);
   });
 });
 
@@ -622,6 +638,7 @@ const ALL_GIT: GitCapabilities = {
   rebase: true,
   resolve: true,
   deleteRemote: true,
+  conflicts: true,
 };
 const NO_ACTIONS = { stage: false, unstage: false, discard: false, resolve: false };
 
@@ -659,6 +676,32 @@ describe('refusalCopy', () => {
     );
   });
 
+  it('phrases the conflict resolver\'s refusals around the file they name', () => {
+    expect(refusalCopy('not_conflicted', 'src/login.py')).toBe('src/login.py is no longer in conflict.');
+    expect(refusalCopy('not_conflicted', null)).toBe('The file is no longer in conflict.');
+    expect(refusalCopy('file_changed', 'src/login.py')).toBe(
+      'src/login.py changed on the agent machine since you opened it.',
+    );
+    expect(refusalCopy('file_changed', null)).toBe(
+      'The file changed on the agent machine since you opened it.',
+    );
+    expect(refusalCopy('file_busy', 'src/login.py')).toBe(
+      'src/login.py is open in another program — close it and try again.',
+    );
+    expect(refusalCopy('not_restorable', 'src/login.py')).toBe(
+      'The conflict in src/login.py can no longer be rebuilt.',
+    );
+    expect(refusalCopy('not_restorable', null)).toBe('The conflict in the file can no longer be rebuilt.');
+  });
+
+  it('keeps the path out of the refusals that are not about one file', () => {
+    expect(refusalCopy('unsupported', 'vendor/lib')).toBe(
+      "This conflict can't be resolved here — use the terminal.",
+    );
+    expect(refusalCopy('too_large', null)).toBe('The text is too large to save from here.');
+    expect(refusalCopy('bad_content', null)).toBe("The text contains characters that can't be saved.");
+  });
+
   it('names an unknown code, with the git output when there is any', () => {
     expect(refusalCopy('rate_limited', null)).toBe('git refused the request (rate_limited).');
     expect(refusalCopy('rate_limited', 'slow down')).toBe(
@@ -691,6 +734,23 @@ describe('mutationErrorCopy', () => {
   });
 });
 
+describe('opensResolver', () => {
+  it('opens the resolver for a conflict row of an agent that serves it', () => {
+    expect(opensResolver(conflict('c.py'), ALL_GIT)).toBe(true);
+  });
+
+  it('keeps the HEAD diff for an agent without the capability, whatever else it has', () => {
+    expect(opensResolver(conflict('c.py'), { ...ALL_GIT, conflicts: false })).toBe(false);
+  });
+
+  it('never opens for a row outside Conflicts', () => {
+    expect(opensResolver(staged(), ALL_GIT)).toBe(false);
+    expect(opensResolver(entry(), ALL_GIT)).toBe(false);
+    expect(opensResolver(untracked('n.txt'), ALL_GIT)).toBe(false);
+    expect(opensResolver(entry({ group: foreignGroup('ignored') }), ALL_GIT)).toBe(false);
+  });
+});
+
 describe('rowActions', () => {
   it('unstages a staged row, stages or discards a modified or untracked one, and marks a conflict resolved', () => {
     expect(rowActions(staged(), ALL_GIT)).toEqual({ ...NO_ACTIONS, unstage: true });
@@ -716,6 +776,7 @@ describe('rowActions', () => {
       rebase: false,
       resolve: false,
       deleteRemote: false,
+      conflicts: false,
     };
     const stageOnly: GitCapabilities = {
       stage: true,
@@ -728,6 +789,7 @@ describe('rowActions', () => {
       rebase: false,
       resolve: false,
       deleteRemote: false,
+      conflicts: false,
     };
 
     expect(rowActions(entry(), discardOnly)).toEqual({ ...NO_ACTIONS, discard: true });
@@ -855,6 +917,7 @@ describe('sectionAction', () => {
         rebase: false,
         resolve: false,
         deleteRemote: false,
+        conflicts: false,
       }),
     ).toBeNull();
   });
@@ -923,6 +986,7 @@ const NO_SYNC: GitCapabilities = {
   rebase: false,
   resolve: false,
   deleteRemote: false,
+  conflicts: false,
 };
 
 const job = (over: Partial<SessionGitJob> = {}): SessionGitJob => ({
@@ -1083,6 +1147,23 @@ describe('job copy', () => {
     expect(jobErrorCopy('no_head', null)).toBe('No commits yet.');
     expect(jobErrorCopy('hook_failed', null)).toBe('A pre-push hook rejected the push.');
     expect(jobErrorCopy('index_locked', null)).toBe('Another git process is running — try again.');
+  });
+
+  it('sends a pull stopped on conflicts to the Conflicts section when the agent resolves in the app', () => {
+    expect(jobErrorCopy('conflicts', null, true)).toBe(
+      'Stopped on conflicts — open a file under Conflicts to resolve it.',
+    );
+    expect(jobErrorCopy('conflicts', null, false)).toBe(
+      'Stopped on conflicts — resolve them in the terminal.',
+    );
+    expect(jobNotice(failedJob('conflicts', { op: 'pull' }), true)).toBe(
+      'Pull failed: Stopped on conflicts — open a file under Conflicts to resolve it.',
+    );
+    expect(jobNotice(failedJob('conflicts', { op: 'pull' }))).toBe(
+      'Pull failed: Stopped on conflicts — resolve them in the terminal.',
+    );
+    // every other code reads the same either way
+    expect(jobErrorCopy('unmerged', null, true)).toBe('Resolve the conflicts first.');
   });
 
   it('falls back to git_error and unknown codes on the message, else a plain failure', () => {
@@ -1391,6 +1472,21 @@ describe('rebaseBanner', () => {
     expect(rebaseBanner(rebasing(rebaseInfo({ stopped_on: null })), 0)?.progress).toBe('2/5');
     expect(rebaseBanner(rebasing(rebaseInfo({ step: null })), 0)?.progress).toBe(
       'Stopped at fedcba9 Fix the login redirect',
+    );
+  });
+
+  it('points at the files themselves when the agent can resolve them in the app', () => {
+    expect(rebaseBanner(rebasing(), 1, true)?.hint).toBe('1 conflict — open a file to resolve it.');
+    expect(rebaseBanner(rebasing(), 3, true)?.hint).toBe('3 conflicts — open a file to resolve it.');
+    expect(rebaseBanner(rebasing(), 1, false)?.hint).toBe(
+      '1 conflict — fix the files, then Mark resolved.',
+    );
+  });
+
+  it('says the same with or without the resolver once no conflict is left or the terminal owns the rebase', () => {
+    expect(rebaseBanner(rebasing(), 0, true)?.hint).toBe('No conflicts left — Continue when ready.');
+    expect(rebaseBanner(rebasing(null), 2, true)?.hint).toBe(
+      'Continue, skip or abort it in the terminal.',
     );
   });
 

@@ -3375,6 +3375,84 @@ body:has(dialog[open]) {
 .git-diff-action {
   margin-left: auto;
 }
+.git-diff-action + .git-diff-action {
+  margin-left: 0;
+}
+.git-changes-row-static {
+  cursor: default;
+}
+.git-changes-row-static:hover {
+  background: transparent;
+}
+.git-changes-item-static .git-changes-row-actions {
+  opacity: 1;
+  padding-right: 0.5rem;
+}
+.git-conflict-caption {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+.git-conflict-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.4rem 1rem;
+  border-bottom: 2px solid var(--surface-2);
+  font-size: 0.85rem;
+}
+.git-conflict-count {
+  margin-right: auto;
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+}
+.git-conflict-legend {
+  margin: 0;
+  padding: 0.5rem 1rem 0.5rem 2rem;
+  border-bottom: 2px solid var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+.git-conflict-editor {
+  flex: 1;
+  min-height: 12rem;
+  width: 100%;
+  padding: 0.5rem 1rem;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  tab-size: 4;
+  white-space: pre;
+  overflow: auto;
+  resize: none;
+}
+.git-conflict-editor:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.git-conflict-warning {
+  margin: 0;
+  padding: 0.3rem 1rem;
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+.git-conflict-blocked {
+  flex: 1;
+  padding: 1rem;
+}
+.git-conflict-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-top: 2px solid var(--surface-2);
+}
 
 .git-commit-form {
   display: flex;

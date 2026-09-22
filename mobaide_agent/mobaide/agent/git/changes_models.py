@@ -1,6 +1,6 @@
 """Pydantic wire models for the session-scoped git Changes API (status/diff
 reads, the stage/unstage/discard/commit mutations, the fetch/pull/push
-jobs and the rebase routes).
+jobs, the rebase routes and the conflict resolver).
 
 ``GET /api/sessions/{id}/git/status`` and ``.../git/diff`` share one parser
 on the agent so the three clients render dumb, pre-shaped JSON. Every key is
@@ -16,6 +16,12 @@ from pydantic import BaseModel, Field
 ENTRY_LIMIT = 5000
 LINE_LIMIT = 5000
 BYTE_LIMIT = 1024 * 1024
+# A conflicted file travels whole, in both directions, inside one relay frame.
+# ``json.dumps`` escapes non-ASCII up to 6x and a frame over the tunnel's 4 MiB
+# cap closes the tunnel for every session, so the editable ceiling sits far
+# below ``BYTE_LIMIT``.
+EDIT_BYTE_LIMIT = 256 * 1024
+RESOLVED_LIMIT = 200
 
 # Advertised as ``capabilities.git`` on ``GET /api/version`` (both transports).
 # Clients render the Changes viewer on ``changes`` and gate every mutating
@@ -26,6 +32,8 @@ BYTE_LIMIT = 1024 * 1024
 # certifies that ``stage`` refuses an unmerged path still holding conflict
 # markers, which is what makes a "Mark resolved" row action safe to offer.
 # ``delete_remote`` lets ``POST /items:delete`` take ``remote_branch`` items.
+# ``conflicts`` covers the ``.../git/conflict`` routes and ``resolved_paths``
+# on status.
 GIT_CAPABILITIES: dict[str, bool] = {
     "changes": True,
     "stage": True,
@@ -38,6 +46,7 @@ GIT_CAPABILITIES: dict[str, bool] = {
     "rebase": True,
     "resolve": True,
     "delete_remote": True,
+    "conflicts": True,
 }
 MESSAGE_LIMIT = 64 * 1024
 JOB_LINE_LIMIT = 200
@@ -64,6 +73,8 @@ DiffLineType = Literal["ctx", "add", "del"]
 GitJobOp = Literal["fetch", "pull", "push"]
 GitJobStatus = Literal["running", "done"]
 GitPullMode = Literal["ff_only", "rebase", "merge"]
+ConflictSide = Literal["ours", "theirs"]
+ConflictStyle = Literal["merge", "diff3"]
 
 
 class GitHead(BaseModel):
@@ -148,6 +159,11 @@ class GitStatusResponse(BaseModel):
     counts: GitStatusCounts | None = None
     truncated: bool = False
     entry_limit: int = ENTRY_LIMIT
+    # Paths resolved during the operation in progress whose conflict git can
+    # still rebuild. Top-level rather than an entry group: a resolution equal
+    # to HEAD has no status entry at all, and one that differs already has a
+    # ``staged`` row.
+    resolved_paths: list[str] = Field(default_factory=list)
 
 
 class GitDiffLine(BaseModel):
@@ -245,6 +261,58 @@ class GitRebaseResponse(BaseModel):
     outcome: str
     rebase: GitRebaseInfo | None = None
     message: str | None = None
+
+
+class GitConflictSide(BaseModel):
+    """One side of a conflict. ``present`` is false when that side deleted
+    the file (or never had it); ``label`` names the side for the user and is
+    null when the agent cannot tell."""
+
+    label: str | None = None
+    present: bool = False
+
+
+class GitConflictResponse(BaseModel):
+    """A conflicted path as the resolver shows it. ``ours`` is index stage 2
+    and ``theirs`` stage 3 — during a rebase that is the branch being rebased
+    onto and the commit being replayed. ``kind`` is an open vocabulary:
+    ``text`` | ``too_large`` | ``binary`` | ``encoding`` | ``missing`` |
+    ``symlink`` | ``submodule`` | ``unsupported``; only ``text`` carries
+    ``content`` (LF line endings, no BOM) and ``token``, the hash of the file
+    as read that ``resolve`` must send back."""
+
+    path: str
+    code: str
+    state: RepoState = "clean"
+    kind: str
+    content: str | None = None
+    token: str | None = None
+    markers: int = 0
+    has_base: bool = False
+    ours: GitConflictSide
+    theirs: GitConflictSide
+    byte_limit: int = EDIT_BYTE_LIMIT
+
+
+class GitConflictResolveRequest(BaseModel):
+    """``content`` carries no length bound on purpose: a validation error
+    echoes its input, so the size is checked by the service instead."""
+
+    path: str = Field(min_length=1)
+    token: str = Field(min_length=1)
+    content: str
+    mark_resolved: bool = True
+
+
+class GitConflictTakeRequest(BaseModel):
+    path: str = Field(min_length=1)
+    side: ConflictSide
+
+
+class GitConflictRestoreRequest(BaseModel):
+    path: str = Field(min_length=1)
+    style: ConflictStyle = "merge"
+    token: str | None = None
 
 
 class GitPullRequest(BaseModel):

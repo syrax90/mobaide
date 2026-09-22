@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 from mobaide.agent.git import changes_service
+from mobaide.agent.git.changes_models import GitRebaseCommit, GitRebaseInfo
 from mobaide.agent.git.changes_service import (
     GitCommandError,
     GitTimeoutError,
@@ -16,6 +17,7 @@ from mobaide.agent.git.changes_service import (
     repo_state,
     resolve_repo,
     resolve_repo_dirs,
+    restorable_paths,
 )
 from mobaide.core import git_exec
 from mobaide.core.git_exec import (
@@ -29,14 +31,18 @@ from .git_repo_support import (
     GIT_BIN,
     add_submodule,
     commit_all,
+    finish_merge_as_ours,
     init_repo,
     make_conflict_branches,
     make_modify_delete_branches,
+    make_submodule_conflict,
     norm_path,
     posix_only,
     repo,  # noqa: F401 - pytest fixture
     requires_git,
     run_git_sync,
+    start_failing_am_after_a_merge_as_ours,
+    stop_rebase_on_exec_after_a_pick_as_ours,
     stub_git,
     write_file,
 )
@@ -648,3 +654,363 @@ class TestSessionGitStatus:
 
         with pytest.raises(GitUnavailableError):
             await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+
+def _resolve_undo_record(
+    path: str, stages: dict[int, str], *, gitlink: tuple[int, ...] = ()
+) -> bytes:
+    """The record git keeps per stage; the stages in ``gitlink`` carry a
+    submodule's mode instead of a file's."""
+    return b"".join(
+        f"{'160000' if stage in gitlink else '100644'} {oid} {stage}\t{path}\0".encode()
+        for stage, oid in stages.items()
+    )
+
+
+@requires_git
+class TestResolvedPaths:
+    async def test_a_path_resolved_during_the_operation_is_listed(self, repo):
+        make_conflict_branches(repo)
+        run_git_sync(repo, "merge", "other", check=False)
+        before = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+        write_file(repo, "keep.txt", b"one\nRESOLVED\nthree\n")
+        run_git_sync(repo, "add", "keep.txt")
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert before.resolved_paths == []
+        assert resp.resolved_paths == ["keep.txt"]
+        assert [(e.group, e.path) for e in resp.entries] == [("staged", "keep.txt")]
+
+    async def test_a_resolution_equal_to_head_is_listed_without_any_entry(self, repo):
+        make_conflict_branches(repo)
+        run_git_sync(repo, "merge", "other", check=False)
+        run_git_sync(repo, "checkout", "--ours", "--", "keep.txt")
+        run_git_sync(repo, "add", "keep.txt")
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert (resp.entries, resp.resolved_paths) == ([], ["keep.txt"])
+
+    async def test_a_record_left_by_a_finished_operation_is_not_listed(self, repo):
+        finish_merge_as_ours(repo)
+        records = subprocess.run(
+            [GIT_BIN, "ls-files", "--resolve-undo"], cwd=repo, check=True, capture_output=True
+        ).stdout
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert b"keep.txt" in records
+        assert (resp.repo.state, resp.resolved_paths) == ("clean", [])
+
+    async def test_a_record_left_by_a_finished_merge_is_not_listed_during_a_bisect(
+        self, repo
+    ):
+        # Resolved as "ours" and untouched since, the record's stage 2 is still
+        # HEAD's blob, and a bisect is an operation in progress.
+        finish_merge_as_ours(repo)
+        write_file(repo, "later.txt", b"unrelated\n")
+        commit_all(repo, "unrelated work")
+        run_git_sync(repo, "bisect", "start", "HEAD")
+        records = subprocess.run(
+            [GIT_BIN, "ls-files", "--resolve-undo"], cwd=repo, check=True, capture_output=True
+        ).stdout
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert b"keep.txt" in records
+        assert (resp.repo.state, resp.resolved_paths) == ("bisecting", [])
+
+    async def test_a_record_left_by_a_finished_merge_is_not_listed_during_a_git_am(
+        self, repo, tmp_path
+    ):
+        # ``rebasing`` without a rebase: the session never rewrote the index, so
+        # the record is the finished merge's, its stage 2 still HEAD's blob.
+        start_failing_am_after_a_merge_as_ours(repo, str(tmp_path / "patches"))
+        records = subprocess.run(
+            [GIT_BIN, "ls-files", "--resolve-undo"], cwd=repo, check=True, capture_output=True
+        ).stdout
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert b"keep.txt" in records
+        assert (resp.repo.state, resp.repo.rebase) == ("rebasing", None)
+        assert resp.resolved_paths == []
+
+    async def test_a_record_of_a_pick_already_committed_is_not_listed_at_an_exec_stop(
+        self, repo
+    ):
+        # The rebase stopped on a failed ``exec``, not on a pick: the record is
+        # the committed pick's, its stage 2 still HEAD's blob.
+        stop_rebase_on_exec_after_a_pick_as_ours(repo)
+        records = subprocess.run(
+            [GIT_BIN, "ls-files", "--resolve-undo"], cwd=repo, check=True, capture_output=True
+        ).stdout
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert b"keep.txt" in records
+        assert (resp.repo.state, resp.repo.rebase.stopped_on) == ("rebasing", None)
+        assert resp.resolved_paths == []
+
+    async def test_a_vanished_record_changes_the_etag(self, repo):
+        make_conflict_branches(repo)
+        run_git_sync(repo, "merge", "other", check=False)
+        write_file(repo, "keep.txt", b"one\nRESOLVED\nthree\n")
+        run_git_sync(repo, "add", "keep.txt")
+        first = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+        run_git_sync(repo, "update-index", "--clear-resolve-undo")
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=first.etag)
+
+        assert first.resolved_paths == ["keep.txt"]
+        assert (resp.unchanged, resp.resolved_paths) == (False, [])
+        assert [(e.group, e.path) for e in resp.entries] == [("staged", "keep.txt")]
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            CmdResult(rc=129, stdout=b"", stderr=b"error: unknown option\n"),
+            CmdResult(rc=-9, stdout=b"", stderr=b"", timed_out=True),
+            OSError("boom"),
+        ],
+    )
+    async def test_status_survives_git_not_answering_for_the_records(
+        self, repo, monkeypatch, answer
+    ):
+        make_conflict_branches(repo)
+        run_git_sync(repo, "merge", "other", check=False)
+        write_file(repo, "keep.txt", b"one\nRESOLVED\nthree\n")
+        run_git_sync(repo, "add", "keep.txt")
+        real_run_git = changes_service.run_git
+
+        async def no_resolve_undo(args, **kwargs):
+            if "--resolve-undo" not in args:
+                return await real_run_git(args, **kwargs)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        monkeypatch.setattr(changes_service, "run_git", no_resolve_undo)
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert resp.repo.state == "merging"
+        assert resp.resolved_paths == []
+        assert [(e.group, e.path) for e in resp.entries] == [("staged", "keep.txt")]
+
+    async def test_a_listing_cut_at_the_output_cap_keeps_its_complete_records(
+        self, repo, monkeypatch
+    ):
+        make_conflict_branches(repo)
+        run_git_sync(repo, "merge", "other", check=False)
+        write_file(repo, "keep.txt", b"one\nRESOLVED\nthree\n")
+        run_git_sync(repo, "add", "keep.txt")
+        # The cap fell inside ``README.md.orig``: read as a whole record, the
+        # tail would pair with README.md's stage 2 and list a second path.
+        cut_tail = (
+            _resolve_undo_record("README.md", {2: _rev(repo, "HEAD:README.md")})
+            + f"100644 {'1' * 40} 3\tREADME.md".encode()
+        )
+        real_run_git = changes_service.run_git
+
+        async def cut_listing(args, **kwargs):
+            result = await real_run_git(args, **kwargs)
+            if "--resolve-undo" not in args:
+                return result
+            return CmdResult(
+                rc=-9, stdout=result.stdout + cut_tail, stderr=b"", truncated=True
+            )
+
+        monkeypatch.setattr(changes_service, "run_git", cut_listing)
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert resp.resolved_paths == ["keep.txt"]
+
+    async def test_heads_blobs_are_asked_for_in_chunks_and_merged(self, repo, monkeypatch):
+        names = [f"{name}.txt" for name in ("a", "b", "c", "d", "e")]
+        for name in names:
+            write_file(repo, name, f"{name}\n".encode())
+        commit_all(repo, "five files")
+        raw = b"".join(
+            _resolve_undo_record(name, {2: _rev(repo, f"HEAD:{name}"), 3: "1" * 40})
+            for name in names
+        )
+        asked: list[list[str]] = []
+        real_run_git = changes_service.run_git
+
+        async def record_ls_tree(args, **kwargs):
+            if args[0] == "ls-tree":
+                asked.append(list(args[args.index("--") + 1 :]))
+            return await real_run_git(args, **kwargs)
+
+        monkeypatch.setattr(changes_service, "run_git", record_ls_tree)
+        monkeypatch.setattr(changes_service, "_LS_TREE_CHUNK", 2)
+
+        listed = await restorable_paths(repo, raw, unmerged=set())
+
+        assert listed == names
+        assert asked == [["a.txt", "b.txt"], ["c.txt", "d.txt"], ["e.txt"]]
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            CmdResult(rc=128, stdout=b"", stderr=b"fatal: not a tree object\n"),
+            CmdResult(rc=-9, stdout=b"", stderr=b"", timed_out=True),
+            CmdResult(rc=-9, stdout=b"", stderr=b"", truncated=True),
+            OSError("boom"),
+        ],
+    )
+    async def test_a_chunk_git_cannot_answer_drops_only_its_own_paths(
+        self, repo, monkeypatch, answer
+    ):
+        names = [f"{name}.txt" for name in ("a", "b", "c")]
+        for name in names:
+            write_file(repo, name, f"{name}\n".encode())
+        commit_all(repo, "three files")
+        raw = b"".join(
+            _resolve_undo_record(name, {2: _rev(repo, f"HEAD:{name}"), 3: "1" * 40})
+            for name in names
+        )
+        real_run_git = changes_service.run_git
+
+        async def first_chunk_fails(args, **kwargs):
+            if args[0] != "ls-tree" or "a.txt" not in args:
+                return await real_run_git(args, **kwargs)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        monkeypatch.setattr(changes_service, "run_git", first_chunk_fails)
+        monkeypatch.setattr(changes_service, "_LS_TREE_CHUNK", 2)
+
+        listed = await restorable_paths(repo, raw, unmerged=set())
+
+        assert listed == ["c.txt"]
+
+    async def test_status_survives_git_not_answering_for_heads_blobs(
+        self, repo, monkeypatch
+    ):
+        make_conflict_branches(repo)
+        run_git_sync(repo, "merge", "other", check=False)
+        write_file(repo, "keep.txt", b"one\nRESOLVED\nthree\n")
+        run_git_sync(repo, "add", "keep.txt")
+        real_run_git = changes_service.run_git
+
+        async def no_ls_tree(args, **kwargs):
+            if args[0] == "ls-tree":
+                raise OSError("boom")
+            return await real_run_git(args, **kwargs)
+
+        monkeypatch.setattr(changes_service, "run_git", no_ls_tree)
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert resp.repo.state == "merging"
+        assert resp.resolved_paths == []
+        assert [(e.group, e.path) for e in resp.entries] == [("staged", "keep.txt")]
+
+    async def test_only_a_two_sided_record_whose_ours_is_still_head_is_restorable(self, repo):
+        write_file(repo, "b.txt", b"b\n")
+        write_file(repo, "c.txt", b"c\n")
+        commit_all(repo, "more files")
+        head = {p: _rev(repo, f"HEAD:{p}") for p in ("keep.txt", "README.md", "b.txt", "c.txt")}
+        other = "1" * 40
+        raw = (
+            _resolve_undo_record("keep.txt", {1: other, 2: head["keep.txt"], 3: other})
+            + _resolve_undo_record("added.txt", {2: other, 3: other})
+            + _resolve_undo_record("README.md", {1: other, 2: other, 3: other})
+            + _resolve_undo_record("b.txt", {1: other, 3: other})
+            + _resolve_undo_record("c.txt", {2: head["c.txt"], 3: other})
+            + b"garbage without a tab\0"
+        )
+
+        listed = await restorable_paths(repo, raw, unmerged={"c.txt"})
+
+        assert listed == ["keep.txt"]
+
+    @pytest.mark.parametrize(
+        ("gitlink", "listed"),
+        [
+            ((), ["keep.txt"]),
+            ((1,), []),
+            ((2,), []),
+            ((3,), []),
+            ((1, 2, 3), []),
+        ],
+    )
+    async def test_a_record_with_a_submodule_on_any_stage_is_never_restorable(
+        self, repo, gitlink, listed
+    ):
+        # Stage 2 equals HEAD's entry in every case, so only the mode decides.
+        other = "1" * 40
+        raw = _resolve_undo_record(
+            "keep.txt",
+            {1: other, 2: _rev(repo, "HEAD:keep.txt"), 3: other},
+            gitlink=gitlink,
+        )
+
+        assert await restorable_paths(repo, raw, unmerged=set()) == listed
+
+    async def test_a_resolved_submodule_conflict_is_not_listed(self, repo, tmp_path):
+        # ``git add sub`` with the submodule on main's commit resolves as
+        # "ours": the record's stage 2 is HEAD's gitlink, and ``checkout
+        # --merge`` on it dies with "unable to read blob object".
+        make_submodule_conflict(repo, str(tmp_path))
+        before = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+        run_git_sync(repo, "add", "sub")
+        records = subprocess.run(
+            [GIT_BIN, "ls-files", "--resolve-undo"], cwd=repo, check=True, capture_output=True
+        ).stdout.decode()
+
+        resp = await get_session_git_status(session_id="s1", cwd=repo, etag=None)
+
+        assert [(e.group, e.path) for e in before.entries] == [("conflicts", "sub")]
+        assert f"160000 {_rev(repo, 'HEAD:sub')} 2\tsub" in records
+        assert resp.repo.state == "merging"
+        assert [e.path for e in resp.entries if e.group == "conflicts"] == []
+        assert resp.resolved_paths == []
+
+    async def test_the_list_is_capped_in_path_order(self, repo, monkeypatch):
+        for name in ("c", "a", "b"):
+            write_file(repo, f"{name}.txt", b"x\n")
+        commit_all(repo, "three files")
+        blob = _rev(repo, "HEAD:a.txt")
+        raw = b"".join(
+            _resolve_undo_record(f"{name}.txt", {2: blob, 3: "1" * 40})
+            for name in ("c", "a", "b")
+        )
+        monkeypatch.setattr(changes_service, "RESOLVED_LIMIT", 2)
+
+        listed = await restorable_paths(repo, raw, unmerged=set())
+
+        assert listed == ["a.txt", "b.txt"]
+
+    async def test_no_records_never_asks_git(self, tmp_path):
+        assert await restorable_paths(str(tmp_path / "gone"), b"", unmerged=set()) == []
+
+
+_STOPPED_ON = GitRebaseCommit(oid="1" * 40, short_oid="1" * 7, subject="other side")
+
+
+class TestResolveUndoLive:
+    @pytest.mark.parametrize(
+        ("state", "rebase", "live"),
+        [
+            ("merging", None, True),
+            ("cherry_picking", None, True),
+            ("reverting", None, True),
+            ("bisecting", None, False),
+            ("clean", None, False),
+            # a ``git am`` session
+            ("rebasing", None, False),
+            # a rebase stopped on ``exec`` or ``break``: no REBASE_HEAD
+            ("rebasing", GitRebaseInfo(branch="other", step=1, total=2), False),
+            ("rebasing", GitRebaseInfo(stopped_on=_STOPPED_ON), True),
+        ],
+    )
+    def test_records_are_live_only_while_stopped_on_a_conflicting_step(
+        self, state, rebase, live
+    ):
+        assert changes_service._resolve_undo_live(state, rebase) is live

@@ -155,6 +155,8 @@ export interface GitCapabilities {
   resolve: boolean;
   /** The project Git screen may delete remote-tracking rows (on the remote). */
   deleteRemote: boolean;
+  /** The conflict resolver's routes and `resolved_paths` on status. */
+  conflicts: boolean;
 }
 
 export const NO_GIT_CAPABILITIES: GitCapabilities = {
@@ -168,6 +170,7 @@ export const NO_GIT_CAPABILITIES: GitCapabilities = {
   rebase: false,
   resolve: false,
   deleteRemote: false,
+  conflicts: false,
 };
 
 /** The *Fetch / Pull / Push…* entry and the Sync button exist on any of the three. */
@@ -201,5 +204,6 @@ export function gitCapabilities(info: AgentVersionInfo | undefined): GitCapabili
     rebase: gitCapability(info, 'rebase'),
     resolve: gitCapability(info, 'resolve'),
     deleteRemote: gitCapability(info, 'delete_remote'),
+    conflicts: gitCapability(info, 'conflicts'),
   };
 }

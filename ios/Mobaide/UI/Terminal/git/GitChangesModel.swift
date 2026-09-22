@@ -54,10 +54,11 @@ struct GitJobBanner: Equatable {
     var running: Bool { !lost && (job?.running ?? true) }
     var failed: Bool { lost || job?.ok == false }
 
-    var text: String {
+    /// `canResolveInApp` is the agent's `conflicts` capability, which words a conflict stop.
+    func text(canResolveInApp: Bool = false) -> String {
         if lost { return GitChangesDisplay.jobLostCopy }
         guard let job else { return "Syncing…" }
-        return GitChangesDisplay.jobNotice(job)
+        return GitChangesDisplay.jobNotice(job, canResolveInApp: canResolveInApp)
     }
 }
 
@@ -154,6 +155,10 @@ final class GitChangesModel {
     var rebaseSheet: RebaseSheetState?
     /// Skip or Abort waiting for its confirmation; the `isPresented` setter clears only this.
     var rebasePrompt: RebasePrompt?
+    /// The conflicted file the resolver is open for.
+    var conflictTarget: GitConflictTarget?
+    /// The resolved path whose *Restore conflict…* awaits confirmation.
+    var restorePrompt: String?
     var toast: ToastMessage?
     /// The fetch / pull / push this screen follows, until its result is
     /// dismissed. Adopted from wherever it surfaces — this screen's own start,
@@ -461,6 +466,47 @@ final class GitChangesModel {
     /// Stage a fixed conflict; the agent refuses a file that still holds markers.
     func resolve(_ row: GitChangesRow) async {
         await stage([row])
+    }
+
+    /// Paths resolved during the operation in progress that can be restored;
+    /// empty on an agent without the resolver.
+    var resolvedPaths: [String] {
+        guard capabilities.conflicts else { return [] }
+        return status?.resolved_paths ?? []
+    }
+
+    /// A conflict row on an agent with the resolver opens the editor, not the HEAD diff.
+    func opensResolver(_ entry: GitStatusEntry) -> Bool {
+        GitChangesDisplay.opensResolver(entry, capabilities: capabilities)
+    }
+
+    func openResolver(for entry: GitStatusEntry) {
+        conflictTarget = GitConflictTarget(sessionId: sessionId, path: entry.path)
+    }
+
+    /// The resolver closed; `message` is its outcome, nil when it was just left.
+    func resolverClosed(message: String?) async {
+        conflictTarget = nil
+        if let message { toast = ToastMessage(text: message, tone: .ok) }
+        await load()
+    }
+
+    func requestRestore(_ path: String) {
+        restorePrompt = path
+    }
+
+    func confirmRestore(_ path: String) async {
+        guard !isMutating else { return }
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            try await agentAPI.restoreSessionGitConflict(sessionId: sessionId, path: path)
+            toast = ToastMessage(text: GitConflictDisplay.restoredNotice(path), tone: .ok)
+        } catch {
+            guard !SessionGitError.isCancellation(error) else { return }
+            toast = ToastMessage(text: SessionGitCopy.mutationMessage(for: SessionGitError.map(error)), tone: .danger)
+        }
+        await load()
     }
 
     /// Every job the agent reports for this session, as the socket frames
@@ -1113,7 +1159,7 @@ enum GitChangesDisplay {
     /// One line per job `error_code`, identical on the three clients. `message`
     /// is git's own explanation and is rendered beside it in monospace, so only
     /// an unknown code falls back to it here.
-    static func jobErrorCopy(_ code: String?, message: String?) -> String {
+    static func jobErrorCopy(_ code: String?, message: String?, canResolveInApp: Bool = false) -> String {
         switch code ?? "" {
         case GitJobResponse.codeCancelled: return "Cancelled."
         case SessionGitError.codeGitTimeout: return "git took too long to answer. Try again."
@@ -1123,7 +1169,10 @@ enum GitChangesDisplay {
         case GitJobResponse.codeRemoteNotFound: return "The remote doesn't exist."
         case GitJobResponse.codeRejected: return "The remote rejected the push."
         case GitJobResponse.codeNotFastForward: return "Your branch is behind the remote."
-        case GitJobResponse.codeConflicts: return "Stopped on conflicts — resolve them in the terminal."
+        case GitJobResponse.codeConflicts:
+            return canResolveInApp
+                ? "Stopped on conflicts — open a file under Conflicts to resolve it."
+                : "Stopped on conflicts — resolve them in the terminal."
         case GitJobResponse.codeDirtyWorktree: return "Commit or stash your changes first."
         case SessionGitError.codeUnmerged: return "Resolve the conflicts first."
         case GitJobResponse.codeOperationInProgress: return "A rebase or merge is already in progress."
@@ -1141,7 +1190,7 @@ enum GitChangesDisplay {
 
     /// The banner's one line: the title plus git's summary, or the title plus
     /// the failure copy.
-    static func jobNotice(_ job: GitJobResponse) -> String {
+    static func jobNotice(_ job: GitJobResponse, canResolveInApp: Bool = false) -> String {
         if job.running { return jobTitle(job.op) }
         let ok = job.ok == true
         let title = jobDoneTitle(job.op, ok: ok)
@@ -1149,7 +1198,7 @@ enum GitChangesDisplay {
             if let message = job.message, !message.isEmpty { return "\(title) · \(message)" }
             return title
         }
-        return "\(title): \(jobErrorCopy(job.error_code, message: job.message))"
+        return "\(title): \(jobErrorCopy(job.error_code, message: job.message, canResolveInApp: canResolveInApp))"
     }
 
     /// Whether the failure's `message` adds anything the copy did not already say.
@@ -1290,8 +1339,19 @@ extension GitChangesDisplay {
         let actionable: Bool
     }
 
+    /// Whether a row opens the conflict resolver instead of the HEAD diff.
+    static func opensResolver(_ entry: GitStatusEntry, capabilities: GitCapabilities) -> Bool {
+        entry.group == GitStatusEntry.groupConflicts && capabilities.conflicts
+    }
+
     /// The Changes screen's banner while the repository is rebasing.
-    static func rebaseBanner(_ repo: GitRepoInfo?, conflicts: Int) -> RebaseBanner? {
+    /// `canResolveInApp` is the agent's `conflicts` capability: without it the
+    /// files can only be fixed in the terminal, and the hint says so.
+    static func rebaseBanner(
+        _ repo: GitRepoInfo?,
+        conflicts: Int,
+        canResolveInApp: Bool = false
+    ) -> RebaseBanner? {
         guard let repo, repo.state == GitRepoInfo.stateRebasing else { return nil }
         let info = repo.rebase
         let branch = info?.branch
@@ -1311,7 +1371,8 @@ extension GitChangesDisplay {
         if !actionable {
             hint = "Continue, skip or abort it in the terminal."
         } else if conflicts > 0 {
-            hint = "\(conflicts) \(conflicts == 1 ? "conflict" : "conflicts") — fix the files, then Mark resolved."
+            let next = canResolveInApp ? "open a file to resolve it." : "fix the files, then Mark resolved."
+            hint = "\(conflicts) \(conflicts == 1 ? "conflict" : "conflicts") — \(next)"
         } else {
             hint = "No conflicts left — Continue when ready."
         }
