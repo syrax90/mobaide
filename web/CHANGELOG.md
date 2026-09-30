@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.9](https://github.com/syrax90/claude_mobile/compare/web-v0.1.8...web-v0.1.9) (2026-09-30)
+
+
+### Bug Fixes
+
+* **web:** declare app.mobaide.com/ as the SPA's canonical URL ([c22bf08](https://github.com/syrax90/claude_mobile/commit/c22bf0824a25177c8f3a7fc007a20691957050f0))
+* **web:** declare app.mobaide.com/ as the SPA's canonical URL ([a499bbc](https://github.com/syrax90/claude_mobile/commit/a499bbc858ed77ba114bc13501b66b5d16a6c905))
+
 ## [0.1.8](https://github.com/syrax90/claude_mobile/compare/web-v0.1.7...web-v0.1.8) (2026-09-22)
 
 

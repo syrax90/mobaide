@@ -1,5 +1,15 @@
 # central_server Changelog
 
+## [0.2.16](https://github.com/syrax90/claude_mobile/compare/server-v0.2.15...server-v0.2.16) (2026-09-30)
+
+
+### Features
+
+* **server:** add Git changes screenshots to the landing page ([f5a6db4](https://github.com/syrax90/claude_mobile/commit/f5a6db48e30656522dff3c756d4532644cb752ef))
+* **server:** add Git changes screenshots to the landing page ([082df8b](https://github.com/syrax90/claude_mobile/commit/082df8bfe1915344877535b30accf5e55a89c5fd))
+* **server:** name the developer in the landing page footer ([8515e39](https://github.com/syrax90/claude_mobile/commit/8515e39858f2f426426f9e7434b3e0f2ea6b764f))
+* **server:** name the developer in the landing page footer ([d229e8f](https://github.com/syrax90/claude_mobile/commit/d229e8f020f737752e7e57f335ca40df78caac35))
+
 ## [0.2.15](https://github.com/syrax90/claude_mobile/compare/server-v0.2.14...server-v0.2.15) (2026-09-04)
 
 
