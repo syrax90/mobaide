@@ -43,6 +43,9 @@ final class TerminalSelectionController: NSObject {
     private(set) var range: TerminalSelectionRange?
     /// Which handle the in-flight drag is moving.
     private var draggingHandle: TerminalSelectionHandle?
+    /// The system magnifier shown while a handle is dragged, so the text under
+    /// the finger stays readable.
+    private var loupe: UITextLoupeSession?
     /// `Buffer.totalLinesTrimmed` as of the last emulator scroll, for the
     /// trim-shift decision.
     private var lastLinesTrimmed: Int?
@@ -159,12 +162,21 @@ final class TerminalSelectionController: NSObject {
             // Hide the toolbar so it never sits under the dragging finger
             // (Android `updateFloatingToolbarVisibility`).
             onChange?(nil)
+            if let handle = draggingHandle {
+                loupe = UITextLoupeSession.begin(
+                    at: gesture.location(in: view),
+                    fromSelectionWidgetView: nil,
+                    in: view
+                )
+                moveLoupe(tracking: handle)
+            }
             dragHandle(to: gesture.location(in: view))
         case .changed:
             autoscrollIfNeeded(gesture)
             dragHandle(to: gesture.location(in: view))
         case .ended, .cancelled, .failed:
             draggingHandle = nil
+            dismissLoupe()
             refresh()
         default:
             break
@@ -179,6 +191,23 @@ final class TerminalSelectionController: NSObject {
     private func dragHandle(to point: CGPoint) {
         guard let handle = draggingHandle else { return }
         moveHandle(handle, to: point)
+    }
+
+    /// Follows the snapped endpoint rather than the raw touch, so the loupe
+    /// shows the cell the selection actually ends on.
+    private func moveLoupe(tracking handle: TerminalSelectionHandle) {
+        guard let loupe, let current = range else { return }
+        let caret = TerminalSelection.caretRect(for: handle, range: current, cellSize: view.cellSize)
+        loupe.move(
+            to: CGPoint(x: caret.midX, y: caret.midY),
+            withCaretRect: caret,
+            trackingCaret: true
+        )
+    }
+
+    private func dismissLoupe() {
+        loupe?.invalidate()
+        loupe = nil
     }
 
     /// Re-points one handle, pinning it so it cannot cross the other.
@@ -304,6 +333,7 @@ final class TerminalSelectionController: NSObject {
         guard isActive else { return }
         range = nil
         draggingHandle = nil
+        dismissLoupe()
         lastLinesTrimmed = nil
         lastOverlayGeometry = nil
         refresh()
@@ -434,6 +464,9 @@ final class TerminalSelectionController: NSObject {
         )
         guard geometry != lastOverlayGeometry else { return }
         lastOverlayGeometry = geometry
+        // Here rather than in the drag path: streamed output shifts the range
+        // under a stationary finger, and only this refresh sees that.
+        if let handle = draggingHandle { moveLoupe(tracking: handle) }
         overlay.frame = frame
         let rects = TerminalSelection.highlightRects(
             start: current.start,

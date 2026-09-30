@@ -208,6 +208,25 @@ enum TerminalSelection {
         )
     }
 
+    /// A caret-shaped rect at `handle`'s edge of the selection, spanning its
+    /// row, in content coordinates — what the magnifier loupe tracks while that
+    /// handle is dragged.
+    static func caretRect(
+        for handle: TerminalSelectionHandle,
+        range: TerminalSelectionRange,
+        cellSize: CGSize
+    ) -> CGRect {
+        let centers = handleCenters(start: range.start, end: range.end, cellSize: cellSize)
+        let bottom = handle == .start ? centers.start : centers.end
+        let width: CGFloat = 2
+        return CGRect(
+            x: bottom.x - width / 2,
+            y: bottom.y - cellSize.height,
+            width: width,
+            height: cellSize.height
+        )
+    }
+
     /// The handle a touch grabs, or nil when it landed on neither. Ties go to
     /// the end handle, the one a fresh drag most often means to extend.
     static func grabbedHandle(
