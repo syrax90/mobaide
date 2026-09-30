@@ -376,7 +376,10 @@ the space `resolveRow` and `Terminal.getText` already share — and
 subview that draws the highlight and handles (`TerminalView.draw` is `public`,
 not `open`, so it cannot be overridden cross-module, and it early-returns under
 the Metal renderer; the overlay tracks the visible content window so it never
-rasterizes more than a screen). Text comes from `Terminal.getText`, which joins
+rasterizes more than a screen). While a handle is dragged (iOS 17+) a system `UITextLoupeSession`
+magnifier follows the snapped endpoint (`TerminalSelection.caretRect`) rather than
+the raw touch, so the cell under the finger stays readable (Android uses
+`android.widget.Magnifier` on API 28+). Text comes from `Terminal.getText`, which joins
 soft-wrapped rows without a newline and adds one on hard breaks — Android's
 `joinBackLines = true` — so a wrapped path copies back intact. A live selection
 also pins the viewport through `holdsAutoScroll`, a second self-restoring term

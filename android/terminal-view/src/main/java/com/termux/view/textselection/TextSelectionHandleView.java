@@ -11,6 +11,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.WindowManager;
+import android.widget.Magnifier;
 import android.widget.PopupWindow;
 
 import com.termux.view.R;
@@ -52,6 +53,8 @@ public class TextSelectionHandleView extends View {
     public static final int RIGHT = 2;
 
     private long mLastTime;
+
+    private Magnifier mMagnifier;
 
     public TextSelectionHandleView(TerminalView terminalView, CursorController cursorController, int initialOrientation) {
         super(terminalView.getContext());
@@ -136,6 +139,7 @@ public class TextSelectionHandleView extends View {
 
     public void hide() {
         mIsDragging = false;
+        dismissMagnifier();
 
         if (mHandle != null) {
             mHandle.dismiss();
@@ -180,6 +184,7 @@ public class TextSelectionHandleView extends View {
             }
 
             if (mIsDragging) {
+                showMagnifier();
                 if (coords == null) {
                     coords = mTempCoords;
                     terminalView.getLocationInWindow(coords);
@@ -276,6 +281,45 @@ public class TextSelectionHandleView extends View {
             posY >= clip.top && posY <= clip.bottom;
     }
 
+    /**
+     * Magnifies the cell this handle points at while it is dragged, so the text under the finger
+     * stays readable. Centred on the snapped handle position rather than the raw touch, and on the
+     * middle of the selected row: {@link #positionAtCursor} places {@code mPointY} at its bottom edge.
+     */
+    private void showMagnifier() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return;
+        if (mMagnifier == null) {
+            mMagnifier = createMagnifier();
+        }
+        float rowHeight = terminalView.mRenderer.getFontLineSpacing();
+        mMagnifier.show(mPointX + mHotspotX, mPointY - rowHeight / 2f);
+    }
+
+    private Magnifier createMagnifier() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            //noinspection NewApi
+            return new Magnifier(terminalView);
+        }
+        float density = getResources().getDisplayMetrics().density;
+        int rowHeight = terminalView.mRenderer.getFontLineSpacing();
+        float zoom = 1.75f;
+        //noinspection NewApi
+        return new Magnifier.Builder(terminalView)
+            .setInitialZoom(zoom)
+            .setSize(Math.round(160 * density), Math.round(rowHeight * 3 * zoom))
+            .setCornerRadius(12 * density)
+            .setDefaultSourceToMagnifierOffset(0, -Math.round(rowHeight * 2 * zoom + mHandleHeight))
+            .build();
+    }
+
+    private void dismissMagnifier() {
+        if (mMagnifier != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            mMagnifier.dismiss();
+        }
+        // Rebuilt per drag: its size is derived from the font, which pinch-zoom can change.
+        mMagnifier = null;
+    }
+
     @Override
     public void onDraw(Canvas c) {
         final int width = mHandleDrawable.getIntrinsicWidth();
@@ -316,6 +360,7 @@ public class TextSelectionHandleView extends View {
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
                 mIsDragging = false;
+                dismissMagnifier();
         }
         return true;
     }

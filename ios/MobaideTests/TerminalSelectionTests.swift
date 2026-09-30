@@ -219,6 +219,35 @@ final class TerminalSelectionTests: XCTestCase {
         )
     }
 
+    func testCaretRectSpansTheDraggedHandlesOwnRow() {
+        let selection = range(5, 1, 2, 3)
+
+        XCTAssertEqual(
+            TerminalSelection.caretRect(for: .start, range: selection, cellSize: cell),
+            CGRect(x: 49, y: 20, width: 2, height: 20),
+            "the loupe tracks the left edge of the first selected cell"
+        )
+        XCTAssertEqual(
+            TerminalSelection.caretRect(for: .end, range: selection, cellSize: cell),
+            CGRect(x: 29, y: 60, width: 2, height: 20),
+            "the loupe tracks the right edge of the last selected cell, on the last row"
+        )
+    }
+
+    func testCaretRectFollowsOrderedEdgesWhenTheDragRanBackwards() {
+        let backwards = range(2, 3, 5, 1)
+
+        XCTAssertEqual(
+            TerminalSelection.caretRect(for: .start, range: backwards, cellSize: cell),
+            CGRect(x: 49, y: 20, width: 2, height: 20),
+            "start means the earlier endpoint, not the anchor"
+        )
+        XCTAssertEqual(
+            TerminalSelection.caretRect(for: .end, range: backwards, cellSize: cell),
+            CGRect(x: 29, y: 60, width: 2, height: 20)
+        )
+    }
+
     func testGrabbedHandlePicksTheNearerOneAndIgnoresDistantTouches() {
         let start = CGPoint(x: 20, y: 40)
         let end = CGPoint(x: 200, y: 40)
