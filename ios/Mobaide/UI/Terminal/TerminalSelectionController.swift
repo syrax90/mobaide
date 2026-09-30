@@ -162,12 +162,13 @@ final class TerminalSelectionController: NSObject {
             // Hide the toolbar so it never sits under the dragging finger
             // (Android `updateFloatingToolbarVisibility`).
             onChange?(nil)
-            if draggingHandle != nil {
+            if let handle = draggingHandle {
                 loupe = UITextLoupeSession.begin(
                     at: gesture.location(in: view),
                     fromSelectionWidgetView: nil,
                     in: view
                 )
+                moveLoupe(tracking: handle)
             }
             dragHandle(to: gesture.location(in: view))
         case .changed:
@@ -190,7 +191,6 @@ final class TerminalSelectionController: NSObject {
     private func dragHandle(to point: CGPoint) {
         guard let handle = draggingHandle else { return }
         moveHandle(handle, to: point)
-        moveLoupe(tracking: handle)
     }
 
     /// Follows the snapped endpoint rather than the raw touch, so the loupe
@@ -464,6 +464,9 @@ final class TerminalSelectionController: NSObject {
         )
         guard geometry != lastOverlayGeometry else { return }
         lastOverlayGeometry = geometry
+        // Here rather than in the drag path: streamed output shifts the range
+        // under a stationary finger, and only this refresh sees that.
+        if let handle = draggingHandle { moveLoupe(tracking: handle) }
         overlay.frame = frame
         let rects = TerminalSelection.highlightRects(
             start: current.start,
