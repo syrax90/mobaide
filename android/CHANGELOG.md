@@ -1,5 +1,13 @@
 # Android Changelog
 
+## [3.6.7](https://github.com/syrax90/claude_mobile/compare/android-v3.6.6...android-v3.6.7) (2026-09-30)
+
+
+### Features
+
+* show a magnifier while dragging terminal selection handles ([47d6529](https://github.com/syrax90/claude_mobile/commit/47d65294fbfcd4f0c27a752018c7a384db0a738a))
+* show a magnifier while dragging terminal selection handles ([dc72c6a](https://github.com/syrax90/claude_mobile/commit/dc72c6af2a6cfa1f0171cbd31bf4117e32a9544a))
+
 ## [3.6.6](https://github.com/syrax90/claude_mobile/compare/android-v3.6.5...android-v3.6.6) (2026-09-22)
 
 
