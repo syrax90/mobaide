@@ -119,7 +119,7 @@ data class CreateSessionUiState(
     val noMemory: Boolean = false,
     val skipPermissions: Boolean = false,
     // Claude reasoning controls (replace the old boolean "Max effort"). model is
-    // a curated alias or null (account default); effort "high" == omit the flag.
+    // a curated alias or null (account default); effort is always sent explicitly.
     val claudeModel: String? = null,
     val claudeEffort: String = "high",
     val claudeFastMode: Boolean = false,
