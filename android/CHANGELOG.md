@@ -1,12 +1,5 @@
 # Android Changelog
 
-## [3.6.8](https://github.com/syrax90/claude_mobile/compare/android-v3.6.7...android-v3.6.8) (2026-10-01)
-
-
-### Bug Fixes
-
-* **agent:** pass the chosen Claude effort to the CLI when it is high ([b15d6dd](https://github.com/syrax90/claude_mobile/commit/b15d6dd840fac89973d2240877e262f0ab7085e9))
-
 ## [3.6.7](https://github.com/syrax90/claude_mobile/compare/android-v3.6.6...android-v3.6.7) (2026-09-30)
 
 

@@ -5,7 +5,6 @@
 
 ### Bug Fixes
 
-* **agent:** pass the chosen Claude effort to the CLI when it is high ([b15d6dd](https://github.com/syrax90/claude_mobile/commit/b15d6dd840fac89973d2240877e262f0ab7085e9))
 * **agent:** pass the chosen Claude effort to the CLI when it is high ([eb67a39](https://github.com/syrax90/claude_mobile/commit/eb67a394f5cada2d5d3b41b08667b76d0f02ee83))
 
 ## [0.3.12](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.11...agent-v0.3.12) (2026-09-22)
