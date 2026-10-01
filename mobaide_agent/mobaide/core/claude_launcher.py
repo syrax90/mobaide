@@ -113,9 +113,10 @@ class ClaudeOptions:
     identifier: str | None = None
     title: str | None = None
     # Curated model alias (opus / sonnet / haiku / fable) or None for the
-    # account default. effort is one of low/medium/high/xhigh/max; None and
-    # "high" both omit --effort (high is the CLI default). fast_mode / ultracode
-    # are emitted via a merged --settings dict, never an --effort value.
+    # account default. effort is one of low/medium/high/xhigh/max, emitted as
+    # --effort <level>; None omits the flag (the CLI's own default applies).
+    # fast_mode / ultracode are emitted via a merged --settings dict, never an
+    # --effort value.
     model: str | None = None
     effort: str | None = None
     fast_mode: bool = False
@@ -298,10 +299,12 @@ class ClaudeLauncher:
             argv.append("--dangerously-skip-permissions")
         if options.model:
             argv += ["--model", options.model]
-        # None / "high" omit the flag (high is the CLI default); ultracode
-        # internally drives xhigh and is redundant with --effort (precedence
-        # undocumented), so it suppresses an explicit effort.
-        if options.effort and options.effort != "high" and not options.ultracode:
+        # Every explicit level is emitted, "high" included: with no flag the CLI
+        # uses the operator's persisted effortLevel / per-model default, which
+        # is not reliably "high". None (no client choice) leaves that default
+        # alone. ultracode internally drives xhigh and is redundant with
+        # --effort (precedence undocumented), so it suppresses an explicit effort.
+        if options.effort and not options.ultracode:
             argv += ["--effort", options.effort]
         if options.append_system_prompt:
             argv += ["--append-system-prompt", options.append_system_prompt]
