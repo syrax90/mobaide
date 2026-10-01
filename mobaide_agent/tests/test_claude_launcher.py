@@ -21,8 +21,8 @@ async def test_argv_minimal_adds_bypass(tmp_path: Path):
     approval dialogs, so a session with no explicit choice always skips
     permissions at the wire/launch layer (the mobile UI's own toggle starts
     off, but always sends its choice explicitly — see the ClaudeOptionsModel
-    comments on both platforms). The default effort is ``high`` (the CLI
-    default), so no ``--effort`` flag; ``debug`` defaults off, so no ``--debug``."""
+    comments on both platforms). The default effort is unset, so no
+    ``--effort`` flag; ``debug`` defaults off, so no ``--debug``."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)), ClaudeOptions()
@@ -65,8 +65,8 @@ async def test_argv_plan_mode_without_skip_permissions(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_argv_no_plan_no_skip(tmp_path: Path):
-    """Neither plan_mode nor skip_permissions: bare claude (the default effort
-    high omits the flag)."""
+    """Neither plan_mode nor skip_permissions: bare claude (an unset effort
+    omits the flag)."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)),
@@ -152,23 +152,27 @@ async def test_argv_model_emitted_when_set(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("effort", ["high", None])
-async def test_argv_default_effort_omits_flag(tmp_path: Path, effort):
-    """``None`` and ``high`` both omit ``--effort`` — high is the CLI default."""
+async def test_argv_unset_effort_omits_flag(tmp_path: Path):
+    """``None`` (no client choice) omits ``--effort`` so the CLI's own default
+    applies."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path)), ClaudeOptions(effort=effort),
+        _make_project(str(tmp_path)), ClaudeOptions(effort=None),
     )
     assert "--effort" not in spec.argv
 
 
 @pytest.mark.asyncio
-async def test_argv_non_default_effort_emitted(tmp_path: Path):
+@pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
+async def test_argv_explicit_effort_emitted(tmp_path: Path, effort):
+    """Every explicit level reaches the CLI — ``high`` included. Omitting it
+    used to hand the session to the operator's persisted ``effortLevel`` /
+    per-model default (``medium`` in practice), not the level the user picked."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path)), ClaudeOptions(effort="max"),
+        _make_project(str(tmp_path)), ClaudeOptions(effort=effort),
     )
-    assert spec.argv[spec.argv.index("--effort") + 1] == "max"
+    assert spec.argv[spec.argv.index("--effort") + 1] == effort
 
 
 @pytest.mark.asyncio

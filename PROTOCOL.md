@@ -893,8 +893,10 @@ cadence; they do **not** gate compatibility.
       ``haiku`` | ``fable``) or null for the account default. Free-form on the
       server (the client curates the list); emitted as ``--model <alias>``.
     * ``effort`` — ``low`` | ``medium`` | ``high`` | ``xhigh`` | ``max`` | null.
-      null / ``high`` emit no ``--effort`` flag (``high`` is the CLI default);
-      suppressed entirely when ``ultracode`` is on.
+      Every non-null level is emitted as ``--effort <level>`` (``high``
+      included — with no flag the CLI falls back to the operator's persisted
+      ``effortLevel`` / per-model default, which is not reliably ``high``);
+      null emits no flag; suppressed entirely when ``ultracode`` is on.
     * ``fast_mode`` — bool (Opus-only fast mode) and ``ultracode`` — bool: both
       emitted through a single merged ``--settings`` dict
       (``{"fastMode": true, "ultracode": true}``), merged into the per-session
