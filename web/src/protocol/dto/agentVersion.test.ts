@@ -9,6 +9,7 @@ import {
   gitCapabilities,
   gitCapability,
   hasGitSync,
+  voiceCapability,
   type AgentVersionInfo,
 } from './agentVersion';
 
@@ -251,5 +252,35 @@ describe('hasGitSync', () => {
   it('is false for an agent that only stages and commits', () => {
     expect(hasGitSync(gitCapabilities(info({ git: { changes: true, stage: true, discard: true, commit: true } })))).toBe(false);
     expect(hasGitSync(NO_GIT_CAPABILITIES)).toBe(false);
+  });
+});
+
+describe('voiceCapability', () => {
+  const VOICE = { dictation: true, sample_rate: 16000, max_seconds: 120, max_chunk_bytes: 65536 };
+
+  it('reads the dictation limits the agent advertises', () => {
+    expect(voiceCapability(info({ voice: VOICE }))).toEqual({
+      sampleRate: 16000,
+      maxSeconds: 120,
+      maxChunkBytes: 65536,
+    });
+  });
+
+  const NO_VOICE: [string, unknown][] = [
+    ['no probe at all', undefined],
+    ['an agent too old for voice', {}],
+    ['a voice block of the wrong shape', { voice: true }],
+    ['dictation not offered', { voice: { ...VOICE, dictation: false } }],
+    ['dictation as a string', { voice: { ...VOICE, dictation: 'true' } }],
+    ['a zero limit', { voice: { ...VOICE, max_seconds: 0 } }],
+    ['a fractional rate', { voice: { ...VOICE, sample_rate: 16000.5 } }],
+    ['a stringified limit', { voice: { ...VOICE, max_chunk_bytes: '65536' } }],
+    ['a missing limit', { voice: { dictation: true, sample_rate: 16000, max_seconds: 120 } }],
+  ];
+
+  it.each(NO_VOICE)('answers null for %s, which hides the mic', (_label, capabilities) => {
+    const probe = capabilities === undefined ? undefined : info(capabilities);
+
+    expect(voiceCapability(probe)).toBeNull();
   });
 });

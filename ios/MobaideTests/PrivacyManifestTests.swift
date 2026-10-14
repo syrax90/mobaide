@@ -41,8 +41,10 @@ final class PrivacyManifestTests: XCTestCase {
     /// The Firebase Analytics binaries ship no privacy manifest of their own, so
     /// this file is the only declaration of what the SDK collects: the app
     /// instance id (Device ID), app opens and the pairing event (Product
-    /// Interaction) and the coarse location Google derives from the IP. None
-    /// of it is tracking — no IDFA, no AdSupport, no ATT.
+    /// Interaction) and the coarse location Google derives from the IP. Voice
+    /// input adds the dictated audio, used only to transcribe it on the
+    /// user's own computer. None of it is tracking — no IDFA, no AdSupport,
+    /// no ATT.
     func testCollectedDataTypesAreLinkedNonTrackingAndPurposed() throws {
         let appFunctionality = "NSPrivacyCollectedDataTypePurposeAppFunctionality"
         let analytics = "NSPrivacyCollectedDataTypePurposeAnalytics"
@@ -53,6 +55,7 @@ final class PrivacyManifestTests: XCTestCase {
             "NSPrivacyCollectedDataTypeDeviceID": (true, [appFunctionality, analytics, advertising]),
             "NSPrivacyCollectedDataTypeProductInteraction": (false, [analytics, advertising]),
             "NSPrivacyCollectedDataTypeCoarseLocation": (false, [analytics]),
+            "NSPrivacyCollectedDataTypeAudioData": (true, [appFunctionality]),
         ]
         let collected = try XCTUnwrap(manifest["NSPrivacyCollectedDataTypes"] as? [[String: Any]])
         XCTAssertEqual(

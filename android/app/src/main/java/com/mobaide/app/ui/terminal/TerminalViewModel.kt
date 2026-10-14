@@ -731,6 +731,30 @@ class TerminalViewModel @Inject constructor(
         revealComposer()
     }
 
+    /**
+     * Put a dictated transcript at the composer's cursor (replacing a
+     * selection), with a space on either side where it would otherwise run
+     * into a word, then reveal and focus the composer with the cursor after
+     * it. Never sends: the user reviews the text first.
+     */
+    fun insertTranscript(transcript: String) {
+        val clean = transcript.trim()
+        if (clean.isEmpty()) return
+        val current = _inputText.value
+        val start = current.selection.min.coerceIn(0, current.text.length)
+        val end = current.selection.max.coerceIn(start, current.text.length)
+        val before = current.text.substring(0, start)
+        val after = current.text.substring(end)
+        val lead = if (before.isNotEmpty() && !before.last().isWhitespace()) " " else ""
+        val trail = if (after.isNotEmpty() && !after.first().isWhitespace()) " " else ""
+        val inserted = lead + clean + trail
+        _inputText.value = TextFieldValue(
+            text = before + inserted + after,
+            selection = TextRange(before.length + inserted.length),
+        )
+        revealComposer()
+    }
+
     /** Deterministic fetch fired when the templates picker opens. The shared
      *  cache is otherwise only populated best-effort (WS-connect refresh in
      *  UserEventBus, or a visit to Settings → Templates), so without this the

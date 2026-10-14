@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -222,6 +223,8 @@ fun InputBar(
     onRevealComposer: () -> Unit = {},
     onHideComposer: () -> Unit = {},
     onRaiseTerminalKeyboard: () -> Unit = {},
+    micButton: (@Composable () -> Unit)? = null,
+    dictationBar: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val haptic = LocalHapticFeedback.current
@@ -283,6 +286,8 @@ fun InputBar(
                 onExpand = onExpand,
                 onSend = { send() },
                 onHideComposer = onHideComposer,
+                micButton = micButton,
+                dictationBar = dictationBar,
             )
         }
 
@@ -416,7 +421,11 @@ private fun ComposerBlock(
     onExpand: () -> Unit,
     onSend: () -> Unit,
     onHideComposer: () -> Unit,
+    micButton: (@Composable () -> Unit)?,
+    dictationBar: (@Composable () -> Unit)?,
 ) {
+    // While a dictation runs its bar takes the action buttons' place; the
+    // field stays, so the user sees where the transcript will land.
     if (isLandscape) {
         // Landscape: text field and action buttons share one row.
         Row(
@@ -434,17 +443,22 @@ private fun ComposerBlock(
                 onHasFocusChange = onHasFocusChange,
                 modifier = Modifier.weight(1f),
             )
-            ActionButtons(
-                enabled = enabled,
-                canSend = text.text.isNotEmpty(),
-                panelExpanded = panelExpanded,
-                onOpenTemplates = onOpenTemplates,
-                onSaveAsTemplate = onSaveAsTemplate,
-                onTogglePanel = onTogglePanel,
-                onExpand = onExpand,
-                onSend = onSend,
-                onHideComposer = onHideComposer,
-            )
+            if (dictationBar != null) {
+                Box(modifier = Modifier.widthIn(max = 400.dp)) { dictationBar() }
+            } else {
+                ActionButtons(
+                    enabled = enabled,
+                    canSend = text.text.isNotEmpty(),
+                    panelExpanded = panelExpanded,
+                    onOpenTemplates = onOpenTemplates,
+                    onSaveAsTemplate = onSaveAsTemplate,
+                    onTogglePanel = onTogglePanel,
+                    onExpand = onExpand,
+                    onSend = onSend,
+                    onHideComposer = onHideComposer,
+                    micButton = micButton,
+                )
+            }
         }
     } else {
         // Portrait: text field spans full width above the action buttons.
@@ -467,17 +481,22 @@ private fun ComposerBlock(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ActionButtons(
-                    enabled = enabled,
-                    canSend = text.text.isNotEmpty(),
-                    panelExpanded = panelExpanded,
-                    onOpenTemplates = onOpenTemplates,
-                    onSaveAsTemplate = onSaveAsTemplate,
-                    onTogglePanel = onTogglePanel,
-                    onExpand = onExpand,
-                    onSend = onSend,
-                    onHideComposer = onHideComposer,
-                )
+                if (dictationBar != null) {
+                    dictationBar()
+                } else {
+                    ActionButtons(
+                        enabled = enabled,
+                        canSend = text.text.isNotEmpty(),
+                        panelExpanded = panelExpanded,
+                        onOpenTemplates = onOpenTemplates,
+                        onSaveAsTemplate = onSaveAsTemplate,
+                        onTogglePanel = onTogglePanel,
+                        onExpand = onExpand,
+                        onSend = onSend,
+                        onHideComposer = onHideComposer,
+                        micButton = micButton,
+                    )
+                }
             }
         }
     }
@@ -522,12 +541,14 @@ private fun InputField(
             .focusRequester(focusRequester)
             .onFocusChanged { focusState ->
                 // Auto-place cursor at end on focus only when the
-                // current selection is collapsed (a cursor). When
-                // upstream code (e.g. the templates picker) has set
-                // a non-collapsed range like select-all, preserve it.
+                // current selection is a cursor at the very start (the
+                // default for text set without one). When upstream code
+                // has placed it — the templates picker's select-all, a
+                // dictated transcript's end — preserve it.
                 if (focusState.isFocused && !hasFocus
                     && text.text.isNotEmpty()
-                    && text.selection.collapsed) {
+                    && text.selection.collapsed
+                    && text.selection.start == 0) {
                     onTextChange(text.copy(selection = TextRange(text.text.length)))
                 }
                 onHasFocusChange(focusState.isFocused)
@@ -561,6 +582,7 @@ private fun ActionButtons(
     onExpand: () -> Unit,
     onSend: () -> Unit,
     onHideComposer: () -> Unit,
+    micButton: (@Composable () -> Unit)?,
 ) {
     PixelIconButton(
         imageVector = Icons.Filled.KeyboardHide,
@@ -590,6 +612,7 @@ private fun ActionButtons(
         selected = panelExpanded,
         compact = true,
     )
+    micButton?.invoke()
     PixelIconButton(
         imageVector = Icons.Default.OpenInFull,
         contentDescription = "Expand editor",

@@ -83,6 +83,13 @@ final class TerminalSessionModel {
     /// direct-typing keyboard); fed by the view's responder overrides.
     private(set) var terminalKeyboardActive = false
     var inputText = ""
+    /// The composer's selection in character offsets, kept current by the
+    /// field on iOS 18+ (SwiftUI exposes no selection before that); nil
+    /// means "unknown", which inserts at the end.
+    var composerSelection: Range<Int>?
+    /// Bumped to move the composer's cursor to `composerSelection` after a
+    /// programmatic insert.
+    private(set) var composerCursorRequest = 0
 
     /// Per-kind MRU chords, parsed from the device-local store on demand
     /// (empty until `refreshShortcutRecents` first runs — Android parity).
@@ -665,6 +672,33 @@ final class TerminalSessionModel {
         if requestFocus {
             revealComposer()
         }
+    }
+
+    /// Put a dictated transcript at the composer's cursor (replacing a
+    /// selection), with a space on either side where it would otherwise run
+    /// into a word, then reveal and focus the composer with the cursor after
+    /// it. Never sends: the user reviews the text first.
+    func insertTranscript(_ transcript: String) {
+        let clean = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        let length = inputText.count
+        let selection = composerSelection ?? length..<length
+        let lower = min(max(selection.lowerBound, 0), length)
+        let upper = min(max(selection.upperBound, lower), length)
+        let before = String(inputText.prefix(lower))
+        let after = String(inputText.dropFirst(upper))
+        let lead = before.last.map { $0.isWhitespace ? "" : " " } ?? ""
+        let trail = after.first.map { $0.isWhitespace ? "" : " " } ?? ""
+        let inserted = lead + clean + trail
+        inputText = before + inserted + after
+        // iOS 17's field never reports its selection, so remembering one there
+        // would aim the next transcript at a stale offset instead of the end.
+        if #available(iOS 18.0, *) {
+            let cursor = before.count + inserted.count
+            composerSelection = cursor..<cursor
+            composerCursorRequest += 1
+        }
+        revealComposer()
     }
 
     func applyTemplate(_ template: TemplateDto) {

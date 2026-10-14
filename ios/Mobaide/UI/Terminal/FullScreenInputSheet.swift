@@ -6,6 +6,7 @@ import SwiftUI
 /// multi-line prompts cannot be composed in a field whose Return key sends.
 struct FullScreenInputSheet: View {
     @Bindable var model: TerminalSessionModel
+    var voice: VoiceInputModel?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.mobaideColors) private var colors
@@ -27,7 +28,12 @@ struct FullScreenInputSheet: View {
                         }
                         .accessibilityLabel("Collapse editor")
                     }
-                    ToolbarItem(placement: .confirmationAction) {
+                    ToolbarItemGroup(placement: .confirmationAction) {
+                        // Dictate only: the setup sheet hangs off the terminal,
+                        // which cannot present it over this editor.
+                        if let voice, voice.micMode == .ready {
+                            VoiceMicButton(voice: voice)
+                        }
                         Button {
                             model.submitComposer()
                             dismiss()
@@ -36,6 +42,13 @@ struct FullScreenInputSheet: View {
                         }
                         .disabled(!model.canSubmitComposer)
                         .accessibilityLabel("Send")
+                    }
+                }
+                .safeAreaInset(edge: .bottom) {
+                    if let voice, voice.dictation != .idle, !voice.dictation.isResult {
+                        VoiceDictationBar(voice: voice)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
                     }
                 }
         }
@@ -53,13 +66,12 @@ struct FullScreenInputSheet: View {
         // Same verbatim-input rule as the composer this expands: the text goes
         // straight to the PTY, so the keyboard must not capitalize or "correct"
         // command tokens.
-        TextEditor(text: $model.inputText)
+        ComposerTextField(model: model, style: .editor, focus: $editorFocused)
             .font(MobaideTypography.code)
             .foregroundStyle(colors.text)
             .scrollContentBackground(.hidden)
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
-            .focused($editorFocused)
             .disabled(!model.isComposerActive)
             .padding(.horizontal, 12)
             .background(colors.bg)

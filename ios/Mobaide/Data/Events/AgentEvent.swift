@@ -17,6 +17,9 @@ enum AgentEvent: Equatable, Sendable {
     case gitJobProgress(GitJobResponse)
     /// The same job's final snapshot, once; a `git.changed` follows it.
     case gitJobDone(GitJobResponse)
+    /// The agent's whole voice input status: on every state change, throttled
+    /// to two a second while a download runs, and on every connect.
+    case voiceChanged(VoiceStatusResponse)
     case autoScanStatus(AutoScanInstanceDto)
     case autoScanListChanged(AutoScanListResponse)
     case autoScanEvent(projectName: String, seq: Int64, ts: String, payload: ScanProgressPayload)
@@ -95,6 +98,8 @@ enum AgentEnvelopeDemux {
             return decode(GitJobResponse.self, from: envelope).map { .gitJobProgress($0) }
         case "git.job.done":
             return decode(GitJobResponse.self, from: envelope).map { .gitJobDone($0) }
+        case "voice.changed":
+            return decode(VoiceStatusResponse.self, from: envelope).map { .voiceChanged($0) }
         case "autoscan.status":
             return decode(AutoScanInstanceDto.self, from: envelope).map { .autoScanStatus($0) }
         case "autoscan.list.changed":

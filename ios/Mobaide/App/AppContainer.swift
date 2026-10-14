@@ -32,6 +32,7 @@ final class AppContainer {
     let foregroundSessionTracker: ForegroundSessionTracker
     let sessionRepository: SessionRepository
     let projectsRepository: ProjectsRepository
+    let voiceRepository: VoiceRepository
     let autoScanRepository: AutoScanRepository
     let agentRepository: AgentRepository
     let templatesRepository: TemplatesRepository
@@ -225,6 +226,11 @@ final class AppContainer {
             agentAPI: agentAPI,
             agentEventBus: agentEventBus
         )
+        self.voiceRepository = VoiceRepository(
+            agentAPI: agentAPI,
+            agentEventBus: agentEventBus,
+            sessionManager: sessionManager
+        )
         let autoScanWsClient = AutoScanWsClient(
             webSocketFactory: webSocketFactory,
             urlProvider: AutoScanWsClient.liveURLProvider(tokenStore: tokenStore, sessionManager: sessionManager),
@@ -341,6 +347,7 @@ final class AppContainer {
         Task { await versionGate.probe() }
         sessionRepository.start()
         projectsRepository.start()
+        voiceRepository.start()
         autoScanRepository.start()
         attentionCoordinator.start()
         deepLinkCoordinator.start()

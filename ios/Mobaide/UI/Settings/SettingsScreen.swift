@@ -16,6 +16,7 @@ struct SettingsScreen: View {
 private struct SettingsContent: View {
     @State private var model: SettingsModel
     @State private var deleteModel: DeleteAccountModel
+    @State private var voice: VoiceInputModel
     private let displayStore: TerminalDisplayStore
     private let themeStore: ThemeStore
 
@@ -33,6 +34,7 @@ private struct SettingsContent: View {
             signInService: container.signInService,
             email: container.authRepository.getUserEmail() ?? ""
         ))
+        _voice = State(initialValue: VoiceInputModel(container: container, sessionId: nil))
         displayStore = container.terminalDisplayStore
         themeStore = container.themeStore
     }
@@ -85,6 +87,7 @@ private struct SettingsContent: View {
                 PixelSectionFooter("Full Screen reflows columns to fit the screen. Static keeps a fixed column count and pans horizontally.")
             }
             .pixelFormSection()
+            VoiceSettingsSection(voice: voice)
             Section(header: PixelSectionHeader("Support")) {
                 NavigationLink("Help & Support", value: Route.support)
                 Button("Privacy policy") { model.openPrivacyPolicy() }

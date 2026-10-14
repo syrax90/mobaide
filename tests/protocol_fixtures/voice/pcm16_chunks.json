@@ -1,0 +1,322 @@
+{
+  "type": "Pcm16Chunks",
+  "description": "Golden vectors for the voice-input audio pipeline shared by the Android, iOS and web clients and asserted against the agent's decoder. Audio is 16 kHz mono PCM16 little-endian; each chunk is uploaded as `pcm16_b64`, standard padded base64 with no line breaks. `chunk_size`: a chunk holds min(sample_rate * 2, max_chunk_bytes) bytes (about one second), rounded down to an even count; null means the agent's limit is too small to carry one sample. `chunk_cases`: `open` lists the chunks sealed while recording is still running (only full chunks), `final` the chunks after the recording stopped (the short tail included, never an empty chunk). A `generator` case builds `count` samples as wrap16(i * multiplier) \u2014 (i * multiplier) mod 65536, minus 65536 when that is 32768 or more \u2014 and pins each chunk by byte length, base64 length and the SHA-256 (hex) of its base64 text. `float_to_pcm16` pins the conversion from Float32 capture buffers (web and iOS; Android records PCM16 directly): non-finite inputs are encoded as the strings \"NaN\", \"Infinity\" and \"-Infinity\".",
+  "sample_rate": 16000,
+  "chunk_size": [
+    {
+      "max_chunk_bytes": 65536,
+      "chunk_bytes": 32000
+    },
+    {
+      "max_chunk_bytes": 20001,
+      "chunk_bytes": 20000
+    },
+    {
+      "max_chunk_bytes": 4096,
+      "chunk_bytes": 4096
+    },
+    {
+      "max_chunk_bytes": 1,
+      "chunk_bytes": null
+    }
+  ],
+  "chunk_cases": [
+    {
+      "name": "empty",
+      "max_chunk_bytes": 64,
+      "samples": [],
+      "open": [],
+      "final": []
+    },
+    {
+      "name": "le_signed_extremes",
+      "max_chunk_bytes": 64,
+      "samples": [
+        0,
+        1,
+        -1,
+        256,
+        -256,
+        32767,
+        -32768
+      ],
+      "open": [],
+      "final": [
+        {
+          "seq": 0,
+          "bytes_hex": "00000100ffff000100ffff7f0080",
+          "pcm16_b64": "AAABAP//AAEA//9/AIA="
+        }
+      ]
+    },
+    {
+      "name": "exactly_one_chunk",
+      "max_chunk_bytes": 6,
+      "samples": [
+        1000,
+        -1000,
+        12345
+      ],
+      "open": [
+        {
+          "seq": 0,
+          "bytes_hex": "e80318fc3930",
+          "pcm16_b64": "6AMY/Dkw"
+        }
+      ],
+      "final": [
+        {
+          "seq": 0,
+          "bytes_hex": "e80318fc3930",
+          "pcm16_b64": "6AMY/Dkw"
+        }
+      ]
+    },
+    {
+      "name": "boundary_with_tail",
+      "max_chunk_bytes": 13,
+      "samples": [
+        100,
+        -100,
+        200,
+        -200,
+        300,
+        -300,
+        400,
+        -400
+      ],
+      "open": [
+        {
+          "seq": 0,
+          "bytes_hex": "64009cffc80038ff2c01d4fe",
+          "pcm16_b64": "ZACc/8gAOP8sAdT+"
+        }
+      ],
+      "final": [
+        {
+          "seq": 0,
+          "bytes_hex": "64009cffc80038ff2c01d4fe",
+          "pcm16_b64": "ZACc/8gAOP8sAdT+"
+        },
+        {
+          "seq": 1,
+          "bytes_hex": "900170fe",
+          "pcm16_b64": "kAFw/g=="
+        }
+      ]
+    },
+    {
+      "name": "no_line_breaks",
+      "max_chunk_bytes": 65536,
+      "samples": [
+        0,
+        2053,
+        4106,
+        6159,
+        8212,
+        10265,
+        12318,
+        14371,
+        16424,
+        18477,
+        20530,
+        22583,
+        24636,
+        26689,
+        28742,
+        30795,
+        -32688,
+        -30635,
+        -28582,
+        -26529,
+        -24476,
+        -22423,
+        -20370,
+        -18317,
+        -16264,
+        -14211,
+        -12158,
+        -10105,
+        -8052,
+        -5999,
+        -3946,
+        -1893,
+        160,
+        2213,
+        4266,
+        6319,
+        8372,
+        10425,
+        12478,
+        14531,
+        16584,
+        18637,
+        20690,
+        22743,
+        24796,
+        26849,
+        28902,
+        30955,
+        -32528,
+        -30475,
+        -28422,
+        -26369,
+        -24316,
+        -22263,
+        -20210,
+        -18157,
+        -16104,
+        -14051,
+        -11998,
+        -9945,
+        -7892,
+        -5839,
+        -3786,
+        -1733
+      ],
+      "open": [],
+      "final": [
+        {
+          "seq": 0,
+          "bytes_hex": "000005080a100f18142019281e30233828402d48325037583c60416846704b78508055885a905f9864a069a86eb073b878c07dc882d087d88ce091e896f09bf8a000a508aa10af18b420b928be30c338c840cd48d250d758dc60e168e670eb78f080f588fa90ff9804a109a90eb113b918c11dc922d127d92ce131e936f13bf9",
+          "pcm16_b64": "AAAFCAoQDxgUIBkoHjAjOChALUgyUDdYPGBBaEZwS3hQgFWIWpBfmGSgaahusHO4eMB9yILQh9iM4JHolvCb+KAApQiqEK8YtCC5KL4wwzjIQM1I0lDXWNxg4WjmcOt48ID1iPqQ/5gEoQmpDrETuRjBHcki0SfZLOEx6TbxO/k="
+        }
+      ]
+    },
+    {
+      "name": "real_size_generated",
+      "max_chunk_bytes": 65536,
+      "generator": {
+        "multiplier": 7919,
+        "count": 40000
+      },
+      "open": [
+        {
+          "seq": 0,
+          "byte_length": 32000,
+          "b64_length": 42668,
+          "b64_sha256": "19b0d2a6f708ed6b9c4fa0b0fb5a942d63214593677070908d63782eafc9bac4"
+        },
+        {
+          "seq": 1,
+          "byte_length": 32000,
+          "b64_length": 42668,
+          "b64_sha256": "303f739d6a31b510e27ccd1ec398ad0a592fc818a174a6cf2de814f1fef7d93a"
+        }
+      ],
+      "final": [
+        {
+          "seq": 0,
+          "byte_length": 32000,
+          "b64_length": 42668,
+          "b64_sha256": "19b0d2a6f708ed6b9c4fa0b0fb5a942d63214593677070908d63782eafc9bac4"
+        },
+        {
+          "seq": 1,
+          "byte_length": 32000,
+          "b64_length": 42668,
+          "b64_sha256": "303f739d6a31b510e27ccd1ec398ad0a592fc818a174a6cf2de814f1fef7d93a"
+        },
+        {
+          "seq": 2,
+          "byte_length": 16000,
+          "b64_length": 21336,
+          "b64_sha256": "ef49bf0e8c89521cf7af10129a3ab34687ca9d9f87eb1291ced99d311861f153"
+        }
+      ]
+    }
+  ],
+  "float_to_pcm16": {
+    "rule": "NaN -> 0; v = x * 32768; clamp v to [-32768, 32767]; truncate toward zero",
+    "cases": [
+      {
+        "name": "zeros",
+        "input": [
+          0.0,
+          -0.0
+        ],
+        "expect": [
+          0,
+          0
+        ]
+      },
+      {
+        "name": "halves",
+        "input": [
+          0.5,
+          -0.5
+        ],
+        "expect": [
+          16384,
+          -16384
+        ]
+      },
+      {
+        "name": "full_scale",
+        "input": [
+          1.0,
+          -1.0
+        ],
+        "expect": [
+          32767,
+          -32768
+        ]
+      },
+      {
+        "name": "out_of_range",
+        "input": [
+          1.5,
+          -2.0
+        ],
+        "expect": [
+          32767,
+          -32768
+        ]
+      },
+      {
+        "name": "truncates_toward_zero",
+        "input": [
+          4.57763671875e-05,
+          -4.57763671875e-05
+        ],
+        "expect": [
+          1,
+          -1
+        ]
+      },
+      {
+        "name": "largest_below_full_scale",
+        "input": [
+          0.999969482421875,
+          -0.999969482421875
+        ],
+        "expect": [
+          32767,
+          -32767
+        ]
+      },
+      {
+        "name": "below_one_step",
+        "input": [
+          1.52587890625e-05
+        ],
+        "expect": [
+          0
+        ]
+      },
+      {
+        "name": "non_finite",
+        "input": [
+          "Infinity",
+          "-Infinity",
+          "NaN"
+        ],
+        "expect": [
+          32767,
+          -32768,
+          0
+        ]
+      }
+    ]
+  }
+}

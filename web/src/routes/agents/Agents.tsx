@@ -23,6 +23,8 @@ import { AgentCard } from './AgentCard';
 import { AgentCredentialsPanel } from './AgentCredentialsPanel';
 import { AgentsEmptyState } from './AgentsEmptyState';
 import { InstallCommandsPanel } from './InstallCommandsPanel';
+import { VoiceSettingsDialog } from './VoiceSettingsDialog';
+import { useVoicePrefsStore } from '../../voice/voicePrefsStore';
 
 type Panel =
   | { kind: 'none' }
@@ -30,7 +32,8 @@ type Panel =
   | { kind: 'install' }
   | { kind: 'credentials'; title: string; credentials: AgentCredentials }
   | { kind: 'confirmReregister'; agent: Agent }
-  | { kind: 'confirmDelete'; agent: Agent };
+  | { kind: 'confirmDelete'; agent: Agent }
+  | { kind: 'voice'; agent: Agent };
 
 /**
  * Everything an account can do to its agents, minus pairing itself (`/pair`).
@@ -92,6 +95,7 @@ export function Agents() {
       // Otherwise the bucket outlives the machine it names, and re-pairing an
       // agent that happens to reuse the id resurrects directories from it.
       clearRecentPaths(agent.agentId);
+      useVoicePrefsStore.getState().forgetAgent(agent.agentId);
       const selected = useSelectedAgentStore.getState();
       if (selected.selectedAgentId === agent.agentId) {
         selected.setSelectedAgent(null);
@@ -149,6 +153,9 @@ export function Agents() {
             onDelete={(target) => {
               setPanel({ kind: 'confirmDelete', agent: target });
             }}
+            onVoice={(target) => {
+              setPanel({ kind: 'voice', agent: target });
+            }}
           />
         ))}
       </ul>
@@ -192,6 +199,15 @@ export function Agents() {
             create.mutate(name);
           }}
           onCancel={() => {
+            setPanel({ kind: 'none' });
+          }}
+        />
+      )}
+
+      {panel.kind === 'voice' && (
+        <VoiceSettingsDialog
+          agent={panel.agent}
+          onClose={() => {
             setPanel({ kind: 'none' });
           }}
         />

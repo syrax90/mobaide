@@ -2,7 +2,9 @@
 verifying → ready | failed), cancel and remove, the restart rules of
 ``start()`` (resume an interrupted install, repair a ready one, never retry a
 failed one), the cross-process lock, the throttled ``voice.changed``
-publisher and dictations through the facade.
+publisher, a runtime repair (cancelling it keeps the model), the watcher that
+publishes an install running in another process, and dictations through the
+facade.
 
 Fake mode throughout (the generated model, no runtime, the fake engine);
 nothing touches the network or the real voice root."""
@@ -15,6 +17,7 @@ import sys
 import threading
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,7 +47,9 @@ from mobaide.voice.store import (
     VoicePaths,
     VoiceSettings,
     load_settings,
+    model_ready,
     save_settings,
+    write_model_marker,
     write_runtime_marker,
 )
 
@@ -765,6 +770,202 @@ class TestStartAfterRestart:
         finally:
             await service.shutdown()
             voice_dir.chmod(0o700)
+
+
+def _place_verified_model(paths: VoicePaths, spec) -> None:
+    directory = paths.model_dir(spec.id)
+    directory.mkdir(parents=True, exist_ok=True)
+    for file in spec.files:
+        (directory / file.name).write_bytes(FAKE_CONTENT[file.name])
+    write_model_marker(paths, spec)
+
+
+class TestRuntimeRepair:
+    """An enabled voice whose verified model is in place but whose runtime is
+    gone (a Python upgrade) is a repair: it shows as ``repairing`` and
+    cancelling it must never delete the model."""
+
+    WHEEL = CatalogFile(
+        name="sherpa_onnx_test.whl", size=4096, sha256="0" * 64, urls=("https://example.invalid/w",)
+    )
+    TARGET = RuntimeTarget(key="sherpa-onnx-test", wheels=(WHEEL,))
+    MODEL = replace(FAKE_MODEL, id="fake-stt-runtime", needs_runtime=True)
+
+    @pytest.fixture(autouse=True)
+    def _model_with_a_runtime(self, monkeypatch):
+        monkeypatch.setattr(service_module, "MODELS", {self.MODEL.id: self.MODEL})
+        monkeypatch.setattr(service_module, "DEFAULT_MODEL_ID", self.MODEL.id)
+        monkeypatch.setattr(service_module, "resolve_runtime", lambda: (self.TARGET, None))
+        monkeypatch.setattr(host_module, "free_disk_bytes", lambda _path: 10**12)
+        monkeypatch.setattr(service_module, "free_disk_bytes", lambda _path: 10**12)
+
+    @pytest.fixture
+    def runtime_install(self, monkeypatch):
+        """Stands in for ``install_runtime``: leaves a partial wheel and a
+        staging dir, then waits on ``gate``."""
+        state = SimpleNamespace(started=asyncio.Event(), gate=asyncio.Event())
+
+        async def install_runtime(paths, target, fetcher, on_progress):
+            paths.wheel_downloads.mkdir(parents=True, exist_ok=True)
+            (paths.wheel_downloads / (self.WHEEL.name + ".part")).write_bytes(b"partial")
+            (paths.runtime_root / f".staging-{target.key}-1").mkdir()
+            state.started.set()
+            await state.gate.wait()
+            return paths.runtime_dir(target.key)
+
+        monkeypatch.setattr(service_module, "install_runtime", install_runtime)
+        return state
+
+    @pytest.mark.parametrize(
+        ("enabled", "model", "runtime", "repairing"),
+        [
+            (True, True, False, True),
+            (True, False, False, False),
+            (True, True, True, False),
+            (False, True, False, False),
+        ],
+        ids=["model_without_runtime", "nothing_yet", "installed", "voice_off"],
+    )
+    def test_repairing_only_when_an_enabled_model_lacks_its_runtime(
+        self, voice_dir, enabled, model, runtime, repairing
+    ):
+        paths = VoicePaths(voice_dir)
+        _write_settings(voice_dir, enabled=enabled, model_id=self.MODEL.id, phase="ready")
+        if model:
+            _place_verified_model(paths, self.MODEL)
+        if runtime:
+            runtime_dir = paths.runtime_dir(self.TARGET.key)
+            runtime_dir.mkdir(parents=True)
+            write_runtime_marker(runtime_dir, self.TARGET)
+
+        status = VoiceService(voice_dir=voice_dir).status()
+
+        assert status.repairing is repairing
+
+    async def test_cancelling_a_repair_keeps_the_model_and_offers_a_retry(
+        self, make_service, voice_dir, runtime_install
+    ):
+        paths = VoicePaths(voice_dir)
+        _write_settings(voice_dir, enabled=True, model_id=self.MODEL.id, phase="ready")
+        _place_verified_model(paths, self.MODEL)
+        events = _Events()
+        service = make_service(fake=False, publish=events)
+        await service.start()
+        await asyncio.wait_for(runtime_install.started.wait(), INSTALL_TIMEOUT)
+        during = service.status()
+
+        status = await service.cancel_install()
+
+        assert (during.state, during.repairing) == ("downloading", True)
+        assert (status.state, status.enabled, status.repairing) == ("failed", True, True)
+        assert status.error is not None and status.error.code == "interrupted"
+        assert status.error.message == "Voice needs a small update for this agent; retry to finish."
+        assert model_ready(paths, self.MODEL)
+        assert not paths.wheel_downloads.exists()
+        assert not list(paths.runtime_root.glob(".staging-*"))
+        assert load_settings(paths).enabled is True
+        assert (events.payloads[-1]["state"], events.payloads[-1]["repairing"]) == ("failed", True)
+
+    async def test_cancelling_a_first_install_with_a_runtime_still_deletes_everything(
+        self, make_service, runtime_install
+    ):
+        service = make_service(fake=False)
+        await service.install()
+        await asyncio.wait_for(runtime_install.started.wait(), INSTALL_TIMEOUT)
+
+        status = await service.cancel_install()
+
+        assert (status.state, status.enabled, status.repairing) == ("not_installed", False, False)
+        assert not service.paths.runtime_root.exists()
+        assert not service.paths.models_dir.exists()
+
+
+class TestForeignInstall:
+    """An install running in another process (the CLI, a second agent on the
+    same prefix) is published from disk while it holds the lock, and its
+    outcome once the lock frees."""
+
+    @pytest.fixture(autouse=True)
+    def _fast_polls(self, monkeypatch):
+        monkeypatch.setattr(service_module, "FOREIGN_INSTALL_POLL_SECONDS", 0.02)
+        monkeypatch.setattr(service_module, "MIN_PUBLISH_INTERVAL", 0.01)
+
+    @staticmethod
+    def _watchers() -> int:
+        return sum(
+            1
+            for task in asyncio.all_tasks()
+            if not task.done() and task.get_coro().__name__ == "_watch_lock"
+        )
+
+    async def test_progress_is_published_while_held_and_the_outcome_once_freed(
+        self, make_service, voice_dir
+    ):
+        _write_settings(voice_dir, enabled=True, model_id=FAKE_MODEL.id, phase="installing")
+        events = _Events()
+        service = make_service(publish=events)
+        other = FileLock(service.paths.lock_file)
+        assert other.try_acquire()
+        try:
+            assert service.status().state == "queued"
+            await _wait_for(lambda: len(events.payloads) >= 2)
+            assert events.states() == ["queued"]
+            _place_verified_model(service.paths, FAKE_MODEL)
+            _write_settings(voice_dir, enabled=True, model_id=FAKE_MODEL.id, phase="ready")
+        finally:
+            other.release()
+
+        await _wait_for(lambda: events.payloads[-1]["state"] == "ready")
+        published = len(events.payloads)
+        await asyncio.sleep(0.1)
+
+        assert len(events.payloads) == published
+        assert self._watchers() == 0
+
+    async def test_at_most_one_watcher_runs(self, make_service, voice_dir):
+        _write_settings(voice_dir, enabled=True, model_id=FAKE_MODEL.id, phase="installing")
+        service = make_service(publish=_Events())
+        other = FileLock(service.paths.lock_file)
+        assert other.try_acquire()
+        try:
+            for _ in range(5):
+                assert service.status().state == "queued"
+            await asyncio.sleep(0.05)
+
+            assert self._watchers() == 1
+        finally:
+            other.release()
+
+    async def test_no_watcher_without_a_publisher(self, make_service, voice_dir):
+        _write_settings(voice_dir, enabled=True, model_id=FAKE_MODEL.id, phase="installing")
+        service = make_service()
+        other = FileLock(service.paths.lock_file)
+        assert other.try_acquire()
+        try:
+            assert service.status().state == "queued"
+
+            assert self._watchers() == 0
+        finally:
+            other.release()
+
+    async def test_shutdown_stops_the_watcher(self, make_service, voice_dir):
+        _write_settings(voice_dir, enabled=True, model_id=FAKE_MODEL.id, phase="installing")
+        events = _Events()
+        service = make_service(publish=events)
+        other = FileLock(service.paths.lock_file)
+        assert other.try_acquire()
+        try:
+            service.status()
+            await _wait_for(lambda: events.payloads)
+
+            await service.shutdown()
+            published = len(events.payloads)
+            await asyncio.sleep(0.1)
+
+            assert len(events.payloads) == published
+            assert self._watchers() == 0
+        finally:
+            other.release()
 
 
 class TestMarkInterrupted:

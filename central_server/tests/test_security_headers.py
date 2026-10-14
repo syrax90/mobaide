@@ -604,9 +604,10 @@ class TestExternalisedBundlesAreServed:
 # server-rendered portal: Caddy stamps these for ``app.mobaide.com`` and this
 # middleware never sees that request. Spelled out here rather than imported —
 # ``security_headers.py`` no longer knows about either provider at all, now
-# that the portal composed no policy for them.
+# that the portal composed no policy for them. ``microphone=(self)`` is the
+# SPA's voice input; every page this middleware serves keeps ``microphone=()``.
 SPA_GIS_PERMISSIONS_POLICY = (
-    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), "
+    "camera=(), microphone=(self), geolocation=(), payment=(), usb=(), "
     'identity-credentials-get=(self "https://accounts.google.com")'
 )
 SPA_APPLE_JS_SCRIPT_URL = (

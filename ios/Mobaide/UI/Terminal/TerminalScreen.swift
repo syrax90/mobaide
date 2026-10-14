@@ -37,6 +37,8 @@ private struct TerminalScreenContent: View {
     /// not `@Observable` — only its stream drives a re-render.
     @State private var sessionRow: SessionResponse?
     @State private var customTypeNames: [String: String]
+    /// Voice input for the connected agent: the composer's mic and dictation.
+    @State private var voice: VoiceInputModel
     private let displayStore: TerminalDisplayStore
     private let sessionRepository: SessionRepository
     private let customAgentTypesRepository: CustomAgentTypesRepository
@@ -45,6 +47,7 @@ private struct TerminalScreenContent: View {
 
     @Environment(Router.self) private var router
     @Environment(\.mobaideColors) private var colors
+    @Environment(\.scenePhase) private var scenePhase
 
     init(container: AppContainer, sessionId: String) {
         let session = container.sessionRepository.currentSessions.first { $0.session_id == sessionId }
@@ -58,6 +61,7 @@ private struct TerminalScreenContent: View {
             initialStatus: session?.state
         ))
         _sessionRow = State(initialValue: session)
+        _voice = State(initialValue: VoiceInputModel(container: container, sessionId: sessionId))
         _customTypeNames = State(initialValue: Self.typeNames(container.customAgentTypesRepository.currentTypes))
         displayStore = container.terminalDisplayStore
         sessionRepository = container.sessionRepository
@@ -139,7 +143,8 @@ private struct TerminalScreenContent: View {
                         showShortcutPicker = true
                     },
                     onExpand: { showFullScreenInput = true },
-                    onRenameSavedShortcut: { renameShortcutTarget = $0 }
+                    onRenameSavedShortcut: { renameShortcutTarget = $0 },
+                    voice: voice
                 )
             }
             .offset(y: -keyboard.transition.lift)
@@ -211,7 +216,10 @@ private struct TerminalScreenContent: View {
             ShortcutPickerSheet(model: model)
         }
         .sheet(isPresented: $showFullScreenInput) {
-            FullScreenInputSheet(model: model)
+            FullScreenInputSheet(model: model, voice: voice)
+        }
+        .sheet(isPresented: Bindable(voice).setupVisible, onDismiss: { voice.hideSetup() }) {
+            VoiceSetupSheet(voice: voice)
         }
         // The keyboard observer listens on app-wide `UIResponder` notifications,
         // so the expanded editor's keyboard would otherwise drive this screen's
@@ -240,6 +248,19 @@ private struct TerminalScreenContent: View {
         }
         .task {
             gitCapabilities = (try? await agentAPI.getAgentVersion())?.gitCapabilities ?? .none
+        }
+        .task {
+            // The transcript goes into the composer for review, never sent.
+            voice.onTranscript = { [model] text in model.insertTranscript(text) }
+            await voice.load()
+        }
+        .task { await voice.watchConnection() }
+        .onChange(of: voice.status?.state) { _, _ in voice.statusChanged() }
+        // Leaving the foreground keeps what was said and transcribes it.
+        // `.background` only: the microphone permission alert, Control Center
+        // and a pulled-down notification all make the scene `.inactive`.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { voice.interrupt() }
         }
         .task {
             checkSessionStillExists()
@@ -276,6 +297,7 @@ private struct TerminalScreenContent: View {
             screenVisible = false
             model.markHidden()
             keyboard.stop()
+            voice.leave()
         }
     }
 

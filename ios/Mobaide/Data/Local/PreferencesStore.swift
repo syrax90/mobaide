@@ -20,6 +20,7 @@ struct PreferencesStore: @unchecked Sendable {
 
     static let attentionSeenPrefix = "attention_seen::"
     static let recentCustomPathsPrefix = "recent_custom_paths::"
+    static let voiceMicHiddenPrefix = "voice_mic_hidden::"
     /// Outside every sign-out sweep on purpose: the `agent_paired` conversion
     /// is once per account, so signing back in must find the outcome.
 
@@ -31,6 +32,7 @@ struct PreferencesStore: @unchecked Sendable {
     static func recentCustomPathsKey(agentKey: String) -> String { "\(recentCustomPathsPrefix)\(agentKey)" }
     static func recentShortcutChordsKey(kindKey: String) -> String { "recent_shortcut_chords::\(kindKey)" }
     static func attentionSeenKey(agentKey: String) -> String { "\(attentionSeenPrefix)\(agentKey)" }
+    static func voiceMicHiddenKey(agentKey: String) -> String { "\(voiceMicHiddenPrefix)\(agentKey)" }
 
     // UserDefaults is documented thread-safe; this struct holds no other
     // mutable state, hence @unchecked Sendable.
@@ -125,6 +127,20 @@ struct PreferencesStore: @unchecked Sendable {
 
     func setExternalSessionsNoticeDismissed() {
         defaults.set(true, forKey: Self.keyExternalSessionsNoticeDismissed)
+    }
+
+    /// Whether the user hid the session mic for this agent (undone in
+    /// Settings → Voice input).
+    func isVoiceMicHidden(agentKey: String) -> Bool {
+        defaults.bool(forKey: Self.voiceMicHiddenKey(agentKey: agentKey))
+    }
+
+    func setVoiceMicHidden(agentKey: String, hidden: Bool) {
+        if hidden {
+            defaults.set(true, forKey: Self.voiceMicHiddenKey(agentKey: agentKey))
+        } else {
+            defaults.removeObject(forKey: Self.voiceMicHiddenKey(agentKey: agentKey))
+        }
     }
 
     func getCachedLinearLabels(projectName: String) -> [LinearLabelDto] {

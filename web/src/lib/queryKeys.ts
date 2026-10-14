@@ -102,6 +102,12 @@ export const queryKeys = {
   autoscan: (agentId: string) => ['agent', agentId, 'autoscan'] as const,
   /** Which CLIs the agent has installed, and the models each advertises. */
   agentCapabilities: (agentId: string) => ['agent', agentId, 'capabilities'] as const,
+  /**
+   * The agent's voice input status. Written by `voice.changed` (a full
+   * snapshot, republished on every events-channel connect) and by the
+   * install / cancel / remove answers.
+   */
+  voiceStatus: (agentId: string) => ['agent', agentId, 'voice'] as const,
 };
 
 /**

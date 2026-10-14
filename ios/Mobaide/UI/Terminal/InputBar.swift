@@ -82,6 +82,8 @@ struct InputBar: View {
     let onOpenShortcuts: () -> Void
     let onExpand: () -> Void
     let onRenameSavedShortcut: (SavedShortcutUi) -> Void
+    /// Voice input for the connected agent; nil keeps the mic out entirely.
+    var voice: VoiceInputModel?
 
     @FocusState private var inputFocused: Bool
     @Environment(\.mobaideColors) private var colors
@@ -93,6 +95,11 @@ struct InputBar: View {
     var body: some View {
         VStack(spacing: 6) {
             controlKeyRow
+            if let voice, showsDictationBar(voice) {
+                VoiceDictationBar(voice: voice)
+                    .padding(.horizontal, 8)
+                    .transition(.opacity)
+            }
             // Fade only, never slide (Android parity): a slide animates the bar
             // height frame-by-frame, resizing the terminal — and the remote PTY —
             // through a burst of intermediate row counts. A fade changes height
@@ -196,17 +203,20 @@ struct InputBar: View {
             // Verbatim input: this text is written straight to the PTY, so the
             // keyboard must not capitalize `ls` into `Ls` or "correct" command
             // tokens.
-            TextField("Message", text: $model.inputText, axis: .vertical)
+            ComposerTextField(model: model, style: .inline, focus: $inputFocused)
                 .lineLimit(1...5)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
-                .focused($inputFocused)
                 .pixelField(isFocused: inputFocused)
 
             Button(action: onSaveTemplate) {
                 Image(systemName: "square.and.arrow.down")
             }
             .disabled(trimmedInput.isEmpty)
+
+            if let voice {
+                VoiceMicButton(voice: voice)
+            }
 
             // Same slot Android gives it — immediately left of Send — and the
             // same session gate, not the send gate: an empty buffer is a
@@ -227,6 +237,14 @@ struct InputBar: View {
         }
         .padding(.horizontal, 8)
         .transition(.opacity)
+    }
+
+    /// A dictation in progress, or its outcome waiting to be dismissed.
+    private func showsDictationBar(_ voice: VoiceInputModel) -> Bool {
+        switch voice.dictation {
+        case .idle, .result: return false
+        default: return true
+        }
     }
 
     /// Collapsed-composer row (Android `RevealComposerChip` + show-keyboard

@@ -5,6 +5,7 @@ interface AgentCardProps {
   busy: boolean;
   onReregister: (agent: Agent) => void;
   onDelete: (agent: Agent) => void;
+  onVoice: (agent: Agent) => void;
 }
 
 /**
@@ -17,7 +18,7 @@ interface AgentCardProps {
  * `AgentSummaryResponse` decodes it but neither client renders it, and it is
  * the fastest way to spot the host that missed an auto-update.
  */
-export function AgentCard({ agent, busy, onReregister, onDelete }: AgentCardProps) {
+export function AgentCard({ agent, busy, onReregister, onDelete, onVoice }: AgentCardProps) {
   return (
     <li className="device-card">
       <div className="device-card-head agent-card-head">
@@ -30,6 +31,20 @@ export function AgentCard({ agent, busy, onReregister, onDelete }: AgentCardProp
           <span className="agent-state-label">{agent.online ? 'Online' : 'Offline'}</span>
         </span>
         <div className="button-row">
+          {/* Voice lives on the agent's own computer, so it is reachable only
+              while the agent is online. */}
+          {agent.online && (
+            <button
+              type="button"
+              className="button"
+              disabled={busy}
+              onClick={() => {
+                onVoice(agent);
+              }}
+            >
+              Voice input
+            </button>
+          )}
           <button
             type="button"
             className="button"

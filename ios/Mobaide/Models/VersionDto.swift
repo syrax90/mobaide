@@ -154,6 +154,34 @@ extension VersionInfoResponse {
     }
 }
 
+/// `capabilities.voice`: what dictation needs to know before it starts.
+struct VoiceCapability: Equatable, Sendable {
+    let sampleRate: Int
+    let maxSeconds: Int
+    let maxChunkBytes: Int
+}
+
+extension VersionInfoResponse {
+    /// The agent's voice input limits, or nil when it does not offer voice.
+    /// Present whatever the install state (`GET /api/voice/status` tells
+    /// that), so nil means an agent too old for voice: the mic stays hidden.
+    var voiceCapability: VoiceCapability? {
+        guard case .bool(true)? = capabilities["voice"]?["dictation"] else { return nil }
+        func positive(_ key: String) -> Int? {
+            guard case .int(let value)? = capabilities["voice"]?[key], value > 0 else { return nil }
+            return value
+        }
+        guard
+            let sampleRate = positive("sample_rate"),
+            let maxSeconds = positive("max_seconds"),
+            let maxChunkBytes = positive("max_chunk_bytes")
+        else {
+            return nil
+        }
+        return VoiceCapability(sampleRate: sampleRate, maxSeconds: maxSeconds, maxChunkBytes: maxChunkBytes)
+    }
+}
+
 /// One entry of `capabilities.cli.<id>.model_details`: the reasoning efforts a
 /// model supports and (when the catalog names one) its default effort. Built
 /// only by the loose walk in `cliModelDetails` — never decoded directly.

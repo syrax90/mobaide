@@ -780,14 +780,16 @@ describe('TerminalScreen git changes', () => {
     expect(screen.queryByRole('menuitem', { name: 'Commit…' })).toBeNull();
   });
 
-  it('asks the agent nothing while the row names no folder', async () => {
-    // The probe is gated like the menu it feeds: without a cwd there are no
-    // git routes to offer, so the agent is not asked what it could do.
+  it('offers no git menu while the row names no folder', async () => {
+    // The git menu is gated on a cwd: without one there are no git routes to
+    // offer, whatever the agent advertises. The capabilities probe itself is
+    // shared with the mic (`capabilities.voice`), which does not depend on a
+    // folder, so it still runs - once, never once per consumer.
     agentVersion.capabilities = { git: { commit: true } };
     await renderSynced(row());
     await flush();
 
-    expect(agentVersion.probes).toBe(0);
+    expect(agentVersion.probes).toBe(1);
     expect(more()).toBeNull();
   });
 

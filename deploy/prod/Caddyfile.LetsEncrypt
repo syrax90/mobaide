@@ -100,13 +100,19 @@
         # here. Both are unconditional, for the same reason the CSP's
         # third-party origins are: Caddy cannot read the .env, and neither
         # button mounts when GET /api/version reports no client id for it.
+        #
+        # microphone=(self) is voice input: the SPA records in the browser and
+        # streams the audio to the user's own agent (the AudioWorklet module it
+        # loads is a same-origin static file, so script-src needs nothing
+        # new). Only this origin gets it; central_server's pages keep
+        # microphone=(). Changing this header takes a Caddy reload.
         header {
             Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-DQjnNfb9BFsBDwtrOfOC9aSi5NaqDDr+KkPgo0PMtbY=' https://accounts.google.com/gsi/client https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self'; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
             Cross-Origin-Opener-Policy "same-origin-allow-popups"
             X-Frame-Options "DENY"
             X-Content-Type-Options "nosniff"
             Referrer-Policy "strict-origin-when-cross-origin"
-            Permissions-Policy `camera=(), microphone=(), geolocation=(), payment=(), usb=(), identity-credentials-get=(self "https://accounts.google.com")`
+            Permissions-Policy `camera=(), microphone=(self), geolocation=(), payment=(), usb=(), identity-credentials-get=(self "https://accounts.google.com")`
         }
 
         # route {} forces listed order: the cache headers must run AFTER the

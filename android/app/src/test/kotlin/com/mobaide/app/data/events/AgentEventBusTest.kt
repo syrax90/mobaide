@@ -10,6 +10,7 @@ import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.GitJobResponse
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
+import com.mobaide.app.data.network.dto.VoiceProgress
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -816,4 +817,77 @@ class AgentEventBusGitJobTest {
 
         bus.stop()
     }
+}
+
+/** `voice.changed`: a whole `VoiceStatusResponse`, decoded as is. */
+class AgentEventBusVoiceTest {
+
+    private fun newBus(): Triple<AgentEventBus, MutableSharedFlow<WsEvent>, WebSocketConnection> {
+        val connEvents = MutableSharedFlow<WsEvent>(replay = 0, extraBufferCapacity = 64)
+        val conn = mockk<WebSocketConnection>(relaxed = true)
+        every { conn.events } returns connEvents
+        val wsm = mockk<WebSocketManager>()
+        every { wsm.createConnection("ws/events") } returns conn
+        val sessionManager = mockk<SessionManager>(relaxed = true)
+        every { sessionManager.authState } returns
+            MutableStateFlow<SessionManager.AuthState>(SessionManager.AuthState.FullyConnected)
+        every { sessionManager.isLoggedIn() } returns true
+        return Triple(AgentEventBus(wsm, sessionManager), connEvents, conn)
+    }
+
+    @Test
+    fun message_voiceChanged_carriesTheWholeStatus() = runTest {
+        val (bus, connEvents, _) = newBus()
+        bus.start()
+
+        bus.events.test {
+            connEvents.emit(WsEvent.Message(voiceFrame(state = "downloading", repairing = true)))
+            val changed = awaitItem() as AgentEvent.VoiceChanged
+            assertEquals("downloading", changed.status.state)
+            assertTrue(changed.status.repairing)
+            assertEquals(VoiceProgress(done_bytes = 43, total_bytes = 100), changed.status.progress)
+            assertEquals("CC-BY-4.0", changed.status.model.notice)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_voiceChangedItCannotType_isSkipped_andTheNextFrameStillArrives() = runTest {
+        val (bus, connEvents, _) = newBus()
+        bus.start()
+
+        bus.events.test {
+            connEvents.emit(WsEvent.Message("""{"type":"voice.changed","payload":{"state":"ready"}}"""))
+            connEvents.emit(WsEvent.Message(voiceFrame(state = "ready", repairing = false)))
+            assertEquals("ready", (awaitItem() as AgentEvent.VoiceChanged).status.state)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        bus.stop()
+    }
+
+    private fun voiceFrame(state: String, repairing: Boolean) = """
+        {
+          "type": "voice.changed",
+          "payload": {
+            "state": "$state",
+            "enabled": true,
+            "repairing": $repairing,
+            "model": {
+              "id": "parakeet", "name": "Parakeet", "languages": ["en"],
+              "download_bytes": 100, "disk_bytes": 200, "ram_bytes": 300, "notice": "CC-BY-4.0"
+            },
+            "progress": {"done_bytes": 43, "total_bytes": 100},
+            "host": {
+              "ram_total_bytes": null, "disk_free_bytes": null, "cpu_count": null,
+              "recommendation": "ok", "reasons": []
+            },
+            "speed_factor": null,
+            "error": null,
+            "added_later": {"ignored": true}
+          }
+        }
+    """.trimIndent()
 }

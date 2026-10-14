@@ -28,6 +28,8 @@ class VoiceModelInfo(BaseModel):
     download_bytes: int
     disk_bytes: int
     ram_bytes: int
+    # Attribution and license text the clients show next to the model.
+    notice: str
 
 
 class VoiceProgress(BaseModel):
@@ -60,11 +62,14 @@ class VoiceStatusResponse(BaseModel):
     ``downloading`` | ``verifying`` | ``ready`` | ``failed``. ``progress`` is
     set while ``downloading``; ``error`` while ``failed``; ``speed_factor``
     (seconds of speech transcribed per second of CPU time, from the install
-    self-test) once ``ready``.
+    self-test) once ``ready``. ``repairing`` is true while an enabled voice
+    keeps its verified model and only needs its runtime again (after a
+    Python upgrade): cancelling then stops without deleting the model.
     """
 
     state: str
     enabled: bool
+    repairing: bool
     model: VoiceModelInfo
     progress: VoiceProgress | None
     host: VoiceHostInfo

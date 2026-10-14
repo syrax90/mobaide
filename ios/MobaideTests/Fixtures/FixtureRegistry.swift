@@ -166,5 +166,14 @@ enum FixtureRegistry {
         "FirstAgentPairedPayload": runner(FirstAgentPairedPayload.self),
         // VersionDto.swift
         "VersionInfoResponse": runner(VersionInfoResponse.self),
+        // VoiceDto.swift
+        "VoiceStatusResponse": runner(VoiceStatusResponse.self),
+        "VoiceInstallRequest": runner(VoiceInstallRequest.self),
+        "VoiceDictationCreateRequest": runner(VoiceDictationCreateRequest.self),
+        "VoiceDictationResponse": runner(VoiceDictationResponse.self),
+        "VoiceDictationAudioRequest": runner(VoiceDictationAudioRequest.self),
+        "VoiceDictationAudioResponse": runner(VoiceDictationAudioResponse.self),
+        "VoiceDictationFinishRequest": runner(VoiceDictationFinishRequest.self),
+        "VoiceDictationResultResponse": runner(VoiceDictationResultResponse.self),
     ]
 }

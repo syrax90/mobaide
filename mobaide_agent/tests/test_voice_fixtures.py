@@ -6,14 +6,20 @@ Strict rule: every case survives
 ``decoded_canonical`` (the Swift re-encode, nil optionals dropped) equals the
 wire with null-valued keys recursively stripped. ``capabilities.voice`` in
 the ``VersionInfoResponse`` golden must be exactly what the agent advertises.
+Every chunk the clients would upload for ``voice/pcm16_chunks.json`` decodes
+through the agent's own chunk decoder to the pinned bytes.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import struct
 from pathlib import Path
 
 import pytest
 
+from mobaide.voice.dictation import MAX_CHUNK_BYTES, SAMPLE_RATE, _decode_chunk
 from mobaide.voice.models import (
     VOICE_CAPABILITIES,
     VoiceDictationAudioRequest,
@@ -29,6 +35,9 @@ from mobaide.voice.models import (
 # Resolved from this file, never the CWD.
 _FIXTURE_DIR = (
     Path(__file__).resolve().parents[2] / "tests" / "protocol_fixtures" / "dto" / "agent"
+)
+_PCM16_CHUNKS = (
+    Path(__file__).resolve().parents[2] / "tests" / "protocol_fixtures" / "voice" / "pcm16_chunks.json"
 )
 _MODELS = {
     "VoiceStatusResponse": VoiceStatusResponse,
@@ -90,3 +99,67 @@ def test_version_fixture_voice_capability_is_what_the_agent_advertises():
     cases = {case["name"]: case for case in _load("VersionInfoResponse")["cases"]}
 
     assert cases["voice_capability"]["wire"]["capabilities"]["voice"] == VOICE_CAPABILITIES
+
+
+def _pcm16_doc() -> dict:
+    doc = json.loads(_PCM16_CHUNKS.read_text(encoding="utf-8"))
+    assert doc["type"] == "Pcm16Chunks"
+    return doc
+
+
+def _chunk_cases():
+    for case in _pcm16_doc()["chunk_cases"]:
+        yield pytest.param(case, id=case["name"])
+
+
+def _generated_samples(generator: dict) -> list[int]:
+    out = []
+    for i in range(generator["count"]):
+        value = (i * generator["multiplier"]) % 65536
+        out.append(value - 65536 if value >= 32768 else value)
+    return out
+
+
+def test_pcm16_chunk_size_matches_what_the_agent_announces():
+    doc = _pcm16_doc()
+    rows = {row["max_chunk_bytes"]: row["chunk_bytes"] for row in doc["chunk_size"]}
+
+    assert doc["sample_rate"] == SAMPLE_RATE
+    assert rows[MAX_CHUNK_BYTES] == SAMPLE_RATE * 2
+
+
+@pytest.mark.parametrize("case", list(_chunk_cases()))
+def test_every_golden_chunk_decodes_to_its_bytes(case):
+    for chunk in case["open"] + case["final"]:
+        if "bytes_hex" not in chunk:
+            continue
+        assert "\n" not in chunk["pcm16_b64"]
+        assert _decode_chunk(chunk["pcm16_b64"]) == bytes.fromhex(chunk["bytes_hex"])
+
+
+@pytest.mark.parametrize("case", list(_chunk_cases()))
+def test_final_chunks_carry_every_sample_little_endian_in_order(case):
+    samples = case["samples"] if "samples" in case else _generated_samples(case["generator"])
+    expected = struct.pack(f"<{len(samples)}h", *samples)
+    final = case["final"]
+
+    assert [chunk["seq"] for chunk in final] == list(range(len(final)))
+    if "generator" in case:
+        assert sum(chunk["byte_length"] for chunk in final) == len(expected)
+    else:
+        assert b"".join(bytes.fromhex(chunk["bytes_hex"]) for chunk in final) == expected
+
+
+def test_generated_case_hashes_match_the_agent_decoder():
+    case = next(c for c in _pcm16_doc()["chunk_cases"] if "generator" in c)
+    pcm = struct.pack(f"<{case['generator']['count']}h", *_generated_samples(case["generator"]))
+    offset = 0
+    for chunk in case["final"]:
+        piece = pcm[offset : offset + chunk["byte_length"]]
+        offset += chunk["byte_length"]
+        text = base64.b64encode(piece).decode("ascii")
+
+        assert len(text) == chunk["b64_length"]
+        assert hashlib.sha256(text.encode("ascii")).hexdigest() == chunk["b64_sha256"]
+        assert _decode_chunk(text) == piece
+    assert offset == len(pcm)
