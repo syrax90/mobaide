@@ -241,7 +241,8 @@ Browsers also expose no ping API, unlike both mobile clients (CLA-219).
 **Resume hooks.** The session I/O channel re-asserts the cached PTY size on
 every open — the client is the sole size authority and the agent spawns at
 24×80. WEB-05's replay state machine owns two further re-assert points
-(first inbound binary while reconnecting, and `replayEnd`) and drives them
+(first inbound binary while reconnecting, and `replayEnd` for this
+client's own attach handshake only) and drives them
 through `setSize`, because its model caches the measured grid *before* the
 resize debounce and can therefore be ahead of the channel's own cache. The
 auto-scan channel sends
@@ -1027,8 +1028,10 @@ report parsed through their `write` callbacks.
 
 **Size authority.** The grid is cached before the 100 ms resize debounce and
 re-asserted at all four live triggers — socket open, first inbound binary
-of a cycle, `replayEnd`, and the tab-shown / window-focus switch-back edge
-(GH #631) — because the agent spawns every PTY at 24×80 and never reports
+of a cycle, `replayEnd` (only the one closing this client's own handshake,
+since the relay fans every attach replay out to all clients and a hidden
+retained tab must not resize the PTY back), and the tab-shown / window-focus
+switch-back edge (GH #631) — because the agent spawns every PTY at 24×80 and never reports
 back. The switch-edge trigger bypasses the same-size dedupe cache, since a
 peer client may have resized the shared PTY while this one sat idle, and
 fires only while already live — every non-live state already re-asserts on

@@ -21,6 +21,11 @@
  *    ordering, and the `ESC[3J` is what stops the replay stacking on top of
  *    pre-drop history.
  * 3. **`'e'` is guarded on `inReplay`** so a stray end marker is a no-op.
+ *
+ * The relay fans every handshake out to all clients attached to the session,
+ * so a span can belong to another client's attach. Only the first `'e'` after
+ * this socket connected re-asserts the grid; answering a foreign replay would
+ * resize the PTY back to this tab's grid.
  */
 import type { TerminalInboundFrame } from '../protocol/terminalCodec';
 
@@ -46,6 +51,8 @@ export type TerminalConnectionState = 'connecting' | 'replaying' | 'live';
 export interface ReplayState {
   connection: TerminalConnectionState;
   inReplay: boolean;
+  /** Set on connect, consumed by the next `'e'`: that span is our own handshake. */
+  ownReplayPending: boolean;
 }
 
 export type ReplayEffect =
@@ -54,7 +61,7 @@ export type ReplayEffect =
   | { kind: 'write'; payload: Uint8Array }
   /** Raw `s` frame JSON; the caller decodes and stores it. */
   | { kind: 'state'; json: string }
-  /** Entered live: re-assert the cached grid size. */
+  /** Re-assert the cached grid size: on connect and at the end of our own replay. */
   | { kind: 'enterLive' }
   /** The replay span closed; the caller reveals live once the writes drain. */
   | { kind: 'replayFinished' };
@@ -65,7 +72,7 @@ export interface ReplayTransition {
 }
 
 export function initialReplayState(): ReplayState {
-  return { connection: 'connecting', inReplay: false };
+  return { connection: 'connecting', inReplay: false, ownReplayPending: false };
 }
 
 /**
@@ -83,13 +90,13 @@ export function reduceInboundFrame(
   let next = state;
 
   if (next.connection === 'connecting') {
-    next = { ...next, connection: 'live' };
+    next = { ...next, connection: 'live', ownReplayPending: true };
     effects.push({ kind: 'enterLive' });
   }
 
   switch (frame?.kind) {
     case 'replayStart':
-      next = { connection: 'replaying', inReplay: true };
+      next = { ...next, connection: 'replaying', inReplay: true };
       effects.push({ kind: 'wipe' });
       break;
     case 'output':
@@ -104,8 +111,10 @@ export function reduceInboundFrame(
       break;
     case 'replayEnd':
       if (next.inReplay) {
-        next = { connection: 'live', inReplay: false };
-        effects.push({ kind: 'replayFinished' }, { kind: 'enterLive' });
+        const own = next.ownReplayPending;
+        next = { connection: 'live', inReplay: false, ownReplayPending: false };
+        effects.push({ kind: 'replayFinished' });
+        if (own) effects.push({ kind: 'enterLive' });
       }
       break;
     default:
@@ -123,5 +132,5 @@ export function reduceInboundFrame(
  * overlay would clear a replay early.
  */
 export function reduceDisconnected(): ReplayState {
-  return { connection: 'connecting', inReplay: false };
+  return { connection: 'connecting', inReplay: false, ownReplayPending: false };
 }
