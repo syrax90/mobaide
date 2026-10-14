@@ -2864,6 +2864,368 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "VoiceDictationAudioRequest": {
+        "properties": {
+          "pcm16_b64": {
+            "title": "Pcm16 B64",
+            "type": "string"
+          },
+          "seq": {
+            "minimum": 0.0,
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "pcm16_b64"
+        ],
+        "title": "VoiceDictationAudioRequest",
+        "type": "object"
+      },
+      "VoiceDictationAudioResponse": {
+        "properties": {
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "duration_ms"
+        ],
+        "title": "VoiceDictationAudioResponse",
+        "type": "object"
+      },
+      "VoiceDictationCreateRequest": {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "title": "VoiceDictationCreateRequest",
+        "type": "object"
+      },
+      "VoiceDictationFinishRequest": {
+        "properties": {
+          "last_seq": {
+            "minimum": -1.0,
+            "title": "Last Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "last_seq"
+        ],
+        "title": "VoiceDictationFinishRequest",
+        "type": "object"
+      },
+      "VoiceDictationResponse": {
+        "properties": {
+          "dictation_id": {
+            "title": "Dictation Id",
+            "type": "string"
+          },
+          "max_chunk_bytes": {
+            "title": "Max Chunk Bytes",
+            "type": "integer"
+          },
+          "max_seconds": {
+            "title": "Max Seconds",
+            "type": "integer"
+          },
+          "sample_rate": {
+            "title": "Sample Rate",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dictation_id",
+          "sample_rate",
+          "max_seconds",
+          "max_chunk_bytes"
+        ],
+        "title": "VoiceDictationResponse",
+        "type": "object"
+      },
+      "VoiceDictationResultResponse": {
+        "description": "``state`` is ``done`` (``text`` set) or ``transcribing`` (call\n``finish`` again).",
+        "properties": {
+          "dictation_id": {
+            "title": "Dictation Id",
+            "type": "string"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "required": [
+          "dictation_id",
+          "state",
+          "text",
+          "duration_ms"
+        ],
+        "title": "VoiceDictationResultResponse",
+        "type": "object"
+      },
+      "VoiceErrorInfo": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "VoiceErrorInfo",
+        "type": "object"
+      },
+      "VoiceHostInfo": {
+        "properties": {
+          "cpu_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Count"
+          },
+          "disk_free_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Free Bytes"
+          },
+          "ram_total_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ram Total Bytes"
+          },
+          "reasons": {
+            "items": {
+              "$ref": "#/components/schemas/VoiceHostReason"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "recommendation": {
+            "title": "Recommendation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ram_total_bytes",
+          "disk_free_bytes",
+          "cpu_count",
+          "recommendation",
+          "reasons"
+        ],
+        "title": "VoiceHostInfo",
+        "type": "object"
+      },
+      "VoiceHostReason": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "VoiceHostReason",
+        "type": "object"
+      },
+      "VoiceInstallRequest": {
+        "properties": {
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          }
+        },
+        "title": "VoiceInstallRequest",
+        "type": "object"
+      },
+      "VoiceModelInfo": {
+        "properties": {
+          "disk_bytes": {
+            "title": "Disk Bytes",
+            "type": "integer"
+          },
+          "download_bytes": {
+            "title": "Download Bytes",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "languages": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Languages",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ram_bytes": {
+            "title": "Ram Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "languages",
+          "download_bytes",
+          "disk_bytes",
+          "ram_bytes"
+        ],
+        "title": "VoiceModelInfo",
+        "type": "object"
+      },
+      "VoiceProgress": {
+        "properties": {
+          "done_bytes": {
+            "title": "Done Bytes",
+            "type": "integer"
+          },
+          "total_bytes": {
+            "title": "Total Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "done_bytes",
+          "total_bytes"
+        ],
+        "title": "VoiceProgress",
+        "type": "object"
+      },
+      "VoiceStatusResponse": {
+        "description": "``GET /api/voice/status`` and the ``voice.changed`` event payload.\n\n``state``: ``unsupported`` | ``not_installed`` | ``queued`` |\n``downloading`` | ``verifying`` | ``ready`` | ``failed``. ``progress`` is\nset while ``downloading``; ``error`` while ``failed``; ``speed_factor``\n(seconds of speech transcribed per second of CPU time, from the install\nself-test) once ``ready``.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VoiceErrorInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "host": {
+            "$ref": "#/components/schemas/VoiceHostInfo"
+          },
+          "model": {
+            "$ref": "#/components/schemas/VoiceModelInfo"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VoiceProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "speed_factor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speed Factor"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "enabled",
+          "model",
+          "progress",
+          "host",
+          "speed_factor",
+          "error"
+        ],
+        "title": "VoiceStatusResponse",
+        "type": "object"
       }
     }
   },
@@ -4988,6 +5350,304 @@
         "summary": "Version Info",
         "tags": [
           "version"
+        ]
+      }
+    },
+    "/api/voice/dictations": {
+      "post": {
+        "operationId": "voice_dictation_create_api_voice_dictations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/VoiceDictationCreateRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceDictationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Voice Dictation Create",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/dictations/{dictation_id}": {
+      "delete": {
+        "operationId": "voice_dictation_delete_api_voice_dictations__dictation_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dictation_id",
+            "required": true,
+            "schema": {
+              "title": "Dictation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Voice Dictation Delete",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/dictations/{dictation_id}/audio": {
+      "post": {
+        "operationId": "voice_dictation_audio_api_voice_dictations__dictation_id__audio_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dictation_id",
+            "required": true,
+            "schema": {
+              "title": "Dictation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceDictationAudioRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceDictationAudioResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Voice Dictation Audio",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/dictations/{dictation_id}/finish": {
+      "post": {
+        "operationId": "voice_dictation_finish_api_voice_dictations__dictation_id__finish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dictation_id",
+            "required": true,
+            "schema": {
+              "title": "Dictation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceDictationFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceDictationResultResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Voice Dictation Finish",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/install": {
+      "post": {
+        "operationId": "voice_install_api_voice_install_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/VoiceInstallRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Voice Install",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/install/cancel": {
+      "post": {
+        "operationId": "voice_install_cancel_api_voice_install_cancel_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Voice Install Cancel",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/model": {
+      "delete": {
+        "operationId": "voice_remove_api_voice_model_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Voice Remove",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/voice/status": {
+      "get": {
+        "operationId": "voice_status_api_voice_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Voice Status",
+        "tags": [
+          "voice"
         ]
       }
     },

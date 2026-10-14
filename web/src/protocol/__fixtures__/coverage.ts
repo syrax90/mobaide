@@ -73,6 +73,13 @@ const OWNER = {
    * round trip would be a second, staler copy of what is already on screen.
    */
   unusedByClients: 'no client consumes this endpoint',
+  /**
+   * The agent's on-PC voice input API (#736). The web, Android and iOS halves —
+   * mic capture, the enable/cost screen and the dictation upload — are #737,
+   * which decides per shape between the generated types and a Zod mirror
+   * (`VoiceStatusResponse` also rides the `voice.changed` event).
+   */
+  voice: '#737 — voice input clients',
 } as const;
 
 /** Fixture files this milestone's tests read and assert. */
@@ -148,6 +155,14 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/StopScanRequest.json': OWNER.generated,
   'dto/agent/TokenRequest.json': OWNER.generated,
   'dto/agent/TokenResponse.json': OWNER.generated,
+  'dto/agent/VoiceDictationAudioRequest.json': OWNER.voice,
+  'dto/agent/VoiceDictationAudioResponse.json': OWNER.voice,
+  'dto/agent/VoiceDictationCreateRequest.json': OWNER.voice,
+  'dto/agent/VoiceDictationFinishRequest.json': OWNER.voice,
+  'dto/agent/VoiceDictationResponse.json': OWNER.voice,
+  'dto/agent/VoiceDictationResultResponse.json': OWNER.voice,
+  'dto/agent/VoiceInstallRequest.json': OWNER.voice,
+  'dto/agent/VoiceStatusResponse.json': OWNER.voice,
 
   'dto/central/AgentSummaryResponse.json': OWNER.generated,
   'dto/central/CancelAccountDeletionResponse.json': OWNER.generated,

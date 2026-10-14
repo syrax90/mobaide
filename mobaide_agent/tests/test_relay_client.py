@@ -4167,6 +4167,7 @@ class TestProxyVersionCapabilities:
         hand-rolls the shape instead of calling the shared builder, this fails.
         """
         from mobaide.core.cli_launcher import build_cli_capabilities
+        from mobaide.voice.models import VOICE_CAPABILITIES
 
         mock_app_state.cli_launchers = {
             "claude": self._launcher(resolves=True),
@@ -4196,6 +4197,7 @@ class TestProxyVersionCapabilities:
                 "delete_remote": True,
                 "conflicts": True,
             },
+            "voice": VOICE_CAPABILITIES,
         }
 
     async def test_missing_cli_launchers_attr_degrades_to_empty_cli(
@@ -4204,6 +4206,8 @@ class TestProxyVersionCapabilities:
         """An ``app_state`` without ``cli_launchers`` (partially-built state)
         must not crash the version branch — ``getattr(..., {})`` falls back to
         an empty registry, yielding ``capabilities.cli == {}``."""
+        from mobaide.voice.models import VOICE_CAPABILITIES
+
         if hasattr(mock_app_state, "cli_launchers"):
             del mock_app_state.cli_launchers
         ws = AsyncMock()
@@ -4229,6 +4233,7 @@ class TestProxyVersionCapabilities:
                 "delete_remote": True,
                 "conflicts": True,
             },
+            "voice": VOICE_CAPABILITIES,
         }
 
     async def test_version_body_keeps_core_fields(self, client, mock_app_state):
