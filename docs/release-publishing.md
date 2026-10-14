@@ -7,10 +7,9 @@ curl -fsSL https://get.mobaide.com/install.sh | bash
 irm https://get.mobaide.com/install.ps1 | iex
 ```
 
-reach end users, the GitHub Actions workflow that auto-publishes them
-when `deploy/install.{sh,ps1}` or `deploy/windows_launcher.py` change
-on `main`, and the manual override an operator can fall back to if the
-automation does not fire.
+reach end users, the GitHub Actions workflow that publishes them after
+every successful agent release, and the manual override an operator can
+fall back to if the automation does not fire.
 
 For the rest of the release machinery (component versioning, signed
 manifests, the staged-binary auto-updater on already-installed agents)
@@ -24,9 +23,10 @@ the agent.
 deploy/install.{sh,ps1}     canonical source. PRs edit these.
 deploy/windows_launcher.py   per-user Scheduled-Task supervisor (stdlib); co-versioned with install.ps1.
         │
-        │ publish-gh-pages.yml on push: main with paths
-        │ deploy/install.{sh,ps1} or deploy/windows_launcher.py.
-        │ workflow_dispatch is the manual fallback when the chain breaks.
+        │ publish-gh-pages.yml via workflow_run after "Release agent"
+        │ succeeds, copying the files from the released (agent-v*) commit.
+        │ workflow_dispatch from main or an agent-v* tag is the manual
+        │ fallback.
         ▼
 gh-pages branch root        also holds CNAME and .nojekyll. This is the
         │                   actual GitHub Pages source.
@@ -37,31 +37,47 @@ https://get.mobaide.com/    public CDN. The CNAME at the gh-pages root
                             provisions the custom domain.
 ```
 
-Three places hold copies of these files: `deploy/` on `main` and
-the root of the `gh-pages` branch. The second is auto-published from
-`deploy/` by `publish-gh-pages.yml` on every push to `main` that
-touches `deploy/install.{sh,ps1}` or `deploy/windows_launcher.py`.
+Two places hold copies of these files: `deploy/` on `main` and the
+root of the `gh-pages` branch. The second is published from `deploy/`
+by `publish-gh-pages.yml` once an agent release completes: the workflow
+runs on the `workflow_run` event of `release-agent.yml` (only when that
+run succeeded, i.e. after the signed manifest is verified on
+central_server) and copies the three files from the run's `head_sha` —
+the commit the `agent-v*` tag points at, not the current `main` tip.
+
+Consequences:
+
+* Merging a change to `deploy/install.{sh,ps1}` or
+  `deploy/windows_launcher.py` does **not** publish it. It ships with the
+  next agent release (release-please PR merge or `release-agent-manual.yml`),
+  so the served installer never runs ahead of the agent manifest it reads.
+* An installer-only fix that cannot wait for an agent release is shipped
+  with a manual `workflow_dispatch` run from `main`.
+* Server, Android, and web releases never touch `gh-pages`.
 
 ## When to use the manual fallback
 
-`publish-gh-pages.yml` listens for `push: main` events that touch
-`deploy/install.{sh,ps1}` or `deploy/windows_launcher.py`. Direct PR
-merges trigger it cleanly under the default `GITHUB_TOKEN`, so the
-common path is fully automatic.
+The preferred override is a `workflow_dispatch` run of "Publish install
+scripts to gh-pages" (Actions tab, or
+`gh workflow run publish-gh-pages.yml --ref main`). It publishes the
+files at the selected ref; the workflow refuses any ref other than
+`main` or an `agent-v*` tag, so a feature branch's installer cannot be
+published by accident. Use it to ship an installer-only hotfix ahead of
+the next agent release, or to re-publish a release whose
+`workflow_run` did not fire.
 
-Use the runbook below only when the workflow did not fire (transient
-Actions outage, paths filter mismatch from a partial revert), an
-emergency override is needed, or you need to reproduce the publish
-locally for debugging.
+Use the git runbook below only when Actions itself is unavailable, or
+you need to reproduce the publish locally for debugging.
 
 ## What to watch after a release
 
-The Actions tab is the source of truth. After any merge that touches
-`deploy/install.{sh,ps1}` or `deploy/windows_launcher.py`, confirm that "Publish install scripts to
-gh-pages" ran green on the resulting `main` SHA. There is no automated
-alarm: if the workflow ever silently skips, the served scripts will
-lag the canonical source until the next push or a `workflow_dispatch`
-nudge.
+The Actions tab is the source of truth. After every agent release,
+confirm that "Publish install scripts to gh-pages" ran green right after
+"Release agent" (it reports "nothing to publish" when the release did
+not change the installers). A failed "Release agent" run skips the
+publish on purpose. There is no automated alarm: if the workflow ever
+silently skips, the served scripts lag until the next agent release or
+a `workflow_dispatch` nudge.
 
 ## Manual fallback runbook
 
@@ -141,7 +157,7 @@ infrastructure — they should not move:
 
 | File | Purpose | Touched by sync? |
 |---|---|---|
-| `install.sh` | Linux/macOS bootstrap. Mirrors `deploy/install.sh` from `main`. | Yes — every sync. |
+| `install.sh` | Linux/macOS bootstrap. Mirrors `deploy/install.sh` at the last published agent release. | Yes — every sync. |
 | `install.ps1` | Windows bootstrap. Mirrors `deploy/install.ps1`. | Yes — every sync. |
 | `windows_launcher.py` | Stdlib-only per-user Scheduled-Task supervisor downloaded by `install.ps1` into `<prefix>\svc\mobaide_launcher.py`. Co-versioned with `install.ps1` so supervisor API changes ship atomically with the installer. Mirrors `deploy/windows_launcher.py`. | Yes — every sync. |
 | `CNAME` | Single line `get.mobaide.com`. Provisions the custom domain. | No. |

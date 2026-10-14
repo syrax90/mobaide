@@ -49,8 +49,8 @@ $Script:InstallUrl = if ($env:MOBAIDE_AGENT_INSTALL_URL) {
     "https://get.mobaide.com/install.ps1"
 }
 # Scheduled-Task supervisor URL. Co-versioned with install.ps1 itself: the
-# publish-gh-pages workflow ships both files together on every push to
-# main, so an installer change that depends on a new supervisor API can
+# publish-gh-pages workflow ships both files together after every agent
+# release, so an installer change that depends on a new supervisor API can
 # never desync from the module it ships against. Loaded into the Scheduled
 # Task at install time and stored at <prefix>\svc\mobaide_launcher.py —
 # outside any release dir, so the registered task ``Execute`` path stays

@@ -782,9 +782,11 @@ Windows (self-elevates via UAC if launched from a normal PowerShell — no need 
 irm https://get.mobaide.com/install.ps1 | iex
 ```
 
-Both scripts are auto-published from `deploy/` to the root of the
+Both scripts are published from `deploy/` to the root of the
 `gh-pages` branch (the actual GitHub Pages source for
-`get.mobaide.com`) by `publish-gh-pages.yml` — see
+`get.mobaide.com`) by `publish-gh-pages.yml` after each successful agent
+release, taken from the released commit — merging an installer change
+alone does not publish it; see
 [release-publishing.md](release-publishing.md) for the runbook. They:
 
 1. Detect the OS and locate / create `<prefix>` (`/opt/mobaide`,
