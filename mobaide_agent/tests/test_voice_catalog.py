@@ -40,6 +40,7 @@ def _pin_host(
     gil_disabled: int = 0,
     libc: tuple[str, str] = ("glibc", "2.31"),
     win_platform: str = "win-amd64",
+    maxsize: int = 2**63 - 1,
 ) -> None:
     monkeypatch.setattr(
         catalog,
@@ -48,6 +49,7 @@ def _pin_host(
             platform=platform,
             version_info=(*version, 0, "final", 0),
             implementation=SimpleNamespace(name=implementation),
+            maxsize=maxsize,
         ),
     )
     monkeypatch.setattr(
@@ -253,3 +255,31 @@ class TestHostMachine:
 
         assert target is not None
         assert target.key.endswith("win_amd64")
+
+    @pytest.mark.parametrize(
+        ("platform", "machine"),
+        [("linux", "aarch64"), ("linux", "x86_64"), ("darwin", "arm64")],
+    )
+    def test_32_bit_python_on_a_64_bit_kernel_is_platform_unsupported(
+        self, monkeypatch, platform, machine
+    ):
+        """``platform.machine()`` names the kernel: 32-bit Raspberry Pi OS on a
+        Pi 4/5 reports ``aarch64`` but cannot load the 64-bit wheels."""
+        _pin_host(monkeypatch, platform=platform, machine=machine, maxsize=2**31 - 1)
+
+        assert resolve_runtime() == (None, "platform_unsupported")
+
+    @pytest.mark.parametrize(
+        ("platform", "machine", "core_tag"),
+        [("linux", "aarch64", "manylinux2014_aarch64"), ("linux", "x86_64", "manylinux2014_x86_64")],
+    )
+    def test_64_bit_python_on_a_64_bit_kernel_still_resolves(
+        self, monkeypatch, platform, machine, core_tag
+    ):
+        _pin_host(monkeypatch, platform=platform, machine=machine, maxsize=2**63 - 1)
+
+        target, reason = resolve_runtime()
+
+        assert reason is None
+        assert target is not None
+        assert target.key.endswith(core_tag)

@@ -591,7 +591,7 @@ Dictation is transcribed **on the agent's PC**, never on a Mobaide server. It is
 | Disk | up to ~730 MB |
 | Memory | none while idle; up to ~2 GB while a dictation runs (1.9 GB peak measured on an Apple M4 over a 115 s dictation) |
 | Warning thresholds | apps warn (`low_resources`) below 11.5 GiB RAM, 4 logical CPUs or 2 GiB free disk; the user may still enable |
-| Unsupported | Python other than CPython 3.12–3.14 (or a free-threaded build), CPUs other than x86-64/ARM64, Linux with musl or glibc < 2.17, or too little free disk |
+| Unsupported | Python other than 64-bit CPython 3.12–3.14 (a 32-bit or free-threaded build), CPUs other than x86-64/ARM64, Linux with musl or glibc < 2.17, or too little free disk |
 
 **How it runs.** A helper process (`python -P -m mobaide.voice.worker`, same interpreter as the agent) starts on the first dictation, at below-normal priority with 2 inference threads and no console window, and exits after 3 idle minutes, which returns all of its memory to the OS; it is also recycled after an hour or 500 requests. The agent process itself never loads the model. The helper reads stdin from the agent and exits when the agent goes away, so it is never left behind. While a dictation is open, the auto-updater defers its restart (a forced update, and the `mobaide-agent update` CLI, do not wait).
 

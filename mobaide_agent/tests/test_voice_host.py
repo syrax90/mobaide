@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections import namedtuple
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -137,6 +138,23 @@ def test_every_runtime_reason_has_a_message(code):
 
     assert reason.code == code
     assert reason.message
+
+
+@pytest.mark.parametrize(("maxsize", "bits"), [(2**31 - 1, 32), (2**63 - 1, 64)])
+def test_platform_unsupported_names_the_interpreter_bitness(monkeypatch, maxsize, bits):
+    monkeypatch.setattr(
+        host, "sys", SimpleNamespace(version_info=(3, 12, 4), platform="linux", maxsize=maxsize)
+    )
+    monkeypatch.setattr(
+        host, "platform", SimpleNamespace(system=lambda: "Linux", machine=lambda: "aarch64")
+    )
+
+    reason = host.runtime_reason("platform_unsupported")
+
+    assert reason.message == (
+        "Voice input supports 64-bit Python on Windows, macOS and Linux (x86-64 or "
+        f"ARM64); this agent runs {bits}-bit Python on Linux aarch64."
+    )
 
 
 def test_free_disk_walks_up_to_the_nearest_existing_ancestor(monkeypatch, tmp_path):

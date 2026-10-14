@@ -35,8 +35,8 @@ _RUNTIME_REASONS = {
         "this agent runs Python {python}."
     ),
     "platform_unsupported": (
-        "Voice input supports Windows, macOS and Linux on x86-64 or ARM64; "
-        "this agent runs on {platform}."
+        "Voice input supports 64-bit Python on Windows, macOS and Linux (x86-64 or "
+        "ARM64); this agent runs {bits}-bit Python on {platform}."
     ),
     "libc_unsupported": "Voice input on Linux needs glibc 2.17 or newer (musl is not supported).",
 }
@@ -109,6 +109,7 @@ def runtime_reason(code: str) -> HostReason:
     message = template.format(
         python=".".join(str(p) for p in sys.version_info[:3]),
         platform=f"{platform.system() or sys.platform} {platform.machine()}".strip(),
+        bits=64 if sys.maxsize > 2**32 else 32,
     )
     return HostReason(code=code, message=message)
 

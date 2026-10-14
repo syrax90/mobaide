@@ -133,6 +133,11 @@ def _host_machine() -> str:
         # ``platform.machine()`` (the OS architecture) would not pick.
         plat = sysconfig.get_platform()
         return plat.split("-", 1)[1].lower() if "-" in plat else "x86"
+    # Every pinned wheel is 64-bit, while ``platform.machine()`` names the
+    # kernel's architecture: a 32-bit Python on a 64-bit kernel (32-bit
+    # Raspberry Pi OS on a Pi 4/5, an armhf or i386 container) must not match.
+    if sys.maxsize <= 2**32:
+        return "32bit"
     machine = platform.machine().lower()
     if sys.platform.startswith("linux") and machine == "arm64":
         return "aarch64"
