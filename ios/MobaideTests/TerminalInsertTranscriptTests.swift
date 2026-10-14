@@ -75,6 +75,25 @@ final class TerminalInsertTranscriptTests: XCTestCase {
         XCTAssertEqual(model.inputText, "👍 all done")
     }
 
+    func testReplacedTextForgetsTheOldSelectionSoTheTranscriptAppends() {
+        let model = model(text: "old draft", selection: 2..<2)
+
+        model.setInput("new text", requestFocus: false)
+        model.insertTranscript("hi")
+
+        XCTAssertEqual(model.inputText, "new text hi")
+    }
+
+    func testAfterSendingTheNextTranscriptAppendsToTheNewDraft() {
+        let model = model(text: "ls -la", selection: 2..<2)
+
+        model.sendInput("ls -la")
+        model.inputText = "git"
+        model.insertTranscript("status")
+
+        XCTAssertEqual(model.inputText, "git status")
+    }
+
     func testABlankTranscriptChangesNothing() {
         let model = model(text: "keep me", selection: 4..<4)
         model.hideComposer()

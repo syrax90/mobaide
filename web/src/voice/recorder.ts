@@ -73,6 +73,11 @@ export class WebAudioRecorder implements Recorder {
     }
     const context = new AudioContext();
     this.context = context;
+    // Listen from the click on: a tab hidden while the microphone is still
+    // opening must end the start too, or the mic would go live in the background.
+    this.sink = sink;
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
+    window.addEventListener('pagehide', this.onPageHide);
     try {
       let stream: MediaStream;
       try {
@@ -111,12 +116,9 @@ export class WebAudioRecorder implements Recorder {
       this.node = node;
       this.silent = silent;
       this.resampler = new Resampler(context.sampleRate, sampleRate);
-      this.sink = sink;
       node.port.onmessage = (event: MessageEvent<WorkletMessage>) => {
         this.onWorkletMessage(event.data);
       };
-      document.addEventListener('visibilitychange', this.onVisibilityChange);
-      window.addEventListener('pagehide', this.onPageHide);
       context.addEventListener('statechange', this.onContextStateChange);
       for (const track of stream.getAudioTracks()) {
         track.addEventListener('ended', this.onTrackEnded);

@@ -356,6 +356,7 @@ final class TerminalSessionModel {
         enqueue(.submit("\u{01}\u{0B}" + body))
         setFollowMode(true)
         inputText = ""
+        composerSelection = nil
     }
 
     /// The single definition of "is there something to send", shared by the
@@ -669,6 +670,8 @@ final class TerminalSessionModel {
 
     func setInput(_ text: String, requestFocus: Bool) {
         inputText = text
+        // The old offsets belong to the replaced text; unknown inserts at the end.
+        composerSelection = nil
         if requestFocus {
             revealComposer()
         }
