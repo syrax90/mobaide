@@ -51,7 +51,7 @@ While `queued`, clients also poll the status every 4 s, because agents older tha
 - **Interruptions.** Backgrounding the app, hiding the tab, a phone call, an audio route change or an unplugged mic all **stop and transcribe** what was captured. Leaving the session or switching agents **cancels**.
 - **Insertion.**
   - **Mobile:** the transcript goes at the composer's cursor, with a space added where needed, and the composer is focused. On iOS 17 it is appended, because SwiftUI exposes the selection only from iOS 18.
-  - **Web:** an editable review field, then **Insert**, which uses the Templates paste path (a sanitized bracketed paste, never Enter). Claude Code may display long text as `[Pasted text]`.
+  - **Web:** an editable review field, then **Insert**, which uses the Templates paste path (a sanitized bracketed paste, never Enter). Claude Code may display long text as `[Pasted text]`. Once the session has ended, the toolbar mic and **Record again** are disabled, because a transcript can only be pasted into a running session (an unknown status, such as while connecting, keeps them enabled).
 
 ## Permissions, privacy and stores
 

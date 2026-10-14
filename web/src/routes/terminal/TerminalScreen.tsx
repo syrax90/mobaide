@@ -205,6 +205,9 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // send path that the model silently swallows. It is a time-superset of the
   // model's gate, so nothing that would have been allowed gets disabled.
   const canSend = view.connection === 'live' && !view.replayPainting && running;
+  // A transcript can only be pasted into a running session. An unknown status
+  // (still connecting) or a reconnect keeps recording available.
+  const canRecord = view.status === null || running;
 
   // Ctrl+R is a chord people press in a terminal on purpose, and a reload costs
   // the whole replay. See `useReloadGuard` for why this is capture-phase and
@@ -304,7 +307,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
           <VoiceButton
             mode={micMode}
             status={voiceStatus.data}
-            disabled={false}
+            disabled={micMode === 'ready' && !canRecord}
             onClick={() => {
               // Synchronous on purpose: the recorder opens audio inside this
               // click's user activation.
@@ -555,6 +558,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
           state={dictation.state}
           agentName={agentName}
           canSend={canSend}
+          canRecord={canRecord}
           onStop={dictation.stop}
           onCancel={dictation.cancel}
           onRetry={dictation.retry}

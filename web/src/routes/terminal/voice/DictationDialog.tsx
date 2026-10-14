@@ -12,6 +12,8 @@ interface DictationDialogProps {
   state: Exclude<DictationState, { kind: 'idle' }>;
   agentName: string;
   canSend: boolean;
+  /** False once the session has ended: a new recording could never be inserted. */
+  canRecord: boolean;
   onStop: () => void;
   onCancel: () => void;
   onRetry: () => void;
@@ -51,6 +53,7 @@ export function DictationDialog({
   state,
   agentName,
   canSend,
+  canRecord,
   onStop,
   onCancel,
   onRetry,
@@ -198,7 +201,12 @@ export function DictationDialog({
           <button type="button" className="button" onClick={onDismiss}>
             Close
           </button>
-          <button type="button" className="button button-primary" onClick={onRecordAgain}>
+          <button
+            type="button"
+            className="button button-primary"
+            disabled={!canRecord}
+            onClick={onRecordAgain}
+          >
             Record again
           </button>
         </>
@@ -228,7 +236,12 @@ export function DictationDialog({
               Retry
             </button>
           ) : (
-            <button type="button" className="button button-primary" onClick={onRecordAgain}>
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={!canRecord}
+              onClick={onRecordAgain}
+            >
               Record again
             </button>
           )}
