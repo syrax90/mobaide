@@ -14,7 +14,33 @@ const output = (...bytes: number[]): TerminalInboundFrame => ({
   payload: Uint8Array.from(bytes),
 });
 
-const LIVE: ReplayState = { connection: 'live', inReplay: false };
+const LIVE: ReplayState = { connection: 'live', inReplay: false, ownReplayPending: false };
+
+/** Live on a fresh socket whose own handshake has not closed yet. */
+const LIVE_AWAITING_OWN: ReplayState = { ...LIVE, ownReplayPending: true };
+
+const REPLAYING: ReplayState = { connection: 'replaying', inReplay: true, ownReplayPending: false };
+
+const play = (
+  start: ReplayState,
+  frames: TerminalInboundFrame[],
+): { state: ReplayState; seen: string[] } => {
+  const seen: string[] = [];
+  let state = start;
+  for (const frame of frames) {
+    const transition = reduceInboundFrame(state, frame);
+    state = transition.state;
+    seen.push(...kinds(transition.effects));
+  }
+  return { state, seen };
+};
+
+const HANDSHAKE: TerminalInboundFrame[] = [
+  { kind: 'state', json: '{"status":"running"}' },
+  { kind: 'replayStart' },
+  output(0x61),
+  { kind: 'replayEnd' },
+];
 
 const kinds = (effects: ReplayEffect[]): string[] =>
   effects.map((effect) => effect.kind);
@@ -40,14 +66,14 @@ describe('reduceInboundFrame', () => {
     });
 
     expect(kinds(effects)).toEqual(['enterLive', 'wipe']);
-    expect(state).toEqual({ connection: 'replaying', inReplay: true });
+    expect(state).toEqual({ ...REPLAYING, ownReplayPending: true });
   });
 
   it('upgrades a connecting channel even when the frame did not decode', () => {
     const { state, effects } = reduceInboundFrame(initialReplayState(), null);
 
     expect(kinds(effects)).toEqual(['enterLive']);
-    expect(state).toEqual(LIVE);
+    expect(state).toEqual(LIVE_AWAITING_OWN);
   });
 
   it('does not re-announce live for later frames on an open channel', () => {
@@ -60,13 +86,10 @@ describe('reduceInboundFrame', () => {
   it('writes nothing for the empty output frame an empty ring produces', () => {
     // The agent always emits at least one `o` inside the span, even with
     // nothing to replay.
-    const { state, effects } = reduceInboundFrame(
-      { connection: 'replaying', inReplay: true },
-      output(),
-    );
+    const { state, effects } = reduceInboundFrame(REPLAYING, output());
 
     expect(effects).toEqual([]);
-    expect(state).toEqual({ connection: 'replaying', inReplay: true });
+    expect(state).toEqual(REPLAYING);
   });
 
   it('hands the raw state json to the caller', () => {
@@ -85,14 +108,49 @@ describe('reduceInboundFrame', () => {
     expect(state).toEqual(LIVE);
   });
 
-  it('closes a real span and re-enters live', () => {
+  it('closes its own span and re-asserts the grid', () => {
     const { state, effects } = reduceInboundFrame(
-      { connection: 'replaying', inReplay: true },
+      { ...REPLAYING, ownReplayPending: true },
       { kind: 'replayEnd' },
     );
 
     expect(kinds(effects)).toEqual(['replayFinished', 'enterLive']);
     expect(state).toEqual(LIVE);
+  });
+
+  it('closes a foreign span without re-asserting the grid', () => {
+    // The relay fans another client's attach handshake out to this socket too.
+    // Answering its `'e'` with our grid would resize the PTY back from under
+    // the client that just opened the session.
+    const { state, effects } = reduceInboundFrame(REPLAYING, { kind: 'replayEnd' });
+
+    expect(kinds(effects)).toEqual(['replayFinished']);
+    expect(state).toEqual(LIVE);
+  });
+
+  it('stays quiet for a second client attaching after our own handshake', () => {
+    const own = play(initialReplayState(), HANDSHAKE);
+    const foreign = play(own.state, HANDSHAKE.slice(1));
+
+    expect(own.seen.filter((kind) => kind === 'enterLive')).toHaveLength(2);
+    expect(foreign.seen).toEqual(['wipe', 'write', 'replayFinished']);
+    expect(foreign.state).toEqual(LIVE);
+  });
+
+  it('re-arms the re-assert for the handshake after a reconnect', () => {
+    const own = play(initialReplayState(), HANDSHAKE);
+    const foreign = play(own.state, HANDSHAKE.slice(1));
+    const reconnected = play(reduceDisconnected(), HANDSHAKE);
+
+    expect(foreign.seen).not.toContain('enterLive');
+    expect(reconnected.seen).toEqual([
+      'enterLive',
+      'state',
+      'wipe',
+      'write',
+      'replayFinished',
+      'enterLive',
+    ]);
   });
 
   it('walks the whole agent handshake', () => {
@@ -131,6 +189,10 @@ describe('reduceDisconnected', () => {
   it('leaves any open replay span behind', () => {
     // A socket that dies mid-replay would otherwise let the next cycle's `e`
     // match a span that never finished and clear the overlay early.
-    expect(reduceDisconnected()).toEqual({ connection: 'connecting', inReplay: false });
+    expect(reduceDisconnected()).toEqual({
+      connection: 'connecting',
+      inReplay: false,
+      ownReplayPending: false,
+    });
   });
 });

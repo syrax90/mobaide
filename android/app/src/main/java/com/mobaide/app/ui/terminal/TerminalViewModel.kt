@@ -372,6 +372,13 @@ class TerminalViewModel @Inject constructor(
     /** When true, the next 'o' frame is the start of replay-buffer playback. */
     private var inReplay = false
 
+    /**
+     * Set on [WsEvent.Connected], consumed by the next REPLAY_END: that span is this
+     * socket's own handshake. The relay fans every attach handshake out to all clients,
+     * and answering another client's replay would resize the PTY back to this grid.
+     */
+    private var ownReplayPending = false
+
     private val _sessionEnded = Channel<Unit>(Channel.BUFFERED)
 
     /** Fires once when the agent proves this session no longer exists and it was
@@ -421,6 +428,7 @@ class TerminalViewModel @Inject constructor(
                 when (event) {
                     is WsEvent.Connected -> {
                         _isConnected.value = true
+                        ownReplayPending = true
                         enterLiveState()
                     }
                     is WsEvent.Disconnected -> {
@@ -520,7 +528,9 @@ class TerminalViewModel @Inject constructor(
                     // make the first live byte after any reconnect-while-
                     // unwatched blow the budget instantly, suspend again, loop.
                     unwatchedBytes = 0
-                    enterLiveState()
+                    val own = ownReplayPending
+                    ownReplayPending = false
+                    enterLiveState(reassertSize = own)
                 }
             }
             null -> { /* unknown frame type, ignore */ }
@@ -681,17 +691,17 @@ class TerminalViewModel @Inject constructor(
     }
 
     /** Single entry point into [ConnectionState.Live]. */
-    private fun enterLiveState() {
+    private fun enterLiveState(reassertSize: Boolean = true) {
         _connectionState.value = ConnectionState.Live
         // Reaching live retires the latch: an ON_START that never arrived
         // must not suppress a later, genuine screen-on nudge.
         resumedFromSuspend = false
-        resendCachedSize()
+        if (reassertSize) resendCachedSize()
     }
 
     /**
-     * Re-assert the last measured grid to the agent: on every entry into Live,
-     * and as the delivery step of every [scheduleSizeReassert] debounce.
+     * Re-assert the last measured grid to the agent: on every entry into Live except
+     * the end of another client's replay (see [ownReplayPending]), and as the delivery step of every [scheduleSizeReassert] debounce.
      *
      * The PTY is spawned at the create default (24x80) and only a resize frame
      * corrects it. The other resize trigger — a layout pass (TerminalScreen's

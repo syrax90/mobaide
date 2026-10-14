@@ -40,6 +40,8 @@ interface Harness {
   deliverFrame: (frame: Uint8Array) => void;
   /** Outbound frames of one type, in the order they reached the socket. */
   framesOfType: (typeByte: number) => Uint8Array[];
+  /** Fire the channel's armed reconnect and accept the socket it opens. */
+  reconnect: () => Promise<FakeSocket>;
 }
 
 const live: Model[] = [];
@@ -93,6 +95,14 @@ async function harness(): Promise<Harness> {
       socket.deliver(frame.buffer);
     },
     framesOfType,
+    reconnect: async () => {
+      channelTimers.runNext();
+      await settle();
+      const next = sockets[sockets.length - 1];
+      if (next === undefined || next === socket) throw new Error('no socket was reopened');
+      next.accept();
+      return next;
+    },
   };
 }
 
@@ -177,6 +187,70 @@ describe('TerminalSessionModel grid size', () => {
     deliver(0x00);
 
     expect(resizeFrames()).toHaveLength(2);
+  });
+
+  it('re-asserts at the end of its own handshake replay', async () => {
+    const { model, flushResize, resizeFrames, deliver, deliverFrame } = await harness();
+    model.term.resize(120, 40);
+    flushResize();
+    deliverFrame(stateFrame('running'));
+    deliver(TERMINAL_FRAME_TYPE.replayStart);
+    deliverFrame(outputFrame('history'));
+    const beforeEnd = resizeFrames().length;
+
+    deliver(TERMINAL_FRAME_TYPE.replayEnd);
+
+    expect(resizeFrames()).toHaveLength(beforeEnd + 1);
+    expect(resizeFrames().at(-1)).toEqual(resizeFrame(40, 120));
+  });
+
+  it('does not answer another client attaching to the same session', async () => {
+    // The relay fans every attach handshake out to all sockets on the session.
+    // A retained, hidden tab answering a phone's replay with its own grid would
+    // resize the PTY back to desktop width right after the phone opened it.
+    const { model, flushResize, resizeFrames, deliver, deliverFrame } = await harness();
+    model.term.resize(120, 40);
+    flushResize();
+    deliverFrame(stateFrame('running'));
+    deliver(TERMINAL_FRAME_TYPE.replayStart);
+    deliver(TERMINAL_FRAME_TYPE.replayEnd);
+    const afterOwn = resizeFrames().length;
+
+    deliverFrame(stateFrame('running'));
+    deliver(TERMINAL_FRAME_TYPE.replayStart);
+    deliverFrame(outputFrame('history'));
+    deliver(TERMINAL_FRAME_TYPE.replayEnd);
+
+    expect(resizeFrames()).toHaveLength(afterOwn);
+    expect(model.state.getState().connection).toBe('live');
+  });
+
+  it('re-asserts at the end of the handshake after a reconnect', async () => {
+    const { model, socket, flushResize, deliver, deliverFrame, reconnect } = await harness();
+    model.term.resize(120, 40);
+    flushResize();
+    deliverFrame(stateFrame('running'));
+    deliver(TERMINAL_FRAME_TYPE.replayStart);
+    deliver(TERMINAL_FRAME_TYPE.replayEnd);
+    deliver(TERMINAL_FRAME_TYPE.replayStart);
+    deliver(TERMINAL_FRAME_TYPE.replayEnd);
+
+    socket.serverClose(1006);
+    const next = await reconnect();
+    const resizesOnNext = (): number =>
+      next.sent.filter(
+        (frame) => frame instanceof Uint8Array && frame[0] === TERMINAL_FRAME_TYPE.resize,
+      ).length;
+    const replay = (typeByte: number): void => {
+      next.deliver(Uint8Array.from([typeByte]).buffer);
+    };
+    next.deliver(stateFrame('running').buffer);
+    replay(TERMINAL_FRAME_TYPE.replayStart);
+    const beforeEnd = resizesOnNext();
+
+    replay(TERMINAL_FRAME_TYPE.replayEnd);
+
+    expect(resizesOnNext()).toBe(beforeEnd + 1);
   });
 });
 

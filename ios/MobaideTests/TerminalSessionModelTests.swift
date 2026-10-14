@@ -171,6 +171,75 @@ final class TerminalSessionModelTests: XCTestCase {
         )
     }
 
+    private func resizeCount(_ connection: FakeWebSocketConnection) -> Int {
+        connection.sentBinaries.filter { $0.first == 0x72 }.count
+    }
+
+    private func emitHandshakeReplay(_ connection: FakeWebSocketConnection) {
+        connection.emit(.binary(Data([0x62]))) // replayStart
+        connection.emit(.binary(Data([0x6F]) + Data("history".utf8))) // output
+        connection.emit(.binary(Data([0x65]))) // replayEnd
+    }
+
+    /// A model whose measured grid is on the wire and whose own handshake has
+    /// closed: the debounced layout frame, the first-binary upgrade re-assert,
+    /// and the own `replayEnd` re-assert.
+    private func liveAfterOwnHandshake() async throws -> (TerminalSessionModel, FakeWebSocketConnection) {
+        let (model, connection) = try await connectedModel()
+        model.resize(rows: 40, cols: 120)
+        let measured = await poll { self.resizeCount(connection) == 1 }
+        XCTAssertTrue(measured, "the debounced layout frame goes out")
+
+        connection.emit(.binary(Data([0x73]) + Data(#"{"status":"running"}"#.utf8)))
+        let upgraded = await poll { self.resizeCount(connection) == 2 }
+        XCTAssertTrue(upgraded, "the first binary upgrades to live and re-asserts")
+
+        emitHandshakeReplay(connection)
+        let reasserted = await poll { self.resizeCount(connection) == 3 }
+        XCTAssertTrue(reasserted, "the end of the own handshake re-asserts the grid")
+        XCTAssertEqual(model.connectionState, .live)
+        return (model, connection)
+    }
+
+    func testOwnHandshakeReplayEndReassertsSize() async throws {
+        let (_, connection) = try await liveAfterOwnHandshake()
+        XCTAssertEqual(
+            connection.sentBinaries.filter { $0.first == 0x72 }.last,
+            Data([0x72, 0x00, 0x28, 0x00, 0x78])
+        )
+    }
+
+    /// The relay fans every attach handshake out to all sockets on the session.
+    /// A retained model answering another client's replay would resize the PTY
+    /// back to its own grid right after that client opened the session.
+    func testForeignHandshakeReplayEndSendsNoResize() async throws {
+        let (model, connection) = try await liveAfterOwnHandshake()
+
+        emitHandshakeReplay(connection)
+        // Sends are queued in order, so once this input frame is out, any
+        // re-assert the foreign `replayEnd` produced would already be ahead of it.
+        model.sendControlKey([0x03])
+        let flushed = await poll { connection.sentBinaries.last == Data([0x69, 0x03]) }
+        XCTAssertTrue(flushed)
+
+        XCTAssertEqual(resizeCount(connection), 3, "a foreign replay end is not answered")
+        XCTAssertEqual(model.connectionState, .live)
+    }
+
+    func testReconnectRearmsReplayEndReassert() async throws {
+        let (model, connection) = try await liveAfterOwnHandshake()
+        emitHandshakeReplay(connection) // foreign: consumes nothing
+
+        connection.emit(.opened) // reconnect → .connected → resend + re-arm
+        let resent = await poll { self.resizeCount(connection) == 4 }
+        XCTAssertTrue(resent, "the connect-path re-assert is unchanged")
+
+        emitHandshakeReplay(connection)
+        let reasserted = await poll { self.resizeCount(connection) == 5 }
+        XCTAssertTrue(reasserted, "the handshake after a reconnect is our own again")
+        XCTAssertEqual(model.connectionState, .live)
+    }
+
     /// The same recovery on the other entry into live — the first inbound
     /// binary upgrading out of `.reconnecting`, with no `.connected` in between
     /// to carry the re-assert.

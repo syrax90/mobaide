@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -44,6 +45,8 @@ import org.junit.Test
  *    re-asserted (bypassing the debounce and dedupe) so a PTY left at its
  *    24x80 spawn default is corrected even when the measuring layout pass
  *    settled before the socket connected. Mirrors iOS resendCachedSize().
+ *    The one exception is a REPLAY_END closing another client's attach
+ *    handshake, which the relay fans out to every socket on the session.
  * 5. onScreenVisible() over an already-Live socket re-asserts the cached size
  *    through the shared debounce, bypassing the dedupe: a peer client may
  *    have resized the shared PTY while this one was unwatched.
@@ -309,6 +312,79 @@ class TerminalViewModelResizeTest {
 
         val expected = TerminalProtocol.encodeResize(50, 120)
         verify(atLeast = 2, timeout = 2000) { connection.sendBinary(expected) }
+    }
+
+    @Test
+    fun replayEnd_ownHandshake_reassertsCachedSize() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+        vm.resize(24, 80)
+        advanceTimeBy(200)
+        runCurrent()
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+        emitReplay(this)
+
+        // Debounced layout frame, connect-time resend, own replay end.
+        verify(exactly = 3) { connection.sendBinary(TerminalProtocol.encodeResize(24, 80)) }
+    }
+
+    @Test
+    fun replayEnd_foreignHandshakeWhileLive_sendsNoResize() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+        vm.resize(24, 80)
+        advanceTimeBy(200)
+        runCurrent()
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+        emitReplay(this)
+        val expected = TerminalProtocol.encodeResize(24, 80)
+        verify(exactly = 3) { connection.sendBinary(expected) }
+
+        // Another client attached: the relay fans its handshake out to this
+        // socket too. Answering it would resize the PTY back to this grid
+        // right after that client opened the session.
+        emitReplay(this)
+
+        verify(exactly = 3) { connection.sendBinary(expected) }
+        assertEquals(ConnectionState.Live, vm.connectionState.value)
+    }
+
+    @Test
+    fun replayEnd_afterReconnect_reassertsAgain() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+        vm.resize(24, 80)
+        advanceTimeBy(200)
+        runCurrent()
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+        emitReplay(this)
+        emitReplay(this)
+        val expected = TerminalProtocol.encodeResize(24, 80)
+        verify(exactly = 3) { connection.sendBinary(expected) }
+
+        eventsFlow.emit(WsEvent.Disconnected)
+        runCurrent()
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+        verify(exactly = 4) { connection.sendBinary(expected) }
+
+        emitReplay(this)
+
+        verify(exactly = 5) { connection.sendBinary(expected) }
+    }
+
+    private suspend fun emitReplay(scope: TestScope) {
+        eventsFlow.emit(WsEvent.Binary(byteArrayOf(TerminalProtocol.TYPE_REPLAY).toByteString()))
+        scope.runCurrent()
+        eventsFlow.emit(
+            WsEvent.Binary(byteArrayOf(TerminalProtocol.TYPE_OUTPUT).plus("x".toByteArray()).toByteString()),
+        )
+        scope.runCurrent()
+        eventsFlow.emit(WsEvent.Binary(byteArrayOf(TerminalProtocol.TYPE_REPLAY_END).toByteString()))
+        scope.runCurrent()
     }
 
     @Test
