@@ -49,6 +49,9 @@ class PreferencesStore(private val context: Context) {
     private fun keyRecentCustomPaths(agentKey: String) =
         stringPreferencesKey("$RECENT_CUSTOM_PATHS_PREFIX$agentKey")
 
+    private fun keyVoiceMicHidden(agentKey: String) =
+        booleanPreferencesKey("$VOICE_MIC_HIDDEN_PREFIX$agentKey")
+
     private fun keyRecentShortcutChords(sessionKindKey: String) =
         stringPreferencesKey("recent_shortcut_chords::$sessionKindKey")
 
@@ -82,6 +85,17 @@ class PreferencesStore(private val context: Context) {
 
     val externalSessionsNoticeDismissed: Flow<Boolean> =
         context.dataStore.data.map { it[keyExternalSessionsNoticeDismissed] ?: false }
+
+    /** Whether the user hid the session mic for this agent (undone in Settings → Voice input). */
+    fun voiceMicHidden(agentKey: String): Flow<Boolean> =
+        context.dataStore.data.map { it[keyVoiceMicHidden(agentKey)] ?: false }
+
+    suspend fun setVoiceMicHidden(agentKey: String, hidden: Boolean) {
+        context.dataStore.edit { prefs ->
+            if (hidden) prefs[keyVoiceMicHidden(agentKey)] = true
+            else prefs.remove(keyVoiceMicHidden(agentKey))
+        }
+    }
 
     val terminalStaticColumns: Flow<Int> =
         context.dataStore.data.map { prefs ->
@@ -307,6 +321,7 @@ class PreferencesStore(private val context: Context) {
 
     companion object {
         const val RECENT_CUSTOM_PATHS_PREFIX: String = "recent_custom_paths::"
+        const val VOICE_MIC_HIDDEN_PREFIX: String = "voice_mic_hidden::"
         const val MAX_RECENT_CUSTOM_PATHS: Int = 5
         const val MAX_RECENT_SHORTCUT_CHORDS: Int = 10
     }

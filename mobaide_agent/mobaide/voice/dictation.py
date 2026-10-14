@@ -111,7 +111,7 @@ class DictationManager:
         )
         self._dictations[dictation.id] = dictation
         self._ensure_reaper()
-        self._spawn(self._preload(load))
+        self._spawn(self._preload(dictation))
         logger.info("voice.dictation_started dictation_id=%s", dictation.id)
         return dictation.id
 
@@ -121,6 +121,10 @@ class DictationManager:
         async with dictation.lock:
             if dictation.collect is not None:
                 raise VoiceError(409, "dictation_finished", "This dictation is already finished.")
+            if dictation.failure is not None:
+                # Tell the client now, while it is still recording, instead
+                # of letting it upload audio nobody can transcribe.
+                raise _fresh(dictation.failure)
             if seq < dictation.next_seq:
                 return dictation.duration_ms
             if seq > dictation.next_seq:
@@ -145,6 +149,8 @@ class DictationManager:
         dictation = self._get(dictation_id)
         async with dictation.lock:
             if dictation.collect is None:
+                if dictation.failure is not None:
+                    raise _fresh(dictation.failure)
                 if last_seq >= dictation.next_seq:
                     raise VoiceError(
                         409, "seq_gap", "An audio chunk has not arrived yet.",
@@ -164,7 +170,7 @@ class DictationManager:
             raise dictation_not_found()
         error = collect.exception()
         if error is not None:
-            raise error
+            raise _fresh(error) if isinstance(error, VoiceError) else error
         return DictationResult(STATE_DONE, collect.result(), dictation.duration_ms)
 
     async def abort(self, dictation_id: str) -> None:
@@ -194,16 +200,25 @@ class DictationManager:
         return dictation
 
     def _start_part(self, dictation: _Dictation, segment: Segment) -> asyncio.Task[str]:
-        task = asyncio.ensure_future(self._transcribe(dictation, segment))
+        previous = dictation.parts[-1] if dictation.parts else None
+        task = asyncio.ensure_future(self._transcribe(dictation, segment, previous))
         task.add_done_callback(consume_exception)
         return task
 
-    async def _transcribe(self, dictation: _Dictation, segment: Segment) -> str:
+    async def _transcribe(
+        self, dictation: _Dictation, segment: Segment, previous: asyncio.Task[str] | None
+    ) -> str:
+        if previous is not None:
+            # Segments run one after another anyway (the helper serializes
+            # them); waiting here lets a failure of the previous one latch
+            # before this one could respawn the worker and reload the model.
+            # Silent segments wait too, or they would break the chain.
+            await asyncio.wait({previous})
         if not segment.voiced:
             return ""
         for attempt in (1, 2):
             if dictation.failure is not None:
-                raise dictation.failure
+                raise _fresh(dictation.failure)
             try:
                 result = await self._helper.transcribe(dictation.load, segment.pcm, SAMPLE_RATE)
                 return result.text
@@ -213,7 +228,7 @@ class DictationManager:
                         503, "transcription_failed",
                         exc.message or "Speech recognition failed on this computer.",
                     )
-                    raise dictation.failure from exc
+                    raise _fresh(dictation.failure) from exc
                 logger.warning("voice.segment_retry code=%s", exc.code)
         raise AssertionError("unreachable")
 
@@ -239,11 +254,18 @@ class DictationManager:
         )
         return " ".join(text for text in texts if text)
 
-    async def _preload(self, load: LoadSpec) -> None:
+    async def _preload(self, dictation: _Dictation) -> None:
         try:
-            await self._helper.preload(load)
+            await self._helper.preload(dictation.load)
         except HelperError as exc:
             logger.warning("voice.preload_failed code=%s", exc.code)
+            if exc.code == "load_failed" and dictation.failure is None:
+                # The model cannot load on this computer; retrying it for
+                # every segment would only reload it again and again.
+                dictation.failure = VoiceError(
+                    503, "transcription_failed",
+                    exc.message or "The speech model could not load on this computer.",
+                )
 
     def _ensure_reaper(self) -> None:
         if self._reaper is None or self._reaper.done():
@@ -273,6 +295,13 @@ class DictationManager:
         self._background.add(task)
         task.add_done_callback(self._background.discard)
         task.add_done_callback(consume_exception)
+
+
+def _fresh(error: VoiceError) -> VoiceError:
+    """A copy of a stored failure to raise again: raising the same exception
+    object appends every raise's frames (with the request's audio) to its
+    traceback, which would keep them alive until the dictation is reaped."""
+    return VoiceError(error.status, error.code, error.message, **error.extra)
 
 
 def _decode_chunk(pcm16_b64: str) -> bytes:

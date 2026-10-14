@@ -79,6 +79,22 @@ final class AgentEventBusTests: XCTestCase {
         }
     }
 
+    func testVoiceChangedFixtureDemux() throws {
+        for fixtureCase in try EnvelopeFixtures.cases(fixture: "dto/agent/VoiceStatusResponse.json") {
+            let envelope = try EnvelopeFixtures.envelope(type: "voice.changed", payload: fixtureCase.wire)
+            guard case .voiceChanged(let status)? = AgentEnvelopeDemux.demux(envelope) else {
+                return XCTFail("case \(fixtureCase.name): expected voiceChanged")
+            }
+            if fixtureCase.name.hasPrefix("repairing") {
+                XCTAssertTrue(status.repairing, "case \(fixtureCase.name)")
+            }
+        }
+    }
+
+    func testVoiceChangedWithoutRequiredFieldsIsDropped() {
+        XCTAssertNil(AgentEnvelopeDemux.demux(#"{"type":"voice.changed","payload":{"state":"ready"}}"#))
+    }
+
     func testGitChangedDemux() {
         let event = AgentEnvelopeDemux.demux(
             #"{"type":"git.changed","payload":{"project_name":"demo"}}"#

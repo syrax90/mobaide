@@ -91,6 +91,7 @@ STATE_FAILED = "failed"
 EVENT_TYPE = "voice.changed"
 MIN_PUBLISH_INTERVAL = 0.5
 LOCK_POLL_SECONDS = 5.0
+FOREIGN_INSTALL_POLL_SECONDS = 2.0
 _SHUTDOWN_WAIT_SECONDS = 5.0
 
 PublishFn = Callable[[str, dict[str, Any]], None]
@@ -131,6 +132,7 @@ class VoiceService:
         self._op_lock: asyncio.Lock | None = None
         self._publish_timer: asyncio.TimerHandle | None = None
         self._publish_pending = False
+        self._lock_watcher: asyncio.Task[None] | None = None
 
     @property
     def paths(self) -> VoicePaths:
@@ -177,6 +179,9 @@ class VoiceService:
         """Stop everything; a running download keeps its partial files and
         resumes on the next start."""
         try:
+            if self._lock_watcher is not None:
+                self._lock_watcher.cancel()
+                self._lock_watcher = None
             task = self._task
             if task is not None and not task.done():
                 task.cancel()
@@ -197,6 +202,12 @@ class VoiceService:
         target, reason = self._runtime(spec)
         installed = reason is None and self._installed(paths, spec, target)
         state = self._derive_state(settings, installed, reason)
+        repairing = (
+            not installed
+            and settings.enabled
+            and target is not None
+            and self._repairable(paths, spec, target)
+        )
 
         total = spec.download_bytes + (target.download_bytes if target else 0)
         done = self._done_bytes(paths, spec, target) if not installed else total
@@ -215,6 +226,7 @@ class VoiceService:
         return VoiceStatusResponse(
             state=state,
             enabled=settings.enabled,
+            repairing=repairing,
             model=VoiceModelInfo(
                 id=spec.id,
                 name=spec.name,
@@ -222,6 +234,7 @@ class VoiceService:
                 download_bytes=total,
                 disk_bytes=spec.download_bytes + (RUNTIME_DISK_BYTES if spec.needs_runtime else 0),
                 ram_bytes=spec.ram_bytes,
+                notice=spec.notice,
             ),
             progress=progress,
             host=VoiceHostInfo(
@@ -312,6 +325,11 @@ class VoiceService:
             return False
         return target is None or runtime_ready(paths, target)
 
+    @staticmethod
+    def _repairable(paths: VoicePaths, spec: ModelSpec, target: RuntimeTarget) -> bool:
+        """The verified model is in place and only the runtime is missing."""
+        return model_ready(paths, spec) and not runtime_ready(paths, target)
+
     def _derive_state(self, settings: Any, installed: bool, reason: str | None) -> str:
         if reason is not None:
             return STATE_UNSUPPORTED
@@ -327,8 +345,37 @@ class VoiceService:
         # process that holds the install lock, or abandoned by one that died
         # mid-install (offered as a retry).
         if FileLock(self.paths.lock_file).is_held_elsewhere():
+            self._watch_foreign_install()
             return STATE_QUEUED
         return STATE_FAILED
+
+    def _watch_foreign_install(self) -> None:
+        """Another process (``mobaide-agent voice install``, a second agent on
+        the same prefix) holds the install lock: publish its progress from
+        disk while it runs and the outcome once the lock frees, so clients
+        see it without polling. At most one watcher runs."""
+        if self._publish_fn is None:
+            return
+        if self._lock_watcher is not None and not self._lock_watcher.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._lock_watcher = loop.create_task(self._watch_lock())
+        self._lock_watcher.add_done_callback(consume_exception)
+
+    async def _watch_lock(self) -> None:
+        lock = FileLock(self.paths.lock_file)
+        while True:
+            await asyncio.sleep(FOREIGN_INSTALL_POLL_SECONDS)
+            if self._task is not None and not self._task.done():
+                # This agent's own install now publishes for itself.
+                return
+            if not lock.is_held_elsewhere():
+                break
+            self._publish()
+        self._publish(force=True)
 
     def _done_bytes(self, paths: VoicePaths, spec: ModelSpec, target: RuntimeTarget | None) -> int:
         if self._task is not None and not self._task.done() and self._progress:
@@ -447,6 +494,19 @@ class VoiceService:
         if settings.enabled and self._installed(paths, spec, target):
             self._publish(force=True)
             return self.status()
+        if settings.enabled and target is not None and self._repairable(paths, spec, target):
+            # Stopping a runtime repair must never cost the user the verified
+            # model: only the runtime's partial files go, and a retry fetches
+            # just the runtime again.
+            try:
+                await self._discard_runtime_partials(paths)
+                self._save_failure(
+                    "interrupted", "Voice needs a small update for this agent; retry to finish."
+                )
+            finally:
+                self._publish(force=True)
+            logger.info("voice.repair_cancelled")
+            return self.status()
         try:
             if paths.root.exists():
                 await self._wipe(paths)
@@ -477,7 +537,8 @@ class VoiceService:
         task.cancel()
         await asyncio.wait({task})
 
-    async def _wipe(self, paths: VoicePaths) -> None:
+    @staticmethod
+    def _acquire_lock(paths: VoicePaths) -> FileLock:
         lock = FileLock(paths.lock_file)
         try:
             acquired = lock.try_acquire()
@@ -490,6 +551,28 @@ class VoiceService:
                 409, "install_in_progress",
                 "Another Mobaide process is installing voice input on this computer.",
             )
+        return lock
+
+    async def _discard_runtime_partials(self, paths: VoicePaths) -> None:
+        lock = self._acquire_lock(paths)
+
+        def discard() -> None:
+            try:
+                entries = list(paths.runtime_root.iterdir())
+            except OSError:
+                entries = []
+            for entry in entries:
+                if entry.is_dir() and entry.name.startswith(".staging-"):
+                    remove_tree(entry)
+            remove_tree(paths.wheel_downloads)
+
+        try:
+            await asyncio.to_thread(discard)
+        finally:
+            lock.release()
+
+    async def _wipe(self, paths: VoicePaths) -> None:
+        lock = self._acquire_lock(paths)
         try:
             settings = load_settings(paths)
             settings.enabled = False

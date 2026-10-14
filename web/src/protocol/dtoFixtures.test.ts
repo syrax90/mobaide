@@ -26,6 +26,7 @@ import {
   templateDeletedSchema,
   templateSchema,
 } from './dto/userEvents';
+import { voiceStatusSchema } from './dto/voice';
 
 /**
  * Fixture `type` → the schema that owns it, the TypeScript analogue of iOS's
@@ -53,6 +54,7 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   CustomAgentTypeDto: customAgentTypeSchema,
   CustomTypeDeletedPayload: customTypeDeletedSchema,
   FirstAgentPairedPayload: firstAgentPairedSchema,
+  VoiceStatusResponse: voiceStatusSchema,
 };
 
 const dtoFiles = COVERED_FIXTURES.filter((path) => path.startsWith('dto/'));

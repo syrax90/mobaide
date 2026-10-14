@@ -6,6 +6,7 @@ import com.mobaide.app.data.network.dto.GitJobResponse
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.TemplateDto
+import com.mobaide.app.data.network.dto.VoiceStatusResponse
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
@@ -93,6 +94,10 @@ sealed class AgentEvent {
 
     /** The same job's final snapshot, once; a `git.changed` follows it. */
     data class GitJobDone(val job: GitJobResponse) : AgentEvent()
+
+    /** The agent's whole voice input status: on every state change, throttled
+     *  to two a second while a download runs, and on every connect. */
+    data class VoiceChanged(val status: VoiceStatusResponse) : AgentEvent()
 
     /** Pushed by the server's user-scoped channel when any of the user's
      *  agents transitions between online and offline. */

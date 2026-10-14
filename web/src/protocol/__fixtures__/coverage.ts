@@ -54,6 +54,10 @@ const OWNER = {
    * do #678's `GitRebaseRequest` / `GitRebaseResponse` from the Changes panel
    * and the conflict resolver's `GitConflictResponse` and its three
    * `GitConflict*Request` bodies.
+   *
+   * #737's voice dictation and install bodies are REST-only and follow them
+   * here too; `VoiceStatusResponse` also rides the `voice.changed` event and
+   * keeps its Zod mirror.
    */
   generated: 'shipped — typed by the generated OpenAPI schema',
   /** Editing a custom agent type on web: CLA-231. */
@@ -73,13 +77,6 @@ const OWNER = {
    * round trip would be a second, staler copy of what is already on screen.
    */
   unusedByClients: 'no client consumes this endpoint',
-  /**
-   * The agent's on-PC voice input API (#736). The web, Android and iOS halves —
-   * mic capture, the enable/cost screen and the dictation upload — are #737,
-   * which decides per shape between the generated types and a Zod mirror
-   * (`VoiceStatusResponse` also rides the `voice.changed` event).
-   */
-  voice: '#737 — voice input clients',
 } as const;
 
 /** Fixture files this milestone's tests read and assert. */
@@ -90,6 +87,7 @@ export const COVERED_FIXTURES: readonly string[] = [
   'keys/key_chords.json',
   'pairing/qr_payload.json',
   'relay/relay_mapping.json',
+  'voice/pcm16_chunks.json',
   'dto/agent/AntigravityOptionsModel.json',
   'dto/agent/AutoScanFilterDto.json',
   'dto/agent/AutoScanInstanceDto.json',
@@ -104,6 +102,7 @@ export const COVERED_FIXTURES: readonly string[] = [
   'dto/agent/SessionKind.json',
   'dto/agent/SessionResponse.json',
   'dto/agent/VersionInfoResponse.json',
+  'dto/agent/VoiceStatusResponse.json',
   'dto/central/CreateCustomAgentTypeRequest.json',
   'dto/central/CustomAgentTypeDto.json',
   'dto/central/CustomTypeDeletedPayload.json',
@@ -155,14 +154,13 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/StopScanRequest.json': OWNER.generated,
   'dto/agent/TokenRequest.json': OWNER.generated,
   'dto/agent/TokenResponse.json': OWNER.generated,
-  'dto/agent/VoiceDictationAudioRequest.json': OWNER.voice,
-  'dto/agent/VoiceDictationAudioResponse.json': OWNER.voice,
-  'dto/agent/VoiceDictationCreateRequest.json': OWNER.voice,
-  'dto/agent/VoiceDictationFinishRequest.json': OWNER.voice,
-  'dto/agent/VoiceDictationResponse.json': OWNER.voice,
-  'dto/agent/VoiceDictationResultResponse.json': OWNER.voice,
-  'dto/agent/VoiceInstallRequest.json': OWNER.voice,
-  'dto/agent/VoiceStatusResponse.json': OWNER.voice,
+  'dto/agent/VoiceDictationAudioRequest.json': OWNER.generated,
+  'dto/agent/VoiceDictationAudioResponse.json': OWNER.generated,
+  'dto/agent/VoiceDictationCreateRequest.json': OWNER.generated,
+  'dto/agent/VoiceDictationFinishRequest.json': OWNER.generated,
+  'dto/agent/VoiceDictationResponse.json': OWNER.generated,
+  'dto/agent/VoiceDictationResultResponse.json': OWNER.generated,
+  'dto/agent/VoiceInstallRequest.json': OWNER.generated,
 
   'dto/central/AgentSummaryResponse.json': OWNER.generated,
   'dto/central/CancelAccountDeletionResponse.json': OWNER.generated,

@@ -35,6 +35,13 @@ import { TerminalSurface } from './TerminalSurface';
 import { useSessionGone } from './useSessionGone';
 import { useSessionHeaderLabel } from './useSessionHeaderLabel';
 import { useSessionRow } from './useSessionRow';
+import { DictationDialog } from './voice/DictationDialog';
+import { VoiceButton } from './voice/VoiceButton';
+import { VoiceSetupDialog } from './voice/VoiceSetupDialog';
+import { useAgentName, useDictation } from '../../voice/useDictation';
+import { useVoiceCapability, useVoiceStatus } from '../../voice/useVoiceStatus';
+import { useMicHidden } from '../../voice/voicePrefsStore';
+import { voiceMicMode } from '../../voice/voiceStatusView';
 
 export function TerminalScreen() {
   const { agentId, sessionId } = useParams();
@@ -168,6 +175,22 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
     gitCapabilities.branches && session?.project_name !== undefined
       ? session.project_name
       : null;
+  // Voice input: the mic shows only on an agent that advertises
+  // `capabilities.voice`, styled by its live status (`voice.changed` arrives
+  // on the agent channel `useSessionGone` already holds open).
+  const voiceCapability = useVoiceCapability(model.agentId).data ?? null;
+  const voiceStatus = useVoiceStatus(model.agentId, voiceCapability !== null);
+  const micHidden = useMicHidden(model.agentId);
+  const micMode = voiceMicMode(voiceCapability, voiceStatus.data, micHidden);
+  // A capability only while voice is ready: any other state disposes the
+  // controller, which cancels a recording the agent can no longer take.
+  const dictation = useDictation(
+    model.agentId,
+    model.sessionId,
+    micMode === 'ready' ? voiceCapability : null,
+  );
+  const [voiceSetupOpen, setVoiceSetupOpen] = useState(false);
+  const agentName = useAgentName(model.agentId);
   const navigate = useNavigate();
   const immersive = useKeyboardLock();
   // Shared with the scrollbar, whose `role="scrollbar"` has to name what it
@@ -182,6 +205,9 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // send path that the model silently swallows. It is a time-superset of the
   // model's gate, so nothing that would have been allowed gets disabled.
   const canSend = view.connection === 'live' && !view.replayPainting && running;
+  // A transcript can only be pasted into a running session. An unknown status
+  // (still connecting) or a reconnect keeps recording available.
+  const canRecord = view.status === null || running;
 
   // Ctrl+R is a chord people press in a terminal on purpose, and a reload costs
   // the whole replay. See `useReloadGuard` for why this is capture-phase and
@@ -198,7 +224,8 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // Keyed on whether *any* panel is open rather than on the picker alone, so
   // the picker-to-editor hop is not mistaken for a dismissal and does not pull
   // focus out of the editor it just opened.
-  const panelOpen = panel.kind !== 'none';
+  const panelOpen =
+    panel.kind !== 'none' || voiceSetupOpen || dictation.state.kind !== 'idle';
   const panelWasOpen = useRef(false);
   useEffect(() => {
     if (panelWasOpen.current && !panelOpen) model.focus();
@@ -276,6 +303,19 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
             <span className="terminal-toggle-label-short">Ctrl+V</span>
           </span>
         </label>
+        {micMode !== 'hidden' && (
+          <VoiceButton
+            mode={micMode}
+            status={voiceStatus.data}
+            disabled={micMode === 'ready' && !canRecord}
+            onClick={() => {
+              // Synchronous on purpose: the recorder opens audio inside this
+              // click's user activation.
+              if (micMode === 'ready') dictation.toggle();
+              else setVoiceSetupOpen(true);
+            }}
+          />
+        )}
         <button
           type="button"
           className="button"
@@ -497,6 +537,40 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
           onCancel={() => {
             setPanel({ kind: 'none' });
             setSaveError(null);
+          }}
+        />
+      )}
+
+      {voiceSetupOpen && (
+        <VoiceSetupDialog
+          agentId={model.agentId}
+          agentName={agentName}
+          status={voiceStatus.data}
+          loadFailed={voiceStatus.isError}
+          onClose={() => {
+            setVoiceSetupOpen(false);
+          }}
+        />
+      )}
+
+      {dictation.state.kind !== 'idle' && (
+        <DictationDialog
+          state={dictation.state}
+          agentName={agentName}
+          canSend={canSend}
+          canRecord={canRecord}
+          onStop={dictation.stop}
+          onCancel={dictation.cancel}
+          onRetry={dictation.retry}
+          onRecordAgain={dictation.toggle}
+          onDismiss={dictation.dismiss}
+          onInsert={(text) => {
+            // Pasted like a template — never with Enter — so the text waits
+            // on the program's input line for the user to send.
+            if (!canSend || !model.pasteText(text)) return false;
+            model.jumpToBottom();
+            dictation.dismiss();
+            return true;
           }}
         />
       )}

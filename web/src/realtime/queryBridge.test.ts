@@ -532,3 +532,68 @@ describe('applyAgentEvent git jobs', () => {
     expect(invalidated).toEqual([]);
   });
 });
+
+describe('applyAgentEvent voice.changed', () => {
+  // A whole `VoiceStatusResponse` per frame, throttled to two a second while
+  // a download runs: written, never invalidated.
+  const voiceFrame = (over: Record<string, unknown> = {}) => ({
+    state: 'downloading',
+    enabled: true,
+    repairing: false,
+    model: {
+      id: 'parakeet',
+      name: 'Parakeet',
+      languages: ['en'],
+      download_bytes: 100,
+      disk_bytes: 200,
+      ram_bytes: 300,
+      notice: 'CC-BY-4.0',
+    },
+    progress: { done_bytes: 43, total_bytes: 100 },
+    host: {
+      ram_total_bytes: null,
+      disk_free_bytes: null,
+      cpu_count: null,
+      recommendation: 'ok',
+      reasons: [],
+    },
+    speed_factor: null,
+    error: null,
+    ...over,
+  });
+  const voiceKey = queryKeys.voiceStatus('a1');
+
+  it('writes the snapshot for that agent instead of invalidating', () => {
+    applyAgentEvent(client, 'a1', frame('voice.changed', voiceFrame()));
+
+    const outcome = applyAgentEvent(
+      client,
+      'a1',
+      frame('voice.changed', voiceFrame({ progress: { done_bytes: 87, total_bytes: 100 } })),
+    );
+
+    expect(outcome).toEqual({ kind: 'patched', type: 'voice.changed', keys: [voiceKey] });
+    expect(client.getQueryData(voiceKey)).toMatchObject({
+      state: 'downloading',
+      progress: { done_bytes: 87, total_bytes: 100 },
+    });
+    expect(client.getQueryData(queryKeys.voiceStatus('a2'))).toBeUndefined();
+    expect(invalidated).toEqual([]);
+  });
+
+  it('keeps a state this client does not know, for the mic to read as unavailable', () => {
+    applyAgentEvent(client, 'a1', frame('voice.changed', voiceFrame({ state: 'paused' })));
+
+    expect(client.getQueryData(voiceKey)).toMatchObject({ state: 'paused' });
+  });
+
+  it('drops a frame it cannot type and keeps the last good one', () => {
+    applyAgentEvent(client, 'a1', frame('voice.changed', voiceFrame({ state: 'ready' })));
+
+    const outcome = applyAgentEvent(client, 'a1', frame('voice.changed', voiceFrame({ enabled: 'yes' })));
+
+    expect(outcome).toEqual({ kind: 'dropped' });
+    expect(client.getQueryData(voiceKey)).toMatchObject({ state: 'ready' });
+    expect(invalidated).toEqual([]);
+  });
+});

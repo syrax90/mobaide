@@ -3132,6 +3132,10 @@
             "title": "Name",
             "type": "string"
           },
+          "notice": {
+            "title": "Notice",
+            "type": "string"
+          },
           "ram_bytes": {
             "title": "Ram Bytes",
             "type": "integer"
@@ -3143,7 +3147,8 @@
           "languages",
           "download_bytes",
           "disk_bytes",
-          "ram_bytes"
+          "ram_bytes",
+          "notice"
         ],
         "title": "VoiceModelInfo",
         "type": "object"
@@ -3167,7 +3172,7 @@
         "type": "object"
       },
       "VoiceStatusResponse": {
-        "description": "``GET /api/voice/status`` and the ``voice.changed`` event payload.\n\n``state``: ``unsupported`` | ``not_installed`` | ``queued`` |\n``downloading`` | ``verifying`` | ``ready`` | ``failed``. ``progress`` is\nset while ``downloading``; ``error`` while ``failed``; ``speed_factor``\n(seconds of speech transcribed per second of CPU time, from the install\nself-test) once ``ready``.",
+        "description": "``GET /api/voice/status`` and the ``voice.changed`` event payload.\n\n``state``: ``unsupported`` | ``not_installed`` | ``queued`` |\n``downloading`` | ``verifying`` | ``ready`` | ``failed``. ``progress`` is\nset while ``downloading``; ``error`` while ``failed``; ``speed_factor``\n(seconds of speech transcribed per second of CPU time, from the install\nself-test) once ``ready``. ``repairing`` is true while an enabled voice\nkeeps its verified model and only needs its runtime again (after a\nPython upgrade): cancelling then stops without deleting the model.",
         "properties": {
           "enabled": {
             "title": "Enabled",
@@ -3199,6 +3204,10 @@
               }
             ]
           },
+          "repairing": {
+            "title": "Repairing",
+            "type": "boolean"
+          },
           "speed_factor": {
             "anyOf": [
               {
@@ -3218,6 +3227,7 @@
         "required": [
           "state",
           "enabled",
+          "repairing",
           "model",
           "progress",
           "host",

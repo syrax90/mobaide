@@ -1,7 +1,9 @@
 """``DictationManager`` against a hand-written helper fake: chunk sequencing
 (duplicates, gaps), the size/length limits, ``finish`` (seq check,
 ``transcribing`` then ``done``, idempotence, segment order), the single
-retry after a helper crash, abort, and the reaper on a pinned clock."""
+retry after a helper crash, the failure latch (a model that cannot load is
+loaded once and fails the next chunk), abort, and the reaper on a pinned
+clock."""
 from __future__ import annotations
 
 import asyncio
@@ -30,10 +32,16 @@ RATE = 16000
 SPEC = LoadSpec(key="fake:1", engine="fake", model_dir=Path("."), runtime_dir=None)
 
 
-def _tone(seconds: float) -> bytes:
+def _tone(seconds: float, amplitude: int = 3000) -> bytes:
     return array(
-        "h", (int(3000 * math.sin(2 * math.pi * 200 * i / RATE)) for i in range(int(seconds * RATE)))
+        "h", (int(amplitude * math.sin(2 * math.pi * 200 * i / RATE)) for i in range(int(seconds * RATE)))
     ).tobytes()
+
+
+def _voiced_silent_voiced() -> bytes:
+    """Speech, a pause, five seconds of room noise below the voice level
+    closed by a quieter pause (a silent segment), then speech again."""
+    return _tone(6.0) + _silence(0.6) + _tone(5.0, amplitude=212) + _tone(0.6, amplitude=42) + _tone(1.0)
 
 
 def _silence(seconds: float) -> bytes:
@@ -54,18 +62,22 @@ async def _send(manager: DictationManager, did: str, pcm: bytes) -> int:
 
 class _FakeHelper:
     """Transcribes a segment to its length (``"<ms>ms"``); can hold calls on
-    a gate and fail the next calls with scripted helper error codes."""
+    a gate, fail the next calls with scripted helper error codes and fail the
+    preload with ``preload_failure``."""
 
     def __init__(self) -> None:
         self.busy = False
         self.calls = 0
         self.preloads = 0
         self.failures: list[str] = []
+        self.preload_failure: str | None = None
         self.gate: asyncio.Event | None = None
         self.hold_first: asyncio.Event | None = None
 
     async def preload(self, spec: LoadSpec) -> int:
         self.preloads += 1
+        if self.preload_failure is not None:
+            raise HelperError(self.preload_failure, "model will not load")
         return 1
 
     async def transcribe(self, spec: LoadSpec, pcm16: bytes, sample_rate: int) -> TranscribeResult:
@@ -113,6 +125,13 @@ async def _raises(code: str, awaitable) -> VoiceError:
         await awaitable
     assert excinfo.value.code == code
     return excinfo.value
+
+
+def _traceback_depth(error: BaseException) -> int:
+    depth, tb = 0, error.__traceback__
+    while tb is not None:
+        depth, tb = depth + 1, tb.tb_next
+    return depth
 
 
 class TestCreate:
@@ -227,17 +246,38 @@ class TestAppend:
 
 class TestFinish:
     async def test_transcript_joins_voiced_segments_in_order(self, manager, fake_helper):
-        """The first segment answers last; the transcript keeps speech order."""
+        """A segment reaches the helper only once the one before it is done;
+        the transcript keeps speech order."""
         fake_helper.hold_first = asyncio.Event()
         did = await manager.create()
         last_seq = await _send(manager, did, _tone(6.0) + _silence(0.6) + _tone(1.0))
         finishing = asyncio.ensure_future(manager.finish(did, last_seq))
-        await _wait_for(lambda: fake_helper.calls == 2)
+        await _wait_for(lambda: fake_helper.calls == 1)
+        await asyncio.sleep(0.05)
+        assert fake_helper.calls == 1
         fake_helper.hold_first.set()
 
         result = await finishing
 
         assert (result.state, result.text, result.duration_ms) == ("done", "6260ms 1340ms", 7600)
+        assert fake_helper.calls == 2
+
+    async def test_a_silent_segment_keeps_the_chain(self, manager, fake_helper):
+        """The speech after a silent segment still waits for the speech
+        before it."""
+        fake_helper.hold_first = asyncio.Event()
+        did = await manager.create()
+        last_seq = await _send(manager, did, _voiced_silent_voiced())
+        finishing = asyncio.ensure_future(manager.finish(did, last_seq))
+        await _wait_for(lambda: fake_helper.calls >= 1)
+        await asyncio.sleep(0.05)
+        assert fake_helper.calls == 1
+        fake_helper.hold_first.set()
+
+        result = await finishing
+
+        assert (result.state, result.text) == ("done", "6260ms 1340ms")
+        assert fake_helper.calls == 2
 
     async def test_silence_is_never_sent_to_the_helper(self, manager, fake_helper):
         did = await manager.create()
@@ -367,6 +407,148 @@ class TestFinish:
         await manager.append(did, 0, _b64(_tone(1.0)))
 
         assert (await manager.finish(did, 0)).text == "1000ms"
+
+
+class TestFailureLatch:
+    async def test_a_model_that_fails_to_load_is_loaded_only_once(self, manager, fake_helper):
+        """Later segments wait for the first; once it fails for good they
+        never reach the helper (which would load the model again)."""
+        fake_helper.hold_first = asyncio.Event()
+        fake_helper.failures = ["load_failed"] * 10
+        did = await manager.create()
+        last_seq = await _send(
+            manager, did, _tone(6.0) + _silence(0.6) + _tone(6.0) + _silence(0.6) + _tone(1.0)
+        )
+        finishing = asyncio.ensure_future(manager.finish(did, last_seq))
+        await _wait_for(lambda: fake_helper.calls == 1)
+        await asyncio.sleep(0.05)
+        fake_helper.hold_first.set()
+
+        error = await _raises("transcription_failed", finishing)
+
+        assert error.status == 503
+        assert fake_helper.calls == 1
+
+    async def test_a_silent_segment_between_does_not_load_the_model_again(
+        self, manager, fake_helper
+    ):
+        fake_helper.hold_first = asyncio.Event()
+        fake_helper.failures = ["load_failed"] * 10
+        did = await manager.create()
+        last_seq = await _send(manager, did, _voiced_silent_voiced())
+        finishing = asyncio.ensure_future(manager.finish(did, last_seq))
+        await _wait_for(lambda: fake_helper.calls >= 1)
+        await asyncio.sleep(0.05)
+        fake_helper.hold_first.set()
+
+        error = await _raises("transcription_failed", finishing)
+
+        assert error.status == 503
+        assert fake_helper.calls == 1
+
+    async def test_failed_segment_refuses_the_next_chunk_while_recording(self, manager, fake_helper):
+        fake_helper.failures = ["load_failed"]
+        did = await manager.create()
+        seq = await _send(manager, did, _tone(6.0) + _silence(0.6))
+        await _wait_for(lambda: fake_helper.calls == 1)
+        await asyncio.sleep(0.01)
+
+        error = await _raises("transcription_failed", manager.append(did, seq + 1, _b64(_tone(0.1))))
+
+        assert error.status == 503
+        assert error.message == "worker trouble"
+
+    async def test_retried_chunk_after_finish_still_reads_dictation_finished(
+        self, manager, fake_helper
+    ):
+        fake_helper.failures = ["load_failed"]
+        did = await manager.create()
+        await manager.append(did, 0, _b64(_tone(1.0)))
+        await _raises("transcription_failed", manager.finish(did, 0))
+
+        await _raises("dictation_finished", manager.append(did, 0, _b64(_tone(1.0))))
+
+    async def test_preload_that_cannot_load_the_model_fails_the_next_chunk(
+        self, manager, fake_helper
+    ):
+        fake_helper.preload_failure = "load_failed"
+        did = await manager.create()
+        await _wait_for(lambda: fake_helper.preloads == 1)
+        await asyncio.sleep(0.01)
+
+        error = await _raises("transcription_failed", manager.append(did, 0, _b64(_tone(0.5))))
+
+        assert error.status == 503
+        assert error.message == "model will not load"
+        assert fake_helper.calls == 0
+
+    async def test_preload_that_cannot_load_the_model_fails_finish_of_silence(
+        self, manager, fake_helper
+    ):
+        """Silence never reaches the helper, so without the latch a broken
+        model would read as an empty transcript."""
+        did = await manager.create()
+        await manager.append(did, 0, _b64(_silence(1.0)))
+        await _wait_for(lambda: fake_helper.preloads == 1)
+        fake_helper.preload_failure = "load_failed"
+        failing = await manager.create()
+        await _wait_for(lambda: fake_helper.preloads == 2)
+        await asyncio.sleep(0.01)
+
+        assert (await manager.finish(did, 0)).text == ""
+        error = await _raises("transcription_failed", manager.finish(failing, -1))
+
+        assert error.status == 503
+        assert fake_helper.calls == 0
+
+    @pytest.mark.parametrize("code", ["helper_crashed", "helper_timeout"])
+    async def test_preload_crash_is_not_latched(self, manager, fake_helper, code):
+        fake_helper.preload_failure = code
+        did = await manager.create()
+        await _wait_for(lambda: fake_helper.preloads == 1)
+        await asyncio.sleep(0.01)
+
+        await manager.append(did, 0, _b64(_tone(1.0)))
+
+        assert (await manager.finish(did, 0)).text == "1000ms"
+
+    async def test_refusals_raise_fresh_copies_of_the_latched_failure(self, manager, fake_helper):
+        """Raising the stored failure again would chain every request's
+        frames, and the audio they hold, onto its traceback."""
+        fake_helper.preload_failure = "load_failed"
+        did = await manager.create()
+        await _wait_for(lambda: fake_helper.preloads == 1)
+        await asyncio.sleep(0.01)
+        latched = manager._dictations[did].failure
+
+        raised = [
+            await _raises("transcription_failed", manager.append(did, 0, _b64(_tone(0.1))))
+            for _ in range(3)
+        ]
+        raised.append(await _raises("transcription_failed", manager.finish(did, -1)))
+
+        assert latched.__traceback__ is None
+        assert len({id(error) for error in [latched, *raised]}) == 5
+        for error in raised:
+            assert (error.status, error.detail()) == (503, latched.detail())
+            assert error.message == "model will not load"
+
+    async def test_asking_a_failed_dictation_again_does_not_grow_the_stored_traceback(
+        self, manager, fake_helper
+    ):
+        fake_helper.failures = ["load_failed"]
+        did = await manager.create()
+        await manager.append(did, 0, _b64(_tone(1.0)))
+        first = await _raises("transcription_failed", manager.finish(did, 0))
+        latched = manager._dictations[did].failure
+        depth = _traceback_depth(latched)
+
+        again = [await _raises("transcription_failed", manager.finish(did, 0)) for _ in range(3)]
+
+        assert _traceback_depth(latched) == depth
+        assert len({id(error) for error in [latched, first, *again]}) == 5
+        for error in [first, *again]:
+            assert (error.status, error.detail()) == (503, latched.detail())
 
 
 class TestAbortAndBusy:

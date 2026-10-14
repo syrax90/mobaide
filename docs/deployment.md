@@ -218,7 +218,9 @@ Chosen by path, like the CSP:
 | Surface | Policy |
 | --- | --- |
 | every surface `central_server` renders | `camera=(), microphone=(), geolocation=(), payment=(), usb=(), identity-credentials-get=()` |
-| `app.mobaide.com` static SPA (served by **Caddy**) | the same list, but `identity-credentials-get=(self "https://accounts.google.com")` |
+| `app.mobaide.com` static SPA (served by **Caddy**) | the same list, but `microphone=(self)` and `identity-credentials-get=(self "https://accounts.google.com")` |
+
+The SPA's `microphone=(self)` is voice input: the browser records while the user dictates and streams the audio to their own agent (docs/voice-input.md). Only that origin gets it; every central_server surface keeps `microphone=()`. Like any header in the Caddy site block, a change ships with `deploy_central.py` and needs a Caddy reload (`caddy reload --force`) before browsers see it.
 
 > **`identity-credentials-get=(self)` on the SPA origin breaks Google Sign-In**, the same way `COOP: same-origin` does, and for the same reason it looks like the tighter choice. The Google button frame is created with `allow="identity-credentials-get"`, and a frame's `allow` only delegates a feature the embedding document's own policy grants to *that origin*. Naming the feature at all therefore obliges you to name Google's origin alongside `self`.
 

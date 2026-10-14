@@ -2383,6 +2383,8 @@ export interface components {
             languages: string[];
             /** Name */
             name: string;
+            /** Notice */
+            notice: string;
             /** Ram Bytes */
             ram_bytes: number;
         };
@@ -2401,7 +2403,9 @@ export interface components {
          *     ``downloading`` | ``verifying`` | ``ready`` | ``failed``. ``progress`` is
          *     set while ``downloading``; ``error`` while ``failed``; ``speed_factor``
          *     (seconds of speech transcribed per second of CPU time, from the install
-         *     self-test) once ``ready``.
+         *     self-test) once ``ready``. ``repairing`` is true while an enabled voice
+         *     keeps its verified model and only needs its runtime again (after a
+         *     Python upgrade): cancelling then stops without deleting the model.
          */
         VoiceStatusResponse: {
             /** Enabled */
@@ -2410,6 +2414,8 @@ export interface components {
             host: components["schemas"]["VoiceHostInfo"];
             model: components["schemas"]["VoiceModelInfo"];
             progress: components["schemas"]["VoiceProgress"] | null;
+            /** Repairing */
+            repairing: boolean;
             /** Speed Factor */
             speed_factor: number | null;
             /** State */
