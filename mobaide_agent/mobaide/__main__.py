@@ -1110,10 +1110,8 @@ def _run_re_pair(args: argparse.Namespace) -> int:
         2   .env missing.
     """
     from mobaide.agent._env_writer import (
-        atomic_write,
+        blank_relay_credentials,
         env_path_for_prefix,
-        render_template,
-        restrict_perms,
     )
     from mobaide.agent.install_paths import default_prefix
     from mobaide.agent.pairing_qr import clear_pending_pairing
@@ -1130,13 +1128,7 @@ def _run_re_pair(args: argparse.Namespace) -> int:
         return 2
 
     fresh = getattr(args, "fresh", False)
-    overrides = {"RELAY_AGENT_TOKEN": ""}
-    if fresh:
-        overrides["RELAY_AGENT_ID"] = ""
-    template_text = env_file.read_text(encoding="utf-8")
-    rendered = render_template(template_text, overrides=overrides)
-    atomic_write(env_file, rendered)
-    restrict_perms(env_file)
+    blank_relay_credentials(env_file, clear_agent_id=fresh)
     clear_pending_pairing(layout)
     if fresh:
         sys.stdout.write(

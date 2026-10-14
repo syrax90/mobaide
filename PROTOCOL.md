@@ -114,6 +114,34 @@ cadence; they do **not** gate compatibility.
   (see docs/app-conversion-measurement.md). Older clients ignore the kind
   (``else -> Unit`` / ``default: .none`` / ``{kind: 'ignored'}``); the web
   client mirrors both shapes and invalidates its agent list on the event.
+* **Agent self-uninstall** (additive, **no version bump**; 2026-10-14).
+  Removing an agent can now also make it uninstall itself from its host.
+  * Agent → relay ``auth`` carries ``capabilities: {"uninstall": true}``
+    when the build can do it (an installed release, or ``MOBAIDE_ENV=test``,
+    which deletes nothing). The relay stores it as
+    ``agents.supports_uninstall`` (rewritten on every handshake) and
+    ``GET /api/agents`` returns it as ``supports_uninstall`` (default
+    ``false``); clients offer the option only when it is ``true``.
+  * ``DELETE /api/agents/{agent_id}?uninstall=true`` (still ``204``)
+    records an uninstall request — ``agent_uninstall_requests``, keyed by
+    agent id + the credential hash, 30-day TTL, removed by the periodic
+    token sweep — before the
+    usual cascade delete.
+  * Live agent: the relay writes a ``CH_CONTROL`` ``{"type":
+    "agent_uninstall"}`` envelope straight on the socket (not through the
+    send queue, which the close tears down) and then closes ``4010``
+    with reason ``agent_uninstalled``. Paired mobiles still get ``4010``
+    ``admin_revoked``.
+  * Offline agent: when it next authenticates with the removed agent's
+    credentials and a live request matches, the relay replies to ``auth``
+    with the text frame ``{"type": "agent_uninstall"}`` instead of
+    ``auth_ok`` and closes ``4001`` ``Agent removed``. Delivery is
+    idempotent, so the request stays until it expires.
+  * Older agents ignore the unknown control type and treat a non-``auth_ok``
+    reply as an ordinary auth failure, exactly as before.
+  * The agent side (disarm credentials, unregister the supervisor, delete
+    the install, exit 0) is described in docs/deployment.md *Uninstalling
+    the agent*.
 * Protocol-fixture updates under ``tests/protocol_fixtures/`` (dropping
   the ``unknown_coerces_to_claude`` cases, adding ``custom_*`` round-trip
   cases and the ``CustomAgentTypeDto`` fixtures) rode with the iOS client

@@ -66,7 +66,19 @@ CREATE TABLE IF NOT EXISTS agents (
     created_at             TEXT NOT NULL,
     last_seen_at           TEXT,
     agent_version          TEXT,
-    agent_protocol_version INTEGER
+    agent_protocol_version INTEGER,
+    supports_uninstall     INTEGER NOT NULL DEFAULT 0
+);
+
+-- A removed agent that was asked to uninstall itself. Kept past the agents
+-- row so an agent that was offline at removal can still prove its old
+-- credentials on its next connect and receive the uninstall command;
+-- delivery is idempotent, so rows only leave by expiry.
+CREATE TABLE IF NOT EXISTS agent_uninstall_requests (
+    agent_id    TEXT PRIMARY KEY,
+    token_hash  TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS mobile_devices (
@@ -269,6 +281,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_agent_types_owner_name
     ON custom_agent_types(owner_user_id, name COLLATE NOCASE)
     WHERE deleted_at IS NULL;
 """
+
+
+# How long a removed agent that was offline can still collect its uninstall
+# command by reconnecting with its old credentials.
+AGENT_UNINSTALL_REQUEST_TTL = timedelta(days=30)
 
 
 def _now_iso() -> str:
@@ -740,6 +757,19 @@ class Database:
             )
             await self._conn.execute("PRAGMA user_version = 20")
 
+        if version < 21:
+            # Agent self-uninstall: the handshake-reported capability column
+            # plus the agent_uninstall_requests table _SCHEMA creates.
+            col_cursor = await self._conn.execute("PRAGMA table_info(agents)")
+            agent_cols = {r[1] for r in await col_cursor.fetchall()}
+            if agent_cols and "supports_uninstall" not in agent_cols:
+                await self._conn.execute(
+                    "ALTER TABLE agents ADD COLUMN "
+                    "supports_uninstall INTEGER NOT NULL DEFAULT 0"
+                )
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 21")
+
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -937,6 +967,39 @@ class Database:
         await self.conn.commit()
         return cursor.rowcount == 1
 
+    async def record_uninstall_request(
+        self, agent_id: str, ttl: timedelta = AGENT_UNINSTALL_REQUEST_TTL
+    ) -> bool:
+        """Remember that ``agent_id`` must uninstall itself, keyed by its
+        current credential hash. Must run before ``delete_agent``, which
+        drops the row the hash is copied from. Returns ``False`` when the
+        agent does not exist.
+        """
+        now = datetime.now(timezone.utc)
+        cursor = await self.conn.execute(
+            "INSERT OR REPLACE INTO agent_uninstall_requests "
+            "(agent_id, token_hash, created_at, expires_at) "
+            "SELECT agent_id, token_hash, ?, ? FROM agents WHERE agent_id = ?",
+            (now.isoformat(), (now + ttl).isoformat(), agent_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    async def match_uninstall_request(
+        self, agent_id: str, raw_token: str
+    ) -> bool:
+        """True when ``agent_id`` + ``raw_token`` are the credentials of a
+        removed agent with an unexpired uninstall request."""
+        cursor = await self.conn.execute(
+            "SELECT token_hash FROM agent_uninstall_requests "
+            "WHERE agent_id = ? AND expires_at > ?",
+            (agent_id, _now_iso()),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return False
+        return secrets.compare_digest(_hash_token(raw_token), row["token_hash"])
+
     async def delete_user(self, user_id: str) -> list[str]:
         """Delete a user and cascade-delete every owned agent + dependent row.
 
@@ -1022,7 +1085,7 @@ class Database:
 
     _AGENT_COLUMNS = (
         "agent_id, name, owner_user_id, created_at, last_seen_at, "
-        "agent_version, agent_protocol_version"
+        "agent_version, agent_protocol_version, supports_uninstall"
     )
 
     async def list_agents(self) -> list[dict]:
@@ -1223,6 +1286,7 @@ class Database:
         agent_id: str,
         agent_version: str | None,
         agent_protocol_version: int | None,
+        supports_uninstall: bool = False,
     ) -> None:
         """Record a successful agent handshake: bump ``last_seen_at`` and
         persist the version + protocol-version reported in the auth message.
@@ -1236,14 +1300,20 @@ class Database:
         when the caller passes ``None`` (e.g., the agent omitted the field
         from its auth message), so a stale write never clobbers a
         previously-stored value. ``last_seen_at`` is always refreshed.
+        ``supports_uninstall`` is always overwritten: it describes the build
+        that just connected, so a downgrade must clear it.
         """
         await self.conn.execute(
             "UPDATE agents "
             "SET last_seen_at = ?, "
             "    agent_version = COALESCE(?, agent_version), "
-            "    agent_protocol_version = COALESCE(?, agent_protocol_version) "
+            "    agent_protocol_version = COALESCE(?, agent_protocol_version), "
+            "    supports_uninstall = ? "
             "WHERE agent_id = ?",
-            (_now_iso(), agent_version, agent_protocol_version, agent_id),
+            (
+                _now_iso(), agent_version, agent_protocol_version,
+                int(supports_uninstall), agent_id,
+            ),
         )
         await self.conn.commit()
 
@@ -2331,8 +2401,8 @@ class Database:
 
     async def cleanup_expired_tokens(self) -> int:
         """Delete expired pairing, device-code, email-verification,
-        password-reset and user-session refresh tokens; clear stale claimed
-        pairing-token rows.
+        password-reset and user-session refresh tokens and agent uninstall
+        requests; clear stale claimed pairing-token rows.
 
         Verification tokens are cleaned in two sweeps:
           - expired but never consumed rows are dropped immediately;
@@ -2440,6 +2510,10 @@ class Database:
             "  AND redeemed_at <= ?",
             (retention_cutoff,),
         )
+        uninstall_request_cursor = await self.conn.execute(
+            "DELETE FROM agent_uninstall_requests WHERE expires_at <= ?",
+            (now,),
+        )
         await self.conn.commit()
         return (
             pairing_cursor.rowcount
@@ -2453,6 +2527,7 @@ class Database:
             + device_code_expired_cursor.rowcount
             + device_code_settled_cursor.rowcount
             + device_code_stranded_cursor.rowcount
+            + uninstall_request_cursor.rowcount
         )
 
     async def create_verification_token(

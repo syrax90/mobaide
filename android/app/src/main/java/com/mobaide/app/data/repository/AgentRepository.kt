@@ -68,9 +68,14 @@ class AgentRepository(
         return centralApi.reregisterAgent(token, agentId)
     }
 
-    suspend fun deleteAgent(agentId: String) {
+    /**
+     * Remove [agentId] from the account. With [uninstall] the agent also
+     * deletes itself from its host — at once when online, otherwise on its
+     * next connect within 30 days.
+     */
+    suspend fun deleteAgent(agentId: String, uninstall: Boolean = false) {
         val token = userIdentityStore.requireAccessToken()
-        centralApi.deleteAgent(token, agentId)
+        centralApi.deleteAgent(token, agentId, uninstall)
         refreshAgents()
     }
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -1208,7 +1208,7 @@ class TestPushColumnsMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 20
+        assert (await cursor.fetchone())[0] == 21
         cursor = await db.conn.execute("PRAGMA table_info(mobile_devices)")
         columns = {r[1] for r in await cursor.fetchall()}
         assert {"platform", "push_token", "push_environment"} <= columns
@@ -1334,7 +1334,7 @@ class TestAdminOwnedAgentPurgeMigration:
 
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 20
+        assert row[0] == 21
 
         # v4 purges admin-owned agents + their cascade rows.
         assert await db.get_agent(admin_agent_id) is None
@@ -1364,7 +1364,7 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 20
+        assert row[0] == 21
         await db.close()
 
 
@@ -2170,7 +2170,7 @@ class TestCustomAgentTypesMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 20
+        assert (await cursor.fetchone())[0] == 21
 
         # Table is usable and the NOCASE unique index came back with it.
         row = await db.create_custom_agent_type(owner, "Aider", "c1")
@@ -2184,6 +2184,183 @@ class TestCustomAgentTypesMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 20
+        assert (await cursor.fetchone())[0] == 21
         assert await db.get_custom_agent_type(row["id"]) is not None
+        await db.close()
+
+
+class TestAgentSupportsUninstall:
+    """``supports_uninstall`` describes the build that last connected, so
+    unlike the COALESCE'd version fields it is overwritten on every
+    handshake."""
+
+    async def test_defaults_to_false_for_a_fresh_agent(self, db: Database):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+
+        agent = await db.get_agent(agent_id)
+        assert agent["supports_uninstall"] == 0
+
+    async def test_handshake_persists_the_capability(self, db: Database):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+
+        await db.update_agent_handshake_info(
+            agent_id, "0.9.0", 8, supports_uninstall=True
+        )
+
+        assert (await db.get_agent(agent_id))["supports_uninstall"] == 1
+        listed = await db.list_agents_for_user(owner)
+        assert listed[0]["supports_uninstall"] == 1
+
+    async def test_downgraded_handshake_clears_the_capability(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.update_agent_handshake_info(
+            agent_id, "0.9.0", 8, supports_uninstall=True
+        )
+
+        await db.update_agent_handshake_info(agent_id, None, None)
+
+        assert (await db.get_agent(agent_id))["supports_uninstall"] == 0
+
+
+class TestAgentUninstallRequests:
+    async def test_recorded_request_matches_the_removed_agents_token(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, raw_token = await db.register_agent("test", owner)
+
+        assert await db.record_uninstall_request(agent_id) is True
+        await db.delete_agent(agent_id)
+
+        assert await db.match_uninstall_request(agent_id, raw_token) is True
+
+    async def test_wrong_token_does_not_match(self, db: Database):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.record_uninstall_request(agent_id)
+        await db.delete_agent(agent_id)
+
+        assert await db.match_uninstall_request(agent_id, "not-the-token") is False
+
+    async def test_token_does_not_match_another_agent_id(self, db: Database):
+        owner = await _create_test_user(db)
+        agent_id, raw_token = await db.register_agent("test", owner)
+        other_id, _ = await db.register_agent("other", owner)
+        await db.record_uninstall_request(agent_id)
+
+        assert await db.match_uninstall_request(other_id, raw_token) is False
+
+    async def test_no_request_without_a_record(self, db: Database):
+        owner = await _create_test_user(db)
+        agent_id, raw_token = await db.register_agent("test", owner)
+        await db.delete_agent(agent_id)
+
+        assert await db.match_uninstall_request(agent_id, raw_token) is False
+
+    async def test_record_for_unknown_agent_returns_false(self, db: Database):
+        assert await db.record_uninstall_request("nonexistent") is False
+        assert await db.match_uninstall_request("nonexistent", "tok") is False
+
+    async def test_request_keys_on_the_token_current_at_removal(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, old_token = await db.register_agent("test", owner)
+        new_token = await db.reregister_agent(agent_id)
+        await db.record_uninstall_request(agent_id)
+        await db.delete_agent(agent_id)
+
+        assert await db.match_uninstall_request(agent_id, new_token) is True
+        assert await db.match_uninstall_request(agent_id, old_token) is False
+
+    async def test_match_survives_repeated_delivery(self, db: Database):
+        owner = await _create_test_user(db)
+        agent_id, raw_token = await db.register_agent("test", owner)
+        await db.record_uninstall_request(agent_id)
+        await db.delete_agent(agent_id)
+
+        assert await db.match_uninstall_request(agent_id, raw_token) is True
+        assert await db.match_uninstall_request(agent_id, raw_token) is True
+
+    async def test_expired_request_does_not_match(self, db: Database):
+        owner = await _create_test_user(db)
+        agent_id, raw_token = await db.register_agent("test", owner)
+        await db.record_uninstall_request(agent_id, ttl=timedelta(seconds=-1))
+        await db.delete_agent(agent_id)
+
+        assert await db.match_uninstall_request(agent_id, raw_token) is False
+
+    async def test_cleanup_expired_removes_only_expired_requests(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        stale_id, _ = await db.register_agent("stale", owner)
+        live_id, live_token = await db.register_agent("live", owner)
+        await db.record_uninstall_request(stale_id, ttl=timedelta(seconds=-1))
+        await db.record_uninstall_request(live_id)
+
+        deleted = await db.cleanup_expired_tokens()
+
+        assert deleted == 1
+        cursor = await db.conn.execute(
+            "SELECT agent_id FROM agent_uninstall_requests"
+        )
+        assert [r[0] for r in await cursor.fetchall()] == [live_id]
+        assert await db.match_uninstall_request(live_id, live_token) is True
+
+    async def test_recording_does_not_purge_expired_requests(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        stale_id, _ = await db.register_agent("stale", owner)
+        live_id, _ = await db.register_agent("live", owner)
+        await db.record_uninstall_request(stale_id, ttl=timedelta(seconds=-1))
+
+        await db.record_uninstall_request(live_id)
+
+        cursor = await db.conn.execute(
+            "SELECT agent_id FROM agent_uninstall_requests ORDER BY agent_id"
+        )
+        assert [r[0] for r in await cursor.fetchall()] == sorted(
+            [stale_id, live_id]
+        )
+
+
+class TestAgentUninstallMigration:
+    async def test_v21_adds_column_and_table_to_existing_db(self, tmp_path):
+        db_path = str(tmp_path / "pre_v21.db")
+        db = Database(db_path)
+        await db.connect()
+        owner = await _create_test_user(db)
+        agent_id, raw_token = await db.register_agent("legacy", owner)
+        # Simulate a v20 on-disk schema: drop the new column + table and
+        # roll user_version back so reopening replays the v21 block.
+        await db.conn.execute("DROP TABLE agent_uninstall_requests")
+        await db.conn.execute("ALTER TABLE agents DROP COLUMN supports_uninstall")
+        await db.conn.execute("PRAGMA user_version = 20")
+        await db.conn.commit()
+        await db.close()
+
+        db = Database(db_path)
+        await db.connect()
+        cursor = await db.conn.execute("PRAGMA user_version")
+        assert (await cursor.fetchone())[0] == 21
+        # Pre-existing agents read as not supporting uninstall until their
+        # next handshake says otherwise.
+        assert (await db.get_agent(agent_id))["supports_uninstall"] == 0
+        assert await db.record_uninstall_request(agent_id) is True
+        await db.delete_agent(agent_id)
+        assert await db.match_uninstall_request(agent_id, raw_token) is True
+        await db.close()
+
+        db = Database(db_path)
+        await db.connect()
+        cursor = await db.conn.execute("PRAGMA user_version")
+        assert (await cursor.fetchone())[0] == 21
+        assert await db.match_uninstall_request(agent_id, raw_token) is True
         await db.close()

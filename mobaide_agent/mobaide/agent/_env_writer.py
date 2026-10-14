@@ -210,6 +210,19 @@ def _restrict_perms_windows(path: Path) -> None:
         )
 
 
+def blank_relay_credentials(env_file: Path, *, clear_agent_id: bool) -> None:
+    """Blank ``RELAY_AGENT_TOKEN`` (and, with ``clear_agent_id``,
+    ``RELAY_AGENT_ID``) in ``env_file``, keeping every other line."""
+    overrides = {"RELAY_AGENT_TOKEN": ""}
+    if clear_agent_id:
+        overrides["RELAY_AGENT_ID"] = ""
+    rendered = render_template(
+        env_file.read_text(encoding="utf-8"), overrides=overrides
+    )
+    atomic_write(env_file, rendered)
+    restrict_perms(env_file)
+
+
 def env_path_for_prefix(prefix: Path) -> Path:
     """Canonical path of the agent ``.env`` under an install prefix."""
     return prefix / "mobaide_agent" / ".env"

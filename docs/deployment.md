@@ -655,6 +655,86 @@ journalctl -u mobaide-agent -f
 sudo systemctl restart mobaide-agent
 ```
 
+### Uninstalling the agent
+
+**Remotely, from a client.** When you remove an agent in the Android, iOS or
+web app, the **Also uninstall Mobaide from this computer** option is checked
+by default. iOS shows it as a **Delete & Uninstall** button. The option
+appears only when the agent's build reported that it can uninstall itself;
+see the self-uninstall entry in `PROTOCOL.md`. Here is what happens:
+
+1. The relay sends the agent an `agent_uninstall` order. An online agent gets
+   it at once. An offline agent gets it the next time it connects with its old
+   credentials, within 30 days.
+2. The agent blanks `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` in
+   `<prefix>/mobaide_agent/.env`, so it can never reconnect, even if the
+   rest fails.
+3. The agent removes itself. It deletes only the known install entries
+   (`releases/`, `trust/`, `mobaide_agent/`, `run/`, `state/`, `logs/`,
+   `svc/`, `bin/`, `current_version`, logs, `users.json`, `projects.json`, …)
+   and then the prefix itself if that left it empty. It never runs a blanket
+   `rm -rf` of a prefix that `MOBAIDE_AGENT_PREFIX` may have pointed
+   somewhere shared.
+   - **Linux:** the agent runs unprivileged, so it only drops
+     `<prefix>/run/uninstall-requested`. `install.sh` installs a root-owned
+     `mobaide-agent-uninstall.path` unit that watches for that marker. It
+     starts `mobaide-agent-uninstall.service`, which runs
+     `/usr/local/libexec/mobaide-agent-uninstall`. That script disables and
+     stops `mobaide-agent`, deletes the install, removes all three units and
+     finally itself.
+     Installs made before this helper existed get a partial uninstall:
+     everything is deleted except an `exit 0` stub at
+     `bin/mobaide-agent-launcher.sh`, so the leftover unit stays quiet.
+     Finish by hand with
+     `sudo systemctl disable mobaide-agent && sudo rm -f /etc/systemd/system/mobaide-agent.service && sudo rm -rf /opt/mobaide`,
+     or re-run the installer first so a later remote uninstall is complete.
+   - **macOS:** the agent deletes the install and
+     `~/Library/LaunchAgents/com.mobaide.agent.plist`, then runs
+     `launchctl bootout gui/<uid>/com.mobaide.agent`, which stops it.
+     `/usr/local/mobaide` itself stays behind (empty) when `/usr/local`
+     is root-owned.
+   - **Windows:** the agent deletes the `MobaideAgent` Scheduled Task. It
+     starts a one-shot `MobaideAgentCleanup` task, run by the base Python
+     interpreter outside the install, that retries deleting
+     `%ProgramFiles%\MobaideAgent` until the agent's files unlock, then
+     removes itself. Python, which the installer may have installed, is
+     left alone.
+4. The agent exits 0.
+
+An offline agent removed this way keeps its order for 30 days, and
+`install.sh` / `install.ps1` re-runs keep the existing `.env` credentials.
+So reinstalling on that host within the window uninstalls the fresh install
+the moment it connects, which is seconds after the installer restarts the
+service. To reuse the machine, delete `<prefix>/mobaide_agent/.env` **before**
+reinstalling. The installer then writes a fresh one and starts a new pairing,
+and nothing matches the old order.
+
+A developer or source run, i.e. any interpreter outside
+`<prefix>/releases/`, never deletes or rewrites anything. It only stops
+talking to the relay.
+
+**By hand.** Remove the pieces the installer created:
+
+```bash
+# Linux
+sudo systemctl disable --now mobaide-agent mobaide-agent-uninstall.path
+sudo rm -f /etc/systemd/system/mobaide-agent.service \
+  /etc/systemd/system/mobaide-agent-uninstall.{path,service} \
+  /usr/local/libexec/mobaide-agent-uninstall
+sudo systemctl daemon-reload && sudo rm -rf /opt/mobaide
+# macOS
+launchctl bootout gui/$(id -u)/com.mobaide.agent
+rm -f ~/Library/LaunchAgents/com.mobaide.agent.plist && sudo rm -rf /usr/local/mobaide
+```
+
+```powershell
+# Windows (elevated)
+Unregister-ScheduledTask -TaskName MobaideAgent -Confirm:$false
+Remove-Item -Recurse -Force "$env:ProgramFiles\MobaideAgent"
+```
+
+Then remove the agent from your account in the app.
+
 ### Android client configuration
 
 1. Open the Mobaide app

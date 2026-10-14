@@ -176,9 +176,10 @@ class CentralApi(
         return execute(request)
     }
 
-    suspend fun deleteAgent(userToken: String, agentId: String) {
+    suspend fun deleteAgent(userToken: String, agentId: String, uninstall: Boolean = false) {
+        val query = if (uninstall) "?uninstall=true" else ""
         val request = Request.Builder()
-            .url("${baseUrl()}/api/agents/$agentId")
+            .url("${baseUrl()}/api/agents/$agentId$query")
             .delete()
             .header("Authorization", "Bearer $userToken")
             .build()

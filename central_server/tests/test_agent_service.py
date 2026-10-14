@@ -253,3 +253,72 @@ class TestDeleteAgent:
 
         await service.delete_agent(agent_id, owner)
         assert await db.get_agent(agent_id) is None
+
+
+class TestDeleteAgentUninstall:
+    async def test_offline_agent_gets_an_uninstall_request(self, service, db):
+        owner = await _create_owner(db)
+        agent_id, raw_token = await service.create_agent("offline", owner)
+
+        await service.delete_agent(agent_id, owner, uninstall=True)
+
+        assert await db.get_agent(agent_id) is None
+        assert await db.match_uninstall_request(agent_id, raw_token) is True
+
+    async def test_plain_delete_records_no_uninstall_request(self, service, db):
+        owner = await _create_owner(db)
+        agent_id, raw_token = await service.create_agent("agent", owner)
+
+        await service.delete_agent(agent_id, owner)
+
+        assert await db.match_uninstall_request(agent_id, raw_token) is False
+
+    async def test_non_owner_cannot_record_an_uninstall_request(
+        self, service, db
+    ):
+        owner = await _create_owner(db)
+        other = await db.create_user(email="other@test.local", password_hash="h")
+        agent_id, raw_token = await service.create_agent("agent", owner)
+
+        with pytest.raises(ValueError, match="Not the owner"):
+            await service.delete_agent(agent_id, other, uninstall=True)
+
+        assert await db.get_agent(agent_id) is not None
+        assert await db.match_uninstall_request(agent_id, raw_token) is False
+
+    async def test_online_agent_gets_the_control_frame_and_its_own_reason(
+        self, service, db, routing
+    ):
+        import json
+
+        from central_server.relay.envelope import CH_CONTROL, decode
+
+        owner = await _create_owner(db)
+        agent_id, raw_token = await service.create_agent("online", owner)
+        agent_ws = MagicMock()
+        agent_ws.send_bytes = AsyncMock()
+        agent_ws.send_text = AsyncMock()
+        agent_ws.close = AsyncMock()
+        routing.register_agent(agent_id, agent_ws)
+        mobile_ws = MagicMock()
+        mobile_ws.send_text = AsyncMock()
+        mobile_ws.close = AsyncMock()
+        routing.register_mobile(
+            agent_id,
+            "session_io:s1",
+            MobileClient(device_id="dev-1", websocket=mobile_ws),
+        )
+
+        await service.delete_agent(agent_id, owner, uninstall=True)
+
+        agent_ws.send_bytes.assert_awaited_once()
+        channel, _, payload = decode(agent_ws.send_bytes.await_args.args[0])
+        assert channel == CH_CONTROL
+        assert json.loads(payload) == {"type": "agent_uninstall"}
+        agent_ws.close.assert_awaited_once_with(
+            code=4010, reason="agent_uninstalled"
+        )
+        mobile_ws.close.assert_awaited_once_with(code=4010, reason="admin_revoked")
+        # Recorded too, so a frame lost to a crash is retried at re-auth.
+        assert await db.match_uninstall_request(agent_id, raw_token) is True
+        assert await db.get_agent(agent_id) is None

@@ -10,6 +10,8 @@ data class AgentSummaryResponse(
     val online: Boolean,
     val created_at: String,
     val last_seen_at: String? = null,
+    /** The build that last connected can uninstall itself when removed. */
+    val supports_uninstall: Boolean = false,
 )
 
 @Serializable

@@ -44,6 +44,19 @@ E2E_ADMIN_PASSWORD = "E2eHarnessAdminPass123!"
 
 
 @dataclass
+class SpawnedAgent:
+    """An extra agent subprocess a test owns outright (see ``spawn_agent``)."""
+
+    agent_id: str
+    agent_token: str
+    prefix: Path
+    log_path: Path
+
+    def log_text(self) -> str:
+        return self.log_path.read_text(encoding="utf-8", errors="replace")
+
+
+@dataclass
 class Harness:
     """What the ``e2e_stack`` fixture hands to a test."""
 
@@ -240,3 +253,51 @@ def e2e_stack(request, xprocess):
         client=client,
         tmp=tmp,
     )
+
+
+@pytest.fixture
+def spawn_agent(request, xprocess, e2e_stack):
+    """Factory for a dedicated agent subprocess on the shared relay.
+
+    For tests that remove or break their agent: the session-scoped
+    ``e2e_stack`` agent is shared by every other test and must stay online.
+    """
+
+    def spawn(name: str, *, extra_env: dict[str, str] | None = None) -> SpawnedAgent:
+        agent_id, agent_token = e2e_stack.client.create_agent(name)
+        agent_port = _free_port()
+        process_name = f"cla78_extra_agent_{agent_port}"
+        prefix = e2e_stack.tmp / process_name
+        prefix.mkdir(parents=True, exist_ok=True)
+        request.addfinalizer(lambda: _terminate(xprocess, process_name))
+        env = {
+            **os.environ,
+            "MOBAIDE_ENV": "test",
+            "JWT_SECRET_KEY": secrets.token_urlsafe(32),
+            "HOST": "127.0.0.1",
+            "PORT": str(agent_port),
+            "RELAY_SERVER_URL": f"ws://127.0.0.1:{e2e_stack.server_port}",
+            "RELAY_AGENT_ID": agent_id,
+            "RELAY_AGENT_TOKEN": agent_token,
+            "MOBAIDE_AGENT_ALLOW_INSECURE_WS": "1",
+            "MOBAIDE_AGENT_PREFIX": str(prefix),
+            "LOG_FORMAT": "console",
+            "LOG_LEVEL": "INFO",
+            "PYTHONUNBUFFERED": "1",
+            **(extra_env or {}),
+        }
+        starter = _make_starter(
+            args=[sys.executable, "-u", "-m", "mobaide"],
+            env=env,
+            cwd=e2e_stack.tmp,
+            ready=_agent_ready(agent_port),
+        )
+        _pid, log_path = xprocess.ensure(process_name, starter)
+        return SpawnedAgent(
+            agent_id=agent_id,
+            agent_token=agent_token,
+            prefix=prefix,
+            log_path=Path(log_path),
+        )
+
+    return spawn

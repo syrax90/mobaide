@@ -16,6 +16,7 @@ const api = vi.hoisted((): {
   agents: Agent[];
   created: string[];
   deleted: string[];
+  uninstallFlags: boolean[];
   reregistered: string[];
   credentials: AgentCredentials;
   createError: Error | null;
@@ -24,6 +25,7 @@ const api = vi.hoisted((): {
   agents: [],
   created: [],
   deleted: [],
+  uninstallFlags: [],
   reregistered: [],
   credentials: { agentId: 'agent-new', name: 'Laptop', token: 'tok-shown-once' },
   createError: null,
@@ -47,8 +49,9 @@ vi.mock('../../api/agentRepository', () => ({
     api.reregistered.push(agentId);
     return Promise.resolve<AgentCredentials>({ agentId, name, token: 'tok-rotated' });
   },
-  deleteAgent: (agentId: string) => {
+  deleteAgent: (agentId: string, uninstall = false) => {
     api.deleted.push(agentId);
+    api.uninstallFlags.push(uninstall);
     const failure = api.deleteError;
     if (failure !== null) return Promise.reject(failure);
     return Promise.resolve();
@@ -76,6 +79,7 @@ const { useSelectedAgentStore } = await import('../../stores/selectedAgentStore'
 // Left real rather than mocked: the bucket it deletes lives in the stubbed
 // storage above, so the assertion can be the storage state itself.
 const { noteRecentPath, readRecentPaths } = await import('../../stores/recentPaths');
+const { useToastStore } = await import('../../stores/toastStore');
 const { Agents } = await import('./Agents');
 
 const agent = (agentId: string, name: string): Agent => ({
@@ -86,6 +90,7 @@ const agent = (agentId: string, name: string): Agent => ({
   lastSeenAt: null,
   agentVersion: '0.9.9',
   agentProtocolVersion: 7,
+  supportsUninstall: false,
 });
 
 let client: QueryClient;
@@ -128,6 +133,7 @@ beforeEach(() => {
   api.agents = [agent('agent-1', 'Workstation'), agent('agent-2', 'Laptop')];
   api.created.length = 0;
   api.deleted.length = 0;
+  api.uninstallFlags.length = 0;
   api.reregistered.length = 0;
   api.createError = null;
   api.deleteError = null;
@@ -304,6 +310,91 @@ describe('Agents remove', () => {
     expect(seams.clearedTokens).toEqual([]);
     expect(seams.disconnected).toEqual([]);
     expect(readRecentPaths('agent-1')).toEqual(['/srv/one']);
+  });
+});
+
+describe('Agents remove and uninstall', () => {
+  const UNINSTALL_LABEL = 'Also uninstall Mobaide from this computer';
+
+  const openRemoveFor = async (name: string): Promise<HTMLElement> => {
+    const row = (await screen.findByText(name)).closest('li') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: 'Remove' }));
+    return screen.findByRole('alertdialog');
+  };
+
+  const confirmRemove = (dialog: HTMLElement) => {
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+  };
+
+  beforeEach(() => {
+    useToastStore.setState({ toasts: [] });
+  });
+
+  it('offers no uninstall option for a build that cannot uninstall itself', async () => {
+    renderAgents();
+    const dialog = await openRemoveFor('Workstation');
+
+    expect(within(dialog).queryByLabelText(UNINSTALL_LABEL)).toBeNull();
+    expect(dialog.textContent).toContain('The host keeps running');
+    confirmRemove(dialog);
+
+    await waitFor(() => {
+      expect(api.deleted).toEqual(['agent-1']);
+    });
+    expect(api.uninstallFlags).toEqual([false]);
+  });
+
+  it('checks the uninstall option by default and sends it', async () => {
+    api.agents = [{ ...agent('agent-1', 'Workstation'), supportsUninstall: true }];
+    renderAgents();
+    const dialog = await openRemoveFor('Workstation');
+
+    const checkbox = within(dialog).getByLabelText(UNINSTALL_LABEL);
+    expect((checkbox as HTMLInputElement).checked).toBe(true);
+    expect(dialog.textContent).not.toContain('The host keeps running');
+    confirmRemove(dialog);
+
+    await waitFor(() => {
+      expect(api.uninstallFlags).toEqual([true]);
+    });
+    await waitFor(() => {
+      expect(useToastStore.getState().toasts.map((toast) => toast.message)).toEqual([
+        '“Workstation” is uninstalling itself.',
+      ]);
+    });
+  });
+
+  it('removes only when the option is unchecked', async () => {
+    api.agents = [{ ...agent('agent-1', 'Workstation'), supportsUninstall: true }];
+    renderAgents();
+    const dialog = await openRemoveFor('Workstation');
+
+    fireEvent.click(within(dialog).getByLabelText(UNINSTALL_LABEL));
+    expect(dialog.textContent).toContain('The host keeps running');
+    confirmRemove(dialog);
+
+    await waitFor(() => {
+      expect(api.deleted).toEqual(['agent-1']);
+    });
+    expect(api.uninstallFlags).toEqual([false]);
+    expect(useToastStore.getState().toasts).toEqual([]);
+  });
+
+  it('tells an offline agent it uninstalls on its next connect', async () => {
+    api.agents = [
+      { ...agent('agent-1', 'Workstation'), online: false, supportsUninstall: true },
+    ];
+    renderAgents();
+    const dialog = await openRemoveFor('Workstation');
+
+    expect(dialog.textContent).toContain('the next time it connects');
+    confirmRemove(dialog);
+
+    await waitFor(() => {
+      expect(useToastStore.getState().toasts.map((toast) => toast.message)).toEqual([
+        '“Workstation” will uninstall itself when it next comes online.',
+      ]);
+    });
   });
 });
 

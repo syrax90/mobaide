@@ -40,6 +40,7 @@ const agent = (online: boolean): Agent => ({
   lastSeenAt: null,
   agentVersion: null,
   agentProtocolVersion: null,
+  supportsUninstall: false,
 });
 
 const DEADLINE_MS = WAIT_FOR_ONLINE_TIMEOUT_SECONDS * 1000;

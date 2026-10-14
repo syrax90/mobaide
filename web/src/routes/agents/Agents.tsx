@@ -12,6 +12,7 @@ import {
 import { clearAgentToken } from '../../auth/agentTokens';
 import { ErrorState } from '../../components/ErrorState';
 import { Modal } from '../../components/Modal';
+import { CheckboxField } from '../../components/form/CheckboxField';
 import { queryKeys, wsBackedQueryOptions } from '../../lib/queryKeys';
 import { disconnectAgentEvents } from '../../realtime';
 import { useLastSessionStore } from '../../stores/lastSessionStore';
@@ -30,7 +31,7 @@ type Panel =
   | { kind: 'install' }
   | { kind: 'credentials'; title: string; credentials: AgentCredentials }
   | { kind: 'confirmReregister'; agent: Agent }
-  | { kind: 'confirmDelete'; agent: Agent };
+  | { kind: 'confirmDelete'; agent: Agent; uninstall: boolean };
 
 /**
  * Everything an account can do to its agents, minus pairing itself (`/pair`).
@@ -80,8 +81,9 @@ export function Agents() {
   });
 
   const remove = useMutation({
-    mutationFn: (agent: Agent) => deleteAgent(agent.agentId),
-    onSuccess: async (_result, agent) => {
+    mutationFn: ({ agent, uninstall }: { agent: Agent; uninstall: boolean }) =>
+      deleteAgent(agent.agentId, uninstall),
+    onSuccess: async (_result, { agent, uninstall }) => {
       setPanel({ kind: 'none' });
       // `clearAgentToken`, never `sessionStore.agentDisconnect()` — that one
       // drops *every* agent's tokens, which would sign the browser out of the
@@ -97,6 +99,16 @@ export function Agents() {
         selected.setSelectedAgent(null);
       }
       await invalidateAgents();
+      if (uninstall) {
+        useToastStore
+          .getState()
+          .show(
+            agent.online
+              ? `“${agent.name}” is uninstalling itself.`
+              : `“${agent.name}” will uninstall itself when it next comes online.`,
+            'success',
+          );
+      }
     },
     onError: () => {
       setPanel({ kind: 'none' });
@@ -147,7 +159,13 @@ export function Agents() {
               setPanel({ kind: 'confirmReregister', agent: target });
             }}
             onDelete={(target) => {
-              setPanel({ kind: 'confirmDelete', agent: target });
+              // Checked by default: once removed, an agent left on its host can
+              // never reconnect and only retries forever.
+              setPanel({
+                kind: 'confirmDelete',
+                agent: target,
+                uninstall: target.supportsUninstall,
+              });
             }}
           />
         ))}
@@ -266,16 +284,32 @@ export function Agents() {
           <h2 id="remove-agent-title">Remove agent?</h2>
           <p>
             Permanently removes &ldquo;{panel.agent.name}&rdquo; and all of its data.
-            The host keeps running until you stop it, and can be paired again from
-            scratch.
+            {panel.uninstall
+              ? ' The agent then stops and deletes itself from its computer.'
+              : ' The host keeps running until you stop it, and can be paired again from scratch.'}
           </p>
+          {panel.agent.supportsUninstall && (
+            <CheckboxField
+              label="Also uninstall Mobaide from this computer"
+              hint={
+                panel.agent.online
+                  ? 'The agent stops and deletes itself right away.'
+                  : 'The agent is offline, so this happens the next time it connects (within 30 days).'
+              }
+              checked={panel.uninstall}
+              disabled={remove.isPending}
+              onChange={(checked) => {
+                setPanel({ ...panel, uninstall: checked });
+              }}
+            />
+          )}
           <div className="button-row">
             <button
               type="button"
               className="button button-danger"
               disabled={remove.isPending}
               onClick={() => {
-                remove.mutate(panel.agent);
+                remove.mutate({ agent: panel.agent, uninstall: panel.uninstall });
               }}
             >
               Remove

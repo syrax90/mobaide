@@ -41,6 +41,10 @@ WS_CLOSE_ADMIN_REVOKED = 4010  # admin unregistered the user/agent
 # would have permanently killed every per-agent socket on the device.
 WS_CLOSE_AGENT_TRANSIENT_OFFLINE = 4012
 
+# Control-frame type telling an agent to remove itself from its host. Sent
+# on the live tunnel and as the auth reply to a removed agent's credentials.
+AGENT_UNINSTALL_TYPE = "agent_uninstall"
+
 
 async def safe_send_reason_and_close(
     websocket: WebSocket, code: int, reason_code: str
@@ -388,6 +392,9 @@ class RoutingTable:
         agent_id: str,
         code: int = WS_CLOSE_ADMIN_REVOKED,
         reason_code: str = "admin_revoked",
+        *,
+        agent_control: dict | None = None,
+        agent_reason_code: str | None = None,
     ) -> int:
         """Close an agent's WS plus every paired mobile-client WS.
 
@@ -395,12 +402,26 @@ class RoutingTable:
         sockets closed (agent + mobiles). Uses ``unregister_agent`` to
         atomically pop the agent and its mobile-client list out of the
         routing tables, then closes each WS with a reason frame.
+
+        ``agent_control`` is written to the agent as a CH_CONTROL envelope
+        straight on the socket, not through ``send_queue``: the writer task
+        is torn down with the close, so a queued frame could be dropped.
+        ``agent_reason_code`` overrides ``reason_code`` for the agent only.
         """
         conn = self._agents.get(agent_id)
         if conn is None:
             return 0
         mobiles = self.unregister_agent(agent_id, conn.conn_id)
-        await safe_send_reason_and_close(conn.websocket, code, reason_code)
+        if agent_control is not None:
+            try:
+                await conn.websocket.send_bytes(
+                    encode(CH_CONTROL, "", json.dumps(agent_control).encode())
+                )
+            except Exception:
+                pass
+        await safe_send_reason_and_close(
+            conn.websocket, code, agent_reason_code or reason_code
+        )
         for client in mobiles:
             await safe_send_reason_and_close(
                 client.websocket, code, reason_code

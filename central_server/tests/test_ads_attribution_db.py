@@ -82,7 +82,7 @@ class TestV20Migration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 20
+        assert (await cursor.fetchone())[0] == 21
         cursor = await db.conn.execute("PRAGMA table_info(users)")
         assert set(_AD_COLUMNS) <= {r[1] for r in await cursor.fetchall()}
         # Accounts that already paired must not read as first-time later.
@@ -97,7 +97,7 @@ class TestV20Migration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 20
+        assert (await cursor.fetchone())[0] == 21
         await db.close()
 
 

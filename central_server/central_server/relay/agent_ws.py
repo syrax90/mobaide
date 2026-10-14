@@ -29,6 +29,7 @@ from .envelope import (
     encode,
 )
 from .routing import (
+    AGENT_UNINSTALL_TYPE,
     WS_CLOSE_AGENT_TRANSIENT_OFFLINE,
     MobileClient,
     RoutingTable,
@@ -98,6 +99,22 @@ async def agent_tunnel(websocket: WebSocket) -> None:
         return
 
     if not await auth_service.verify_agent_token(agent_id, agent_token):
+        # A removed agent asked to uninstall itself gets the command in
+        # place of auth_ok; any other bad credential is a plain 4001.
+        if isinstance(agent_token, str) and await db.match_uninstall_request(
+            agent_id, agent_token
+        ):
+            try:
+                await websocket.send_text(
+                    json.dumps({"type": AGENT_UNINSTALL_TYPE})
+                )
+            except Exception:
+                pass
+            await _safe_close(websocket, 4001, "Agent removed")
+            logger.info(
+                "agent_tunnel.uninstall_delivered agent_id=%s", agent_id,
+            )
+            return
         await _safe_close(websocket, 4001, "Invalid agent credentials")
         return
 
@@ -153,8 +170,13 @@ async def agent_tunnel(websocket: WebSocket) -> None:
     # path issues a single UPDATE+commit. Heartbeats after this point are
     # in-memory only (RoutingTable.last_heartbeat); they reach the DB via
     # app.py's periodic batched flush and the disconnect flush below.
+    capabilities = auth_msg.get("capabilities")
+    supports_uninstall = (
+        isinstance(capabilities, dict) and capabilities.get("uninstall") is True
+    )
     await db.update_agent_handshake_info(
         agent_id, reported_version, client_protocol_version,
+        supports_uninstall=supports_uninstall,
     )
 
     manifest_record = _read_manifest(websocket.app)

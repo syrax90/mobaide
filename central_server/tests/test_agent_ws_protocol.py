@@ -18,6 +18,7 @@ import json
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from central_server import __version__
 from central_server.manifest.store import ManifestStore, canonical_json
@@ -343,3 +344,77 @@ class TestHandshakeVersionPersisted:
         assert after["last_seen_at"] is not None
         assert after["agent_version"] == "0.3.0"
         assert after["agent_protocol_version"] == PROTOCOL_VERSION
+
+
+class TestAgentUninstallHandshake:
+    """A removed agent asked to uninstall itself gets the command as its
+    auth reply; the ``uninstall`` capability in the auth message is
+    persisted for the clients' checkbox."""
+
+    async def test_removed_agent_with_request_gets_agent_uninstall(
+        self, app, registered_agent, db,
+    ):
+        agent_id, raw_token = registered_agent
+        await db.record_uninstall_request(agent_id)
+        await db.delete_agent(agent_id)
+
+        client = TestClient(app)
+        with client.websocket_connect("/ws/agent-tunnel") as ws:
+            ws.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": PROTOCOL_VERSION,
+            }))
+            assert json.loads(ws.receive_text()) == {"type": "agent_uninstall"}
+            with pytest.raises(WebSocketDisconnect) as excinfo:
+                ws.receive_text()
+            assert excinfo.value.code == 4001
+
+        assert app.state.routing.is_agent_online(agent_id) is False
+
+    async def test_wrong_token_for_removed_agent_is_a_plain_auth_failure(
+        self, app, registered_agent, db,
+    ):
+        agent_id, _ = registered_agent
+        await db.record_uninstall_request(agent_id)
+        await db.delete_agent(agent_id)
+
+        client = TestClient(app)
+        with client.websocket_connect("/ws/agent-tunnel") as ws:
+            ws.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": "guessed-token",
+                "protocol_version": PROTOCOL_VERSION,
+            }))
+            with pytest.raises(WebSocketDisconnect) as excinfo:
+                ws.receive_text()
+            assert excinfo.value.code == 4001
+            assert excinfo.value.reason == "Invalid agent credentials"
+
+    @pytest.mark.parametrize(
+        ("capabilities", "expected"),
+        [
+            ({"uninstall": True}, 1),
+            ({"uninstall": "true"}, 0),
+            ({}, 0),
+            (["uninstall"], 0),
+        ],
+    )
+    async def test_uninstall_capability_is_persisted_only_when_true(
+        self, app, registered_agent, db, capabilities, expected,
+    ):
+        agent_id, raw_token = registered_agent
+        client = TestClient(app)
+        with client.websocket_connect("/ws/agent-tunnel") as ws:
+            ws.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": PROTOCOL_VERSION,
+                "capabilities": capabilities,
+            }))
+            assert json.loads(ws.receive_text())["type"] == "auth_ok"
+
+        assert (await db.get_agent(agent_id))["supports_uninstall"] == expected

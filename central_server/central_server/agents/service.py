@@ -53,7 +53,12 @@ class AgentService:
         return raw_token
 
     async def delete_agent(
-        self, agent_id: str, user_id: str, *, as_admin: bool = False
+        self,
+        agent_id: str,
+        user_id: str,
+        *,
+        as_admin: bool = False,
+        uninstall: bool = False,
     ) -> None:
         """Delete an agent with full cascade and tear down live sockets.
 
@@ -67,17 +72,31 @@ class AgentService:
         ``RoutingTable.disconnect_agent`` which sends the standard
         ``{"reason": "admin_revoked"}`` text frame before each
         ``close(4010)`` (mirrors ``delete_user``).
+
+        ``uninstall=True`` sends a live agent an ``agent_uninstall`` frame
+        before the close. The request is recorded first, so an offline agent
+        (or one that loses the frame) gets it at its next connect.
         """
         if not as_admin and not await self._db.is_agent_owner(agent_id, user_id):
             raise ValueError("Not the owner of this agent")
 
-        from ..relay.routing import WS_CLOSE_ADMIN_REVOKED
+        from ..relay.routing import AGENT_UNINSTALL_TYPE, WS_CLOSE_ADMIN_REVOKED
 
-        await self._routing.disconnect_agent(
-            agent_id, WS_CLOSE_ADMIN_REVOKED, "admin_revoked"
-        )
+        if uninstall:
+            await self._db.record_uninstall_request(agent_id)
+            await self._routing.disconnect_agent(
+                agent_id,
+                WS_CLOSE_ADMIN_REVOKED,
+                "admin_revoked",
+                agent_control={"type": AGENT_UNINSTALL_TYPE},
+                agent_reason_code="agent_uninstalled",
+            )
+        else:
+            await self._routing.disconnect_agent(
+                agent_id, WS_CLOSE_ADMIN_REVOKED, "admin_revoked"
+            )
         await self._db.delete_agent(agent_id)
         logger.info(
-            "agent.deleted agent_id=%s by_user=%s as_admin=%s",
-            agent_id, user_id, as_admin,
+            "agent.deleted agent_id=%s by_user=%s as_admin=%s uninstall=%s",
+            agent_id, user_id, as_admin, uninstall,
         )

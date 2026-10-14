@@ -107,6 +107,10 @@ fun AgentListScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        viewModel.messages.collect { snackbarHostState.showSnackbar(it) }
+    }
+
     LaunchedEffect(uiState.error) {
         uiState.error?.let { error ->
             snackbarHostState.showSnackbar(error)
@@ -203,7 +207,9 @@ fun AgentListScreen(
     uiState.deleteConfirmAgent?.let { agent ->
         DeleteAgentDialog(
             agentName = agent.name,
-            onConfirm = { viewModel.confirmDelete(agent.agent_id) },
+            online = agent.online,
+            supportsUninstall = agent.supports_uninstall,
+            onConfirm = { uninstall -> viewModel.confirmDelete(agent.agent_id, uninstall) },
             onDismiss = viewModel::dismissDeleteConfirm,
         )
     }

@@ -345,7 +345,10 @@ account.
 To move a host to a different account:
 
 1. **Remove the agent** from the current owner's account (app → agent
-   settings → Remove agent).
+   settings → Remove agent). Clear the *uninstall* option (Android/web
+   checkbox, iOS "Delete Only"): with it on, the host's install is deleted
+   remotely and there is nothing left to re-pair (see
+   [deployment.md](deployment.md) *Uninstalling the agent*).
 2. On the agent host, run:
 
    ```bash
