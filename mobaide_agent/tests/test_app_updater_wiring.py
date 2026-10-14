@@ -85,6 +85,35 @@ def test_build_updater_returns_instance_with_trust_key(tmp_path, monkeypatch):
     assert updater._layout.prefix == prefix
 
 
+def test_build_updater_defers_while_voice_is_busy(tmp_path, monkeypatch):
+    """``app.state.voice.busy`` is the updater's busy probe: an open
+    dictation keeps the agent from restarting under the user."""
+    prefix = tmp_path / "mobaide"
+    prefix.mkdir()
+    _write_trust_key(prefix)
+    monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(prefix))
+    monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
+    monkeypatch.setattr(
+        "mobaide.agent.app._is_running_managed_release", lambda layout: True
+    )
+    busy = {"value": False}
+    session_manager = MagicMock()
+    session_manager.list_sessions.return_value = []
+    fake = SimpleNamespace(
+        state=SimpleNamespace(
+            session_manager=session_manager,
+            voice=SimpleNamespace(busy=lambda: busy["value"]),
+        )
+    )
+
+    updater = _build_updater(cast(FastAPI, fake))
+    assert updater is not None
+    assert updater._is_idle() is True
+
+    busy["value"] = True
+    assert updater._is_idle() is False
+
+
 def test_build_updater_env_trust_key_overrides_disk(tmp_path, monkeypatch):
     """``MOBAIDE_AGENT_TRUST_KEY`` is the CI/test override path."""
     prefix = tmp_path / "mobaide"

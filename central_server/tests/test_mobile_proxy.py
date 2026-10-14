@@ -279,6 +279,32 @@ class TestProxyEndpoint:
         data = resp.json()
         assert data["sessions"][0]["id"] == "s1"
 
+    async def test_proxy_returns_a_relayed_204_without_a_body(
+        self, client, app, registered_agent
+    ):
+        agent_id, _ = registered_agent
+        owner = await app.state.db.get_user_by_email("viewer@test.local")
+        access, _ = await app.state.auth_service.create_mobile_tokens(
+            owner["id"], agent_id, owner["id"]
+        )
+
+        app.state.mobile_proxy = MobileProxy(app.state.routing)
+
+        ws = _mock_ws()
+        app.state.routing.register_agent(agent_id, ws)
+
+        async def mock_forward(agent_id, method, path, query=None, body=None, timeout=30.0):
+            return {"status": 204, "body": None}
+
+        app.state.mobile_proxy.forward = mock_forward
+
+        resp = await client.delete(
+            f"/proxy/{agent_id}/api/voice/dictations/d1",
+            headers={"Authorization": f"Bearer {access}"},
+        )
+        assert resp.status_code == 204
+        assert resp.content == b""
+
     async def test_proxy_patch_forwards_method_and_body(
         self, client, app, registered_agent
     ):

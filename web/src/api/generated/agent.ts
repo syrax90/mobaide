@@ -853,6 +853,142 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/voice/dictations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Voice Dictation Create */
+        post: operations["voice_dictation_create_api_voice_dictations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/dictations/{dictation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Voice Dictation Delete */
+        delete: operations["voice_dictation_delete_api_voice_dictations__dictation_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/dictations/{dictation_id}/audio": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Voice Dictation Audio */
+        post: operations["voice_dictation_audio_api_voice_dictations__dictation_id__audio_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/dictations/{dictation_id}/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Voice Dictation Finish */
+        post: operations["voice_dictation_finish_api_voice_dictations__dictation_id__finish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Voice Install */
+        post: operations["voice_install_api_voice_install_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/install/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Voice Install Cancel */
+        post: operations["voice_install_cancel_api_voice_install_cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Voice Remove */
+        delete: operations["voice_remove_api_voice_model_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Voice Status */
+        get: operations["voice_status_api_voice_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/internal/hook": {
         parameters: {
             query?: never;
@@ -2152,6 +2288,132 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** VoiceDictationAudioRequest */
+        VoiceDictationAudioRequest: {
+            /** Pcm16 B64 */
+            pcm16_b64: string;
+            /** Seq */
+            seq: number;
+        };
+        /** VoiceDictationAudioResponse */
+        VoiceDictationAudioResponse: {
+            /** Duration Ms */
+            duration_ms: number;
+            /** Seq */
+            seq: number;
+        };
+        /** VoiceDictationCreateRequest */
+        VoiceDictationCreateRequest: {
+            /** Session Id */
+            session_id?: string | null;
+        };
+        /** VoiceDictationFinishRequest */
+        VoiceDictationFinishRequest: {
+            /** Last Seq */
+            last_seq: number;
+        };
+        /** VoiceDictationResponse */
+        VoiceDictationResponse: {
+            /** Dictation Id */
+            dictation_id: string;
+            /** Max Chunk Bytes */
+            max_chunk_bytes: number;
+            /** Max Seconds */
+            max_seconds: number;
+            /** Sample Rate */
+            sample_rate: number;
+        };
+        /**
+         * VoiceDictationResultResponse
+         * @description ``state`` is ``done`` (``text`` set) or ``transcribing`` (call
+         *     ``finish`` again).
+         */
+        VoiceDictationResultResponse: {
+            /** Dictation Id */
+            dictation_id: string;
+            /** Duration Ms */
+            duration_ms: number;
+            /** State */
+            state: string;
+            /** Text */
+            text: string | null;
+        };
+        /** VoiceErrorInfo */
+        VoiceErrorInfo: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /** VoiceHostInfo */
+        VoiceHostInfo: {
+            /** Cpu Count */
+            cpu_count: number | null;
+            /** Disk Free Bytes */
+            disk_free_bytes: number | null;
+            /** Ram Total Bytes */
+            ram_total_bytes: number | null;
+            /** Reasons */
+            reasons: components["schemas"]["VoiceHostReason"][];
+            /** Recommendation */
+            recommendation: string;
+        };
+        /** VoiceHostReason */
+        VoiceHostReason: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /** VoiceInstallRequest */
+        VoiceInstallRequest: {
+            /** Model Id */
+            model_id?: string | null;
+        };
+        /** VoiceModelInfo */
+        VoiceModelInfo: {
+            /** Disk Bytes */
+            disk_bytes: number;
+            /** Download Bytes */
+            download_bytes: number;
+            /** Id */
+            id: string;
+            /** Languages */
+            languages: string[];
+            /** Name */
+            name: string;
+            /** Ram Bytes */
+            ram_bytes: number;
+        };
+        /** VoiceProgress */
+        VoiceProgress: {
+            /** Done Bytes */
+            done_bytes: number;
+            /** Total Bytes */
+            total_bytes: number;
+        };
+        /**
+         * VoiceStatusResponse
+         * @description ``GET /api/voice/status`` and the ``voice.changed`` event payload.
+         *
+         *     ``state``: ``unsupported`` | ``not_installed`` | ``queued`` |
+         *     ``downloading`` | ``verifying`` | ``ready`` | ``failed``. ``progress`` is
+         *     set while ``downloading``; ``error`` while ``failed``; ``speed_factor``
+         *     (seconds of speech transcribed per second of CPU time, from the install
+         *     self-test) once ``ready``.
+         */
+        VoiceStatusResponse: {
+            /** Enabled */
+            enabled: boolean;
+            error: components["schemas"]["VoiceErrorInfo"] | null;
+            host: components["schemas"]["VoiceHostInfo"];
+            model: components["schemas"]["VoiceModelInfo"];
+            progress: components["schemas"]["VoiceProgress"] | null;
+            /** Speed Factor */
+            speed_factor: number | null;
+            /** State */
+            state: string;
         };
     };
     responses: never;
@@ -3613,6 +3875,231 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    voice_dictation_create_api_voice_dictations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["VoiceDictationCreateRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceDictationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    voice_dictation_delete_api_voice_dictations__dictation_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dictation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    voice_dictation_audio_api_voice_dictations__dictation_id__audio_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dictation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VoiceDictationAudioRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceDictationAudioResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    voice_dictation_finish_api_voice_dictations__dictation_id__finish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dictation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VoiceDictationFinishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceDictationResultResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    voice_install_api_voice_install_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["VoiceInstallRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    voice_install_cancel_api_voice_install_cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceStatusResponse"];
+                };
+            };
+        };
+    };
+    voice_remove_api_voice_model_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceStatusResponse"];
+                };
+            };
+        };
+    };
+    voice_status_api_voice_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceStatusResponse"];
                 };
             };
         };

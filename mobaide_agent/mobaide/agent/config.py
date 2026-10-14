@@ -103,6 +103,13 @@ class AgentConfig(BaseSettings):
         default=None, validation_alias="MOBAIDE_AGY_BIN",
     )
 
+    # The fake switch swaps the speech model for a tiny generated one and a
+    # deterministic engine — the real install state machine and helper process
+    # still run — so tests and client work never download the 670 MB model. The
+    # dir defaults to ``<state_prefix>/voice`` (``voice-fake`` in fake mode).
+    voice_fake: bool = Field(default=False, validation_alias="MOBAIDE_VOICE_FAKE")
+    voice_dir: str | None = Field(default=None, validation_alias="MOBAIDE_VOICE_DIR")
+
     auto_scan_config: AutoScanConfig | None = Field(default=None, exclude=True)
     relay_config: RelayConfig | None = Field(default=None, exclude=True)
 
@@ -120,14 +127,14 @@ class AgentConfig(BaseSettings):
         populate_by_name=True,
     )
 
-    @field_validator("audit_log_path", mode="before")
+    @field_validator("audit_log_path", "voice_dir", mode="before")
     @classmethod
     def _empty_audit_path_to_none(cls, value: Any) -> Any:
         if value == "" or value is None:
             return None
         return value
 
-    @field_validator("log_sample_ws", "enable_api_docs", mode="before")
+    @field_validator("log_sample_ws", "enable_api_docs", "voice_fake", mode="before")
     @classmethod
     def _parse_env_bool(cls, value: Any) -> bool:
         if isinstance(value, bool):
@@ -172,7 +179,7 @@ class AgentConfig(BaseSettings):
         # (returning model_copy(...) is silently dropped when validating via
         # __init__), so the anchored values are written onto ``self`` directly.
         prefix: Path | None = None
-        for field in ("user_store_path", "projects_store_path", "audit_log_path"):
+        for field in ("user_store_path", "projects_store_path", "audit_log_path", "voice_dir"):
             value = getattr(self, field)
             if value is None or Path(value).is_absolute():
                 continue

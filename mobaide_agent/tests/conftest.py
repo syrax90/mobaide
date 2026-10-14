@@ -104,6 +104,23 @@ def _pin_model_enumeration(monkeypatch):
     )
     yield
 
+
+@pytest.fixture(autouse=True)
+def _pin_voice_state_prefix(monkeypatch, tmp_path_factory):
+    """Pin the voice service's default root to a fresh temp dir for every test.
+
+    A ``VoiceService`` built without ``voice_dir`` (an ``AgentConfig`` a test
+    builds itself, whose lifespan then runs ``voice.start()``) would otherwise
+    read the developer's real ``<prefix>/voice``.
+    """
+    from mobaide.voice import service as voice_service
+
+    monkeypatch.setattr(
+        voice_service, "state_prefix",
+        lambda *_a, **_kw: tmp_path_factory.mktemp("state"),
+    )
+    yield
+
 TEST_JWT_SECRET = "test-secret-key-for-jwt-signing-do-not-use-in-prod"
 TEST_USERNAME = "testuser"
 TEST_PASSWORD = "testpass123"
@@ -216,11 +233,13 @@ def short_lived_config() -> SessionConfig:
 
 @pytest.fixture
 def agent_config(tmp_path) -> AgentConfig:
-    """Create a test AgentConfig with a temp user store and projects store."""
+    """Create a test AgentConfig with temp user/projects stores and a temp
+    voice dir, so no test reads or writes the real ``<prefix>/voice``."""
     return AgentConfig(
         jwt_secret_key=TEST_JWT_SECRET,
         user_store_path=str(tmp_path / "users.json"),
         projects_store_path=str(tmp_path / "projects.json"),
+        voice_dir=str(tmp_path / "voice"),
         max_sessions=4,
         log_level="DEBUG",
     )
@@ -241,6 +260,7 @@ def test_mode_agent_config(tmp_path) -> AgentConfig:
         env="test",
         user_store_path=str(tmp_path / "users.json"),
         projects_store_path=str(tmp_path / "projects.json"),
+        voice_dir=str(tmp_path / "voice"),
         max_sessions=4,
         log_level="DEBUG",
     )

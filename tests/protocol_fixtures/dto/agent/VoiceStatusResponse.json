@@ -1,0 +1,520 @@
+{
+  "type": "VoiceStatusResponse",
+  "cases": [
+    {
+      "name": "not_installed",
+      "wire": {
+        "state": "not_installed",
+        "enabled": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 2000000000
+        },
+        "progress": null,
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        },
+        "speed_factor": null,
+        "error": null
+      },
+      "decoded_canonical": {
+        "state": "not_installed",
+        "enabled": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 2000000000
+        },
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        }
+      }
+    },
+    {
+      "name": "downloading_low_resources",
+      "wire": {
+        "state": "downloading",
+        "enabled": true,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 2000000000
+        },
+        "progress": {
+          "done_bytes": 241172480,
+          "total_bytes": 682365212
+        },
+        "host": {
+          "ram_total_bytes": 8589934592,
+          "disk_free_bytes": 48000000000,
+          "cpu_count": 4,
+          "recommendation": "low_resources",
+          "reasons": [
+            {
+              "code": "low_ram",
+              "message": "This computer has 8.6 GB of memory; dictation uses about 2 GB while it runs, which may slow other apps."
+            }
+          ]
+        },
+        "speed_factor": null,
+        "error": null
+      },
+      "decoded_canonical": {
+        "state": "downloading",
+        "enabled": true,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 2000000000
+        },
+        "progress": {
+          "done_bytes": 241172480,
+          "total_bytes": 682365212
+        },
+        "host": {
+          "ram_total_bytes": 8589934592,
+          "disk_free_bytes": 48000000000,
+          "cpu_count": 4,
+          "recommendation": "low_resources",
+          "reasons": [
+            {
+              "code": "low_ram",
+              "message": "This computer has 8.6 GB of memory; dictation uses about 2 GB while it runs, which may slow other apps."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "ready",
+      "wire": {
+        "state": "ready",
+        "enabled": true,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 2000000000
+        },
+        "progress": null,
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        },
+        "speed_factor": 35.2,
+        "error": null
+      },
+      "decoded_canonical": {
+        "state": "ready",
+        "enabled": true,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 2000000000
+        },
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        },
+        "speed_factor": 35.2
+      }
+    },
+    {
+      "name": "failed",
+      "wire": {
+        "state": "failed",
+        "enabled": true,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 2000000000
+        },
+        "progress": null,
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        },
+        "speed_factor": null,
+        "error": {
+          "code": "hash_mismatch",
+          "message": "encoder.int8.onnx from huggingface.co failed verification."
+        }
+      },
+      "decoded_canonical": {
+        "state": "failed",
+        "enabled": true,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 2000000000
+        },
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        },
+        "error": {
+          "code": "hash_mismatch",
+          "message": "encoder.int8.onnx from huggingface.co failed verification."
+        }
+      }
+    },
+    {
+      "name": "unsupported",
+      "wire": {
+        "state": "unsupported",
+        "enabled": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 2000000000
+        },
+        "progress": null,
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 8,
+          "recommendation": "unsupported",
+          "reasons": [
+            {
+              "code": "libc_unsupported",
+              "message": "Voice input on Linux needs glibc 2.17 or newer (musl is not supported)."
+            }
+          ]
+        },
+        "speed_factor": null,
+        "error": null
+      },
+      "decoded_canonical": {
+        "state": "unsupported",
+        "enabled": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 2000000000
+        },
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 8,
+          "recommendation": "unsupported",
+          "reasons": [
+            {
+              "code": "libc_unsupported",
+              "message": "Voice input on Linux needs glibc 2.17 or newer (musl is not supported)."
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

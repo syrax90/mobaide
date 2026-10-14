@@ -579,6 +579,43 @@ path for a background tool. It is intentionally **not** automated here, because
 child-process TCC inheritance to the `claude` subprocess tree is not guaranteed across
 macOS versions.
 
+### Voice input (speech-to-text)
+
+Dictation is transcribed **on the agent's PC**, never on a Mobaide server. It is **off by default**: the agent downloads and starts nothing until the user enables voice from an app (or the CLI below), and agent updates install code only — they never fetch the model. The wire contract (routes, states, error codes, `capabilities.voice`, `voice.changed`) is in [PROTOCOL.md](../PROTOCOL.md).
+
+**What enabling costs.** The model is NVIDIA Parakeet TDT 0.6B v3 (int8 ONNX, 25 European languages including Russian and Ukrainian; no Japanese, Chinese, Korean, Arabic, Hindi or Turkish), run on the CPU by sherpa-onnx — the GPU is never used.
+
+| | |
+|---|---|
+| Download | ~682–690 MB (670 MB model + 12–19 MB of runtime wheels, depending on the platform) |
+| Disk | up to ~730 MB |
+| Memory | none while idle; up to ~2 GB while a dictation runs (1.9 GB peak measured on an Apple M4 over a 115 s dictation) |
+| Warning thresholds | apps warn (`low_resources`) below 11.5 GiB RAM, 4 logical CPUs or 2 GiB free disk; the user may still enable |
+| Unsupported | Python other than 64-bit CPython 3.12–3.14 (a 32-bit or free-threaded build), CPUs other than x86-64/ARM64, Linux with musl or glibc < 2.17, or too little free disk |
+
+**How it runs.** A helper process (`python -P -m mobaide.voice.worker`, same interpreter as the agent) starts on the first dictation, at below-normal priority with 2 inference threads and no console window, and exits after 3 idle minutes, which returns all of its memory to the OS; it is also recycled after an hour or 500 requests. The agent process itself never loads the model. The helper reads stdin from the agent and exits when the agent goes away, so it is never left behind. While a dictation is open, the auto-updater defers its restart (a forced update, and the `mobaide-agent update` CLI, do not wait).
+
+**Where files live.** `<state prefix>/voice/` — the install prefix (`/usr/local/mobaide`, `/opt/mobaide`, `C:\Program Files\MobaideAgent`) when writable, else the per-user data dir — outside `releases/`, so release pruning and rollback never touch it; the systemd unit's `ReadWritePaths` already covers it. `settings.json` holds the on/off choice and the last install outcome, `models/<model-id>/` the model plus its `NOTICE` (CC BY 4.0 attribution: created by NVIDIA, int8 ONNX export by k2-fsa/sherpa-onnx), and `runtime/<sherpa-onnx-version>-<python tag>-<platform>/` the sherpa-onnx runtime, unpacked from hash-pinned PyPI wheels without pip — it is not a dependency of the agent wheel, so a platform without a wheel can never break an agent install. A Python upgrade fetches a new runtime; the model stays. `MOBAIDE_VOICE_DIR` overrides the location (a relative path is anchored under the state prefix; the CLI reads it from the agent's environment or `.env`, and `--voice-dir` overrides both).
+
+**Downloads.** Model files come from the `voice-model-parakeet-tdt-0.6b-v3-int8` release in the public releases repo (`github.com`), falling back to the pinned upstream Hugging Face revision (`huggingface.co`); the two runtime wheels come from PyPI (`files.pythonhosted.org`) — allow those hosts on a filtering proxy. Every file's size and SHA-256 are pinned in the agent's catalog (`mobaide/voice/catalog.py`), so a captive-portal page or a truncated mirror is rejected (`hash_mismatch`) and the next source is tried. Downloads honour `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`, use certifi, retry with backoff and resume from `*.part` files with HTTP Range — after a network drop, a sleeping laptop, or an agent restart (which resumes the install by itself). A `failed` install waits for the user to retry. Offline, enabling fails with `network`; once installed, dictation needs no internet.
+
+**CLI** (run as the agent's user — elevated on Windows — so the files stay writable for the agent):
+
+```bash
+mobaide-agent voice status [--json]     # state, cost, host warnings, self-test speed
+mobaide-agent voice install             # foreground download + verify + self-test
+mobaide-agent voice remove [--yes]      # turn off and delete the files
+mobaide-agent voice benchmark           # dictation latency on this PC (needs voice installed)
+```
+
+The CLI works on the same files and lock as the running agent; the apps see the result on their next status read.
+
+**Privacy.** Audio is held in memory only, transcribed, and dropped; neither audio nor transcript text is logged or written to disk — logs carry only sizes, durations, timings and error codes.
+
+**Testing without the model.** `MOBAIDE_VOICE_FAKE=1` swaps in a tiny generated model and a deterministic engine (transcripts read `fake transcript <n> ms`) under `<state prefix>/voice-fake/`; the install state machine and helper process are real. `tests/e2e/manual_stack.py up --fake-voice` sets it.
+
+**Troubleshooting.** `hash_mismatch` behind a proxy usually means TLS interception or a captive portal; `disk_full` needs the space shown in `voice status`; `selftest_failed` means the runtime or model could not load (the message names the cause, e.g. a missing glibc symbol) — `voice remove` then `voice install` reinstalls both.
+
 ### Threat model
 
 The agent now runs with the developer's full UID privileges and has read/write access to `$HOME`. A compromise of the relay channel — i.e. a stolen `RELAY_AGENT_TOKEN` or a compromised central server — gains the same access the developer has interactively:

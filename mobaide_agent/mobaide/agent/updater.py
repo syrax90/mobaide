@@ -53,6 +53,7 @@ import tarfile
 import tempfile
 import time
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -250,11 +251,15 @@ class StagedBinaryUpdater:
         venv_builder: Any | None = None,
         finalizer: Any | None = None,
         exit_func: Any | None = None,
+        busy_probe: Callable[[], bool] | None = None,
     ) -> None:
         self._layout = layout
         self._public_key_b64 = public_key_b64
         self._session_manager = session_manager
         self._current_version = current_version
+        # Extra non-session work that must not be cut by a restart (an active
+        # voice dictation); forced updates bypass it like they bypass sessions.
+        self._busy_probe = busy_probe
         # Two-phase install: build the pip-less venv in staging (move-safe),
         # then finalize (pip + wheel) at the final path AFTER the swap so no
         # console-script shebang ever encodes the staging dir. Both phases are
@@ -382,6 +387,12 @@ class StagedBinaryUpdater:
         )
 
     def _is_idle(self) -> bool:
+        if self._busy_probe is not None:
+            try:
+                if self._busy_probe():
+                    return False
+            except Exception as exc:
+                logger.warning("updater.busy_probe_failed: %s", exc)
         if self._session_manager is None:
             return True
         try:

@@ -138,6 +138,16 @@ from mobaide.linear.scanner import (
     AutoScanCapacityReached,
 )
 from mobaide.linear.worktree import WorktreeCreationError
+from mobaide.voice.errors import VoiceError
+from mobaide.voice.errors import http_error_for as voice_http_error_for
+from mobaide.voice.models import (
+    VOICE_CAPABILITIES,
+    VoiceDictationAudioRequest,
+    VoiceDictationCreateRequest,
+    VoiceDictationFinishRequest,
+    VoiceInstallRequest,
+)
+from mobaide.voice.service import VoiceService
 
 from mobaide import __version__
 from .config import RelayConfig
@@ -200,6 +210,15 @@ def _build_relay_ssl_context(
         return None
     # Any other scheme: no TLS context — websockets surfaces the error itself.
     return None
+
+# Voice proxy requests run as their own tasks instead of inline in the tunnel
+# reader: ``finish`` may wait up to 20 s for the transcript, and an inline
+# await would stall input to every session meanwhile. Bounded so a flood of
+# requests cannot pile up tasks.
+_VOICE_PATH_PREFIX = "/api/voice/"
+MAX_VOICE_PROXY_TASKS = 32
+_VOICE_ROUTE = re.compile(r"^/api/voice/(status|install|install/cancel|model|dictations)$")
+_VOICE_DICTATION_ROUTE = re.compile(r"^/api/voice/dictations/([^/]+)(?:/(audio|finish))?$")
 
 # PTY frame type bytes — must stay in sync with agent/ws/session_io.py.
 FRAME_OUTPUT = b"o"
@@ -418,6 +437,11 @@ class RelayClient:
         self._autoscan_streams: dict[str, asyncio.Task] = {}
         self._autoscan_inboxes: dict[str, asyncio.Queue[str]] = {}
 
+        # In-flight ``/api/voice/*`` proxy requests. They outlive a reconnect
+        # (the reply goes out on whichever tunnel is live when they finish)
+        # and are cancelled only by ``stop()``.
+        self._voice_proxy_tasks: set[asyncio.Task] = set()
+
         # Latest manifest pointer received from central_server (auth_ok or a
         # mid-connection ``agent_manifest_update`` control frame). Consumed by
         # the staged-binary auto-updater. Never raises on absence.
@@ -452,6 +476,8 @@ class RelayClient:
         """Gracefully shut down the relay client."""
         self._stopping = True
         self._cancel_all_subtasks()
+        for task in list(self._voice_proxy_tasks):
+            task.cancel()
         if self._task and not self._task.done():
             self._task.cancel()
             try:
@@ -729,7 +755,10 @@ class RelayClient:
             await self._handle_stop_session(ctrl, ws)
 
         elif msg_type == "proxy_request":
-            await self._handle_proxy_request(ctrl, ws)
+            if str(ctrl.get("path", "")).startswith(_VOICE_PATH_PREFIX):
+                self._spawn_voice_proxy(ctrl)
+            else:
+                await self._handle_proxy_request(ctrl, ws)
 
         elif msg_type == "open_autoscan":
             await self._handle_open_autoscan(ctrl, ws)
@@ -831,6 +860,15 @@ class RelayClient:
                 logger.exception(
                     "relay.events_snapshot.projects_publish_failed"
                 )
+
+        voice = getattr(self._app_state, "voice", None)
+        if isinstance(voice, VoiceService):
+            try:
+                self._event_bus.publish(
+                    "voice.changed", voice.status().model_dump(mode="json")
+                )
+            except Exception:
+                logger.exception("relay.events_snapshot.voice_publish_failed")
 
         try:
             await ws.send(
@@ -1368,6 +1406,7 @@ class RelayClient:
                             and not warm_task.done(),
                         ),
                         "git": GIT_CAPABILITIES,
+                        "voice": VOICE_CAPABILITIES,
                     },
                     "latest_agent_version": (manifest or {}).get("version"),
                 },
@@ -1550,6 +1589,10 @@ class RelayClient:
         linear_resp = await self._dispatch_linear_discovery(method, path)
         if linear_resp is not None:
             return linear_resp
+
+        voice_resp = await self._dispatch_voice(method, path, body)
+        if voice_resp is not None:
+            return voice_resp
 
         if method == "GET" and path == "/api/autoscan/list":
             mgr = getattr(self._app_state, "autoscan_manager", None)
@@ -2057,6 +2100,120 @@ class RelayClient:
             mapped = git_changes_http_error_for(exc)
             if mapped is None:
                 raise
+            return {"status": mapped[0], "body": mapped[1]}
+        return {"status": 200, "body": resp.model_dump(mode="json")}
+
+    def _spawn_voice_proxy(self, ctrl: dict) -> None:
+        if len(self._voice_proxy_tasks) >= MAX_VOICE_PROXY_TASKS:
+            coro = self._send_proxy_result(
+                ctrl,
+                {
+                    "status": 503,
+                    "body": {
+                        "detail": {
+                            "code": "voice_busy",
+                            "message": "Too many voice requests are in flight.",
+                        }
+                    },
+                },
+            )
+        else:
+            coro = self._run_voice_proxy(ctrl)
+        task = asyncio.create_task(coro, name="relay-voice-proxy")
+        self._voice_proxy_tasks.add(task)
+        task.add_done_callback(self._voice_proxy_tasks.discard)
+
+    async def _run_voice_proxy(self, ctrl: dict) -> None:
+        method = str(ctrl.get("method", "GET")).upper()
+        path = str(ctrl.get("path", ""))
+        try:
+            result = await self._dispatch_voice(method, path, ctrl.get("body"))
+            if result is None:
+                result = {
+                    "status": 404,
+                    "body": {"detail": f"Unknown proxy route: {method} {path}"},
+                }
+        except Exception as exc:
+            logger.warning("relay.proxy_request_failed path=%s: %s", path, exc)
+            result = {"status": 500, "body": {"detail": str(exc)}}
+        await self._send_proxy_result(ctrl, result)
+
+    async def _send_proxy_result(self, ctrl: dict, result: dict) -> None:
+        # Whatever tunnel is live now: the central server matches the reply
+        # by request_id, so an answer that outlived a reconnect still lands.
+        ws = self._ws
+        if ws is None:
+            logger.info("relay.voice_proxy_dropped path=%s", ctrl.get("path"))
+            return
+        resp = {
+            "type": "proxy_response",
+            "request_id": ctrl.get("request_id", ""),
+            "status": result.get("status", 200),
+            "body": result.get("body"),
+        }
+        try:
+            await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+        except Exception as exc:
+            logger.info("relay.voice_proxy_send_failed path=%s: %s", ctrl.get("path"), exc)
+
+    async def _dispatch_voice(
+        self, method: str, path: str, body: dict | None
+    ) -> dict | None:
+        """``/api/voice/*`` with the same service calls, models and error
+        bodies as ``mobaide.voice.router``; ``None`` for any other path."""
+        route_match = _VOICE_ROUTE.match(path)
+        dictation_match = None if route_match else _VOICE_DICTATION_ROUTE.match(path)
+        if route_match is None and dictation_match is None:
+            return None
+        voice = getattr(self._app_state, "voice", None)
+        if not isinstance(voice, VoiceService):
+            return {
+                "status": 503,
+                "body": {
+                    "detail": {
+                        "code": "voice_unavailable",
+                        "message": "Voice input is not available.",
+                    }
+                },
+            }
+        try:
+            if route_match is not None:
+                route = route_match.group(1)
+                if method == "GET" and route == "status":
+                    resp = voice.status()
+                elif method == "POST" and route == "install":
+                    request = VoiceInstallRequest.model_validate(body or {})
+                    resp = await voice.install(request.model_id)
+                elif method == "POST" and route == "install/cancel":
+                    resp = await voice.cancel_install()
+                elif method == "DELETE" and route == "model":
+                    resp = await voice.remove()
+                elif method == "POST" and route == "dictations":
+                    VoiceDictationCreateRequest.model_validate(body or {})
+                    resp = await voice.create_dictation()
+                else:
+                    return None
+            else:
+                assert dictation_match is not None
+                dictation_id, action = dictation_match.group(1), dictation_match.group(2)
+                if method == "POST" and action == "audio":
+                    resp = await voice.append_audio(
+                        dictation_id, VoiceDictationAudioRequest.model_validate(body or {})
+                    )
+                elif method == "POST" and action == "finish":
+                    resp = await voice.finish_dictation(
+                        dictation_id, VoiceDictationFinishRequest.model_validate(body or {})
+                    )
+                elif method == "DELETE" and action is None:
+                    await voice.delete_dictation(dictation_id)
+                    return {"status": 204, "body": None}
+                else:
+                    return None
+        except ValidationError as exc:
+            return {"status": 422, "body": {"detail": _scrub_validation_errors(exc)}}
+        except VoiceError as exc:
+            mapped = voice_http_error_for(exc)
+            assert mapped is not None
             return {"status": mapped[0], "body": mapped[1]}
         return {"status": 200, "body": resp.model_dump(mode="json")}
 

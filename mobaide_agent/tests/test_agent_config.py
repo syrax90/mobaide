@@ -40,6 +40,8 @@ _ENV_VARS = (
     "RELAY_RECONNECT_BASE",
     "RELAY_RECONNECT_MAX",
     "RELAY_RECONNECT_STABILITY_THRESHOLD",
+    "MOBAIDE_VOICE_FAKE",
+    "MOBAIDE_VOICE_DIR",
 )
 
 
@@ -319,3 +321,47 @@ class TestAgentConfigProjectsField:
         # projects store has a chance to surface a useful error.
         assert cfg.projects == seed
         assert isinstance(cfg.projects, str)
+
+
+class TestAgentConfigVoice:
+    def test_unset_is_real_voice_in_the_default_dir(self, monkeypatch):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+
+        cfg = AgentConfig.from_env()
+
+        assert cfg.voice_fake is False
+        assert cfg.voice_dir is None
+
+    @pytest.mark.parametrize(("raw", "expected"), [("1", True), ("true", True), ("0", False), ("", False)])
+    def test_fake_switch_parses_env_booleans(self, monkeypatch, raw, expected):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("MOBAIDE_VOICE_FAKE", raw)
+
+        cfg = AgentConfig.from_env()
+
+        assert cfg.voice_fake is expected
+
+    def test_empty_voice_dir_becomes_none(self, monkeypatch):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("MOBAIDE_VOICE_DIR", "")
+
+        cfg = AgentConfig.from_env()
+
+        assert cfg.voice_dir is None
+
+    def test_voice_dir_passed_through(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("MOBAIDE_VOICE_DIR", str(tmp_path / "voice"))
+
+        cfg = AgentConfig.from_env()
+
+        assert cfg.voice_dir == str(tmp_path / "voice")
+
+    def test_relative_voice_dir_anchored_to_prefix(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(tmp_path))
+        monkeypatch.setenv("MOBAIDE_VOICE_DIR", "my-voice")
+
+        cfg = AgentConfig.from_env()
+
+        assert cfg.voice_dir == str(tmp_path / "my-voice")

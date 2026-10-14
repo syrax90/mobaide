@@ -206,6 +206,23 @@ class MockMobileClient:
         resp.raise_for_status()
         return resp.json()
 
+    def proxy_request(
+        self,
+        agent_id: str,
+        mobile_token: str,
+        method: str,
+        path: str,
+        body: dict | None = None,
+    ) -> httpx.Response:
+        """Call ``/<path>`` on the agent over the server proxy and return the
+        raw response, refusals included (no ``raise_for_status``)."""
+        return self._http.request(
+            method,
+            f"/proxy/{agent_id}/{path.lstrip('/')}",
+            json=body,
+            headers=self._bearer(mobile_token),
+        )
+
     def _session_ws_url(self, agent_id: str, session_id: str, mobile_token: str) -> str:
         return (
             f"{self.ws_base}/relay/ws/session/{agent_id}/{session_id}?token={mobile_token}"

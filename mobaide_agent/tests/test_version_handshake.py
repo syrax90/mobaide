@@ -46,6 +46,12 @@ async def test_get_version(client) -> None:
             "delete_remote": True,
             "conflicts": True,
         },
+        "voice": {
+            "dictation": True,
+            "sample_rate": 16000,
+            "max_seconds": 120,
+            "max_chunk_bytes": 65536,
+        },
     }
     # The signed manifest body now travels inline over the relay WebSocket
     # — it is not exposed via this REST surface.
