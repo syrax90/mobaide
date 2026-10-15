@@ -964,9 +964,78 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 EOF
     chown -R "$RUN_USER:$RUN_GROUP" "$MOBAIDE_AGENT_PREFIX"
+    install_systemd_uninstall_helper
     systemctl daemon-reload
     systemctl enable mobaide-agent
     systemctl restart mobaide-agent
+    if [ -f /etc/systemd/system/mobaide-agent-uninstall.path ]; then
+        systemctl enable --now mobaide-agent-uninstall.path
+    fi
+}
+
+# Root half of the remote uninstall. The agent runs unprivileged under
+# NoNewPrivileges, so when the relay orders it to uninstall it can only drop
+# <prefix>/run/uninstall-requested; this .path unit sees the marker and runs
+# a root-owned script that stops and unregisters the service and deletes the
+# install. The script lives outside the user-owned prefix so the run-as user
+# cannot rewrite what root executes, and it enters the prefix with `cd -P`
+# plus a canonical-path check so a prefix swapped for a symlink is refused.
+install_systemd_uninstall_helper() {
+    local path_unit="/etc/systemd/system/mobaide-agent-uninstall.path"
+    local svc_unit="/etc/systemd/system/mobaide-agent-uninstall.service"
+    local script="/usr/local/libexec/mobaide-agent-uninstall"
+    local canon marker
+    canon="$(readlink -f -- "$MOBAIDE_AGENT_PREFIX" 2>/dev/null || true)"
+    case "$canon" in
+        ""|/|*"'"*|*" "*)
+            warn "Skipping the remote-uninstall helper: unsupported prefix '$MOBAIDE_AGENT_PREFIX'"
+            return 0
+            ;;
+    esac
+    marker="$canon/run/uninstall-requested"
+    # A marker left over from an earlier uninstall would fire the moment the
+    # path unit starts and remove this fresh install.
+    rm -f -- "$marker"
+    mkdir -p /usr/local/libexec
+    # The entry list mirrors PREFIX_ENTRIES in
+    # mobaide_agent/mobaide/agent/self_uninstall.py; keep the two in sync.
+    cat > "$script" <<EOF
+#!/bin/sh
+set -u
+PREFIX='$canon'
+systemctl disable --now mobaide-agent.service mobaide-agent-uninstall.path || true
+if cd -P -- "\$PREFIX" 2>/dev/null && [ "\$(pwd -P)" = "\$PREFIX" ]; then
+    rm -rf --one-file-system -- releases trust mobaide_agent run state logs svc bin \\
+        current_version current_version.tmp .boot_journal agent.env \\
+        agent.out.log agent.err.log users.json projects.json
+    cd /
+    rmdir -- "\$PREFIX" 2>/dev/null || true
+fi
+rm -f $svc_unit $path_unit /etc/systemd/system/mobaide-agent.service
+systemctl daemon-reload
+rm -f -- "\$0"
+EOF
+    chown root:root "$script"
+    chmod 0755 "$script"
+    cat > "$svc_unit" <<EOF
+[Unit]
+Description=Mobaide Agent remote uninstall
+
+[Service]
+Type=oneshot
+ExecStart=$script
+EOF
+    cat > "$path_unit" <<EOF
+[Unit]
+Description=Watch for a Mobaide Agent remote-uninstall request
+
+[Path]
+PathExists=$marker
+Unit=mobaide-agent-uninstall.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
 }
 
 resolve_run_as_user_macos() {
