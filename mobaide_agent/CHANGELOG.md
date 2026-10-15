@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.3.14](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.13...agent-v0.3.14) (2026-10-15)
+
+
+### Features
+
+* let removing an agent also uninstall it from its host ([f2addc4](https://github.com/syrax90/claude_mobile/commit/f2addc424dd34644e34000a360705497431b03d8))
+* let removing an agent also uninstall it from its host ([51d77ac](https://github.com/syrax90/claude_mobile/commit/51d77ac05d19d51a39754bf8f7e94a57984ae25f))
+
 ## [0.3.13](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.12...agent-v0.3.13) (2026-10-01)
 
 

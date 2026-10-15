@@ -1,5 +1,13 @@
 # central_server Changelog
 
+## [0.2.17](https://github.com/syrax90/claude_mobile/compare/server-v0.2.16...server-v0.2.17) (2026-10-15)
+
+
+### Features
+
+* let removing an agent also uninstall it from its host ([f2addc4](https://github.com/syrax90/claude_mobile/commit/f2addc424dd34644e34000a360705497431b03d8))
+* let removing an agent also uninstall it from its host ([51d77ac](https://github.com/syrax90/claude_mobile/commit/51d77ac05d19d51a39754bf8f7e94a57984ae25f))
+
 ## [0.2.16](https://github.com/syrax90/claude_mobile/compare/server-v0.2.15...server-v0.2.16) (2026-09-30)
 
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.10](https://github.com/syrax90/claude_mobile/compare/web-v0.1.9...web-v0.1.10) (2026-10-15)
+
+
+### Features
+
+* let removing an agent also uninstall it from its host ([f2addc4](https://github.com/syrax90/claude_mobile/commit/f2addc424dd34644e34000a360705497431b03d8))
+* let removing an agent also uninstall it from its host ([51d77ac](https://github.com/syrax90/claude_mobile/commit/51d77ac05d19d51a39754bf8f7e94a57984ae25f))
+
+
+### Bug Fixes
+
+* stop a retained hidden client from resizing the PTY when another client attaches ([cb21cfb](https://github.com/syrax90/claude_mobile/commit/cb21cfbf09742c4874446d8c1555a54a855f80c4))
+* stop a retained hidden client from resizing the PTY when another client attaches ([e134336](https://github.com/syrax90/claude_mobile/commit/e134336abbab00bfabfc9cecdac56d79fe9eef10))
+
 ## [0.1.9](https://github.com/syrax90/claude_mobile/compare/web-v0.1.8...web-v0.1.9) (2026-09-30)
 
 
