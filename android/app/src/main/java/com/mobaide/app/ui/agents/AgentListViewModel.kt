@@ -14,13 +14,16 @@ import com.mobaide.app.data.repository.AgentRepository
 import com.mobaide.app.data.security.TrustKeyPinning
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -174,6 +177,11 @@ class AgentListViewModel @Inject constructor(
 
     private val _navigateToSessions = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val navigateToSessions: SharedFlow<Unit> = _navigateToSessions.asSharedFlow()
+
+    private val _messages = Channel<String>(Channel.BUFFERED)
+
+    /** One-shot confirmations for the screen's snackbar. */
+    val messages: Flow<String> = _messages.receiveAsFlow()
 
     private val _scanRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val scanRequests: SharedFlow<Unit> = _scanRequests.asSharedFlow()
@@ -331,7 +339,8 @@ class AgentListViewModel @Inject constructor(
         _uiState.update { it.copy(deleteConfirmAgent = null) }
     }
 
-    fun confirmDelete(agentId: String) {
+    fun confirmDelete(agentId: String, uninstall: Boolean = false) {
+        val agent = _uiState.value.deleteConfirmAgent?.takeIf { it.agent_id == agentId }
         viewModelScope.launch {
             _uiState.update { it.copy(deleteConfirmAgent = null) }
             try {
@@ -341,7 +350,16 @@ class AgentListViewModel @Inject constructor(
                     sessionManager.agentDisconnect()
                     _uiState.update { it.copy(connectedAgentId = null) }
                 }
-                agentRepository.deleteAgent(agentId)
+                agentRepository.deleteAgent(agentId, uninstall)
+                if (uninstall && agent != null) {
+                    _messages.send(
+                        if (agent.online) {
+                            "“${agent.name}” is uninstalling itself."
+                        } else {
+                            "“${agent.name}” will uninstall itself when it next comes online."
+                        },
+                    )
+                }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(error = e.message ?: "Failed to delete agent")

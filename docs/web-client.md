@@ -609,7 +609,9 @@ agent host — the Windows-specific `Get-ScheduledTask` / `agent.err.log`
 enumeration is gone.
 
 **`/agents`** is full mobile parity: cards (status dot, name, Online/Offline,
-agent id, version, added, last seen), manual add, re-register, remove, and the
+agent id, version, added, last seen), manual add, re-register, remove (with an
+"Also uninstall Mobaide from this computer" checkbox, on by default, offered
+when the agent advertises `supports_uninstall`), and the
 install-commands panel. Two web-only card fields, both because a browser is
 the first client that can hold several agents at once: the agent id, which is
 what each host's `.env` carries, and the agent version, which is the fastest

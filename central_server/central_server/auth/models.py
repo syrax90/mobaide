@@ -95,6 +95,9 @@ class AgentSummary(BaseModel):
     last_seen_at: str | None
     agent_version: str | None = None
     agent_protocol_version: int | None = None
+    # Whether the build that last connected can uninstall itself, i.e.
+    # whether ``DELETE /api/agents/{id}?uninstall=true`` will take effect.
+    supports_uninstall: bool = False
 
 
 class ReregisterAgentResponse(BaseModel):

@@ -35,6 +35,12 @@ polls with that admin's token (`client.login(...)`), not the mobile-owner's —
 if this wiring is ever dropped, the readiness wait fails silently as a 45s
 timeout rather than an auth error.
 
+Tests that remove or break their agent use the function-scoped `spawn_agent`
+fixture instead (`tests/e2e/conftest.py`): it provisions a dedicated agent for
+the `e2e_stack` owner on the shared relay, boots it with its own
+`MOBAIDE_AGENT_PREFIX`, and terminates it at test end, so the shared stack
+agent stays online (see `test_e2e_agent_uninstall.py`).
+
 `tests/e2e/test_e2e_session_echo.py` then mints a mobile token, creates a **SHELL** session
 via `POST /proxy/{agent_id}/api/sessions` (the agent's `FakePtyBackend` — no real
 shell, no `claude`/`codex` CLI), attaches the relay session WebSocket, and asserts

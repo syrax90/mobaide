@@ -6,6 +6,36 @@ struct AgentSummaryResponse: Codable, Equatable, Sendable {
     let online: Bool
     let created_at: String
     let last_seen_at: String?
+    /// The build that last connected can uninstall itself when removed.
+    let supports_uninstall: Bool
+
+    init(
+        agent_id: String,
+        name: String,
+        online: Bool,
+        created_at: String,
+        last_seen_at: String?,
+        supports_uninstall: Bool = false
+    ) {
+        self.agent_id = agent_id
+        self.name = name
+        self.online = online
+        self.created_at = created_at
+        self.last_seen_at = last_seen_at
+        self.supports_uninstall = supports_uninstall
+    }
+}
+
+extension AgentSummaryResponse {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        agent_id = try container.decode(String.self, forKey: .agent_id)
+        name = try container.decode(String.self, forKey: .name)
+        online = try container.decode(Bool.self, forKey: .online)
+        created_at = try container.decode(String.self, forKey: .created_at)
+        last_seen_at = try container.decodeIfPresent(String.self, forKey: .last_seen_at)
+        supports_uninstall = try container.decodeIfPresent(Bool.self, forKey: .supports_uninstall) ?? false
+    }
 }
 
 struct CreateAgentRequest: Codable, Equatable, Sendable {

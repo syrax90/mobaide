@@ -99,7 +99,7 @@ class TestMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 20
+        assert (await cursor.fetchone())[0] == 21
 
         # The column has to be ALTERed in before _SCHEMA re-runs, and the
         # new table has to come back usable alongside it.
@@ -113,7 +113,7 @@ class TestMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 20
+        assert (await cursor.fetchone())[0] == 21
         assert await db.get_user_trust_key_fp(owner) == _FP_A
         assert await db.get_device_code(request_id, owner) is not None
         await db.close()

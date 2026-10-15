@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from ..auth.dependencies import get_non_admin_api_user
 from ..auth.models import (
@@ -70,12 +70,19 @@ async def reregister_agent(
 async def delete_agent(
     request: Request,
     agent_id: str,
+    uninstall: bool = Query(
+        False,
+        description=(
+            "Also make the agent uninstall itself from its host: at once "
+            "when online, otherwise on its next connect within 30 days."
+        ),
+    ),
     user: UserTokenPayload = Depends(get_non_admin_api_user),
 ):
     """Delete an agent and cascade all related data. Owner only."""
     agent_service = request.app.state.agent_service
     try:
-        await agent_service.delete_agent(agent_id, user.sub)
+        await agent_service.delete_agent(agent_id, user.sub, uninstall=uninstall)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)

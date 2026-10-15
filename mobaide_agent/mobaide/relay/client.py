@@ -294,6 +294,17 @@ class ProtocolIncompatibleError(ConnectionError):
         self.manifest_url_hint = manifest_url_hint
 
 
+class AgentUninstallRequested(ConnectionError):
+    """Raised when the relay answers the auth handshake with
+    ``agent_uninstall``: this agent was removed from its account and asked
+    to uninstall itself while it was offline."""
+
+
+# Control-frame type for the relay's uninstall order; the relay sends it on
+# the live tunnel and as its reply to a removed agent's auth.
+AGENT_UNINSTALL_TYPE = "agent_uninstall"
+
+
 def _validate_adhoc_cwd_or_error(cwd: str) -> str | None:
     """Return a human-readable error string if ``cwd`` is unfit for an
     ad-hoc launch, else ``None``.
@@ -431,6 +442,10 @@ class RelayClient:
         # takes priority. Exceptions are logged and never propagated
         # back into the reconnect loop.
         self._on_protocol_incompatible: Any | None = None
+        # Fired once when the relay orders this agent to uninstall itself.
+        # Wiring it is also what advertises the ``uninstall`` capability.
+        self._on_uninstall_requested: Any | None = None
+        self._uninstall_task: asyncio.Task | None = None
         self._unknown_control_type_total = 0
         self._unknown_session_input_total = 0
         self._unknown_session_notified: set[str] = set()
@@ -507,6 +522,8 @@ class RelayClient:
                             cb_exc,
                         )
                 proto_incompatible = True
+            except AgentUninstallRequested:
+                self._request_uninstall()
             except Exception as exc:
                 logger.warning("relay.connection_failed: %s", exc)
 
@@ -597,6 +614,33 @@ class RelayClient:
         """
         self._on_protocol_incompatible = callback
 
+    def set_uninstall_callback(self, callback: Any) -> None:
+        """Register the async no-argument callback run when the relay orders
+        this agent to uninstall itself, and advertise the ``uninstall``
+        capability in the auth handshake from then on."""
+        self._on_uninstall_requested = callback
+
+    def _request_uninstall(self) -> None:
+        """Stop reconnecting for good and run the uninstall callback once.
+
+        The callback runs as its own task so the tunnel teardown that
+        follows the order cannot cancel it half-way.
+        """
+        self._stopping = True
+        if self._uninstall_task is not None:
+            return
+        logger.warning("relay.uninstall_requested agent_id=%s", self._config.agent_id)
+        if self._on_uninstall_requested is None:
+            return
+
+        async def _run() -> None:
+            try:
+                await self._on_uninstall_requested()
+            except Exception as exc:
+                logger.warning("relay.uninstall_callback_failed: %s", exc)
+
+        self._uninstall_task = asyncio.create_task(_run(), name="agent-uninstall")
+
     @property
     def latest_manifest(self) -> dict[str, object] | None:
         return self._latest_manifest
@@ -609,7 +653,9 @@ class RelayClient:
             "token": self._config.agent_token,
             "protocol_version": PROTOCOL_VERSION,
             "agent_version": __version__,
-            "capabilities": {},
+            "capabilities": (
+                {"uninstall": True} if self._on_uninstall_requested else {}
+            ),
         })
         await ws.send(auth_msg)
         raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
@@ -625,6 +671,8 @@ class RelayClient:
             raise ProtocolIncompatibleError(
                 reason, manifest_url_hint=manifest_url_hint,
             )
+        if msg_type == AGENT_UNINSTALL_TYPE:
+            raise AgentUninstallRequested("Relay removed this agent")
         if msg_type != "auth_ok":
             raise ConnectionError(f"Relay auth failed: {resp}")
         self._latest_manifest = {
@@ -754,6 +802,9 @@ class RelayClient:
             }
             self._latest_manifest = manifest
             await self._maybe_dispatch_manifest_update(manifest)
+
+        elif msg_type == AGENT_UNINSTALL_TYPE:
+            self._request_uninstall()
 
         else:
             self._unknown_control_type_total += 1

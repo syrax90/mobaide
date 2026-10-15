@@ -189,6 +189,11 @@
           "online": {
             "title": "Online",
             "type": "boolean"
+          },
+          "supports_uninstall": {
+            "default": false,
+            "title": "Supports Uninstall",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2043,6 +2048,18 @@
             "schema": {
               "title": "Agent Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Also make the agent uninstall itself from its host: at once when online, otherwise on its next connect within 30 days.",
+            "in": "query",
+            "name": "uninstall",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Also make the agent uninstall itself from its host: at once when online, otherwise on its next connect within 30 days.",
+              "title": "Uninstall",
+              "type": "boolean"
             }
           }
         ],

@@ -316,4 +316,28 @@ class CentralApiTest {
             assertEquals(401, e.code)
         }
     }
+
+    @Test
+    fun deleteAgent_withoutUninstall_sendsNoQuery() = runTest {
+        val (api, client) = newApi()
+        val captured = stubCall(client) { req -> responseFor(req, 204, "") }
+
+        api.deleteAgent("tok-1", "a-1")
+
+        assertEquals("DELETE", captured.captured.method)
+        assertEquals("https://central.example.com/api/agents/a-1", captured.captured.url.toString())
+        assertEquals("Bearer tok-1", captured.captured.header("Authorization"))
+    }
+
+    @Test
+    fun deleteAgent_withUninstall_appendsUninstallQuery() = runTest {
+        val (api, client) = newApi()
+        val captured = stubCall(client) { req -> responseFor(req, 204, "") }
+
+        api.deleteAgent("tok-1", "a-1", uninstall = true)
+
+        assertEquals("DELETE", captured.captured.method)
+        assertEquals("/api/agents/a-1", captured.captured.url.encodedPath)
+        assertEquals("true", captured.captured.url.queryParameter("uninstall"))
+    }
 }

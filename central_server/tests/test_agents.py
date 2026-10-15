@@ -204,6 +204,54 @@ class TestDeleteAgent:
         assert await cur.fetchone() is None
 
 
+class TestDeleteAgentUninstall:
+    async def test_uninstall_query_records_the_request(
+        self, client, app, api_auth_headers, registered_agent
+    ):
+        agent_id, raw_token = registered_agent
+
+        resp = await client.delete(
+            f"/api/agents/{agent_id}",
+            params={"uninstall": "true"},
+            headers=api_auth_headers,
+        )
+
+        assert resp.status_code == 204
+        assert await app.state.db.get_agent(agent_id) is None
+        assert await app.state.db.match_uninstall_request(agent_id, raw_token) is True
+
+    async def test_without_query_no_request_is_recorded(
+        self, client, app, api_auth_headers, registered_agent
+    ):
+        agent_id, raw_token = registered_agent
+
+        resp = await client.delete(
+            f"/api/agents/{agent_id}", headers=api_auth_headers
+        )
+
+        assert resp.status_code == 204
+        assert await app.state.db.match_uninstall_request(agent_id, raw_token) is False
+
+
+class TestListAgentsSupportsUninstall:
+    async def test_list_reports_the_handshake_capability(
+        self, client, app, api_auth_headers, registered_agent, viewer_user
+    ):
+        capable_id, _ = registered_agent
+        legacy_id, _ = await app.state.db.register_agent(
+            "legacy", viewer_user["id"]
+        )
+        await app.state.db.update_agent_handshake_info(
+            capable_id, "0.9.0", 8, supports_uninstall=True
+        )
+
+        resp = await client.get("/api/agents", headers=api_auth_headers)
+
+        by_id = {a["agent_id"]: a for a in resp.json()}
+        assert by_id[capable_id]["supports_uninstall"] is True
+        assert by_id[legacy_id]["supports_uninstall"] is False
+
+
 class TestGetMobileTokens:
     async def test_get_mobile_tokens(self, client, api_auth_headers):
         create_resp = await client.post(

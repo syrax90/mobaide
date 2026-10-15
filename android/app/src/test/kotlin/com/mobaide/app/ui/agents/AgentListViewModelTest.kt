@@ -428,6 +428,22 @@ class AgentListViewModelTest {
     }
 
     @Test
+    fun confirmDelete_withUninstall_forwardsFlag() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.agentRepository.deleteAgent("a-1", true) } just Runs
+
+        vm.confirmDelete("a-1", uninstall = true)
+        advanceUntilIdle()
+
+        assertNull(vm.uiState.value.deleteConfirmAgent)
+        assertNull(vm.uiState.value.error)
+        coVerify(exactly = 1) { fx.agentRepository.deleteAgent("a-1", true) }
+    }
+
+    @Test
     fun confirmDelete_ofConnectedAgent_disconnectsFirst() = runTest {
         val fx = newFixture(connectedAgentId = "a-1")
         val vm = fx.buildVm()
@@ -472,6 +488,85 @@ class AgentListViewModelTest {
         vm.confirmDelete("a-1")
         advanceUntilIdle()
 
+        assertEquals("forbidden", vm.uiState.value.error)
+    }
+
+    @Test
+    fun confirmDelete_withUninstall_ofOnlineAgent_announcesUninstallNow() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.agentRepository.deleteAgent("a-1", true) } just Runs
+
+        vm.messages.test {
+            vm.showDeleteConfirm(agent("a-1", name = "Laptop", online = true))
+            vm.confirmDelete("a-1", uninstall = true)
+            advanceUntilIdle()
+
+            assertEquals("“Laptop” is uninstalling itself.", awaitItem())
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertNull(vm.uiState.value.deleteConfirmAgent)
+    }
+
+    @Test
+    fun confirmDelete_withUninstall_ofOfflineAgent_announcesDeferredUninstall() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.agentRepository.deleteAgent("a-1", true) } just Runs
+
+        vm.messages.test {
+            vm.showDeleteConfirm(agent("a-1", name = "Laptop", online = false))
+            vm.confirmDelete("a-1", uninstall = true)
+            advanceUntilIdle()
+
+            assertEquals(
+                "“Laptop” will uninstall itself when it next comes online.",
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun confirmDelete_withoutUninstall_postsNoMessage() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.agentRepository.deleteAgent("a-1", false) } just Runs
+
+        vm.messages.test {
+            vm.showDeleteConfirm(agent("a-1", name = "Laptop", online = true))
+            vm.confirmDelete("a-1", uninstall = false)
+            advanceUntilIdle()
+
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun confirmDelete_withUninstall_onFailure_postsNoMessage() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.agentRepository.deleteAgent("a-1", true) } throws
+            RuntimeException("forbidden")
+
+        vm.messages.test {
+            vm.showDeleteConfirm(agent("a-1", name = "Laptop", online = true))
+            vm.confirmDelete("a-1", uninstall = true)
+            advanceUntilIdle()
+
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
         assertEquals("forbidden", vm.uiState.value.error)
     }
 

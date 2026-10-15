@@ -10,6 +10,7 @@ const agent = (agentId: string, online: boolean): Agent => ({
   lastSeenAt: null,
   agentVersion: null,
   agentProtocolVersion: null,
+  supportsUninstall: false,
 });
 
 describe('resolveSelectedAgent', () => {

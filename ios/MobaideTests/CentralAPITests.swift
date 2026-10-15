@@ -142,6 +142,16 @@ final class CentralAPITests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "Content-Type"))
     }
 
+    func testDeleteAgentWithUninstallSendsTheQuery() async throws {
+        StubURLProtocol.enqueue(status: 204, body: "")
+        try await makeAPI().deleteAgent(userToken: "u", agentId: "A1", uninstall: true)
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(request.url?.path, "/api/agents/A1")
+        XCTAssertEqual(request.url?.query, "uninstall=true")
+    }
+
     func testEmptyBodyPostsCarryJSONContentType() async throws {
         StubURLProtocol.enqueue(
             status: 200,

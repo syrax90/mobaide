@@ -295,6 +295,23 @@ async def _start_relay_in_process(
 
         relay_client.set_protocol_incompatible_callback(_on_protocol_incompatible)
 
+    # Only an installed release can remove itself. A test-mode run still
+    # advertises the capability so a local stack can exercise the flow, but
+    # handle_uninstall_request deletes nothing for it.
+    from mobaide.agent.self_uninstall import handle_uninstall_request
+    from mobaide.agent.updater import InstallLayout
+
+    uninstall_layout = InstallLayout(prefix=default_prefix())
+    installed = _is_running_managed_release(uninstall_layout)
+    if installed or app.state.config.is_test_mode:
+
+        async def _on_uninstall_requested() -> None:
+            await handle_uninstall_request(
+                uninstall_layout.prefix, installed=installed,
+            )
+
+        relay_client.set_uninstall_callback(_on_uninstall_requested)
+
     await relay_client.start()
     app.state.relay_client = relay_client
     app.state.updater = updater

@@ -353,6 +353,75 @@ class TestDisconnectAgent:
             )
 
 
+    async def test_agent_control_is_written_on_the_socket_before_close(
+        self, routing: RoutingTable
+    ):
+        agent_ws = _RecordingWs()
+        conn = routing.register_agent("a1", agent_ws)
+        mobile_ws = _RecordingWs()
+        routing.register_mobile(
+            "a1",
+            "session_io:s1",
+            MobileClient(device_id="dev-1", websocket=mobile_ws),
+        )
+
+        await routing.disconnect_agent(
+            "a1",
+            agent_control={"type": "agent_uninstall"},
+            agent_reason_code="agent_uninstalled",
+        )
+
+        assert [kind for kind, _ in agent_ws.events] == ["bytes", "text", "close"]
+        channel, session_id, payload = decode(agent_ws.events[0][1])
+        assert channel == CH_CONTROL
+        assert session_id == ""
+        assert json.loads(payload) == {"type": "agent_uninstall"}
+        assert agent_ws.events[1][1] == json.dumps({"reason": "agent_uninstalled"})
+        assert agent_ws.events[2][1] == (4010, "agent_uninstalled")
+        # Bypasses the writer queue, which dies with the close.
+        assert conn.send_queue.empty()
+        # Mobiles keep the plain admin_revoked reason and get no control frame.
+        assert mobile_ws.events == [
+            ("text", json.dumps({"reason": "admin_revoked"})),
+            ("close", (4010, "admin_revoked")),
+        ]
+
+    async def test_agent_control_send_failure_still_closes(
+        self, routing: RoutingTable
+    ):
+        agent_ws = _RecordingWs(fail_bytes=True)
+        routing.register_agent("a1", agent_ws)
+
+        count = await routing.disconnect_agent(
+            "a1",
+            agent_control={"type": "agent_uninstall"},
+            agent_reason_code="agent_uninstalled",
+        )
+
+        assert count == 1
+        assert agent_ws.events[-1] == ("close", (4010, "agent_uninstalled"))
+        assert routing.is_agent_online("a1") is False
+
+
+class _RecordingWs:
+    """WebSocket fake that records every send/close in call order."""
+
+    def __init__(self, *, fail_bytes: bool = False) -> None:
+        self.events: list[tuple[str, object]] = []
+        self._fail_bytes = fail_bytes
+
+    async def send_bytes(self, data: bytes) -> None:
+        if self._fail_bytes:
+            raise RuntimeError("socket already gone")
+        self.events.append(("bytes", data))
+
+    async def send_text(self, data: str) -> None:
+        self.events.append(("text", data))
+
+    async def close(self, code: int, reason: str) -> None:
+        self.events.append(("close", (code, reason)))
+
+
 class TestSafeSendReasonAndClose:
     """The shared helper used by both disconnect_user and disconnect_agent.
     Each step is wrapped in try/except so an already-closed socket is a no-op.

@@ -132,11 +132,19 @@ private struct AgentListContent: View {
                 "Delete agent",
                 isPresented: presenting(\.deleteConfirm),
                 presenting: model.deleteConfirm
-            ) { _ in
-                Button("Delete", role: .destructive) { model.confirmDelete() }
+            ) { agent in
+                // An alert cannot host a toggle, so the web/Android uninstall
+                // checkbox becomes two buttons; uninstalling comes first as
+                // the default choice there.
+                if agent.supports_uninstall {
+                    Button("Delete & Uninstall", role: .destructive) { model.confirmDelete(uninstall: true) }
+                    Button("Delete Only", role: .destructive) { model.confirmDelete() }
+                } else {
+                    Button("Delete", role: .destructive) { model.confirmDelete() }
+                }
                 Button("Cancel", role: .cancel) { model.deleteConfirm = nil }
             } message: { agent in
-                Text("Permanently remove “\(agent.name)” and all associated data.")
+                Text(Self.deleteMessage(for: agent))
             }
             .toast($toast)
             .onChange(of: model.message) { _, newValue in
@@ -223,6 +231,15 @@ private struct AgentListContent: View {
             get: { model[keyPath: keyPath] != nil },
             set: { if !$0 { model[keyPath: keyPath] = nil } }
         )
+    }
+
+    private static func deleteMessage(for agent: AgentSummaryResponse) -> String {
+        let base = "Permanently remove “\(agent.name)” and all associated data."
+        guard agent.supports_uninstall else { return base }
+        let when = agent.online
+            ? "right away"
+            : "the next time it connects (within 30 days), as it is offline"
+        return base + " Delete & Uninstall also makes the agent stop and delete itself from its computer \(when)."
     }
 }
 
