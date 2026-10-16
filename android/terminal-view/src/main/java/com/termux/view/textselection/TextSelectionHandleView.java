@@ -56,6 +56,15 @@ public class TextSelectionHandleView extends View {
 
     private Magnifier mMagnifier;
 
+    private float mLastRawX;
+    private float mLastRawY;
+    private static final long AUTOSCROLL_INTERVAL_MS = 45;
+    /**
+     * Repeats the drag from the last touch while the handle sits at an edge: {@code ACTION_MOVE}
+     * stops arriving once the finger is still, which would freeze the autoscroll short of the text.
+     */
+    private final Runnable mAutoscrollTick = this::dragToLastTouch;
+
     public TextSelectionHandleView(TerminalView terminalView, CursorController cursorController, int initialOrientation) {
         super(terminalView.getContext());
         this.terminalView = terminalView;
@@ -139,6 +148,7 @@ public class TextSelectionHandleView extends View {
 
     public void hide() {
         mIsDragging = false;
+        stopAutoscroll();
         dismissMagnifier();
 
         if (mHandle != null) {
@@ -347,22 +357,40 @@ public class TextSelectionHandleView extends View {
             }
 
             case MotionEvent.ACTION_MOVE: {
-                final float rawX = event.getRawX();
-                final float rawY = event.getRawY();
-
-                final float newPosX = rawX - mTouchToWindowOffsetX + mHotspotX;
-                final float newPosY = rawY - mTouchToWindowOffsetY + mHotspotY + mTouchOffsetY;
-
-                mCursorController.updatePosition(this, Math.round(newPosX), Math.round(newPosY));
+                mLastRawX = event.getRawX();
+                mLastRawY = event.getRawY();
+                dragToLastTouch();
                 break;
             }
 
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
                 mIsDragging = false;
+                stopAutoscroll();
                 dismissMagnifier();
         }
         return true;
+    }
+
+    /**
+     * Moves the dragged endpoint under the last touch, then re-arms {@link #mAutoscrollTick} while
+     * that move scrolled the view. {@code mTouchToWindowOffsetX} already absorbs a horizontal pan of
+     * the host (see {@link #moveTo}), so a still finger lands on the newly revealed columns.
+     */
+    private void dragToLastTouch() {
+        terminalView.removeCallbacks(mAutoscrollTick);
+        if (!mIsDragging) return;
+        final float newPosX = mLastRawX - mTouchToWindowOffsetX + mHotspotX;
+        final float newPosY = mLastRawY - mTouchToWindowOffsetY + mHotspotY + mTouchOffsetY;
+
+        mCursorController.updatePosition(this, Math.round(newPosX), Math.round(newPosY));
+        if (mIsDragging && mCursorController.didAutoscroll()) {
+            terminalView.postDelayed(mAutoscrollTick, AUTOSCROLL_INTERVAL_MS);
+        }
+    }
+
+    private void stopAutoscroll() {
+        terminalView.removeCallbacks(mAutoscrollTick);
     }
 
     @Override
