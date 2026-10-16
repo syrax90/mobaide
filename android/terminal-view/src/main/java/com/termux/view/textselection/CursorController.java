@@ -33,6 +33,14 @@ public interface CursorController extends ViewTreeObserver.OnTouchModeChangeList
     void updatePosition(TextSelectionHandleView handle, int x, int y);
 
     /**
+     * @return whether the last {@link #updatePosition} scrolled the view to follow a handle held
+     * at an edge, so the dragged handle should repeat it while the finger stays put.
+     */
+    default boolean didAutoscroll() {
+        return false;
+    }
+
+    /**
      * This method is called by {@link #onTouchEvent(MotionEvent)} and gives the cursors
      * a chance to become active and/or visible.
      *

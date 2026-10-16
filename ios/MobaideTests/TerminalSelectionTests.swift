@@ -278,6 +278,53 @@ final class TerminalSelectionTests: XCTestCase {
         XCTAssertEqual(rows, 0, "the band is capped at a third of the viewport so the middle stays neutral")
     }
 
+    func testAutoscrollRowBandHasAFloorForSmallFonts() {
+        let height: CGFloat = 600
+        let cellHeight: CGFloat = 10
+
+        XCTAssertEqual(
+            TerminalSelection.autoscrollRows(viewportY: 20, viewportHeight: height, cellHeight: cellHeight),
+            -1,
+            "a finger held at the edge with a small font must stay inside the band"
+        )
+        XCTAssertEqual(TerminalSelection.autoscrollRows(viewportY: 580, viewportHeight: height, cellHeight: cellHeight), 1)
+        XCTAssertEqual(TerminalSelection.autoscrollRows(viewportY: 30, viewportHeight: height, cellHeight: cellHeight), 0)
+    }
+
+    func testAutoscrollColumnsTriggersOnlyNearTheHorizontalEdges() {
+        let width: CGFloat = 800
+        let cellWidth: CGFloat = 8
+
+        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 20, viewportWidth: width, cellWidth: cellWidth), -1)
+        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 780, viewportWidth: width, cellWidth: cellWidth), 1)
+        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 400, viewportWidth: width, cellWidth: cellWidth), 0)
+        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 30, viewportWidth: width, cellWidth: cellWidth), 0)
+    }
+
+    func testAutoscrollColumnBandSpansTwoCellsForWideFonts() {
+        let width: CGFloat = 800
+        let cellWidth: CGFloat = 20
+
+        XCTAssertEqual(
+            TerminalSelection.autoscrollColumns(viewportX: 35, viewportWidth: width, cellWidth: cellWidth),
+            -1,
+            "the horizontal band is two cells wide, wider than the 24pt floor here"
+        )
+        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 765, viewportWidth: width, cellWidth: cellWidth), 1)
+        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 45, viewportWidth: width, cellWidth: cellWidth), 0)
+    }
+
+    func testAutoscrollColumnBandsCannotOverlapOnANarrowViewport() {
+        let columns = TerminalSelection.autoscrollColumns(viewportX: 30, viewportWidth: 60, cellWidth: 20)
+
+        XCTAssertEqual(columns, 0, "the band is capped at a third of the viewport so the middle stays neutral")
+    }
+
+    func testAutoscrollColumnsIsInertBeforeLayout() {
+        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 0, viewportWidth: 800, cellWidth: 0), 0)
+        XCTAssertEqual(TerminalSelection.autoscrollColumns(viewportX: 0, viewportWidth: 0, cellWidth: 8), 0)
+    }
+
     // MARK: - Streaming output
 
     func testTrimShiftIgnoresRegionScrolls() {
