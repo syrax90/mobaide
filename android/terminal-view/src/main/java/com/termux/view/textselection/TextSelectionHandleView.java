@@ -64,6 +64,11 @@ public class TextSelectionHandleView extends View {
      * stops arriving once the finger is still, which would freeze the autoscroll short of the text.
      */
     private final Runnable mAutoscrollTick = this::dragToLastTouch;
+    /**
+     * Whether {@link #mAutoscrollTick} is queued. While it is, moves only record the touch so the
+     * scroll keeps the tick's pace instead of stepping on every touch sample.
+     */
+    private boolean mAutoscrollPending;
 
     public TextSelectionHandleView(TerminalView terminalView, CursorController cursorController, int initialOrientation) {
         super(terminalView.getContext());
@@ -359,7 +364,7 @@ public class TextSelectionHandleView extends View {
             case MotionEvent.ACTION_MOVE: {
                 mLastRawX = event.getRawX();
                 mLastRawY = event.getRawY();
-                dragToLastTouch();
+                if (!mAutoscrollPending) dragToLastTouch();
                 break;
             }
 
@@ -378,18 +383,20 @@ public class TextSelectionHandleView extends View {
      * the host (see {@link #moveTo}), so a still finger lands on the newly revealed columns.
      */
     private void dragToLastTouch() {
-        terminalView.removeCallbacks(mAutoscrollTick);
+        stopAutoscroll();
         if (!mIsDragging) return;
         final float newPosX = mLastRawX - mTouchToWindowOffsetX + mHotspotX;
         final float newPosY = mLastRawY - mTouchToWindowOffsetY + mHotspotY + mTouchOffsetY;
 
         mCursorController.updatePosition(this, Math.round(newPosX), Math.round(newPosY));
         if (mIsDragging && mCursorController.didAutoscroll()) {
+            mAutoscrollPending = true;
             terminalView.postDelayed(mAutoscrollTick, AUTOSCROLL_INTERVAL_MS);
         }
     }
 
     private void stopAutoscroll() {
+        mAutoscrollPending = false;
         terminalView.removeCallbacks(mAutoscrollTick);
     }
 
