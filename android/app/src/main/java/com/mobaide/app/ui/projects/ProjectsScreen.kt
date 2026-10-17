@@ -54,6 +54,7 @@ fun ProjectsScreen(
     onOpenGit: (String) -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val pathSuggestions by viewModel.pathSuggestionState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel) {
@@ -158,6 +159,9 @@ fun ProjectsScreen(
             onRemovalLabelChange = viewModel::onRemovalLabelChange,
             onRefreshFilterMetadata = viewModel::refreshFilterMetadata,
             onSave = viewModel::save,
+            pathSuggestions = pathSuggestions,
+            onPathFocusChange = viewModel::onPathFocusChange,
+            onPickPathSuggestion = viewModel::pickPathSuggestion,
             onOpenGit = { name ->
                 viewModel.closeSheet()
                 onOpenGit(name)

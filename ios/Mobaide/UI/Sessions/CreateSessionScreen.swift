@@ -21,6 +21,8 @@ private struct CreateSessionContent: View {
     @State private var model: CreateSessionModel
     @State private var toast: ToastMessage?
     @State private var projectSheet: ProjectFormMode?
+    @State private var pathSuggestions: PathSuggestionsModel
+    @FocusState private var customPathFocused: Bool
 
     @Environment(Router.self) private var router
     @Environment(\.mobaideColors) private var colors
@@ -38,6 +40,7 @@ private struct CreateSessionContent: View {
             autoScanRepository: container.autoScanRepository,
             autoScanProject: autoScanProject
         ))
+        _pathSuggestions = State(initialValue: PathSuggestionsModel(repository: container.pathSuggestionRepository))
     }
 
     var body: some View {
@@ -167,10 +170,16 @@ private struct CreateSessionContent: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .pixelField(isInvalid: model.customPathError != nil)
+                .focused($customPathFocused)
+                .onChange(of: customPathFocused) { _, focused in pathSuggestions.focusChanged(focused) }
+                .onChange(of: model.customPathDraft, initial: true) { _, text in pathSuggestions.textChanged(text) }
+                PathSuggestionList(model: pathSuggestions) { name in
+                    model.setCustomPath(pathSuggestions.accept(name))
+                }
                 if let error = model.customPathError {
                     Text(error).font(.footnote).foregroundStyle(colors.danger)
                 } else {
-                    Text(#"e.g. /home/user/code or D:\projects\demo"#)
+                    Text(#"e.g. /home/user/code or D:\projects\demo"# + " — \(pathBrowseHint)")
                         .font(.footnote)
                         .foregroundStyle(colors.textMuted)
                 }

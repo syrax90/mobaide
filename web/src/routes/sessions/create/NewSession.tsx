@@ -13,6 +13,7 @@ import {
 import { listProjects, type ProjectInfo } from '../../../api/projectRepository';
 import { createSession, type CreateSessionRequest } from '../../../api/sessionRepository';
 import { ErrorState } from '../../../components/ErrorState';
+import { trimTrailingSeparator } from '../../../lib/pathCompletion';
 import { queryKeys, wsBackedQueryOptions } from '../../../lib/queryKeys';
 import type { SessionResponse } from '../../../protocol/dto/session';
 import { customSessionTypeId } from '../../../protocol/wireSchema';
@@ -594,6 +595,7 @@ export function NewSession() {
         />
       ) : location.step === 'project' ? (
         <ProjectStep
+          agentId={resolvedAgentId}
           projects={projects.data}
           selection={location.selection}
           customPathDraft={state.customPathDraft}
@@ -639,7 +641,7 @@ export function NewSession() {
             // recent both advance on their own click. The child's `disabled` is
             // an affordance, not an invariant this container may lean on, and
             // `validateCustomPath` refuses the empty draft under the same call.
-            const draft = state.customPathDraft.trim();
+            const draft = trimTrailingSeparator(state.customPathDraft.trim());
             if (validateCustomPath(draft) !== null) return;
             advanceToMode({ kind: 'customPath', path: draft });
           }}

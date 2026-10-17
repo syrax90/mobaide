@@ -102,6 +102,12 @@ export const queryKeys = {
   autoscan: (agentId: string) => ['agent', agentId, 'autoscan'] as const,
   /** Which CLIs the agent has installed, and the models each advertises. */
   agentCapabilities: (agentId: string) => ['agent', agentId, 'capabilities'] as const,
+  /**
+   * `capabilities.fs.dirs` for the path fields. Its own key rather than an
+   * observer of `agentCapabilities`, whose wizard observer deliberately keeps
+   * `gcTime: 0` — a second observer would stretch that entry's lifetime.
+   */
+  agentFsDirs: (agentId: string) => ['agent', agentId, 'capabilities', 'fs-dirs'] as const,
 };
 
 /**

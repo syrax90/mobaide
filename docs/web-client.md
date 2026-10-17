@@ -444,8 +444,9 @@ schemas) and typed as the *generated* request, whose booleans are required —
 so a dropped flag is a compile error rather than a silent escalation.
 
 **Recent custom paths** (CLA-256) mirror the mobile stores exactly: up to 5
-per agent, newest first, deduped by exact string equality — no trailing-slash
-collapse, no `~` expansion — and never filtered against what is being typed.
+per agent, newest first, deduped by exact string equality after one trailing
+separator (never a root) is trimmed, so `/a/b/` and `/a/b` are the same entry,
+with no `~` expansion — and never filtered against what is being typed.
 Picking one advances the step, exactly as a project row does; the container
 re-validates first, so a hand-edited blob holding a relative path fills the
 field with its inline error instead of pushing a URL the clamp would bounce

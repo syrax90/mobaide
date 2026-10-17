@@ -164,6 +164,8 @@ enum FixtureRegistry {
         "UpdateTemplateRequest": runner(UpdateTemplateRequest.self),
         "TemplateDeletedPayload": runner(TemplateDeletedPayload.self),
         "FirstAgentPairedPayload": runner(FirstAgentPairedPayload.self),
+        // FsDto.swift
+        "FsDirsResponse": runner(FsDirsResponse.self),
         // VersionDto.swift
         "VersionInfoResponse": runner(VersionInfoResponse.self),
     ]

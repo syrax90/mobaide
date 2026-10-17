@@ -190,6 +190,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/fs/dirs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Dirs Endpoint
+         * @description Subdirectories of ``path`` for client-side path completion.
+         */
+        get: operations["list_dirs_endpoint_api_fs_dirs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -1202,6 +1222,23 @@ export interface components {
              * @default false
              */
             worktree: boolean;
+        };
+        /**
+         * FsDirsResponse
+         * @description Subdirectory names of one host directory.
+         *
+         *     ``path`` is the listed directory after ``~`` expansion, so a client that
+         *     completes ``~/co`` can write back an absolute path. ``truncated`` means a
+         *     scan cap or the time budget stopped the listing early: the client must
+         *     not filter it locally as if it were complete, and re-asks with ``q``.
+         */
+        FsDirsResponse: {
+            /** Dirs */
+            dirs: string[];
+            /** Path */
+            path: string;
+            /** Truncated */
+            truncated: boolean;
         };
         /**
          * GitBranchCreateRequest
@@ -2424,6 +2461,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CodexLoginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_dirs_endpoint_api_fs_dirs_get: {
+        parameters: {
+            query: {
+                path: string;
+                q?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FsDirsResponse"];
                 };
             };
             /** @description Validation Error */

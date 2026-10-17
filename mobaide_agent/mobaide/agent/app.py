@@ -64,6 +64,8 @@ from .logging_setup import configure_logging, shutdown_logging
 from .projects.router import router as projects_router
 from .sessions.router import router as sessions_router
 from .events import EventBus
+from .fs.models import FS_CAPABILITIES
+from .fs.router import router as fs_router
 from .update_check import (
     PERIODIC_POLL_INTERVAL_SECONDS,
     run_https_update_check,
@@ -824,6 +826,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.include_router(codex_router)
     app.include_router(hooks_router)
     app.include_router(projects_router)
+    app.include_router(fs_router)
     app.include_router(git_router)
     app.include_router(session_git_router)
     app.include_router(ws_session_io_router)
@@ -880,6 +883,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                     models_pending=warm_task is not None and not warm_task.done(),
                 ),
                 "git": GIT_CAPABILITIES,
+                "fs": FS_CAPABILITIES,
             },
             "latest_agent_version": (manifest or {}).get("version"),
         }

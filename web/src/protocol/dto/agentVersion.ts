@@ -192,6 +192,14 @@ export function gitCapability(info: AgentVersionInfo | undefined, key: string): 
   return Object.hasOwn(git, key) && (git as Record<string, unknown>)[key] === true;
 }
 
+/** `capabilities.fs.<key>`, with `gitCapability`'s explicit-`true` rule. */
+export function fsCapability(info: AgentVersionInfo | undefined, key: string): boolean {
+  if (info === undefined) return false;
+  const fs = info.capabilities.fs;
+  if (typeof fs !== 'object' || fs === null) return false;
+  return Object.hasOwn(fs, key) && (fs as Record<string, unknown>)[key] === true;
+}
+
 export function gitCapabilities(info: AgentVersionInfo | undefined): GitCapabilities {
   return {
     stage: gitCapability(info, 'stage'),

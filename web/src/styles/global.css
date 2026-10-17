@@ -1016,6 +1016,7 @@ input[type='radio']:checked {
   .button,
   .theme-seg,
   .recent-path-pick,
+  .path-suggestions,
   .terminal-overlay-retry {
     border: 1px solid ButtonBorder;
   }
@@ -1984,6 +1985,41 @@ input[type='radio']:checked {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
+}
+
+/* In flow, not floating: a dialog's scroll box would clip a popup list. */
+.path-suggestions {
+  list-style: none;
+  margin: 0;
+  padding: 2px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--gray);
+}
+
+.path-suggestions[hidden] {
+  display: none;
+}
+
+.path-suggestion {
+  padding: 0.4rem 0.6rem;
+  font-family: var(--font-chrome);
+  font-size: 0.8rem;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-suggestion:hover,
+.path-suggestion[aria-selected='true'] {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.path-suggestions-more {
+  margin: 0;
+  font-size: var(--pix-sm);
+  color: var(--text-muted);
 }
 
 .option-group {

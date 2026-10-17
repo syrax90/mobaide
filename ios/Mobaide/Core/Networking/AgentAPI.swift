@@ -234,6 +234,13 @@ struct AgentAPI: Sendable {
         )
     }
 
+    /// `GET /api/fs/dirs?path=[&q=]` — subdirectory names for the path fields' suggestions.
+    func listDirs(path: String, q: String?) async throws -> FsDirsResponse {
+        var query = "?path=\(Self.encodeQueryValue(path))"
+        if let q { query += "&q=\(Self.encodeQueryValue(q))" }
+        return try await execute(method: "GET", url: "\(try await base())/api/fs/dirs\(query)")
+    }
+
     /// `GET /api/sessions/{id}/git/conflict?path=` — one conflicted file for the resolver.
     func getSessionGitConflict(sessionId: String, path: String) async throws -> GitConflictResponse {
         let query = "?path=\(Self.encodeQueryValue(path))"

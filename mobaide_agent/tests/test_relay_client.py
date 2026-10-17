@@ -4196,6 +4196,7 @@ class TestProxyVersionCapabilities:
                 "delete_remote": True,
                 "conflicts": True,
             },
+            "fs": {"dirs": True},
         }
 
     async def test_missing_cli_launchers_attr_degrades_to_empty_cli(
@@ -4229,6 +4230,7 @@ class TestProxyVersionCapabilities:
                 "delete_remote": True,
                 "conflicts": True,
             },
+            "fs": {"dirs": True},
         }
 
     async def test_version_body_keeps_core_fields(self, client, mock_app_state):

@@ -157,6 +157,36 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-10-17, host path suggestions):
+  **one additive REST route, one additive capability key, no version bump.**
+  Backs folder suggestions under the project form's Path field and the
+  new-session wizard's one-off custom path, on both transports
+  byte-identically (the relay forwards it through the ``/proxy`` catch-all;
+  no ``central_server`` change).
+  * ``GET /api/fs/dirs?path=<dir>[&q=<substring>]`` answers
+    ``FsDirsResponse {"path", "dirs", "truncated"}``: the names (not paths)
+    of ``path``'s subdirectories — symlinks to directories included, dot
+    directories included, sorted case-insensitively. ``path`` is expanded
+    with ``expanduser`` and must then be absolute; the response echoes the
+    expanded directory so a client completing ``~/co`` writes back an
+    absolute path. ``q`` keeps only names containing it case-insensitively.
+  * One ``scandir`` per call, no recursion, stopped at 5 000 entries
+    scanned, 1 000 names returned or 250 ms — ``truncated: true`` then means
+    the list is partial: a client must not filter it locally as complete and
+    re-asks with ``q`` set to what the user typed. Scans run on a private
+    two-thread pool, and the agent answers ``503`` if a scan has not finished
+    within 1 s — a hung network mount can pin at most those two threads, and
+    stalls the relay tunnel's reader (which awaits each proxied request) for
+    at most 1 s per call.
+  * Errors carry ``{"detail": <str>}``: ``400`` empty, relative or malformed
+    ``path``; ``404`` missing or not a directory; ``403`` permission denied
+    (including macOS privacy-protected folders); ``503`` timed out. Clients treat
+    every error as "no suggestions".
+  * ``GET /api/version`` ``capabilities`` gains ``"fs": {"dirs": true}``;
+    clients offer suggestions only when it is ``true``.
+  * Clients fetch each directory once, filter locally while the user types
+    within it, and cache listings per agent for 30 s, so typing a whole path
+    costs a few requests rather than one per keystroke.
 * Additive delta within proto-v7 (2026-09-21, in-session conflict resolver —
   read a conflicted file, write its resolution, take one side, rebuild the
   conflict): **four additive REST routes, one additive status field, one

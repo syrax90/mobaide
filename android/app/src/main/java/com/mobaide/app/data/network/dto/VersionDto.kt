@@ -125,3 +125,10 @@ fun VersionInfoResponse.gitCapability(key: String): Boolean = runCatching {
         // "true", which web and iOS reject.
         ?.let { !it.isString && it.booleanOrNull == true }
 }.getOrNull() == true
+
+/** `capabilities.fs.<key>`, with [gitCapability]'s explicit-JSON-`true` rule. */
+fun VersionInfoResponse.fsCapability(key: String): Boolean = runCatching {
+    capabilities["fs"]?.jsonObject
+        ?.get(key)?.jsonPrimitive
+        ?.let { !it.isString && it.booleanOrNull == true }
+}.getOrNull() == true

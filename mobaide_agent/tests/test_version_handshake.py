@@ -46,6 +46,7 @@ async def test_get_version(client) -> None:
             "delete_remote": True,
             "conflicts": True,
         },
+        "fs": {"dirs": True},
     }
     # The signed manifest body now travels inline over the relay WebSocket
     # — it is not exposed via this REST surface.
