@@ -13,6 +13,11 @@ final class PathSuggestionsModel {
     private(set) var names: [String] = []
     private(set) var overflow = 0
     private(set) var listedPath = ""
+    /// The agent host's path flavour, known once probed even while nothing is listed.
+    private(set) var windowsPaths = false
+
+    /// The separator shown after each name and written by a pick.
+    var separator: String { PathCompletion.separator(listedPath: listedPath) }
 
     private let repository: PathSuggestionRepository
     private let sleeper: any Sleeper
@@ -37,16 +42,22 @@ final class PathSuggestionsModel {
 
     func focusChanged(_ focused: Bool) {
         self.focused = focused
-        if focused, !supported, probeTask == nil {
-            probeTask = Task { [weak self] in
-                guard let self else { return }
-                let supported = await repository.isSupported()
-                self.supported = supported
-                probeTask = nil
-                refresh()
-            }
-        }
+        if focused { probe() }
         refresh()
+    }
+
+    /// Asks the agent what it supports, unless it already said yes. Called when
+    /// the form appears too, so the empty field's hint fits the host before focus.
+    func probe() {
+        guard !supported, probeTask == nil else { return }
+        probeTask = Task { [weak self] in
+            guard let self else { return }
+            let support = await repository.fsSupport()
+            supported = support.dirs
+            windowsPaths = support.windowsPaths
+            probeTask = nil
+            refresh()
+        }
     }
 
     /// The field's new text for a picked suggestion.

@@ -20,7 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import com.mobaide.app.ui.common.PATH_BROWSE_HINT
+import com.mobaide.app.ui.common.pathBrowseHint
 import com.mobaide.app.ui.common.PathSuggestionsUi
 import com.mobaide.app.ui.common.PathTextField
 import com.mobaide.app.ui.common.pixel.PixelButton
@@ -141,7 +141,7 @@ fun ProjectFormSheet(
                 },
                 label = { Text("Path") },
                 isError = state.pathError != null,
-                supportingText = { Text(state.pathError ?: PATH_BROWSE_HINT) },
+                supportingText = { Text(state.pathError ?: pathBrowseHint(pathSuggestions.windowsPaths)) },
                 modifier = Modifier.blurTouchTrigger { onTouch(ProjectFormState.Field.PATH) },
             )
 

@@ -26,7 +26,15 @@ final class PathSuggestionsModelTests: XCTestCase {
 
     /// A focused model whose capability probe has already answered.
     private func focusedModel(supported: Bool = true) async -> PathSuggestionsModel {
-        StubURLProtocol.enqueue(status: 200, body: version(fs: supported ? #"{"dirs":true}"# : nil))
+        await probedModel(fs: supported ? #"{"dirs":true}"# : nil) { $0.focusChanged(true) }
+    }
+
+    /// A model whose capability probe, started by `start`, has already answered.
+    private func probedModel(
+        fs: String?,
+        start: (PathSuggestionsModel) -> Void
+    ) async -> PathSuggestionsModel {
+        StubURLProtocol.enqueue(status: 200, body: version(fs: fs))
         let client = HTTPClient(session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self]))
         let agentAPI = AgentAPI(
             baseURL: { "http://agent.example.com" },
@@ -39,7 +47,7 @@ final class PathSuggestionsModelTests: XCTestCase {
             repository: PathSuggestionRepository(agentAPI: agentAPI, tokenStore: tokenStore),
             sleeper: sleeper
         )
-        model.focusChanged(true)
+        start(model)
         await waitUntil { StubURLProtocol.requests.count == 1 }
         await settle()
         return model
@@ -183,5 +191,25 @@ final class PathSuggestionsModelTests: XCTestCase {
         model.focusChanged(false)
 
         XCTAssertEqual(model.names, [])
+    }
+
+    func testProbeLearnsAWindowsHostBeforeFocus_andPicksUseItsSeparator() async {
+        let model = await probedModel(fs: #"{"dirs":true,"windows_paths":true}"#) { $0.probe() }
+        XCTAssertTrue(model.windowsPaths)
+
+        StubURLProtocol.enqueue(status: 200, body: listing(#"C:\\"#, ["Users"]))
+        model.focusChanged(true)
+        model.textChanged(#"C:/"#)
+        await releaseDebounce(expectingRequests: 2)
+
+        XCTAssertEqual(model.names, ["Users"])
+        XCTAssertEqual(model.separator, "\\")
+        XCTAssertEqual(model.accept("Users"), #"C:\Users\"#)
+    }
+
+    func testAnOlderAgentReadsAsAPosixHost() async {
+        let model = await focusedModel()
+
+        XCTAssertFalse(model.windowsPaths)
     }
 }

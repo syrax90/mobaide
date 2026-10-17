@@ -63,6 +63,14 @@ class PathCompletionTest {
     }
 
     @Test
+    fun separator_isBackslashOnlyForAnAllBackslashPath() {
+        assertEquals("\\", PathCompletion.separator("C:\\Users\\me\\"))
+        assertEquals("/", PathCompletion.separator("C:/Users"))
+        assertEquals("/", PathCompletion.separator("/home/me"))
+        assertEquals("/", PathCompletion.separator(""))
+    }
+
+    @Test
     fun accept_appendsTheNameAndASeparatorInTheListedPathsOwnStyle() {
         assertEquals("/Users/pavel/", PathCompletion.accept("/Users", "pavel"))
         assertEquals("/Users/pavel/", PathCompletion.accept("/Users/", "pavel"))

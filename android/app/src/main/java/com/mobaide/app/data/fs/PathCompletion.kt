@@ -53,9 +53,13 @@ object PathCompletion {
         return prefix + contains
     }
 
+    /** The separator a listing of [listedPath] is extended with: `\` only for an all-backslash path. */
+    fun separator(listedPath: String): String =
+        if (listedPath.contains('\\') && !listedPath.contains('/')) "\\" else "/"
+
     /** The field's new text after picking [name] from a listing of [listedPath]. */
     fun accept(listedPath: String, name: String): String {
-        val sep = if (listedPath.contains('\\') && !listedPath.contains('/')) "\\" else "/"
+        val sep = separator(listedPath)
         val base = if (listedPath.endsWith('/') || listedPath.endsWith('\\')) listedPath else listedPath + sep
         return base + name + sep
     }

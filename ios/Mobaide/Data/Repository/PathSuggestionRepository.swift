@@ -1,12 +1,20 @@
 import Foundation
 
+/// The agent's `capabilities.fs`: `dirs` gates suggestions, `windowsPaths` words the hints.
+struct FsSupport: Equatable, Sendable {
+    let dirs: Bool
+    let windowsPaths: Bool
+
+    static let none = FsSupport(dirs: false, windowsPaths: false)
+}
+
 /// Folder listings behind the host-path fields (Android
 /// `PathSuggestionRepository`), cached per agent so the project form and the
 /// session wizard share what either has already fetched.
 @MainActor
 final class PathSuggestionRepository {
     private struct Support {
-        let supported: Bool
+        let support: FsSupport
         let probedAt: ContinuousClock.Instant
     }
 
@@ -34,16 +42,21 @@ final class PathSuggestionRepository {
 
     private var agentKey: String { tokenStore.getAgentScopeKey() ?? "" }
 
-    /// `capabilities.fs.dirs`, probed at most every five minutes per agent; false on failure.
-    func isSupported() async -> Bool {
+    /// `capabilities.fs`, probed at most every five minutes per agent; `.none` on failure.
+    func fsSupport() async -> FsSupport {
         let key = agentKey
         if let cached = support[key], now() - cached.probedAt < Self.supportTTL {
-            return cached.supported
+            return cached.support
         }
-        guard let info = try? await agentAPI.getAgentVersion() else { return false }
-        let supported = info.fsCapability("dirs")
-        support[key] = Support(supported: supported, probedAt: now())
-        return supported
+        guard let info = try? await agentAPI.getAgentVersion() else { return .none }
+        let probed = FsSupport(dirs: info.fsCapability("dirs"), windowsPaths: info.fsCapability("windows_paths"))
+        support[key] = Support(support: probed, probedAt: now())
+        return probed
+    }
+
+    /// `capabilities.fs.dirs`, with `fsSupport()`'s caching.
+    func isSupported() async -> Bool {
+        await fsSupport().dirs
     }
 
     func lookup(_ query: PathCompletion.Query) -> ListingHit? {

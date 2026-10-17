@@ -64,9 +64,14 @@ export function rankDirs(dirs: readonly string[], fragment: string): string[] {
   return [...prefix, ...contains];
 }
 
+/** The separator a listing of `listedPath` is extended with: `\` only for an all-backslash path. */
+export function pathSeparator(listedPath: string): string {
+  return listedPath.includes('\\') && !listedPath.includes('/') ? '\\' : '/';
+}
+
 /** The field's new text after picking `name` from a listing of `listedPath`. */
 export function acceptSuggestion(listedPath: string, name: string): string {
-  const sep = listedPath.includes('\\') && !listedPath.includes('/') ? '\\' : '/';
+  const sep = pathSeparator(listedPath);
   const base = /[\\/]$/.test(listedPath) ? listedPath : listedPath + sep;
   return base + name + sep;
 }

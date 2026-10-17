@@ -14,6 +14,16 @@ import {
 } from '../../lib/pathCompletion';
 import { fsCapability, type AgentVersionInfo } from '../../protocol/dto/agentVersion';
 
+/** The agent's `capabilities.fs`: `dirs` gates suggestions, `windowsPaths` words the hints. */
+export interface FsSupport {
+  dirs: boolean;
+  windowsPaths: boolean;
+}
+
+function fsSupport(info: AgentVersionInfo): FsSupport {
+  return { dirs: fsCapability(info, 'dirs'), windowsPaths: fsCapability(info, 'windows_paths') };
+}
+
 const FS_CAPABILITY_STALE_MS = 5 * 60_000;
 
 // Statuses that describe the directory itself (relative, missing, denied):
@@ -39,13 +49,15 @@ export interface PathSuggestions {
   overflow: number;
   /** The directory `names` live in, for `acceptSuggestion`. */
   listedPath: string;
+  /** The agent host's path flavour, known once probed even while nothing is listed. */
+  windowsPaths: boolean;
 }
-
-const NONE: PathSuggestions = { names: [], overflow: 0, listedPath: '' };
 
 /**
  * Folder suggestions for `text` on `agentId`, or none while `active` is false,
- * the agent lacks `capabilities.fs.dirs`, or the text is not absolute.
+ * the agent lacks `capabilities.fs.dirs`, or the text is not absolute. The
+ * capability probe runs as soon as the field mounts, so an empty field's hint
+ * fits the host before it is focused.
  */
 export function usePathSuggestions(
   agentId: string,
@@ -55,22 +67,23 @@ export function usePathSuggestions(
   const queryClient = useQueryClient();
   const supported = useQuery({
     queryKey: queryKeys.agentFsDirs(agentId),
-    queryFn: async () => fsCapability(await fetchAgentCapabilities(agentId), 'dirs'),
-    enabled: active && agentId !== '',
+    queryFn: async () => fsSupport(await fetchAgentCapabilities(agentId)),
+    enabled: agentId !== '',
     staleTime: FS_CAPABILITY_STALE_MS,
     // The wizard has usually probed `/api/version` already; reuse its answer.
     initialData: () => {
       const info = queryClient.getQueryData<AgentVersionInfo>(
         queryKeys.agentCapabilities(agentId),
       );
-      return info === undefined ? undefined : fsCapability(info, 'dirs');
+      return info === undefined ? undefined : fsSupport(info);
     },
     initialDataUpdatedAt: () =>
       queryClient.getQueryState(queryKeys.agentCapabilities(agentId))?.dataUpdatedAt,
     meta: { silent: true },
   });
 
-  const enabled = active && supported.data === true;
+  const enabled = active && supported.data?.dirs === true;
+  const windowsPaths = supported.data?.windowsPaths === true;
   const query = useMemo(() => (enabled ? splitPathQuery(text) : null), [enabled, text]);
   // Bumped when a fetch lands, so the render re-reads the cache.
   const [revision, setRevision] = useState(0);
@@ -110,14 +123,16 @@ export function usePathSuggestions(
 
   return useMemo(() => {
     void revision;
-    if (query === null) return NONE;
+    const none: PathSuggestions = { names: [], overflow: 0, listedPath: '', windowsPaths };
+    if (query === null) return none;
     const hit = cacheFor(agentId).lookup(query.dir, query.fragment);
-    if (hit === undefined) return NONE;
+    if (hit === undefined) return none;
     const ranked = rankDirs(hit.listing.dirs, query.fragment);
     return {
       names: ranked.slice(0, MAX_VISIBLE_SUGGESTIONS),
       overflow: Math.max(0, ranked.length - MAX_VISIBLE_SUGGESTIONS),
       listedPath: hit.listing.path,
+      windowsPaths,
     };
-  }, [agentId, query, revision]);
+  }, [agentId, query, revision, windowsPaths]);
 }

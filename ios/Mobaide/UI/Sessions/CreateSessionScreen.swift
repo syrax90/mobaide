@@ -173,13 +173,14 @@ private struct CreateSessionContent: View {
                 .focused($customPathFocused)
                 .onChange(of: customPathFocused) { _, focused in pathSuggestions.focusChanged(focused) }
                 .onChange(of: model.customPathDraft, initial: true) { _, text in pathSuggestions.textChanged(text) }
+                .onAppear { pathSuggestions.probe() }
                 PathSuggestionList(model: pathSuggestions) { name in
                     model.setCustomPath(pathSuggestions.accept(name))
                 }
                 if let error = model.customPathError {
                     Text(error).font(.footnote).foregroundStyle(colors.danger)
                 } else {
-                    Text(#"e.g. /home/user/code or D:\projects\demo"# + " — \(pathBrowseHint)")
+                    Text(customPathExample + " — " + pathBrowseHint(windowsPaths: pathSuggestions.windowsPaths))
                         .font(.footnote)
                         .foregroundStyle(colors.textMuted)
                 }
@@ -630,6 +631,10 @@ private struct CreateSessionContent: View {
     private func isStoredSelected(_ name: String) -> Bool {
         if case .stored(let selected) = model.selection { return selected == name }
         return false
+    }
+
+    private var customPathExample: String {
+        pathSuggestions.windowsPaths ? #"e.g. D:\projects\demo"# : "e.g. /home/user/code"
     }
 
     private var isCustomPathSelected: Bool {

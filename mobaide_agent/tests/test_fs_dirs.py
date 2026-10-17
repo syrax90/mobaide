@@ -29,6 +29,9 @@ _FIXTURE = (
 )
 
 
+_FS_CAPABILITIES = {"dirs": True, "windows_paths": sys.platform == "win32"}
+
+
 def _tree(root: Path, dirs: list[str], files: tuple[str, ...] | list[str] = ()) -> str:
     for name in dirs:
         (root / name).mkdir()
@@ -150,6 +153,16 @@ class TestListing:
         listing = await list_dirs("~/")
 
         assert listing.path == f"{tmp_path}/"
+        assert listing.dirs == ["code"]
+
+    @posix_only
+    async def test_windows_host_echoes_backslash_separators(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(service.os, "sep", "\\")
+        _tree(tmp_path, ["code"])
+
+        listing = await list_dirs(f"{tmp_path}/")
+
+        assert listing.path == str(tmp_path).replace("/", "\\") + "\\"
         assert listing.dirs == ["code"]
 
 
@@ -297,12 +310,12 @@ class TestTransports:
     async def test_direct_version_advertises_fs_dirs(self, client, auth_headers):
         resp = await client.get("/api/version", headers=auth_headers)
 
-        assert resp.json()["capabilities"]["fs"] == {"dirs": True}
+        assert resp.json()["capabilities"]["fs"] == _FS_CAPABILITIES
 
     async def test_relay_version_advertises_fs_dirs(self, relay):
         result = await relay._dispatch_proxy("GET", "/api/version", None, None, AsyncMock())
 
-        assert result["body"]["capabilities"]["fs"] == {"dirs": True}
+        assert result["body"]["capabilities"]["fs"] == _FS_CAPABILITIES
 
 
 def _fixture_cases():

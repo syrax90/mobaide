@@ -64,6 +64,13 @@ final class PathCompletionTests: XCTestCase {
 
     // MARK: - accept / trim
 
+    func testSeparatorIsBackslashOnlyForAnAllBackslashPath() {
+        XCTAssertEqual(PathCompletion.separator(listedPath: #"C:\Users\me\"#), "\\")
+        XCTAssertEqual(PathCompletion.separator(listedPath: "C:/Users"), "/")
+        XCTAssertEqual(PathCompletion.separator(listedPath: "/home/me"), "/")
+        XCTAssertEqual(PathCompletion.separator(listedPath: ""), "/")
+    }
+
     func testAcceptAppendsTheNameAndASeparatorInTheListedPathsOwnStyle() {
         XCTAssertEqual(PathCompletion.accept(listedPath: "/Users", name: "pavel"), "/Users/pavel/")
         XCTAssertEqual(PathCompletion.accept(listedPath: "/Users/", name: "pavel"), "/Users/pavel/")

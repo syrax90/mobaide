@@ -33,7 +33,7 @@ function renderStep(over: Overrides = {}) {
   // The custom-path field's folder suggestions are off for this agent, so the
   // step renders without ever reaching the network.
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  client.setQueryData(queryKeys.agentFsDirs('agent-1'), false);
+  client.setQueryData(queryKeys.agentFsDirs('agent-1'), { dirs: false, windowsPaths: false });
   render(
     <QueryClientProvider client={client}>
       <ProjectStep
