@@ -207,7 +207,7 @@ export function ProjectFormDialog({
             <PathField
               label="Path"
               agentId={agentId}
-              hint="Absolute path on the agent host. Type / or ~ to browse its folders."
+              hint={(browse) => `Absolute path on the agent host. ${browse}`}
               error={form.formState.errors.path?.message}
               value={field.value}
               onChange={field.onChange}

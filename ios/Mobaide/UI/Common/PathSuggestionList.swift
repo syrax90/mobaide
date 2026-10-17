@@ -1,7 +1,11 @@
 import SwiftUI
 
-/// Hint under every host-path field while it is empty.
-let pathBrowseHint = "Type / or ~ to browse folders on the agent"
+/// Hint under every host-path field while it is empty, worded for the agent host's path flavour.
+func pathBrowseHint(windowsPaths: Bool) -> String {
+    windowsPaths
+        ? #"Type C:\ or ~ to browse folders on the agent"#
+        : "Type / or ~ to browse folders on the agent"
+}
 
 /// Folder suggestions listed in flow under a host-path field — not a popover,
 /// so nothing competes with the keyboard for focus. Picking one writes
@@ -20,7 +24,7 @@ struct PathSuggestionList: View {
                         onPick(name)
                     } label: {
                         Label {
-                            Text("\(name)/")
+                            Text(name + model.separator)
                                 .font(.footnote.monospaced())
                                 .lineLimit(1)
                                 .truncationMode(.middle)

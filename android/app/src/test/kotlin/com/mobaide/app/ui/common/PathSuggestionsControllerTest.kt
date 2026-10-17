@@ -167,4 +167,20 @@ class PathSuggestionsControllerTest {
         coVerify(exactly = 0) { restApi.listDirs(any(), any()) }
         assertEquals(PathSuggestionsUi.None, controller.state.value)
     }
+
+    @Test
+    fun probe_learnsAWindowsHostBeforeTheFieldIsFocused() = runTest {
+        coEvery { restApi.getAgentVersion() } returns version("""{"dirs":true,"windows_paths":true}""")
+        val controller = PathSuggestionsController(
+            PathSuggestionRepository(restApi, tokenStore) { testScheduler.currentTime },
+            backgroundScope,
+        )
+        runCurrent()
+        assertEquals(false, controller.state.value.windowsPaths)
+
+        controller.probe()
+        runCurrent()
+
+        assertEquals(PathSuggestionsUi.None.copy(windowsPaths = true), controller.state.value)
+    }
 }

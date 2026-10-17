@@ -128,10 +128,12 @@ class ProjectsViewModel @Inject constructor(
 
     fun openCreateSheet() {
         _uiState.update { it.copy(form = ProjectFormState.forCreate()) }
+        pathSuggestions.probe()
     }
 
     fun openEditSheet(project: ProjectInfo) {
         _uiState.update { it.copy(form = ProjectFormState.forEdit(project)) }
+        pathSuggestions.probe()
         if (project.has_linear_key) {
             // Project has an API key — fetch fresh labels/states. SWR: cached
             // values render immediately if present, fresh ones overwrite.

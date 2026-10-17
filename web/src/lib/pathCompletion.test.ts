@@ -4,6 +4,7 @@ import {
   LISTING_TTL_MS,
   acceptSuggestion,
   nextListingRequest,
+  pathSeparator,
   rankDirs,
   splitPathQuery,
   trimTrailingSeparator,
@@ -71,6 +72,15 @@ describe('rankDirs', () => {
     expect(rankDirs(dirs, 'conf')).toEqual(['config']);
     expect(rankDirs(dirs, '.')).toEqual(['.config', '.git']);
     expect(rankDirs(dirs, '.CON')).toEqual(['.config']);
+  });
+});
+
+describe('pathSeparator', () => {
+  it('is a backslash only for an all-backslash path', () => {
+    expect(pathSeparator('C:\\Users\\me\\')).toBe('\\');
+    expect(pathSeparator('C:/Users')).toBe('/');
+    expect(pathSeparator('/home/me')).toBe('/');
+    expect(pathSeparator('')).toBe('/');
   });
 });
 

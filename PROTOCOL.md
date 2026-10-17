@@ -184,6 +184,10 @@ cadence; they do **not** gate compatibility.
     every error as "no suggestions".
   * ``GET /api/version`` ``capabilities`` gains ``"fs": {"dirs": true}``;
     clients offer suggestions only when it is ``true``.
+  * ``capabilities.fs.windows_paths`` is ``true`` on a Windows host, where
+    the echoed ``path`` also has every ``/`` rewritten to ``\``: clients
+    word the browse hint for drive letters and show picked folders with a
+    ``\`` separator. Absent (an older agent) reads as ``false``.
   * Clients fetch each directory once, filter locally while the user types
     within it, and cache listings per agent for 30 s, so typing a whole path
     costs a few requests rather than one per keystroke.

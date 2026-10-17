@@ -96,7 +96,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
-import com.mobaide.app.ui.common.PATH_BROWSE_HINT
+import com.mobaide.app.ui.common.pathBrowseHint
 import com.mobaide.app.ui.common.PathSuggestionsUi
 import com.mobaide.app.ui.common.PathTextField
 import com.mobaide.app.ui.common.SecretTextField
@@ -630,10 +630,8 @@ internal fun CustomPathPanel(
         label = { Text("Absolute path on the agent") },
         isError = state.customPathError != null,
         supportingText = {
-            Text(
-                text = state.customPathError
-                    ?: "e.g. /home/user/code or D:\\projects\\demo — $PATH_BROWSE_HINT",
-            )
+            val example = if (suggestions.windowsPaths) "e.g. D:\\projects\\demo" else "e.g. /home/user/code"
+            Text(text = state.customPathError ?: "$example — ${pathBrowseHint(suggestions.windowsPaths)}")
         },
     )
     if (state.recentCustomPaths.isNotEmpty()) {

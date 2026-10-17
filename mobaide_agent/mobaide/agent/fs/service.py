@@ -91,4 +91,6 @@ async def list_dirs(path: str, q: str | None = None) -> FsDirsResponse:
         raise FsListError(400, "Path contains invalid characters") from None
     except OSError as exc:
         raise FsListError(404, f"Cannot list directory: {exc.filename or directory}") from None
+    if os.sep == "\\":
+        directory = directory.replace("/", "\\")
     return FsDirsResponse(path=directory, dirs=dirs, truncated=truncated)

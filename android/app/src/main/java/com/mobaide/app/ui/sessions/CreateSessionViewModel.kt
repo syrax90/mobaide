@@ -508,6 +508,7 @@ class CreateSessionViewModel @Inject constructor(
             )
         }
         customPathSuggestions.onTextChange("")
+        customPathSuggestions.probe()
         val scope = agentScopeKey() ?: return
         viewModelScope.launch {
             // Guarded like removeRecentCustomPath below: a DataStore fault on the

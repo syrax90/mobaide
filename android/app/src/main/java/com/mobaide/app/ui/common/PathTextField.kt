@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Folder
@@ -23,14 +24,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.data.fs.PathCompletion
+import com.mobaide.app.data.repository.FsSupport
 import com.mobaide.app.data.repository.PathSuggestionRepository
 import com.mobaide.app.ui.common.pixel.PixelCard
 import com.mobaide.app.ui.common.pixel.PixelTextFieldDefaults
@@ -47,12 +51,19 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** What the path field's suggestion list shows; [listedPath] is where [names] live. */
+/**
+ * What the path field's suggestion list shows; [listedPath] is where [names] live.
+ * [windowsPaths] is the agent host's path flavour, known even while nothing is listed.
+ */
 data class PathSuggestionsUi(
     val names: List<String> = emptyList(),
     val overflow: Int = 0,
     val listedPath: String = "",
+    val windowsPaths: Boolean = false,
 ) {
+    /** The separator shown after each name and written by a pick. */
+    val separator: String get() = PathCompletion.separator(listedPath)
+
     companion object {
         val None = PathSuggestionsUi()
     }
@@ -72,16 +83,16 @@ class PathSuggestionsController(
     private data class Input(val text: String, val focused: Boolean)
 
     private val input = MutableStateFlow(Input("", focused = false))
-    private val supported = MutableStateFlow(false)
+    private val support = MutableStateFlow(FsSupport.None)
     private val revision = MutableStateFlow(0)
-    private var probe: Job? = null
+    private var probeJob: Job? = null
 
-    private val query = combine(input, supported) { current, isSupported ->
-        if (isSupported && current.focused) PathCompletion.split(current.text) else null
+    private val query = combine(input, support) { current, fs ->
+        if (fs.dirs && current.focused) PathCompletion.split(current.text) else null
     }.distinctUntilChanged()
 
-    val state: StateFlow<PathSuggestionsUi> = combine(query, revision) { current, _ ->
-        render(current)
+    val state: StateFlow<PathSuggestionsUi> = combine(query, revision, support) { current, _, fs ->
+        render(current).copy(windowsPaths = fs.windowsPaths)
     }.stateIn(scope, SharingStarted.Eagerly, PathSuggestionsUi.None)
 
     init {
@@ -100,9 +111,16 @@ class PathSuggestionsController(
 
     fun onFocusChange(focused: Boolean) {
         input.update { it.copy(focused = focused) }
-        if (focused && !supported.value && probe?.isActive != true) {
-            probe = scope.launch { supported.value = repository.isSupported() }
-        }
+        if (focused) probe()
+    }
+
+    /**
+     * Asks the agent what it supports, unless it already said yes. Called when
+     * the form opens too, so the empty field's hint fits the host before focus.
+     */
+    fun probe() {
+        if (support.value.dirs || probeJob?.isActive == true) return
+        probeJob = scope.launch { support.value = repository.support() }
     }
 
     /** The field's new text for a picked suggestion. */
@@ -124,7 +142,9 @@ class PathSuggestionsController(
  * A host-path [OutlinedTextField] with folder suggestions listed in flow under
  * it — not a popup, so nothing fights the IME or a bottom sheet for focus.
  * Picking a folder writes `<dir>/<name>/` with the caret at the end, so the
- * next level's folders appear straight away.
+ * next level's folders appear straight away. The IME's Done means the folder
+ * typed so far is the one wanted: it closes the list until the text changes and
+ * gives up focus.
  */
 @Composable
 fun PathTextField(
@@ -141,7 +161,10 @@ fun PathTextField(
     // A String-valued field keeps its old caret when the value is replaced from
     // outside, which would strand it mid-path after a pick; an external change
     // is shown with the caret at the end instead.
+    val focusManager = LocalFocusManager.current
     var fieldValue by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    // Not focus alone: out of touch mode a cleared focus is handed straight back.
+    var dismissedFor by remember { mutableStateOf<String?>(null) }
     val shown = if (fieldValue.text == value) fieldValue else TextFieldValue(value, TextRange(value.length))
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         OutlinedTextField(
@@ -156,14 +179,19 @@ fun PathTextField(
             keyboardOptions = KeyboardOptions(
                 capitalization = KeyboardCapitalization.None,
                 autoCorrectEnabled = false,
+                imeAction = ImeAction.Done,
             ),
+            keyboardActions = KeyboardActions(onDone = {
+                dismissedFor = value
+                focusManager.clearFocus()
+            }),
             isError = isError,
             supportingText = supportingText,
             modifier = modifier
                 .fillMaxWidth()
                 .onFocusChanged { onFocusChange(it.isFocused) },
         )
-        if (suggestions.names.isNotEmpty()) {
+        if (suggestions.names.isNotEmpty() && dismissedFor != value) {
             PixelCard(modifier = Modifier.fillMaxWidth().testTag("path_suggestions")) {
                 suggestions.names.forEach { name ->
                     Row(
@@ -182,7 +210,7 @@ fun PathTextField(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            text = "$name/",
+                            text = name + suggestions.separator,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.bodyMedium,
@@ -202,4 +230,7 @@ fun PathTextField(
     }
 }
 
-const val PATH_BROWSE_HINT = "Type / or ~ to browse folders on the agent"
+/** Hint under an empty host-path field, worded for the agent host's path flavour. */
+fun pathBrowseHint(windowsPaths: Boolean): String =
+    if (windowsPaths) "Type C:\\ or ~ to browse folders on the agent"
+    else "Type / or ~ to browse folders on the agent"

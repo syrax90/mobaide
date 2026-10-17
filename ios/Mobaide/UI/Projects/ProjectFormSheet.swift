@@ -87,6 +87,7 @@ private struct ProjectFormContent: View {
             .interactiveDismissDisabled(model.isDirty)
             .toast($toast)
             .task { await model.loadMetadataIfNeeded() }
+            .onAppear { pathSuggestions.probe() }
             .onChange(of: model.message) { _, newValue in
                 if let newValue {
                     toast = ToastMessage(text: newValue)
@@ -125,7 +126,9 @@ private struct ProjectFormContent: View {
                     model.path = pathSuggestions.accept(name)
                 }
                 if model.path.isEmpty {
-                    Text(pathBrowseHint).font(.caption).foregroundStyle(colors.textMuted)
+                    Text(pathBrowseHint(windowsPaths: pathSuggestions.windowsPaths))
+                        .font(.caption)
+                        .foregroundStyle(colors.textMuted)
                 }
             }
             TextField("Conda env (optional)", text: $model.condaEnv)

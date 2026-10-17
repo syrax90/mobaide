@@ -11,6 +11,13 @@ import com.mobaide.app.data.network.dto.FsDirsResponse
 import com.mobaide.app.data.network.dto.fsCapability
 import kotlinx.coroutines.CancellationException
 
+/** The agent's `capabilities.fs`: [dirs] gates suggestions, [windowsPaths] words the hints. */
+data class FsSupport(val dirs: Boolean, val windowsPaths: Boolean) {
+    companion object {
+        val None = FsSupport(dirs = false, windowsPaths = false)
+    }
+}
+
 /**
  * Folder listings behind the host-path fields, cached per agent so the project
  * form and the session wizard share what either has already fetched.
@@ -20,7 +27,7 @@ class PathSuggestionRepository(
     private val tokenStore: TokenStore,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
-    private data class Support(val supported: Boolean, val probedAt: Long)
+    private data class Support(val support: FsSupport, val probedAt: Long)
 
     private val lock = Any()
     private val caches = HashMap<String, DirListingCache>()
@@ -32,23 +39,27 @@ class PathSuggestionRepository(
         caches.getOrPut(agentKey()) { DirListingCache(now) }
     }
 
-    /** `capabilities.fs.dirs`, probed at most every five minutes per agent; false on failure. */
-    suspend fun isSupported(): Boolean {
+    /** `capabilities.fs`, probed at most every five minutes per agent; [FsSupport.None] on failure. */
+    suspend fun support(): FsSupport {
         val key = agentKey()
         synchronized(lock) {
-            support[key]?.takeIf { now() - it.probedAt < SUPPORT_TTL_MS }?.let { return it.supported }
+            support[key]?.takeIf { now() - it.probedAt < SUPPORT_TTL_MS }?.let { return it.support }
         }
-        val supported = try {
-            restApi.getAgentVersion().fsCapability("dirs")
+        val probed = try {
+            val info = restApi.getAgentVersion()
+            FsSupport(dirs = info.fsCapability("dirs"), windowsPaths = info.fsCapability("windows_paths"))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             // Suggestions are a convenience: any failed probe just shows none.
-            return false
+            return FsSupport.None
         }
-        synchronized(lock) { support[key] = Support(supported, now()) }
-        return supported
+        synchronized(lock) { support[key] = Support(probed, now()) }
+        return probed
     }
+
+    /** `capabilities.fs.dirs`, with [support]'s caching. */
+    suspend fun isSupported(): Boolean = support().dirs
 
     fun lookup(query: PathCompletion.Query): ListingHit? = synchronized(lock) {
         cache().lookup(query.dir, query.fragment)

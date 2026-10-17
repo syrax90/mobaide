@@ -46,9 +46,14 @@ enum PathCompletion {
         return prefix + contains
     }
 
+    /// The separator a listing of `listedPath` is extended with: `\` only for an all-backslash path.
+    static func separator(listedPath: String) -> String {
+        listedPath.contains("\\") && !listedPath.contains("/") ? "\\" : "/"
+    }
+
     /// The field's new text after picking `name` from a listing of `listedPath`.
     static func accept(listedPath: String, name: String) -> String {
-        let sep = listedPath.contains("\\") && !listedPath.contains("/") ? "\\" : "/"
+        let sep = separator(listedPath: listedPath)
         let base = listedPath.hasSuffix("/") || listedPath.hasSuffix("\\") ? listedPath : listedPath + sep
         return base + name + sep
     }

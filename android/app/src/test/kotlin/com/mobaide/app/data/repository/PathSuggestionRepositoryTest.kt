@@ -129,4 +129,15 @@ class PathSuggestionRepositoryTest {
         assertFalse(repo.isSupported())
         assertTrue(repo.isSupported())
     }
+
+    @Test
+    fun support_readsWindowsPaths_andAnOlderAgentReadsAsPosix() = runTest {
+        coEvery { restApi.getAgentVersion() } returns
+            version("""{"fs":{"dirs":true,"windows_paths":true}}""") andThen
+            version("""{"fs":{"dirs":true}}""")
+
+        assertEquals(FsSupport(dirs = true, windowsPaths = true), repo.support())
+        agentId = "agent-2"
+        assertEquals(FsSupport(dirs = true, windowsPaths = false), repo.support())
+    }
 }

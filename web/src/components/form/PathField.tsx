@@ -1,5 +1,5 @@
 import { useId, useRef, useState, type KeyboardEvent, type Ref } from 'react';
-import { acceptSuggestion } from '../../lib/pathCompletion';
+import { acceptSuggestion, pathSeparator } from '../../lib/pathCompletion';
 import { usePathSuggestions } from './usePathSuggestions';
 
 interface PathFieldProps {
@@ -12,12 +12,18 @@ interface PathFieldProps {
   inputRef?: Ref<HTMLInputElement>;
   placeholder?: string;
   error?: string;
-  hint?: string;
+  /** Shown instead of the empty-field browse hint; a function words it around that hint. */
+  hint?: string | ((browseHint: string) => string);
   autoFocus?: boolean;
   disabled?: boolean;
 }
 
-const BROWSE_HINT = 'Type / or ~ to browse folders on the agent.';
+/** How to start browsing, worded for the agent host's path flavour. */
+export function browseHint(windowsPaths: boolean): string {
+  return windowsPaths
+    ? 'Type C:\\ or ~ to browse folders on the agent.'
+    : 'Type / or ~ to browse folders on the agent.';
+}
 
 /**
  * A host-path text field with folder suggestions: an ARIA 1.2 editable
@@ -27,8 +33,9 @@ const BROWSE_HINT = 'Type / or ~ to browse folders on the agent.';
  * Picking a folder writes `<dir>/<name>/` and keeps the caret in the field, so
  * the next level's folders appear at once. Keys: ↓/↑ move through the list,
  * Enter or Tab take the highlighted folder (Tab only once one is highlighted,
- * so it still leaves the field otherwise), Escape closes the list until the
- * text changes.
+ * so it still leaves the field otherwise), Escape — or Enter with nothing
+ * highlighted, which also submits the form — closes the list until the text
+ * changes.
  */
 export function PathField({
   label,
@@ -58,7 +65,10 @@ export function PathField({
   // A highlight belongs to the text it was made for; typing clears it.
   const activeIndex = open && activeFor === value && active < suggestions.names.length ? active : -1;
 
-  const shownHint = hint ?? (value === '' ? BROWSE_HINT : undefined);
+  const browse = browseHint(suggestions.windowsPaths);
+  const shownHint =
+    typeof hint === 'function' ? hint(browse) : (hint ?? (value === '' ? browse : undefined));
+  const separator = pathSeparator(suggestions.listedPath);
   const describedBy =
     error !== undefined ? errorId : shownHint !== undefined ? hintId : undefined;
 
@@ -89,6 +99,11 @@ export function PathField({
     if ((event.key === 'Enter' || event.key === 'Tab') && activeIndex >= 0) {
       event.preventDefault();
       pick(suggestions.names[activeIndex] ?? '');
+      return;
+    }
+    if (event.key === 'Enter') {
+      // The typed folder is the one wanted; the form still sees this Enter.
+      setDismissedFor(value);
       return;
     }
     if (event.key === 'Escape') {
@@ -157,7 +172,7 @@ export function PathField({
                 pick(name);
               }}
             >
-              {name}/
+              {name + separator}
             </li>
           ))}
       </ul>

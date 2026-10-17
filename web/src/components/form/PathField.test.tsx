@@ -70,8 +70,8 @@ function Harness({ initial }: { initial: string }) {
   );
 }
 
-function mount(initial = '', supported = true): HTMLInputElement {
-  client.setQueryData(queryKeys.agentFsDirs(agentId), supported);
+function mount(initial = '', supported = true, windowsPaths = false): HTMLInputElement {
+  client.setQueryData(queryKeys.agentFsDirs(agentId), { dirs: supported, windowsPaths });
   render(
     <QueryClientProvider client={client}>
       <Harness initial={initial} />
@@ -240,6 +240,19 @@ describe('PathField gating', () => {
     expect(api.requests).toEqual([]);
   });
 
+  it('words the hint and the rows for a Windows host', async () => {
+    api.listings.set('C:/|', () => Promise.resolve({ path: 'C:\\', dirs: ['Users'], truncated: false }));
+    const input = mount('', true, true);
+
+    expect(screen.getByText('Type C:\\ or ~ to browse folders on the agent.')).toBeInTheDocument();
+
+    await type(input, 'C:/');
+    expect(options()).toEqual(['Users\\']);
+
+    fireEvent.click(screen.getByRole('option', { name: 'Users\\' }));
+    expect(changes.at(-1)).toBe('C:\\Users\\');
+  });
+
   it('hides the list once the field loses focus', async () => {
     answer('/', null, ['srv']);
     const input = mount();
@@ -319,6 +332,17 @@ describe('PathField keyboard', () => {
     expect(fireEvent.keyDown(input, { key: 'Escape' })).toBe(false);
     expect(options()).toEqual([]);
     expect(input).toHaveAttribute('aria-expanded', 'false');
+
+    await type(input, '/a');
+    expect(options()).toEqual(['alpha/', 'axe/']);
+  });
+
+  it('closes on Enter with nothing highlighted, still letting the form see it', async () => {
+    const input = await openAt('/', ['alpha', 'axe']);
+
+    expect(fireEvent.keyDown(input, { key: 'Enter' })).toBe(true);
+    expect(options()).toEqual([]);
+    expect(changes.at(-1)).toBe('/');
 
     await type(input, '/a');
     expect(options()).toEqual(['alpha/', 'axe/']);
