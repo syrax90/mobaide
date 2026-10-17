@@ -1,5 +1,21 @@
 # Android Changelog
 
+## [3.6.9](https://github.com/syrax90/claude_mobile/compare/android-v3.6.8...android-v3.6.9) (2026-10-17)
+
+
+### Features
+
+* suggest existing folders while typing project and custom paths ([4f13cfc](https://github.com/syrax90/claude_mobile/commit/4f13cfc1e729eb026f982d3f991a3b8976153e9f))
+* suggest existing folders while typing project and custom paths ([6f2bb9e](https://github.com/syrax90/claude_mobile/commit/6f2bb9e1e5db9b14e066e3986031ae4d2ce1f7ea))
+
+
+### Bug Fixes
+
+* **android:** auto-scroll terminal selection when dragging a handle to an edge ([20b2274](https://github.com/syrax90/claude_mobile/commit/20b22745af9afb0a8103c5d42d4722c7cb17c86b))
+* **android:** throttle selection edge autoscroll to the tick pace ([dae6504](https://github.com/syrax90/claude_mobile/commit/dae65049441846d1dbd16db321e4132fe4848ebf))
+* close folder suggestions on Done and word paths for Windows agents ([78740a9](https://github.com/syrax90/claude_mobile/commit/78740a9ffb2271259eaf64c26d9388fb23a6496b))
+* close folder suggestions on Done and word paths for Windows agents ([f1ccacc](https://github.com/syrax90/claude_mobile/commit/f1ccacce058bf59f4aa869926e5bb0de8b65abf3))
+
 ## [3.6.8](https://github.com/syrax90/claude_mobile/compare/android-v3.6.7...android-v3.6.8) (2026-10-15)
 
 
