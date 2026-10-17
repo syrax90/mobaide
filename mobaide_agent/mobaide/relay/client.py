@@ -70,6 +70,8 @@ from mobaide.agent.git.changes_conflicts import (
     restore_session_conflict,
     take_session_conflict,
 )
+from mobaide.agent.fs.models import FS_CAPABILITIES
+from mobaide.agent.fs.service import FsListError, list_dirs
 from mobaide.agent.git.changes_jobs import job_registry
 from mobaide.agent.git.changes_models import (
     GIT_CAPABILITIES,
@@ -1419,6 +1421,7 @@ class RelayClient:
                             and not warm_task.done(),
                         ),
                         "git": GIT_CAPABILITIES,
+                        "fs": FS_CAPABILITIES,
                     },
                     "latest_agent_version": (manifest or {}).get("version"),
                 },
@@ -1601,6 +1604,14 @@ class RelayClient:
         linear_resp = await self._dispatch_linear_discovery(method, path)
         if linear_resp is not None:
             return linear_resp
+
+        if method == "GET" and path == "/api/fs/dirs":
+            q = (query or {}).get("q") or None
+            try:
+                listing = await list_dirs((query or {}).get("path", ""), q)
+            except FsListError as exc:
+                return {"status": exc.status, "body": {"detail": exc.detail}}
+            return {"status": 200, "body": listing.model_dump()}
 
         if method == "GET" and path == "/api/autoscan/list":
             mgr = getattr(self._app_state, "autoscan_manager", None)

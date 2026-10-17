@@ -3,6 +3,7 @@ package com.mobaide.app.ui.sessions
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.auth.TokenStore
+import com.mobaide.app.data.fs.PathCompletion
 import com.mobaide.app.data.local.AntigravityLaunchPrefs
 import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.CodexLaunchPrefs
@@ -21,8 +22,11 @@ import com.mobaide.app.data.network.dto.cliModels
 import com.mobaide.app.data.network.dto.cliModelsPending
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
+import com.mobaide.app.data.repository.PathSuggestionRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
+import com.mobaide.app.ui.common.PathSuggestionsController
+import com.mobaide.app.ui.common.PathSuggestionsUi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -298,10 +302,14 @@ class CreateSessionViewModel @Inject constructor(
     private val preferencesStore: PreferencesStore,
     private val tokenStore: TokenStore,
     private val customAgentTypesRepository: CustomAgentTypesRepository,
+    pathSuggestionRepository: PathSuggestionRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CreateSessionUiState())
     val uiState: StateFlow<CreateSessionUiState> = _uiState.asStateFlow()
+
+    private val customPathSuggestions = PathSuggestionsController(pathSuggestionRepository, viewModelScope)
+    val customPathSuggestionState: StateFlow<PathSuggestionsUi> = customPathSuggestions.state
 
     private val _navigateToSession = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val navigateToSession: SharedFlow<String> = _navigateToSession.asSharedFlow()
@@ -499,6 +507,7 @@ class CreateSessionViewModel @Inject constructor(
                 branchName = "",
             )
         }
+        customPathSuggestions.onTextChange("")
         val scope = agentScopeKey() ?: return
         viewModelScope.launch {
             // Guarded like removeRecentCustomPath below: a DataStore fault on the
@@ -511,6 +520,7 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     fun setCustomPathDraft(value: String) = _uiState.update {
+        customPathSuggestions.onTextChange(value)
         val error = validateCustomPath(value)
         it.copy(
             customPathDraft = value,
@@ -518,9 +528,10 @@ class CreateSessionViewModel @Inject constructor(
             // The draft stays as typed so the field never fights the user
             // mid-keystroke; only the committed selection — the value that
             // becomes the request cwd and the stored recent — is trimmed (iOS
-            // CreateSessionModel.setCustomPath does the same).
+            // CreateSessionModel.setCustomPath does the same), and loses the
+            // trailing separator a picked folder suggestion leaves behind.
             selection = if (error == null && value.isNotBlank()) {
-                ProjectSelection.CustomPath(value.trim())
+                ProjectSelection.CustomPath(PathCompletion.trimTrailingSeparator(value.trim()))
             } else {
                 ProjectSelection.CustomPath("")
             },
@@ -528,6 +539,10 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     fun pickRecentCustomPath(path: String) = setCustomPathDraft(path)
+
+    fun onCustomPathFocusChange(focused: Boolean) = customPathSuggestions.onFocusChange(focused)
+
+    fun pickCustomPathSuggestion(name: String) = setCustomPathDraft(customPathSuggestions.accept(name))
 
     /**
      * Forgets one recent path for the current agent. The store read afterwards

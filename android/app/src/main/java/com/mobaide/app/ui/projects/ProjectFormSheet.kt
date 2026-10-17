@@ -20,6 +20,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import com.mobaide.app.ui.common.PATH_BROWSE_HINT
+import com.mobaide.app.ui.common.PathSuggestionsUi
+import com.mobaide.app.ui.common.PathTextField
 import com.mobaide.app.ui.common.pixel.PixelButton
 import com.mobaide.app.ui.common.pixel.PixelButtonStyle
 import androidx.compose.material3.DropdownMenuItem
@@ -77,6 +80,9 @@ fun ProjectFormSheet(
     onRefreshFilterMetadata: () -> Unit,
     onSave: () -> Unit,
     onOpenGit: (String) -> Unit = {},
+    pathSuggestions: PathSuggestionsUi = PathSuggestionsUi.None,
+    onPathFocusChange: (Boolean) -> Unit = {},
+    onPickPathSuggestion: (String) -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     PixelBottomSheet(
@@ -121,24 +127,22 @@ fun ProjectFormSheet(
                     .blurTouchTrigger { onTouch(ProjectFormState.Field.NAME) },
             )
 
-            OutlinedTextField(
-                colors = PixelTextFieldDefaults.colors(),
+            PathTextField(
                 value = state.path,
                 onValueChange = {
                     onPathChange(it)
                     onTouch(ProjectFormState.Field.PATH)
                 },
+                suggestions = pathSuggestions,
+                onFocusChange = onPathFocusChange,
+                onPickSuggestion = {
+                    onPickPathSuggestion(it)
+                    onTouch(ProjectFormState.Field.PATH)
+                },
                 label = { Text("Path") },
                 isError = state.pathError != null,
-                supportingText = { state.pathError?.let { Text(it) } },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.None,
-                    autoCorrectEnabled = false,
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .blurTouchTrigger { onTouch(ProjectFormState.Field.PATH) },
+                supportingText = { Text(state.pathError ?: PATH_BROWSE_HINT) },
+                modifier = Modifier.blurTouchTrigger { onTouch(ProjectFormState.Field.PATH) },
             )
 
             OutlinedTextField(

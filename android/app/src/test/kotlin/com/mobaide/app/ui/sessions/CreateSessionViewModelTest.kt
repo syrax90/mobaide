@@ -7,16 +7,19 @@ import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.CodexLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
+import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CliModelDetail
 import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
+import com.mobaide.app.data.network.dto.FsDirsResponse
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
+import com.mobaide.app.data.repository.PathSuggestionRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.testing.MainDispatcherRule
@@ -78,6 +81,7 @@ class CreateSessionViewModelTest {
         val projectsFlow: MutableStateFlow<List<ProjectInfo>>,
         val customTypesRepo: CustomAgentTypesRepository,
         val customTypesFlow: MutableStateFlow<List<CustomAgentTypeDto>>,
+        val restApi: RestApi,
     )
 
     private fun newFixture(
@@ -125,15 +129,20 @@ class CreateSessionViewModelTest {
         every { customTypesRepo.observeTypes() } returns customTypesFlow
         coEvery { customTypesRepo.refreshTypes() } just Runs
 
+        // Strict too: the custom-path folder suggestions reach the agent only
+        // once their field gains focus.
+        val restApi = mockk<RestApi>()
+
         return Fixture(
             projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore, projectsFlow,
-            customTypesRepo, customTypesFlow,
+            customTypesRepo, customTypesFlow, restApi,
         )
     }
 
     private fun Fixture.buildVm(): CreateSessionViewModel =
         CreateSessionViewModel(
             projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore, customTypesRepo,
+            PathSuggestionRepository(restApi, tokenStore),
         )
 
     // ---- Wizard step flow --------------------------------------------------
@@ -1244,6 +1253,56 @@ class CreateSessionViewModelTest {
         assertNull(s.customPathError)
         assertEquals(hostAbsolutePath, s.customPathDraft)
         assertEquals(hostAbsolutePath, (s.selection as ProjectSelection.CustomPath).path)
+    }
+
+    @Test
+    fun setCustomPathDraft_trailingSeparator_isDroppedFromTheSelectionOnly_butNotFromARoot() = runTest {
+        // A picked folder suggestion leaves `C:/srv/app/` in the field; the cwd
+        // and the stored recent must be `C:/srv/app`, or recents list both
+        // spellings. Windows-shape so the validator passes on any host JVM.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        vm.setCustomPathDraft("  C:/srv/app/ ")
+
+        assertEquals("  C:/srv/app/ ", vm.uiState.value.customPathDraft)
+        assertEquals("C:/srv/app", (vm.uiState.value.selection as ProjectSelection.CustomPath).path)
+
+        vm.setCustomPathDraft("C:\\")
+
+        assertEquals("C:\\", (vm.uiState.value.selection as ProjectSelection.CustomPath).path)
+    }
+
+    @Test
+    fun pickCustomPathSuggestion_writesTheFolderWithASeparator_andListsItsChildrenNext() = runTest {
+        val fx = newFixture()
+        coEvery { fx.restApi.getAgentVersion() } returns VersionInfoResponse(
+            name = "mobaide_agent",
+            server_version = "0.2.16",
+            protocol_versions = listOf(7),
+            min_client_version = 5,
+            capabilities = Json.parseToJsonElement("""{"fs":{"dirs":true}}""").jsonObject,
+        )
+        coEvery { fx.restApi.listDirs("C:/", null) } returns FsDirsResponse("C:/", listOf("srv", "usr"), false)
+        coEvery { fx.restApi.listDirs("C:/srv/", null) } returns FsDirsResponse("C:/srv/", listOf("app"), false)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        vm.onCustomPathFocusChange(true)
+        vm.setCustomPathDraft("C:/")
+        advanceTimeBy(201)
+
+        assertEquals(listOf("srv", "usr"), vm.customPathSuggestionState.value.names)
+
+        vm.pickCustomPathSuggestion("srv")
+        advanceTimeBy(201)
+
+        assertEquals("C:/srv/", vm.uiState.value.customPathDraft)
+        assertEquals("C:/srv", (vm.uiState.value.selection as ProjectSelection.CustomPath).path)
+        assertEquals(listOf("app"), vm.customPathSuggestionState.value.names)
     }
 
     @Test

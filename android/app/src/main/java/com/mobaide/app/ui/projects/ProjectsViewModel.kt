@@ -6,8 +6,11 @@ import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.LinearMetadataRepository
 import com.mobaide.app.data.repository.MetadataResult
+import com.mobaide.app.data.repository.PathSuggestionRepository
 import com.mobaide.app.data.repository.ProjectConflictException
 import com.mobaide.app.data.repository.ProjectsRepository
+import com.mobaide.app.ui.common.PathSuggestionsController
+import com.mobaide.app.ui.common.PathSuggestionsUi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.BufferOverflow
@@ -44,10 +47,14 @@ class ProjectsViewModel @Inject constructor(
     private val projectsRepository: ProjectsRepository,
     private val autoScanRepository: AutoScanRepository,
     private val linearMetadataRepository: LinearMetadataRepository,
+    pathSuggestionRepository: PathSuggestionRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProjectsUiState())
     val uiState: StateFlow<ProjectsUiState> = _uiState.asStateFlow()
+
+    private val pathSuggestions = PathSuggestionsController(pathSuggestionRepository, viewModelScope)
+    val pathSuggestionState: StateFlow<PathSuggestionsUi> = pathSuggestions.state
 
     private val _events = MutableSharedFlow<ProjectsUiEvent>(
         replay = 0,
@@ -146,9 +153,17 @@ class ProjectsViewModel @Inject constructor(
         it.copy(name = value, nameServerError = null, submitError = null)
     }
 
-    fun onPathChange(value: String) = updateForm {
-        it.copy(path = value, submitError = null)
+    fun onPathChange(value: String) {
+        pathSuggestions.onTextChange(value)
+        updateForm { it.copy(path = value, submitError = null) }
     }
+
+    fun onPathFocusChange(focused: Boolean) {
+        _uiState.value.form?.let { pathSuggestions.onTextChange(it.path) }
+        pathSuggestions.onFocusChange(focused)
+    }
+
+    fun pickPathSuggestion(name: String) = onPathChange(pathSuggestions.accept(name))
 
     fun onCondaChange(value: String) = updateForm {
         it.copy(condaEnv = value, submitError = null)

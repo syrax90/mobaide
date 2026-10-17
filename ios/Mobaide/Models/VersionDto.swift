@@ -137,6 +137,12 @@ extension VersionInfoResponse {
         return false
     }
 
+    /// `capabilities.fs.<key>`, with `gitCapability`'s explicit-`true` rule.
+    func fsCapability(_ key: String) -> Bool {
+        if case .bool(true)? = capabilities["fs"]?[key] { return true }
+        return false
+    }
+
     var gitCapabilities: GitCapabilities {
         GitCapabilities(
             stage: gitCapability("stage"),

@@ -415,6 +415,17 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.cwd, "/abs/path")
     }
 
+    func testCustomPathDropsThePickedSuggestionsTrailingSeparatorButNotARoot() throws {
+        // A picked folder suggestion leaves `/srv/app/` in the field; the cwd
+        // and the stored recent must be `/srv/app`, or recents list both.
+        let model = makeModel()
+        model.setCustomPath(" /srv/app/ ")
+        XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .standard)).cwd, "/srv/app")
+
+        model.setCustomPath("/")
+        XCTAssertEqual(try XCTUnwrap(model.buildRequest(mode: .standard)).cwd, "/")
+    }
+
     func testNonGitStoredProjectDropsWorktree() async throws {
         let model = await modelWithProjects(#"[{"name":"plain","path":"/p","is_git":false}]"#)
         model.selectStoredProject("plain")

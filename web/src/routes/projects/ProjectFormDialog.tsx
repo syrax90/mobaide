@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createProject,
@@ -14,6 +14,7 @@ import { queryKeys } from '../../lib/queryKeys';
 import { autoScanFilterSchema, type AutoScanFilter } from '../../protocol/dto/projects';
 import { Modal } from '../../components/Modal';
 import { PasswordField } from '../../components/form/PasswordField';
+import { PathField } from '../../components/form/PathField';
 import { TextField } from '../../components/form/TextField';
 import { AutoScanFilterSection } from './AutoScanFilterSection';
 import { FlagsEditor } from './FlagsEditor';
@@ -198,13 +199,22 @@ export function ProjectFormDialog({
             validate: (value) => nameError(value) ?? true,
           })}
         />
-        <TextField
-          label="Path"
-          hint="Absolute path on the agent host."
-          error={form.formState.errors.path?.message}
-          registration={form.register('path', {
-            validate: (value) => pathError(value) ?? true,
-          })}
+        <Controller
+          control={form.control}
+          name="path"
+          rules={{ validate: (value) => pathError(value) ?? true }}
+          render={({ field }) => (
+            <PathField
+              label="Path"
+              agentId={agentId}
+              hint="Absolute path on the agent host. Type / or ~ to browse its folders."
+              error={form.formState.errors.path?.message}
+              value={field.value}
+              onChange={field.onChange}
+              onBlur={field.onBlur}
+              inputRef={field.ref}
+            />
+          )}
         />
         <TextField
           label="Conda environment (optional)"

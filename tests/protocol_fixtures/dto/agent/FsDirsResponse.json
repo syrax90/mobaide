@@ -1,0 +1,29 @@
+{
+  "type": "FsDirsResponse",
+  "cases": [
+    {
+      "name": "complete_listing_with_dot_dirs",
+      "wire": {
+        "path": "/home/me",
+        "dirs": [".config", "code", "Documents", "projects"],
+        "truncated": false
+      }
+    },
+    {
+      "name": "truncated_listing",
+      "wire": {
+        "path": "/var/big",
+        "dirs": ["a0001", "a0002"],
+        "truncated": true
+      }
+    },
+    {
+      "name": "empty_windows_drive_root",
+      "wire": {
+        "path": "C:\\",
+        "dirs": [],
+        "truncated": false
+      }
+    }
+  ]
+}

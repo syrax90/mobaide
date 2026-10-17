@@ -96,6 +96,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
+import com.mobaide.app.ui.common.PATH_BROWSE_HINT
+import com.mobaide.app.ui.common.PathSuggestionsUi
+import com.mobaide.app.ui.common.PathTextField
 import com.mobaide.app.ui.common.SecretTextField
 import com.mobaide.app.ui.projects.ProjectFormSheet
 import com.mobaide.app.ui.projects.ProjectsUiEvent
@@ -112,6 +115,8 @@ fun CreateSessionScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val projectsState by projectsViewModel.uiState.collectAsStateWithLifecycle()
+    val customPathSuggestions by viewModel.customPathSuggestionState.collectAsStateWithLifecycle()
+    val projectPathSuggestions by projectsViewModel.pathSuggestionState.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel) {
@@ -239,6 +244,9 @@ fun CreateSessionScreen(
                     onCustomPathChange = viewModel::setCustomPathDraft,
                     onPickRecentCustomPath = viewModel::pickRecentCustomPath,
                     onRemoveRecentCustomPath = viewModel::removeRecentCustomPath,
+                    customPathSuggestions = customPathSuggestions,
+                    onCustomPathFocusChange = viewModel::onCustomPathFocusChange,
+                    onPickCustomPathSuggestion = viewModel::pickCustomPathSuggestion,
                     onCreateProjectClicked = projectsViewModel::openCreateSheet,
                     onContinue = viewModel::confirmProject,
                 )
@@ -308,6 +316,9 @@ fun CreateSessionScreen(
             onRemovalLabelChange = projectsViewModel::onRemovalLabelChange,
             onRefreshFilterMetadata = projectsViewModel::refreshFilterMetadata,
             onSave = projectsViewModel::save,
+            pathSuggestions = projectPathSuggestions,
+            onPathFocusChange = projectsViewModel::onPathFocusChange,
+            onPickPathSuggestion = projectsViewModel::pickPathSuggestion,
         )
     }
 
@@ -461,6 +472,9 @@ private fun ProjectSelectSection(
     onCustomPathChange: (String) -> Unit,
     onPickRecentCustomPath: (String) -> Unit,
     onRemoveRecentCustomPath: (String) -> Unit,
+    customPathSuggestions: PathSuggestionsUi,
+    onCustomPathFocusChange: (Boolean) -> Unit,
+    onPickCustomPathSuggestion: (String) -> Unit,
     onCreateProjectClicked: () -> Unit,
     onContinue: () -> Unit,
 ) {
@@ -572,6 +586,9 @@ private fun ProjectSelectSection(
             onDraftChange = onCustomPathChange,
             onPickRecent = onPickRecentCustomPath,
             onRemoveRecent = onRemoveRecentCustomPath,
+            suggestions = customPathSuggestions,
+            onFocusChange = onCustomPathFocusChange,
+            onPickSuggestion = onPickCustomPathSuggestion,
         )
     }
 
@@ -600,25 +617,24 @@ internal fun CustomPathPanel(
     onDraftChange: (String) -> Unit,
     onPickRecent: (String) -> Unit,
     onRemoveRecent: (String) -> Unit,
+    suggestions: PathSuggestionsUi = PathSuggestionsUi.None,
+    onFocusChange: (Boolean) -> Unit = {},
+    onPickSuggestion: (String) -> Unit = {},
 ) {
-    OutlinedTextField(
-        colors = PixelTextFieldDefaults.colors(),
+    PathTextField(
         value = state.customPathDraft,
         onValueChange = onDraftChange,
+        suggestions = suggestions,
+        onFocusChange = onFocusChange,
+        onPickSuggestion = onPickSuggestion,
         label = { Text("Absolute path on the agent") },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(
-            capitalization = KeyboardCapitalization.None,
-            autoCorrectEnabled = false,
-        ),
         isError = state.customPathError != null,
         supportingText = {
             Text(
                 text = state.customPathError
-                    ?: "e.g. /home/user/code or D:\\projects\\demo",
+                    ?: "e.g. /home/user/code or D:\\projects\\demo — $PATH_BROWSE_HINT",
             )
         },
-        modifier = Modifier.fillMaxWidth(),
     )
     if (state.recentCustomPaths.isNotEmpty()) {
         Text(

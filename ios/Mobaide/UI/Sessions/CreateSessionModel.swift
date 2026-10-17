@@ -629,8 +629,11 @@ final class CreateSessionModel {
         customPathError = Self.validateCustomPath(path)
         // Store the trimmed path (sent verbatim as `cwd`); the draft keeps the
         // raw text for the field. Whitespace validates but would create the
-        // session in the wrong directory.
-        selection = .customPath(path.trimmingCharacters(in: .whitespacesAndNewlines))
+        // session in the wrong directory, and the trailing separator a picked
+        // folder suggestion leaves would duplicate a recent.
+        selection = .customPath(
+            PathCompletion.trimTrailingSeparator(path.trimmingCharacters(in: .whitespacesAndNewlines))
+        )
     }
 
     func continueFromProject() {

@@ -6,6 +6,7 @@ import {
   cliModelDetails,
   cliModels,
   cliModelsPending,
+  fsCapability,
   gitCapabilities,
   gitCapability,
   hasGitSync,
@@ -179,6 +180,18 @@ describe('gitCapability', () => {
 
   it('does not mistake an inherited object key for a capability', () => {
     expect(gitCapability(info({ git: {} }), 'constructor')).toBe(false);
+  });
+});
+
+describe('fsCapability', () => {
+  it('offers folder suggestions only on an explicit dirs: true', () => {
+    // An agent predating `GET /api/fs/dirs` would 404 every keystroke.
+    expect(fsCapability(info({ fs: { dirs: true } }), 'dirs')).toBe(true);
+    expect(fsCapability(info({ fs: { dirs: 'true' } }), 'dirs')).toBe(false);
+    expect(fsCapability(info({ fs: 'yes' }), 'dirs')).toBe(false);
+    expect(fsCapability(info({ git: { changes: true } }), 'dirs')).toBe(false);
+    expect(fsCapability(info({ fs: {} }), 'constructor')).toBe(false);
+    expect(fsCapability(undefined, 'dirs')).toBe(false);
   });
 });
 

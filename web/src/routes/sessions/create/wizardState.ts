@@ -16,6 +16,7 @@ import { CODEX_REASONING_EFFORTS } from '../../../protocol/dto/sessionCreate';
 import type { CLAUDE_EFFORTS, CODEX_APPROVALS, CODEX_SANDBOXES } from '../../../protocol/dto/sessionCreate';
 import type { CliModelDetail } from '../../../protocol/dto/agentVersion';
 import type { ProjectSummary } from '../../../api/projectRepository';
+import { trimTrailingSeparator } from '../../../lib/pathCompletion';
 
 export type WizardStep = 'project' | 'mode' | 'config';
 
@@ -340,9 +341,10 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         ...state,
         customPathDraft: action.draft,
         customPathError: error,
-        // The **trimmed** value is what becomes `cwd`; the raw draft stays in
+        // The **trimmed** value is what becomes `cwd` — without the trailing
+        // separator a picked folder suggestion leaves — and the raw draft stays in
         // the field so the caret does not jump while typing.
-        selection: { kind: 'customPath', path: action.draft.trim() },
+        selection: { kind: 'customPath', path: trimTrailingSeparator(action.draft.trim()) },
         git: { worktree: false, branchName: '' },
       };
     }
