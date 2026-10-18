@@ -79,6 +79,7 @@ class AgentListViewModelSwitchTest {
         coEvery { agentRepository.refreshAgents() } just Runs
         every { tokenStore.getAgentId() } returns connectedAgentId
         every { sessionManager.isLoggedIn() } returns (connectedAgentId != null)
+        every { sessionManager.tryMarkAgentConnected(any()) } answers { firstArg<() -> Unit>().invoke(); true }
         coEvery { deviceIdentityStore.getOrCreateDeviceId() } returns TEST_DEVICE_ID
         every { deviceIdentityStore.getDeviceName() } returns TEST_DEVICE_NAME
         every { connectionStore.listProfiles() } returns emptyList()

@@ -100,6 +100,7 @@ class AgentListViewModelQrPairingTest {
         every { agentEventBus.start() } just Runs
         every { agentEventBus.stop() } just Runs
         every { sessionManager.markAgentConnected() } just Runs
+        every { sessionManager.tryMarkAgentConnected(any()) } answers { firstArg<() -> Unit>().invoke(); true }
         coEvery { agentRepository.refreshAgents() } just Runs
         coEvery { deviceIdentityStore.getOrCreateDeviceId() } returns TEST_DEVICE_ID
         every { deviceIdentityStore.getDeviceName() } returns TEST_DEVICE_NAME

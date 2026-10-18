@@ -160,6 +160,18 @@ actor SessionManager {
         setState(.fullyConnected)
     }
 
+    /// `markAgentConnected()` for a completer that may have lost the user
+    /// meanwhile: a sign-out that landed while the agent tokens were being
+    /// minted wins. Actor-isolated with `invalidateUserSession`, so the
+    /// sign-out is either strictly before (nothing persisted, `false`) or
+    /// strictly after (its `tokenStore.clear()` wipes what `persist` wrote).
+    func tryMarkAgentConnected(persist: () -> Void) -> Bool {
+        guard isUserAuthenticated() else { return false }
+        persist()
+        setState(.fullyConnected)
+        return true
+    }
+
     /// Pin the session to the terminal upgrade-required state. Cleared only
     /// by a successful version-gate probe (iOS-08).
     func markIncompatibleServer(_ info: AuthState.IncompatibleServer) {

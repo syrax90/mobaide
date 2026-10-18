@@ -18,6 +18,7 @@ import io.mockk.mockk
 import io.mockk.verify
 import io.mockk.verifyOrder
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -62,6 +63,7 @@ class AgentSwitchCoordinatorTest {
         val deviceIdentityStore = mockk<DeviceIdentityStore>(relaxed = true)
 
         every { sessionManager.isLoggedIn() } returns loggedIn
+        every { sessionManager.tryMarkAgentConnected(any()) } answers { firstArg<() -> Unit>().invoke(); true }
         coEvery { deviceIdentityStore.getOrCreateDeviceId() } returns TEST_DEVICE_ID
         every { deviceIdentityStore.getDeviceName() } returns TEST_DEVICE_NAME
         every { connectionStore.listProfiles() } returns emptyList()
@@ -91,6 +93,7 @@ class AgentSwitchCoordinatorTest {
         verifyOrder {
             fx.agentEventBus.stop()
             fx.sessionManager.agentDisconnect()
+            fx.sessionManager.tryMarkAgentConnected(any())
             fx.tokenStore.saveRelayCredentials(
                 serverUrl = any(),
                 agentId = "a-1",
@@ -99,7 +102,6 @@ class AgentSwitchCoordinatorTest {
                 accessToken = "access-tok",
                 refreshToken = "refresh-tok",
             )
-            fx.sessionManager.markAgentConnected()
             fx.connectionStore.captureActiveProfile(fx.tokenStore, "Agent: TestAgent")
             fx.agentEventBus.start()
         }
@@ -147,6 +149,29 @@ class AgentSwitchCoordinatorTest {
         assertEquals("token minting failed", outcome.exceptionOrNull()?.message)
         assertNull(fx.coordinator.switchingAgentId.value)
         verify(exactly = 0) { fx.agentEventBus.start() }
+    }
+
+    @Test
+    fun switchTo_whenSignedOutDuringTheMint_persistsNothing_andThrows() = runTest {
+        val fx = newFixture()
+        val gate = CompletableDeferred<MobileTokenResponse>()
+        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", any(), any()) } coAnswers { gate.await() }
+
+        val outcome = async { runCatching { fx.coordinator.switchTo(agent("a-1")) } }
+        runCurrent()
+        every { fx.sessionManager.tryMarkAgentConnected(any()) } returns false
+        gate.complete(TOKENS)
+        advanceUntilIdle()
+
+        val error = outcome.await().exceptionOrNull()
+        assertTrue(error is SignedOutException)
+        assertEquals("Signed out while connecting", error?.message)
+        verify(exactly = 0) {
+            fx.tokenStore.saveRelayCredentials(any(), any(), any(), any(), any(), any())
+        }
+        verify(exactly = 0) { fx.connectionStore.captureActiveProfile(any(), any()) }
+        verify(exactly = 0) { fx.agentEventBus.start() }
+        assertNull(fx.coordinator.switchingAgentId.value)
     }
 
     @Test
@@ -203,6 +228,32 @@ class AgentSwitchCoordinatorTest {
             assertEquals("token minting failed", awaitItem())
             assertFalse("a failed switch must not open the next agent list", fx.coordinator.pendingSessionsList.value)
             assertNull(fx.coordinator.switchingAgentId.value)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun switchAndOpenSessions_whenSignedOutDuringTheMint_dropsThePendingList_andStaysSilent() = runTest {
+        val fx = newFixture()
+        val gate = CompletableDeferred<MobileTokenResponse>()
+        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", any(), any()) } coAnswers { gate.await() }
+
+        fx.coordinator.errors.test {
+            fx.coordinator.switchAndOpenSessions(agent("a-1"))
+            runCurrent()
+            assertTrue(fx.coordinator.pendingSessionsList.value)
+
+            every { fx.sessionManager.tryMarkAgentConnected(any()) } returns false
+            gate.complete(TOKENS)
+            advanceUntilIdle()
+
+            expectNoEvents()
+            assertFalse("a sign-out mid-switch must not open the next agent list", fx.coordinator.pendingSessionsList.value)
+            assertNull(fx.coordinator.switchingAgentId.value)
+            verify(exactly = 0) {
+                fx.tokenStore.saveRelayCredentials(any(), any(), any(), any(), any(), any())
+            }
+            verify(exactly = 0) { fx.connectionStore.captureActiveProfile(any(), any()) }
             cancelAndIgnoreRemainingEvents()
         }
     }

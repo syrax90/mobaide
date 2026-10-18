@@ -146,15 +146,22 @@ struct AuthRepository: Sendable {
             agentId: agentId,
             request: MobileTokenRequest(mobile_device_id: deviceId, mobile_device_name: deviceName, platform: "ios")
         )
-        tokenStore.saveRelayCredentials(
-            serverUrl: AppConfig.centralServerURL,
-            agentId: agentId,
-            pairingId: agentId,
-            deviceId: deviceId,
-            accessToken: tokens.access_token,
-            refreshToken: tokens.refresh_token
-        )
-        await sessionManager.markAgentConnected()
+        // A sign-out that landed while the mint was in flight wins: persisting
+        // the relay credentials now would resurrect fullyConnected with no user.
+        try Task.checkCancellation()
+        let connected = await sessionManager.tryMarkAgentConnected { [tokenStore] in
+            tokenStore.saveRelayCredentials(
+                serverUrl: AppConfig.centralServerURL,
+                agentId: agentId,
+                pairingId: agentId,
+                deviceId: deviceId,
+                accessToken: tokens.access_token,
+                refreshToken: tokens.refresh_token
+            )
+        }
+        guard connected else {
+            throw APIError(code: -1, errorBody: "Signed out while connecting")
+        }
 
         if let existing = connectionStore.listProfiles()
             .first(where: { $0.mode == "relay" && $0.agentId == agentId }) {

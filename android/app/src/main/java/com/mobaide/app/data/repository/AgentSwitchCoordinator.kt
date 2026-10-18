@@ -20,6 +20,9 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** The user signed out while the agent tokens were being minted. */
+class SignedOutException : IllegalStateException("Signed out while connecting")
+
 /**
  * Connects the app to a different agent. One install talks to one agent at
  * a time, so a switch tears the current connection down before the new
@@ -72,6 +75,10 @@ class AgentSwitchCoordinator @Inject constructor(
             try {
                 _pendingSessionsList.value = true
                 switchTo(agent)
+            } catch (e: SignedOutException) {
+                // The user is on the login screen; a message buffered for the
+                // next sign-in would read as an error on a session that had none.
+                _pendingSessionsList.value = false
             } catch (e: Exception) {
                 _pendingSessionsList.value = false
                 _errors.trySend(e.message ?: "Failed to connect to ${agent.name}")
@@ -100,16 +107,20 @@ class AgentSwitchCoordinator @Inject constructor(
                 mobileDeviceName = deviceName,
             )
 
-            tokenStore.saveRelayCredentials(
-                serverUrl = BuildConfig.CENTRAL_SERVER_URL,
-                agentId = agent.agent_id,
-                pairingId = agent.agent_id,
-                deviceId = deviceId,
-                accessToken = tokens.access_token,
-                refreshToken = tokens.refresh_token,
-            )
-
-            sessionManager.markAgentConnected()
+            // This scope outlives a sign-out. A logout (manual, or a forced 401)
+            // that landed while the mint was in flight must win: persisting the
+            // relay credentials now would resurrect FullyConnected with no user.
+            val connected = sessionManager.tryMarkAgentConnected {
+                tokenStore.saveRelayCredentials(
+                    serverUrl = BuildConfig.CENTRAL_SERVER_URL,
+                    agentId = agent.agent_id,
+                    pairingId = agent.agent_id,
+                    deviceId = deviceId,
+                    accessToken = tokens.access_token,
+                    refreshToken = tokens.refresh_token,
+                )
+            }
+            if (!connected) throw SignedOutException()
 
             val existingProfile = connectionStore.listProfiles()
                 .find { it.agentId == agent.agent_id && it.mode == "relay" }
