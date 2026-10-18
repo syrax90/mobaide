@@ -14,6 +14,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.mobaide.app.data.auth.SessionManager
+import com.mobaide.app.data.repository.AgentSwitchCoordinator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import com.mobaide.app.ui.agents.AgentListScreen
@@ -43,6 +44,7 @@ import com.mobaide.app.ui.update.IncompatibleServerScreen
 @Composable
 fun AppNavigation(
     sessionManager: SessionManager,
+    agentSwitchCoordinator: AgentSwitchCoordinator,
     deepLinkSessionId: StateFlow<String?> = MutableStateFlow<String?>(null),
     onDeepLinkConsumed: () -> Unit = {},
     onImmediateUpdate: () -> Unit = {},
@@ -102,6 +104,19 @@ fun AppNavigation(
             }
             onDeepLinkConsumed()
         }
+    }
+
+    // An agent switch (agent list or the terminal's sessions drawer): the
+    // disconnect above already reset the stack onto the agent list, so the new
+    // agent's sessions list goes on top of it once the connection is back.
+    val pendingSessionsList by agentSwitchCoordinator.pendingSessionsList.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingSessionsList, authState) {
+        if (!pendingSessionsList || authState != SessionManager.AuthState.FullyConnected) return@LaunchedEffect
+        navController.navigate(Routes.SESSION_LIST) {
+            popUpTo(Routes.AGENT_LIST)
+            launchSingleTop = true
+        }
+        agentSwitchCoordinator.consumePendingSessionsList()
     }
 
     NavHost(navController = navController, startDestination = startDestination) {
@@ -309,6 +324,18 @@ fun AppNavigation(
                     entry.arguments?.getString("sessionId")?.let { sessionId ->
                         navController.navigate(Routes.sessionGitChanges(sessionId, rebase = true))
                     }
+                },
+                // Replace, never stack: Back from the new terminal still returns
+                // to the sessions list. `launchSingleTop` alone would keep this
+                // entry (and its ViewModel, bound to the old session id).
+                onSwitchSession = { sessionId ->
+                    navController.navigate(Routes.sessionDetail(sessionId)) {
+                        popUpTo(Routes.SESSION_DETAIL) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onCreateSession = {
+                    navController.navigate(Routes.CREATE_SESSION)
                 },
             )
         }

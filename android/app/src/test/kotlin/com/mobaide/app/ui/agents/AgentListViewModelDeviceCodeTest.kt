@@ -11,6 +11,7 @@ import com.mobaide.app.data.network.dto.DeviceCodeMintResponse
 import com.mobaide.app.data.network.dto.DeviceCodeStatusResponse
 import com.mobaide.app.data.network.dto.PairingClaimResponse
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.AgentSwitchCoordinator
 import com.mobaide.app.data.security.TrustKeyPinning
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.Runs
@@ -85,8 +86,12 @@ class AgentListViewModelDeviceCodeTest {
     }
 
     private fun Fixture.buildVm(): AgentListViewModel = AgentListViewModel(
-        agentRepository, connectionStore, tokenStore,
+        agentRepository, tokenStore,
         sessionManager, agentEventBus, deviceIdentityStore, trustKeyPinning,
+        AgentSwitchCoordinator(
+            agentRepository, connectionStore, tokenStore,
+            sessionManager, agentEventBus, deviceIdentityStore,
+        ),
     ).also {
         // Point the poll's deadline clock at virtual time. `delay` advances
         // only the test scheduler, so a loop comparing the real clock against

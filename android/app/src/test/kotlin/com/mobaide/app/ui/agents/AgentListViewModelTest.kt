@@ -9,6 +9,7 @@ import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.MobileTokenResponse
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.AgentSwitchCoordinator
 import com.mobaide.app.data.security.TrustKeyPinning
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.Runs
@@ -71,6 +72,7 @@ class AgentListViewModelTest {
         val deviceIdentityStore: DeviceIdentityStore,
         val trustKeyPinning: TrustKeyPinning,
         val agentsFlow: MutableStateFlow<List<AgentSummaryResponse>>,
+        val coordinator: AgentSwitchCoordinator,
     )
 
     private fun newFixture(
@@ -101,14 +103,19 @@ class AgentListViewModelTest {
             agentRepository, connectionStore, tokenStore,
             sessionManager, agentEventBus, deviceIdentityStore,
             trustKeyPinning, agentsFlow,
+            AgentSwitchCoordinator(
+                agentRepository, connectionStore, tokenStore,
+                sessionManager, agentEventBus, deviceIdentityStore,
+            ),
         )
     }
 
     private fun Fixture.buildVm(): AgentListViewModel =
         AgentListViewModel(
-            agentRepository, connectionStore, tokenStore,
+            agentRepository, tokenStore,
             sessionManager, agentEventBus, deviceIdentityStore,
             trustKeyPinning,
+            coordinator,
         )
 
     companion object {
@@ -573,17 +580,25 @@ class AgentListViewModelTest {
     // ---- connectToAgent --------------------------------------------------------
 
     @Test
-    fun connectToAgent_happyPath_mintsTokensSavesCredentialsAndNavigates() = runTest {
+    fun connectToAgent_happyPath_mintsTokensSavesCredentialsAndRequestsSessionsList() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
         val tokens = MobileTokenResponse("access-tok", "refresh-tok", "bearer")
-        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", TEST_DEVICE_ID, TEST_DEVICE_NAME) } returns tokens
+        // The mint suspends like the real network call, so the screen observes the in-flight state.
+        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", TEST_DEVICE_ID, TEST_DEVICE_NAME) } coAnswers {
+            delay(100)
+            tokens
+        }
         every { fx.connectionStore.listProfiles() } returns emptyList()
 
         vm.navigateToSessions.test {
             vm.connectToAgent(agent("a-1", name = "TestAgent"))
+            runCurrent()
+            assertTrue(vm.uiState.value.isConnecting)
+            // saveRelayCredentials is mocked; the screen re-reads the stored id once the switch ends.
+            every { fx.tokenStore.getAgentId() } returns "a-1"
             advanceUntilIdle()
 
             // Verify full orchestration chain
@@ -605,8 +620,10 @@ class AgentListViewModelTest {
             assertEquals("a-1", vm.uiState.value.connectedAgentId)
             assertFalse(vm.uiState.value.isConnecting)
 
-            // Verify navigation event
-            assertEquals(Unit, awaitItem())
+            // Navigation now goes through the coordinator's pending flag, not this screen's event.
+            assertTrue(fx.coordinator.pendingSessionsList.value)
+            assertNull(fx.coordinator.switchingAgentId.value)
+            expectNoEvents()
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -663,10 +680,12 @@ class AgentListViewModelTest {
         // The isConnecting flag should be set after the coroutine starts
         runCurrent()
         assertTrue(vm.uiState.value.isConnecting)
+        assertEquals("a-1", fx.coordinator.switchingAgentId.value)
 
         // Second connect should be ignored
         vm.connectToAgent(agent("a-2"))
         runCurrent()
+        assertEquals("a-1", fx.coordinator.switchingAgentId.value)
 
         // Only one call to getMobileTokensForAgent should be made
         coVerify(exactly = 1) { fx.agentRepository.getMobileTokensForAgent(any(), any(), any()) }

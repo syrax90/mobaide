@@ -40,7 +40,7 @@ export function sessionKindLabel(
  * over identifies nothing.
  */
 export function sessionTitle(session: SessionResponse, kindLabel: string): string {
-  if (session.title !== undefined && session.title !== '') return session.title;
+  if (session.title !== undefined && session.title.trim() !== '') return session.title;
   return `${kindLabel} · ${session.project_name ?? session.session_id.slice(0, 8)}`;
 }
 

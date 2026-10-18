@@ -249,4 +249,98 @@ final class DeepLinkCoordinatorAgentSwitchTests: XCTestCase {
         XCTAssertFalse(harness.coordinator.isSwitchingAgent)
         XCTAssertEqual(harness.router.path, [])
     }
+
+    // MARK: - Sessions drawer: another agent's sessions list
+
+    func testOpenSessionsOfTheConnectedAgentPopsToTheListWithoutSwitching() {
+        let harness = Harness(connectedAgentId: "agent-1")
+        harness.router.navigate(to: .sessionList)
+        harness.router.navigate(to: .sessionDetail(sessionId: "s1"))
+
+        harness.coordinator.openSessions(ofAgent: "agent-1")
+
+        XCTAssertEqual(harness.router.path, [.sessionList], "the list beneath the terminal, not a second one on top")
+        XCTAssertEqual(harness.switchRequests, [], "already on that agent")
+        XCTAssertNil(harness.coordinator.pendingRoute)
+        XCTAssertNil(harness.coordinator.pendingAgentId)
+    }
+
+    func testOpenSessionsOfAnotherAgentSwitchesThenLandsOnItsList() async {
+        let harness = Harness(connectedAgentId: "agent-1")
+        harness.router.navigate(to: .sessionList)
+        harness.router.navigate(to: .sessionDetail(sessionId: "s1"))
+        harness.holdSwitch()
+        harness.coordinator.start()
+
+        harness.coordinator.openSessions(ofAgent: "agent-2")
+
+        await waitUntil { harness.switchRequests == ["agent-2"] }
+        XCTAssertEqual(harness.switchRequests, ["agent-2"])
+        XCTAssertEqual(
+            harness.router.path, [.sessionList, .sessionDetail(sessionId: "s1")],
+            "no navigation until the wanted agent is connected"
+        )
+        XCTAssertEqual(harness.coordinator.pendingRoute, .sessionList)
+        XCTAssertEqual(harness.coordinator.pendingAgentId, "agent-2")
+        XCTAssertNil(harness.coordinator.pendingSessionId, "a pending list is not a pending notification tap")
+        XCTAssertTrue(harness.coordinator.isSwitchingAgent, "the drawer's switch shows the same connecting toast")
+
+        // The real switch ends in `markAgentConnected()`; mirror both halves.
+        harness.connectedAgentId = "agent-2"
+        harness.releaseSwitch()
+        harness.yield(.fullyConnected)
+        await waitUntil { harness.router.path == [.sessionList] }
+        XCTAssertEqual(harness.router.path, [.sessionList])
+        XCTAssertNil(harness.coordinator.pendingRoute)
+        XCTAssertFalse(harness.coordinator.isSwitchingAgent)
+        XCTAssertEqual(harness.switchRequests, ["agent-2"], "the now-connected agent must not be re-switched")
+    }
+
+    func testOpenSessionsWithABlankAgentIdIsIgnored() {
+        let harness = Harness(connectedAgentId: "agent-1")
+        harness.router.navigate(to: .sessionList)
+        harness.router.navigate(to: .sessionDetail(sessionId: "s1"))
+
+        harness.coordinator.openSessions(ofAgent: "   ")
+
+        XCTAssertNil(harness.coordinator.pendingRoute)
+        XCTAssertEqual(harness.router.path, [.sessionList, .sessionDetail(sessionId: "s1")])
+        XCTAssertEqual(harness.switchRequests, [])
+    }
+
+    func testOpenSessionsFailedSwitchClearsTheStashAndNamesTheAgentGenerically() async {
+        let harness = Harness(connectedAgentId: "agent-1")
+        harness.switchFailure = SwitchFailure()
+        harness.coordinator.start()
+
+        harness.coordinator.openSessions(ofAgent: "agent-2")
+
+        await waitUntil { harness.coordinator.switchError != nil }
+        let message = harness.coordinator.switchError ?? ""
+        XCTAssertTrue(
+            message.hasPrefix("Couldn’t connect to this agent:"),
+            "the drawer is not a notification; the copy must fit both callers: \(message)"
+        )
+        XCTAssertTrue(message.contains("agent offline"))
+        XCTAssertNil(harness.coordinator.pendingRoute)
+        XCTAssertNil(harness.coordinator.pendingAgentId)
+        XCTAssertEqual(harness.router.path, [])
+    }
+
+    func testANotificationTapSupersedesAPendingListAndViceVersa() {
+        let harness = Harness(connectedAgentId: "agent-1", initialAuthState: .userOnly)
+
+        harness.coordinator.openSessions(ofAgent: "agent-2")
+        XCTAssertEqual(harness.coordinator.pendingRoute, .sessionList)
+
+        harness.coordinator.handleTap(sessionId: "s1", agentId: "agent-3")
+        XCTAssertEqual(harness.coordinator.pendingRoute, .sessionDetail(sessionId: "s1"))
+        XCTAssertEqual(harness.coordinator.pendingSessionId, "s1")
+        XCTAssertEqual(harness.coordinator.pendingAgentId, "agent-3")
+
+        harness.coordinator.openSessions(ofAgent: "agent-2")
+        XCTAssertEqual(harness.coordinator.pendingRoute, .sessionList, "one stash: the newest request wins")
+        XCTAssertNil(harness.coordinator.pendingSessionId)
+        XCTAssertEqual(harness.coordinator.pendingAgentId, "agent-2")
+    }
 }

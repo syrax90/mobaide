@@ -58,6 +58,11 @@ final class TerminalPanScrollView: UIScrollView {
         terminalView.contentInsetAdjustmentBehavior = .never
 
         addSubview(terminalView)
+        // Per-visit → retained is the safe direction for the dependency: this
+        // host dies with the screen, the edge recognizer outlives it.
+        if let edge = terminalView.drawerEdgePanGesture {
+            panGestureRecognizer.require(toFail: edge)
+        }
     }
 
     @available(*, unavailable)

@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.PairingClaimResponse
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.AgentSwitchCoordinator
 import com.mobaide.app.data.security.TrustKeyPinning
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.Runs
@@ -111,8 +112,12 @@ class AgentListViewModelQrPairingTest {
     }
 
     private fun Fixture.buildVm(): AgentListViewModel = AgentListViewModel(
-        agentRepository, connectionStore, tokenStore,
+        agentRepository, tokenStore,
         sessionManager, agentEventBus, deviceIdentityStore, trustKeyPinning,
+        AgentSwitchCoordinator(
+            agentRepository, connectionStore, tokenStore,
+            sessionManager, agentEventBus, deviceIdentityStore,
+        ),
     )
 
     companion object {

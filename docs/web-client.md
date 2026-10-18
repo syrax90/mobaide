@@ -851,7 +851,22 @@ Built on **xterm.js 6.0** (`@xterm/xterm` plus the `fit`, `webgl`,
 `/agents/:agentId/sessions/:sessionId` — the **only lazy route**: xterm and
 its WebGL addon outweigh the rest of the SPA, so they load on first attach
 rather than on the sign-in screen. It is reached from the sessions list at
-`/`.
+`/`, or from the sessions panel below.
+
+**Sessions panel.** A `☰` "Sessions" button in `.terminal-bar` opens a panel
+listing the connected agent's sessions (state dot, title, kind · project,
+attention chip; the current row highlighted), a "New session" shortcut and the
+account's other agents (online → select it and go to `/`; offline rows
+disabled). Unpinned (or on a viewport under `(min-width: 901px)`, see
+`useWideViewport`) it is a `popover="auto"` overlay sliding in from the left,
+the UA backdrop serving as the scrim; pinned and wide it is a docked
+`<aside class="sessions-panel sessions-panel-docked">` beside `.terminal-page`
+(xterm refits once). The pin persists in `useSessionsPanelStore`
+(`localStorage` key `mobaide-sessions-panel`). Picking a session
+`navigate`s with `replace: true` (and records `setLastUsedSession`), so Back
+does not step through every switch; `TerminalView` is keyed on the channel key
+so per-session dialog state resets. Android and iOS open the same list from a
+left-edge swipe or the top-bar button.
 
 **Layering.** `src/terminal/` is framework-free — pure reducers
 (`terminalReplay`, `terminalFollow`, `terminalPaste`,
@@ -1169,7 +1184,7 @@ session on that agent. The toggle is the one piece of terminal state that
 outlives the tab: `terminalPrefsStore` persists it under `localStorage` key
 `mobaide-terminal`, the second persisted key after `mobaide-theme` (WEB-07
 adds `mobaide-agent` and `mobaide-sessions`, and CLA-232 the wizard's global
-`mobaide-launch-prefs`; the dismissible external-sessions notice above the
+`mobaide-launch-prefs`, and the sessions panel's pin `mobaide-sessions-panel`; the dismissible external-sessions notice above the
 sessions list adds `mobaide-external-sessions-notice`; CLA-256 adds the wizard's
 per-agent `recent_custom_paths::<agentId>`, deliberately unprefixed for
 mobile parity — the one prefix sweep in `src/` is CLA-258's

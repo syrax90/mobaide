@@ -70,6 +70,10 @@ describe('sessionTitle', () => {
     expect(sessionTitle(session({ title: '', project_name: 'mobaide' }), 'Codex')).toBe(
       'Codex · mobaide',
     );
+    // So is a whitespace-only one, as on both mobile clients.
+    expect(sessionTitle(session({ title: '   ', project_name: 'mobaide' }), 'Codex')).toBe(
+      'Codex · mobaide',
+    );
   });
 });
 
