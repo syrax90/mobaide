@@ -80,6 +80,7 @@ class AgentListViewModelSwitchTest {
         every { tokenStore.getAgentId() } returns connectedAgentId
         every { sessionManager.isLoggedIn() } returns (connectedAgentId != null)
         every { sessionManager.tryMarkAgentConnected(any()) } answers { firstArg<() -> Unit>().invoke(); true }
+        every { sessionManager.isUserAuthenticated() } returns true
         coEvery { deviceIdentityStore.getOrCreateDeviceId() } returns TEST_DEVICE_ID
         every { deviceIdentityStore.getDeviceName() } returns TEST_DEVICE_NAME
         every { connectionStore.listProfiles() } returns emptyList()

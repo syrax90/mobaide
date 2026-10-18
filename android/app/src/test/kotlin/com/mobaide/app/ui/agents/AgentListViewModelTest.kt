@@ -94,6 +94,7 @@ class AgentListViewModelTest {
         every { agentEventBus.start() } just Runs
         every { sessionManager.agentDisconnect() } just Runs
         every { sessionManager.tryMarkAgentConnected(any()) } answers { firstArg<() -> Unit>().invoke(); true }
+        every { sessionManager.isUserAuthenticated() } returns true
         every { sessionManager.isLoggedIn() } returns (connectedAgentId != null)
         coEvery { agentRepository.refreshAgents() } just Runs
         coEvery { deviceIdentityStore.getOrCreateDeviceId() } returns TEST_DEVICE_ID

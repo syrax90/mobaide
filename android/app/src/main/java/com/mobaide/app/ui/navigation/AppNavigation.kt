@@ -8,6 +8,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -272,14 +273,10 @@ fun AppNavigation(
                 projectsViewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
                 onSessionCreated = { sessionId ->
-                    navController.navigate(Routes.sessionDetail(sessionId)) {
-                        popUpTo(Routes.SESSION_LIST)
-                    }
+                    navController.navigateFromCreate(Routes.sessionDetail(sessionId))
                 },
                 onAutoScanStarted = { projectName ->
-                    navController.navigate(Routes.autoScanDetail(projectName)) {
-                        popUpTo(Routes.SESSION_LIST)
-                    }
+                    navController.navigateFromCreate(Routes.autoScanDetail(projectName))
                 },
             )
         }
@@ -484,5 +481,25 @@ fun AppNavigation(
                 },
             )
         }
+    }
+}
+
+/**
+ * Leaves a finished create flow on `route` with the sessions list beneath it.
+ * Normally that is a `popUpTo(SESSION_LIST)`; but the terminal's drawer can
+ * open the create screen over a terminal that has no list beneath it (a
+ * notification tap, a restored stack), where that pop would do nothing and
+ * leave the used form and the old terminal behind the new screen. The list
+ * is re-created first then, so Back behaves the same either way.
+ */
+private fun NavController.navigateFromCreate(route: String) {
+    if (runCatching { getBackStackEntry(Routes.SESSION_LIST) }.isFailure) {
+        navigate(Routes.SESSION_LIST) {
+            popUpTo(Routes.AGENT_LIST)
+            launchSingleTop = true
+        }
+    }
+    navigate(route) {
+        popUpTo(Routes.SESSION_LIST)
     }
 }

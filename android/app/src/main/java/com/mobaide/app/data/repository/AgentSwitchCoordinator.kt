@@ -81,7 +81,12 @@ class AgentSwitchCoordinator @Inject constructor(
                 _pendingSessionsList.value = false
             } catch (e: Exception) {
                 _pendingSessionsList.value = false
-                _errors.trySend(e.message ?: "Failed to connect to ${agent.name}")
+                // Same rule when the mint itself failed because the central
+                // session expired (401 → forced sign-out): no message for the
+                // next sign-in to find.
+                if (sessionManager.isUserAuthenticated()) {
+                    _errors.trySend(e.message ?: "Failed to connect to ${agent.name}")
+                }
             }
         }
     }

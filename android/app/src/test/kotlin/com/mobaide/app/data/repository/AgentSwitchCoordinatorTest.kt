@@ -218,6 +218,7 @@ class AgentSwitchCoordinatorTest {
     @Test
     fun switchAndOpenSessions_onFailure_dropsThePendingList_andReportsTheMessage() = runTest {
         val fx = newFixture()
+        every { fx.sessionManager.isUserAuthenticated() } returns true
         coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", any(), any()) } throws
             RuntimeException("token minting failed")
 
@@ -259,8 +260,27 @@ class AgentSwitchCoordinatorTest {
     }
 
     @Test
+    fun switchAndOpenSessions_whenTheMintFailsAfterAForcedSignOut_dropsThePendingList_andStaysSilent() = runTest {
+        val fx = newFixture()
+        every { fx.sessionManager.isUserAuthenticated() } returns false
+        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", any(), any()) } throws
+            RuntimeException("401 Unauthorized")
+
+        fx.coordinator.errors.test {
+            fx.coordinator.switchAndOpenSessions(agent("a-1"))
+            advanceUntilIdle()
+
+            expectNoEvents()
+            assertFalse("a failed switch must not open the next agent list", fx.coordinator.pendingSessionsList.value)
+            assertNull(fx.coordinator.switchingAgentId.value)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun switchAndOpenSessions_onAMessagelessFailure_namesTheAgent() = runTest {
         val fx = newFixture()
+        every { fx.sessionManager.isUserAuthenticated() } returns true
         coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", any(), any()) } throws RuntimeException()
 
         fx.coordinator.errors.test {
