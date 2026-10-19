@@ -2132,6 +2132,10 @@ input[type='radio']:checked {
 .advanced[open] > summary::before {
   content: '\2212 ';
 }
+
+.advanced-stack > :not(summary) {
+  margin-top: 0.75rem;
+}
 /* endregion */
 
 /* region agents & pairing (WEB-08) */

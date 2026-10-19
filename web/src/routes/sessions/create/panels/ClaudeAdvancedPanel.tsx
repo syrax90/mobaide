@@ -12,7 +12,7 @@ interface ClaudeAdvancedPanelProps {
 export function ClaudeAdvancedPanel({ bucket, bucketId, dispatch }: ClaudeAdvancedPanelProps) {
   return (
     <div className="option-group">
-      <details className="advanced">
+      <details className="advanced advanced-stack">
         <summary>Advanced</summary>
         <CheckboxField
           label="No memory"
