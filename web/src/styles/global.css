@@ -1185,6 +1185,19 @@ input[type='radio']:checked {
   color: var(--accent);
 }
 
+.sessions-panel-pin-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 0 auto;
+  fill: currentColor;
+  shape-rendering: crispEdges;
+}
+
+.sessions-panel-pin-gap {
+  fill: var(--bg-2);
+}
+
 .sessions-panel-agent {
   display: flex;
   align-items: center;
