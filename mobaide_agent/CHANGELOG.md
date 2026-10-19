@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.3.16](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.15...agent-v0.3.16) (2026-10-19)
+
+
+### Features
+
+* add Focus view toggle and collapsible Advanced group to session launch ([eff1cec](https://github.com/syrax90/claude_mobile/commit/eff1cecbc3b109044c58ba5b54a328de4a611e30))
+* add Focus view toggle and collapsible Advanced group to session launch ([166acfa](https://github.com/syrax90/claude_mobile/commit/166acfa071e61ba1a4a35bddea8ac8ba0ffaf8b3))
+
 ## [0.3.15](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.14...agent-v0.3.15) (2026-10-17)
 
 

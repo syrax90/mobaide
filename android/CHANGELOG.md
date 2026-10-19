@@ -1,5 +1,21 @@
 # Android Changelog
 
+## [3.6.10](https://github.com/syrax90/claude_mobile/compare/android-v3.6.9...android-v3.6.10) (2026-10-19)
+
+
+### Features
+
+* add Focus view toggle and collapsible Advanced group to session launch ([eff1cec](https://github.com/syrax90/claude_mobile/commit/eff1cecbc3b109044c58ba5b54a328de4a611e30))
+* add Focus view toggle and collapsible Advanced group to session launch ([166acfa](https://github.com/syrax90/claude_mobile/commit/166acfa071e61ba1a4a35bddea8ac8ba0ffaf8b3))
+* sessions panel for switching sessions from the terminal (Android, iOS, web) ([81d847d](https://github.com/syrax90/claude_mobile/commit/81d847d6f67a83c9ea09a8bb125156b0ee684e44))
+* sessions panel for switching sessions from the terminal (Android, iOS, web) ([87e572f](https://github.com/syrax90/claude_mobile/commit/87e572fa192a64c7a466d1447596d874cf5f0ee6))
+
+
+### Bug Fixes
+
+* keep the sessions list beneath a session created from the drawer; stay silent on a signed-out switch failure ([2fbdf72](https://github.com/syrax90/claude_mobile/commit/2fbdf72e1c4cc876951e1bcb88115a336ee9169b))
+* refuse to persist agent credentials after a mid-switch sign-out ([9fa31a5](https://github.com/syrax90/claude_mobile/commit/9fa31a5334a1c23e7b884eccf21e429b1c76c1a4))
+
 ## [3.6.9](https://github.com/syrax90/claude_mobile/compare/android-v3.6.8...android-v3.6.9) (2026-10-17)
 
 

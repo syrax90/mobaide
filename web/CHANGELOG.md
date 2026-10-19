@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.12](https://github.com/syrax90/claude_mobile/compare/web-v0.1.11...web-v0.1.12) (2026-10-19)
+
+
+### Features
+
+* add Focus view toggle and collapsible Advanced group to session launch ([eff1cec](https://github.com/syrax90/claude_mobile/commit/eff1cecbc3b109044c58ba5b54a328de4a611e30))
+* add Focus view toggle and collapsible Advanced group to session launch ([166acfa](https://github.com/syrax90/claude_mobile/commit/166acfa071e61ba1a4a35bddea8ac8ba0ffaf8b3))
+* sessions panel for switching sessions from the terminal (Android, iOS, web) ([81d847d](https://github.com/syrax90/claude_mobile/commit/81d847d6f67a83c9ea09a8bb125156b0ee684e44))
+* sessions panel for switching sessions from the terminal (Android, iOS, web) ([87e572f](https://github.com/syrax90/claude_mobile/commit/87e572fa192a64c7a466d1447596d874cf5f0ee6))
+
+
+### Bug Fixes
+
+* **web:** add spacing between Claude Code Advanced options ([712d8e4](https://github.com/syrax90/claude_mobile/commit/712d8e4ac1251605b5e8286dec8cc471a67ae722))
+* **web:** add spacing between Claude Code Advanced options ([f59745c](https://github.com/syrax90/claude_mobile/commit/f59745cbea65a858b6bed3e8558d91754fdcef5e))
+
 ## [0.1.11](https://github.com/syrax90/claude_mobile/compare/web-v0.1.10...web-v0.1.11) (2026-10-17)
 
 
