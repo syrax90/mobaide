@@ -11,6 +11,10 @@ struct SessionDetailScreen: View {
     var body: some View {
         if let container {
             TerminalScreenContent(container: container, sessionId: sessionId)
+                // The sessions drawer swaps the route in place; the content's
+                // `@State` model is seeded in `init`, so a reused identity would
+                // keep rendering the previous session.
+                .id(sessionId)
         }
     }
 }
@@ -37,6 +41,11 @@ private struct TerminalScreenContent: View {
     /// not `@Observable` — only its stream drives a re-render.
     @State private var sessionRow: SessionResponse?
     @State private var customTypeNames: [String: String]
+    @State private var panel: SessionsPanelModel
+    @State private var drawerOpen = false
+    /// Live translation of the terminal's left-edge pan while the finger is
+    /// down; nil otherwise. `SideDrawer` follows it before the open verdict.
+    @State private var drawerDrag: CGFloat?
     private let displayStore: TerminalDisplayStore
     private let sessionRepository: SessionRepository
     private let customAgentTypesRepository: CustomAgentTypesRepository
@@ -44,6 +53,7 @@ private struct TerminalScreenContent: View {
     private let sessionId: String
 
     @Environment(Router.self) private var router
+    @Environment(DeepLinkCoordinator.self) private var deepLink
     @Environment(\.mobaideColors) private var colors
 
     init(container: AppContainer, sessionId: String) {
@@ -59,6 +69,13 @@ private struct TerminalScreenContent: View {
         ))
         _sessionRow = State(initialValue: session)
         _customTypeNames = State(initialValue: Self.typeNames(container.customAgentTypesRepository.currentTypes))
+        _panel = State(initialValue: SessionsPanelModel(
+            sessionRepository: container.sessionRepository,
+            agentEventBus: container.agentEventBus,
+            customAgentTypesRepository: container.customAgentTypesRepository,
+            agentRepository: container.agentRepository,
+            connectedAgentId: container.tokenStore.getAgentId()
+        ))
         displayStore = container.terminalDisplayStore
         sessionRepository = container.sessionRepository
         customAgentTypesRepository = container.customAgentTypesRepository
@@ -121,7 +138,8 @@ private struct TerminalScreenContent: View {
                     TerminalHostView(
                         model: model,
                         displayConfig: displayStore.config,
-                        keyboardTransition: keyboard.transition
+                        keyboardTransition: keyboard.transition,
+                        onDrawerEdgePan: handleDrawerEdgePan
                     )
                     jumpToBottomButton
                     selectionToolbar
@@ -144,12 +162,46 @@ private struct TerminalScreenContent: View {
             }
             .offset(y: -keyboard.transition.lift)
             connectionOverlay
+            // Beside the overlay, outside the lifted column: the drawer must
+            // not move with the keyboard. It is dismissed on open instead,
+            // because `.ignoresSafeArea(.keyboard)` would let it cover the
+            // panel's lower rows.
+            SideDrawer(isOpen: $drawerOpen, dragTranslation: drawerDrag) {
+                SessionsPanel(
+                    model: panel,
+                    currentSessionId: sessionId,
+                    switchingAgentId: deepLink.isSwitchingAgent ? deepLink.pendingAgentId : nil,
+                    onSelectSession: { id in
+                        drawerOpen = false
+                        router.replaceLast(with: .sessionDetail(sessionId: id))
+                    },
+                    onCreateSession: {
+                        drawerOpen = false
+                        router.navigate(to: .createSession)
+                    },
+                    onSelectAgent: { agent in
+                        deepLink.openSessions(ofAgent: agent.agent_id)
+                    },
+                    onClose: { drawerOpen = false }
+                )
+            }
         }
         .clipped()
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        // The left edge is the drawer's; the back button still pops.
+        .background(InteractivePopGestureDisabler())
         .navigationTitle(headerLabel)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    openDrawer()
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .accessibilityLabel("Sessions")
+                .accessibilityIdentifier("terminal-sessions-button")
+            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 PixelStatusSquare(tone: SessionDisplay.stateTone(model.sessionStatus ?? ""), size: 10)
                     .accessibilityLabel(model.sessionStatus ?? "unknown")
@@ -238,6 +290,15 @@ private struct TerminalScreenContent: View {
         .task {
             await seedSessionRow()
         }
+        .task { await panel.observeSessions() }
+        .task { await panel.observeSessionsSynced() }
+        .task { await panel.observeConnection() }
+        .task { await panel.observeCustomTypes() }
+        .task { await panel.observeAgents() }
+        .task { await panel.refreshAgents() }
+        .onChange(of: drawerOpen) { _, open in
+            if open { model.dismissSoftKeyboard() }
+        }
         .task {
             gitCapabilities = (try? await agentAPI.getAgentVersion())?.gitCapabilities ?? .none
         }
@@ -276,6 +337,25 @@ private struct TerminalScreenContent: View {
             screenVisible = false
             model.markHidden()
             keyboard.stop()
+        }
+    }
+
+    private func openDrawer() {
+        drawerDrag = nil
+        drawerOpen = true
+    }
+
+    private func handleDrawerEdgePan(_ pan: DrawerEdgePan) {
+        switch pan {
+        case .changed(let translation):
+            if !drawerOpen { drawerDrag = translation }
+        case .ended(let translation, let velocity):
+            drawerDrag = nil
+            if SideDrawer<EmptyView>.shouldOpen(translation: translation, velocity: velocity) {
+                drawerOpen = true
+            }
+        case .cancelled:
+            drawerDrag = nil
         }
     }
 

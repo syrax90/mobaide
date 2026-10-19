@@ -25,18 +25,22 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.rememberDrawerState
 import com.mobaide.app.ui.theme.pixel
 import com.mobaide.app.ui.theme.PxDarkRule
 import com.mobaide.app.ui.theme.PxDarkSurface
 import com.mobaide.app.ui.theme.PxDarkText
 import com.mobaide.app.ui.theme.chromeCaps
 import com.mobaide.app.ui.common.pixel.PixelFab
+import com.mobaide.app.ui.common.pixel.PixelIconButton
 import com.mobaide.app.ui.common.pixel.PixelStatusDot
 import com.mobaide.app.ui.common.pixel.pixelFrame
 import com.mobaide.app.ui.common.pixel.PixelScaffold
@@ -45,6 +49,11 @@ import com.mobaide.app.ui.common.pixel.PixelSnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import com.mobaide.app.ui.common.pixel.PixelTopBar
+import com.mobaide.app.ui.sessions.panel.SessionsDrawer
+import com.mobaide.app.ui.sessions.panel.SessionsPanel
+import com.mobaide.app.ui.sessions.panel.SessionsPanelViewModel
+import com.mobaide.app.ui.sessions.panel.edgeSwipeToOpen
+import com.mobaide.app.ui.sessions.sessionStateColor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -52,6 +61,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,10 +74,12 @@ import androidx.compose.ui.platform.LocalView
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.ui.theme.TerminalBackground
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** Ceiling on how long a shortcut-sheet snackbar may hold the shared
@@ -84,6 +96,9 @@ fun TerminalScreen(
     viewModel: TerminalViewModel,
     onBack: () -> Unit,
     onSessionEnded: () -> Unit = onBack,
+    panelViewModel: SessionsPanelViewModel = hiltViewModel(),
+    onSwitchSession: (sessionId: String) -> Unit = {},
+    onCreateSession: () -> Unit = {},
     onOpenGitChanges: () -> Unit = {},
     onOpenGitCommit: () -> Unit = {},
     onOpenGitSync: () -> Unit = {},
@@ -119,6 +134,9 @@ fun TerminalScreen(
     var terminalKeyboardRequest by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val shortcutSheetSnackbarHostState = remember { SnackbarHostState() }
+    val panelState by panelViewModel.uiState.collectAsStateWithLifecycle()
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val drawerScope = rememberCoroutineScope()
 
     LaunchedEffect(viewModel) {
         viewModel.sessionEnded.collect { onSessionEnded() }
@@ -172,190 +190,222 @@ fun TerminalScreen(
         }
     }
 
-    val stateColor = when (sessionState) {
-        "running" -> MaterialTheme.pixel.statusRunning
-        "starting" -> MaterialTheme.pixel.statusStarting
-        "stopping" -> MaterialTheme.pixel.statusStopping
-        "stopped" -> MaterialTheme.pixel.statusStopped
-        "crashed" -> MaterialTheme.pixel.statusCrashed
-        else -> MaterialTheme.pixel.statusStopped
+    // The drawer is not inset for the keyboard, so a raised IME would cover
+    // its lower rows; both raise paths share this window token.
+    val openDrawer = {
+        view.context.getSystemService(InputMethodManager::class.java)
+            ?.hideSoftInputFromWindow(view.windowToken, 0)
+        drawerScope.launch { drawerState.open() }
+        Unit
+    }
+    val closeDrawer = {
+        drawerScope.launch { drawerState.close() }
+        Unit
     }
 
-    PixelScaffold(
-        contentWindowInsets = WindowInsets.systemBars,
-        snackbarHost = {
-            PixelSnackbarHost(
-                snackbarHostState,
-                // Scaffold already insets this slot by systemBars; add only the part
-                // of the keyboard that exceeds them so snackbars float above the IME.
-                modifier = Modifier
-                    .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.systemBars)),
+    val stateColor = MaterialTheme.pixel.sessionStateColor(sessionState)
+
+    SessionsDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            SessionsPanel(
+                state = panelState,
+                currentSessionId = viewModel.sessionId,
+                onSelectSession = onSwitchSession,
+                onCreateSession = {
+                    closeDrawer()
+                    onCreateSession()
+                },
+                onSelectAgent = panelViewModel::switchAgent,
+                onClose = closeDrawer,
             )
         },
-        topBar = {
-            PixelTopBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        PixelStatusDot(
-                            color = if (isConnected) stateColor else MaterialTheme.pixel.statusStopped,
-                            modifier = Modifier.semantics { contentDescription = sessionState },
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = headerLabel,
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontFamily = ChromeFontFamily,
-                            ),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                        )
-                    }
-                },
-                actions = {
-                    if (sessionCwd != null) {
-                        val branchesProject = sessionProjectName
-                        TerminalOverflowMenu(
-                            onOpenGitChanges = onOpenGitChanges,
-                            onOpenGitCommit = onOpenGitCommit,
-                            commitAvailable = gitCommitAvailable,
-                            onOpenGitSync = onOpenGitSync,
-                            syncAvailable = gitSyncAvailable,
-                            onOpenGitBranches = {
-                                if (branchesProject != null) onOpenGitBranches(branchesProject)
-                            },
-                            branchesAvailable = gitBranchesAvailable && branchesProject != null,
-                            onOpenGitRebase = onOpenGitRebase,
-                            rebaseAvailable = gitRebaseAvailable,
-                        )
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        // Shared write-path gate: during replay/reconnect or on a stopped/crashed
-        // session the ViewModel's input listener silently drops terminal bytes, so the
-        // selection-menu Paste affordance that would feed that path is withheld rather
-        // than offered and ignored.
-        val sessionInputActive = isConnected && sessionState == "running" &&
-            connectionState == ConnectionState.Live
-        // Cursor-row bottom (px, view-local) reported by the terminal surface. Read ONLY
-        // inside imeCursorCounterPan's placement block: per-output-frame writes then
-        // re-run placement, never composition. MAX_VALUE (no report yet) means a zero
-        // counter-pan, i.e. the plain full-pan behavior.
-        val cursorAnchorBottomPx = remember { mutableIntStateOf(Int.MAX_VALUE) }
-        // Clip host: its top edge is the app bar's bottom, so content panned up by
-        // the keyboard is clipped instead of drawing over the app bar.
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .clipToBounds(),
-        ) {
-            Column(
+    ) {
+        PixelScaffold(
+            contentWindowInsets = WindowInsets.systemBars,
+            snackbarHost = {
+                PixelSnackbarHost(
+                    snackbarHostState,
+                    // Scaffold already insets this slot by systemBars; add only the part
+                    // of the keyboard that exceeds them so snackbars float above the IME.
+                    modifier = Modifier
+                        .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.systemBars)),
+                )
+            },
+            topBar = {
+                PixelTopBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            PixelStatusDot(
+                                color = if (isConnected) stateColor else MaterialTheme.pixel.statusStopped,
+                                modifier = Modifier.semantics { contentDescription = sessionState },
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = headerLabel,
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontFamily = ChromeFontFamily,
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    },
+                    navigationIcon = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = onBack) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                )
+                            }
+                            PixelIconButton(
+                                imageVector = Icons.Default.Menu,
+                                contentDescription = "Sessions",
+                                onClick = openDrawer,
+                                compact = true,
+                            )
+                        }
+                    },
+                    actions = {
+                        if (sessionCwd != null) {
+                            val branchesProject = sessionProjectName
+                            TerminalOverflowMenu(
+                                onOpenGitChanges = onOpenGitChanges,
+                                onOpenGitCommit = onOpenGitCommit,
+                                commitAvailable = gitCommitAvailable,
+                                onOpenGitSync = onOpenGitSync,
+                                syncAvailable = gitSyncAvailable,
+                                onOpenGitBranches = {
+                                    if (branchesProject != null) onOpenGitBranches(branchesProject)
+                                },
+                                branchesAvailable = gitBranchesAvailable && branchesProject != null,
+                                onOpenGitRebase = onOpenGitRebase,
+                                rebaseAvailable = gitRebaseAvailable,
+                            )
+                        }
+                    },
+                )
+            },
+        ) { padding ->
+            // Shared write-path gate: during replay/reconnect or on a stopped/crashed
+            // session the ViewModel's input listener silently drops terminal bytes, so the
+            // selection-menu Paste affordance that would feed that path is withheld rather
+            // than offered and ignored.
+            val sessionInputActive = isConnected && sessionState == "running" &&
+                connectionState == ConnectionState.Live
+            // Cursor-row bottom (px, view-local) reported by the terminal surface. Read ONLY
+            // inside imeCursorCounterPan's placement block: per-output-frame writes then
+            // re-run placement, never composition. MAX_VALUE (no report yet) means a zero
+            // counter-pan, i.e. the plain full-pan behavior.
+            val cursorAnchorBottomPx = remember { mutableIntStateOf(Int.MAX_VALUE) }
+            // Clip host: its top edge is the app bar's bottom, so content panned up by
+            // the keyboard is clipped instead of drawing over the app bar.
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    // Pan, don't resize: the keyboard never changes the terminal's
-                    // measured size (and thus never the grid or the remote PTY size) —
-                    // the whole column just shifts up so the InputBar rides above the
-                    // IME. The terminal surface inside counter-pans to keep the cursor
-                    // row visible. See imeFloatingPan / imeCursorCounterPan.
-                    .imeFloatingPan(WindowInsets.ime, WindowInsets.systemBars),
+                    .padding(padding)
+                    .clipToBounds()
+                    .edgeSwipeToOpen(enabled = !drawerState.isOpen, onOpen = openDrawer),
             ) {
-                Box(modifier = Modifier.weight(1f)) {
-                    // clipToBounds: the counter-pan shifts the surface down by up to the
-                    // pan amount; the overhang must not paint over the InputBar below.
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(TerminalBackground)
-                            .clipToBounds(),
-                    ) {
-                        TerminalSurfaceView(
-                            session = viewModel.session,
-                            sessionCallback = viewModel.sessionCallback,
-                            displayConfig = displayConfig,
-                            // Ungated by design: a pre-connect layout pass must still cache the
-                            // measured grid so enterLiveState()'s resendCachedSize() can deliver it
-                            // on connect (matches iOS). resize() only enqueues the frame; it never
-                            // touches the local emulator.
-                            onResize = { rows, cols ->
-                                viewModel.resize(rows, cols)
-                            },
-                            onRowTapped = { text, isCurrentInput ->
-                                viewModel.sendTappedRow(text, isCurrentInput)
-                            },
-                            onRowCopyToInput = { text, _ ->
-                                viewModel.copyTextToInput(text)
-                            },
-                            onSelectionCopyToInput = { text ->
-                                viewModel.copyTextToInput(text)
-                            },
-                            onScrollSettled = viewModel::onUserScrollSettled,
-                            onCursorAnchorChanged = { cursorAnchorBottomPx.intValue = it },
-                            followMode = followMode,
-                            requestKeyboard = terminalKeyboardRequest,
-                            onKeyboardHandled = { terminalKeyboardRequest = false },
-                            // Deliberately independent of composerVisible: pasting into the
-                            // terminal is valid whether or not the composer is on screen.
-                            pasteFromClipboardEnabled = sessionInputActive,
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        // Pan, don't resize: the keyboard never changes the terminal's
+                        // measured size (and thus never the grid or the remote PTY size) —
+                        // the whole column just shifts up so the InputBar rides above the
+                        // IME. The terminal surface inside counter-pans to keep the cursor
+                        // row visible. See imeFloatingPan / imeCursorCounterPan.
+                        .imeFloatingPan(WindowInsets.ime, WindowInsets.systemBars),
+                ) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        // clipToBounds: the counter-pan shifts the surface down by up to the
+                        // pan amount; the overhang must not paint over the InputBar below.
+                        Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .imeCursorCounterPan(WindowInsets.ime, WindowInsets.systemBars) {
-                                    cursorAnchorBottomPx.intValue
+                                .background(TerminalBackground)
+                                .clipToBounds(),
+                        ) {
+                            TerminalSurfaceView(
+                                session = viewModel.session,
+                                sessionCallback = viewModel.sessionCallback,
+                                displayConfig = displayConfig,
+                                // Ungated by design: a pre-connect layout pass must still cache the
+                                // measured grid so enterLiveState()'s resendCachedSize() can deliver it
+                                // on connect (matches iOS). resize() only enqueues the frame; it never
+                                // touches the local emulator.
+                                onResize = { rows, cols ->
+                                    viewModel.resize(rows, cols)
                                 },
-                        )
-                        JumpToBottomFab(
-                            visible = !followMode,
-                            unreadRows = unreadRows,
-                            onClick = viewModel::jumpToBottom,
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .padding(12.dp),
-                        )
+                                onRowTapped = { text, isCurrentInput ->
+                                    viewModel.sendTappedRow(text, isCurrentInput)
+                                },
+                                onRowCopyToInput = { text, _ ->
+                                    viewModel.copyTextToInput(text)
+                                },
+                                onSelectionCopyToInput = { text ->
+                                    viewModel.copyTextToInput(text)
+                                },
+                                onScrollSettled = viewModel::onUserScrollSettled,
+                                onCursorAnchorChanged = { cursorAnchorBottomPx.intValue = it },
+                                followMode = followMode,
+                                requestKeyboard = terminalKeyboardRequest,
+                                onKeyboardHandled = { terminalKeyboardRequest = false },
+                                // Deliberately independent of composerVisible: pasting into the
+                                // terminal is valid whether or not the composer is on screen.
+                                pasteFromClipboardEnabled = sessionInputActive,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .imeCursorCounterPan(WindowInsets.ime, WindowInsets.systemBars) {
+                                        cursorAnchorBottomPx.intValue
+                                    },
+                            )
+                            JumpToBottomFab(
+                                visible = !followMode,
+                                unreadRows = unreadRows,
+                                onClick = viewModel::jumpToBottom,
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(12.dp),
+                            )
+                        }
                     }
+                    InputBar(
+                        text = inputText,
+                        onTextChange = viewModel::updateInputText,
+                        onSend = { text -> viewModel.sendInput(text) },
+                        onSendBytes = viewModel::sendBytes,
+                        enabled = isConnected && sessionState == "running",
+                        requestFocus = requestInputFocus,
+                        onFocusHandled = viewModel::consumeFocusRequest,
+                        onExpand = { showFullScreenInput = true },
+                        onOpenTemplates = {
+                            viewModel.refreshTemplates()
+                            showTemplatesPicker = true
+                        },
+                        onOpenShortcuts = {
+                            viewModel.refreshShortcutRecents()
+                            viewModel.refreshSavedShortcuts()
+                            showShortcutPicker = true
+                        },
+                        savedShortcuts = savedShortcuts,
+                        onSendSavedShortcut = { viewModel.sendChord(it.chord) },
+                        onRenameSavedShortcut = { renameShortcutTarget = it },
+                        onRemoveSavedShortcut = { viewModel.removeShortcut(it.id) },
+                        onSaveAsTemplate = { showSaveTemplateDialog = true },
+                        sessionKind = sessionKind,
+                        composerVisible = composerVisible,
+                        onRevealComposer = viewModel::revealComposer,
+                        onHideComposer = viewModel::hideComposer,
+                        onRaiseTerminalKeyboard = { terminalKeyboardRequest = true },
+                    )
                 }
-                InputBar(
-                    text = inputText,
-                    onTextChange = viewModel::updateInputText,
-                    onSend = { text -> viewModel.sendInput(text) },
-                    onSendBytes = viewModel::sendBytes,
-                    enabled = isConnected && sessionState == "running",
-                    requestFocus = requestInputFocus,
-                    onFocusHandled = viewModel::consumeFocusRequest,
-                    onExpand = { showFullScreenInput = true },
-                    onOpenTemplates = {
-                        viewModel.refreshTemplates()
-                        showTemplatesPicker = true
-                    },
-                    onOpenShortcuts = {
-                        viewModel.refreshShortcutRecents()
-                        viewModel.refreshSavedShortcuts()
-                        showShortcutPicker = true
-                    },
-                    savedShortcuts = savedShortcuts,
-                    onSendSavedShortcut = { viewModel.sendChord(it.chord) },
-                    onRenameSavedShortcut = { renameShortcutTarget = it },
-                    onRemoveSavedShortcut = { viewModel.removeShortcut(it.id) },
-                    onSaveAsTemplate = { showSaveTemplateDialog = true },
-                    sessionKind = sessionKind,
-                    composerVisible = composerVisible,
-                    onRevealComposer = viewModel::revealComposer,
-                    onHideComposer = viewModel::hideComposer,
-                    onRaiseTerminalKeyboard = { terminalKeyboardRequest = true },
-                )
+                // Stationary sibling of the panned Column: the reconnect/replay pill must
+                // hold its screen position (and stay un-clipped) while the keyboard pans
+                // the content underneath it.
+                ConnectionOverlay(state = connectionState)
             }
-            // Stationary sibling of the panned Column: the reconnect/replay pill must
-            // hold its screen position (and stay un-clipped) while the keyboard pans
-            // the content underneath it.
-            ConnectionOverlay(state = connectionState)
         }
     }
 

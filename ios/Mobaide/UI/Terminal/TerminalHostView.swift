@@ -275,6 +275,45 @@ final class MobaideTerminalView: TerminalView {
         neutralizeSwiftTermGestures()
     }
 
+    // MARK: - Sessions drawer edge pan
+
+    static let drawerEdgePanGestureName = "mobaide.sessionsDrawer"
+
+    private(set) var drawerEdgePanGesture: UIScreenEdgePanGestureRecognizer?
+    private lazy var drawerEdgePanDelegate = DrawerEdgePanDelegate(view: self)
+    /// Live progress of a left-edge pan, consumed by the screen's drawer.
+    var onDrawerEdgePan: ((DrawerEdgePan) -> Void)?
+
+    /// Idempotent, like `installVerticalScrollGesture`: the recognizer targets
+    /// this retained view. Every horizontal pan on the terminal defers to it,
+    /// so a drag that begins on the screen edge belongs to the drawer and
+    /// nothing else; one that begins anywhere else never reaches it.
+    func installDrawerEdgePanGesture() {
+        if let existing = drawerEdgePanGesture, existing.view === self { return }
+        let edge = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(handleDrawerEdgePan(_:)))
+        edge.name = Self.drawerEdgePanGestureName
+        edge.edges = .left
+        edge.delegate = drawerEdgePanDelegate
+        addGestureRecognizer(edge)
+        drawerEdgePanGesture = edge
+        panGestureRecognizer.require(toFail: edge)
+        verticalScrollGesture?.require(toFail: edge)
+    }
+
+    @objc private func handleDrawerEdgePan(_ gesture: UIScreenEdgePanGestureRecognizer) {
+        let translation = gesture.translation(in: window).x
+        switch gesture.state {
+        case .began, .changed:
+            onDrawerEdgePan?(.changed(translation))
+        case .ended:
+            onDrawerEdgePan?(.ended(translation: translation, velocity: gesture.velocity(in: window).x))
+        case .cancelled, .failed:
+            onDrawerEdgePan?(.cancelled)
+        default:
+            break
+        }
+    }
+
     // MARK: - Vertical scrolling
 
     static let verticalScrollGestureName = "mobaide.verticalScroll"
@@ -307,6 +346,9 @@ final class MobaideTerminalView: TerminalView {
         pan.maximumNumberOfTouches = 1
         addGestureRecognizer(pan)
         verticalScrollGesture = pan
+        if let edge = drawerEdgePanGesture {
+            pan.require(toFail: edge)
+        }
     }
 
     /// Whether SwiftTerm's own scrollback pan may own a touch.
@@ -834,6 +876,21 @@ private final class ExclusiveVerticalPanDelegate: NSObject, UIGestureRecognizerD
     }
 }
 
+/// A sticky selection owns the pointer for the whole episode (the view's own
+/// `gestureRecognizerShouldBegin` gate), so the drawer edge pan sits it out too.
+@MainActor
+private final class DrawerEdgePanDelegate: NSObject, UIGestureRecognizerDelegate {
+    private unowned let view: MobaideTerminalView
+
+    init(view: MobaideTerminalView) {
+        self.view = view
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        !view.isSelectionActive
+    }
+}
+
 /// Lets the immediate click tap coexist with the delayed row tap and the double
 /// tap, rather than racing them.
 ///
@@ -854,6 +911,13 @@ private final class SimultaneousTapDelegate: NSObject, UIGestureRecognizerDelega
     }
 }
 
+/// One step of the left-edge pan that opens the sessions drawer.
+enum DrawerEdgePan {
+    case changed(CGFloat)
+    case ended(translation: CGFloat, velocity: CGFloat)
+    case cancelled
+}
+
 /// Bridges the retained `MobaideTerminalView` into SwiftUI, wrapped in a
 /// `TerminalPanScrollView` that applies the Full/Static display mode. The
 /// terminal instance is model-owned (never a fresh one) so emulator state
@@ -863,6 +927,7 @@ struct TerminalHostView: UIViewRepresentable {
     let model: TerminalSessionModel
     let displayConfig: TerminalDisplayConfig
     let keyboardTransition: TerminalKeyboardObserver.Transition
+    var onDrawerEdgePan: ((DrawerEdgePan) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(model: model)
@@ -884,6 +949,7 @@ struct TerminalHostView: UIViewRepresentable {
     func updateUIView(_ uiView: TerminalPanScrollView, context: Context) {
         uiView.displayConfig = displayConfig
         uiView.setKeyboardLift(keyboardTransition.lift, duration: keyboardTransition.duration)
+        uiView.terminalView.onDrawerEdgePan = onDrawerEdgePan
     }
 
     /// SwiftUI does not guarantee the outgoing wrapper is dismantled before
@@ -893,6 +959,10 @@ struct TerminalHostView: UIViewRepresentable {
     /// atomically) is left untouched.
     static func dismantleUIView(_ uiView: TerminalPanScrollView, coordinator: Coordinator) {
         if uiView.terminalView.superview === uiView {
+            // The closure captures the screen's state; left in place it would
+            // pin that state (and its keyboard observer) for as long as the
+            // retained view lives.
+            uiView.terminalView.onDrawerEdgePan = nil
             uiView.terminalView.removeFromSuperview()
         }
     }
@@ -970,6 +1040,7 @@ struct TerminalHostView: UIViewRepresentable {
             view.addGestureRecognizer(doubleTap)
             view.addGestureRecognizer(singleTap)
             view.addGestureRecognizer(mouseTap)
+            view.installDrawerEdgePanGesture()
             view.installVerticalScrollGesture()
             view.selectionController.install()
             view.neutralizeSwiftTermGestures()

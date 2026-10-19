@@ -115,16 +115,29 @@ private struct CreateSessionContent: View {
         }
         .task {
             for await id in model.navEvents() {
-                router.pop()
+                leaveCreateScreen()
                 router.navigate(to: .sessionDetail(sessionId: id))
             }
         }
         .task {
             for await projectName in model.autoScanNavEvents() {
-                router.pop()
+                leaveCreateScreen()
                 router.navigate(to: .autoScanDetail(projectName: projectName))
                 model.clearAutoScanNav()
             }
+        }
+    }
+
+    /// Opened from the terminal's sessions drawer this screen sits over a
+    /// terminal, and a plain pop would leave that old terminal beneath the new
+    /// screen; the list is restored instead (Android `navigateFromCreate`).
+    /// Every other entry point (the list, the Projects shortcut) keeps the
+    /// plain pop.
+    private func leaveCreateScreen() {
+        if case .sessionDetail = router.path.dropLast().last {
+            router.popTo(.sessionList)
+        } else {
+            router.pop()
         }
     }
 

@@ -66,7 +66,7 @@ Android's `AttentionNotifier`, keyed by `session_id` so a re-post replaces in
 place), clearing it when a `session.updated` drops the attention. Foreground
 alerts for the on-screen session are suppressed via `ForegroundSessionTracker`,
 and a tapped alert deep-links to the session's terminal once `.fullyConnected`
-(`DeepLinkCoordinator` stashes the id on a cold start and replays it). Because
+(`DeepLinkCoordinator` stashes a `pendingRoute` on a cold start and replays it). Because
 iOS has no foreground-service equivalent, delivery is honest to the platform:
 the events socket lives while the app runs plus a ~30 s `beginBackgroundTask`
 grace (`AppLifecycleController`), and events missed while suspended are
@@ -180,6 +180,17 @@ column by the keyboard overlap (`TerminalKeyboardObserver`), and
 slack rows stays visible (`TerminalKeyboardPan` math) — the grid never
 resizes on keyboard show/hide, so keyboard transitions send no PTY resize
 frames and no SIGWINCH.
+A left-edge swipe on the terminal (or the top-bar `terminal-sessions-button`)
+opens the sessions panel: a `SideDrawer` overlay listing the connected agent's
+sessions, a New session shortcut and the account's other agents. The swipe is
+a `UIScreenEdgePanGestureRecognizer` (`mobaide.sessionsDrawer`) on
+`MobaideTerminalView` that the scroll, vertical and selection pans
+`require(toFail:)`, so the navigation controller's interactive-pop swipe is
+disabled while the terminal is on top (`InteractivePopGestureDisabler`; the
+Back button stays). Picking a session swaps the route in place
+(`Router.replaceLast(with:)`); picking an online agent connects to it and lands
+on its sessions list via `DeepLinkCoordinator.openSessions(ofAgent:)`.
+
 A vertical-drag scroll ladder (`TerminalWheelScroll` plus a
 `mobaide.verticalScroll` pan on `MobaideTerminalView`) ports Android
 `TerminalView.doScroll`: full-screen TUIs (Claude Code, Codex, Gemini,

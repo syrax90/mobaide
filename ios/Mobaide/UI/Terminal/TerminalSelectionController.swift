@@ -116,6 +116,9 @@ final class TerminalSelectionController: NSObject {
             view.addGestureRecognizer(drag)
             dragGesture = drag
         }
+        if let edge = view.drawerEdgePanGesture {
+            dragGesture?.require(toFail: edge)
+        }
         if dismissTapGesture?.view !== view {
             let tap = UITapGestureRecognizer(target: self, action: #selector(handleDismissTap(_:)))
             tap.name = Self.dismissTapGestureName

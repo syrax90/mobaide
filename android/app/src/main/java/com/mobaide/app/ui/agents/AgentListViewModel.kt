@@ -2,8 +2,6 @@ package com.mobaide.app.ui.agents
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.mobaide.app.BuildConfig
-import com.mobaide.app.data.auth.ConnectionStore
 import com.mobaide.app.data.auth.DeviceIdentityStore
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.TokenStore
@@ -11,6 +9,7 @@ import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.AgentSwitchCoordinator
 import com.mobaide.app.data.security.TrustKeyPinning
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -162,12 +161,12 @@ data class AgentListUiState(
 @HiltViewModel
 class AgentListViewModel @Inject constructor(
     private val agentRepository: AgentRepository,
-    private val connectionStore: ConnectionStore,
     private val tokenStore: TokenStore,
     private val sessionManager: SessionManager,
     private val agentEventBus: AgentEventBus,
     private val deviceIdentityStore: DeviceIdentityStore,
     private val trustKeyPinning: TrustKeyPinning,
+    private val agentSwitchCoordinator: AgentSwitchCoordinator,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -223,7 +222,29 @@ class AgentListViewModel @Inject constructor(
                 _uiState.update { it.copy(agents = agents) }
             }
         }
+        // Before the collectors below: `refresh()` clears `error` inline, and a
+        // switch that already failed (airplane mode) has its message buffered
+        // and waiting — delivered first, it would be wiped before the screen
+        // ever saw it.
         refresh()
+        // Every switch lands here (its disconnect resets the stack onto this
+        // screen), so the connecting state, the connected mark and the failure
+        // message all come from the coordinator rather than from `init`.
+        viewModelScope.launch {
+            agentSwitchCoordinator.errors.collect { message ->
+                _uiState.update { it.copy(error = message) }
+            }
+        }
+        viewModelScope.launch {
+            agentSwitchCoordinator.switchingAgentId.collect { switching ->
+                _uiState.update {
+                    it.copy(
+                        isConnecting = switching != null,
+                        connectedAgentId = if (switching == null) tokenStore.getAgentId() else it.connectedAgentId,
+                    )
+                }
+            }
+        }
     }
 
     override fun onCleared() {
@@ -846,6 +867,12 @@ class AgentListViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Connects to [agent] and opens its sessions list. The switch runs on the
+     * coordinator's app scope, never here: its disconnect resets the back
+     * stack and destroys this ViewModel mid-flight, and a credential rewrite
+     * cancelled half-way would leave the user signed in with no agent.
+     */
     fun connectToAgent(agent: AgentSummaryResponse) {
         if (_uiState.value.isConnecting) return
         if (agent.agent_id == _uiState.value.connectedAgentId) {
@@ -853,69 +880,7 @@ class AgentListViewModel @Inject constructor(
             _navigateToSessions.tryEmit(Unit)
             return
         }
-        viewModelScope.launch {
-            _uiState.update { it.copy(isConnecting = true, error = null) }
-            try {
-                if (sessionManager.isLoggedIn()) {
-                    agentEventBus.stop()
-                    sessionManager.agentDisconnect()
-                }
-
-                val deviceId = deviceIdentityStore.getOrCreateDeviceId()
-                val deviceName = deviceIdentityStore.getDeviceName()
-                val tokens = agentRepository.getMobileTokensForAgent(
-                    agent.agent_id,
-                    mobileDeviceId = deviceId,
-                    mobileDeviceName = deviceName,
-                )
-
-                tokenStore.saveRelayCredentials(
-                    serverUrl = BuildConfig.CENTRAL_SERVER_URL,
-                    agentId = agent.agent_id,
-                    pairingId = agent.agent_id,
-                    deviceId = deviceId,
-                    accessToken = tokens.access_token,
-                    refreshToken = tokens.refresh_token,
-                )
-
-                sessionManager.markAgentConnected()
-
-                val existingProfile = connectionStore.listProfiles()
-                    .find { it.agentId == agent.agent_id && it.mode == "relay" }
-                if (existingProfile != null) {
-                    // Update existing profile with fresh tokens
-                    connectionStore.saveProfile(
-                        existingProfile.copy(
-                            accessToken = tokens.access_token,
-                            refreshToken = tokens.refresh_token,
-                        ),
-                    )
-                    connectionStore.setActiveProfileId(existingProfile.id)
-                } else {
-                    connectionStore.captureActiveProfile(
-                        tokenStore,
-                        label = "Agent: ${agent.name}",
-                    )
-                }
-
-                agentEventBus.start()
-
-                _uiState.update {
-                    it.copy(
-                        isConnecting = false,
-                        connectedAgentId = agent.agent_id,
-                    )
-                }
-
-                _navigateToSessions.tryEmit(Unit)
-            } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
-                        isConnecting = false,
-                        error = e.message ?: "Failed to connect to agent",
-                    )
-                }
-            }
-        }
+        _uiState.update { it.copy(error = null) }
+        agentSwitchCoordinator.switchAndOpenSessions(agent)
     }
 }

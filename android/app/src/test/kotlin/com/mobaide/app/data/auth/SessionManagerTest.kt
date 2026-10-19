@@ -164,6 +164,35 @@ class SessionManagerTest {
     }
 
     @Test
+    fun tryMarkAgentConnected_whenSignedIn_runsPersist_andSetsFullyConnected() {
+        val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
+        val userStore = stubUserIdentityStore(loggedIn = false)
+        val sm = newSessionManager(store, userStore, mockk<OkHttpClient>())
+        sm.markUserLoggedIn()
+        var persisted = 0
+
+        val connected = sm.tryMarkAgentConnected { persisted++ }
+
+        assertTrue(connected)
+        assertEquals(1, persisted)
+        assertEquals(SessionManager.AuthState.FullyConnected, sm.authState.value)
+    }
+
+    @Test
+    fun tryMarkAgentConnected_whenSignedOut_skipsPersist_andStaysUnauthenticated() {
+        val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
+        val userStore = stubUserIdentityStore(loggedIn = false)
+        val sm = newSessionManager(store, userStore, mockk<OkHttpClient>())
+        var persisted = 0
+
+        val connected = sm.tryMarkAgentConnected { persisted++ }
+
+        assertEquals(false, connected)
+        assertEquals(0, persisted)
+        assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
+    }
+
+    @Test
     fun agentDisconnect_transitionsToUserOnly() {
         val store = stubTokenStore()
         val userStore = stubUserIdentityStore(loggedIn = true)

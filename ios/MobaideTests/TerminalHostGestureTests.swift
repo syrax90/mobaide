@@ -733,6 +733,38 @@ final class TerminalHostGestureTests: XCTestCase {
         )
     }
 
+    func testDismantleClearsTheDrawerEdgePanClosureWhenWrapperStillOwnsIt() {
+        let model = makeModel()
+        let coordinator = TerminalHostView.Coordinator(model: model)
+        let config = TerminalDisplayConfig(mode: .static, staticColumns: 120)
+        let wrapper = TerminalPanScrollView(terminalView: model.terminalView, displayConfig: config)
+        model.terminalView.onDrawerEdgePan = { _ in }
+
+        TerminalHostView.dismantleUIView(wrapper, coordinator: coordinator)
+
+        XCTAssertNil(
+            model.terminalView.onDrawerEdgePan,
+            "the closure captures the screen's state; left on the retained view it would outlive the screen"
+        )
+    }
+
+    func testDismantleLeavesTheDrawerEdgePanClosureWithTheWrapperThatStoleIt() {
+        let model = makeModel()
+        let coordinator = TerminalHostView.Coordinator(model: model)
+        let config = TerminalDisplayConfig(mode: .static, staticColumns: 120)
+        let oldWrapper = TerminalPanScrollView(terminalView: model.terminalView, displayConfig: config)
+        let newWrapper = TerminalPanScrollView(terminalView: model.terminalView, displayConfig: config)
+        model.terminalView.onDrawerEdgePan = { _ in }
+
+        TerminalHostView.dismantleUIView(oldWrapper, coordinator: coordinator)
+
+        XCTAssertTrue(model.terminalView.superview === newWrapper)
+        XCTAssertNotNil(
+            model.terminalView.onDrawerEdgePan,
+            "a dying wrapper must not clear the closure the newer wrapper's screen just set"
+        )
+    }
+
     // MARK: - Follow mode
 
     /// Buffer index of the prompt line `feedTranscript` puts into history.

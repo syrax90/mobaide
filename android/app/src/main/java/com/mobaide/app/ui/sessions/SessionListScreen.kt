@@ -205,14 +205,7 @@ private fun SessionCard(
     onClick: () -> Unit,
     onStop: () -> Unit,
 ) {
-    val stateColor = when (session.state) {
-        "running" -> MaterialTheme.pixel.statusRunning
-        "starting" -> MaterialTheme.pixel.statusStarting
-        "stopping" -> MaterialTheme.pixel.statusStopping
-        "stopped" -> MaterialTheme.pixel.statusStopped
-        "crashed" -> MaterialTheme.pixel.statusCrashed
-        else -> MaterialTheme.pixel.statusStopped
-    }
+    val stateColor = MaterialTheme.pixel.sessionStateColor(session.state)
 
     Card(
         modifier = Modifier
@@ -233,8 +226,7 @@ private fun SessionCard(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = session.title
-                        ?: "$kindLabel · ${session.project_name ?: session.session_id.take(8)}",
+                    text = sessionTitle(session, kindLabel),
                     style = MaterialTheme.typography.titleSmall,
                     fontFamily = ChromeFontFamily,
                     maxLines = 1,
@@ -263,6 +255,11 @@ private fun SessionCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = stateColor,
                 )
+            }
+
+            sessionAttention(session.attention)?.let { attention ->
+                Spacer(modifier = Modifier.width(8.dp))
+                SessionAttentionChip(attention)
             }
 
             if (session.state == "running" || session.state == "starting") {

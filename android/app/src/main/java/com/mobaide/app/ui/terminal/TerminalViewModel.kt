@@ -124,7 +124,7 @@ class TerminalViewModel @Inject constructor(
             TerminalDisplayConfig(TerminalDisplayMode.Static, TERMINAL_STATIC_COLUMNS_DEFAULT),
         )
 
-    private val sessionId: String = savedStateHandle["sessionId"]
+    val sessionId: String = savedStateHandle["sessionId"]
         ?: throw IllegalArgumentException("sessionId required")
 
     private var connection: WebSocketConnection? = null
