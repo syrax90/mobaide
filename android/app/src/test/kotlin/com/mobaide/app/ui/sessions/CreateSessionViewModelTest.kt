@@ -348,6 +348,37 @@ class CreateSessionViewModelTest {
     }
 
     @Test
+    fun submit_focusMode_defaultsOn_andReachesRequestAndPrefsWhenToggledOff() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-focus", "starting", "2026-10-19T00:00:00Z")
+        val prefsSlot = slot<ClaudeLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedClaudeOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.submit()
+        advanceUntilIdle()
+
+        assertEquals(true, requestSlot.captured.claude_options!!.focus_mode)
+        assertTrue(prefsSlot.captured.focusMode)
+
+        vm.toggleFocusMode(false)
+        vm.submit()
+        advanceUntilIdle()
+
+        assertEquals(
+            "off is sent explicitly, never as an absent key",
+            false,
+            requestSlot.captured.claude_options!!.focus_mode,
+        )
+        assertFalse(prefsSlot.captured.focusMode)
+    }
+
+    @Test
     fun toggleClaudeFastMode_locksModelToOpus() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -464,6 +495,23 @@ class CreateSessionViewModelTest {
         val s = vm.uiState.value
         assertTrue(s.autoScanClaudeDebug)
         assertFalse("nothing was ever persisted for the Claude Code bucket", s.claudeDebug)
+    }
+
+    @Test
+    fun init_seedsFocusModePerBucket_andDefaultsOnWithoutSavedPrefs() = runTest {
+        val fresh = newFixture().buildVm()
+        advanceUntilIdle()
+        assertTrue(fresh.uiState.value.focusMode)
+        assertTrue(fresh.uiState.value.autoScanFocusMode)
+
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedClaudeOptions() } returns ClaudeLaunchPrefs(focusMode = false)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertFalse(s.focusMode)
+        assertTrue("the Auto Scan bucket was never saved, so it keeps the default", s.autoScanFocusMode)
     }
 
     @Test
@@ -793,6 +841,35 @@ class CreateSessionViewModelTest {
         assertTrue(optsSlot.captured.debug)
         assertTrue(prefsSlot.captured.debug)
         coVerify(exactly = 0) { fx.prefs.setLastUsedClaudeOptions(any()) }
+    }
+
+    @Test
+    fun submitAutoScan_focusMode_readsItsOwnBucket_notTheStandardToggle() = runTest {
+        val fx = newFixture(autoScanPrompt = "seed")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val optsSlot = slot<ClaudeOptionsModel>()
+        coEvery { fx.autoScanRepo.startScan("alpha", capture(optsSlot)) } just Runs
+        val prefsSlot = slot<ClaudeLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedAutoScanOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAutoScanMode()
+        vm.toggleFocusMode(false) // the STANDARD toggle, a different kind
+        vm.submitAutoScan()
+        advanceUntilIdle()
+
+        assertEquals(true, optsSlot.captured.focus_mode)
+        assertTrue(prefsSlot.captured.focusMode)
+
+        vm.toggleAutoScanFocusMode(false)
+        vm.submitAutoScan()
+        advanceUntilIdle()
+
+        assertEquals(false, optsSlot.captured.focus_mode)
+        assertFalse(prefsSlot.captured.focusMode)
     }
 
     @Test

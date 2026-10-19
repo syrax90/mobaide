@@ -341,6 +341,17 @@
             "title": "Fast Mode",
             "type": "boolean"
           },
+          "focus_mode": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus Mode"
+          },
           "identifier": {
             "anyOf": [
               {
@@ -672,7 +683,7 @@
         "type": "object"
       },
       "FsDirsResponse": {
-        "description": "Subdirectory names of one host directory.\n\n``path`` is the listed directory after ``~`` expansion, so a client that\ncompletes ``~/co`` can write back an absolute path. ``truncated`` means a\nscan cap or the time budget stopped the listing early: the client must\nnot filter it locally as if it were complete, and re-asks with ``q``.",
+        "description": "Subdirectory names of one host directory.\n\n``path`` is the listed directory after ``~`` expansion, so a client that\ncompletes ``~/co`` can write back an absolute path; on Windows its ``/``\nseparators are rewritten to ``\\``, so a picked folder extends it with\nthe host's own separator. ``truncated`` means a scan cap or the time\nbudget stopped the listing early: the client must not filter it locally\nas if it were complete, and re-asks with ``q``.",
         "properties": {
           "dirs": {
             "items": {

@@ -124,6 +124,7 @@ const CLAUDE_AT_DEFAULTS = {
   noMemory: false,
   planMode: false,
   debug: false,
+  focusMode: true,
 };
 
 const project = (name: string): ProjectInfo =>

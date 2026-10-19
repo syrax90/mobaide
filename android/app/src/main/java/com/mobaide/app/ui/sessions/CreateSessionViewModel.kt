@@ -129,6 +129,7 @@ data class CreateSessionUiState(
     val claudeFastMode: Boolean = false,
     val claudeUltracode: Boolean = false,
     val claudeDebug: Boolean = false,
+    val focusMode: Boolean = true,
     val claudeAppendSystemPrompt: String = "",
     // Auto Scan's own copies of the Claude controls: each kind remembers its
     // own persisted defaults, and in-flight edits must not bleed between the
@@ -144,6 +145,7 @@ data class CreateSessionUiState(
     val autoScanClaudeFastMode: Boolean = false,
     val autoScanClaudeUltracode: Boolean = false,
     val autoScanClaudeDebug: Boolean = false,
+    val autoScanFocusMode: Boolean = true,
     val autoScanClaudeAppendSystemPrompt: String = "",
     // Codex launch options (CodexConfig step). Defaults reflect the "Auto" preset.
     val codexModel: String? = null,
@@ -231,6 +233,7 @@ private fun CreateSessionUiState.toClaudeLaunchPrefs() = ClaudeLaunchPrefs(
     skipPermissions = skipPermissions,
     noMemory = noMemory,
     debug = claudeDebug,
+    focusMode = focusMode,
 )
 
 /** Snapshot of the Auto Scan launch controls for its own per-kind bucket. */
@@ -244,6 +247,7 @@ private fun CreateSessionUiState.toAutoScanLaunchPrefs() = ClaudeLaunchPrefs(
     noMemory = autoScanNoMemory,
     planMode = autoScanPlanMode,
     debug = autoScanClaudeDebug,
+    focusMode = autoScanFocusMode,
 )
 
 /** Snapshot of the Codex launch controls for persistence / re-defaulting. */
@@ -335,6 +339,7 @@ class CreateSessionViewModel @Inject constructor(
                         skipPermissions = saved.skipPermissions,
                         noMemory = saved.noMemory,
                         claudeDebug = saved.debug,
+                        focusMode = saved.focusMode,
                     )
                 }
             }
@@ -353,6 +358,7 @@ class CreateSessionViewModel @Inject constructor(
                         autoScanNoMemory = saved.noMemory,
                         autoScanPlanMode = saved.planMode,
                         autoScanClaudeDebug = saved.debug,
+                        autoScanFocusMode = saved.focusMode,
                     )
                 }
             }
@@ -807,6 +813,7 @@ class CreateSessionViewModel @Inject constructor(
                     fast_mode = state.autoScanClaudeFastMode,
                     ultracode = state.autoScanClaudeUltracode,
                     debug = state.autoScanClaudeDebug,
+                    focus_mode = state.autoScanFocusMode,
                     append_system_prompt = state.autoScanClaudeAppendSystemPrompt.takeIf { it.isNotBlank() },
                     worktree = true,
                     initial_prompt = state.initialPrompt.takeIf { it.isNotBlank() },
@@ -844,6 +851,7 @@ class CreateSessionViewModel @Inject constructor(
 
     fun toggleNoMemory(v: Boolean) = _uiState.update { it.copy(noMemory = v) }
     fun toggleSkipPermissions(v: Boolean) = _uiState.update { it.copy(skipPermissions = v) }
+    fun toggleFocusMode(v: Boolean) = _uiState.update { it.copy(focusMode = v) }
     fun setClaudeModel(v: String?) = _uiState.update {
         // Clamp the effort if the new model doesn't support the current level
         // (e.g. xhigh/max → high when switching to haiku, the only capped model).
@@ -871,6 +879,8 @@ class CreateSessionViewModel @Inject constructor(
     fun toggleAutoScanNoMemory(v: Boolean) = _uiState.update { it.copy(autoScanNoMemory = v) }
     fun toggleAutoScanSkipPermissions(v: Boolean) =
         _uiState.update { it.copy(autoScanSkipPermissions = v) }
+    fun toggleAutoScanFocusMode(v: Boolean) =
+        _uiState.update { it.copy(autoScanFocusMode = v) }
 
     fun setAutoScanClaudeModel(v: String?) = _uiState.update {
         val efforts = claudeEffortsFor(v)
@@ -966,6 +976,7 @@ class CreateSessionViewModel @Inject constructor(
             fast_mode = state.claudeFastMode,
             ultracode = state.claudeUltracode,
             debug = state.claudeDebug,
+            focus_mode = state.focusMode,
             append_system_prompt = state.claudeAppendSystemPrompt.takeIf { it.isNotBlank() },
             worktree = state.worktree,
             branch_name = state.branchName.takeIf { it.isNotBlank() },

@@ -1080,6 +1080,8 @@ export interface components {
              * @default false
              */
             fast_mode: boolean;
+            /** Focus Mode */
+            focus_mode?: boolean | null;
             /** Identifier */
             identifier?: string | null;
             /** Initial Prompt */
@@ -1228,9 +1230,11 @@ export interface components {
          * @description Subdirectory names of one host directory.
          *
          *     ``path`` is the listed directory after ``~`` expansion, so a client that
-         *     completes ``~/co`` can write back an absolute path. ``truncated`` means a
-         *     scan cap or the time budget stopped the listing early: the client must
-         *     not filter it locally as if it were complete, and re-asks with ``q``.
+         *     completes ``~/co`` can write back an absolute path; on Windows its ``/``
+         *     separators are rewritten to ``\``, so a picked folder extends it with
+         *     the host's own separator. ``truncated`` means a scan cap or the time
+         *     budget stopped the listing early: the client must not filter it locally
+         *     as if it were complete, and re-asks with ``q``.
          */
         FsDirsResponse: {
             /** Dirs */

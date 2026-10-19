@@ -1,6 +1,6 @@
-import { CheckboxField } from '../../../../components/form/CheckboxField';
 import { TextAreaField } from '../../../../components/form/TextAreaField';
 import type { ClaudeBucket, WizardAction } from '../wizardState';
+import { ClaudeAdvancedPanel } from './ClaudeAdvancedPanel';
 import { ClaudeOptionsPanel } from './ClaudeOptionsPanel';
 
 interface AutoScanOptionsPanelProps {
@@ -34,14 +34,9 @@ export function AutoScanOptionsPanel({
         skipPermissionsHint="When off, the scan pauses at permission prompts — you'll get a notification and can open the session to approve."
       />
 
+      <ClaudeAdvancedPanel bucket={bucket} bucketId="autoScan" dispatch={dispatch} />
+
       <div className="option-group">
-        <CheckboxField
-          label="Plan mode"
-          checked={bucket.planMode}
-          onChange={(value) => {
-            dispatch({ type: 'setClaudeFlag', bucket: 'autoScan', flag: 'planMode', value });
-          }}
-        />
         <TextAreaField
           label="Initial prompt (optional)"
           value={bucket.initialPrompt}

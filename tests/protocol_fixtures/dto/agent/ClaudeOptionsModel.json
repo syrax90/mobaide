@@ -17,7 +17,8 @@
         "fast_mode": true,
         "ultracode": true,
         "append_system_prompt": "be careful",
-        "debug": true
+        "debug": true,
+        "focus_mode": true
       }
     },
     {

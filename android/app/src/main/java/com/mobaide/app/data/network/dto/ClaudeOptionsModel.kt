@@ -28,4 +28,7 @@ data class ClaudeOptionsModel(
     // default: the server also treats an absent debug as false, so the field
     // being omitted when the toggle is off carries exactly the right meaning.
     val debug: Boolean = false,
+    // null (the wire default) means "leave Claude Code's view alone", so both
+    // explicit true (viewMode focus) and false (viewMode default) are emitted.
+    val focus_mode: Boolean? = null,
 )

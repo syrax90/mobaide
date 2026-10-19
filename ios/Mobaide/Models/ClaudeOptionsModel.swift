@@ -15,6 +15,8 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
     let ultracode: Bool
     let append_system_prompt: String?
     let debug: Bool
+    // nil leaves Claude Code's view alone; the UI always sends true or false.
+    let focus_mode: Bool?
 
     init(
         plan_mode: Bool = false,
@@ -33,7 +35,8 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
         fast_mode: Bool = false,
         ultracode: Bool = false,
         append_system_prompt: String? = nil,
-        debug: Bool = false
+        debug: Bool = false,
+        focus_mode: Bool? = nil
     ) {
         self.plan_mode = plan_mode
         self.no_memory = no_memory
@@ -49,6 +52,7 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
         self.ultracode = ultracode
         self.append_system_prompt = append_system_prompt
         self.debug = debug
+        self.focus_mode = focus_mode
     }
 }
 
@@ -69,5 +73,6 @@ extension ClaudeOptionsModel {
         ultracode = try container.decodeIfPresent(Bool.self, forKey: .ultracode) ?? false
         append_system_prompt = try container.decodeIfPresent(String.self, forKey: .append_system_prompt)
         debug = try container.decodeIfPresent(Bool.self, forKey: .debug) ?? false
+        focus_mode = try container.decodeIfPresent(Bool.self, forKey: .focus_mode)
     }
 }

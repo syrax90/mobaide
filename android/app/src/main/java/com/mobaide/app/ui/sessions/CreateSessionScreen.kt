@@ -1049,17 +1049,11 @@ private fun StandardConfigSection(
         effort = state.claudeEffort,
         fastMode = state.claudeFastMode,
         ultracode = state.claudeUltracode,
-        debug = state.claudeDebug,
-        appendSystemPrompt = state.claudeAppendSystemPrompt,
         onModelSelect = viewModel::setClaudeModel,
         onEffortSelect = viewModel::setClaudeEffort,
-        onFastModeToggle = viewModel::toggleClaudeFastMode,
-        onUltracodeToggle = viewModel::toggleClaudeUltracode,
-        onDebugToggle = viewModel::toggleClaudeDebug,
-        onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
     )
+    FocusViewToggle(state.focusMode, viewModel::toggleFocusMode)
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
-    ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
 
     if (showWorktreeToggle) {
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
@@ -1079,6 +1073,19 @@ private fun StandardConfigSection(
             )
         }
     }
+
+    ClaudeAdvancedOptions(
+        noMemory = state.noMemory,
+        fastMode = state.claudeFastMode,
+        ultracode = state.claudeUltracode,
+        debug = state.claudeDebug,
+        appendSystemPrompt = state.claudeAppendSystemPrompt,
+        onNoMemoryToggle = viewModel::toggleNoMemory,
+        onFastModeToggle = viewModel::toggleClaudeFastMode,
+        onUltracodeToggle = viewModel::toggleClaudeUltracode,
+        onDebugToggle = viewModel::toggleClaudeDebug,
+        onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
+    )
 
     PixelButton(
         style = PixelButtonStyle.Primary,
@@ -1368,9 +1375,8 @@ private fun AntigravityConfigSection(
 
 /**
  * Claude reasoning controls shared by the Standard and Auto Scan config steps:
- * a model dropdown, a model-conditional effort dropdown, and an "Advanced"
- * expander (fast mode, ultracode, debug logging, append-system-prompt).
- * Replaces the old boolean "Max effort" toggle.
+ * a model dropdown and a model-conditional effort dropdown. The rest of the
+ * Claude flags live in [ClaudeAdvancedOptions], placed after the main options.
  */
 @Composable
 private fun ClaudeOptionControls(
@@ -1378,14 +1384,8 @@ private fun ClaudeOptionControls(
     effort: String,
     fastMode: Boolean,
     ultracode: Boolean,
-    debug: Boolean,
-    appendSystemPrompt: String,
     onModelSelect: (String?) -> Unit,
     onEffortSelect: (String) -> Unit,
-    onFastModeToggle: (Boolean) -> Unit,
-    onUltracodeToggle: (Boolean) -> Unit,
-    onDebugToggle: (Boolean) -> Unit,
-    onAppendSystemPromptChange: (String) -> Unit,
 ) {
     ClaudeModelDropdown(
         selected = model,
@@ -1413,7 +1413,32 @@ private fun ClaudeOptionControls(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
 
+@Composable
+private fun FocusViewToggle(checked: Boolean, onToggle: (Boolean) -> Unit) {
+    ToggleRow("Focus view", checked, onToggle)
+    Text(
+        text = "Claude Code shows only your last prompt, a one-line summary of tool calls, and the final response.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/** Collapsed-by-default expander for the less common Claude flags, shared by the Standard and Auto Scan steps. */
+@Composable
+private fun ClaudeAdvancedOptions(
+    noMemory: Boolean,
+    fastMode: Boolean,
+    ultracode: Boolean,
+    debug: Boolean,
+    appendSystemPrompt: String,
+    onNoMemoryToggle: (Boolean) -> Unit,
+    onFastModeToggle: (Boolean) -> Unit,
+    onUltracodeToggle: (Boolean) -> Unit,
+    onDebugToggle: (Boolean) -> Unit,
+    onAppendSystemPromptChange: (String) -> Unit,
+) {
     var advancedExpanded by remember { mutableStateOf(false) }
     PixelTextButton(
         onClick = { advancedExpanded = !advancedExpanded },
@@ -1426,6 +1451,7 @@ private fun ClaudeOptionControls(
         Text("Advanced")
     }
     if (advancedExpanded) {
+        ToggleRow("No memory", noMemory, onNoMemoryToggle)
         ToggleRow("Fast mode (Opus only)", fastMode, onFastModeToggle)
         ToggleRow("ultracode", ultracode, onUltracodeToggle)
         ToggleRow("Debug logging", debug, onDebugToggle)
@@ -1622,16 +1648,11 @@ private fun AutoScanConfigSection(
         effort = state.autoScanClaudeEffort,
         fastMode = state.autoScanClaudeFastMode,
         ultracode = state.autoScanClaudeUltracode,
-        debug = state.autoScanClaudeDebug,
-        appendSystemPrompt = state.autoScanClaudeAppendSystemPrompt,
         onModelSelect = viewModel::setAutoScanClaudeModel,
         onEffortSelect = viewModel::setAutoScanClaudeEffort,
-        onFastModeToggle = viewModel::toggleAutoScanClaudeFastMode,
-        onUltracodeToggle = viewModel::toggleAutoScanClaudeUltracode,
-        onDebugToggle = viewModel::toggleAutoScanClaudeDebug,
-        onAppendSystemPromptChange = viewModel::setAutoScanClaudeAppendSystemPrompt,
     )
     ToggleRow("Plan mode", state.autoScanPlanMode, viewModel::toggleAutoScanPlanMode)
+    FocusViewToggle(state.autoScanFocusMode, viewModel::toggleAutoScanFocusMode)
     ToggleRow(
         "Skip permissions",
         state.autoScanSkipPermissions,
@@ -1643,7 +1664,18 @@ private fun AutoScanConfigSection(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    ToggleRow("No memory", state.autoScanNoMemory, viewModel::toggleAutoScanNoMemory)
+    ClaudeAdvancedOptions(
+        noMemory = state.autoScanNoMemory,
+        fastMode = state.autoScanClaudeFastMode,
+        ultracode = state.autoScanClaudeUltracode,
+        debug = state.autoScanClaudeDebug,
+        appendSystemPrompt = state.autoScanClaudeAppendSystemPrompt,
+        onNoMemoryToggle = viewModel::toggleAutoScanNoMemory,
+        onFastModeToggle = viewModel::toggleAutoScanClaudeFastMode,
+        onUltracodeToggle = viewModel::toggleAutoScanClaudeUltracode,
+        onDebugToggle = viewModel::toggleAutoScanClaudeDebug,
+        onAppendSystemPromptChange = viewModel::setAutoScanClaudeAppendSystemPrompt,
+    )
 
     OutlinedTextField(
         colors = PixelTextFieldDefaults.colors(),

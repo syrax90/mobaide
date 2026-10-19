@@ -55,6 +55,11 @@ export const claudeOptionsSchema = z.strictObject({
    * matches the UI default (both false), so an omitted field is unambiguous.
    */
   debug: z.boolean().default(false),
+  /**
+   * Claude Code's `viewMode`: `true` → focus, `false` → default, absent → the
+   * agent leaves the CLI's own view setting alone. Clients always send a bool.
+   */
+  focus_mode: z.boolean().nullish(),
 });
 
 export const codexOptionsSchema = z.strictObject({
