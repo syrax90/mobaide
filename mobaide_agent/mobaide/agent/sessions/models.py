@@ -39,6 +39,7 @@ class ClaudeOptionsModel(BaseModel):
     ultracode: bool = False
     append_system_prompt: str | None = None
     debug: bool = False
+    focus_mode: bool | None = None
 
     def to_options(self) -> ClaudeOptions:
         return ClaudeOptions(**self.model_dump())

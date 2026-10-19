@@ -19,6 +19,7 @@ const CLAUDE_BLOB = {
   noMemory: true,
   planMode: true,
   debug: true,
+  focusMode: true,
 };
 
 const CODEX_BLOB = {
@@ -41,6 +42,7 @@ const CLAUDE_DEFAULTS = {
   noMemory: false,
   planMode: false,
   debug: false,
+  focusMode: true,
 } as const;
 
 async function rehydrateWith(state: Record<string, unknown>) {
@@ -96,6 +98,21 @@ describe('hydration', () => {
       reasoningEffort: 'high',
     });
     expect(prefs.antigravity).toEqual({ model: null, skipPermissions: false, sandbox: false });
+  });
+
+  it('restores focus view on for a blob saved before the toggle existed', async () => {
+    // CLAUDE_BLOB predates focusMode; a stored `false` must still win over the default.
+    const prefs = await rehydrateWith({
+      claude: CLAUDE_BLOB,
+      autoScan: { ...CLAUDE_BLOB, focusMode: false },
+    });
+
+    expect(prefs.claude?.focusMode).toBe(true);
+    expect(prefs.autoScan?.focusMode).toBe(false);
+  });
+
+  it('voids the bucket for a wrong-typed focusMode', async () => {
+    expect((await rehydrateWith({ claude: { ...CLAUDE_BLOB, focusMode: 'on' } })).claude).toBeNull();
   });
 
   it('voids the whole bucket for a present but wrong-typed field', async () => {

@@ -63,6 +63,7 @@ export interface ClaudeBucket {
   fastMode: boolean;
   ultracode: boolean;
   debug: boolean;
+  focusMode: boolean;
   appendSystemPrompt: string;
   skipPermissions: boolean;
   noMemory: boolean;
@@ -121,6 +122,7 @@ const CLAUDE_DEFAULTS: ClaudeBucket = {
   fastMode: false,
   ultracode: false,
   debug: false,
+  focusMode: true,
   appendSystemPrompt: '',
   // Starts **off**, unlike the wire-absence default of `true`. Both mobile
   // clients do the same; see the comment on `claudeOptionsSchema`.
@@ -289,7 +291,14 @@ export type WizardAction =
   | {
       type: 'setClaudeFlag';
       bucket: ClaudeBucketId;
-      flag: 'fastMode' | 'ultracode' | 'debug' | 'skipPermissions' | 'noMemory' | 'planMode';
+      flag:
+        | 'fastMode'
+        | 'ultracode'
+        | 'debug'
+        | 'focusMode'
+        | 'skipPermissions'
+        | 'noMemory'
+        | 'planMode';
       value: boolean;
     }
   | {

@@ -364,6 +364,41 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         )
     }
 
+    func testAutoScanFocusModeIsReadFromItsOwnBucketNotTheClaudeStep() {
+        let prefs = isolatedPrefs()
+        prefs.setLastUsedAutoScanOptions(ClaudeLaunchPrefs(focusMode: false))
+
+        let model = makeModel(autoScanRepo: makeAutoScanRepo(), prefs: prefs)
+
+        XCTAssertFalse(model.autoScanFocusMode)
+        XCTAssertTrue(model.focusMode, "nothing was saved for the Claude Code step")
+        XCTAssertEqual(model.autoScanClaudeOptions().focus_mode, false)
+
+        model.autoScanFocusMode = true
+        model.focusMode = false
+        XCTAssertEqual(
+            model.autoScanClaudeOptions().focus_mode, true,
+            "a Claude Code edit must not bleed into the scan's options"
+        )
+    }
+
+    func testStartAutoScanSendsFocusModeAndPersistsItIntoItsOwnBucket() async throws {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = await loadedModel(autoScanRepo: makeAutoScanRepo(), prefs: prefs)
+        model.selectStoredProject("linear")
+        model.autoScanFocusMode = false
+        StubURLProtocol.enqueue(status: 200, body: "{}")
+
+        await model.startAutoScan()
+
+        XCTAssertNil(model.error)
+        let data = try XCTUnwrap(StubURLProtocol.bodies.last)
+        let body = try WireJSON.decoder().decode(JSONValue.self, from: data)
+        XCTAssertEqual(body["claude_options"]?["focus_mode"]?.boolValue, false)
+        XCTAssertEqual(prefs.getLastUsedAutoScanOptions()?.focusMode, false)
+    }
+
     func testStartAutoScanSendsDebugAndPersistsItIntoItsOwnBucket() async throws {
         StubURLProtocol.reset()
         let prefs = isolatedPrefs()

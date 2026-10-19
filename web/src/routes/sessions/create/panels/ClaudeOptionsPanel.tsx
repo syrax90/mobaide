@@ -1,6 +1,5 @@
 import { CheckboxField } from '../../../../components/form/CheckboxField';
 import { SelectField, type SelectOption } from '../../../../components/form/SelectField';
-import { TextAreaField } from '../../../../components/form/TextAreaField';
 import {
   claudeEffortsFor,
   CLAUDE_MODELS,
@@ -49,8 +48,10 @@ export function modelOptions(
 }
 
 /**
- * Shared by the Claude Code and Auto Scan branches, parameterised by which
- * bucket it writes to — the two hold completely separate values.
+ * The main Claude controls, shared by the Claude Code and Auto Scan branches and
+ * parameterised by which bucket it writes to — the two hold completely separate
+ * values. The less common flags live in `ClaudeAdvancedPanel`, which each branch
+ * renders after its own main options.
  */
 export function ClaudeOptionsPanel({
   bucket,
@@ -85,53 +86,30 @@ export function ClaudeOptionsPanel({
           }
         }}
       />
+      {/* Plan mode has a control only in Auto Scan; the Claude Code launch never sends it. */}
+      {bucketId === 'autoScan' && (
+        <CheckboxField
+          label="Plan mode"
+          checked={bucket.planMode}
+          onChange={(value) => {
+            dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'planMode', value });
+          }}
+        />
+      )}
+      <CheckboxField
+        label="Focus view"
+        checked={bucket.focusMode}
+        hint="Claude Code shows only your last prompt, a one-line summary of tool calls, and the final response."
+        onChange={(value) => {
+          dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'focusMode', value });
+        }}
+      />
       <CheckboxField
         label="Skip permissions"
         checked={bucket.skipPermissions}
         hint={skipPermissionsHint}
         onChange={(value) => {
           dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'skipPermissions', value });
-        }}
-      />
-      <CheckboxField
-        label="Fast mode (Opus only)"
-        checked={bucket.fastMode}
-        onChange={(value) => {
-          dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'fastMode', value });
-        }}
-      />
-      <CheckboxField
-        label="Ultracode"
-        checked={bucket.ultracode}
-        onChange={(value) => {
-          dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'ultracode', value });
-        }}
-      />
-      <CheckboxField
-        label="Debug logging"
-        checked={bucket.debug}
-        hint="Claude Code prints verbose diagnostics into the terminal."
-        onChange={(value) => {
-          dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'debug', value });
-        }}
-      />
-      <CheckboxField
-        label="No memory"
-        checked={bucket.noMemory}
-        onChange={(value) => {
-          dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'noMemory', value });
-        }}
-      />
-      <TextAreaField
-        label="Append system prompt (optional)"
-        value={bucket.appendSystemPrompt}
-        onChange={(value) => {
-          dispatch({
-            type: 'setClaudeText',
-            bucket: bucketId,
-            field: 'appendSystemPrompt',
-            value,
-          });
         }}
       />
     </div>

@@ -157,6 +157,23 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-10-19, Claude focus view toggle):
+  **additive optional field, no version bump.** ``claude_options`` gains
+  ``focus_mode`` — bool or null, default ``null``. The agent merges it into the
+  session's single ``--settings`` source as Claude Code's ``viewMode`` setting:
+  ``true`` → ``"focus"``, ``false`` → ``"default"`` (explicit, so a sticky
+  host-side ``/focus`` cannot keep a session in focus view after the user turned
+  the toggle off; it also overrides a host ``verbose: true``), ``null`` /
+  absent → no ``viewMode`` key. An unknown top-level settings key raises no
+  startup dialog (verified with ``claude --settings <f> doctor`` on 2.1.303), so
+  the merged hooks file stays safe on CLIs predating ``viewMode``. All three clients
+  surface it as a **Focus view** toggle (default on, remembered per Claude /
+  Auto Scan bucket) and always send a concrete bool. Old client + new agent
+  therefore keeps the pre-change behaviour; new client + old agent is a no-op
+  (the old agent ignores the unknown key). The relay forwards ``claude_options``
+  opaquely, so ``central_server`` is untouched. Fixtures
+  ``tests/protocol_fixtures/dto/agent/{ClaudeOptionsModel,CreateSessionRequest,StartScanRequest}.json``
+  carry it (``true`` in the ``full`` / scan cases, ``false`` in the create case).
 * Additive delta within proto-v7 (2026-10-17, host path suggestions):
   **one additive REST route, one additive capability key, no version bump.**
   Backs folder suggestions under the project form's Path field and the

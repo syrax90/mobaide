@@ -36,6 +36,7 @@ const POPULATED: WizardState = {
     fastMode: false,
     ultracode: true,
     debug: true,
+    focusMode: true,
     appendSystemPrompt: 'claude system',
     skipPermissions: true,
     noMemory: true,
@@ -48,6 +49,7 @@ const POPULATED: WizardState = {
     fastMode: false,
     ultracode: false,
     debug: false,
+    focusMode: true,
     appendSystemPrompt: 'scan system',
     skipPermissions: true,
     noMemory: false,
@@ -353,5 +355,33 @@ describe('buildStartScanRequest', () => {
         state: { ...POPULATED, selection: { kind: 'customPath', path: '/tmp/scratch' } },
       }),
     ).toBeNull();
+  });
+});
+
+describe('focus_mode', () => {
+  it('defaults to focus view on for both a Claude launch and a scan', () => {
+    const fresh: WizardState = {
+      ...INITIAL_WIZARD_STATE,
+      selection: { kind: 'stored', name: gitProject.name },
+    };
+
+    expect(build('claude', fresh).claude_options?.focus_mode).toBe(true);
+    expect(
+      buildStartScanRequest({ state: fresh, mode: 'auto_scan', project: gitProject })
+        ?.claude_options?.focus_mode,
+    ).toBe(true);
+  });
+
+  it('sends an explicit false from each bucket independently', () => {
+    const state: WizardState = {
+      ...POPULATED,
+      claude: { ...POPULATED.claude, focusMode: false },
+      autoScan: { ...POPULATED.autoScan, focusMode: true },
+    };
+    const scan = buildStartScanRequest({ state, mode: 'auto_scan', project: gitProject });
+
+    expect(build('claude', state).claude_options?.focus_mode).toBe(false);
+    expect(scan?.claude_options?.focus_mode).toBe(true);
+    expect(() => createSessionRequestSchema.parse(build('claude', state))).not.toThrow();
   });
 });

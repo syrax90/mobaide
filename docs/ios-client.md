@@ -459,12 +459,13 @@ iOS-only user. A fifth **Auto Scan** mode card sits between Antigravity and
 Terminal, enabled only when the selected stored project carries a Linear API key
 and the Claude CLI is installed, greyed out with the reason otherwise (Android's
 `autoScanEnabled` gate; a custom path has no stored project, so it can never
-satisfy it). Its config step drives the Claude model / effort / fast-mode /
-ultracode / debug / append-system-prompt controls — extracted into two `@ViewBuilder`
-helpers now shared with the Claude Code step, mirroring Android's
-`ClaudeOptionControls` — plus Plan mode, Skip permissions (default ON for
-unattended scans, with an always-visible caption explaining the off-state), No
-memory, and an Initial prompt seeded from the project's saved `auto_scan_prompt`
+satisfy it). Its config step drives the Claude model / effort pickers
+(shared with the Claude Code step, mirroring Android's `ClaudeOptionControls`),
+Plan mode, a Focus view toggle (default ON; sets `claude_options.focus_mode`),
+Skip permissions (default ON for unattended scans, with an always-visible
+caption explaining the off-state), a collapsible Advanced section
+(`claudeAdvancedOptions` — No memory, fast mode, ultracode, debug logging,
+append-system-prompt, shared with the Claude Code step), and an Initial prompt seeded from the project's saved `auto_scan_prompt`
 and then the agent-wide default. Submitting POSTs the pre-existing
 `/api/autoscan/start` with `worktree` forced true — the scanner branches a
 worktree per Linear issue, so the shared Worktree section would be a lie — and

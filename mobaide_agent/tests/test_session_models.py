@@ -50,6 +50,13 @@ def test_debug_wire_absence_is_off_and_survives_the_hop_to_claude_options():
     assert ClaudeOptionsModel.model_validate({"debug": True}).to_options().debug is True
 
 
+def test_focus_mode_wire_absence_is_none_and_survives_the_hop_to_claude_options():
+    assert ClaudeOptionsModel.model_validate({}).to_options().focus_mode is None
+    for value in (True, False):
+        opts = ClaudeOptionsModel.model_validate({"focus_mode": value}).to_options()
+        assert opts.focus_mode is value
+
+
 def test_effort_accepts_full_ladder():
     for level in ("low", "medium", "high", "xhigh", "max"):
         assert ClaudeOptionsModel.model_validate({"effort": level}).effort == level

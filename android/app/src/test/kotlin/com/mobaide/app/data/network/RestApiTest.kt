@@ -268,6 +268,35 @@ class RestApiTest {
         assertTrue(bodyOf(captured.captured).contains("\"debug\":true"))
     }
 
+    @Test
+    fun createSession_focusMode_sendsBothValuesExplicitly_andOmitsAnUnsetOne() = runTest {
+        // Unlike debug, focus_mode defaults to null: false must reach the wire so
+        // the agent pins viewMode "default" instead of leaving a sticky /focus on.
+        val (api, client) = newApi()
+        val captured = stubCall(client) { req ->
+            responseFor(
+                req,
+                200,
+                bodyJson = """{"session_id":"s-1","state":"running","created_at":"2026-10-19T00:00:00Z"}""",
+            )
+        }
+
+        api.createSession(
+            CreateSessionRequest(project_name = "alpha", claude_options = ClaudeOptionsModel(focus_mode = false)),
+        )
+        assertTrue(bodyOf(captured.captured).contains("\"focus_mode\":false"))
+
+        api.createSession(
+            CreateSessionRequest(project_name = "alpha", claude_options = ClaudeOptionsModel(focus_mode = true)),
+        )
+        assertTrue(bodyOf(captured.captured).contains("\"focus_mode\":true"))
+
+        api.createSession(
+            CreateSessionRequest(project_name = "alpha", claude_options = ClaudeOptionsModel()),
+        )
+        assertFalse(bodyOf(captured.captured).contains("\"focus_mode\""))
+    }
+
     private fun bodyOf(request: Request): String {
         val buffer = okio.Buffer()
         request.body!!.writeTo(buffer)

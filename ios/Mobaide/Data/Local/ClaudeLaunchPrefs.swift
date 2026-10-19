@@ -14,6 +14,7 @@ struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
     let noMemory: Bool
     let planMode: Bool
     let debug: Bool
+    let focusMode: Bool
 
     init(
         model: String? = nil,
@@ -24,7 +25,8 @@ struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
         skipPermissions: Bool = false,
         noMemory: Bool = false,
         planMode: Bool = false,
-        debug: Bool = false
+        debug: Bool = false,
+        focusMode: Bool = true
     ) {
         self.model = model
         self.effort = effort
@@ -35,6 +37,7 @@ struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
         self.noMemory = noMemory
         self.planMode = planMode
         self.debug = debug
+        self.focusMode = focusMode
     }
 }
 
@@ -50,5 +53,7 @@ extension ClaudeLaunchPrefs {
         noMemory = try container.decodeIfPresent(Bool.self, forKey: .noMemory) ?? false
         planMode = try container.decodeIfPresent(Bool.self, forKey: .planMode) ?? false
         debug = try container.decodeIfPresent(Bool.self, forKey: .debug) ?? false
+        // Defaults ON so a blob saved before the toggle existed restores focus view.
+        focusMode = try container.decodeIfPresent(Bool.self, forKey: .focusMode) ?? true
     }
 }
