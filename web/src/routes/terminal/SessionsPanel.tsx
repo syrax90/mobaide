@@ -97,12 +97,13 @@ export function SessionsPanel({
           type="button"
           className="button button-icon"
           aria-pressed={pinned}
+          aria-label={pinned ? 'Unpin' : 'Pin'}
           title={pinned ? 'Unpin the panel' : 'Keep the panel open beside the terminal'}
           onClick={() => {
             onPinnedChange(!pinned);
           }}
         >
-          {pinned ? 'Unpin' : 'Pin'}
+          <PinIcon pinned={pinned} />
         </button>
         {!docked && (
           <button
@@ -209,5 +210,48 @@ export function SessionsPanel({
         )}
       </div>
     </div>
+  );
+}
+
+/** A 2px-wide diagonal, bottom-left to top-right, on the 16-unit grid. */
+const SLASH =
+  'M13 2h2v1h-2zM12 3h2v1h-2zM11 4h2v1h-2zM10 5h2v1h-2zM9 6h2v1h-2zM8 7h2v1h-2z' +
+  'M7 8h2v1h-2zM6 9h2v1h-2zM5 10h2v1h-2zM4 11h2v1h-2zM3 12h2v1h-2zM2 13h2v1h-2z';
+
+/**
+ * The pin toggle's glyph: a hollow pushpin while the panel is loose, a filled
+ * one struck through once it is pinned, so the icon shows the action the
+ * press performs, as the former "Pin"/"Unpin" labels did. Drawn on a pixel
+ * grid to match the rest of the chrome; `aria-hidden` because the button's
+ * `aria-label` already names the action.
+ */
+function PinIcon({ pinned }: { pinned: boolean }) {
+  return (
+    <svg
+      className="sessions-panel-pin-icon"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {pinned ? (
+        <rect x="5" y="1" width="6" height="6" />
+      ) : (
+        <>
+          <rect x="5" y="1" width="6" height="1" />
+          <rect x="5" y="2" width="1" height="5" />
+          <rect x="10" y="2" width="1" height="5" />
+        </>
+      )}
+      <rect x="3" y="7" width="10" height="2" />
+      <rect x="7" y="9" width="2" height="5" />
+      {pinned && (
+        <>
+          {/* A one-pixel gap either side keeps the slash legible over the body. */}
+          <path className="sessions-panel-pin-gap" transform="translate(-1 0)" d={SLASH} />
+          <path className="sessions-panel-pin-gap" transform="translate(1 0)" d={SLASH} />
+          <path d={SLASH} />
+        </>
+      )}
+    </svg>
   );
 }
