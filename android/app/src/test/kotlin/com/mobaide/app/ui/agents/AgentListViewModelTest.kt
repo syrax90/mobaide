@@ -9,6 +9,7 @@ import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.MobileTokenResponse
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.AgentSwitchCoordinator
 import com.mobaide.app.data.security.TrustKeyPinning
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.Runs
@@ -71,6 +72,7 @@ class AgentListViewModelTest {
         val deviceIdentityStore: DeviceIdentityStore,
         val trustKeyPinning: TrustKeyPinning,
         val agentsFlow: MutableStateFlow<List<AgentSummaryResponse>>,
+        val coordinator: AgentSwitchCoordinator,
     )
 
     private fun newFixture(
@@ -91,7 +93,8 @@ class AgentListViewModelTest {
         every { agentEventBus.stop() } just Runs
         every { agentEventBus.start() } just Runs
         every { sessionManager.agentDisconnect() } just Runs
-        every { sessionManager.markAgentConnected() } just Runs
+        every { sessionManager.tryMarkAgentConnected(any()) } answers { firstArg<() -> Unit>().invoke(); true }
+        every { sessionManager.isUserAuthenticated() } returns true
         every { sessionManager.isLoggedIn() } returns (connectedAgentId != null)
         coEvery { agentRepository.refreshAgents() } just Runs
         coEvery { deviceIdentityStore.getOrCreateDeviceId() } returns TEST_DEVICE_ID
@@ -101,14 +104,19 @@ class AgentListViewModelTest {
             agentRepository, connectionStore, tokenStore,
             sessionManager, agentEventBus, deviceIdentityStore,
             trustKeyPinning, agentsFlow,
+            AgentSwitchCoordinator(
+                agentRepository, connectionStore, tokenStore,
+                sessionManager, agentEventBus, deviceIdentityStore,
+            ),
         )
     }
 
     private fun Fixture.buildVm(): AgentListViewModel =
         AgentListViewModel(
-            agentRepository, connectionStore, tokenStore,
+            agentRepository, tokenStore,
             sessionManager, agentEventBus, deviceIdentityStore,
             trustKeyPinning,
+            coordinator,
         )
 
     companion object {
@@ -428,6 +436,22 @@ class AgentListViewModelTest {
     }
 
     @Test
+    fun confirmDelete_withUninstall_forwardsFlag() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.agentRepository.deleteAgent("a-1", true) } just Runs
+
+        vm.confirmDelete("a-1", uninstall = true)
+        advanceUntilIdle()
+
+        assertNull(vm.uiState.value.deleteConfirmAgent)
+        assertNull(vm.uiState.value.error)
+        coVerify(exactly = 1) { fx.agentRepository.deleteAgent("a-1", true) }
+    }
+
+    @Test
     fun confirmDelete_ofConnectedAgent_disconnectsFirst() = runTest {
         val fx = newFixture(connectedAgentId = "a-1")
         val vm = fx.buildVm()
@@ -475,20 +499,107 @@ class AgentListViewModelTest {
         assertEquals("forbidden", vm.uiState.value.error)
     }
 
+    @Test
+    fun confirmDelete_withUninstall_ofOnlineAgent_announcesUninstallNow() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.agentRepository.deleteAgent("a-1", true) } just Runs
+
+        vm.messages.test {
+            vm.showDeleteConfirm(agent("a-1", name = "Laptop", online = true))
+            vm.confirmDelete("a-1", uninstall = true)
+            advanceUntilIdle()
+
+            assertEquals("“Laptop” is uninstalling itself.", awaitItem())
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertNull(vm.uiState.value.deleteConfirmAgent)
+    }
+
+    @Test
+    fun confirmDelete_withUninstall_ofOfflineAgent_announcesDeferredUninstall() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.agentRepository.deleteAgent("a-1", true) } just Runs
+
+        vm.messages.test {
+            vm.showDeleteConfirm(agent("a-1", name = "Laptop", online = false))
+            vm.confirmDelete("a-1", uninstall = true)
+            advanceUntilIdle()
+
+            assertEquals(
+                "“Laptop” will uninstall itself when it next comes online.",
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun confirmDelete_withoutUninstall_postsNoMessage() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.agentRepository.deleteAgent("a-1", false) } just Runs
+
+        vm.messages.test {
+            vm.showDeleteConfirm(agent("a-1", name = "Laptop", online = true))
+            vm.confirmDelete("a-1", uninstall = false)
+            advanceUntilIdle()
+
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun confirmDelete_withUninstall_onFailure_postsNoMessage() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.agentRepository.deleteAgent("a-1", true) } throws
+            RuntimeException("forbidden")
+
+        vm.messages.test {
+            vm.showDeleteConfirm(agent("a-1", name = "Laptop", online = true))
+            vm.confirmDelete("a-1", uninstall = true)
+            advanceUntilIdle()
+
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals("forbidden", vm.uiState.value.error)
+    }
+
     // ---- connectToAgent --------------------------------------------------------
 
     @Test
-    fun connectToAgent_happyPath_mintsTokensSavesCredentialsAndNavigates() = runTest {
+    fun connectToAgent_happyPath_mintsTokensSavesCredentialsAndRequestsSessionsList() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
         val tokens = MobileTokenResponse("access-tok", "refresh-tok", "bearer")
-        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", TEST_DEVICE_ID, TEST_DEVICE_NAME) } returns tokens
+        // The mint suspends like the real network call, so the screen observes the in-flight state.
+        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", TEST_DEVICE_ID, TEST_DEVICE_NAME) } coAnswers {
+            delay(100)
+            tokens
+        }
         every { fx.connectionStore.listProfiles() } returns emptyList()
 
         vm.navigateToSessions.test {
             vm.connectToAgent(agent("a-1", name = "TestAgent"))
+            runCurrent()
+            assertTrue(vm.uiState.value.isConnecting)
+            // saveRelayCredentials is mocked; the screen re-reads the stored id once the switch ends.
+            every { fx.tokenStore.getAgentId() } returns "a-1"
             advanceUntilIdle()
 
             // Verify full orchestration chain
@@ -502,7 +613,7 @@ class AgentListViewModelTest {
                     refreshToken = "refresh-tok",
                 )
             }
-            verify(exactly = 1) { fx.sessionManager.markAgentConnected() }
+            verify(exactly = 1) { fx.sessionManager.tryMarkAgentConnected(any()) }
             verify(exactly = 1) { fx.connectionStore.captureActiveProfile(fx.tokenStore, "Agent: TestAgent") }
             verify(exactly = 1) { fx.agentEventBus.start() }
 
@@ -510,8 +621,10 @@ class AgentListViewModelTest {
             assertEquals("a-1", vm.uiState.value.connectedAgentId)
             assertFalse(vm.uiState.value.isConnecting)
 
-            // Verify navigation event
-            assertEquals(Unit, awaitItem())
+            // Navigation now goes through the coordinator's pending flag, not this screen's event.
+            assertTrue(fx.coordinator.pendingSessionsList.value)
+            assertNull(fx.coordinator.switchingAgentId.value)
+            expectNoEvents()
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -568,10 +681,12 @@ class AgentListViewModelTest {
         // The isConnecting flag should be set after the coroutine starts
         runCurrent()
         assertTrue(vm.uiState.value.isConnecting)
+        assertEquals("a-1", fx.coordinator.switchingAgentId.value)
 
         // Second connect should be ignored
         vm.connectToAgent(agent("a-2"))
         runCurrent()
+        assertEquals("a-1", fx.coordinator.switchingAgentId.value)
 
         // Only one call to getMobileTokensForAgent should be made
         coVerify(exactly = 1) { fx.agentRepository.getMobileTokensForAgent(any(), any(), any()) }

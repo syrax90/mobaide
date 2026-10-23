@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import struct
+import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -4198,6 +4199,7 @@ class TestProxyVersionCapabilities:
                 "conflicts": True,
             },
             "voice": VOICE_CAPABILITIES,
+            "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
         }
 
     async def test_missing_cli_launchers_attr_degrades_to_empty_cli(
@@ -4234,6 +4236,7 @@ class TestProxyVersionCapabilities:
                 "conflicts": True,
             },
             "voice": VOICE_CAPABILITIES,
+            "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
         }
 
     async def test_version_body_keeps_core_fields(self, client, mock_app_state):

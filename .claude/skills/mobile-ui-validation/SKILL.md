@@ -29,4 +29,20 @@ echo $! > stack.pid      # run detached; wait until `manual_stack.py status` exi
 kill -TERM "$(cat stack.pid)"
 ```
 
+On **Windows** there is no iOS simulator; validate Android + web only. One command boots the
+emulator (AVD `Mobaide-E2E`, created on first use), builds + installs + launches the debug app, and
+serves the web client; `stop` is the graceful shutdown (Windows has no `kill -TERM`) and also shuts
+down the emulator the stack booted:
+
+```powershell
+# conda env with the editable installs, e.g. mobaide-e2e-tests; run detached (background task)
+python tests/e2e/manual_stack.py up --host 127.0.0.1 --android-url emulator --emulator --install-app --web --no-browser
+python tests/e2e/manual_stack.py status          # exit 0 = READY
+# exercise the UI: adb -s emulator-5554 shell input ... / exec-out screencap -p; web at http://localhost:5173
+python tests/e2e/manual_stack.py android --emulator --install-app   # reinstall after app changes
+python tests/e2e/manual_stack.py stop            # restores android/local.properties, stops the emulator
+```
+
+In Git Bash, prefix `adb shell` commands with `MSYS_NO_PATHCONV=1` or `/sdcard/...` paths get mangled.
+
 Login shown in the READY banner: `dev@test.local` / `Qwe>123`.

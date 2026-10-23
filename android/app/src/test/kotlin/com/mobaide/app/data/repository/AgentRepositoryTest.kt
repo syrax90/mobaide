@@ -190,6 +190,16 @@ class AgentRepositoryTest {
         assertEquals(listOf("a-2"), repo.observeAgents().value.map { it.agent_id })
     }
 
+    @Test
+    fun deleteAgent_withUninstall_forwardsFlagToCentralApi() = runTest {
+        val (repo, api) = newFixture()
+        coEvery { api.listAgents(any()) } returns emptyList()
+
+        repo.deleteAgent("a-1", uninstall = true)
+
+        coVerify(exactly = 1) { api.deleteAgent("tok-user-123", "a-1", true) }
+    }
+
     // ---- updateAgentOnline (user-scoped push from UserEventBus) ----------------
 
     @Test

@@ -117,6 +117,15 @@ class MockMobileClient:
         resp.raise_for_status()
         return resp.json()
 
+    def delete_agent(self, agent_id: str, *, uninstall: bool = False) -> None:
+        """DELETE /api/agents/{id}; ``uninstall`` also orders the agent to remove itself."""
+        resp = self._http.delete(
+            f"/api/agents/{agent_id}",
+            params={"uninstall": "true" if uninstall else "false"},
+            headers=self._bearer(),
+        )
+        resp.raise_for_status()
+
     def wait_agents_online(
         self,
         minimum: int = 1,

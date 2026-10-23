@@ -1,6 +1,8 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ProjectSummary } from '../../../api/projectRepository';
+import { queryKeys } from '../../../lib/queryKeys';
 import { projectInfoSchema } from '../../../protocol/dto/projects';
 import { ProjectStep } from './ProjectStep';
 import type { ProjectSelection, WizardAction } from './wizardState';
@@ -28,24 +30,31 @@ interface Overrides {
  * group, and an empty project list keeps the rest of the step out of the way.
  */
 function renderStep(over: Overrides = {}) {
+  // The custom-path field's folder suggestions are off for this agent, so the
+  // step renders without ever reaching the network.
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(queryKeys.agentFsDirs('agent-1'), { dirs: false, windowsPaths: false });
   render(
-    <ProjectStep
-      projects={over.projects ?? []}
-      selection={over.selection ?? { kind: 'none' }}
-      customPathDraft={over.customPathDraft ?? ''}
-      customPathError={over.customPathError ?? null}
-      recentPaths={over.recentPaths ?? []}
-      onForgetRecent={(path) => forgotten.push(path)}
-      onSelectProject={(project) => selected.push(project.name)}
-      onSelectRecentPath={(path) => picked.push(path)}
-      onCreateProject={() => {
-        createOpened += 1;
-      }}
-      dispatch={(action) => dispatched.push(action)}
-      onContinue={() => {
-        continued += 1;
-      }}
-    />,
+    <QueryClientProvider client={client}>
+      <ProjectStep
+        agentId="agent-1"
+        projects={over.projects ?? []}
+        selection={over.selection ?? { kind: 'none' }}
+        customPathDraft={over.customPathDraft ?? ''}
+        customPathError={over.customPathError ?? null}
+        recentPaths={over.recentPaths ?? []}
+        onForgetRecent={(path) => forgotten.push(path)}
+        onSelectProject={(project) => selected.push(project.name)}
+        onSelectRecentPath={(path) => picked.push(path)}
+        onCreateProject={() => {
+          createOpened += 1;
+        }}
+        dispatch={(action) => dispatched.push(action)}
+        onContinue={() => {
+          continued += 1;
+        }}
+      />
+    </QueryClientProvider>,
   );
 }
 

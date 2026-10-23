@@ -26,6 +26,7 @@ import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.events.UserEventBus
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.local.ThemeMode
+import com.mobaide.app.data.repository.AgentSwitchCoordinator
 import com.mobaide.app.data.repository.ServerCompatibility
 import com.mobaide.app.data.repository.VersionGateRepository
 import com.mobaide.app.notifications.SessionEventService
@@ -63,6 +64,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var agentPairedConversion: AgentPairedConversion
+
+    @Inject
+    lateinit var agentSwitchCoordinator: AgentSwitchCoordinator
 
     /** Session id from a tapped notification; consumed by [AppNavigation]. */
     private val deepLinkSessionId = MutableStateFlow<String?>(null)
@@ -161,6 +165,7 @@ class MainActivity : ComponentActivity() {
             MobaideTheme(darkTheme = darkTheme) {
                 AppNavigation(
                     sessionManager = sessionManager,
+                    agentSwitchCoordinator = agentSwitchCoordinator,
                     deepLinkSessionId = deepLinkSessionId,
                     onDeepLinkConsumed = { deepLinkSessionId.value = null },
                     onImmediateUpdate = {

@@ -208,6 +208,21 @@ class SessionManager @Inject constructor(
     }
 
     /**
+     * [markAgentConnected] for a completer that may have lost the user
+     * meanwhile: a sign-out that landed while the agent tokens were being
+     * minted wins. Under the same lock as [invalidateUserSession], so the
+     * sign-out is either strictly before (nothing persisted, `false`) or
+     * strictly after (its [TokenStore.clear] wipes what [persist] wrote).
+     */
+    @Synchronized
+    fun tryMarkAgentConnected(persist: () -> Unit): Boolean {
+        if (!isUserAuthenticated()) return false
+        persist()
+        _authState.value = AuthState.FullyConnected
+        return true
+    }
+
+    /**
      * Pin the session to a terminal upgrade-required state. Cleared only by a
      * successful version-gate probe (see [VersionGateRepository.reset]) — the
      * UI is expected to direct the user to the Play Store before retry.

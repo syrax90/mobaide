@@ -220,7 +220,7 @@ final class AgentListModel {
         deleteConfirm = agent
     }
 
-    func confirmDelete() {
+    func confirmDelete(uninstall: Bool = false) {
         guard let agent = deleteConfirm else { return }
         deleteConfirm = nil
         Task { [weak self] in
@@ -231,9 +231,14 @@ final class AgentListModel {
                     await self.authRepository.disconnectAgent()
                     self.connectedAgentId = nil
                 }
-                try await self.agentRepository.deleteAgent(agentId: agent.agent_id)
+                try await self.agentRepository.deleteAgent(agentId: agent.agent_id, uninstall: uninstall)
                 // Drop any saved relay profile for the now-deleted agent.
                 self.authRepository.removeRelayProfile(agentId: agent.agent_id)
+                if uninstall {
+                    self.message = agent.online
+                        ? "“\(agent.name)” is uninstalling itself."
+                        : "“\(agent.name)” will uninstall itself when it next comes online."
+                }
             } catch {
                 self.message = "Failed to delete agent: \(ErrorText.message(for: error))"
             }

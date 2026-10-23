@@ -17,6 +17,7 @@ import pytest
 from mobaide.agent import _env_writer
 from mobaide.agent._env_writer import (
     atomic_write,
+    blank_relay_credentials,
     env_path_for_prefix,
     parse_env_file,
     render_template,
@@ -287,6 +288,38 @@ class TestEnvPathForPrefix:
         # Pure path math — should not touch the filesystem.
         env_path_for_prefix(tmp_path)
         assert not (tmp_path / "mobaide_agent").exists()
+
+
+class TestBlankRelayCredentials:
+    _ENV = (
+        "RELAY_SERVER_URL=wss://relay.example\n"
+        "RELAY_AGENT_ID=agent-1\n"
+        "RELAY_AGENT_TOKEN=tok\n"
+    )
+
+    def test_blanks_token_and_keeps_agent_id_by_default(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(self._ENV, encoding="utf-8")
+
+        blank_relay_credentials(env_file, clear_agent_id=False)
+
+        assert parse_env_file(env_file) == {
+            "RELAY_SERVER_URL": "wss://relay.example",
+            "RELAY_AGENT_ID": "agent-1",
+            "RELAY_AGENT_TOKEN": "",
+        }
+
+    def test_clear_agent_id_blanks_both(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(self._ENV, encoding="utf-8")
+
+        blank_relay_credentials(env_file, clear_agent_id=True)
+
+        assert parse_env_file(env_file) == {
+            "RELAY_SERVER_URL": "wss://relay.example",
+            "RELAY_AGENT_ID": "",
+            "RELAY_AGENT_TOKEN": "",
+        }
 
 
 class TestRenderTemplateInjectionGuard:

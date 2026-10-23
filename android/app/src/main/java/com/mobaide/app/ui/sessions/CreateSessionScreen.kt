@@ -96,6 +96,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
+import com.mobaide.app.ui.common.pathBrowseHint
+import com.mobaide.app.ui.common.PathSuggestionsUi
+import com.mobaide.app.ui.common.PathTextField
 import com.mobaide.app.ui.common.SecretTextField
 import com.mobaide.app.ui.projects.ProjectFormSheet
 import com.mobaide.app.ui.projects.ProjectsUiEvent
@@ -112,6 +115,8 @@ fun CreateSessionScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val projectsState by projectsViewModel.uiState.collectAsStateWithLifecycle()
+    val customPathSuggestions by viewModel.customPathSuggestionState.collectAsStateWithLifecycle()
+    val projectPathSuggestions by projectsViewModel.pathSuggestionState.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel) {
@@ -239,6 +244,9 @@ fun CreateSessionScreen(
                     onCustomPathChange = viewModel::setCustomPathDraft,
                     onPickRecentCustomPath = viewModel::pickRecentCustomPath,
                     onRemoveRecentCustomPath = viewModel::removeRecentCustomPath,
+                    customPathSuggestions = customPathSuggestions,
+                    onCustomPathFocusChange = viewModel::onCustomPathFocusChange,
+                    onPickCustomPathSuggestion = viewModel::pickCustomPathSuggestion,
                     onCreateProjectClicked = projectsViewModel::openCreateSheet,
                     onContinue = viewModel::confirmProject,
                 )
@@ -308,6 +316,9 @@ fun CreateSessionScreen(
             onRemovalLabelChange = projectsViewModel::onRemovalLabelChange,
             onRefreshFilterMetadata = projectsViewModel::refreshFilterMetadata,
             onSave = projectsViewModel::save,
+            pathSuggestions = projectPathSuggestions,
+            onPathFocusChange = projectsViewModel::onPathFocusChange,
+            onPickPathSuggestion = projectsViewModel::pickPathSuggestion,
         )
     }
 
@@ -461,6 +472,9 @@ private fun ProjectSelectSection(
     onCustomPathChange: (String) -> Unit,
     onPickRecentCustomPath: (String) -> Unit,
     onRemoveRecentCustomPath: (String) -> Unit,
+    customPathSuggestions: PathSuggestionsUi,
+    onCustomPathFocusChange: (Boolean) -> Unit,
+    onPickCustomPathSuggestion: (String) -> Unit,
     onCreateProjectClicked: () -> Unit,
     onContinue: () -> Unit,
 ) {
@@ -572,6 +586,9 @@ private fun ProjectSelectSection(
             onDraftChange = onCustomPathChange,
             onPickRecent = onPickRecentCustomPath,
             onRemoveRecent = onRemoveRecentCustomPath,
+            suggestions = customPathSuggestions,
+            onFocusChange = onCustomPathFocusChange,
+            onPickSuggestion = onPickCustomPathSuggestion,
         )
     }
 
@@ -600,25 +617,22 @@ internal fun CustomPathPanel(
     onDraftChange: (String) -> Unit,
     onPickRecent: (String) -> Unit,
     onRemoveRecent: (String) -> Unit,
+    suggestions: PathSuggestionsUi = PathSuggestionsUi.None,
+    onFocusChange: (Boolean) -> Unit = {},
+    onPickSuggestion: (String) -> Unit = {},
 ) {
-    OutlinedTextField(
-        colors = PixelTextFieldDefaults.colors(),
+    PathTextField(
         value = state.customPathDraft,
         onValueChange = onDraftChange,
+        suggestions = suggestions,
+        onFocusChange = onFocusChange,
+        onPickSuggestion = onPickSuggestion,
         label = { Text("Absolute path on the agent") },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(
-            capitalization = KeyboardCapitalization.None,
-            autoCorrectEnabled = false,
-        ),
         isError = state.customPathError != null,
         supportingText = {
-            Text(
-                text = state.customPathError
-                    ?: "e.g. /home/user/code or D:\\projects\\demo",
-            )
+            val example = if (suggestions.windowsPaths) "e.g. D:\\projects\\demo" else "e.g. /home/user/code"
+            Text(text = state.customPathError ?: "$example — ${pathBrowseHint(suggestions.windowsPaths)}")
         },
-        modifier = Modifier.fillMaxWidth(),
     )
     if (state.recentCustomPaths.isNotEmpty()) {
         Text(
@@ -1035,17 +1049,11 @@ private fun StandardConfigSection(
         effort = state.claudeEffort,
         fastMode = state.claudeFastMode,
         ultracode = state.claudeUltracode,
-        debug = state.claudeDebug,
-        appendSystemPrompt = state.claudeAppendSystemPrompt,
         onModelSelect = viewModel::setClaudeModel,
         onEffortSelect = viewModel::setClaudeEffort,
-        onFastModeToggle = viewModel::toggleClaudeFastMode,
-        onUltracodeToggle = viewModel::toggleClaudeUltracode,
-        onDebugToggle = viewModel::toggleClaudeDebug,
-        onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
     )
+    FocusViewToggle(state.focusMode, viewModel::toggleFocusMode)
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
-    ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
 
     if (showWorktreeToggle) {
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
@@ -1065,6 +1073,19 @@ private fun StandardConfigSection(
             )
         }
     }
+
+    ClaudeAdvancedOptions(
+        noMemory = state.noMemory,
+        fastMode = state.claudeFastMode,
+        ultracode = state.claudeUltracode,
+        debug = state.claudeDebug,
+        appendSystemPrompt = state.claudeAppendSystemPrompt,
+        onNoMemoryToggle = viewModel::toggleNoMemory,
+        onFastModeToggle = viewModel::toggleClaudeFastMode,
+        onUltracodeToggle = viewModel::toggleClaudeUltracode,
+        onDebugToggle = viewModel::toggleClaudeDebug,
+        onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
+    )
 
     PixelButton(
         style = PixelButtonStyle.Primary,
@@ -1354,9 +1375,8 @@ private fun AntigravityConfigSection(
 
 /**
  * Claude reasoning controls shared by the Standard and Auto Scan config steps:
- * a model dropdown, a model-conditional effort dropdown, and an "Advanced"
- * expander (fast mode, ultracode, debug logging, append-system-prompt).
- * Replaces the old boolean "Max effort" toggle.
+ * a model dropdown and a model-conditional effort dropdown. The rest of the
+ * Claude flags live in [ClaudeAdvancedOptions], placed after the main options.
  */
 @Composable
 private fun ClaudeOptionControls(
@@ -1364,14 +1384,8 @@ private fun ClaudeOptionControls(
     effort: String,
     fastMode: Boolean,
     ultracode: Boolean,
-    debug: Boolean,
-    appendSystemPrompt: String,
     onModelSelect: (String?) -> Unit,
     onEffortSelect: (String) -> Unit,
-    onFastModeToggle: (Boolean) -> Unit,
-    onUltracodeToggle: (Boolean) -> Unit,
-    onDebugToggle: (Boolean) -> Unit,
-    onAppendSystemPromptChange: (String) -> Unit,
 ) {
     ClaudeModelDropdown(
         selected = model,
@@ -1399,7 +1413,32 @@ private fun ClaudeOptionControls(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
 
+@Composable
+private fun FocusViewToggle(checked: Boolean, onToggle: (Boolean) -> Unit) {
+    ToggleRow("Focus view", checked, onToggle)
+    Text(
+        text = "Claude Code shows only your last prompt, a one-line summary of tool calls, and the final response.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/** Collapsed-by-default expander for the less common Claude flags, shared by the Standard and Auto Scan steps. */
+@Composable
+private fun ClaudeAdvancedOptions(
+    noMemory: Boolean,
+    fastMode: Boolean,
+    ultracode: Boolean,
+    debug: Boolean,
+    appendSystemPrompt: String,
+    onNoMemoryToggle: (Boolean) -> Unit,
+    onFastModeToggle: (Boolean) -> Unit,
+    onUltracodeToggle: (Boolean) -> Unit,
+    onDebugToggle: (Boolean) -> Unit,
+    onAppendSystemPromptChange: (String) -> Unit,
+) {
     var advancedExpanded by remember { mutableStateOf(false) }
     PixelTextButton(
         onClick = { advancedExpanded = !advancedExpanded },
@@ -1412,6 +1451,7 @@ private fun ClaudeOptionControls(
         Text("Advanced")
     }
     if (advancedExpanded) {
+        ToggleRow("No memory", noMemory, onNoMemoryToggle)
         ToggleRow("Fast mode (Opus only)", fastMode, onFastModeToggle)
         ToggleRow("ultracode", ultracode, onUltracodeToggle)
         ToggleRow("Debug logging", debug, onDebugToggle)
@@ -1608,16 +1648,11 @@ private fun AutoScanConfigSection(
         effort = state.autoScanClaudeEffort,
         fastMode = state.autoScanClaudeFastMode,
         ultracode = state.autoScanClaudeUltracode,
-        debug = state.autoScanClaudeDebug,
-        appendSystemPrompt = state.autoScanClaudeAppendSystemPrompt,
         onModelSelect = viewModel::setAutoScanClaudeModel,
         onEffortSelect = viewModel::setAutoScanClaudeEffort,
-        onFastModeToggle = viewModel::toggleAutoScanClaudeFastMode,
-        onUltracodeToggle = viewModel::toggleAutoScanClaudeUltracode,
-        onDebugToggle = viewModel::toggleAutoScanClaudeDebug,
-        onAppendSystemPromptChange = viewModel::setAutoScanClaudeAppendSystemPrompt,
     )
     ToggleRow("Plan mode", state.autoScanPlanMode, viewModel::toggleAutoScanPlanMode)
+    FocusViewToggle(state.autoScanFocusMode, viewModel::toggleAutoScanFocusMode)
     ToggleRow(
         "Skip permissions",
         state.autoScanSkipPermissions,
@@ -1629,7 +1664,18 @@ private fun AutoScanConfigSection(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    ToggleRow("No memory", state.autoScanNoMemory, viewModel::toggleAutoScanNoMemory)
+    ClaudeAdvancedOptions(
+        noMemory = state.autoScanNoMemory,
+        fastMode = state.autoScanClaudeFastMode,
+        ultracode = state.autoScanClaudeUltracode,
+        debug = state.autoScanClaudeDebug,
+        appendSystemPrompt = state.autoScanClaudeAppendSystemPrompt,
+        onNoMemoryToggle = viewModel::toggleAutoScanNoMemory,
+        onFastModeToggle = viewModel::toggleAutoScanClaudeFastMode,
+        onUltracodeToggle = viewModel::toggleAutoScanClaudeUltracode,
+        onDebugToggle = viewModel::toggleAutoScanClaudeDebug,
+        onAppendSystemPromptChange = viewModel::setAutoScanClaudeAppendSystemPrompt,
+    )
 
     OutlinedTextField(
         colors = PixelTextFieldDefaults.colors(),

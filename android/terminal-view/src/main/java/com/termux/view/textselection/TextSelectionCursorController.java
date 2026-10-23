@@ -8,6 +8,7 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.View;
+import android.widget.HorizontalScrollView;
 
 import com.termux.terminal.TerminalBuffer;
 import com.termux.terminal.WcWidth;
@@ -23,6 +24,10 @@ public class TextSelectionCursorController implements CursorController {
 
     private final int mHandleHeight;
     private int mSelX1 = -1, mSelX2 = -1, mSelY1 = -1, mSelY2 = -1;
+    /** Whether the last {@link #updatePosition} scrolled the view on either axis. */
+    private boolean mAutoscrolled = false;
+    /** The narrowest horizontal edge band. */
+    private static final float AUTOSCROLL_MIN_BAND_DP = 24f;
 
     private ActionMode mActionMode;
     public final int ACTION_COPY = 1;
@@ -208,6 +213,8 @@ public class TextSelectionCursorController implements CursorController {
     @Override
     public void updatePosition(TextSelectionHandleView handle, int x, int y) {
         TerminalBuffer screen = terminalView.mEmulator.getScreen();
+        final int topRowBefore = terminalView.getTopRow();
+        final boolean scrolledHorizontally = autoscrollHorizontally(x);
         final int scrollRows = screen.getActiveRows() - terminalView.mEmulator.mRows;
         if (handle == mStartHandle) {
             mSelX1 = terminalView.getCursorX(x);
@@ -292,7 +299,43 @@ public class TextSelectionCursorController implements CursorController {
             mSelX2 = getValidCurX(screen, mSelY2, mSelX2);
         }
 
+        mAutoscrolled = scrolledHorizontally || terminalView.getTopRow() != topRowBefore;
         terminalView.invalidate();
+    }
+
+    /**
+     * Pans the Static-mode {@link HorizontalScrollView} host one cell towards the edge band the
+     * dragged handle sits in, so columns wider than the screen stay reachable. The host clamps
+     * {@code scrollBy} to its content, so a pinned edge reports no movement.
+     *
+     * @param x the handle's x in this view's coordinates.
+     * @return whether the host scrolled.
+     */
+    private boolean autoscrollHorizontally(int x) {
+        if (!(terminalView.getParent() instanceof HorizontalScrollView)) return false;
+        HorizontalScrollView host = (HorizontalScrollView) terminalView.getParent();
+        int viewportWidth = host.getWidth();
+        if (viewportWidth <= 0 || terminalView.getWidth() <= viewportWidth) return false;
+        float cellWidth = terminalView.mRenderer.getFontWidth();
+        float minBand = AUTOSCROLL_MIN_BAND_DP * terminalView.getResources().getDisplayMetrics().density;
+        float band = Math.min(Math.max(cellWidth * 2, minBand), viewportWidth / 3f);
+        float viewportX = x + terminalView.getLeft() - host.getScrollX();
+        int step;
+        if (viewportX < band) {
+            step = -Math.max(1, Math.round(cellWidth));
+        } else if (viewportX > viewportWidth - band) {
+            step = Math.max(1, Math.round(cellWidth));
+        } else {
+            return false;
+        }
+        int before = host.getScrollX();
+        host.scrollBy(step, 0);
+        return host.getScrollX() != before;
+    }
+
+    @Override
+    public boolean didAutoscroll() {
+        return mAutoscrolled;
     }
 
     private int getValidCurX(TerminalBuffer screen, int cy, int cx) {

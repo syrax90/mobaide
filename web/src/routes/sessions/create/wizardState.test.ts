@@ -139,6 +139,18 @@ describe('wizardReducer', () => {
     );
   });
 
+  it('selects a picked folder suggestion without its trailing separator, except a root', () => {
+    // A pick leaves `/a/b/` in the field; recents must not hold it beside `/a/b`.
+    const picked = reduce([{ type: 'setCustomPathDraft', draft: ' /a/b/ ' }]);
+
+    expect(picked.customPathDraft).toBe(' /a/b/ ');
+    expect(picked.selection).toEqual({ kind: 'customPath', path: '/a/b' });
+    expect(reduce([{ type: 'setCustomPathDraft', draft: '/' }]).selection).toEqual({
+      kind: 'customPath',
+      path: '/',
+    });
+  });
+
   it('picks Opus when fast mode goes on and leaves it when it goes off', () => {
     const on = reduce([
       { type: 'setClaudeModel', bucket: 'claude', model: 'haiku' },

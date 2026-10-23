@@ -341,6 +341,17 @@
             "title": "Fast Mode",
             "type": "boolean"
           },
+          "focus_mode": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus Mode"
+          },
           "identifier": {
             "anyOf": [
               {
@@ -669,6 +680,33 @@
           }
         },
         "title": "CreateSessionRequest",
+        "type": "object"
+      },
+      "FsDirsResponse": {
+        "description": "Subdirectory names of one host directory.\n\n``path`` is the listed directory after ``~`` expansion, so a client that\ncompletes ``~/co`` can write back an absolute path; on Windows its ``/``\nseparators are rewritten to ``\\``, so a picked folder extends it with\nthe host's own separator. ``truncated`` means a scan cap or the time\nbudget stopped the listing early: the client must not filter it locally\nas if it were complete, and re-asks with ``q``.",
+        "properties": {
+          "dirs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dirs",
+            "type": "array"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "dirs",
+          "truncated"
+        ],
+        "title": "FsDirsResponse",
         "type": "object"
       },
       "GitBranchCreateRequest": {
@@ -3586,6 +3624,65 @@
         "summary": "Codex Login",
         "tags": [
           "codex"
+        ]
+      }
+    },
+    "/api/fs/dirs": {
+      "get": {
+        "description": "Subdirectories of ``path`` for client-side path completion.",
+        "operationId": "list_dirs_endpoint_api_fs_dirs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FsDirsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Dirs Endpoint",
+        "tags": [
+          "fs"
         ]
       }
     },

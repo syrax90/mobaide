@@ -246,21 +246,42 @@ enum TerminalSelection {
         return toStart < toEnd ? .start : .end
     }
 
-    /// Rows to scroll while a handle is dragged near a viewport edge: -1 up,
-    /// +1 down, 0 otherwise. One row per update, like Android's `updatePosition`.
-    /// `viewportY` is the touch's y in **viewport** coordinates.
+    /// The narrowest edge band, so a finger held still at the edge stays inside
+    /// it even with a small font.
+    static let autoscrollMinBand: CGFloat = 24
+
+    /// Rows to scroll per autoscroll tick while a handle is held near a
+    /// viewport edge: -1 up, +1 down, 0 otherwise. `viewportY` is the touch's y
+    /// in **viewport** coordinates.
     static func autoscrollRows(
         viewportY: CGFloat,
         viewportHeight: CGFloat,
         cellHeight: CGFloat
     ) -> Int {
-        guard cellHeight > 0, viewportHeight > 0 else { return 0 }
+        guard cellHeight > 0 else { return 0 }
+        return autoscrollStep(at: viewportY, extent: viewportHeight, band: cellHeight)
+    }
+
+    /// Columns to scroll per autoscroll tick while a handle is held near the
+    /// left (-1) or right (+1) edge of a Static-mode viewport, 0 otherwise.
+    /// `viewportX` is the touch's x in **viewport** coordinates.
+    static func autoscrollColumns(
+        viewportX: CGFloat,
+        viewportWidth: CGFloat,
+        cellWidth: CGFloat
+    ) -> Int {
+        guard cellWidth > 0 else { return 0 }
+        return autoscrollStep(at: viewportX, extent: viewportWidth, band: cellWidth * 2)
+    }
+
+    private static func autoscrollStep(at position: CGFloat, extent: CGFloat, band: CGFloat) -> Int {
+        guard extent > 0 else { return 0 }
         // A band rather than a strict out-of-bounds test, so the user does not
         // have to drag off the view to extend. Capped at a third of the
         // viewport so the two bands cannot overlap on a short one.
-        let band = min(cellHeight, viewportHeight / 3)
-        if viewportY < band { return -1 }
-        if viewportY > viewportHeight - band { return 1 }
+        let width = min(max(band, autoscrollMinBand), extent / 3)
+        if position < width { return -1 }
+        if position > extent - width { return 1 }
         return 0
     }
 

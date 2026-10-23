@@ -21,6 +21,10 @@ private struct CreateSessionContent: View {
     @State private var model: CreateSessionModel
     @State private var toast: ToastMessage?
     @State private var projectSheet: ProjectFormMode?
+    @State private var pathSuggestions: PathSuggestionsModel
+    @State private var claudeAdvancedExpanded = false
+    @State private var autoScanAdvancedExpanded = false
+    @FocusState private var customPathFocused: Bool
 
     @Environment(Router.self) private var router
     @Environment(\.mobaideColors) private var colors
@@ -38,6 +42,7 @@ private struct CreateSessionContent: View {
             autoScanRepository: container.autoScanRepository,
             autoScanProject: autoScanProject
         ))
+        _pathSuggestions = State(initialValue: PathSuggestionsModel(repository: container.pathSuggestionRepository))
     }
 
     var body: some View {
@@ -110,16 +115,29 @@ private struct CreateSessionContent: View {
         }
         .task {
             for await id in model.navEvents() {
-                router.pop()
+                leaveCreateScreen()
                 router.navigate(to: .sessionDetail(sessionId: id))
             }
         }
         .task {
             for await projectName in model.autoScanNavEvents() {
-                router.pop()
+                leaveCreateScreen()
                 router.navigate(to: .autoScanDetail(projectName: projectName))
                 model.clearAutoScanNav()
             }
+        }
+    }
+
+    /// Opened from the terminal's sessions drawer this screen sits over a
+    /// terminal, and a plain pop would leave that old terminal beneath the new
+    /// screen; the list is restored instead (Android `navigateFromCreate`).
+    /// Every other entry point (the list, the Projects shortcut) keeps the
+    /// plain pop.
+    private func leaveCreateScreen() {
+        if case .sessionDetail = router.path.dropLast().last {
+            router.popTo(.sessionList)
+        } else {
+            router.pop()
         }
     }
 
@@ -167,10 +185,17 @@ private struct CreateSessionContent: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .pixelField(isInvalid: model.customPathError != nil)
+                .focused($customPathFocused)
+                .onChange(of: customPathFocused) { _, focused in pathSuggestions.focusChanged(focused) }
+                .onChange(of: model.customPathDraft, initial: true) { _, text in pathSuggestions.textChanged(text) }
+                .onAppear { pathSuggestions.probe() }
+                PathSuggestionList(model: pathSuggestions) { name in
+                    model.setCustomPath(pathSuggestions.accept(name))
+                }
                 if let error = model.customPathError {
                     Text(error).font(.footnote).foregroundStyle(colors.danger)
                 } else {
-                    Text(#"e.g. /home/user/code or D:\projects\demo"#)
+                    Text(customPathExample + " — " + pathBrowseHint(windowsPaths: pathSuggestions.windowsPaths))
                         .font(.footnote)
                         .foregroundStyle(colors.textMuted)
                 }
@@ -300,6 +325,9 @@ private struct CreateSessionContent: View {
             case .autoScan, .shell, .none: shellConfig
             }
             gitOptionsSection
+            if model.mode == .standard {
+                claudeAdvancedSection
+            }
             Section {
                 Button {
                     Task { await model.create() }
@@ -327,16 +355,11 @@ private struct CreateSessionContent: View {
                 fastMode: model.autoScanClaudeFastMode,
                 ultracode: model.autoScanClaudeUltracode
             )
-            claudeAdvancedControls(
-                fastMode: $model.autoScanClaudeFastMode,
-                ultracode: $model.autoScanClaudeUltracode,
-                debug: $model.autoScanClaudeDebug,
-                appendSystemPrompt: $model.autoScanClaudeAppendSystemPrompt
-            )
         }
 
         Section {
             Toggle("Plan mode", isOn: $model.autoScanPlanMode)
+            focusViewToggle($model.autoScanFocusMode)
             Toggle("Skip permissions", isOn: $model.autoScanSkipPermissions)
             // Shown in both states: this defaults ON, so leaving the caption to
             // the off-state would let an unattended permission-bypassing scan
@@ -344,12 +367,20 @@ private struct CreateSessionContent: View {
             Text("When off, the scan pauses at permission prompts — you'll get a notification and can open the session to approve.")
                 .font(.footnote)
                 .foregroundStyle(colors.textMuted)
-            Toggle("No memory", isOn: $model.autoScanNoMemory)
         } header: {
             PixelSectionHeader("Auto Scan")
         } footer: {
             PixelSectionFooter("Each matching issue runs in its own git worktree, so its changes stay isolated from your working copy. Non-git projects run in the project directory.")
         }
+
+        claudeAdvancedOptions(
+            isExpanded: $autoScanAdvancedExpanded,
+            noMemory: $model.autoScanNoMemory,
+            fastMode: $model.autoScanClaudeFastMode,
+            ultracode: $model.autoScanClaudeUltracode,
+            debug: $model.autoScanClaudeDebug,
+            appendSystemPrompt: $model.autoScanClaudeAppendSystemPrompt
+        )
 
         Section(header: PixelSectionHeader("Initial prompt")) {
             TextField("Sent to each spawned session", text: $model.autoScanInitialPrompt, axis: .vertical)
@@ -389,15 +420,31 @@ private struct CreateSessionContent: View {
                 fastMode: model.claudeFastMode,
                 ultracode: model.claudeUltracode
             )
+            focusViewToggle($model.focusMode)
             Toggle("Skip permissions", isOn: $model.skipPermissions)
-            Toggle("No memory", isOn: $model.noMemory)
-            claudeAdvancedControls(
-                fastMode: $model.claudeFastMode,
-                ultracode: $model.claudeUltracode,
-                debug: $model.claudeDebug,
-                appendSystemPrompt: $model.claudeAppendSystemPrompt
-            )
         }
+    }
+
+    /// Rendered after the Worktree section, so the main options stay on top.
+    @ViewBuilder
+    private var claudeAdvancedSection: some View {
+        @Bindable var model = model
+        claudeAdvancedOptions(
+            isExpanded: $claudeAdvancedExpanded,
+            noMemory: $model.noMemory,
+            fastMode: $model.claudeFastMode,
+            ultracode: $model.claudeUltracode,
+            debug: $model.claudeDebug,
+            appendSystemPrompt: $model.claudeAppendSystemPrompt
+        )
+    }
+
+    @ViewBuilder
+    private func focusViewToggle(_ isOn: Binding<Bool>) -> some View {
+        Toggle("Focus view", isOn: isOn)
+        Text("Claude Code shows only your last prompt, a one-line summary of tool calls, and the final response.")
+            .font(.footnote)
+            .foregroundStyle(colors.textMuted)
     }
 
     /// Model + Effort pickers with their fast-mode / ultracode interlocks.
@@ -423,27 +470,33 @@ private struct CreateSessionContent: View {
         .disabled(ultracode)
     }
 
-    /// The trailing half of the shared Claude controls. Kept separate from the
-    /// pickers so each config step can interleave its own toggles between the
-    /// two runs without reordering anything on screen.
+    /// Collapsed-by-default "Advanced" section shared by the Claude Code and
+    /// Auto Scan steps (Android: `ClaudeAdvancedOptions`).
     @ViewBuilder
-    private func claudeAdvancedControls(
+    private func claudeAdvancedOptions(
+        isExpanded: Binding<Bool>,
+        noMemory: Binding<Bool>,
         fastMode: Binding<Bool>,
         ultracode: Binding<Bool>,
         debug: Binding<Bool>,
         appendSystemPrompt: Binding<String>
     ) -> some View {
-        Toggle("Fast mode (Opus only)", isOn: fastMode)
-        Toggle("Ultracode", isOn: ultracode)
-        Toggle("Debug logging", isOn: debug)
-        Text("Claude Code prints verbose diagnostics into the terminal.")
-            .font(.footnote)
-            .foregroundStyle(colors.textMuted)
-        TextField("Append system prompt", text: appendSystemPrompt, axis: .vertical)
-            .lineLimit(1...4)
-            .autocorrectionDisabled()
-            .textInputAutocapitalization(.never)
-            .pixelField()
+        Section {
+            DisclosureGroup("Advanced", isExpanded: isExpanded) {
+                Toggle("No memory", isOn: noMemory)
+                Toggle("Fast mode (Opus only)", isOn: fastMode)
+                Toggle("Ultracode", isOn: ultracode)
+                Toggle("Debug logging", isOn: debug)
+                Text("Claude Code prints verbose diagnostics into the terminal.")
+                    .font(.footnote)
+                    .foregroundStyle(colors.textMuted)
+                TextField("Append system prompt", text: appendSystemPrompt, axis: .vertical)
+                    .lineLimit(1...4)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .pixelField()
+            }
+        }
     }
 
     @ViewBuilder
@@ -621,6 +674,10 @@ private struct CreateSessionContent: View {
     private func isStoredSelected(_ name: String) -> Bool {
         if case .stored(let selected) = model.selection { return selected == name }
         return false
+    }
+
+    private var customPathExample: String {
+        pathSuggestions.windowsPaths ? #"e.g. D:\projects\demo"# : "e.g. /home/user/code"
     }
 
     private var isCustomPathSelected: Bool {

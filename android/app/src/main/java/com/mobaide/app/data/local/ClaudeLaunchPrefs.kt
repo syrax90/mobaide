@@ -21,4 +21,6 @@ data class ClaudeLaunchPrefs(
     val noMemory: Boolean = false,
     val planMode: Boolean = false,
     val debug: Boolean = false,
+    // Defaults ON so a blob saved before the toggle existed restores focus view.
+    val focusMode: Boolean = true,
 )

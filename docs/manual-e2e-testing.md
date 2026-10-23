@@ -44,6 +44,16 @@ python tests/e2e/manual_stack.py ios --install-app
 #     (the first --web run auto-installs web/node_modules via `npm ci`)
 ```
 
+On Windows (no iOS) or any machine with the Android SDK, the whole Android +
+web loop is one command — the script boots the emulator, builds, installs and
+launches the app, and serves the web client:
+
+```
+python tests/e2e/manual_stack.py up --host 127.0.0.1 --android-url emulator --emulator --install-app --web
+# later, from any other shell (the only graceful stop on Windows):
+python tests/e2e/manual_stack.py stop
+```
+
 Then open the app on the phone or simulator, **register or log in** with the
 credentials from the banner (email `dev@test.local`, password `Qwe>123` — both fixed,
 easy dev-testing defaults; override with `--email`/`--password`), pick the
@@ -93,9 +103,44 @@ across restarts instead.
    crash-reaped exactly like server and agent, and writes nothing to the
    checkout except the gitignored `web/node_modules` (kept across runs — it is
    a dev dependency like the Python venv, not a temp file).
-8. On stop, restores both `CENTRAL_SERVER_URL` values to what they were and
+8. With `--emulator [AVD]` (default AVD `Mobaide-E2E`), reuses that AVD if it
+   is already running, otherwise boots it (detached, log in
+   `<state>/logs/emulator.log`). A missing AVD is created once with
+   `avdmanager` from the best installed phone system image for the host CPU
+   (stable 4 KB-page images first, newest API, Play Store > Google APIs >
+   AOSP) on the `pixel_7` profile with the host keyboard enabled. With
+   `--install-app` the APK is assembled *while* the emulator boots, installed
+   with `ANDROID_SERIAL` pinned to it, and launched once the stack is READY.
+   The SDK is found via `ANDROID_HOME` / `ANDROID_SDK_ROOT`, else Android
+   Studio's per-OS default location.
+9. On stop, restores both `CENTRAL_SERVER_URL` values to what they were,
    removes the generated Android debug override (skip with `--keep-android` /
-   `--keep-ios`).
+   `--keep-ios`), and shuts down an emulator it booted with `adb emu kill`, so
+   the quick-boot snapshot is saved and the next boot takes seconds
+   (`--keep-emulator` leaves it running; an emulator it only reused is never
+   touched).
+
+### Stopping, and why Windows needs more than Ctrl+C
+
+`Ctrl+C` in the `up` console and `kill -TERM <pid>` on macOS/Linux both run
+the normal teardown. `python tests/e2e/manual_stack.py stop` does the same from
+any other shell on every OS: it drops a `stop.request` file into the state dir,
+which `up` polls once a second, and waits (`--timeout`, default 90 s) for that
+`up` to exit. Windows has no `SIGTERM` a second shell could send, so `stop` is
+the way to end a detached or background run there. If the run does not exit in
+time it is killed; if it was already gone (hard-killed), `stop` reaps what it
+left behind — children, an emulator it booted, the client files — honouring
+the `--keep-*` flags that run was started with.
+
+On Windows every child (server, agent, Vite) is also assigned to a
+kill-on-close **job object** owned by `up`. A `TerminateProcess` — Task
+Manager, `Stop-Process`, a closed terminal, a supervising tool stopping the
+task — skips every `finally` block, but the kernel still kills the whole child
+tree, PTY shells included, the moment `up` dies, so no orphan keeps ports
+9000/5173 busy. The client files of such a run are restored by the next
+`stop`, `clean`, or `up`. The Vite child runs in its own process group on
+Windows so `Ctrl+C` never reaches the `.cmd` shims and their
+"Terminate batch job (Y/N)?" prompt; teardown stops it instead.
 
 State lives in `<system-temp>/mobaide-manual-e2e` by default (`--state-dir` to
 move it): `state.json` (JWT secret, account, agent id + token, last-used port),
@@ -215,6 +260,10 @@ release builds. Use the simulator over loopback instead.
 | `up --web` | also serve the web client at `http://localhost:5173`, proxied to this stack, and open it with the login pre-filled |
 | `up --web --web-port <n>` | same, on another port (e.g. when 5173 is taken by a plain `npm run dev`) |
 | `up --web --no-browser` | same, but do not open a browser tab (headless boxes, SSH, scripted runs) |
+| `up --emulator [AVD]` | boot (or reuse) an Android emulator, default AVD `Mobaide-E2E`, created once if missing; shut down on stop when this run booted it |
+| `up --emulator --keep-emulator` | same, but leave the emulator running on stop |
+| `android --emulator --install-app` | boot/reuse the emulator, install the debug app on it and launch it (the emulator stays up; this command has no teardown) |
+| `stop` | gracefully stop the running `up` from another shell (any OS; the only graceful stop on Windows); reaps a hard-killed run's leftovers |
 | `up --projects <paths>` | seed the agent's project list with real directories |
 | `up --keep-android` / `--keep-ios` | on stop, leave the test URL in place (default: restore it) |
 | `up --no-android` / `--no-ios` | skip that client's file sync entirely |
@@ -252,6 +301,10 @@ session-create time with a `<cli>_cli_missing` marker.
 | `port 5173 on 127.0.0.1 is busy` | A plain `npm run dev` (or another stack) already serves there. Stop it, or pass `--web-port`. |
 | `npm ci failed in .../web` | Run `cd web && npm ci` by hand to see the full error (network, Node version, lockfile drift), then re-run `up --web`. |
 | `clean` left `web/node_modules` behind | Deliberate: it is a kept dev dependency (like the Python installs), gitignored and minutes-expensive to rebuild. Delete it by hand if you want the disk back. |
+| `the emulator exited during boot` | See `<state>/logs/emulator.log`. On Windows enable the **Windows Hypervisor Platform** feature (hardware acceleration); also check the AVD is not already open in Android Studio. |
+| `AVD ... cannot be created` | Install the SDK *Command-line Tools* and a phone system image (`sdkmanager "system-images;android-36;google_apis;x86_64"`), or create the AVD in Android Studio's Device Manager. |
+| `Gradle build daemon has been stopped: stop command received` | Something else ran `gradlew --stop` (e.g. a build in another worktree sharing `~/.gradle`). Re-run `android --emulator --install-app`. |
+| Background `up` on Windows will not stop | Use `python tests/e2e/manual_stack.py stop`; `taskkill` without `/F` cannot end a console process. |
 | State vanished after reboot (Linux/macOS) | `/tmp` may be cleared on reboot; use `--state-dir ~/mobaide-manual-e2e`. |
 
 ## Production safety

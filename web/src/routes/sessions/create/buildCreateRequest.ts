@@ -81,6 +81,7 @@ function claudeOptions(
     fast_mode: bucket.fastMode,
     ultracode: bucket.ultracode,
     debug: bucket.debug,
+    focus_mode: bucket.focusMode,
     append_system_prompt: blankToUndefined(bucket.appendSystemPrompt),
   };
 }

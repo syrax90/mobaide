@@ -43,6 +43,7 @@ export interface ClaudeLaunchPrefs {
   /** Only meaningful in the Auto Scan bucket, as on both mobile clients. */
   planMode: boolean;
   debug: boolean;
+  focusMode: boolean;
 }
 
 /** Android `CodexLaunchPrefs`, iOS `CodexLaunchPrefs`. */
@@ -118,6 +119,8 @@ export const CLAUDE_PREFS_DEFAULTS: ClaudeLaunchPrefs = {
   noMemory: false,
   planMode: false,
   debug: false,
+  // On for both buckets, so a blob saved before the toggle existed restores focus view.
+  focusMode: true,
 };
 
 export const CODEX_PREFS_DEFAULTS: CodexLaunchPrefs = {
@@ -216,6 +219,7 @@ function sanitizeClaudePrefs(raw: unknown): ClaudeLaunchPrefs | null {
   const noMemory = field(raw, 'noMemory', CLAUDE_PREFS_DEFAULTS.noMemory, isBoolean);
   const planMode = field(raw, 'planMode', CLAUDE_PREFS_DEFAULTS.planMode, isBoolean);
   const debug = field(raw, 'debug', CLAUDE_PREFS_DEFAULTS.debug, isBoolean);
+  const focusMode = field(raw, 'focusMode', CLAUDE_PREFS_DEFAULTS.focusMode, isBoolean);
   if (
     model === undefined ||
     effort === undefined ||
@@ -225,7 +229,8 @@ function sanitizeClaudePrefs(raw: unknown): ClaudeLaunchPrefs | null {
     skipPermissions === undefined ||
     noMemory === undefined ||
     planMode === undefined ||
-    debug === undefined
+    debug === undefined ||
+    focusMode === undefined
   ) {
     return null;
   }
@@ -239,6 +244,7 @@ function sanitizeClaudePrefs(raw: unknown): ClaudeLaunchPrefs | null {
     noMemory,
     planMode,
     debug,
+    focusMode,
   };
 }
 

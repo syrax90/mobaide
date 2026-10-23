@@ -224,6 +224,25 @@ async def test_argv_no_settings_when_no_fast_or_ultracode(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("focus_mode", "view_mode"), [(True, "focus"), (False, "default")],
+)
+async def test_argv_focus_mode_sets_view_mode_inline(
+    tmp_path: Path, focus_mode: bool, view_mode: str,
+):
+    """False maps to an explicit "default" so a sticky host-side /focus can't
+    keep the session in focus view."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(focus_mode=focus_mode, fast_mode=True),
+    )
+    assert spec.argv.count("--settings") == 1
+    payload = json.loads(spec.argv[spec.argv.index("--settings") + 1])
+    assert payload == {"fastMode": True, "viewMode": view_mode}
+
+
+@pytest.mark.asyncio
 async def test_argv_append_system_prompt_emitted(tmp_path: Path):
     launcher = ClaudeLauncher()
     spec = await launcher.build(
@@ -768,6 +787,36 @@ async def test_settings_file_merges_fast_and_ultracode(
     assert doc["fastMode"] is True
     assert doc["ultracode"] is True
     assert "hooks" in doc
+
+
+@pytest.mark.asyncio
+async def test_settings_file_merges_view_mode(
+    tmp_path: Path, _isolated_hooks_tempdir,
+):
+    launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(focus_mode=True),
+        session_id="sid-focus",
+    )
+    assert spec.argv.count("--settings") == 1
+    settings_path = spec.argv[spec.argv.index("--settings") + 1]
+    doc = json.loads(Path(settings_path).read_text(encoding="utf-8"))
+    assert doc["viewMode"] == "focus"
+    assert "hooks" in doc
+
+
+@pytest.mark.asyncio
+async def test_settings_file_omits_view_mode_when_focus_mode_unset(
+    tmp_path: Path, _isolated_hooks_tempdir,
+):
+    launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
+    spec = await launcher.build(
+        _make_project(str(tmp_path)), ClaudeOptions(), session_id="sid-nofocus",
+    )
+    settings_path = spec.argv[spec.argv.index("--settings") + 1]
+    doc = json.loads(Path(settings_path).read_text(encoding="utf-8"))
+    assert "viewMode" not in doc
 
 
 @pytest.mark.asyncio

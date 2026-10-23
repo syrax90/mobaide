@@ -33,6 +33,7 @@ final class AppContainer {
     let sessionRepository: SessionRepository
     let projectsRepository: ProjectsRepository
     let voiceRepository: VoiceRepository
+    let pathSuggestionRepository: PathSuggestionRepository
     let autoScanRepository: AutoScanRepository
     let agentRepository: AgentRepository
     let templatesRepository: TemplatesRepository
@@ -231,6 +232,7 @@ final class AppContainer {
             agentEventBus: agentEventBus,
             sessionManager: sessionManager
         )
+        self.pathSuggestionRepository = PathSuggestionRepository(agentAPI: agentAPI, tokenStore: tokenStore)
         let autoScanWsClient = AutoScanWsClient(
             webSocketFactory: webSocketFactory,
             urlProvider: AutoScanWsClient.liveURLProvider(tokenStore: tokenStore, sessionManager: sessionManager),

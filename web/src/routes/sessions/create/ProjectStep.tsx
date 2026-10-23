@@ -1,8 +1,10 @@
 import type { ProjectSummary } from '../../../api/projectRepository';
-import { TextField } from '../../../components/form/TextField';
+import { PathField } from '../../../components/form/PathField';
 import type { ProjectSelection, WizardAction } from './wizardState';
 
 interface ProjectStepProps {
+  /** The agent whose folders the custom-path field suggests. */
+  agentId: string;
   projects: readonly ProjectSummary[];
   selection: ProjectSelection;
   customPathDraft: string;
@@ -36,6 +38,7 @@ interface ProjectStepProps {
  * advances too.
  */
 export function ProjectStep({
+  agentId,
   projects,
   selection,
   customPathDraft,
@@ -107,8 +110,9 @@ export function ProjectStep({
 
       <div className="option-group">
         <h3>Or a one-off directory</h3>
-        <TextField
+        <PathField
           label="Absolute path"
+          agentId={agentId}
           value={customPathDraft}
           placeholder="/Users/me/code/project"
           error={customPathError ?? undefined}

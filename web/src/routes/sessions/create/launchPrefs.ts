@@ -45,6 +45,7 @@ function restoreClaudeBucket(
     fastMode: saved.fastMode,
     ultracode: saved.ultracode,
     debug: saved.debug,
+    focusMode: saved.focusMode,
     appendSystemPrompt: saved.appendSystemPrompt,
     skipPermissions: saved.skipPermissions,
     noMemory: saved.noMemory,
@@ -113,6 +114,7 @@ function claudePrefsFrom(bucket: ClaudeBucket): ClaudeLaunchPrefs {
     noMemory: bucket.noMemory,
     planMode: bucket.planMode,
     debug: bucket.debug,
+    focusMode: bucket.focusMode,
   };
 }
 

@@ -102,6 +102,20 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(legacy?.planMode, false)
     }
 
+    func testClaudeLaunchPrefsFocusModeRoundTripsAndDefaultsOnForALegacyBlob() {
+        store.setLastUsedClaudeOptions(ClaudeLaunchPrefs(focusMode: false))
+        XCTAssertEqual(store.getLastUsedClaudeOptions()?.focusMode, false)
+
+        defaults.set(
+            #"{"model":"opus","effort":"max","debug":false}"#,
+            forKey: PreferencesStore.keyLastUsedClaudeOptions
+        )
+        XCTAssertEqual(
+            store.getLastUsedClaudeOptions()?.focusMode, true,
+            "a blob saved before the toggle existed restores focus view"
+        )
+    }
+
     func testDynamicKeysUseDoubleColonSeparator() {
         XCTAssertEqual(PreferencesStore.linearLabelsKey(projectName: "p"), "linear_labels::p")
         XCTAssertEqual(PreferencesStore.linearStatesKey(projectName: "p"), "linear_states::p")

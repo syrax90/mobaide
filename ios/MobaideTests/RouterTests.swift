@@ -84,4 +84,24 @@ final class RouterTests: XCTestCase {
         router.handleTransition(from: .fullyConnected, to: .incompatibleServer(info))
         XCTAssertEqual(router.path, [.settings], "the takeover renders above the stack; no reset needed")
     }
+
+    func testReplaceLastSwapsTheTopScreenWithoutGrowingTheStack() {
+        let router = Router()
+        router.navigate(to: .sessionList)
+        router.navigate(to: .sessionDetail(sessionId: "s1"))
+
+        // The sessions drawer's switch: Back must still return to the list,
+        // not to the terminal the user just left.
+        router.replaceLast(with: .sessionDetail(sessionId: "s2"))
+
+        XCTAssertEqual(router.path, [.sessionList, .sessionDetail(sessionId: "s2")])
+    }
+
+    func testReplaceLastOnAnEmptyPathPushes() {
+        let router = Router()
+
+        router.replaceLast(with: .sessionDetail(sessionId: "s1"))
+
+        XCTAssertEqual(router.path, [.sessionDetail(sessionId: "s1")], "nothing to replace still has to land somewhere")
+    }
 }

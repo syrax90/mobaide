@@ -290,6 +290,28 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual(conflict.theirs, GitConflictSide(label: nil, present: true))
     }
 
+    func testListDirsSendsPathAloneOrWithQEachAsOneEncodedParameter() async throws {
+        StubURLProtocol.enqueue(status: 200, body: #"{"path":"/home/me","dirs":["code"],"truncated":false}"#)
+        StubURLProtocol.enqueue(status: 200, body: #"{"path":"C:\\My Docs","dirs":[],"truncated":true}"#)
+        let api = makeAPI()
+
+        let home = try await api.listDirs(path: "~/", q: nil)
+        let docs = try await api.listDirs(path: #"C:\My Docs & more\"#, q: "a&b c")
+
+        XCTAssertEqual(home, FsDirsResponse(path: "/home/me", dirs: ["code"], truncated: false))
+        XCTAssertEqual(docs.truncated, true)
+        let requests = StubURLProtocol.requests
+        XCTAssertEqual(requests[0].httpMethod, "GET")
+        XCTAssertEqual(requests[0].url?.path, "/api/fs/dirs")
+        let homeItems = try XCTUnwrap(URLComponents(url: XCTUnwrap(requests[0].url), resolvingAgainstBaseURL: false)?.queryItems)
+        XCTAssertEqual(homeItems, [URLQueryItem(name: "path", value: "~/")])
+        let items = try XCTUnwrap(URLComponents(url: XCTUnwrap(requests[1].url), resolvingAgainstBaseURL: false)?.queryItems)
+        XCTAssertEqual(items, [
+            URLQueryItem(name: "path", value: #"C:\My Docs & more\"#),
+            URLQueryItem(name: "q", value: "a&b c"),
+        ])
+    }
+
     func testSessionGitConflictWritesPostTheirBodiesUnderTheirOwnLeaves() async throws {
         for _ in 0..<4 { StubURLProtocol.enqueue(status: 200, body: #"{"ok":true}"#) }
         let api = makeAPI()

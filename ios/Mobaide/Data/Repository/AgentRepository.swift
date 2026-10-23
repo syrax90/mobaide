@@ -70,7 +70,8 @@ final class AgentRepository: AgentStatusApplying {
             name: existing.name,
             online: online,
             created_at: existing.created_at,
-            last_seen_at: existing.last_seen_at
+            last_seen_at: existing.last_seen_at,
+            supports_uninstall: existing.supports_uninstall
         )
         setAgents(list)
     }
@@ -93,8 +94,10 @@ final class AgentRepository: AgentStatusApplying {
         try await centralAPI.reregisterAgent(userToken: try userToken(), agentId: agentId)
     }
 
-    func deleteAgent(agentId: String) async throws {
-        try await centralAPI.deleteAgent(userToken: try userToken(), agentId: agentId)
+    /// With `uninstall`, the agent also deletes itself from its host — at once
+    /// when online, otherwise on its next connect within 30 days.
+    func deleteAgent(agentId: String, uninstall: Bool = false) async throws {
+        try await centralAPI.deleteAgent(userToken: try userToken(), agentId: agentId, uninstall: uninstall)
         // Remove the row locally first: a failed best-effort refresh must not
         // leave a stale, tappable row that would connect to a deleted agent
         // (there is no agent.deleted user event to self-heal the list).

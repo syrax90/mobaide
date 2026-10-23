@@ -27,6 +27,17 @@ const DARK_QUERY = '(prefers-color-scheme: dark)';
  * visible at the point of the state change.
  */
 export function stubPrefersDark(initial: boolean): { set: (next: boolean) => void } {
+  return stubMediaQuery(DARK_QUERY, initial);
+}
+
+/**
+ * The same stand-in for any one media query: only `query` is answered, every
+ * other query reports non-matching.
+ */
+export function stubMediaQuery(
+  query: string,
+  initial: boolean,
+): { set: (next: boolean) => void } {
   const listeners = new Set<() => void>();
   const media = {
     matches: initial,
@@ -44,8 +55,7 @@ export function stubPrefersDark(initial: boolean): { set: (next: boolean) => voi
   };
   vi.stubGlobal(
     'matchMedia',
-    (query: string) =>
-      (query === DARK_QUERY ? media : inert) as unknown as MediaQueryList,
+    (asked: string) => (asked === query ? media : inert) as unknown as MediaQueryList,
   );
   return {
     set: (next: boolean) => {

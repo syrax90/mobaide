@@ -494,4 +494,52 @@ final class AgentListModelTests: XCTestCase {
         let state = await harness.session.sessionManager.currentAuthState
         XCTAssertEqual(state, .fullyConnected)
     }
+
+    func testConfirmDeleteWithUninstallSendsQueryAndAnnouncesIt() async {
+        let harness = AgentHarness()
+        let model = harness.makeAgentListModel()
+
+        model.startDelete(agent(id: "a2", name: "Workstation", online: true))
+        StubURLProtocol.enqueue(status: 204, body: "")
+        StubURLProtocol.enqueue(status: 200, body: "[]")
+        model.confirmDelete(uninstall: true)
+        await waitUntil { model.message != nil }
+
+        let delete = StubURLProtocol.requests.first { $0.httpMethod == "DELETE" }
+        XCTAssertEqual(delete?.url?.path, "/api/agents/a2")
+        XCTAssertEqual(delete?.url?.query, "uninstall=true")
+        XCTAssertEqual(model.message, "“Workstation” is uninstalling itself.")
+    }
+
+    func testConfirmDeleteWithUninstallOfOfflineAgentAnnouncesTheDeferral() async {
+        let harness = AgentHarness()
+        let model = harness.makeAgentListModel()
+
+        model.startDelete(agent(id: "a2", name: "Workstation", online: false))
+        StubURLProtocol.enqueue(status: 204, body: "")
+        StubURLProtocol.enqueue(status: 200, body: "[]")
+        model.confirmDelete(uninstall: true)
+        await waitUntil { model.message != nil }
+
+        XCTAssertEqual(
+            model.message,
+            "“Workstation” will uninstall itself when it next comes online."
+        )
+    }
+
+    func testConfirmDeleteWithoutUninstallSendsNoQueryAndNoMessage() async {
+        let harness = AgentHarness()
+        let model = harness.makeAgentListModel()
+
+        model.startDelete(agent(id: "a2", name: "Workstation", online: true))
+        StubURLProtocol.enqueue(status: 204, body: "")
+        StubURLProtocol.enqueue(status: 200, body: "[]")
+        model.confirmDelete()
+        await waitUntil { StubURLProtocol.requests.count >= 2 }
+
+        let delete = StubURLProtocol.requests.first { $0.httpMethod == "DELETE" }
+        XCTAssertEqual(delete?.url?.path, "/api/agents/a2")
+        XCTAssertNil(delete?.url?.query)
+        XCTAssertNil(model.message)
+    }
 }

@@ -1,8 +1,10 @@
 package com.mobaide.app.ui.agents
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import com.mobaide.app.ui.common.pixel.PixelAlertDialog
@@ -19,7 +21,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.mobaide.app.ui.common.pixel.PixelCheckbox
+import com.mobaide.app.ui.theme.MobaideTheme
 
 sealed interface AddAgentDialogState {
     data object Hidden : AddAgentDialogState
@@ -155,23 +161,63 @@ fun ReRegisterDialog(
     }
 }
 
+/**
+ * Confirm removing an agent. When the agent's build supports it, offers
+ * uninstalling it from its computer too — checked by default, because a
+ * removed agent left on its host can never reconnect and only retries.
+ */
 @Composable
 fun DeleteAgentDialog(
     agentName: String,
-    onConfirm: () -> Unit,
+    online: Boolean,
+    supportsUninstall: Boolean,
+    onConfirm: (uninstall: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var uninstall by rememberSaveable(agentName) { mutableStateOf(supportsUninstall) }
     PixelAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Delete Agent") },
         text = {
-            Text(
-                "Are you sure you want to delete \"$agentName\"? " +
-                    "This will permanently remove the agent and all associated data.",
-            )
+            Column {
+                Text(
+                    "Are you sure you want to delete \"$agentName\"? " +
+                        "This will permanently remove the agent and all associated data.",
+                )
+                if (supportsUninstall) {
+                    Spacer(Modifier.height(12.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        PixelCheckbox(
+                            checked = uninstall,
+                            onCheckedChange = { uninstall = it },
+                            modifier = Modifier.testTag("delete_agent_uninstall_checkbox"),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Column {
+                            Text(
+                                "Also uninstall Mobaide from this computer",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                if (online) {
+                                    "The agent stops and deletes itself right away."
+                                } else {
+                                    "The agent is offline, so this happens the next " +
+                                        "time it connects (within 30 days)."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
         },
         confirmButton = {
-            PixelTextButton(onClick = onConfirm) {
+            PixelTextButton(
+                onClick = { onConfirm(supportsUninstall && uninstall) },
+                modifier = Modifier.testTag("delete_agent_confirm"),
+            ) {
                 Text("Delete", color = MaterialTheme.colorScheme.error)
             }
         },
@@ -179,4 +225,20 @@ fun DeleteAgentDialog(
             PixelTextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+@Preview(name = "Delete agent dark", showBackground = true, backgroundColor = 0xFF121212)
+@Composable
+private fun DeleteAgentDialogPreviewDark() {
+    MobaideTheme(darkTheme = true) {
+        DeleteAgentDialog("workstation", online = false, supportsUninstall = true, {}, {})
+    }
+}
+
+@Preview(name = "Delete agent light", showBackground = true, backgroundColor = 0xFFF4F4F4)
+@Composable
+private fun DeleteAgentDialogPreviewLight() {
+    MobaideTheme(darkTheme = false) {
+        DeleteAgentDialog("workstation", online = true, supportsUninstall = true, {}, {})
+    }
 }

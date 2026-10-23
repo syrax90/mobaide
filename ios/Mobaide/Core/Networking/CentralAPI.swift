@@ -82,8 +82,9 @@ struct CentralAPI: Sendable {
         try await execute(method: "POST", path: "/api/agents/\(agentId)/reregister", rawBody: Data(), bearer: userToken)
     }
 
-    func deleteAgent(userToken: String, agentId: String) async throws {
-        try await executeNoContent(method: "DELETE", path: "/api/agents/\(agentId)", bearer: userToken)
+    func deleteAgent(userToken: String, agentId: String, uninstall: Bool = false) async throws {
+        let query = uninstall ? "?uninstall=true" : ""
+        try await executeNoContent(method: "DELETE", path: "/api/agents/\(agentId)\(query)", bearer: userToken)
     }
 
     func requestAccountDeletion(userToken: String, request: DeleteAccountRequest) async throws {

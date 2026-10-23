@@ -136,6 +136,7 @@ final class CreateSessionModel {
     var claudeFastMode = false
     var claudeUltracode = false
     var claudeDebug = false
+    var focusMode = true
     var claudeAppendSystemPrompt = ""
     var skipPermissions = false
     var noMemory = false
@@ -154,6 +155,7 @@ final class CreateSessionModel {
     var autoScanClaudeFastMode = false
     var autoScanClaudeUltracode = false
     var autoScanClaudeDebug = false
+    var autoScanFocusMode = true
     var autoScanClaudeAppendSystemPrompt = ""
     var autoScanPlanMode = false
     /// Defaults ON: a scan runs unattended, so pausing at a permission prompt
@@ -629,8 +631,11 @@ final class CreateSessionModel {
         customPathError = Self.validateCustomPath(path)
         // Store the trimmed path (sent verbatim as `cwd`); the draft keeps the
         // raw text for the field. Whitespace validates but would create the
-        // session in the wrong directory.
-        selection = .customPath(path.trimmingCharacters(in: .whitespacesAndNewlines))
+        // session in the wrong directory, and the trailing separator a picked
+        // folder suggestion leaves would duplicate a recent.
+        selection = .customPath(
+            PathCompletion.trimTrailingSeparator(path.trimmingCharacters(in: .whitespacesAndNewlines))
+        )
     }
 
     func continueFromProject() {
@@ -925,7 +930,8 @@ final class CreateSessionModel {
             fast_mode: autoScanClaudeFastMode,
             ultracode: autoScanClaudeUltracode,
             append_system_prompt: Self.blankToNil(autoScanClaudeAppendSystemPrompt),
-            debug: autoScanClaudeDebug
+            debug: autoScanClaudeDebug,
+            focus_mode: autoScanFocusMode
         )
     }
 
@@ -939,7 +945,8 @@ final class CreateSessionModel {
             skipPermissions: autoScanSkipPermissions,
             noMemory: autoScanNoMemory,
             planMode: autoScanPlanMode,
-            debug: autoScanClaudeDebug
+            debug: autoScanClaudeDebug,
+            focusMode: autoScanFocusMode
         )
     }
 
@@ -985,7 +992,8 @@ final class CreateSessionModel {
                 fast_mode: claudeFastMode,
                 ultracode: claudeUltracode,
                 append_system_prompt: Self.blankToNil(claudeAppendSystemPrompt),
-                debug: claudeDebug
+                debug: claudeDebug,
+                focus_mode: focusMode
             )
             return CreateSessionRequest(cwd: cwd, project_name: projectName, claude_options: options)
         case .codex:
@@ -1062,7 +1070,8 @@ final class CreateSessionModel {
                 appendSystemPrompt: claudeAppendSystemPrompt,
                 skipPermissions: skipPermissions,
                 noMemory: noMemory,
-                debug: claudeDebug
+                debug: claudeDebug,
+                focusMode: focusMode
             ))
         case .codex:
             preferencesStore.setLastUsedCodexOptions(CodexLaunchPrefs(
@@ -1097,6 +1106,7 @@ final class CreateSessionModel {
             skipPermissions = claude.skipPermissions
             noMemory = claude.noMemory
             claudeDebug = claude.debug
+            focusMode = claude.focusMode
         }
         if let autoScan = preferencesStore.getLastUsedAutoScanOptions() {
             autoScanClaudeModel = autoScan.model
@@ -1108,6 +1118,7 @@ final class CreateSessionModel {
             autoScanNoMemory = autoScan.noMemory
             autoScanPlanMode = autoScan.planMode
             autoScanClaudeDebug = autoScan.debug
+            autoScanFocusMode = autoScan.focusMode
         }
         if let codex = preferencesStore.getLastUsedCodexOptions() {
             codexModel = codex.model

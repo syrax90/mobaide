@@ -20,7 +20,10 @@ import SwiftTerm
 ///   the overlay shows "Replaying buffer…" until `replayEnd`.
 /// - `.live` — entered on `replayEnd`, or provisionally on the first inbound
 ///   binary of a cycle (the upgrade precedes decoding, so a marker counts),
-///   always via `enterLiveState()`, which also re-asserts the cached PTY size.
+///   always via `enterLiveState()`, which also re-asserts the cached PTY size —
+///   except at the end of a replay this socket did not ask for (the relay fans
+///   every attach handshake out to all clients; answering it would resize the
+///   PTY back to this grid).
 ///   Replay and live `output` frames are fed identically; only the markers move
 ///   the machine, so a reconnect re-clears and re-feeds without duplicating output.
 @MainActor
@@ -147,6 +150,9 @@ final class TerminalSessionModel {
     private var savesInFlight: Set<String> = []
     private var savedShortcutsRefreshInFlight = false
     private var inReplay = false
+    /// Set on `.connected`, consumed by the next `replayEnd`: that span is this
+    /// socket's own handshake, the only replay whose end re-asserts the size.
+    private var ownReplayPending = false
     private var started = false
     private var isTornDown = false
 
@@ -279,6 +285,7 @@ final class TerminalSessionModel {
     private func handle(_ event: WebSocketEvent) {
         switch event {
         case .connected:
+            ownReplayPending = true
             resendCachedSize()
         case .binary(let data):
             handleBinary(data)
@@ -335,7 +342,9 @@ final class TerminalSessionModel {
                 // the first live byte after any reconnect-while-unwatched blow
                 // the budget instantly, suspend again, and loop.
                 unwatchedBytes = 0
-                enterLiveState()
+                let own = ownReplayPending
+                ownReplayPending = false
+                enterLiveState(reassertSize: own)
             }
         }
     }
@@ -516,13 +525,13 @@ final class TerminalSessionModel {
     }
 
     /// Single entry point into `.live` (Android `TerminalViewModel.enterLiveState`).
-    private func enterLiveState() {
+    private func enterLiveState(reassertSize: Bool = true) {
         connectionState = .live
-        resendCachedSize()
+        if reassertSize { resendCachedSize() }
     }
 
     /// Re-assert the last measured grid: on `.connected`, on every entry into
-    /// `.live`, and as the delivery step of every `scheduleSizeReassert`
+    /// `.live` except a foreign replay's end, and as the delivery step of every `scheduleSizeReassert`
     /// debounce.
     ///
     /// The PTY is spawned at the create default (24x80) and only a resize frame

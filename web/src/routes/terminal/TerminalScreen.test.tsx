@@ -14,6 +14,8 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PromptTemplate } from '../../api/templateRepository';
 import { recordingClipboard, refusingClipboard } from '../../test/clipboardStub';
+import { stubLocalStorage } from '../../test/localStorageStub';
+import { stubMediaQuery } from '../../test/matchMediaStub';
 import { ApiError } from '../../api/errors';
 import type { SessionGitStatus } from '../../api/sessionGitRepository';
 import type { SessionResponse } from '../../protocol/dto/session';
@@ -197,12 +199,18 @@ vi.mock('../../api/voiceRepository', async (importOriginal) => {
   };
 });
 
+// Before any persisted store is imported: the sessions panel's pin lives in
+// one, and Node's own `localStorage` throws without `--localstorage-file`.
+stubLocalStorage();
+
 const { sessionChannelName } = await import('../../realtime/channels');
 const { acquireTerminal, evictTerminalSessions, useTerminalStore } = await import(
   '../../terminal/terminalStore'
 );
 const { useToastStore } = await import('../../stores/toastStore');
 const { TerminalScreen } = await import('./TerminalScreen');
+const { useSessionsPanelStore } = await import('../../stores/sessionsPanelStore');
+const { WIDE_VIEWPORT_QUERY } = await import('./useWideViewport');
 const { sessionResponseSchema } = await import('../../protocol/dto/session');
 const { voiceStatusSchema } = await import('../../protocol/dto/voice');
 const { markSessionsSynced, resetSessionsSynced } = await import(
@@ -245,6 +253,7 @@ afterEach(() => {
   }
   useTerminalStore.setState({ models: {}, order: [] });
   useToastStore.setState({ toasts: [] });
+  useSessionsPanelStore.setState({ pinned: false });
 });
 
 describe('TerminalScreen scrollbar', () => {
@@ -1001,5 +1010,168 @@ describe('TerminalScreen voice button', () => {
     seed(model, 'live', 'stopped');
 
     expect(setup).toBeEnabled();
+  });
+});
+
+describe('TerminalScreen sessions panel', () => {
+  const toggle = (): HTMLElement => screen.getByRole('button', { name: 'Sessions' });
+  const overlay = (): HTMLElement | null =>
+    screen.queryByRole('complementary', { name: 'Sessions panel' });
+  const docked = (container: HTMLElement): Element | null =>
+    container.querySelector('.sessions-panel-docked');
+
+  /**
+   * Answer the wide-viewport query; `setup.ts`'s `matchMedia` is a constant
+   * `false`. Re-stubbed narrow afterwards rather than `vi.unstubAllGlobals`,
+   * which would take the localStorage stand-in with it.
+   */
+  const stubViewport = (wide: boolean): void => {
+    stubMediaQuery(WIDE_VIEWPORT_QUERY, wide);
+  };
+
+  afterEach(() => {
+    stubViewport(false);
+  });
+
+  it('opens the panel as a popover from the Sessions button and hands focus back on close', () => {
+    acquireTerminal('a1', 's1');
+    renderTerminal();
+    expect(overlay()).toBeNull();
+    expect(toggle()).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(toggle());
+
+    const panel = overlay();
+    expect(panel).not.toBeNull();
+    // `auto`, not `manual`: a click into the grid or Escape dismisses it, and
+    // the UA backdrop is the scrim — the terminal underneath stays live.
+    expect(panel).toHaveAttribute('popover', 'auto');
+    expect(panel?.dataset['popoverOpen']).toBe('1');
+    expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('heading', { name: 'Sessions' })).toHaveFocus();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close sessions panel' }));
+
+    expect(overlay()).toBeNull();
+    expect(toggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle()).toHaveFocus();
+  });
+
+  it('follows a light dismiss so the next click opens it again', () => {
+    // Escape and a click outside close the popover without going through
+    // React; the `toggle` event is the only word of it.
+    acquireTerminal('a1', 's1');
+    renderTerminal();
+    fireEvent.click(toggle());
+    const panel = overlay();
+    expect(panel).not.toBeNull();
+
+    act(() => {
+      panel?.hidePopover();
+    });
+
+    expect(overlay()).toBeNull();
+    expect(toggle()).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(toggle());
+    expect(overlay()).not.toBeNull();
+  });
+
+  it('docks the panel beside the stage when pinned on a wide viewport', () => {
+    // Beside `.terminal-page`, never inside it: that one is a column and a
+    // child there would stack under the grid.
+    stubViewport(true);
+    useSessionsPanelStore.setState({ pinned: true });
+    acquireTerminal('a1', 's1');
+    const { container } = renderTerminal();
+
+    const rail = docked(container);
+    expect(rail).not.toBeNull();
+    expect(rail?.nextElementSibling).toBe(container.querySelector('.terminal-page'));
+    expect(overlay()).toBeNull();
+    expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByRole('button', { name: 'Close sessions panel' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Sessions' })).not.toHaveFocus();
+
+    // The toggle's job while docked is to unpin: the rail leaves and the pin
+    // is forgotten for the next visit too.
+    fireEvent.click(toggle());
+
+    expect(docked(container)).toBeNull();
+    expect(useSessionsPanelStore.getState().pinned).toBe(false);
+    expect(toggle()).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('keeps the overlay form when pinned on a narrow viewport', () => {
+    // The pin waits for the window to grow again; a 300 px rail on a phone
+    // would leave nothing for the grid.
+    stubViewport(false);
+    useSessionsPanelStore.setState({ pinned: true });
+    acquireTerminal('a1', 's1');
+    const { container } = renderTerminal();
+
+    expect(docked(container)).toBeNull();
+    expect(overlay()).toBeNull();
+
+    fireEvent.click(toggle());
+
+    expect(overlay()).not.toBeNull();
+    expect(docked(container)).toBeNull();
+    expect(useSessionsPanelStore.getState().pinned).toBe(true);
+  });
+
+  it('turns the rail into an open overlay when unpinned from the panel on a wide viewport', () => {
+    // Unpinning from inside the docked panel must not make it vanish under
+    // the click; it stays on screen as the overlay.
+    stubViewport(true);
+    useSessionsPanelStore.setState({ pinned: true });
+    acquireTerminal('a1', 's1');
+    const { container } = renderTerminal();
+    const rail = docked(container);
+    expect(rail).not.toBeNull();
+
+    fireEvent.click(within(rail as HTMLElement).getByRole('button', { name: 'Unpin' }));
+
+    expect(docked(container)).toBeNull();
+    expect(overlay()).not.toBeNull();
+    expect(useSessionsPanelStore.getState().pinned).toBe(false);
+  });
+
+  it('docks the overlay when pinned from it on a wide viewport', () => {
+    stubViewport(true);
+    acquireTerminal('a1', 's1');
+    const { container } = renderTerminal();
+    fireEvent.click(toggle());
+    const panel = overlay();
+    expect(panel).not.toBeNull();
+
+    fireEvent.click(within(panel as HTMLElement).getByRole('button', { name: 'Pin' }));
+
+    expect(overlay()).toBeNull();
+    expect(docked(container)).not.toBeNull();
+    expect(useSessionsPanelStore.getState().pinned).toBe(true);
+  });
+
+  it('leaves focus in the rail when pinned from the overlay on a wide viewport', () => {
+    // The overlay closes its own popover on unmount, and that raises the same
+    // `toggle` event a light dismiss does. Mistaken for one, it would hand
+    // focus to the Sessions button while the panel is still on screen as the
+    // rail.
+    stubViewport(true);
+    acquireTerminal('a1', 's1');
+    const { container } = renderTerminal();
+    fireEvent.click(toggle());
+    const panel = overlay();
+    expect(panel).not.toBeNull();
+    const pin = within(panel as HTMLElement).getByRole('button', { name: 'Pin' });
+    act(() => {
+      pin.focus();
+    });
+
+    fireEvent.click(pin);
+
+    expect(docked(container)).not.toBeNull();
+    expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle()).not.toHaveFocus();
   });
 });

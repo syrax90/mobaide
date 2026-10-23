@@ -241,7 +241,8 @@ Browsers also expose no ping API, unlike both mobile clients (CLA-219).
 **Resume hooks.** The session I/O channel re-asserts the cached PTY size on
 every open — the client is the sole size authority and the agent spawns at
 24×80. WEB-05's replay state machine owns two further re-assert points
-(first inbound binary while reconnecting, and `replayEnd`) and drives them
+(first inbound binary while reconnecting, and `replayEnd` for this
+client's own attach handshake only) and drives them
 through `setSize`, because its model caches the measured grid *before* the
 resize debounce and can therefore be ahead of the channel's own cache. The
 auto-scan channel sends
@@ -443,8 +444,9 @@ schemas) and typed as the *generated* request, whose booleans are required —
 so a dropped flag is a compile error rather than a silent escalation.
 
 **Recent custom paths** (CLA-256) mirror the mobile stores exactly: up to 5
-per agent, newest first, deduped by exact string equality — no trailing-slash
-collapse, no `~` expansion — and never filtered against what is being typed.
+per agent, newest first, deduped by exact string equality after one trailing
+separator (never a root) is trimmed, so `/a/b/` and `/a/b` are the same entry,
+with no `~` expansion — and never filtered against what is being typed.
 Picking one advances the step, exactly as a project row does; the container
 re-validates first, so a hand-edited blob holding a relative path fills the
 field with its inline error instead of pushing a URL the clamp would bounce
@@ -608,7 +610,9 @@ agent host — the Windows-specific `Get-ScheduledTask` / `agent.err.log`
 enumeration is gone.
 
 **`/agents`** is full mobile parity: cards (status dot, name, Online/Offline,
-agent id, version, added, last seen), manual add, re-register, remove, and the
+agent id, version, added, last seen), manual add, re-register, remove (with an
+"Also uninstall Mobaide from this computer" checkbox, on by default, offered
+when the agent advertises `supports_uninstall`), and the
 install-commands panel. Two web-only card fields, both because a browser is
 the first client that can hold several agents at once: the agent id, which is
 what each host's `.env` carries, and the agent version, which is the fastest
@@ -847,7 +851,28 @@ Built on **xterm.js 6.0** (`@xterm/xterm` plus the `fit`, `webgl`,
 `/agents/:agentId/sessions/:sessionId` — the **only lazy route**: xterm and
 its WebGL addon outweigh the rest of the SPA, so they load on first attach
 rather than on the sign-in screen. It is reached from the sessions list at
-`/`.
+`/`, or from the sessions panel below.
+
+**Sessions panel.** A `☰` "Sessions" button in `.terminal-bar` opens a panel
+listing the connected agent's sessions (state dot, title, kind · project,
+attention chip; the current row highlighted), a "New session" shortcut and the
+account's other agents (online → select it and go to `/`; offline rows
+disabled). Unpinned (or on a viewport under `(min-width: 901px)`, see
+`useWideViewport`) it is a `popover="auto"` overlay sliding in from the left,
+the UA backdrop serving as the scrim; pinned and wide it is a docked
+`<aside class="sessions-panel sessions-panel-docked">` beside `.terminal-page`
+(xterm refits once). The pin persists in `useSessionsPanelStore`
+(`localStorage` key `mobaide-sessions-panel`). Picking a session
+`navigate`s with `replace: true` (and records `setLastUsedSession`), so Back
+does not step through every switch; `TerminalView` is keyed on the channel key
+so per-session dialog state resets. Each running/starting row has a compact
+Stop icon button inside its frame (the `<li>` carries the frame, since a button
+cannot nest in the row button), as on Android, opening the same Stop / Force Stop / Cancel confirmation as the list;
+both surfaces share the mutation in `routes/sessions/useStopSession.ts`.
+Stopping another session just drops its row ("Session stopped" toast);
+stopping the one on screen navigates to `/` ("Session stopped." toast).
+Failures toast "Failed to stop session: …". Android and iOS open the same list
+from a left-edge swipe or the top-bar button.
 
 **Layering.** `src/terminal/` is framework-free — pure reducers
 (`terminalReplay`, `terminalFollow`, `terminalPaste`,
@@ -1027,8 +1052,10 @@ report parsed through their `write` callbacks.
 
 **Size authority.** The grid is cached before the 100 ms resize debounce and
 re-asserted at all four live triggers — socket open, first inbound binary
-of a cycle, `replayEnd`, and the tab-shown / window-focus switch-back edge
-(GH #631) — because the agent spawns every PTY at 24×80 and never reports
+of a cycle, `replayEnd` (only the one closing this client's own handshake,
+since the relay fans every attach replay out to all clients and a hidden
+retained tab must not resize the PTY back), and the tab-shown / window-focus
+switch-back edge (GH #631) — because the agent spawns every PTY at 24×80 and never reports
 back. The switch-edge trigger bypasses the same-size dedupe cache, since a
 peer client may have resized the shared PTY while this one sat idle, and
 fires only while already live — every non-live state already re-asserts on
@@ -1163,7 +1190,7 @@ session on that agent. The toggle is the one piece of terminal state that
 outlives the tab: `terminalPrefsStore` persists it under `localStorage` key
 `mobaide-terminal`, the second persisted key after `mobaide-theme` (WEB-07
 adds `mobaide-agent` and `mobaide-sessions`, and CLA-232 the wizard's global
-`mobaide-launch-prefs`; the dismissible external-sessions notice above the
+`mobaide-launch-prefs`, and the sessions panel's pin `mobaide-sessions-panel`; the dismissible external-sessions notice above the
 sessions list adds `mobaide-external-sessions-notice`; CLA-256 adds the wizard's
 per-agent `recent_custom_paths::<agentId>`, deliberately unprefixed for
 mobile parity — the one prefix sweep in `src/` is CLA-258's

@@ -35,7 +35,7 @@ struct RootView: View {
             // The switch clears the stack and takes a network round trip; say
             // so, or the wait on the agent list reads as another dead tap.
             if switching {
-                toast = ToastMessage(text: "Connecting to this notification’s agent…")
+                toast = ToastMessage(text: "Connecting to agent…")
             }
         }
     }

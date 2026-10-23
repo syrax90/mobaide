@@ -21,6 +21,16 @@ final class Router {
         path.removeAll()
     }
 
+    /// Swaps the top screen for `route`: the back stack neither grows nor loses
+    /// what is beneath.
+    func replaceLast(with route: Route) {
+        if path.isEmpty {
+            path = [route]
+        } else {
+            path[path.count - 1] = route
+        }
+    }
+
     /// Returns to `route`, pushing it when it is not already behind us — a
     /// notification deep link can land on a pushed screen with nothing under it.
     func popTo(_ route: Route) {

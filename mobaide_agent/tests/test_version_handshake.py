@@ -2,6 +2,8 @@
 emitted by ``/ws/session/<id>``."""
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from mobaide import __version__
@@ -52,6 +54,7 @@ async def test_get_version(client) -> None:
             "max_seconds": 120,
             "max_chunk_bytes": 65536,
         },
+        "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
     }
     # The signed manifest body now travels inline over the relay WebSocket
     # — it is not exposed via this REST surface.

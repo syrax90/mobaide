@@ -67,6 +67,8 @@ from .logging_setup import configure_logging, shutdown_logging
 from .projects.router import router as projects_router
 from .sessions.router import router as sessions_router
 from .events import EventBus
+from .fs.models import FS_CAPABILITIES
+from .fs.router import router as fs_router
 from .update_check import (
     PERIODIC_POLL_INTERVAL_SECONDS,
     run_https_update_check,
@@ -299,6 +301,23 @@ async def _start_relay_in_process(
             await run_https_update_check(updater, url, force=True)
 
         relay_client.set_protocol_incompatible_callback(_on_protocol_incompatible)
+
+    # Only an installed release can remove itself. A test-mode run still
+    # advertises the capability so a local stack can exercise the flow, but
+    # handle_uninstall_request deletes nothing for it.
+    from mobaide.agent.self_uninstall import handle_uninstall_request
+    from mobaide.agent.updater import InstallLayout
+
+    uninstall_layout = InstallLayout(prefix=default_prefix())
+    installed = _is_running_managed_release(uninstall_layout)
+    if installed or app.state.config.is_test_mode:
+
+        async def _on_uninstall_requested() -> None:
+            await handle_uninstall_request(
+                uninstall_layout.prefix, installed=installed,
+            )
+
+        relay_client.set_uninstall_callback(_on_uninstall_requested)
 
     await relay_client.start()
     app.state.relay_client = relay_client
@@ -824,6 +843,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.include_router(codex_router)
     app.include_router(hooks_router)
     app.include_router(projects_router)
+    app.include_router(fs_router)
     app.include_router(git_router)
     app.include_router(session_git_router)
     app.include_router(ws_session_io_router)
@@ -882,6 +902,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 ),
                 "git": GIT_CAPABILITIES,
                 "voice": VOICE_CAPABILITIES,
+                "fs": FS_CAPABILITIES,
             },
             "latest_agent_version": (manifest or {}).get("version"),
         }

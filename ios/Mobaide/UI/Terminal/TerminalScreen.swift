@@ -11,6 +11,10 @@ struct SessionDetailScreen: View {
     var body: some View {
         if let container {
             TerminalScreenContent(container: container, sessionId: sessionId)
+                // The sessions drawer swaps the route in place; the content's
+                // `@State` model is seeded in `init`, so a reused identity would
+                // keep rendering the previous session.
+                .id(sessionId)
         }
     }
 }
@@ -39,6 +43,12 @@ private struct TerminalScreenContent: View {
     @State private var customTypeNames: [String: String]
     /// Voice input for the connected agent: the composer's mic and dictation.
     @State private var voice: VoiceInputModel
+    @State private var panel: SessionsPanelModel
+    @State private var drawerOpen = false
+    @State private var pendingStop: SessionResponse?
+    /// Live translation of the terminal's left-edge pan while the finger is
+    /// down; nil otherwise. `SideDrawer` follows it before the open verdict.
+    @State private var drawerDrag: CGFloat?
     private let displayStore: TerminalDisplayStore
     private let sessionRepository: SessionRepository
     private let customAgentTypesRepository: CustomAgentTypesRepository
@@ -46,6 +56,7 @@ private struct TerminalScreenContent: View {
     private let sessionId: String
 
     @Environment(Router.self) private var router
+    @Environment(DeepLinkCoordinator.self) private var deepLink
     @Environment(\.mobaideColors) private var colors
     @Environment(\.scenePhase) private var scenePhase
 
@@ -63,6 +74,13 @@ private struct TerminalScreenContent: View {
         _sessionRow = State(initialValue: session)
         _voice = State(initialValue: VoiceInputModel(container: container, sessionId: sessionId))
         _customTypeNames = State(initialValue: Self.typeNames(container.customAgentTypesRepository.currentTypes))
+        _panel = State(initialValue: SessionsPanelModel(
+            sessionRepository: container.sessionRepository,
+            agentEventBus: container.agentEventBus,
+            customAgentTypesRepository: container.customAgentTypesRepository,
+            agentRepository: container.agentRepository,
+            connectedAgentId: container.tokenStore.getAgentId()
+        ))
         displayStore = container.terminalDisplayStore
         sessionRepository = container.sessionRepository
         customAgentTypesRepository = container.customAgentTypesRepository
@@ -110,6 +128,32 @@ private struct TerminalScreenContent: View {
         router.popTo(.sessionList)
     }
 
+    private var stopPresented: Binding<Bool> {
+        Binding(
+            get: { pendingStop != nil },
+            set: { if !$0 { pendingStop = nil } }
+        )
+    }
+
+    /// `checkSessionStillExists` never leaves a session this screen has seen
+    /// alive, so stopping the one on screen navigates away here instead —
+    /// unless the user switched sessions while the request was in flight.
+    private func stopSession(_ id: String, force: Bool) async {
+        do {
+            guard try await panel.stopSession(id, force: force) else { return }
+        } catch {
+            model.terminalMessage = ToastMessage(text: "Failed to stop session: \(String(describing: error))", tone: .danger)
+            return
+        }
+        if id == sessionId {
+            guard router.path.last == .sessionDetail(sessionId: id) else { return }
+            drawerOpen = false
+            router.popTo(.sessionList)
+        } else {
+            model.terminalMessage = ToastMessage(text: "Session stopped", tone: .ok)
+        }
+    }
+
     /// Pan-don't-resize keyboard layout (Android `ImeFloatingPan` parity):
     /// the screen opts out of SwiftUI keyboard avoidance, then lifts the whole
     /// column by the keyboard overlap as a placement-only offset — the
@@ -125,7 +169,8 @@ private struct TerminalScreenContent: View {
                     TerminalHostView(
                         model: model,
                         displayConfig: displayStore.config,
-                        keyboardTransition: keyboard.transition
+                        keyboardTransition: keyboard.transition,
+                        onDrawerEdgePan: handleDrawerEdgePan
                     )
                     jumpToBottomButton
                     selectionToolbar
@@ -149,12 +194,47 @@ private struct TerminalScreenContent: View {
             }
             .offset(y: -keyboard.transition.lift)
             connectionOverlay
+            // Beside the overlay, outside the lifted column: the drawer must
+            // not move with the keyboard. It is dismissed on open instead,
+            // because `.ignoresSafeArea(.keyboard)` would let it cover the
+            // panel's lower rows.
+            SideDrawer(isOpen: $drawerOpen, dragTranslation: drawerDrag) {
+                SessionsPanel(
+                    model: panel,
+                    currentSessionId: sessionId,
+                    switchingAgentId: deepLink.isSwitchingAgent ? deepLink.pendingAgentId : nil,
+                    onSelectSession: { id in
+                        drawerOpen = false
+                        router.replaceLast(with: .sessionDetail(sessionId: id))
+                    },
+                    onStopSession: { pendingStop = $0 },
+                    onCreateSession: {
+                        drawerOpen = false
+                        router.navigate(to: .createSession)
+                    },
+                    onSelectAgent: { agent in
+                        deepLink.openSessions(ofAgent: agent.agent_id)
+                    },
+                    onClose: { drawerOpen = false }
+                )
+            }
         }
         .clipped()
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        // The left edge is the drawer's; the back button still pops.
+        .background(InteractivePopGestureDisabler())
         .navigationTitle(headerLabel)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    openDrawer()
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .accessibilityLabel("Sessions")
+                .accessibilityIdentifier("terminal-sessions-button")
+            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 PixelStatusSquare(tone: SessionDisplay.stateTone(model.sessionStatus ?? ""), size: 10)
                     .accessibilityLabel(model.sessionStatus ?? "unknown")
@@ -231,6 +311,21 @@ private struct TerminalScreenContent: View {
                 keyboard.start()
             }
         }
+        .confirmationDialog(
+            "Stop session?",
+            isPresented: stopPresented,
+            presenting: pendingStop
+        ) { session in
+            Button("Stop", role: .destructive) {
+                Task { await stopSession(session.session_id, force: false) }
+            }
+            Button("Force Stop", role: .destructive) {
+                Task { await stopSession(session.session_id, force: true) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { session in
+            Text("Stop “\(SessionDisplay.dialogLabel(session, customTypeNames: panel.customTypeNames))”?")
+        }
         .alert("Save as template", isPresented: $showSaveTemplate) {
             TextField("Name", text: $templateName)
             Button("Save") { model.saveInputAsTemplate(name: templateName) }
@@ -245,6 +340,15 @@ private struct TerminalScreenContent: View {
         }
         .task {
             await seedSessionRow()
+        }
+        .task { await panel.observeSessions() }
+        .task { await panel.observeSessionsSynced() }
+        .task { await panel.observeConnection() }
+        .task { await panel.observeCustomTypes() }
+        .task { await panel.observeAgents() }
+        .task { await panel.refreshAgents() }
+        .onChange(of: drawerOpen) { _, open in
+            if open { model.dismissSoftKeyboard() }
         }
         .task {
             gitCapabilities = (try? await agentAPI.getAgentVersion())?.gitCapabilities ?? .none
@@ -298,6 +402,25 @@ private struct TerminalScreenContent: View {
             model.markHidden()
             keyboard.stop()
             voice.leave()
+        }
+    }
+
+    private func openDrawer() {
+        drawerDrag = nil
+        drawerOpen = true
+    }
+
+    private func handleDrawerEdgePan(_ pan: DrawerEdgePan) {
+        switch pan {
+        case .changed(let translation):
+            if !drawerOpen { drawerDrag = translation }
+        case .ended(let translation, let velocity):
+            drawerDrag = nil
+            if SideDrawer<EmptyView>.shouldOpen(translation: translation, velocity: velocity) {
+                drawerOpen = true
+            }
+        case .cancelled:
+            drawerDrag = nil
         }
     }
 

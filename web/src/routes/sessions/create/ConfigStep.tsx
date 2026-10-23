@@ -8,6 +8,7 @@ import type { ProjectSummary } from '../../../api/projectRepository';
 import type { CustomAgentType } from '../../../api/customAgentTypeRepository';
 import { AntigravityOptionsPanel } from './panels/AntigravityOptionsPanel';
 import { AutoScanOptionsPanel } from './panels/AutoScanOptionsPanel';
+import { ClaudeAdvancedPanel } from './panels/ClaudeAdvancedPanel';
 import { ClaudeOptionsPanel } from './panels/ClaudeOptionsPanel';
 import { CodexOptionsPanel } from './panels/CodexOptionsPanel';
 import { WorktreeSection } from './panels/WorktreeSection';
@@ -122,6 +123,10 @@ export function ConfigStep({
       )}
 
       {showsGitOptions && <WorktreeSection git={state.git} dispatch={dispatch} />}
+
+      {mode === 'claude' && (
+        <ClaudeAdvancedPanel bucket={state.claude} bucketId="claude" dispatch={dispatch} />
+      )}
 
       {error !== null && <p className="field-error">{error}</p>}
 

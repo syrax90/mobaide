@@ -27,6 +27,7 @@ const claudePrefs = (over: Partial<ClaudeLaunchPrefs> = {}): ClaudeLaunchPrefs =
   noMemory: false,
   planMode: false,
   debug: false,
+  focusMode: true,
   ...over,
 });
 
@@ -225,6 +226,27 @@ describe('launchPrefsFromState', () => {
     const restored = applyLaunchPrefs(base, { ...NEVER_LAUNCHED, claude: cleared });
 
     expect(restored.claude.appendSystemPrompt).toBe('');
+  });
+
+  it('round-trips focus view off per bucket without bleeding into the other', () => {
+    const state: WizardState = {
+      ...INITIAL_WIZARD_STATE,
+      claude: { ...INITIAL_WIZARD_STATE.claude, focusMode: false },
+    };
+    const claude = claudeSnapshot(state, 'claude');
+    const autoScan = claudeSnapshot(state, 'auto_scan');
+
+    expect(claude.focusMode).toBe(false);
+    expect(autoScan.focusMode).toBe(true);
+
+    const restored = applyLaunchPrefs(INITIAL_WIZARD_STATE, {
+      ...NEVER_LAUNCHED,
+      claude,
+      autoScan: { ...autoScan, focusMode: false },
+    });
+
+    expect(restored.claude.focusMode).toBe(false);
+    expect(restored.autoScan.focusMode).toBe(false);
   });
 });
 

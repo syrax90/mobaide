@@ -151,3 +151,10 @@ fun VersionInfoResponse.voiceCapability(): VoiceCapability? = runCatching {
         maxChunkBytes = positive("max_chunk_bytes") ?: return@runCatching null,
     )
 }.getOrNull()
+
+/** `capabilities.fs.<key>`, with [gitCapability]'s explicit-JSON-`true` rule. */
+fun VersionInfoResponse.fsCapability(key: String): Boolean = runCatching {
+    capabilities["fs"]?.jsonObject
+        ?.get(key)?.jsonPrimitive
+        ?.let { !it.isString && it.booleanOrNull == true }
+}.getOrNull() == true

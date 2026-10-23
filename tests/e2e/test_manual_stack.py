@@ -391,3 +391,187 @@ def test_build_agent_env_fake_voice_is_opt_in_and_sanitized(monkeypatch, tmp_pat
     env = ms.build_agent_env(state, fake, tmp_path / "agent", 9101)
     assert env["MOBAIDE_VOICE_FAKE"] == "1"
     assert env["MOBAIDE_VOICE_DIR"] == ""
+
+
+def test_up_parser_emulator_is_opt_in():
+    """Plain `up` (the macOS workflow) must not boot anything new; a bare
+    --emulator picks the shared AVD name, and an explicit one wins."""
+    args = ms.build_parser().parse_args(["up"])
+    assert args.emulator is None
+    assert args.keep_emulator is False
+
+    args = ms.build_parser().parse_args(["up", "--emulator", "--web"])
+    assert args.emulator == ms.DEFAULT_AVD == "Mobaide-E2E"
+    assert args.web is True
+
+    args = ms.build_parser().parse_args(["android", "--emulator", "Pixel_9", "--install-app"])
+    assert args.emulator == "Pixel_9"
+
+    args = ms.build_parser().parse_args(["stop"])
+    assert args.timeout == ms.DEFAULT_STOP_TIMEOUT
+
+
+def test_parse_adb_devices_skips_daemon_chatter():
+    output = (
+        "* daemon not running; starting now at tcp:5037\n"
+        "* daemon started successfully\n"
+        "List of devices attached\n"
+        "emulator-5554\tdevice\n"
+        "emulator-5556\toffline\n"
+        "R58N12345\tunauthorized\n"
+        "\n"
+    )
+    assert ms.parse_adb_devices(output) == {
+        "emulator-5554": "device",
+        "emulator-5556": "offline",
+        "R58N12345": "unauthorized",
+    }
+
+
+def test_parse_avd_list_ignores_log_lines():
+    output = (
+        "INFO    | Storing crashdata in: C:\\tmp\\crashdata\n"
+        "Mobaide-E2E\n"
+        "Pixel_9_API_36\n"
+    )
+    assert ms.parse_avd_list(output) == ["Mobaide-E2E", "Pixel_9_API_36"]
+
+
+def _fake_image(sdk: Path, api: str, tag: str, abi: str) -> None:
+    image = sdk / "system-images" / api / tag / abi
+    image.mkdir(parents=True)
+    (image / "source.properties").write_text("Pkg.Revision=1\n", encoding="utf-8")
+
+
+def test_pick_system_image_prefers_stable_4k_newest(tmp_path):
+    """The layout found on a real Windows box: the newest image is a 16 KB-page
+    one and a CANARY preview exists -- neither may win over a stable 4 KB one."""
+    _fake_image(tmp_path, "android-36.1", "google_apis_playstore", "x86_64")
+    _fake_image(tmp_path, "android-36.1", "google_apis_playstore_ps16k", "x86_64")
+    _fake_image(tmp_path, "android-37.0", "google_apis_playstore_ps16k", "x86_64")
+    _fake_image(tmp_path, "android-CANARY", "google_apis_playstore", "x86_64")
+    _fake_image(tmp_path, "android-35", "google_apis", "x86_64")
+    _fake_image(tmp_path, "android-36", "android-tv", "x86_64")
+    (tmp_path / "system-images" / "android-38" / "google_apis" / "x86_64").mkdir(
+        parents=True)  # half-downloaded: no source.properties
+
+    assert ms.pick_system_image(tmp_path, "AMD64") == (
+        "system-images;android-36.1;google_apis_playstore;x86_64")
+    assert ms.pick_system_image(tmp_path, "arm64") is None  # wrong ABI only
+
+
+def test_pick_system_image_falls_back_to_16k(tmp_path):
+    _fake_image(tmp_path, "android-37.0", "google_apis_playstore_ps16k", "arm64-v8a")
+    assert ms.pick_system_image(tmp_path, "arm64") == (
+        "system-images;android-37.0;google_apis_playstore_ps16k;arm64-v8a")
+
+
+def test_enable_hardware_keyboard_is_idempotent(tmp_path):
+    config = tmp_path / "config.ini"
+    config.write_text("hw.keyboard=no\nhw.lcd.density=420\n", encoding="utf-8")
+    ms.enable_hardware_keyboard(config)
+    ms.enable_hardware_keyboard(config)
+    lines = config.read_text(encoding="utf-8").splitlines()
+    assert lines.count("hw.keyboard=yes") == 1
+    assert "hw.keyboard=no" not in lines
+    assert "hw.lcd.density=420" in lines
+    ms.enable_hardware_keyboard(tmp_path / "missing.ini")  # must not raise
+
+
+def test_stop_without_a_running_stack_is_a_noop(tmp_path, capsys):
+    """`stop` after a clean shutdown (runtime cleared) must not revert files a
+    --keep-android run deliberately left in place."""
+    (tmp_path / "state.json").write_text(
+        json.dumps({**ms.default_state(), "runtime": {}}), encoding="utf-8")
+    args = ms.build_parser().parse_args(["stop", "--state-dir", str(tmp_path)])
+    args.state_dir = tmp_path
+    assert ms.cmd_stop(args) == 0
+    assert "nothing to stop" in capsys.readouterr().out
+
+
+def test_teardown_leftovers_honors_the_keep_flags(monkeypatch, tmp_path):
+    """A hard-killed run's cleanup restores only what that run synced and did
+    not opt to keep, exactly as the run's own teardown would have."""
+    _point_client_files_at(monkeypatch, tmp_path)
+    _seed_local_properties()
+    state = ms.default_state()
+    ms.sync_android_files(state, TEST_URL, lambda: None)
+
+    import psutil
+
+    state["runtime"] = {"synced": ["android"], "keep": ["android"]}
+    ms.teardown_leftovers(tmp_path / "state", state, psutil)
+    assert _central_url(ms.ANDROID_URL_FILE) == TEST_URL
+    assert state["runtime"] == {}
+
+    # A crashed `up --no-android` never synced Android: an override an
+    # earlier run left in place must survive its cleanup.
+    state["runtime"] = {"synced": [], "keep": []}
+    ms.teardown_leftovers(tmp_path / "state", state, psutil)
+    assert _central_url(ms.ANDROID_URL_FILE) == TEST_URL
+
+    state["runtime"] = {"synced": ["android"], "keep": []}
+    ms.teardown_leftovers(tmp_path / "state", state, psutil)
+    assert _central_url(ms.ANDROID_URL_FILE) == PROD_URL
+    assert not ms.DEBUG_NSC_PATH.exists()
+
+
+def test_recorded_live_process_requires_matching_create_time():
+    """The ownership gate `stop` and the emulator teardown rely on: a live pid
+    whose create time differs (a recycled pid) is never treated as ours."""
+    import psutil
+
+    me = psutil.Process()
+    runtime = {"up_pid": me.pid, "up_create_time": me.create_time()}
+    assert ms.recorded_live_process(runtime, "up", psutil).pid == me.pid
+    runtime["up_create_time"] -= 3600
+    assert ms.recorded_live_process(runtime, "up", psutil) is None
+    assert ms.recorded_live_process({}, "up", psutil) is None
+
+
+def test_failed_emulator_never_falls_back_to_an_unpinned_install(monkeypatch):
+    """An unpinned installDebug hits every attached device, so a requested but
+    unavailable emulator must skip the install rather than overwrite the app
+    on a connected phone; without --emulator the old behavior stays."""
+    calls = []
+    monkeypatch.setattr(ms, "run_gradle_install",
+                        lambda *a, **kw: calls.append((a, kw)) or True)
+
+    assert ms.install_on_emulator_or_device(
+        None, Path("emu.log"), emulator_requested=True) is False
+    assert calls == []
+
+    assert ms.install_on_emulator_or_device(
+        None, Path("emu.log"), emulator_requested=False) is True
+    assert calls == [((), {})]
+
+
+def test_kill_tree_spares_the_given_subtree():
+    """A forced `stop` kills the `up` tree, but the detached emulator is still
+    its descendant; the spared subtree must survive so --keep-emulator and the
+    clean `adb emu kill` shutdown are still decided by teardown_leftovers."""
+    import subprocess
+    import sys
+
+    import psutil
+
+    sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+    code = (
+        "import subprocess, sys, time;"
+        f"a = subprocess.Popen({sleeper!r});"
+        f"b = subprocess.Popen({sleeper!r});"
+        "print(a.pid, b.pid, flush=True); time.sleep(60)"
+    )
+    parent = subprocess.Popen([sys.executable, "-c", code],
+                              stdout=subprocess.PIPE, text=True)
+    spared_pid = None
+    try:
+        spared_pid, doomed_pid = map(int, parent.stdout.readline().split())
+        ms.kill_tree(psutil, parent.pid, spare=psutil.Process(spared_pid))
+        assert parent.wait(timeout=10) is not None
+        assert not psutil.pid_exists(doomed_pid) or (
+            psutil.Process(doomed_pid).status() == psutil.STATUS_ZOMBIE)
+        assert psutil.Process(spared_pid).is_running()
+    finally:
+        ms.kill_tree(psutil, spared_pid)
+        ms.kill_tree(psutil, parent.pid)

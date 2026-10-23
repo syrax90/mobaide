@@ -66,7 +66,7 @@ Android's `AttentionNotifier`, keyed by `session_id` so a re-post replaces in
 place), clearing it when a `session.updated` drops the attention. Foreground
 alerts for the on-screen session are suppressed via `ForegroundSessionTracker`,
 and a tapped alert deep-links to the session's terminal once `.fullyConnected`
-(`DeepLinkCoordinator` stashes the id on a cold start and replays it). Because
+(`DeepLinkCoordinator` stashes a `pendingRoute` on a cold start and replays it). Because
 iOS has no foreground-service equivalent, delivery is honest to the platform:
 the events socket lives while the app runs plus a ~30 s `beginBackgroundTask`
 grace (`AppLifecycleController`), and events missed while suspended are
@@ -180,6 +180,20 @@ column by the keyboard overlap (`TerminalKeyboardObserver`), and
 slack rows stays visible (`TerminalKeyboardPan` math) — the grid never
 resizes on keyboard show/hide, so keyboard transitions send no PTY resize
 frames and no SIGWINCH.
+A left-edge swipe on the terminal (or the top-bar `terminal-sessions-button`)
+opens the sessions panel: a `SideDrawer` overlay listing the connected agent's
+sessions (running/starting rows carry a Stop button opening a Stop / Force Stop
+/ Cancel confirmation; stopping the on-screen session returns to the sessions
+list, stopping another keeps the terminal), a New session shortcut and the
+account's other agents. The swipe is
+a `UIScreenEdgePanGestureRecognizer` (`mobaide.sessionsDrawer`) on
+`MobaideTerminalView` that the scroll, vertical and selection pans
+`require(toFail:)`, so the navigation controller's interactive-pop swipe is
+disabled while the terminal is on top (`InteractivePopGestureDisabler`; the
+Back button stays). Picking a session swaps the route in place
+(`Router.replaceLast(with:)`); picking an online agent connects to it and lands
+on its sessions list via `DeepLinkCoordinator.openSessions(ofAgent:)`.
+
 A vertical-drag scroll ladder (`TerminalWheelScroll` plus a
 `mobaide.verticalScroll` pan on `MobaideTerminalView`) ports Android
 `TerminalView.doScroll`: full-screen TUIs (Claude Code, Codex, Gemini,
@@ -459,12 +473,13 @@ iOS-only user. A fifth **Auto Scan** mode card sits between Antigravity and
 Terminal, enabled only when the selected stored project carries a Linear API key
 and the Claude CLI is installed, greyed out with the reason otherwise (Android's
 `autoScanEnabled` gate; a custom path has no stored project, so it can never
-satisfy it). Its config step drives the Claude model / effort / fast-mode /
-ultracode / debug / append-system-prompt controls — extracted into two `@ViewBuilder`
-helpers now shared with the Claude Code step, mirroring Android's
-`ClaudeOptionControls` — plus Plan mode, Skip permissions (default ON for
-unattended scans, with an always-visible caption explaining the off-state), No
-memory, and an Initial prompt seeded from the project's saved `auto_scan_prompt`
+satisfy it). Its config step drives the Claude model / effort pickers
+(shared with the Claude Code step, mirroring Android's `ClaudeOptionControls`),
+Plan mode, a Focus view toggle (default ON; sets `claude_options.focus_mode`),
+Skip permissions (default ON for unattended scans, with an always-visible
+caption explaining the off-state), a collapsible Advanced section
+(`claudeAdvancedOptions` — No memory, fast mode, ultracode, debug logging,
+append-system-prompt, shared with the Claude Code step), and an Initial prompt seeded from the project's saved `auto_scan_prompt`
 and then the agent-wide default. Submitting POSTs the pre-existing
 `/api/autoscan/start` with `worktree` forced true — the scanner branches a
 worktree per Linear issue, so the shared Worktree section would be a lie — and
@@ -495,7 +510,7 @@ production. Selecting "Custom path…" now loads a "Recent paths" section of up
 to 5 previously launched per-agent directories, monospaced and head-truncated
 so the trailing folder stays visible; tapping a row fills the field, and swipe
 or long-press removes it — Android reached parity in CLA-255 with a ✕ on the
-chip, and both clients trim the path before storing it. A path is
+chip, and both clients trim the path (and one trailing separator, never a root) before storing it. A path is
 recorded only after the session is actually created and never becomes the
 last-used project.
 

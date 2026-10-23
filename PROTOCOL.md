@@ -114,6 +114,34 @@ cadence; they do **not** gate compatibility.
   (see docs/app-conversion-measurement.md). Older clients ignore the kind
   (``else -> Unit`` / ``default: .none`` / ``{kind: 'ignored'}``); the web
   client mirrors both shapes and invalidates its agent list on the event.
+* **Agent self-uninstall** (additive, **no version bump**; 2026-10-14).
+  Removing an agent can now also make it uninstall itself from its host.
+  * Agent → relay ``auth`` carries ``capabilities: {"uninstall": true}``
+    when the build can do it (an installed release, or ``MOBAIDE_ENV=test``,
+    which deletes nothing). The relay stores it as
+    ``agents.supports_uninstall`` (rewritten on every handshake) and
+    ``GET /api/agents`` returns it as ``supports_uninstall`` (default
+    ``false``); clients offer the option only when it is ``true``.
+  * ``DELETE /api/agents/{agent_id}?uninstall=true`` (still ``204``)
+    records an uninstall request — ``agent_uninstall_requests``, keyed by
+    agent id + the credential hash, 30-day TTL, removed by the periodic
+    token sweep — before the
+    usual cascade delete.
+  * Live agent: the relay writes a ``CH_CONTROL`` ``{"type":
+    "agent_uninstall"}`` envelope straight on the socket (not through the
+    send queue, which the close tears down) and then closes ``4010``
+    with reason ``agent_uninstalled``. Paired mobiles still get ``4010``
+    ``admin_revoked``.
+  * Offline agent: when it next authenticates with the removed agent's
+    credentials and a live request matches, the relay replies to ``auth``
+    with the text frame ``{"type": "agent_uninstall"}`` instead of
+    ``auth_ok`` and closes ``4001`` ``Agent removed``. Delivery is
+    idempotent, so the request stays until it expires.
+  * Older agents ignore the unknown control type and treat a non-``auth_ok``
+    reply as an ordinary auth failure, exactly as before.
+  * The agent side (disarm credentials, unregister the supervisor, delete
+    the install, exit 0) is described in docs/deployment.md *Uninstalling
+    the agent*.
 * Protocol-fixture updates under ``tests/protocol_fixtures/`` (dropping
   the ``unknown_coerces_to_claude`` cases, adding ``custom_*`` round-trip
   cases and the ``CustomAgentTypeDto`` fixtures) rode with the iOS client
@@ -129,6 +157,57 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-10-19, Claude focus view toggle):
+  **additive optional field, no version bump.** ``claude_options`` gains
+  ``focus_mode`` — bool or null, default ``null``. The agent merges it into the
+  session's single ``--settings`` source as Claude Code's ``viewMode`` setting:
+  ``true`` → ``"focus"``, ``false`` → ``"default"`` (explicit, so a sticky
+  host-side ``/focus`` cannot keep a session in focus view after the user turned
+  the toggle off; it also overrides a host ``verbose: true``), ``null`` /
+  absent → no ``viewMode`` key. An unknown top-level settings key raises no
+  startup dialog (verified with ``claude --settings <f> doctor`` on 2.1.303), so
+  the merged hooks file stays safe on CLIs predating ``viewMode``. All three clients
+  surface it as a **Focus view** toggle (default on, remembered per Claude /
+  Auto Scan bucket) and always send a concrete bool. Old client + new agent
+  therefore keeps the pre-change behaviour; new client + old agent is a no-op
+  (the old agent ignores the unknown key). The relay forwards ``claude_options``
+  opaquely, so ``central_server`` is untouched. Fixtures
+  ``tests/protocol_fixtures/dto/agent/{ClaudeOptionsModel,CreateSessionRequest,StartScanRequest}.json``
+  carry it (``true`` in the ``full`` / scan cases, ``false`` in the create case).
+* Additive delta within proto-v7 (2026-10-17, host path suggestions):
+  **one additive REST route, one additive capability key, no version bump.**
+  Backs folder suggestions under the project form's Path field and the
+  new-session wizard's one-off custom path, on both transports
+  byte-identically (the relay forwards it through the ``/proxy`` catch-all;
+  no ``central_server`` change).
+  * ``GET /api/fs/dirs?path=<dir>[&q=<substring>]`` answers
+    ``FsDirsResponse {"path", "dirs", "truncated"}``: the names (not paths)
+    of ``path``'s subdirectories — symlinks to directories included, dot
+    directories included, sorted case-insensitively. ``path`` is expanded
+    with ``expanduser`` and must then be absolute; the response echoes the
+    expanded directory so a client completing ``~/co`` writes back an
+    absolute path. ``q`` keeps only names containing it case-insensitively.
+  * One ``scandir`` per call, no recursion, stopped at 5 000 entries
+    scanned, 1 000 names returned or 250 ms — ``truncated: true`` then means
+    the list is partial: a client must not filter it locally as complete and
+    re-asks with ``q`` set to what the user typed. Scans run on a private
+    two-thread pool, and the agent answers ``503`` if a scan has not finished
+    within 1 s — a hung network mount can pin at most those two threads, and
+    stalls the relay tunnel's reader (which awaits each proxied request) for
+    at most 1 s per call.
+  * Errors carry ``{"detail": <str>}``: ``400`` empty, relative or malformed
+    ``path``; ``404`` missing or not a directory; ``403`` permission denied
+    (including macOS privacy-protected folders); ``503`` timed out. Clients treat
+    every error as "no suggestions".
+  * ``GET /api/version`` ``capabilities`` gains ``"fs": {"dirs": true}``;
+    clients offer suggestions only when it is ``true``.
+  * ``capabilities.fs.windows_paths`` is ``true`` on a Windows host, where
+    the echoed ``path`` also has every ``/`` rewritten to ``\``: clients
+    word the browse hint for drive letters and show picked folders with a
+    ``\`` separator. Absent (an older agent) reads as ``false``.
+  * Clients fetch each directory once, filter locally while the user types
+    within it, and cache listings per agent for 30 s, so typing a whole path
+    costs a few requests rather than one per keystroke.
 * Additive delta within proto-v7 (2026-10-14, on-PC voice input — the agent
   half, #736; the Android/iOS/web half is #737): **eight additive REST
   routes, one additive event, one additive capability key, no version

@@ -53,7 +53,8 @@ const OWNER = {
    * plain REST bodies of the project Git screen and follow the same call, as
    * do #678's `GitRebaseRequest` / `GitRebaseResponse` from the Changes panel
    * and the conflict resolver's `GitConflictResponse` and its three
-   * `GitConflict*Request` bodies.
+   * `GitConflict*Request` bodies. `FsDirsResponse`, the folder listing behind
+   * the path fields' suggestions, is a plain REST body on the same footing.
    *
    * #737's voice dictation and install bodies are REST-only and follow them
    * here too; `VoiceStatusResponse` also rides the `voice.changed` event and
@@ -116,6 +117,7 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/CodexLoginRequest.json': OWNER.generated,
   'dto/agent/CodexLoginResponse.json': OWNER.generated,
   'dto/agent/ForceUpdateResponse.json': OWNER.agentUpdate,
+  'dto/agent/FsDirsResponse.json': OWNER.generated,
   'dto/agent/GitBranchCreateRequest.json': OWNER.generated,
   'dto/agent/GitBranchResponse.json': OWNER.generated,
   'dto/agent/GitCheckoutRequest.json': OWNER.generated,

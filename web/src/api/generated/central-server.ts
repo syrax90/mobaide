@@ -1094,6 +1094,11 @@ export interface components {
             name: string;
             /** Online */
             online: boolean;
+            /**
+             * Supports Uninstall
+             * @default false
+             */
+            supports_uninstall: boolean;
         };
         /**
          * AppleAuthRequest
@@ -2005,7 +2010,10 @@ export interface operations {
     };
     delete_agent_api_agents__agent_id__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Also make the agent uninstall itself from its host: at once when online, otherwise on its next connect within 30 days. */
+                uninstall?: boolean;
+            };
             header?: never;
             path: {
                 agent_id: string;

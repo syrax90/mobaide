@@ -48,4 +48,21 @@ class ClaudeLaunchPrefsTest {
         assertTrue(encoded.contains("\"noMemory\":false"))
         assertTrue(encoded.contains("\"planMode\":true"))
     }
+
+    @Test
+    fun legacyBlob_withoutFocusMode_restoresFocusViewOn() {
+        val legacy = """{"model":"opus","effort":"max","debug":false}"""
+
+        val decoded = json.decodeFromString(ClaudeLaunchPrefs.serializer(), legacy)
+
+        assertTrue(decoded.focusMode)
+    }
+
+    @Test
+    fun savedFocusModeOff_survivesTheRoundTrip() {
+        val encoded = json.encodeToString(ClaudeLaunchPrefs.serializer(), ClaudeLaunchPrefs(focusMode = false))
+
+        assertTrue(encoded.contains("\"focusMode\":false"))
+        assertFalse(json.decodeFromString(ClaudeLaunchPrefs.serializer(), encoded).focusMode)
+    }
 }

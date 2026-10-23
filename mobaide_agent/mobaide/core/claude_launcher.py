@@ -125,6 +125,10 @@ class ClaudeOptions:
     # Emits --debug. Wire-absence default matches the clients' UI default (both
     # off), so an omitted field is unambiguous — unlike skip_permissions above.
     debug: bool = False
+    # Claude Code transcript view: True → viewMode "focus", False → "default"
+    # (explicit, so a sticky host-side /focus can't override the client's
+    # choice), None (older client) → no viewMode key, CLI behaviour unchanged.
+    focus_mode: bool | None = None
 
 
 _LINEAR_MCP_TEMPLATE = {
@@ -225,17 +229,20 @@ class ClaudeLauncher:
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=created)
 
     @staticmethod
-    def _cli_settings(options: ClaudeOptions) -> dict[str, bool]:
+    def _cli_settings(options: ClaudeOptions) -> dict[str, bool | str]:
         """The ``--settings`` keys that ride alongside the attention hooks:
-        fast mode and ultracode. Merged into the single hooks settings file when
-        one is written, else emitted as one inline ``--settings`` JSON arg — so a
-        launch never carries two ``--settings`` flags (Claude Code last-wins them).
+        fast mode, ultracode and the transcript view mode. Merged into the
+        single hooks settings file when one is written, else emitted as one
+        inline ``--settings`` JSON arg — so a launch never carries two
+        ``--settings`` flags (Claude Code last-wins them).
         """
-        settings: dict[str, bool] = {}
+        settings: dict[str, bool | str] = {}
         if options.fast_mode:
             settings["fastMode"] = True
         if options.ultracode:
             settings["ultracode"] = True
+        if options.focus_mode is not None:
+            settings["viewMode"] = "focus" if options.focus_mode else "default"
         return settings
 
     def _maybe_write_hooks(

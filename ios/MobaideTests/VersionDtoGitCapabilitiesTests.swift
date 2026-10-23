@@ -54,6 +54,29 @@ final class VersionDtoGitCapabilitiesTests: XCTestCase {
     }
 }
 
+/// `fsCapability(_:)`: the gate on the path fields' folder suggestions, with
+/// `gitCapability`'s explicit-`true` rule — an older agent would 404 them.
+final class VersionDtoFsCapabilityTests: XCTestCase {
+    private func info(_ capabilities: JSONValue) -> VersionInfoResponse {
+        VersionInfoResponse(
+            name: "mobaide-agent",
+            server_version: "1.4.0",
+            protocol_versions: [7],
+            min_client_version: 1,
+            capabilities: capabilities
+        )
+    }
+
+    func testReadsAnExplicitTrueAndNothingElse() {
+        XCTAssertTrue(info(["fs": ["dirs": true]]).fsCapability("dirs"))
+        XCTAssertFalse(info(["fs": ["dirs": "true"]]).fsCapability("dirs"))
+        XCTAssertFalse(info(["fs": ["dirs": false]]).fsCapability("dirs"))
+        XCTAssertFalse(info(["fs": "yes"]).fsCapability("dirs"))
+        XCTAssertFalse(info(["git": ["changes": true]]).fsCapability("dirs"))
+        XCTAssertFalse(info([:]).fsCapability("dirs"))
+    }
+}
+
 /// The three job keys and `hasSync`, which gates the menu entry and
 /// the Sync button on any of them.
 final class VersionDtoGitSyncCapabilitiesTests: XCTestCase {

@@ -11,6 +11,8 @@ export interface Agent {
   lastSeenAt: string | null;
   agentVersion: string | null;
   agentProtocolVersion: number | null;
+  /** The build that last connected can uninstall itself when removed. */
+  supportsUninstall: boolean;
 }
 
 /**
@@ -39,6 +41,7 @@ export async function listAgents(): Promise<Agent[]> {
       lastSeenAt: agent.last_seen_at,
       agentVersion: agent.agent_version ?? null,
       agentProtocolVersion: agent.agent_protocol_version ?? null,
+      supportsUninstall: agent.supports_uninstall ?? false,
     }))
     .sort(byOnlineThenName);
 }
@@ -84,9 +87,17 @@ export async function reregisterAgent(
   return { agentId: data.agent_id, name, token: data.token };
 }
 
-export async function deleteAgent(agentId: string): Promise<void> {
+/**
+ * Remove an agent from the account. With `uninstall`, the agent also deletes
+ * itself from its host: at once when online, otherwise on its next connect
+ * within 30 days.
+ */
+export async function deleteAgent(agentId: string, uninstall = false): Promise<void> {
   const { error, response } = await relayClient.DELETE('/api/agents/{agent_id}', {
-    params: { path: { agent_id: agentId } },
+    params: {
+      path: { agent_id: agentId },
+      ...(uninstall ? { query: { uninstall: true } } : {}),
+    },
   });
   if (error !== undefined) {
     throw toApiError(response, error);

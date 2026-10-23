@@ -22,6 +22,7 @@ import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.DeviceRepository
 import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.LinearMetadataRepository
+import com.mobaide.app.data.repository.PathSuggestionRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.VoiceRepository
 import com.mobaide.app.data.repository.SessionRepository
@@ -143,6 +144,15 @@ object RepositoryModule {
         sessionManager: SessionManager,
     ): VoiceRepository {
         return VoiceRepository(restApi, eventBus, sessionManager)
+    }
+
+    @Provides
+    @Singleton
+    fun providePathSuggestionRepository(
+        restApi: RestApi,
+        tokenStore: TokenStore,
+    ): PathSuggestionRepository {
+        return PathSuggestionRepository(restApi, tokenStore)
     }
 
     @Provides

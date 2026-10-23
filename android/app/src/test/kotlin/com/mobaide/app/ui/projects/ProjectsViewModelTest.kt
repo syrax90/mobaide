@@ -1,15 +1,20 @@
 package com.mobaide.app.ui.projects
 
 import app.cash.turbine.test
+import com.mobaide.app.data.auth.TokenStore
+import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
+import com.mobaide.app.data.network.dto.FsDirsResponse
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.ProjectUpdate
 import com.mobaide.app.data.network.dto.ProjectWrite
 import com.mobaide.app.data.network.dto.LinearLabelDto
 import com.mobaide.app.data.network.dto.LinearStateDto
+import com.mobaide.app.data.network.dto.VersionInfoResponse
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.LinearMetadataRepository
 import com.mobaide.app.data.repository.MetadataResult
+import com.mobaide.app.data.repository.PathSuggestionRepository
 import com.mobaide.app.data.repository.ProjectConflictException
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.testing.MainDispatcherRule
@@ -22,8 +27,11 @@ import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -69,6 +77,7 @@ class ProjectsViewModelTest {
         val metadataRepo: LinearMetadataRepository,
         val projectsFlow: MutableStateFlow<List<ProjectInfo>>,
         val scansFlow: MutableStateFlow<List<AutoScanInstanceDto>>,
+        val restApi: RestApi,
     )
 
     private fun newFixture(
@@ -92,8 +101,15 @@ class ProjectsViewModelTest {
             MetadataResult.Cached<LinearLabelDto>(emptyList())
         coEvery { metadataRepo.getStates(any(), any()) } returns
             MetadataResult.Cached<LinearStateDto>(emptyList())
-        val vm = ProjectsViewModel(projectsRepo, autoScanRepo, metadataRepo)
-        return Fixture(vm, projectsRepo, autoScanRepo, metadataRepo, projectsFlow, scansFlow)
+        // The Path field's folder suggestions run on a real repository over a
+        // strict RestApi: nothing reaches it unless the field gains focus.
+        val restApi = mockk<RestApi>()
+        val tokenStore = mockk<TokenStore>(relaxed = true)
+        every { tokenStore.getAgentId() } returns "agent-1"
+        val vm = ProjectsViewModel(
+            projectsRepo, autoScanRepo, metadataRepo, PathSuggestionRepository(restApi, tokenStore),
+        )
+        return Fixture(vm, projectsRepo, autoScanRepo, metadataRepo, projectsFlow, scansFlow, restApi)
     }
 
     // --- projects list / sort ---
@@ -134,6 +150,33 @@ class ProjectsViewModelTest {
         assertEquals("ml", form.condaEnv)
         assertEquals("", form.linearApiKey)
         assertFalse(form.clearLinearKey)
+    }
+
+    @Test
+    fun pathFocus_listsTheEditedProjectsParent_andAPickDrillsIntoTheFolder() = runTest {
+        // The edit sheet fills the path without a keystroke, so focusing the
+        // field must be what hands it to the suggestions.
+        val f = newFixture()
+        advanceUntilIdle()
+        coEvery { f.restApi.getAgentVersion() } returns VersionInfoResponse(
+            name = "mobaide_agent",
+            server_version = "1.4.0",
+            protocol_versions = listOf(7),
+            min_client_version = 1,
+            capabilities = Json.parseToJsonElement("""{"fs":{"dirs":true}}""") as JsonObject,
+        )
+        coEvery { f.restApi.listDirs("/p/", null) } returns
+            FsDirsResponse("/p", listOf("alpha", "alpha-old", "beta"), truncated = false)
+
+        f.vm.openEditSheet(project("alpha"))
+        f.vm.onPathFocusChange(true)
+        advanceTimeBy(201)
+
+        assertEquals(listOf("alpha", "alpha-old"), f.vm.pathSuggestionState.value.names)
+
+        f.vm.pickPathSuggestion("alpha-old")
+
+        assertEquals("/p/alpha-old/", f.vm.uiState.value.form!!.path)
     }
 
     @Test

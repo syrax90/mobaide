@@ -1016,6 +1016,7 @@ input[type='radio']:checked {
   .button,
   .theme-seg,
   .recent-path-pick,
+  .path-suggestions,
   .terminal-overlay-retry {
     border: 1px solid ButtonBorder;
   }
@@ -1078,9 +1079,11 @@ input[type='radio']:checked {
   font-size: 0.9rem;
 }
 
-/* Shared with the Changes viewer's chrome, which sits beside this bar. */
+/* Shared with the Changes viewer's chrome and the sessions panel, which sit
+   beside this bar. */
 .terminal-bar .button,
-.git-panel .button {
+.git-panel .button,
+.sessions-panel .button {
   flex: none;
   padding: 5px 11px;
   font-family: var(--font-chrome);
@@ -1091,7 +1094,8 @@ input[type='radio']:checked {
 }
 
 .terminal-bar .button[aria-pressed='true'],
-.git-panel .button[aria-pressed='true'] {
+.git-panel .button[aria-pressed='true'],
+.sessions-panel .button[aria-pressed='true'] {
   color: var(--text);
   box-shadow: inset 0 0 0 2px var(--accent),
     var(--px) var(--px) 0 0 var(--btn-shadow);
@@ -1099,6 +1103,246 @@ input[type='radio']:checked {
 
 .terminal-bar-spacer {
   flex: 1;
+}
+
+/*
+ * The sessions panel (Herdr's sidebar, the mobile clients' swipe-in drawer).
+ * Two forms of one body: docked, a row-flex sibling of `.terminal-page` that
+ * narrows the stage (no width transition — the grid refits once per layout,
+ * and every refit is a PTY resize); or a popover slide-over with the UA
+ * backdrop as scrim.
+ */
+.sessions-panel {
+  width: 300px;
+  color: var(--text);
+  background: var(--bg-2);
+}
+
+.sessions-panel-docked {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 2px solid var(--surface-2);
+}
+
+.sessions-panel[popover] {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: min(300px, 100vw);
+  height: auto;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 2px var(--surface-2),
+    var(--px) 0 0 0 var(--modal-shadow);
+}
+
+.sessions-panel[popover]::backdrop {
+  background: var(--scrim);
+}
+
+/* Scoped to the open state: an unconditional `display` would beat the UA's
+   `display: none` for a closed popover. */
+.sessions-panel:popover-open {
+  display: flex;
+  flex-direction: column;
+  animation: sessions-panel-in 160ms steps(4);
+}
+
+@keyframes sessions-panel-in {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: none;
+  }
+}
+
+.sessions-panel-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sessions-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 48px;
+  padding: 0.5rem 0.75rem 0.5rem 1rem;
+  border-bottom: 2px solid var(--surface-2);
+}
+
+.sessions-panel-head h2 {
+  flex: 1;
+  font-family: var(--font-chrome);
+  font-weight: 400;
+  font-size: 1.1rem;
+  color: var(--accent);
+}
+
+.sessions-panel-pin-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 0 auto;
+  fill: currentColor;
+  shape-rendering: crispEdges;
+}
+
+.sessions-panel-pin-gap {
+  fill: var(--bg-2);
+}
+
+.sessions-panel-agent {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.75rem 1rem;
+}
+
+.sessions-panel-agent-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.sessions-panel-agent-state,
+.sessions-panel-section,
+.sessions-panel-new {
+  font-family: var(--font-chrome);
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.sessions-panel-agent-state {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.sessions-panel-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 0;
+  padding: 0.25rem 0.75rem 1rem;
+  overflow-y: auto;
+}
+
+.sessions-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sessions-panel-item {
+  display: flex;
+  align-items: center;
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+}
+
+.sessions-panel-item-current {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+}
+
+.sessions-panel-item .sessions-panel-row {
+  box-shadow: none;
+}
+
+.sessions-panel-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  min-height: 48px;
+  padding: 0.6rem 0.75rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+  cursor: pointer;
+}
+
+.sessions-panel-row:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.sessions-panel-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sessions-panel-item .sessions-panel-row:focus-visible {
+  outline-offset: -4px;
+}
+
+/* A compact framed icon button inside the row's frame, after the attention
+   chip — the mobile clients' stop control. */
+.sessions-panel .sessions-panel-stop {
+  width: 32px;
+  height: 32px;
+  margin: 0 0.75rem 0 -0.25rem;
+  padding: 0;
+}
+
+.sessions-panel .sessions-panel-stop:not(:disabled) {
+  color: var(--danger);
+}
+
+.sessions-panel-stop-icon {
+  display: block;
+  width: 12px;
+  height: 12px;
+  margin: 0 auto;
+  fill: currentColor;
+  shape-rendering: crispEdges;
+}
+
+.sessions-panel-row-agent {
+  min-height: 44px;
+  box-shadow: none;
+}
+
+.sessions-panel-new {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 0.25rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.sessions-panel-section {
+  margin: 0.5rem 0 0;
+  padding: 0 0.25rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.sessions-panel-note {
+  margin: 0;
+  padding: 0.75rem 0.25rem;
+  color: var(--text-muted);
 }
 
 .terminal-back {
@@ -1986,6 +2230,41 @@ input[type='radio']:checked {
   text-align: left;
 }
 
+/* In flow, not floating: a dialog's scroll box would clip a popup list. */
+.path-suggestions {
+  list-style: none;
+  margin: 0;
+  padding: 2px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--gray);
+}
+
+.path-suggestions[hidden] {
+  display: none;
+}
+
+.path-suggestion {
+  padding: 0.4rem 0.6rem;
+  font-family: var(--font-chrome);
+  font-size: 0.8rem;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-suggestion:hover,
+.path-suggestion[aria-selected='true'] {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.path-suggestions-more {
+  margin: 0;
+  font-size: var(--pix-sm);
+  color: var(--text-muted);
+}
+
 .option-group {
   display: flex;
   flex-direction: column;
@@ -2095,6 +2374,10 @@ input[type='radio']:checked {
 
 .advanced[open] > summary::before {
   content: '\2212 ';
+}
+
+.advanced-stack > :not(summary) {
+  margin-top: 0.75rem;
 }
 /* endregion */
 

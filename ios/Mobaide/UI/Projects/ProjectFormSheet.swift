@@ -18,6 +18,8 @@ private struct ProjectFormContent: View {
     @State private var model: ProjectFormModel
     @State private var revealKey = false
     @State private var toast: ToastMessage?
+    @State private var pathSuggestions: PathSuggestionsModel
+    @FocusState private var pathFocused: Bool
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.mobaideColors) private var colors
@@ -32,6 +34,7 @@ private struct ProjectFormContent: View {
         onCreated: @escaping (ProjectInfo) -> Void
     ) {
         _model = State(initialValue: ProjectFormModel(mode: mode, repository: container.projectsRepository))
+        _pathSuggestions = State(initialValue: PathSuggestionsModel(repository: container.pathSuggestionRepository))
         self.onOpenGit = onOpenGit
         self.onCreated = onCreated
     }
@@ -84,6 +87,7 @@ private struct ProjectFormContent: View {
             .interactiveDismissDisabled(model.isDirty)
             .toast($toast)
             .task { await model.loadMetadataIfNeeded() }
+            .onAppear { pathSuggestions.probe() }
             .onChange(of: model.message) { _, newValue in
                 if let newValue {
                     toast = ToastMessage(text: newValue)
@@ -115,6 +119,17 @@ private struct ProjectFormContent: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .pixelField(isInvalid: model.submitAttempted && model.pathError != nil)
+                    .focused($pathFocused)
+                    .onChange(of: pathFocused) { _, focused in pathSuggestions.focusChanged(focused) }
+                    .onChange(of: model.path, initial: true) { _, text in pathSuggestions.textChanged(text) }
+                PathSuggestionList(model: pathSuggestions) { name in
+                    model.path = pathSuggestions.accept(name)
+                }
+                if model.path.isEmpty {
+                    Text(pathBrowseHint(windowsPaths: pathSuggestions.windowsPaths))
+                        .font(.caption)
+                        .foregroundStyle(colors.textMuted)
+                }
             }
             TextField("Conda env (optional)", text: $model.condaEnv)
                 .textInputAutocapitalization(.never)

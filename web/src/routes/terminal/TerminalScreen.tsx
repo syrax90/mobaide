@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createTemplate } from '../../api/templateRepository';
@@ -18,6 +18,7 @@ import {
 } from '../../terminal/terminalStore';
 import type { SessionResponse } from '../../protocol/dto/session';
 import { isSessionRunning } from '../../protocol/dto/terminalState';
+import { useSessionsPanelStore } from '../../stores/sessionsPanelStore';
 import { useTerminalPrefsStore } from '../../stores/terminalPrefsStore';
 import { useToastStore } from '../../stores/toastStore';
 import { useVisibleSessionStore } from '../../stores/visibleSessionStore';
@@ -29,6 +30,7 @@ import { GitChangesPanel } from './git/GitChangesPanel';
 import { NO_GIT_CAPABILITIES, hasGitSync } from '../../protocol/dto/agentVersion';
 import { useSessionGitCapabilities } from './git/useSessionGit';
 import { JumpToBottom } from './JumpToBottom';
+import { SessionsPanel } from './SessionsPanel';
 import { TemplatesPicker } from './TemplatesPicker';
 import { TerminalScrollbar } from './TerminalScrollbar';
 import { TerminalSurface } from './TerminalSurface';
@@ -43,6 +45,7 @@ import type { DictationState } from '../../voice/dictationController';
 import { useVoiceCapability, useVoiceStatus } from '../../voice/useVoiceStatus';
 import { useMicHidden, useSkipReview, useVoicePrefsStore } from '../../voice/voicePrefsStore';
 import { voiceMicMode } from '../../voice/voiceStatusView';
+import { useWideViewport } from './useWideViewport';
 
 export function TerminalScreen() {
   const { agentId, sessionId } = useParams();
@@ -111,7 +114,9 @@ function TerminalRoute({ agentId, sessionId }: TerminalRouteProps) {
     return <section className="terminal-page terminal-page-empty">Attaching…</section>;
   }
 
-  return <TerminalView model={model} headerLabel={headerLabel} session={session} />;
+  // Keyed on the channel: the sessions panel swaps the route in place, and the
+  // view's dialog state and git request counters belong to one session.
+  return <TerminalView key={key} model={model} headerLabel={headerLabel} session={session} />;
 }
 
 /**
@@ -156,6 +161,14 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // under the template dialogs, and it returns focus to the menu that opened
   // it rather than to the grid.
   const [changesOpen, setChangesOpen] = useState(false);
+  // The sessions panel: `open` is per visit, `pinned` persists. Docked beside
+  // the grid only when pinned on a wide viewport; otherwise it slides over.
+  const [sessionsOpen, setSessionsOpen] = useState(false);
+  const pinned = useSessionsPanelStore((state) => state.pinned);
+  const setPinned = useSessionsPanelStore((state) => state.setPinned);
+  const wide = useWideViewport();
+  const docked = pinned && wide;
+  const panelButtonRef = useRef<HTMLButtonElement>(null);
   // A counter, not a flag: the panel may already be open when *Commit…* is
   // picked again, and only a new value re-opens its dialog.
   const [commitRequest, setCommitRequest] = useState(0);
@@ -304,327 +317,421 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
     };
   }, []);
 
+  const closeSessions = () => {
+    setSessionsOpen(false);
+    panelButtonRef.current?.focus();
+  };
+
+  const sessionsPanel = (
+    <SessionsPanel
+      agentId={model.agentId}
+      sessionId={model.sessionId}
+      docked={docked}
+      pinned={pinned}
+      onPinnedChange={(next) => {
+        setPinned(next);
+        // Unpinning on a wide screen turns the rail into an overlay; keep it
+        // on screen rather than making it vanish under the click.
+        if (!next && wide) setSessionsOpen(true);
+      }}
+      onClose={closeSessions}
+    />
+  );
+
   return (
-    <section className="terminal-page">
-      <header className="terminal-bar">
-        <Link to="/" className="terminal-back">
-          ← Sessions
-        </Link>
-        <span
-          className={`terminal-state terminal-state-${view.status?.status ?? 'unknown'}`}
-        >
-          {view.status?.status ?? 'connecting'}
-        </span>
-        {headerLabel !== '' && <span className="terminal-title">{headerLabel}</span>}
-        <span className="terminal-bar-spacer" />
-        <label className="terminal-toggle" title="Pass Ctrl+V to terminal">
-          <input
-            type="checkbox"
-            aria-label="Pass Ctrl+V to terminal"
-            checked={passCtrlV}
-            onChange={(event) => {
-              setPassCtrlV(event.target.checked);
-            }}
-          />
-          {/* aria-label pins the accessible name, so the visible text can
-              shrink to "Ctrl+V" on narrow screens without renaming the
-              control for a screen reader. */}
-          <span className="terminal-toggle-label" aria-hidden="true">
-            <span className="terminal-toggle-label-full">Pass Ctrl+V to terminal</span>
-            <span className="terminal-toggle-label-short">Ctrl+V</span>
-          </span>
-        </label>
-        {micMode !== 'hidden' && (
-          <VoiceButton
-            mode={micMode}
-            status={voiceStatus.data}
-            disabled={micMode === 'ready' && !canRecord}
+    <>
+      {/* Beside `.terminal-page`, never inside it: that one is a column, and a
+          child there would stack under the grid. `.app-main` lays the two out
+          in a row, and the narrower stage refits the grid once. */}
+      {docked && <aside className="sessions-panel sessions-panel-docked">{sessionsPanel}</aside>}
+      {sessionsOpen && !docked && (
+        <SessionsPanelOverlay onClose={closeSessions}>{sessionsPanel}</SessionsPanelOverlay>
+      )}
+      <section className="terminal-page">
+        <header className="terminal-bar">
+          <button
+            type="button"
+            className="button button-icon"
+            ref={panelButtonRef}
+            aria-label="Sessions"
+            aria-expanded={docked || sessionsOpen}
+            title="Switch session"
             onClick={() => {
-              // Synchronous on purpose: the recorder opens audio inside this
-              // click's user activation.
-              if (micMode === 'ready') dictation.toggle();
-              else setVoiceSetupOpen(true);
+              if (docked) {
+                setPinned(false);
+              } else {
+                setSessionsOpen((open) => !open);
+              }
             }}
-          />
-        )}
-        <button
-          type="button"
-          className="button"
-          title="Insert a prompt template at the cursor"
-          onClick={() => {
-            // Read here, before any dialog exists, so a busy PTY cannot clear
-            // the selection out from under the editor — see `TemplatePanel`.
-            setPanel({ kind: 'picker', selection: model.selectionText() });
-          }}
-        >
-          Templates
-        </button>
-        {immersive.supported && (
+          >
+            ☰
+          </button>
+          <Link to="/" className="terminal-back">
+            ← Sessions
+          </Link>
+          <span
+            className={`terminal-state terminal-state-${view.status?.status ?? 'unknown'}`}
+          >
+            {view.status?.status ?? 'connecting'}
+          </span>
+          {headerLabel !== '' && <span className="terminal-title">{headerLabel}</span>}
+          <span className="terminal-bar-spacer" />
+          <label className="terminal-toggle" title="Pass Ctrl+V to terminal">
+            <input
+              type="checkbox"
+              aria-label="Pass Ctrl+V to terminal"
+              checked={passCtrlV}
+              onChange={(event) => {
+                setPassCtrlV(event.target.checked);
+              }}
+            />
+            {/* aria-label pins the accessible name, so the visible text can
+                shrink to "Ctrl+V" on narrow screens without renaming the
+                control for a screen reader. */}
+            <span className="terminal-toggle-label" aria-hidden="true">
+              <span className="terminal-toggle-label-full">Pass Ctrl+V to terminal</span>
+              <span className="terminal-toggle-label-short">Ctrl+V</span>
+            </span>
+          </label>
+          {micMode !== 'hidden' && (
+            <VoiceButton
+              mode={micMode}
+              status={voiceStatus.data}
+              disabled={micMode === 'ready' && !canRecord}
+              onClick={() => {
+                // Synchronous on purpose: the recorder opens audio inside this
+                // click's user activation.
+                if (micMode === 'ready') dictation.toggle();
+                else setVoiceSetupOpen(true);
+              }}
+            />
+          )}
           <button
             type="button"
             className="button"
-            aria-pressed={immersive.active}
-            // Chromium-only; the permission prompt Chrome announced for 131 was
-            // never shipped (see `keyboard/useKeyboardLock.ts`). It is the only
-            // way Ctrl+W, Ctrl+T and F11 ever reach the terminal, so it is
-            // opt-in per session rather than a persisted preference.
-            title="Capture every key, including the ones the browser normally takes"
-            onClick={immersive.active ? immersive.exit : immersive.enter}
+            title="Insert a prompt template at the cursor"
+            onClick={() => {
+              // Read here, before any dialog exists, so a busy PTY cannot clear
+              // the selection out from under the editor — see `TemplatePanel`.
+              setPanel({ kind: 'picker', selection: model.selectionText() });
+            }}
           >
-            {immersive.active ? 'Leave immersive' : 'Immersive'}
+            Templates
           </button>
-        )}
-        {/* Only once the row carries a cwd, as on both mobile clients: the
-            git routes answer for the directory the session was spawned in,
-            and a row without one has nothing to show. */}
-        {session?.cwd !== undefined && (
-          <MenuButton
-            label="More options"
-            className="button button-icon"
-            triggerRef={moreRef}
-            groups={[
-              {
-                id: 'git',
-                label: 'Git',
-                items: [
-                  {
-                    id: 'changes',
-                    label: 'Changes…',
-                    onSelect: () => {
-                      setChangesOpen(true);
+          {immersive.supported && (
+            <button
+              type="button"
+              className="button"
+              aria-pressed={immersive.active}
+              // Chromium-only; the permission prompt Chrome announced for 131 was
+              // never shipped (see `keyboard/useKeyboardLock.ts`). It is the only
+              // way Ctrl+W, Ctrl+T and F11 ever reach the terminal, so it is
+              // opt-in per session rather than a persisted preference.
+              title="Capture every key, including the ones the browser normally takes"
+              onClick={immersive.active ? immersive.exit : immersive.enter}
+            >
+              {immersive.active ? 'Leave immersive' : 'Immersive'}
+            </button>
+          )}
+          {/* Only once the row carries a cwd, as on both mobile clients: the
+              git routes answer for the directory the session was spawned in,
+              and a row without one has nothing to show. */}
+          {session?.cwd !== undefined && (
+            <MenuButton
+              label="More options"
+              className="button button-icon"
+              triggerRef={moreRef}
+              groups={[
+                {
+                  id: 'git',
+                  label: 'Git',
+                  items: [
+                    {
+                      id: 'changes',
+                      label: 'Changes…',
+                      onSelect: () => {
+                        setChangesOpen(true);
+                      },
                     },
-                  },
-                  ...(canCommit
-                    ? [
-                        {
-                          id: 'commit',
-                          label: 'Commit…',
-                          onSelect: () => {
-                            setChangesOpen(true);
-                            setCommitRequest((n) => n + 1);
+                    ...(canCommit
+                      ? [
+                          {
+                            id: 'commit',
+                            label: 'Commit…',
+                            onSelect: () => {
+                              setChangesOpen(true);
+                              setCommitRequest((n) => n + 1);
+                            },
                           },
-                        },
-                      ]
-                    : []),
-                  ...(canSync
-                    ? [
-                        {
-                          id: 'sync',
-                          label: 'Fetch / Pull / Push…',
-                          onSelect: () => {
-                            setChangesOpen(true);
-                            setSyncRequest((n) => n + 1);
+                        ]
+                      : []),
+                    ...(canSync
+                      ? [
+                          {
+                            id: 'sync',
+                            label: 'Fetch / Pull / Push…',
+                            onSelect: () => {
+                              setChangesOpen(true);
+                              setSyncRequest((n) => n + 1);
+                            },
                           },
-                        },
-                      ]
-                    : []),
-                  ...(branchesProject !== null
-                    ? [
-                        {
-                          id: 'branches',
-                          label: 'Branches…',
-                          onSelect: () => {
-                            void navigate(
-                              `/agents/${encodeURIComponent(model.agentId)}/projects/${encodeURIComponent(branchesProject)}/git`,
-                            );
+                        ]
+                      : []),
+                    ...(branchesProject !== null
+                      ? [
+                          {
+                            id: 'branches',
+                            label: 'Branches…',
+                            onSelect: () => {
+                              void navigate(
+                                `/agents/${encodeURIComponent(model.agentId)}/projects/${encodeURIComponent(branchesProject)}/git`,
+                              );
+                            },
                           },
-                        },
-                      ]
-                    : []),
-                  ...(gitCapabilities.rebase
-                    ? [
-                        {
-                          id: 'rebase',
-                          label: 'Rebase…',
-                          onSelect: () => {
-                            setChangesOpen(true);
-                            setRebaseRequest((n) => n + 1);
+                        ]
+                      : []),
+                    ...(gitCapabilities.rebase
+                      ? [
+                          {
+                            id: 'rebase',
+                            label: 'Rebase…',
+                            onSelect: () => {
+                              setChangesOpen(true);
+                              setRebaseRequest((n) => n + 1);
+                            },
                           },
-                        },
-                      ]
-                    : []),
-                ],
-              },
-            ]}
-          >
-            ⋯
-          </MenuButton>
-        )}
-      </header>
+                        ]
+                      : []),
+                  ],
+                },
+              ]}
+            >
+              ⋯
+            </MenuButton>
+          )}
+        </header>
 
-      <div className="terminal-stage">
-        <TerminalSurface model={model} id={surfaceId} />
-        {/* Sits in the gutter FitAddon already reserves for a scrollbar, so it
-            costs no columns — see `terminalScrollbar.ts`. */}
-        <TerminalScrollbar model={model} surfaceId={surfaceId} />
-        {/* Overlaid, never a flex sibling: an in-flow error would change the
-            stage height, and a terminal row-count change clears the selection. */}
-        {immersive.error !== null && <p className="terminal-error">{immersive.error}</p>}
-        <ConnectionOverlay
-          message={overlay}
-          onRetry={
-            view.channelStopped
-              ? () => {
-                  model.retryConnection();
-                }
-              : undefined
-          }
-        />
-        {!view.pinned && (
-          <JumpToBottom
-            unread={view.unread}
-            onJump={() => {
+        <div className="terminal-stage">
+          <TerminalSurface model={model} id={surfaceId} />
+          {/* Sits in the gutter FitAddon already reserves for a scrollbar, so it
+              costs no columns — see `terminalScrollbar.ts`. */}
+          <TerminalScrollbar model={model} surfaceId={surfaceId} />
+          {/* Overlaid, never a flex sibling: an in-flow error would change the
+              stage height, and a terminal row-count change clears the selection. */}
+          {immersive.error !== null && <p className="terminal-error">{immersive.error}</p>}
+          <ConnectionOverlay
+            message={overlay}
+            onRetry={
+              view.channelStopped
+                ? () => {
+                    model.retryConnection();
+                  }
+                : undefined
+            }
+          />
+          {!view.pinned && (
+            <JumpToBottom
+              unread={view.unread}
+              onJump={() => {
+                model.jumpToBottom();
+              }}
+            />
+          )}
+        </div>
+
+        {panel.kind === 'picker' && (
+          <TemplatesPicker
+            canSend={canSend}
+            onClose={() => {
+              setPanel({ kind: 'none' });
+            }}
+            onNewTemplate={() => {
+              setSaveError(null);
+              setPanel({ kind: 'editor', initialBody: panel.selection });
+            }}
+            onPick={(template) => {
+              // A refused insert keeps the picker open: the body stays on
+              // screen for a retry instead of silently vanishing while the
+              // recency stamp advertises success. The picker disables its rows
+              // while the gate is shut and explains a refusal inline — a toast
+              // would render below the dialog's top layer, unseen.
+              if (!canSend) return false;
+              // Paste, never execute: the body lands on the running program's
+              // input line for review, mirroring the mobile clients' insert-
+              // into-composer semantics.
+              if (!model.pasteText(template.body)) return false;
+              setPanel({ kind: 'none' });
+              // The paste bypasses xterm's user-input scroll, so an insert made
+              // while scrolled up would otherwise land off-screen.
               model.jumpToBottom();
+              // Claude Code collapses a paste over 800 chars, or with more than
+              // `min(rows - 10, 2)` newlines, to a `[Pasted text #n +m lines]`
+              // placeholder and tells the user to paste again to expand it — an
+              // instruction nothing could act on, because the pick never touched
+              // the system clipboard.
+              //
+              // ESC and C1 come off first. `stripControls` is idempotent and the
+              // newline pass needs an `\n`, so `sanitizePaste(stripControls(b))`
+              // equals `sanitizePaste(b)` — a second paste re-runs this same
+              // encoder and still converges on the byte-identical input the CLI's
+              // equality check needs. What the strip buys is the consumer that
+              // encoder can never reach: paste into a native terminal instead and
+              // a live `ESC[201~` in the body closes the bracket early and runs
+              // its tail (the CVE-2021-31701 class `terminalPaste` defends).
+              //
+              // Called without an await in front of it, so Safari and Firefox
+              // still see the click's transient user activation. Only after
+              // `pasteText` reported the frame sent — with nothing on the input
+              // line there is nothing to expand, and clobbering the clipboard
+              // would be pure cost.
+              void writeClipboardText(stripControls(template.body)).then((written) => {
+                if (!mounted.current) return;
+                useToastStore
+                  .getState()
+                  .show(
+                    // Claims only the half the client can verify. Delivery past
+                    // the relay is not confirmable from here, and the Templates
+                    // button is unconditional — this screen cannot know whether
+                    // the session runs Claude Code or a plain shell, so it must
+                    // not name either.
+                    //
+                    // The refusal names the *copy* as what failed. A bare
+                    // "browser refused the clipboard write" reads as a failed
+                    // pick, and the obvious recovery — pick again — appends a
+                    // duplicate for any template the program did not collapse.
+                    written
+                      ? 'Template copied — paste again if it was collapsed.'
+                      : 'Could not copy the template — the browser refused the clipboard write.',
+                    written ? 'success' : 'error',
+                  );
+              });
+              return true;
             }}
           />
         )}
-      </div>
 
-      {panel.kind === 'picker' && (
-        <TemplatesPicker
-          canSend={canSend}
-          onClose={() => {
-            setPanel({ kind: 'none' });
-          }}
-          onNewTemplate={() => {
-            setSaveError(null);
-            setPanel({ kind: 'editor', initialBody: panel.selection });
-          }}
-          onPick={(template) => {
-            // A refused insert keeps the picker open: the body stays on
-            // screen for a retry instead of silently vanishing while the
-            // recency stamp advertises success. The picker disables its rows
-            // while the gate is shut and explains a refusal inline — a toast
-            // would render below the dialog's top layer, unseen.
-            if (!canSend) return false;
-            // Paste, never execute: the body lands on the running program's
-            // input line for review, mirroring the mobile clients' insert-
-            // into-composer semantics.
-            if (!model.pasteText(template.body)) return false;
-            setPanel({ kind: 'none' });
-            // The paste bypasses xterm's user-input scroll, so an insert made
-            // while scrolled up would otherwise land off-screen.
-            model.jumpToBottom();
-            // Claude Code collapses a paste over 800 chars, or with more than
-            // `min(rows - 10, 2)` newlines, to a `[Pasted text #n +m lines]`
-            // placeholder and tells the user to paste again to expand it — an
-            // instruction nothing could act on, because the pick never touched
-            // the system clipboard.
-            //
-            // ESC and C1 come off first. `stripControls` is idempotent and the
-            // newline pass needs an `\n`, so `sanitizePaste(stripControls(b))`
-            // equals `sanitizePaste(b)` — a second paste re-runs this same
-            // encoder and still converges on the byte-identical input the CLI's
-            // equality check needs. What the strip buys is the consumer that
-            // encoder can never reach: paste into a native terminal instead and
-            // a live `ESC[201~` in the body closes the bracket early and runs
-            // its tail (the CVE-2021-31701 class `terminalPaste` defends).
-            //
-            // Called without an await in front of it, so Safari and Firefox
-            // still see the click's transient user activation. Only after
-            // `pasteText` reported the frame sent — with nothing on the input
-            // line there is nothing to expand, and clobbering the clipboard
-            // would be pure cost.
-            void writeClipboardText(stripControls(template.body)).then((written) => {
-              if (!mounted.current) return;
-              useToastStore
-                .getState()
-                .show(
-                  // Claims only the half the client can verify. Delivery past
-                  // the relay is not confirmable from here, and the Templates
-                  // button is unconditional — this screen cannot know whether
-                  // the session runs Claude Code or a plain shell, so it must
-                  // not name either.
-                  //
-                  // The refusal names the *copy* as what failed. A bare
-                  // "browser refused the clipboard write" reads as a failed
-                  // pick, and the obvious recovery — pick again — appends a
-                  // duplicate for any template the program did not collapse.
-                  written
-                    ? 'Template copied — paste again if it was collapsed.'
-                    : 'Could not copy the template — the browser refused the clipboard write.',
-                  written ? 'success' : 'error',
-                );
-            });
-            return true;
-          }}
-        />
-      )}
+        {/* No `key`: the panel passes through `none` on every exit, so each open
+            is already a fresh mount with a fresh draft. */}
+        {panel.kind === 'editor' && (
+          <TemplateEditorDialog
+            editing={null}
+            initialBody={panel.initialBody}
+            busy={save.isPending}
+            error={saveError}
+            onSave={(name, body) => {
+              save.mutate({ name, body });
+            }}
+            // Back to the terminal rather than to the picker. A save has to close
+            // everything for its toast to be visible, and two exits that land in
+            // different places would be the surprising half of the pair.
+            onCancel={() => {
+              setPanel({ kind: 'none' });
+              setSaveError(null);
+            }}
+          />
+        )}
 
-      {/* No `key`: the panel passes through `none` on every exit, so each open
-          is already a fresh mount with a fresh draft. */}
-      {panel.kind === 'editor' && (
-        <TemplateEditorDialog
-          editing={null}
-          initialBody={panel.initialBody}
-          busy={save.isPending}
-          error={saveError}
-          onSave={(name, body) => {
-            save.mutate({ name, body });
-          }}
-          // Back to the terminal rather than to the picker. A save has to close
-          // everything for its toast to be visible, and two exits that land in
-          // different places would be the surprising half of the pair.
-          onCancel={() => {
-            setPanel({ kind: 'none' });
-            setSaveError(null);
-          }}
-        />
-      )}
+        {voiceSetupOpen && (
+          <VoiceSetupDialog
+            agentId={model.agentId}
+            agentName={agentName}
+            status={voiceStatus.data}
+            loadFailed={voiceStatus.isError}
+            onClose={() => {
+              setVoiceSetupOpen(false);
+            }}
+          />
+        )}
 
-      {voiceSetupOpen && (
-        <VoiceSetupDialog
-          agentId={model.agentId}
-          agentName={agentName}
-          status={voiceStatus.data}
-          loadFailed={voiceStatus.isError}
-          onClose={() => {
-            setVoiceSetupOpen(false);
-          }}
-        />
-      )}
+        {dictationShown && (
+          <DictationDialog
+            state={dictation.state}
+            carried={carried}
+            agentName={agentName}
+            canSend={canSend}
+            canRecord={canRecord}
+            onStop={dictation.stop}
+            onCancel={dictation.cancel}
+            onRetry={dictation.retry}
+            onRecordAgain={dictation.toggle}
+            onDismiss={dictation.dismiss}
+            onContinue={dictation.continueFrom}
+            onDiscard={dictation.finish}
+            onInsert={insertTranscript}
+            skipReview={skipReview}
+            onSkipReviewChange={(skip) => {
+              setSkipReview(model.agentId, skip);
+            }}
+          />
+        )}
 
-      {dictationShown && (
-        <DictationDialog
-          state={dictation.state}
-          carried={carried}
-          agentName={agentName}
-          canSend={canSend}
-          canRecord={canRecord}
-          onStop={dictation.stop}
-          onCancel={dictation.cancel}
-          onRetry={dictation.retry}
-          onRecordAgain={dictation.toggle}
-          onDismiss={dictation.dismiss}
-          onContinue={dictation.continueFrom}
-          onDiscard={dictation.finish}
-          onInsert={insertTranscript}
-          skipReview={skipReview}
-          onSkipReviewChange={(skip) => {
-            setSkipReview(model.agentId, skip);
-          }}
-        />
-      )}
+        {changesOpen && (
+          <GitChangesPanel
+            agentId={model.agentId}
+            sessionId={model.sessionId}
+            commitRequest={commitRequest}
+            syncRequest={syncRequest}
+            rebaseRequest={rebaseRequest}
+            projectName={session?.project_name ?? null}
+            onClose={() => {
+              setChangesOpen(false);
+              setCommitRequest(0);
+              setSyncRequest(0);
+              setRebaseRequest(0);
+              // Back to the menu button, not the grid: the viewer was reached
+              // from the header, and a keyboard user is still up there.
+              moreRef.current?.focus();
+            }}
+          />
+        )}
+      </section>
+    </>
+  );
+}
 
-      {changesOpen && (
-        <GitChangesPanel
-          agentId={model.agentId}
-          sessionId={model.sessionId}
-          commitRequest={commitRequest}
-          syncRequest={syncRequest}
-          rebaseRequest={rebaseRequest}
-          projectName={session?.project_name ?? null}
-          onClose={() => {
-            setChangesOpen(false);
-            setCommitRequest(0);
-            setSyncRequest(0);
-            setRebaseRequest(0);
-            // Back to the menu button, not the grid: the viewer was reached
-            // from the header, and a keyboard user is still up there.
-            moreRef.current?.focus();
-          }}
-        />
-      )}
-    </section>
+interface SessionsPanelOverlayProps {
+  onClose: () => void;
+  children: ReactNode;
+}
+
+/**
+ * The slide-over form of the panel. `popover="auto"`, unlike the Changes
+ * viewer's `manual`: a click into the terminal or Escape should dismiss it,
+ * and the UA `::backdrop` is the scrim. Mounted only while open, the way that
+ * viewer and `Modal` are, so the top-layer entry comes and goes with it.
+ */
+function SessionsPanelOverlay({ onClose, children }: SessionsPanelOverlayProps) {
+  const ref = useRef<HTMLElement>(null);
+  // Set while this component closes the popover itself (unmount: a switch, or
+  // a pin that turns it into the docked rail). The toggle event that follows
+  // is not a dismissal, and acting on it would pull focus out of the rail.
+  const unmounting = useRef(false);
+
+  useLayoutEffect(() => {
+    // Re-armed on every mount: StrictMode replays mount → cleanup → mount on
+    // one instance, and a latch left set would swallow every real dismissal.
+    unmounting.current = false;
+    const panel = ref.current;
+    panel?.showPopover();
+    return () => {
+      unmounting.current = true;
+      panel?.hidePopover();
+    };
+  }, []);
+
+  return (
+    <aside
+      ref={ref}
+      className="sessions-panel"
+      popover="auto"
+      aria-label="Sessions panel"
+      onToggle={(event) => {
+        // Light dismiss and Escape close the popover without going through
+        // React; mirror that into state so the next click opens it again.
+        if (event.newState === 'closed' && !unmounting.current) onClose();
+      }}
+    >
+      {children}
+    </aside>
   );
 }

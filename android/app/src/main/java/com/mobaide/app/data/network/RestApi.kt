@@ -7,6 +7,7 @@ import com.mobaide.app.data.network.dto.CodexLoginRequest
 import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ForceUpdateResponse
+import com.mobaide.app.data.network.dto.FsDirsResponse
 import com.mobaide.app.data.network.dto.GitCommitContextResponse
 import com.mobaide.app.data.network.dto.GitCommitRequest
 import com.mobaide.app.data.network.dto.GitCommitResponse
@@ -267,6 +268,18 @@ class RestApi(
         val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
         val url = projectGitUrl(projectName, "checkout").build()
         return execute(Request.Builder().url(url).post(payload).build())
+    }
+
+    /** Cancellable: the path field supersedes a listing as soon as the user moves on. */
+    suspend fun listDirs(path: String, q: String?): FsDirsResponse {
+        val url = baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("fs")
+            .addPathSegment("dirs")
+            .addQueryParameter("path", path)
+            .apply { if (q != null) addQueryParameter("q", q) }
+            .build()
+        return executeCancellable(Request.Builder().url(url).get().build())
     }
 
     private fun projectGitUrl(projectName: String, leaf: String): HttpUrl.Builder =

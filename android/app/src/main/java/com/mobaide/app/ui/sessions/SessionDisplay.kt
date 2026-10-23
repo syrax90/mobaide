@@ -1,7 +1,9 @@
 package com.mobaide.app.ui.sessions
 
+import androidx.compose.ui.graphics.Color
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
+import com.mobaide.app.ui.theme.PixelColors
 
 /**
  * Human-readable label for a session's kind. Custom types prefer the wire
@@ -34,3 +36,34 @@ fun sessionHeaderLabel(
     customTypeNames: Map<String, String>,
 ): String = session.title?.takeIf { it.isNotBlank() }
     ?: sessionKindLabel(session, customTypeNames)
+
+/**
+ * A card's headline: the live title, otherwise
+ * `kind · project` — with several sessions of one kind open, the bare kind
+ * identifies nothing — falling back to a truncated id for a project-less one.
+ */
+fun sessionTitle(session: SessionResponse, kindLabel: String): String =
+    session.title?.takeIf { it.isNotBlank() }
+        ?: "$kindLabel · ${session.project_name ?: session.session_id.take(8)}"
+
+/** The status-dot colour for a session's `state`. */
+fun PixelColors.sessionStateColor(state: String): Color = when (state) {
+    "running" -> statusRunning
+    "starting" -> statusStarting
+    "stopping" -> statusStopping
+    "stopped" -> statusStopped
+    "crashed" -> statusCrashed
+    else -> statusStopped
+}
+
+enum class AttentionTone { Warning, Ok, Muted }
+
+data class SessionAttention(val text: String, val tone: AttentionTone)
+
+/** The card chip for a session's `attention` field. */
+fun sessionAttention(value: String?): SessionAttention? = when (value) {
+    "awaiting_permission", "awaiting_os_permission" -> SessionAttention("Needs permission", AttentionTone.Warning)
+    "turn_finished" -> SessionAttention("Ready", AttentionTone.Ok)
+    "ended" -> SessionAttention("Ended", AttentionTone.Muted)
+    else -> null
+}

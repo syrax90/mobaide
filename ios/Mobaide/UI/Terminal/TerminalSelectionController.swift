@@ -55,6 +55,10 @@ final class TerminalSelectionController: NSObject {
     /// re-baselines it on every trim it does account for, because `yDisp` itself
     /// drops once per trimmed line whenever `Terminal.userScrolling` is set.
     private var startYDisp = 0
+    /// Repeats the edge autoscroll while a dragged handle sits in an edge band.
+    private var autoscrollTimer: Timer?
+    private weak var autoscrollGesture: UIPanGestureRecognizer?
+    private static let autoscrollInterval: TimeInterval = 0.045
 
     /// Publishes selection geometry to the session model for the SwiftUI toolbar.
     var onChange: ((TerminalSelectionUi?) -> Void)?
@@ -111,6 +115,9 @@ final class TerminalSelectionController: NSObject {
             drag.delegate = gestureDelegate
             view.addGestureRecognizer(drag)
             dragGesture = drag
+        }
+        if let edge = view.drawerEdgePanGesture {
+            dragGesture?.require(toFail: edge)
         }
         if dismissTapGesture?.view !== view {
             let tap = UITapGestureRecognizer(target: self, action: #selector(handleDismissTap(_:)))
@@ -171,10 +178,12 @@ final class TerminalSelectionController: NSObject {
                 moveLoupe(tracking: handle)
             }
             dragHandle(to: gesture.location(in: view))
+            updateAutoscroll(gesture)
         case .changed:
-            autoscrollIfNeeded(gesture)
             dragHandle(to: gesture.location(in: view))
+            updateAutoscroll(gesture)
         case .ended, .cancelled, .failed:
+            stopAutoscroll()
             draggingHandle = nil
             dismissLoupe()
             refresh()
@@ -221,24 +230,89 @@ final class TerminalSelectionController: NSObject {
         refreshOverlay()
     }
 
-    private func autoscrollIfNeeded(_ gesture: UIPanGestureRecognizer) {
+    /// Starts or stops the edge-autoscroll timer for the drag's current touch.
+    /// A timer rather than a per-`.changed` step, so a finger held still at the
+    /// edge keeps scrolling — `.changed` only fires while the finger moves.
+    private func updateAutoscroll(_ gesture: UIPanGestureRecognizer) {
+        autoscrollGesture = gesture
+        guard draggingHandle != nil, autoscrollOffset(for: gesture) != nil else {
+            stopAutoscroll()
+            return
+        }
+        guard autoscrollTimer == nil else { return }
+        let timer = Timer(timeInterval: Self.autoscrollInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.autoscrollTick() }
+        }
+        // `.common`, so the timer keeps firing while UIKit tracks the touch.
+        RunLoop.main.add(timer, forMode: .common)
+        autoscrollTimer = timer
+        autoscrollTick()
+    }
+
+    private func autoscrollTick() {
+        guard let gesture = autoscrollGesture,
+              draggingHandle != nil,
+              let step = autoscrollOffset(for: gesture) else {
+            stopAutoscroll()
+            return
+        }
+        // Programmatic writes, so `handleScrollViewDidScroll` ignores the
+        // vertical one and follow mode is left alone.
+        if let y = step.y {
+            view.contentOffset = CGPoint(x: view.contentOffset.x, y: y)
+        }
+        if let x = step.x, let host = staticPanHost {
+            host.contentOffset = CGPoint(x: x, y: host.contentOffset.y)
+        }
+        // Re-read against the scrolled views: the finger stays put on screen,
+        // so the handle lands on whatever content scrolled under it.
+        dragHandle(to: gesture.location(in: view))
+    }
+
+    private func stopAutoscroll() {
+        autoscrollTimer?.invalidate()
+        autoscrollTimer = nil
+        autoscrollGesture = nil
+    }
+
+    /// The outer horizontal pan view, only while it has columns to reveal.
+    private var staticPanHost: TerminalPanScrollView? {
+        guard let host = view.superview as? TerminalPanScrollView,
+              host.displayConfig.mode == .static else { return nil }
+        return host
+    }
+
+    /// The clamped content offsets one autoscroll tick would move to, per axis,
+    /// or nil when the touch is outside every edge band or the band's direction
+    /// is already at its limit.
+    private func autoscrollOffset(for gesture: UIGestureRecognizer) -> (x: CGFloat?, y: CGFloat?)? {
+        let cell = view.cellSize
+        var y: CGFloat?
         // The alternate buffer has no scrollback to reach (Android skips
-        // autoscroll there for the same reason).
-        guard !view.getTerminal().isCurrentBufferAlternate else { return }
-        let viewportY = gesture.location(in: view).y - view.contentOffset.y
-        let rows = TerminalSelection.autoscrollRows(
-            viewportY: viewportY,
-            viewportHeight: view.bounds.height,
-            cellHeight: view.cellSize.height
-        )
-        guard rows != 0 else { return }
-        let target = view.contentOffset.y + CGFloat(rows) * view.cellSize.height
-        let clamped = min(max(0, target), view.maxScrollOffsetY)
-        guard clamped != view.contentOffset.y else { return }
-        // A programmatic write, so `handleScrollViewDidScroll` ignores it and
-        // follow mode is left alone — the Android rule that `setTopRow` must not
-        // report a scroll position.
-        view.contentOffset = CGPoint(x: view.contentOffset.x, y: clamped)
+        // vertical autoscroll there for the same reason).
+        if !view.getTerminal().isCurrentBufferAlternate {
+            let rows = TerminalSelection.autoscrollRows(
+                viewportY: gesture.location(in: view).y - view.contentOffset.y,
+                viewportHeight: view.bounds.height,
+                cellHeight: cell.height
+            )
+            let target = min(max(0, view.contentOffset.y + CGFloat(rows) * cell.height), view.maxScrollOffsetY)
+            if rows != 0, target != view.contentOffset.y { y = target }
+        }
+        var x: CGFloat?
+        // Both buffers: Claude Code and Codex run on the alternate one, and
+        // their wide rows are exactly what Static mode leaves off-screen.
+        if let host = staticPanHost {
+            let cols = TerminalSelection.autoscrollColumns(
+                viewportX: gesture.location(in: host).x - host.contentOffset.x,
+                viewportWidth: host.bounds.width,
+                cellWidth: cell.width
+            )
+            let maxX = max(0, host.contentSize.width - host.bounds.width)
+            let target = min(max(0, host.contentOffset.x + CGFloat(cols) * cell.width), maxX)
+            if cols != 0, target != host.contentOffset.x { x = target }
+        }
+        return x == nil && y == nil ? nil : (x, y)
     }
 
     private func grabbedHandle(for gesture: UIGestureRecognizer) -> TerminalSelectionHandle? {
@@ -332,6 +406,7 @@ final class TerminalSelectionController: NSObject {
     func endSelection() {
         guard isActive else { return }
         range = nil
+        stopAutoscroll()
         draggingHandle = nil
         dismissLoupe()
         lastLinesTrimmed = nil

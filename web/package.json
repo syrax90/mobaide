@@ -1,7 +1,7 @@
 {
   "name": "mobaide-web",
   "private": true,
-  "version": "0.1.9",
+  "version": "0.1.12",
   "type": "module",
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
