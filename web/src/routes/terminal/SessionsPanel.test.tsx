@@ -324,6 +324,7 @@ describe('SessionsPanel stop', () => {
   it('stops another session with the chosen force flag and stays on this terminal', async () => {
     markSessionsSynced('a1');
     api.sessions = [session('s1', { title: 'one' }), session('s2', { title: 'two' })];
+    useLastSessionStore.setState({ lastUsedSessionIds: { a1: 's1' } });
     renderPanel();
     const list = await screen.findByRole('list', { name: 'Sessions' });
 
@@ -337,11 +338,13 @@ describe('SessionsPanel stop', () => {
     expect(currentPath()).toBe('/agents/a1/sessions/s1');
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(calls.closes).toBe(0);
+    expect(useLastSessionStore.getState().lastUsedSessionIds).toEqual({ a1: 's1' });
   });
 
   it('leaves for the sessions list before evicting the terminal it stopped', async () => {
     markSessionsSynced('a1');
     api.sessions = [session('s1', { title: 'one' })];
+    useLastSessionStore.setState({ lastUsedSessionIds: { a1: 's1', a2: 's9' } });
     setTerminalEvictor((_agentId, ids) => {
       api.trace.push(`evict:${ids.join(',')}`);
     });
@@ -359,6 +362,8 @@ describe('SessionsPanel stop', () => {
     // Evicting first would tear the live view down under the user.
     expect(api.trace).toEqual(['navigate:/', 'evict:s1']);
     expect(toastMessages()).toEqual([['Session stopped.', 'success']]);
+    // Otherwise an unclaimed auto-resume sends the list straight back into it.
+    expect(useLastSessionStore.getState().lastUsedSessionIds).toEqual({ a2: 's9' });
   });
 
   it('treats a 404 on the current session as already stopped and still leaves', async () => {

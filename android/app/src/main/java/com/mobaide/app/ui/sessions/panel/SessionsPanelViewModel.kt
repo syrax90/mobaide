@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.events.AgentEventBus
+import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.AgentRepository
@@ -31,7 +32,8 @@ data class SessionsPanelUiState(
     val agents: List<AgentSummaryResponse> = emptyList(),
     val connectedAgentId: String? = null,
     val switchingAgentId: String? = null,
-    /** The session a panel-started stop is waiting on, if any. */
+    /** The session a panel-started stop is waiting on, if any; every row's
+     *  stop control is disabled while it is set. */
     val stoppingSessionId: String? = null,
 ) {
     val connectedAgent: AgentSummaryResponse?
@@ -108,7 +110,8 @@ class SessionsPanelViewModel @Inject constructor(
     }
 
     /** The row disappears through the agent's `sessions.changed` push, so a
-     *  success needs no refetch here. */
+     *  success needs no refetch here. One stop at a time: the panel disables
+     *  every stop control while one is in flight. */
     fun stopSession(sessionId: String, force: Boolean) {
         if (stoppingSessionId.value != null) return
         stoppingSessionId.value = sessionId
@@ -116,6 +119,13 @@ class SessionsPanelViewModel @Inject constructor(
             try {
                 sessionRepository.deleteSession(sessionId, force)
                 _events.send(SessionsPanelEvent.Stopped(sessionId))
+            } catch (e: ApiException) {
+                // A 404 means the session is already gone, so the stop the user
+                // asked for has happened.
+                _events.send(
+                    if (e.code == 404) SessionsPanelEvent.Stopped(sessionId)
+                    else SessionsPanelEvent.StopFailed("Failed to stop session: ${e.message}"),
+                )
             } catch (e: Exception) {
                 _events.send(SessionsPanelEvent.StopFailed("Failed to stop session: ${e.message}"))
             } finally {

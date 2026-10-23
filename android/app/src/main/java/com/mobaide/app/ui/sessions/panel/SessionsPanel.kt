@@ -150,7 +150,7 @@ fun SessionsPanel(
                     session = session,
                     kindLabel = sessionKindLabel(session, state.customTypeNames),
                     selected = session.session_id == currentSessionId,
-                    stopping = state.stoppingSessionId == session.session_id,
+                    stopping = state.stoppingSessionId != null,
                     onClick = {
                         if (session.session_id == currentSessionId) onClose() else onSelectSession(session.session_id)
                     },

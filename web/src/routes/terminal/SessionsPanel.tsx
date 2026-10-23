@@ -68,6 +68,7 @@ export function SessionsPanel({
     ...wsBackedQueryOptions,
   });
   const setLastUsedSession = useLastSessionStore((state) => state.setLastUsedSession);
+  const clearLastUsedSession = useLastSessionStore((state) => state.clearLastUsedSession);
   const setSelectedAgent = useSelectedAgentStore((state) => state.setSelectedAgent);
 
   const [stopTarget, setStopTarget] = useState<SessionResponse | null>(null);
@@ -78,8 +79,13 @@ export function SessionsPanel({
     onStopped: (stoppedId) => {
       // The terminal's own gone-check never ejects a session it has seen alive,
       // so leaving the one on screen is this panel's job — and it must happen
-      // before the eviction tears the live view down under the user.
-      if (stoppedId === sessionId) void navigate('/', { replace: true });
+      // before the eviction tears the live view down under the user. Clearing
+      // last-used first stops auto-resume, which may not have been claimed yet,
+      // from sending the list straight back into the still-cached session.
+      if (stoppedId === sessionId) {
+        clearLastUsedSession(agentId);
+        void navigate('/', { replace: true });
+      }
       useToastStore.getState().show('Session stopped.', 'success');
     },
   });
@@ -190,7 +196,7 @@ export function SessionsPanel({
                       className="button button-icon sessions-panel-stop"
                       aria-label="Stop session"
                       title="Stop session"
-                      disabled={stop.isPending && stop.variables.sessionId === session.session_id}
+                      disabled={stop.isPending}
                       onClick={() => {
                         setStopTarget(session);
                       }}

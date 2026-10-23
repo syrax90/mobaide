@@ -132,7 +132,8 @@ private struct TerminalScreenContent: View {
     }
 
     /// `checkSessionStillExists` never leaves a session this screen has seen
-    /// alive, so stopping the one on screen navigates away here instead.
+    /// alive, so stopping the one on screen navigates away here instead —
+    /// unless the user switched sessions while the request was in flight.
     private func stopSession(_ id: String, force: Bool) async {
         do {
             guard try await panel.stopSession(id, force: force) else { return }
@@ -141,6 +142,7 @@ private struct TerminalScreenContent: View {
             return
         }
         if id == sessionId {
+            guard router.path.last == .sessionDetail(sessionId: id) else { return }
             drawerOpen = false
             router.popTo(.sessionList)
         } else {

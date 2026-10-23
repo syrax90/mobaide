@@ -223,12 +223,11 @@ class SessionsPanelTest {
     }
 
     @Test
-    fun stopButton_isDisabledOnlyForTheRowBeingStopped() {
+    fun stopButton_isDisabledOnEveryRowWhileAStopIsInFlight() {
         val recorder = setPanel(twoSessions.copy(stoppingSessionId = "s2"))
 
         composeRule.onNodeWithTag(sessionsPanelStopTag("s2")).assertIsNotEnabled().performClick()
-        assertEquals("an in-flight stop must not be resubmitted", emptyList<String>(), recorder.stops)
-
-        composeRule.onNodeWithTag(sessionsPanelStopTag("s1")).assertIsEnabled()
+        composeRule.onNodeWithTag(sessionsPanelStopTag("s1")).assertIsNotEnabled().performClick()
+        assertEquals("no stop may be requested while one is in flight", emptyList<String>(), recorder.stops)
     }
 }

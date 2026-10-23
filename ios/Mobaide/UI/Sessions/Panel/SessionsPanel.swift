@@ -37,7 +37,7 @@ struct SessionsPanel: View {
                                 session: session,
                                 kindLabel: SessionDisplay.kindLabel(session, customTypeNames: model.customTypeNames),
                                 selected: selected,
-                                stopping: model.stoppingSessionId == session.session_id,
+                                stopping: model.stoppingSessionId != nil,
                                 onStop: { onStopSession(session) }
                             )
                         }

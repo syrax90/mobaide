@@ -3,6 +3,7 @@ package com.mobaide.app.ui.sessions.panel
 import app.cash.turbine.test
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.events.AgentEventBus
+import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.SessionResponse
@@ -245,6 +246,37 @@ class SessionsPanelViewModelTest {
             }
             assertNull("a failed stop must re-enable the row", expectMostRecentItem().stoppingSessionId)
             cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun stopSession_alreadyGone404_emitsStopped() = runTest {
+        val fx = build()
+        coEvery { fx.sessionRepo.deleteSession(any(), any()) } throws ApiException(404, "not found")
+        advanceUntilIdle()
+
+        fx.vm.events.test {
+            fx.vm.stopSession("s1", force = false)
+            advanceUntilIdle()
+            assertEquals(SessionsPanelEvent.Stopped("s1"), awaitItem())
+            expectNoEvents()
+        }
+    }
+
+    @Test
+    fun stopSession_otherHttpError_emitsStopFailed() = runTest {
+        val fx = build()
+        coEvery { fx.sessionRepo.deleteSession(any(), any()) } throws ApiException(503, "agent offline")
+        advanceUntilIdle()
+
+        fx.vm.events.test {
+            fx.vm.stopSession("s1", force = false)
+            advanceUntilIdle()
+            assertEquals(
+                SessionsPanelEvent.StopFailed("Failed to stop session: HTTP 503: agent offline"),
+                awaitItem(),
+            )
+            expectNoEvents()
         }
     }
 

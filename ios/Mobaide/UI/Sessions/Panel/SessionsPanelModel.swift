@@ -14,7 +14,8 @@ final class SessionsPanelModel {
     private(set) var synced = false
     private(set) var customTypeNames: [String: String] = [:]
     private(set) var agents: [AgentSummaryResponse] = []
-    /// The session a panel-started stop is waiting on, if any.
+    /// The session a panel-started stop is waiting on, if any; every row's
+    /// stop control is disabled while it is set.
     private(set) var stoppingSessionId: String?
     let connectedAgentId: String?
 
@@ -86,13 +87,16 @@ final class SessionsPanelModel {
     }
 
     /// The row disappears through the agent's `sessions.changed` push, so a
-    /// success needs no refetch here. One stop at a time: a second press while
-    /// one is in flight is ignored rather than queued, and returns false.
+    /// success needs no refetch here. One stop at a time: the panel disables
+    /// every stop control while one is in flight, and a second call returns
+    /// false. A 404 means the session is already gone, so it counts as stopped.
     func stopSession(_ id: String, force: Bool) async throws -> Bool {
         guard stoppingSessionId == nil else { return false }
         stoppingSessionId = id
         defer { stoppingSessionId = nil }
-        try await sessionRepository.deleteSession(id: id, force: force)
+        do {
+            try await sessionRepository.deleteSession(id: id, force: force)
+        } catch let error as APIError where error.code == 404 {}
         return true
     }
 
