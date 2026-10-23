@@ -1,5 +1,21 @@
 # mobaide_agent Changelog
 
+## [0.3.17](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.16...agent-v0.3.17) (2026-10-23)
+
+
+### Features
+
+* opt-in on-PC voice input in the agent and Android, iOS and web clients ([#736](https://github.com/syrax90/claude_mobile/issues/736), [#737](https://github.com/syrax90/claude_mobile/issues/737)) ([7fb5482](https://github.com/syrax90/claude_mobile/commit/7fb5482a39eb2a7d4fd33e84c05e3237f23ec175))
+* **web:** mic icon, dictate more and a review opt-out; ~700 MB voice memory ([#737](https://github.com/syrax90/claude_mobile/issues/737)) ([a5b49e8](https://github.com/syrax90/claude_mobile/commit/a5b49e8c0a0c0d56a4a9ec2a84c8d570c4b55403))
+
+
+### Bug Fixes
+
+* **agent:** delete the voice model when the agent uninstalls itself ([c83d4e2](https://github.com/syrax90/claude_mobile/commit/c83d4e2adc4c3a296af9647fd4c1ae3430498b2a))
+* **agent:** reap a voice worker whose spawn was cancelled ([e56e064](https://github.com/syrax90/claude_mobile/commit/e56e0649d7a5453e6e9c7b8b0d35bd5cc6ab31b6))
+* **agent:** report ~700 MB of dictation memory instead of 2 GB ([ba8df34](https://github.com/syrax90/claude_mobile/commit/ba8df341bdbb4483796f1ff5c89011e1a0efd984))
+* **agent:** report ready only after a passed self-test ([b190424](https://github.com/syrax90/claude_mobile/commit/b1904243b5ad029f2c550c2129c9aca2984a08a6))
+
 ## [0.3.16](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.15...agent-v0.3.16) (2026-10-19)
 
 

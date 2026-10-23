@@ -1,5 +1,21 @@
 # Android Changelog
 
+## [3.6.11](https://github.com/syrax90/claude_mobile/compare/android-v3.6.10...android-v3.6.11) (2026-10-23)
+
+
+### Features
+
+* opt-in on-PC voice input in the agent and Android, iOS and web clients ([#736](https://github.com/syrax90/claude_mobile/issues/736), [#737](https://github.com/syrax90/claude_mobile/issues/737)) ([7fb5482](https://github.com/syrax90/claude_mobile/commit/7fb5482a39eb2a7d4fd33e84c05e3237f23ec175))
+* **sessions:** stop sessions from the terminal sessions panel ([943d12d](https://github.com/syrax90/claude_mobile/commit/943d12de76ac16bef8bbe3ef5b1166110ae9f1c0))
+* **sessions:** stop sessions from the terminal sessions panel ([789fe2c](https://github.com/syrax90/claude_mobile/commit/789fe2c0e0b651399329c84e5519089ce7b533fb))
+* **web:** mic icon, dictate more and a review opt-out; ~700 MB voice memory ([#737](https://github.com/syrax90/claude_mobile/issues/737)) ([a5b49e8](https://github.com/syrax90/claude_mobile/commit/a5b49e8c0a0c0d56a4a9ec2a84c8d570c4b55403))
+
+
+### Bug Fixes
+
+* **agent:** report ~700 MB of dictation memory instead of 2 GB ([ba8df34](https://github.com/syrax90/claude_mobile/commit/ba8df341bdbb4483796f1ff5c89011e1a0efd984))
+* **sessions:** harden stop-from-panel against races and already-gone sessions ([e581d20](https://github.com/syrax90/claude_mobile/commit/e581d2009f49121890ce257bb5f421fd7e07125e))
+
 ## [3.6.10](https://github.com/syrax90/claude_mobile/compare/android-v3.6.9...android-v3.6.10) (2026-10-19)
 
 
