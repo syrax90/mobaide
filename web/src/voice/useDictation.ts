@@ -10,10 +10,24 @@ import { WebAudioRecorder } from './recorder';
 
 const IDLE: DictationState = { kind: 'idle' };
 
-/** Dictating more from the review appends to its text, one space apart. */
-export function joinTranscript(before: string, after: string): string {
-  if (before.trim() === '') return after;
-  return /\s$/.test(before) ? before + after : `${before} ${after}`;
+/** The review's text either side of its cursor (a selection is replaced). */
+export interface CarriedText {
+  before: string;
+  after: string;
+}
+
+/**
+ * Puts a transcript dictated from the review at its cursor, a space apart
+ * from the words around it. `caret` is just past the inserted text.
+ */
+export function spliceTranscript(
+  { before, after }: CarriedText,
+  transcript: string,
+): { text: string; caret: number } {
+  const lead = before === '' || /\s$/.test(before) ? '' : ' ';
+  const trail = after === '' || /^[\s.,;:!?)\]}]/.test(after) ? '' : ' ';
+  const head = before + lead + transcript;
+  return { text: head + trail + after, caret: head.length };
 }
 
 /**
@@ -31,10 +45,10 @@ export function useDictation(
   capability: VoiceCapability | null,
 ) {
   const [state, setState] = useState<DictationState>(IDLE);
-  // Text kept from the review while the user dictates more: the next result
-  // is appended to it, and a cancel, an empty result or a failure returns to
-  // reviewing it.
-  const [carried, setCarried] = useState<string | null>(null);
+  // The review's text around its cursor while the user dictates more: the
+  // next result goes in between, and a cancel, an empty result or a failure
+  // returns to reviewing it.
+  const [carried, setCarried] = useState<CarriedText | null>(null);
   const queryClient = useQueryClient();
   const controllerRef = useRef<DictationController | null>(null);
   const sampleRate = capability?.sampleRate ?? null;
@@ -80,8 +94,8 @@ export function useDictation(
   const dismiss = useCallback(() => {
     controllerRef.current?.dismiss();
   }, []);
-  /** Records again from the review, keeping `text` to append the result to. */
-  const continueFrom = useCallback((text: string) => {
+  /** Records again from the review, keeping its text to insert the result into. */
+  const continueFrom = useCallback((text: CarriedText) => {
     const controller = controllerRef.current;
     if (controller === null) return;
     setCarried(text);

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DictationState } from '../../../voice/dictationController';
+import { spliceTranscript, type CarriedText } from '../../../voice/useDictation';
 import { VOICE_CODE } from '../../../voice/voiceApi';
 import { DictationDialog } from './DictationDialog';
 
@@ -20,7 +21,7 @@ interface Calls {
   retry: number;
   dismiss: number;
   discard: number;
-  continued: string[];
+  continued: CarriedText[];
   inserted: string[];
   skip: boolean[];
 }
@@ -30,7 +31,7 @@ const dialog = (
   calls: Calls,
   state: DictationState,
   canRecord: boolean,
-  options: { carried?: string | null; canSend?: boolean; skipReview?: boolean } = {},
+  options: { carried?: CarriedText | null; canSend?: boolean; skipReview?: boolean } = {},
 ) => (
   <DictationDialog
     state={state}
@@ -49,8 +50,8 @@ const dialog = (
     onDismiss={() => {
       calls.dismiss += 1;
     }}
-    onContinue={(draft) => {
-      calls.continued.push(draft);
+    onContinue={(text) => {
+      calls.continued.push(text);
     }}
     onDiscard={() => {
       calls.discard += 1;
@@ -142,14 +143,28 @@ describe('DictationDialog review', () => {
   const result = (text: string): DialogState => ({ kind: 'result', text });
   const textField = (): HTMLTextAreaElement => screen.getByRole('textbox');
 
-  it('dictates more from the review, keeping the edited text', () => {
+  const dictateMore = (): HTMLElement =>
+    screen.getByRole('button', { name: 'Dictate more at the cursor' });
+
+  it('dictates more from the review, splitting the edited text at the cursor', () => {
     const calls = newCalls();
     render(dialog(calls, result('hello'), true, { canSend: true }));
     fireEvent.change(textField(), { target: { value: 'hello there' } });
+    textField().setSelectionRange(5, 5);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Dictate more: adds to the text' }));
+    fireEvent.click(dictateMore());
 
-    expect(calls.continued).toEqual(['hello there']);
+    expect(calls.continued).toEqual([{ before: 'hello', after: ' there' }]);
+  });
+
+  it('leaves a selection out of the carried text, so the transcript replaces it', () => {
+    const calls = newCalls();
+    render(dialog(calls, result('hello big world'), true, { canSend: true }));
+    textField().setSelectionRange(6, 9);
+
+    fireEvent.click(dictateMore());
+
+    expect(calls.continued).toEqual([{ before: 'hello ', after: ' world' }]);
   });
 
   it('offers Dictate again once the text is cleared', () => {
@@ -159,33 +174,37 @@ describe('DictationDialog review', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Dictate again' }));
 
-    expect(calls.continued).toEqual(['  ']);
+    expect(calls.continued).toHaveLength(1);
   });
 
   it('refuses to dictate more once the session has ended', () => {
     render(dialog(newCalls(), result('hello'), false, { canSend: true }));
 
-    expect(screen.getByRole('button', { name: 'Dictate more: adds to the text' })).toBeDisabled();
+    expect(dictateMore()).toBeDisabled();
   });
 
-  it('appends the next transcript to the carried text and inserts both', () => {
+  it('puts the next transcript at the cursor, leaves the cursor after it and inserts it all', () => {
     const calls = newCalls();
-    const { rerender } = render(dialog(calls, result('hello'), true, { canSend: true }));
-    rerender(dialog(calls, { kind: 'starting' }, true, { canSend: true, carried: 'hello' }));
+    const carried = { before: 'hello', after: ' world' };
+    const { rerender } = render(dialog(calls, result('hello world'), true, { canSend: true }));
+    rerender(dialog(calls, { kind: 'starting' }, true, { canSend: true, carried }));
 
-    rerender(dialog(calls, result('world'), true, { canSend: true, carried: 'hello' }));
+    rerender(dialog(calls, result('big'), true, { canSend: true, carried }));
 
-    expect(textField().value).toBe('hello world');
+    expect(textField().value).toBe('hello big world');
+    expect(textField().selectionStart).toBe('hello big'.length);
+    expect(textField().selectionEnd).toBe('hello big'.length);
     fireEvent.click(screen.getByRole('button', { name: 'Insert' }));
-    expect(calls.inserted).toEqual(['hello world']);
+    expect(calls.inserted).toEqual(['hello big world']);
   });
 
   it('returns to the carried text when the extra recording is abandoned', () => {
     const calls = newCalls();
     const { rerender } = render(dialog(calls, result('hello'), true, { canSend: true }));
-    rerender(dialog(calls, { kind: 'starting' }, true, { canSend: true, carried: 'hello' }));
+    const carried = { before: 'hel', after: 'lo' };
+    rerender(dialog(calls, { kind: 'starting' }, true, { canSend: true, carried }));
 
-    rerender(dialog(calls, { kind: 'idle' }, true, { canSend: true, carried: 'hello' }));
+    rerender(dialog(calls, { kind: 'idle' }, true, { canSend: true, carried }));
 
     expect(textField().value).toBe('hello');
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
@@ -205,5 +224,19 @@ describe('DictationDialog review', () => {
 
     expect(screen.getByRole('checkbox', { name: /without this review/ })).toBeChecked();
     expect(screen.getByText(/laptop.s Voice input settings/)).toBeInTheDocument();
+  });
+});
+
+describe('spliceTranscript', () => {
+  it.each([
+    [{ before: '', after: '' }, 'hi', 'hi', 2],
+    [{ before: 'one', after: '' }, 'two', 'one two', 7],
+    [{ before: 'one ', after: '' }, 'two', 'one two', 7],
+    [{ before: '', after: 'three' }, 'two', 'two three', 3],
+    [{ before: 'one', after: 'three' }, 'two', 'one two three', 7],
+    [{ before: 'one ', after: ' three' }, 'two', 'one two three', 7],
+    [{ before: 'one', after: '. Next' }, 'two', 'one two. Next', 7],
+  ])('splices %o with %s', (around, transcript, text, caret) => {
+    expect(spliceTranscript(around, transcript)).toEqual({ text, caret });
   });
 });

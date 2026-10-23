@@ -249,11 +249,20 @@ test('dictates more from the review, then skips the review once it is turned off
 
   await dictateButton(page).click();
   await record();
-  await expect(review.getByRole('textbox')).toHaveValue(TRANSCRIPT);
+  const field = review.getByRole('textbox');
+  await expect(field).toHaveValue(TRANSCRIPT);
+  // The cursor between two edited words: the next transcript goes there.
+  await field.fill('First. Last.');
+  await field.press('Home');
+  for (let step = 0; step < 'First.'.length; step += 1) await field.press('ArrowRight');
 
-  await review.getByRole('button', { name: 'Dictate more: adds to the text' }).click();
+  await review.getByRole('button', { name: 'Dictate more at the cursor' }).click();
   await record();
-  await expect(review.getByRole('textbox')).toHaveValue(`${TRANSCRIPT} ${TRANSCRIPT}`);
+  await expect(field).toHaveValue(`First. ${TRANSCRIPT} Last.`);
+  // The cursor lands just past the inserted words, ready to type on.
+  await page.keyboard.type(' Thanks');
+  const merged = `First. ${TRANSCRIPT} Thanks Last.`;
+  await expect(field).toHaveValue(merged);
   await review.getByRole('checkbox', { name: /without this review/ }).check();
   await review.getByRole('button', { name: 'Insert' }).click();
   await expect(review).toBeHidden();
@@ -267,7 +276,7 @@ test('dictates more from the review, then skips the review once it is turned off
   await expect
     .poll(inputs)
     .toEqual([
-      `i\x1b[200~${TRANSCRIPT} ${TRANSCRIPT}\x1b[201~`,
+      `i\x1b[200~${merged}\x1b[201~`,
       `i\x1b[200~${TRANSCRIPT}\x1b[201~`,
     ]);
   await expect(review).toBeHidden();

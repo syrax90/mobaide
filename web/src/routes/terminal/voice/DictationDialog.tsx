@@ -1,9 +1,9 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Modal } from '../../../components/Modal';
 import type { DictationState, InterruptReason } from '../../../voice/dictationController';
 import { VOICE_CODE } from '../../../voice/voiceApi';
 import { dictationErrorCopy } from '../../../voice/voiceErrorCopy';
-import { joinTranscript } from '../../../voice/useDictation';
+import { spliceTranscript, type CarriedText } from '../../../voice/useDictation';
 import { formatDuration } from '../../../voice/voiceStatusView';
 import { MicIcon } from './VoiceIcons';
 
@@ -13,8 +13,8 @@ const PASTE_COLLAPSE_CHARS = 800;
 interface DictationDialogProps {
   /** `idle` only while `carried` holds text: the review is showing it again. */
   state: DictationState;
-  /** The review's text kept while the user dictates more; the next result is appended. */
-  carried: string | null;
+  /** The review's text around its cursor while the user dictates more; the next result goes in between. */
+  carried: CarriedText | null;
   agentName: string;
   canSend: boolean;
   /** False once the session has ended: a new recording could never be inserted. */
@@ -25,8 +25,8 @@ interface DictationDialogProps {
   onRecordAgain: () => void;
   /** Leaves an empty result or a failure (back to the review if text is carried). */
   onDismiss: () => void;
-  /** Records more from the review, keeping its current text. */
-  onContinue: (draft: string) => void;
+  /** Records more from the review, keeping its text either side of the cursor. */
+  onContinue: (text: CarriedText) => void;
   /** Throws the review's text away. */
   onDiscard: () => void;
   /** Returns false when the terminal refused the text. */
@@ -59,8 +59,8 @@ const PERMISSION_HELP =
  * field. **Insert** pastes the text into the session the way Templates does
  * — never with Enter — so the user always sends it themselves.
  *
- * The review's mic records again; while it has text the new transcript is
- * appended, and a cancel, an empty result or a failure returns to it.
+ * The review's mic records again; the new transcript goes in at the text's
+ * cursor, and a cancel, an empty result or a failure returns to the review.
  *
  * Esc cancels a recording or a transcription, and discards a result.
  */
@@ -83,23 +83,40 @@ export function DictationDialog({
 }: DictationDialogProps) {
   const titleId = useId();
   const [draft, setDraft] = useState(() => {
-    if (state.kind !== 'result') return carried ?? '';
-    return carried === null ? state.text : joinTranscript(carried, state.text);
+    if (state.kind !== 'result') return carried === null ? '' : carried.before + carried.after;
+    return carried === null ? state.text : spliceTranscript(carried, state.text).text;
   });
   const [insertRefused, setInsertRefused] = useState(false);
   const resultText = state.kind === 'result' ? state.text : null;
+  const textRef = useRef<HTMLTextAreaElement>(null);
+  // Where the cursor goes once a spliced transcript is in the field.
+  const caretRef = useRef<number | null>(null);
   // Read when a result lands, not a dependency: `carried` is set while the
-  // previous result is still showing, which must not re-append it.
+  // previous result is still showing, which must not re-insert it.
   const carriedRef = useRef(carried);
   carriedRef.current = carried;
 
   useEffect(() => {
     if (resultText !== null) {
-      const before = carriedRef.current;
-      setDraft(before === null ? resultText : joinTranscript(before, resultText));
+      const around = carriedRef.current;
+      if (around === null) {
+        setDraft(resultText);
+      } else {
+        const spliced = spliceTranscript(around, resultText);
+        caretRef.current = spliced.caret;
+        setDraft(spliced.text);
+      }
       setInsertRefused(false);
     }
   }, [resultText]);
+
+  useLayoutEffect(() => {
+    const caret = caretRef.current;
+    const field = textRef.current;
+    if (caret === null || field === null || field.value !== draft) return;
+    caretRef.current = null;
+    field.setSelectionRange(caret, caret);
+  }, [draft]);
 
   const live = state.kind === 'starting' || state.kind === 'recording' || state.kind === 'transcribing';
 
@@ -176,7 +193,7 @@ export function DictationDialog({
     case 'idle':
     case 'result': {
       const more = draft.trim() !== '';
-      const micLabel = more ? 'Dictate more: adds to the text' : 'Dictate again';
+      const micLabel = more ? 'Dictate more at the cursor' : 'Dictate again';
       title = 'Review';
       body = (
         <>
@@ -185,6 +202,7 @@ export function DictationDialog({
             press Enter there.
           </label>
           <textarea
+            ref={textRef}
             id={`${titleId}-text`}
             className="field-input field-textarea"
             rows={5}
@@ -230,7 +248,11 @@ export function DictationDialog({
             title={micLabel}
             disabled={!canRecord}
             onClick={() => {
-              onContinue(draft);
+              // The field keeps its selection after losing focus to this button.
+              const field = textRef.current;
+              const start = field?.selectionStart ?? draft.length;
+              const end = field?.selectionEnd ?? draft.length;
+              onContinue({ before: draft.slice(0, start), after: draft.slice(end) });
             }}
           >
             <MicIcon />

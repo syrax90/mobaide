@@ -38,7 +38,7 @@ import { useSessionRow } from './useSessionRow';
 import { DictationDialog } from './voice/DictationDialog';
 import { VoiceButton } from './voice/VoiceButton';
 import { VoiceSetupDialog } from './voice/VoiceSetupDialog';
-import { joinTranscript, useAgentName, useDictation } from '../../voice/useDictation';
+import { spliceTranscript, useAgentName, useDictation } from '../../voice/useDictation';
 import type { DictationState } from '../../voice/dictationController';
 import { useVoiceCapability, useVoiceStatus } from '../../voice/useVoiceStatus';
 import { useMicHidden, useSkipReview, useVoicePrefsStore } from '../../voice/voicePrefsStore';
@@ -234,7 +234,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // A layout effect, so a result never paints as a dialog before it lands.
   useLayoutEffect(() => {
     if (result === null || result === reviewed) return;
-    const text = carried === null ? result.text : joinTranscript(carried, result.text);
+    const text = carried === null ? result.text : spliceTranscript(carried, result.text).text;
     if (skipReview && insertTranscript(text)) return;
     setReviewed(result);
   }, [result, reviewed, skipReview, carried, insertTranscript]);
