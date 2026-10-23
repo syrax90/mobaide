@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.13](https://github.com/syrax90/claude_mobile/compare/web-v0.1.12...web-v0.1.13) (2026-10-23)
+
+
+### Features
+
+* opt-in on-PC voice input in the agent and Android, iOS and web clients ([#736](https://github.com/syrax90/claude_mobile/issues/736), [#737](https://github.com/syrax90/claude_mobile/issues/737)) ([7fb5482](https://github.com/syrax90/claude_mobile/commit/7fb5482a39eb2a7d4fd33e84c05e3237f23ec175))
+* **sessions:** stop sessions from the terminal sessions panel ([943d12d](https://github.com/syrax90/claude_mobile/commit/943d12de76ac16bef8bbe3ef5b1166110ae9f1c0))
+* **sessions:** stop sessions from the terminal sessions panel ([789fe2c](https://github.com/syrax90/claude_mobile/commit/789fe2c0e0b651399329c84e5519089ce7b533fb))
+* **web:** dictate more inserts at the review's cursor ([#737](https://github.com/syrax90/claude_mobile/issues/737)) ([7ca15d7](https://github.com/syrax90/claude_mobile/commit/7ca15d793371ca6a4ebf487f53ce5c8a41d6971f))
+* **web:** mic icon, dictate more and a review opt-out; ~700 MB voice memory ([#737](https://github.com/syrax90/claude_mobile/issues/737)) ([a5b49e8](https://github.com/syrax90/claude_mobile/commit/a5b49e8c0a0c0d56a4a9ec2a84c8d570c4b55403))
+* **web:** mic icon, dictate more and an opt-out of the dictation review ([#737](https://github.com/syrax90/claude_mobile/issues/737)) ([63a4d36](https://github.com/syrax90/claude_mobile/commit/63a4d36642ca46f2b131b7b2a741cd6fa8b58669))
+* **web:** pin and unpin icons on the sessions panel toggle ([7de57c9](https://github.com/syrax90/claude_mobile/commit/7de57c99aaa1b038906e8496a63f2ac0d330144e))
+* **web:** pin and unpin icons on the sessions panel toggle ([ba916a2](https://github.com/syrax90/claude_mobile/commit/ba916a239b9b350b2f332b234c7c2a69eb450f71))
+
+
+### Bug Fixes
+
+* **sessions:** harden stop-from-panel against races and already-gone sessions ([e581d20](https://github.com/syrax90/claude_mobile/commit/e581d2009f49121890ce257bb5f421fd7e07125e))
+* **web:** put the sessions panel stop button inside the row, like Android ([29d6dd4](https://github.com/syrax90/claude_mobile/commit/29d6dd4bc3d53fa097fb35ecc9ec80eaee1e555c))
+* **web:** put the sessions panel stop button inside the row, like Android ([777e32b](https://github.com/syrax90/claude_mobile/commit/777e32b0b7d641a0a0dcad32762ad330ea43520e))
+
 ## [0.1.12](https://github.com/syrax90/claude_mobile/compare/web-v0.1.11...web-v0.1.12) (2026-10-19)
 
 

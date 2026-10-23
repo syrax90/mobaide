@@ -1,5 +1,12 @@
 # central_server Changelog
 
+## [0.2.18](https://github.com/syrax90/claude_mobile/compare/server-v0.2.17...server-v0.2.18) (2026-10-23)
+
+
+### Features
+
+* opt-in on-PC voice input in the agent and Android, iOS and web clients ([#736](https://github.com/syrax90/claude_mobile/issues/736), [#737](https://github.com/syrax90/claude_mobile/issues/737)) ([7fb5482](https://github.com/syrax90/claude_mobile/commit/7fb5482a39eb2a7d4fd33e84c05e3237f23ec175))
+
 ## [0.2.17](https://github.com/syrax90/claude_mobile/compare/server-v0.2.16...server-v0.2.17) (2026-10-15)
 
 
