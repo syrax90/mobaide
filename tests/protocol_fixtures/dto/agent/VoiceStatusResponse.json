@@ -39,7 +39,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "progress": null,
@@ -89,7 +89,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "host": {
@@ -139,7 +139,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "progress": {
@@ -154,7 +154,7 @@
           "reasons": [
             {
               "code": "low_ram",
-              "message": "This computer has 8.6 GB of memory; dictation uses about 2 GB while it runs, which may slow other apps."
+              "message": "This computer has 8.6 GB of memory; dictation uses about 700 MB while it runs, which may slow other apps."
             }
           ]
         },
@@ -197,7 +197,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "progress": {
@@ -212,7 +212,7 @@
           "reasons": [
             {
               "code": "low_ram",
-              "message": "This computer has 8.6 GB of memory; dictation uses about 2 GB while it runs, which may slow other apps."
+              "message": "This computer has 8.6 GB of memory; dictation uses about 700 MB while it runs, which may slow other apps."
             }
           ]
         }
@@ -256,7 +256,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "progress": null,
@@ -306,7 +306,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "host": {
@@ -357,7 +357,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "progress": null,
@@ -410,7 +410,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "host": {
@@ -464,7 +464,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "progress": null,
@@ -519,7 +519,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "host": {
@@ -574,7 +574,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "progress": {
@@ -627,7 +627,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "progress": {
@@ -681,7 +681,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "progress": null,
@@ -734,7 +734,7 @@
           ],
           "download_bytes": 682365212,
           "disk_bytes": 733578420,
-          "ram_bytes": 2000000000,
+          "ram_bytes": 700000000,
           "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
         },
         "host": {

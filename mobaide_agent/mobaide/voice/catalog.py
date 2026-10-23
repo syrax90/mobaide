@@ -233,9 +233,9 @@ PARAKEET_V3 = ModelSpec(
         ),
     ),
     selftest_file="selftest-en.wav",
-    # Peak RSS of the helper measured over a 115 s dictation (segments are
-    # capped at 25 s, which bounds it); idle costs nothing.
-    ram_bytes=2_000_000_000,
+    # Memory of the helper while it transcribes, about 700 MB measured on
+    # Windows (segments are capped at 25 s, which bounds it); idle costs nothing.
+    ram_bytes=700_000_000,
     notice=(
         "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\n"
         "Mobaide voice input.\n"

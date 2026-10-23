@@ -591,7 +591,7 @@ Dictation is transcribed **on the agent's PC**, never on a Mobaide server. It is
 |---|---|
 | Download | ~682–690 MB (670 MB model + 12–19 MB of runtime wheels, depending on the platform) |
 | Disk | up to ~730 MB |
-| Memory | none while idle; up to ~2 GB while a dictation runs (1.9 GB peak measured on an Apple M4 over a 115 s dictation) |
+| Memory | none while idle; about 700 MB while a dictation runs |
 | Warning thresholds | apps warn (`low_resources`) below 11.5 GiB RAM, 4 logical CPUs or 2 GiB free disk; the user may still enable |
 | Unsupported | Python other than 64-bit CPython 3.12–3.14 (a 32-bit or free-threaded build), CPUs other than x86-64/ARM64, Linux with musl or glibc < 2.17, or too little free disk |
 

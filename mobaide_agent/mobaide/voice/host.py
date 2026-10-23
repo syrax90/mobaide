@@ -150,7 +150,7 @@ def assess(
         warnings.append(
             HostReason(
                 "low_ram",
-                f"This computer has {_gb(ram)} of memory; dictation uses about 2 GB "
+                f"This computer has {_gb(ram)} of memory; dictation uses about 700 MB "
                 "while it runs, which may slow other apps.",
             )
         )
