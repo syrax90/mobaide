@@ -866,6 +866,96 @@ class TestRuntimeRepair:
         assert load_settings(paths).enabled is True
         assert (events.payloads[-1]["state"], events.payloads[-1]["repairing"]) == ("failed", True)
 
+    @pytest.fixture
+    def runtime_unpacked(self, monkeypatch):
+        """Stands in for ``install_runtime``: unpacks at once and writes the
+        runtime marker, as the real one does before the self-test runs."""
+        calls: list[str] = []
+
+        async def install_runtime(paths, target, fetcher, on_progress):
+            calls.append(target.key)
+            runtime_dir = paths.runtime_dir(target.key)
+            runtime_dir.mkdir(parents=True, exist_ok=True)
+            write_runtime_marker(runtime_dir, target)
+            return runtime_dir
+
+        monkeypatch.setattr(service_module, "install_runtime", install_runtime)
+        # TARGET's key carries no sherpa-onnx version, so the real collector
+        # would delete the runtime the moment the install finishes.
+        monkeypatch.setattr(service_module, "gc_runtimes", lambda paths, prefix: None)
+        return calls
+
+    def _place_runtime(self, paths: VoicePaths) -> None:
+        runtime_dir = paths.runtime_dir(self.TARGET.key)
+        runtime_dir.mkdir(parents=True)
+        write_runtime_marker(runtime_dir, self.TARGET)
+
+    async def test_failed_self_test_after_a_repair_is_reported_and_retried(
+        self, make_service, voice_dir, runtime_unpacked
+    ):
+        paths = VoicePaths(voice_dir)
+        _write_settings(voice_dir, enabled=True, model_id=self.MODEL.id, phase="ready")
+        _place_verified_model(paths, self.MODEL)
+        helper = _Helper(text="  ")
+        fetcher = _Fetcher()
+        service = make_service(fake=False, helper=helper, fetcher=fetcher)
+        await service.start()
+
+        status = await _installed(service)
+
+        # Both markers are on disk, but the repaired runtime never passed.
+        assert (status.state, status.enabled, status.repairing) == ("failed", True, True)
+        assert status.error is not None and status.error.code == "selftest_failed"
+        with pytest.raises(VoiceError) as excinfo:
+            await service.create_dictation()
+        assert excinfo.value.code == "voice_not_ready"
+
+        helper.text = "fake words"
+        fetched = list(fetcher.calls)
+        await service.install()
+        status = await _installed(service)
+
+        assert (status.state, status.repairing, status.error) == ("ready", False, None)
+        # The retry only verified again: nothing was fetched or unpacked twice.
+        assert runtime_unpacked == [self.TARGET.key]
+        assert fetcher.calls == fetched
+
+    async def test_restart_during_a_repair_self_test_verifies_again(
+        self, make_service, voice_dir, runtime_unpacked
+    ):
+        paths = VoicePaths(voice_dir)
+        _write_settings(voice_dir, enabled=True, model_id=self.MODEL.id, phase="installing")
+        _place_verified_model(paths, self.MODEL)
+        self._place_runtime(paths)
+        helper = _Helper()
+        service = make_service(fake=False, helper=helper)
+        before = service.status()
+
+        await service.start()
+        status = await _installed(service)
+
+        assert before.state != "ready"
+        assert status.state == "ready"
+        assert helper.stops >= 1
+        assert runtime_unpacked == []
+
+    async def test_cancelling_after_a_failed_repair_keeps_the_model(
+        self, make_service, voice_dir
+    ):
+        paths = VoicePaths(voice_dir)
+        _write_settings(
+            voice_dir, enabled=True, model_id=self.MODEL.id, phase="failed",
+            error_code="selftest_failed", error_message="no speech",
+        )
+        _place_verified_model(paths, self.MODEL)
+        self._place_runtime(paths)
+        service = make_service(fake=False)
+
+        status = await service.cancel_install()
+
+        assert (status.state, status.enabled, status.repairing) == ("failed", True, True)
+        assert model_ready(paths, self.MODEL)
+
     async def test_cancelling_a_first_install_with_a_runtime_still_deletes_everything(
         self, make_service, runtime_install
     ):

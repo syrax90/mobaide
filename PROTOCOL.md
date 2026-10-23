@@ -250,9 +250,12 @@ cadence; they do **not** gate compatibility.
     by clients next to the model. ``speed_factor``
     (seconds of speech per second of transcription, from the self-test) is
     set only while ``ready``. ``repairing`` is true while voice is enabled
-    with its verified model in place and only the runtime is missing (the
-    agent re-fetches the ~15 MB runtime by itself after a Python upgrade);
-    clients label that progress as an update, not a first install.
+    with its verified model in place and only the runtime is missing or
+    has not yet passed the self-test with it (the agent re-fetches the
+    ~15 MB runtime by itself after a Python upgrade); clients label that
+    progress as an update, not a first install. ``ready`` needs the files
+    and a passed self-test: a repair whose self-test fails reads ``failed``
+    with ``selftest_failed``, and a retry runs the self-test again.
   * ``POST /api/voice/install`` ``{"model_id"?}`` (enable, or retry a
     ``failed`` install; a no-op once ``ready``) and ``POST
     /api/voice/install/cancel`` answer the status at once; progress arrives

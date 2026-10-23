@@ -165,7 +165,7 @@ class VoiceService:
                 return
             spec = self._spec_for(settings.model_id)
             target, reason = self._runtime(spec)
-            if reason is not None or self._installed(paths, spec, target):
+            if reason is not None or self._verified(paths, settings, spec, target):
                 return
             logger.info("voice.install_resume model=%s phase=%s", spec.id, settings.phase)
             if settings.phase != PHASE_INSTALLING:
@@ -200,13 +200,13 @@ class VoiceService:
         settings = load_settings(paths)
         spec = self._spec_for(settings.model_id)
         target, reason = self._runtime(spec)
-        installed = reason is None and self._installed(paths, spec, target)
+        installed = reason is None and self._verified(paths, settings, spec, target)
         state = self._derive_state(settings, installed, reason)
         repairing = (
             not installed
             and settings.enabled
             and target is not None
-            and self._repairable(paths, spec, target)
+            and self._repairable(paths, settings, spec, target)
         )
 
         total = spec.download_bytes + (target.download_bytes if target else 0)
@@ -325,10 +325,23 @@ class VoiceService:
             return False
         return target is None or runtime_ready(paths, target)
 
+    @classmethod
+    def _verified(
+        cls, paths: VoicePaths, settings: Any, spec: ModelSpec, target: RuntimeTarget | None
+    ) -> bool:
+        """Installed, and the self-test passed on these files: a runtime
+        repair writes the runtime marker before its self-test runs."""
+        return settings.phase == PHASE_READY and cls._installed(paths, spec, target)
+
     @staticmethod
-    def _repairable(paths: VoicePaths, spec: ModelSpec, target: RuntimeTarget) -> bool:
-        """The verified model is in place and only the runtime is missing."""
-        return model_ready(paths, spec) and not runtime_ready(paths, target)
+    def _repairable(
+        paths: VoicePaths, settings: Any, spec: ModelSpec, target: RuntimeTarget
+    ) -> bool:
+        """The verified model is in place and only the runtime is missing or
+        not yet verified with it."""
+        if not model_ready(paths, spec):
+            return False
+        return not runtime_ready(paths, target) or settings.phase != PHASE_READY
 
     def _derive_state(self, settings: Any, installed: bool, reason: str | None) -> str:
         if reason is not None:
@@ -423,7 +436,7 @@ class VoiceService:
             raise not_ready("Voice input is still being installed.")
         if self._op_lock is not None and self._op_lock.locked():
             raise not_ready("Voice input is being changed; try again in a moment.")
-        if not (settings.enabled and self._installed(paths, spec, target)):
+        if not (settings.enabled and self._verified(paths, settings, spec, target)):
             raise not_ready()
         return self._load_spec(paths, spec, target)
 
@@ -470,7 +483,7 @@ class VoiceService:
         if (
             settings.enabled
             and self._spec_for(settings.model_id).id == spec.id
-            and self._installed(paths, spec, target)
+            and self._verified(paths, settings, spec, target)
         ):
             # Already ready: re-running the self-test would stop the helper
             # under another client's dictation.
@@ -491,10 +504,14 @@ class VoiceService:
         settings = load_settings(paths)
         spec = self._spec_for(settings.model_id)
         target, _ = self._runtime(spec)
-        if settings.enabled and self._installed(paths, spec, target):
+        if settings.enabled and self._verified(paths, settings, spec, target):
             self._publish(force=True)
             return self.status()
-        if settings.enabled and target is not None and self._repairable(paths, spec, target):
+        if (
+            settings.enabled
+            and target is not None
+            and self._repairable(paths, settings, spec, target)
+        ):
             # Stopping a runtime repair must never cost the user the verified
             # model: only the runtime's partial files go, and a retry fetches
             # just the runtime again.
