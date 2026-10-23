@@ -10,6 +10,26 @@ import { WebAudioRecorder } from './recorder';
 
 const IDLE: DictationState = { kind: 'idle' };
 
+/** The review's text either side of its cursor (a selection is replaced). */
+export interface CarriedText {
+  before: string;
+  after: string;
+}
+
+/**
+ * Puts a transcript dictated from the review at its cursor, a space apart
+ * from the words around it. `caret` is just past the inserted text.
+ */
+export function spliceTranscript(
+  { before, after }: CarriedText,
+  transcript: string,
+): { text: string; caret: number } {
+  const lead = before === '' || /\s$/.test(before) ? '' : ' ';
+  const trail = after === '' || /^[\s.,;:!?)\]}]/.test(after) ? '' : ' ';
+  const head = before + lead + transcript;
+  return { text: head + trail + after, caret: head.length };
+}
+
 /**
  * One dictation controller per terminal (agent + session). A new pair of ids
  * — another session opened in the same route, an agent switch, leaving the
@@ -25,6 +45,10 @@ export function useDictation(
   capability: VoiceCapability | null,
 ) {
   const [state, setState] = useState<DictationState>(IDLE);
+  // The review's text around its cursor while the user dictates more: the
+  // next result goes in between, and a cancel, an empty result or a failure
+  // returns to reviewing it.
+  const [carried, setCarried] = useState<CarriedText | null>(null);
   const queryClient = useQueryClient();
   const controllerRef = useRef<DictationController | null>(null);
   const sampleRate = capability?.sampleRate ?? null;
@@ -51,6 +75,7 @@ export function useDictation(
       controller.dispose();
       if (controllerRef.current === controller) controllerRef.current = null;
       setState(IDLE);
+      setCarried(null);
     };
   }, [agentId, sessionId, sampleRate, maxSeconds, queryClient]);
 
@@ -69,8 +94,20 @@ export function useDictation(
   const dismiss = useCallback(() => {
     controllerRef.current?.dismiss();
   }, []);
+  /** Records again from the review, keeping its text to insert the result into. */
+  const continueFrom = useCallback((text: CarriedText) => {
+    const controller = controllerRef.current;
+    if (controller === null) return;
+    setCarried(text);
+    controller.toggle();
+  }, []);
+  /** Ends the review: the text was inserted or discarded. */
+  const finish = useCallback(() => {
+    setCarried(null);
+    controllerRef.current?.dismiss();
+  }, []);
 
-  return { state, toggle, stop, cancel, retry, dismiss };
+  return { state, carried, toggle, stop, cancel, retry, dismiss, continueFrom, finish };
 }
 
 /** The agent's display name for copy like "Voice can't run on <agent>". */

@@ -3839,8 +3839,23 @@ body:has(dialog[open]) {
 
 /* region voice input (#737): the toolbar mic, its dialogs, the settings panel */
 
-/* State is in the label text too ("Voice", "Voice 43%", "Voice !"), so the
+/* Each state has its own glyph too (mic, hollow mic, download, "!"), so the
    muted and warning tones are never the only signal. */
+.terminal-bar .voice-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.voice-icon {
+  display: block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  shape-rendering: crispEdges;
+}
+
 .terminal-bar .voice-button-off {
   color: var(--text-muted);
 }
@@ -3858,6 +3873,19 @@ body:has(dialog[open]) {
 
 .voice-dialog-footer {
   justify-content: flex-end;
+}
+
+/* The review's mic sits at the start of the footer, apart from Discard/Insert. */
+.voice-dialog-footer .voice-dictate-more {
+  display: inline-flex;
+  align-items: center;
+  margin-right: auto;
+}
+
+.voice-review-skip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .voice-panel {

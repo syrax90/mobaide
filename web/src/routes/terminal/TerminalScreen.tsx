@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createTemplate } from '../../api/templateRepository';
@@ -38,9 +38,10 @@ import { useSessionRow } from './useSessionRow';
 import { DictationDialog } from './voice/DictationDialog';
 import { VoiceButton } from './voice/VoiceButton';
 import { VoiceSetupDialog } from './voice/VoiceSetupDialog';
-import { useAgentName, useDictation } from '../../voice/useDictation';
+import { spliceTranscript, useAgentName, useDictation } from '../../voice/useDictation';
+import type { DictationState } from '../../voice/dictationController';
 import { useVoiceCapability, useVoiceStatus } from '../../voice/useVoiceStatus';
-import { useMicHidden } from '../../voice/voicePrefsStore';
+import { useMicHidden, useSkipReview, useVoicePrefsStore } from '../../voice/voicePrefsStore';
 import { voiceMicMode } from '../../voice/voiceStatusView';
 
 export function TerminalScreen() {
@@ -209,6 +210,36 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // (still connecting) or a reconnect keeps recording available.
   const canRecord = view.status === null || running;
 
+  // Pasted like a template — never with Enter — so the text waits on the
+  // program's input line for the user to send.
+  const { carried, finish: finishDictation } = dictation;
+  const insertTranscript = useCallback(
+    (text: string): boolean => {
+      if (!canSend || !model.pasteText(text)) return false;
+      model.jumpToBottom();
+      finishDictation();
+      return true;
+    },
+    [canSend, model, finishDictation],
+  );
+  // With the review turned off a result goes straight to the prompt; only a
+  // paste the session refuses falls back to showing it for review. Decided
+  // once per result: turning the review off from the review itself must not
+  // paste the text under the user's edits.
+  const skipReview = useSkipReview(model.agentId);
+  const setSkipReview = useVoicePrefsStore((state) => state.setSkipReview);
+  const result = dictation.state.kind === 'result' ? dictation.state : null;
+  const [reviewed, setReviewed] = useState<DictationState | null>(null);
+  const autoInserting = skipReview && result !== null && result !== reviewed;
+  // A layout effect, so a result never paints as a dialog before it lands.
+  useLayoutEffect(() => {
+    if (result === null || result === reviewed) return;
+    const text = carried === null ? result.text : spliceTranscript(carried, result.text).text;
+    if (skipReview && insertTranscript(text)) return;
+    setReviewed(result);
+  }, [result, reviewed, skipReview, carried, insertTranscript]);
+  const dictationShown = (dictation.state.kind !== 'idle' || carried !== null) && !autoInserting;
+
   // Ctrl+R is a chord people press in a terminal on purpose, and a reload costs
   // the whole replay. See `useReloadGuard` for why this is capture-phase and
   // still lets a focused terminal receive `0x12`.
@@ -225,7 +256,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // the picker-to-editor hop is not mistaken for a dismissal and does not pull
   // focus out of the editor it just opened.
   const panelOpen =
-    panel.kind !== 'none' || voiceSetupOpen || dictation.state.kind !== 'idle';
+    panel.kind !== 'none' || voiceSetupOpen || dictationShown;
   const panelWasOpen = useRef(false);
   useEffect(() => {
     if (panelWasOpen.current && !panelOpen) model.focus();
@@ -553,9 +584,10 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
         />
       )}
 
-      {dictation.state.kind !== 'idle' && (
+      {dictationShown && (
         <DictationDialog
           state={dictation.state}
+          carried={carried}
           agentName={agentName}
           canSend={canSend}
           canRecord={canRecord}
@@ -564,13 +596,12 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
           onRetry={dictation.retry}
           onRecordAgain={dictation.toggle}
           onDismiss={dictation.dismiss}
-          onInsert={(text) => {
-            // Pasted like a template — never with Enter — so the text waits
-            // on the program's input line for the user to send.
-            if (!canSend || !model.pasteText(text)) return false;
-            model.jumpToBottom();
-            dictation.dismiss();
-            return true;
+          onContinue={dictation.continueFrom}
+          onDiscard={dictation.finish}
+          onInsert={insertTranscript}
+          skipReview={skipReview}
+          onSkipReviewChange={(skip) => {
+            setSkipReview(model.agentId, skip);
           }}
         />
       )}

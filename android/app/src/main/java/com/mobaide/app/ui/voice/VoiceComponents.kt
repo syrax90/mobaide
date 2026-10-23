@@ -688,7 +688,7 @@ private val previewStatus = VoiceStatusResponse(
         languages = listOf("de", "en", "fr", "uk"),
         download_bytes = 682_365_212,
         disk_bytes = 733_578_420,
-        ram_bytes = 2_000_000_000,
+        ram_bytes = 700_000_000,
         notice = "CC BY 4.0",
     ),
     host = VoiceHostInfo(
