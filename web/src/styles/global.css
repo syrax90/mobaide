@@ -1250,8 +1250,17 @@ input[type='radio']:checked {
 
 .sessions-panel-item {
   display: flex;
-  align-items: stretch;
-  gap: 0.35rem;
+  align-items: center;
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+}
+
+.sessions-panel-item-current {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+}
+
+.sessions-panel-item .sessions-panel-row {
+  box-shadow: none;
 }
 
 .sessions-panel-row {
@@ -1273,11 +1282,6 @@ input[type='radio']:checked {
   cursor: pointer;
 }
 
-.sessions-panel-row[aria-current='true'] {
-  background: var(--surface);
-  box-shadow: inset 0 0 0 2px var(--brand-2);
-}
-
 .sessions-panel-row:disabled {
   color: var(--text-muted);
   cursor: default;
@@ -1288,9 +1292,17 @@ input[type='radio']:checked {
   outline-offset: 2px;
 }
 
+.sessions-panel-item .sessions-panel-row:focus-visible {
+  outline-offset: -4px;
+}
+
+/* A compact framed icon button inside the row's frame, after the attention
+   chip — the mobile clients' stop control. */
 .sessions-panel .sessions-panel-stop {
-  min-width: 40px;
-  padding: 0 0.5rem;
+  width: 32px;
+  height: 32px;
+  margin: 0 0.75rem 0 -0.25rem;
+  padding: 0;
 }
 
 .sessions-panel .sessions-panel-stop:not(:disabled) {

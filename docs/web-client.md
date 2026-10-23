@@ -865,8 +865,9 @@ the UA backdrop serving as the scrim; pinned and wide it is a docked
 (`localStorage` key `mobaide-sessions-panel`). Picking a session
 `navigate`s with `replace: true` (and records `setLastUsedSession`), so Back
 does not step through every switch; `TerminalView` is keyed on the channel key
-so per-session dialog state resets. Each running/starting row has a Stop
-button opening the same Stop / Force Stop / Cancel confirmation as the list;
+so per-session dialog state resets. Each running/starting row has a compact
+Stop icon button inside its frame (the `<li>` carries the frame, since a button
+cannot nest in the row button), as on Android, opening the same Stop / Force Stop / Cancel confirmation as the list;
 both surfaces share the mutation in `routes/sessions/useStopSession.ts`.
 Stopping another session just drops its row ("Session stopped" toast);
 stopping the one on screen navigates to `/` ("Session stopped." toast).

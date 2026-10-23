@@ -165,7 +165,13 @@ export function SessionsPanel({
               const chip = attentionChip(session.attention);
               const kindLabel = sessionKindLabel(session, names);
               return (
-                <li key={session.session_id} className="sessions-panel-item">
+                // The item, not the row button, carries the frame so the stop
+                // control sits inside it, as on both mobile clients; a button
+                // cannot nest inside another.
+                <li
+                  key={session.session_id}
+                  className={`sessions-panel-item${selected ? ' sessions-panel-item-current' : ''}`}
+                >
                   <button
                     type="button"
                     className="sessions-panel-row"
