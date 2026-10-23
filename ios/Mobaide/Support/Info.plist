@@ -14,6 +14,8 @@
 	<string>Mobaide connects directly to your agent on your local network when direct connection mode is used.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Mobaide uses the camera only to scan the pairing QR code shown on your agent host.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Mobaide records only while you dictate. The audio goes to your own computer, which turns it into text for the command field.</string>
 	<key>GoogleClientID</key>
 	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
 	<key>GoogleServerClientID</key>

@@ -1,0 +1,18 @@
+{
+  "type": "VoiceDictationCreateRequest",
+  "cases": [
+    {
+      "name": "plain",
+      "wire": {
+        "session_id": null
+      },
+      "decoded_canonical": {}
+    },
+    {
+      "name": "with_session",
+      "wire": {
+        "session_id": "sess-42"
+      }
+    }
+  ]
+}

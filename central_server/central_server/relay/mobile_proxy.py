@@ -15,7 +15,7 @@ import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from ..auth.dependencies import get_mobile_user
 from ..auth.models import MobileTokenPayload
@@ -244,7 +244,10 @@ async def proxy_to_agent(
         body=body,
     )
 
-    return JSONResponse(
-        status_code=result.get("status", 200),
-        content=result.get("body"),
-    )
+    status_code = result.get("status", 200)
+    if status_code == status.HTTP_204_NO_CONTENT:
+        # A 204 must carry no body: JSONResponse would serialize ``None`` as
+        # ``null`` against the zero Content-Length the status implies, and
+        # uvicorn then drops the keep-alive connection under the client.
+        return Response(status_code=status_code)
+    return JSONResponse(status_code=status_code, content=result.get("body"))

@@ -1,0 +1,341 @@
+import { DictationUploader, systemClock, type UploadFailure, type UploaderClock } from './dictationUploader';
+import { PcmBuffer } from './pcmBuffer';
+import { VOICE_CODE, type VoiceApi } from './voiceApi';
+
+/** Why recording stopped on its own; the audio so far is still transcribed. */
+export type InterruptReason = 'background' | 'device' | 'limit';
+
+export type DictationState =
+  | { kind: 'idle' }
+  | { kind: 'starting' }
+  | {
+      kind: 'recording';
+      elapsedMs: number;
+      /** 0…1, for the level meter. */
+      level: number;
+      /** Seconds left before the agent's limit, once 15 or fewer remain. */
+      remainingSeconds: number | null;
+      /** Uploads are behind (network trouble); recording carries on. */
+      lagging: boolean;
+    }
+  | { kind: 'transcribing'; interruptedBy: InterruptReason | null; lagging: boolean }
+  | { kind: 'result'; text: string }
+  | { kind: 'empty' }
+  | {
+      kind: 'failed';
+      code: string;
+      retryable: boolean;
+      message: string | null;
+      /** Audio is still buffered, so Retry needs no new recording. */
+      hasAudio: boolean;
+    };
+
+export interface RecorderSink {
+  samples(samples: Int16Array): void;
+  /** 0…1 */
+  level(level: number): void;
+  interrupted(reason: InterruptReason): void;
+}
+
+export class RecorderError extends Error {
+  readonly code: typeof VOICE_CODE.micPermissionDenied | typeof VOICE_CODE.micUnavailable;
+
+  constructor(
+    code: typeof VOICE_CODE.micPermissionDenied | typeof VOICE_CODE.micUnavailable,
+    message?: string,
+  ) {
+    super(message ?? code);
+    this.name = 'RecorderError';
+    this.code = code;
+  }
+}
+
+/**
+ * Platform audio capture at the agent's rate as PCM16. `start` rejects with a
+ * `RecorderError`; `stop` is idempotent and delivers every pending sample
+ * before it resolves.
+ */
+export interface Recorder {
+  start(sampleRate: number, sink: RecorderSink): Promise<void>;
+  stop(): Promise<void>;
+}
+
+export interface DictationControllerOptions {
+  api: VoiceApi;
+  createRecorder: () => Recorder;
+  sampleRate: number;
+  maxSeconds: number;
+  onChange: (state: DictationState) => void;
+  clock?: UploaderClock;
+}
+
+const COUNTDOWN_SECONDS = 15;
+
+/**
+ * One dictation at a time, as the UI sees it: microphone → buffer →
+ * uploader → transcript. Android `DictationController.kt` and iOS
+ * `DictationController.swift` have the same states and transitions.
+ *
+ * The transcript is handed to the UI as `result`; nothing here ever sends it.
+ * Elapsed time is counted in samples, so the countdown and the agent's
+ * `max_seconds` agree exactly.
+ */
+export class DictationController {
+  private state: DictationState = { kind: 'idle' };
+  /** Bumped by every new dictation and every cancel; stale callbacks compare it. */
+  private generation = 0;
+  private recorder: Recorder | null = null;
+  private buffer: PcmBuffer | null = null;
+  private uploader: DictationUploader | null = null;
+  private level = 0;
+  private lagging = false;
+  private disposed = false;
+  private readonly options: DictationControllerOptions;
+
+  constructor(options: DictationControllerOptions) {
+    this.options = options;
+  }
+
+  get current(): DictationState {
+    return this.state;
+  }
+
+  /** The mic button: start, stop, or abandon a start that is still opening. */
+  toggle(): void {
+    switch (this.state.kind) {
+      case 'recording':
+        void this.stop();
+        return;
+      case 'starting':
+        this.cancel();
+        return;
+      case 'transcribing':
+        return;
+      default:
+        void this.start();
+    }
+  }
+
+  /**
+   * Runs synchronously up to the recorder's own first await, so a browser
+   * still sees the click's user activation when the recorder opens audio.
+   */
+  async start(): Promise<void> {
+    if (this.disposed) return;
+    if (this.isActive()) return;
+    this.discard();
+    const generation = ++this.generation;
+    const { api, sampleRate, maxSeconds, clock } = this.options;
+    const buffer = new PcmBuffer(maxSeconds * sampleRate);
+    const uploader = new DictationUploader(
+      api,
+      buffer,
+      sampleRate,
+      {
+        lagging: (lagging) => {
+          if (generation !== this.generation) return;
+          this.lagging = lagging;
+          this.publishProgress();
+        },
+        stopCapture: () => {
+          if (generation !== this.generation) return;
+          void this.stop('limit');
+        },
+        done: (text) => {
+          if (generation !== this.generation) return;
+          this.finishWith(text === '' ? { kind: 'empty' } : { kind: 'result', text });
+        },
+        failed: (failure) => {
+          if (generation !== this.generation) return;
+          void this.fail(failure);
+        },
+      },
+      clock ?? systemClock,
+    );
+    const recorder = this.options.createRecorder();
+    this.buffer = buffer;
+    this.uploader = uploader;
+    this.recorder = recorder;
+    this.level = 0;
+    this.lagging = false;
+    this.set({ kind: 'starting' });
+    // The dictation opens while the microphone does, so the first words are
+    // buffered instead of waiting for the round trip.
+    uploader.start();
+    try {
+      await recorder.start(sampleRate, {
+        samples: (samples) => {
+          if (generation !== this.generation) return;
+          buffer.append(samples);
+          uploader.onAudio();
+          if (this.state.kind !== 'recording') return;
+          if (buffer.isFull) {
+            void this.stop('limit');
+            return;
+          }
+          this.publishProgress();
+        },
+        level: (level) => {
+          if (generation !== this.generation) return;
+          this.level = level;
+          this.publishProgress();
+        },
+        interrupted: (reason) => {
+          if (generation !== this.generation) return;
+          void this.stop(reason);
+        },
+      });
+    } catch (error) {
+      // An upload failure may already have ended this dictation while the
+      // microphone was still opening; that failure is the one to show.
+      if (generation !== this.generation || this.kindNow() !== 'starting') return;
+      this.recorder = null;
+      uploader.cancel();
+      buffer.release();
+      this.buffer = null;
+      this.uploader = null;
+      this.set({
+        kind: 'failed',
+        code: error instanceof RecorderError ? error.code : VOICE_CODE.micUnavailable,
+        retryable: false,
+        message: error instanceof Error ? error.message : null,
+        hasAudio: false,
+      });
+      return;
+    }
+    if (generation !== this.generation) {
+      void recorder.stop().catch(() => undefined);
+      return;
+    }
+    if (this.kindNow() === 'starting') this.publishRecording();
+  }
+
+  /** Stop recording and transcribe what was captured. */
+  async stop(reason: InterruptReason | null = null): Promise<void> {
+    if (this.state.kind === 'starting') {
+      this.cancel();
+      return;
+    }
+    if (this.state.kind !== 'recording') return;
+    const generation = this.generation;
+    this.set({ kind: 'transcribing', interruptedBy: reason, lagging: this.lagging });
+    const recorder = this.recorder;
+    this.recorder = null;
+    try {
+      await recorder?.stop();
+    } catch {
+      // The samples already buffered are what gets transcribed.
+    }
+    if (generation !== this.generation) return;
+    this.uploader?.close();
+  }
+
+  /** Throw the recording away, on the agent too. */
+  cancel(): void {
+    this.generation += 1;
+    this.discard();
+    this.set({ kind: 'idle' });
+  }
+
+  /** Retry a failed upload from the buffered audio. */
+  retry(): void {
+    const state = this.state;
+    if (state.kind !== 'failed' || !state.retryable || !state.hasAudio) return;
+    if (this.uploader?.retry() === true) {
+      this.lagging = false;
+      this.set({ kind: 'transcribing', interruptedBy: null, lagging: false });
+    }
+  }
+
+  /** Leave a result, an empty result or a failure. */
+  dismiss(): void {
+    const kind = this.state.kind;
+    if (kind === 'result' || kind === 'empty' || kind === 'failed') this.cancel();
+  }
+
+  /** Leaving the session or switching agents. */
+  dispose(): void {
+    if (this.disposed) return;
+    this.cancel();
+    this.disposed = true;
+  }
+
+  /** Read through a call: the state changes across awaits and callbacks. */
+  private kindNow(): DictationState['kind'] {
+    return this.state.kind;
+  }
+
+  private isActive(): boolean {
+    const kind = this.kindNow();
+    return kind === 'starting' || kind === 'recording' || kind === 'transcribing';
+  }
+
+  private async fail(failure: UploadFailure): Promise<void> {
+    const generation = this.generation;
+    const recorder = this.recorder;
+    this.recorder = null;
+    if (recorder !== null) {
+      try {
+        await recorder.stop();
+      } catch {
+        // Already failing.
+      }
+      if (generation !== this.generation) return;
+    }
+    this.set({
+      kind: 'failed',
+      code: failure.code,
+      retryable: failure.retryable,
+      message: failure.message,
+      hasAudio: (this.buffer?.sampleCount ?? 0) > 0,
+    });
+  }
+
+  private finishWith(state: DictationState): void {
+    // The agent drops a finished dictation by itself; no DELETE needed.
+    this.buffer?.release();
+    this.buffer = null;
+    this.uploader = null;
+    this.set(state);
+  }
+
+  private discard(): void {
+    const recorder = this.recorder;
+    this.recorder = null;
+    void recorder?.stop().catch(() => undefined);
+    this.uploader?.cancel();
+    this.uploader = null;
+    this.buffer?.release();
+    this.buffer = null;
+    this.level = 0;
+    this.lagging = false;
+  }
+
+  private publishProgress(): void {
+    if (this.state.kind === 'recording') {
+      this.publishRecording();
+    } else if (this.state.kind === 'transcribing' && this.state.lagging !== this.lagging) {
+      this.set({ ...this.state, lagging: this.lagging });
+    }
+  }
+
+  private publishRecording(): void {
+    const buffer = this.buffer;
+    if (buffer === null) return;
+    const { sampleRate } = this.options;
+    const elapsedMs = Math.floor((buffer.sampleCount * 1000) / sampleRate);
+    const left = (buffer.capacitySamples - buffer.sampleCount) / sampleRate;
+    this.set({
+      kind: 'recording',
+      elapsedMs,
+      level: this.level,
+      remainingSeconds: left <= COUNTDOWN_SECONDS ? Math.max(0, Math.ceil(left)) : null,
+      lagging: this.lagging,
+    });
+  }
+
+  private set(state: DictationState): void {
+    this.state = state;
+    this.options.onChange(state);
+  }
+}

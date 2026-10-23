@@ -226,6 +226,10 @@ def e2e_stack(request, xprocess):
         "RELAY_AGENT_TOKEN": agent_token,
         "MOBAIDE_AGENT_ALLOW_INSECURE_WS": "1",
         "MOBAIDE_AGENT_PREFIX": str(agent_dir),
+        # Voice against the generated fake model (no 670 MB download); an
+        # inherited MOBAIDE_VOICE_DIR must not point it at a real install.
+        "MOBAIDE_VOICE_FAKE": "1",
+        "MOBAIDE_VOICE_DIR": "",
         "LOG_FORMAT": "console",
         "LOG_LEVEL": "INFO",
         "PYTHONUNBUFFERED": "1",

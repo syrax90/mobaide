@@ -1,0 +1,54 @@
+name: Voice model check
+
+# Installs the real speech-to-text runtime and model on each desktop OS the
+# agent supports, runs the install self-test and measures dictation latency.
+# Proves the wheel unpack + native load per platform; the unit suites only
+# cover the fake engine.
+# Automatic runs are paused for now; re-enable the pull_request trigger to bring them back.
+on:
+  # pull_request:
+  #   paths:
+  #     - "mobaide_agent/mobaide/voice/**"
+  #     - ".github/workflows/voice-model-check.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: voice-model-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  voice:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the agent
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./mobaide_agent
+
+      - name: Install voice input (download, unpack, self-test)
+        run: python -m mobaide voice install --voice-dir "${{ runner.temp }}/mobaide-voice"
+
+      - name: Status
+        run: python -m mobaide voice status --voice-dir "${{ runner.temp }}/mobaide-voice"
+
+      - name: Dictation latency (real-time paced)
+        run: python -m mobaide voice benchmark --voice-dir "${{ runner.temp }}/mobaide-voice" --seconds 10,30,60,115
+
+      - name: Remove
+        if: always()
+        run: python -m mobaide voice remove --yes --voice-dir "${{ runner.temp }}/mobaide-voice"

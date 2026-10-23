@@ -1007,7 +1007,7 @@ systemctl disable --now mobaide-agent.service mobaide-agent-uninstall.path || tr
 if cd -P -- "\$PREFIX" 2>/dev/null && [ "\$(pwd -P)" = "\$PREFIX" ]; then
     rm -rf --one-file-system -- releases trust mobaide_agent run state logs svc bin \\
         current_version current_version.tmp .boot_journal agent.env \\
-        agent.out.log agent.err.log users.json projects.json
+        agent.out.log agent.err.log users.json projects.json voice voice-fake
     cd /
     rmdir -- "\$PREFIX" 2>/dev/null || true
 fi

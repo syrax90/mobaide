@@ -161,6 +161,71 @@ async def test_deferred_when_session_active(layout, monkeypatch) -> None:
     assert outcome == "deferred"
 
 
+async def test_deferred_when_busy_probe_reports_busy(layout) -> None:
+    """Non-session work (an open voice dictation) defers the restart even
+    with no live session."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    installer_calls: list = []
+
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        venv_builder=lambda venv: installer_calls.append(venv),
+        finalizer=lambda python, wheel: None,
+        busy_probe=lambda: True,
+    )
+    outcome = await updater.consider_manifest(
+        body, signature_b64, body["version"],
+    )
+    assert outcome == "deferred"
+    assert installer_calls == []
+    assert not (layout.releases_dir / "0.2.0").exists()
+
+
+async def test_failing_busy_probe_does_not_block_the_update(layout) -> None:
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+
+    def broken_probe() -> bool:
+        raise RuntimeError("voice service gone")
+
+    exits: list[int] = []
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
+        exit_func=exits.append,
+        busy_probe=broken_probe,
+    )
+    outcome = await updater.consider_manifest(
+        body, signature_b64, body["version"],
+    )
+    assert outcome == "staged"
+    assert exits == [75]
+
+
+async def test_force_update_bypasses_busy_probe(layout) -> None:
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
+        exit_func=lambda code: None,
+        busy_probe=lambda: True,
+    )
+    outcome = await updater.force_update_now(
+        body, signature_b64, body["version"], exit_after_stage=False,
+    )
+    assert outcome == "staged"
+
+
 async def test_staged_swap_succeeds(layout, monkeypatch) -> None:
     public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
 

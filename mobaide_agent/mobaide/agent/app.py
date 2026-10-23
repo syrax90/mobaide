@@ -41,6 +41,9 @@ from mobaide.relay.envelope import (
     MIN_CLIENT_PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
 )
+from mobaide.voice.models import VOICE_CAPABILITIES
+from mobaide.voice.router import router as voice_router
+from mobaide.voice.service import VoiceService
 
 from .auth.jwt_service import JwtService
 from .auth.router import router as auth_router
@@ -143,11 +146,13 @@ def _build_updater(app: FastAPI):
             sys.prefix, layout.releases_dir,
         )
         return None
+    voice = getattr(app.state, "voice", None)
     return StagedBinaryUpdater(
         layout=layout,
         public_key_b64=public_key_b64,
         session_manager=app.state.session_manager,
         current_version=__version__,
+        busy_probe=voice.busy if voice is not None else None,
     )
 
 
@@ -309,7 +314,9 @@ async def _start_relay_in_process(
 
         async def _on_uninstall_requested() -> None:
             await handle_uninstall_request(
-                uninstall_layout.prefix, installed=installed,
+                uninstall_layout.prefix,
+                installed=installed,
+                voice=getattr(app.state, "voice", None),
             )
 
         relay_client.set_uninstall_callback(_on_uninstall_requested)
@@ -560,6 +567,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             app.state.relay_client = None
             app.state.updater = None
             app.state.https_poll_task = None
+        # After the relay branch: a pre-connect update check that stages a
+        # release exits (75) before any voice work starts.
+        await app.state.voice.start()
         yield
         logger.info("agent.shutting_down")
         models_warmup = getattr(app.state, "cli_models_warmup", None)
@@ -593,6 +603,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         relay_client = getattr(app.state, "relay_client", None)
         if relay_client is not None:
             await relay_client.stop()
+        await app.state.voice.shutdown()
         autoscan_mgr = getattr(app.state, "autoscan_manager", None)
         if autoscan_mgr is not None:
             await autoscan_mgr.shutdown()
@@ -775,6 +786,14 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     # is created — including headless Auto Scan subsessions.
     app.state.event_bus = EventBus()
     app.state.broadcaster = SessionListBroadcaster()
+    # Opt-in voice input: nothing is read, downloaded or spawned until the
+    # user enables it (construction does no I/O).
+    app.state.voice = VoiceService(
+        voice_dir=config.voice_dir,
+        test_mode=config.is_test_mode,
+        fake=config.voice_fake,
+        publish=app.state.event_bus.publish,
+    )
     app.state.fanouts = {}  # session_id -> SessionEventFanout
 
     def _on_session_created(session) -> None:
@@ -835,6 +854,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.include_router(autoscan_router)
     app.include_router(autoscan_ws_router)
     app.include_router(updater_router)
+    app.include_router(voice_router)
 
     # Health endpoint (no auth)
     @app.get("/api/health", tags=["health"])
@@ -883,6 +903,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                     models_pending=warm_task is not None and not warm_task.done(),
                 ),
                 "git": GIT_CAPABILITIES,
+                "voice": VOICE_CAPABILITIES,
                 "fs": FS_CAPABILITIES,
             },
             "latest_agent_version": (manifest or {}).get("version"),

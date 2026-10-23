@@ -1,0 +1,18 @@
+{
+  "type": "VoiceInstallRequest",
+  "cases": [
+    {
+      "name": "default_model",
+      "wire": {
+        "model_id": null
+      },
+      "decoded_canonical": {}
+    },
+    {
+      "name": "explicit_model",
+      "wire": {
+        "model_id": "parakeet-tdt-0.6b-v3-int8"
+      }
+    }
+  ]
+}

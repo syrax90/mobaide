@@ -24,8 +24,11 @@ from mobaide.agent.self_uninstall import (
     disarm,
     handle_uninstall_request,
     remove_prefix_entries,
+    remove_voice_files,
     uninstall,
 )
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _ENV_TEXT = """\
 JWT_SECRET_KEY=secret
@@ -35,6 +38,17 @@ RELAY_AGENT_TOKEN=tok-secret
 """
 
 _FOREIGN = ("notes.txt", "backups")
+
+
+def _make_voice_root(root: Path) -> Path:
+    """The voice layout: settings, lock, one model and one runtime."""
+    (root / "models" / "parakeet").mkdir(parents=True)
+    (root / "models" / "parakeet" / "encoder.onnx").write_bytes(b"m")
+    (root / "runtime" / "1.12-cp312-linux").mkdir(parents=True)
+    (root / "runtime" / "1.12-cp312-linux" / "sherpa.so").write_bytes(b"r")
+    (root / "settings.json").write_text('{"enabled": true}', encoding="utf-8")
+    (root / ".lock").write_text("", encoding="utf-8")
+    return root
 
 
 def _make_install(prefix: Path) -> Path:
@@ -59,6 +73,7 @@ def _make_install(prefix: Path) -> Path:
     (prefix / "current_version").write_text("0.9.0", encoding="utf-8")
     (prefix / ".boot_journal").write_text("", encoding="utf-8")
     (prefix / "users.json").write_text("[]", encoding="utf-8")
+    _make_voice_root(prefix / "voice")
     (prefix / "notes.txt").write_text("mine", encoding="utf-8")
     (prefix / "backups").mkdir()
     (prefix / "backups" / "keep.tar").write_text("mine", encoding="utf-8")
@@ -170,6 +185,93 @@ class TestRemovePrefixEntries:
         assert (elsewhere / "precious").read_text() == "x"
 
 
+class TestRemoveVoiceFiles:
+    def test_removes_the_voice_dirs_under_the_prefix(self, prefix):
+        _make_voice_root(prefix / "voice-fake")
+
+        remove_voice_files(prefix)
+
+        assert not (prefix / "voice").exists()
+        assert not (prefix / "voice-fake").exists()
+        assert (prefix / "releases" / "0.9.0").is_dir()
+        assert (prefix / "notes.txt").exists()
+
+    def test_custom_root_loses_only_the_voice_layout(self, prefix, tmp_path):
+        root = _make_voice_root(tmp_path / "models-disk" / "mobaide-voice")
+        (root / "README").write_text("mine", encoding="utf-8")
+
+        remove_voice_files(prefix, root)
+
+        assert {p.name for p in root.iterdir()} == {"README"}
+        assert not (prefix / "voice").exists()
+
+    def test_custom_root_left_empty_is_removed(self, prefix, tmp_path):
+        root = _make_voice_root(tmp_path / "mobaide-voice")
+
+        remove_voice_files(prefix, root)
+
+        assert not root.exists()
+
+    def test_default_root_is_not_cleared_twice(self, prefix, monkeypatch):
+        cleared: list[Path] = []
+        real_remove_tree = self_uninstall.remove_tree
+
+        def recording_remove_tree(path: Path) -> bool:
+            cleared.append(path)
+            return real_remove_tree(path)
+
+        monkeypatch.setattr(self_uninstall, "remove_tree", recording_remove_tree)
+
+        remove_voice_files(prefix, prefix / "voice")
+
+        assert cleared == [prefix / "voice", prefix / "voice-fake"]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+    def test_symlinked_voice_dir_clears_its_target_and_keeps_the_rest(
+        self, prefix, tmp_path
+    ):
+        import shutil
+
+        shutil.rmtree(prefix / "voice")
+        target = _make_voice_root(tmp_path / "big-disk" / "voice")
+        (target / "README").write_text("mine", encoding="utf-8")
+        (prefix / "voice").symlink_to(target, target_is_directory=True)
+
+        remove_voice_files(prefix)
+
+        assert {p.name for p in target.iterdir()} == {"README"}
+        # The link itself goes with the other prefix entries.
+        assert (prefix / "voice").is_symlink()
+        remove_prefix_entries(prefix)
+        assert not (prefix / "voice").exists()
+        assert (target / "README").read_text() == "mine"
+
+    def test_failure_does_not_stop_the_uninstall(
+        self, prefix, no_systemd_helper, monkeypatch, commands
+    ):
+        def boom(_prefix: Path, _root: Path | None = None) -> None:
+            raise RuntimeError("voice gone wrong")
+
+        monkeypatch.setattr(self_uninstall, "remove_voice_files", boom)
+
+        uninstall(prefix, platform="linux")
+
+        # The prefix entries still list the voice dir.
+        assert _remaining(prefix) == {"bin", *_FOREIGN}
+
+
+class TestInstallShHelper:
+    def test_helper_deletes_exactly_the_prefix_entries(self):
+        """The root helper ``install.sh`` writes repeats PREFIX_ENTRIES."""
+        text = (_REPO_ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+        start = text.index("rm -rf --one-file-system -- ")
+        end = text.index("\n", text.index("projects.json", start))
+        words = text[start:end].replace("\\\\", " ").split()
+
+        assert words[:3] == ["rm", "-rf", "--one-file-system"]
+        assert tuple(words[4:]) == PREFIX_ENTRIES
+
+
 class TestUninstallLinux:
     def test_helper_unit_present_only_drops_the_marker(
         self, prefix, tmp_path, monkeypatch, commands
@@ -182,8 +284,10 @@ class TestUninstallLinux:
 
         assert (prefix / "run" / "uninstall-requested").is_file()
         # The root helper deletes the install; the agent leaves it intact
-        # apart from disarming.
+        # apart from disarming and the voice files, which a helper written
+        # by an older install.sh would not delete.
         assert (prefix / "releases" / "0.9.0").is_dir()
+        assert not (prefix / "voice").exists()
         assert (prefix / "current_version").exists()
         assert parse_env_file(prefix / "mobaide_agent" / ".env")[
             "RELAY_AGENT_TOKEN"
@@ -611,8 +715,12 @@ class TestHandleUninstallRequest:
     async def test_installed_uninstalls_then_exits_zero(
         self, prefix, monkeypatch
     ):
-        removed: list[Path] = []
-        monkeypatch.setattr(self_uninstall, "uninstall", removed.append)
+        removed: list[tuple[Path, Path | None]] = []
+        monkeypatch.setattr(
+            self_uninstall,
+            "uninstall",
+            lambda p, voice_root=None: removed.append((p, voice_root)),
+        )
         exits: list[int] = []
 
         await handle_uninstall_request(
@@ -620,11 +728,83 @@ class TestHandleUninstallRequest:
         )
         await self._drain_loop()
 
-        assert removed == [prefix]
+        assert removed == [(prefix, None)]
         assert exits == [0]
 
+    async def test_voice_is_shut_down_before_its_files_are_deleted(
+        self, prefix, tmp_path, monkeypatch
+    ):
+        events: list[object] = []
+        voice_root = tmp_path / "voice-elsewhere"
+
+        class FakeVoice:
+            paths = SimpleNamespace(root=voice_root)
+
+            async def shutdown(self) -> None:
+                events.append("voice.shutdown")
+
+        monkeypatch.setattr(
+            self_uninstall,
+            "uninstall",
+            lambda p, voice_root=None: events.append(("uninstall", p, voice_root)),
+        )
+        exits: list[int] = []
+
+        await handle_uninstall_request(
+            prefix, installed=True, voice=FakeVoice(), exit_func=exits.append
+        )
+        await self._drain_loop()
+
+        assert events == ["voice.shutdown", ("uninstall", prefix, voice_root)]
+        assert exits == [0]
+
+    async def test_real_voice_service_is_stopped_and_its_files_deleted(
+        self, prefix, monkeypatch
+    ):
+        from mobaide.voice.service import VoiceService
+
+        class RecordingHelper:
+            busy = False
+            stops = 0
+
+            async def stop(self) -> None:
+                RecordingHelper.stops += 1
+
+        voice = VoiceService(
+            voice_dir=prefix / "voice", fake=True, helper=RecordingHelper()
+        )
+        real_uninstall = self_uninstall.uninstall
+        # No service manager here: the generic branch only deletes files.
+        monkeypatch.setattr(
+            self_uninstall,
+            "uninstall",
+            lambda p, voice_root=None: real_uninstall(
+                p, platform="freebsd", voice_root=voice_root
+            ),
+        )
+
+        await handle_uninstall_request(
+            prefix, installed=True, voice=voice, exit_func=lambda _: None
+        )
+
+        assert RecordingHelper.stops == 1
+        assert _remaining(prefix) == set(_FOREIGN)
+
+    async def test_not_installed_leaves_voice_running(self, prefix):
+        class FakeVoice:
+            paths = SimpleNamespace(root=prefix / "voice")
+
+            async def shutdown(self) -> None:
+                raise AssertionError("a source run must not stop voice")
+
+        await handle_uninstall_request(
+            prefix, installed=False, voice=FakeVoice(), exit_func=lambda _: None
+        )
+
+        assert (prefix / "voice" / "models").is_dir()
+
     async def test_failed_uninstall_still_exits_zero(self, prefix, monkeypatch):
-        def boom(_prefix: Path) -> None:
+        def boom(_prefix: Path, voice_root: Path | None = None) -> None:
             raise OSError("disk gone")
 
         monkeypatch.setattr(self_uninstall, "uninstall", boom)

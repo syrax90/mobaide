@@ -29,6 +29,8 @@ Subcommands:
                          auto-updater is configured. Bootstrap path for
                          existing installs that were set up before
                          install.sh learned to fetch the key automatically.
+* ``voice``            — ``status | install | remove | benchmark`` for the
+                         opt-in on-PC speech-to-text (see ``mobaide.voice.cli``).
 * ``--version``        — print ``__version__`` and exit.
 """
 from __future__ import annotations
@@ -251,6 +253,37 @@ def _build_parser() -> argparse.ArgumentParser:
             "service. The next agent boot picks up pairing-pending state."
         ),
     )
+    voice = sub.add_parser(
+        "voice",
+        help="Manage on-PC voice input (speech-to-text): status, install, remove, benchmark.",
+    )
+    voice_sub = voice.add_subparsers(dest="voice_command", required=True)
+    for name, help_text in (
+        ("status", "Show whether voice input is installed and what it costs."),
+        ("install", "Download, verify and enable voice input (about 680 MB)."),
+        ("remove", "Turn voice input off and delete its files."),
+        ("benchmark", "Measure transcription latency on this computer."),
+    ):
+        voice_cmd = voice_sub.add_parser(name, help=help_text)
+        voice_cmd.add_argument(
+            "--prefix",
+            help="Override install prefix (default: install_paths.default_prefix()).",
+        )
+        voice_cmd.add_argument("--voice-dir", help="Use this voice directory instead.")
+        if name == "status":
+            voice_cmd.add_argument(
+                "--json", action="store_true", help="Print the raw status JSON."
+            )
+        if name == "remove":
+            voice_cmd.add_argument(
+                "--yes", action="store_true", help="Do not ask for confirmation."
+            )
+        if name == "benchmark":
+            voice_cmd.add_argument(
+                "--seconds",
+                default="10,30,60,115",
+                help="Comma-separated dictation lengths to measure (default: 10,30,60,115).",
+            )
     return parser
 
 
@@ -310,6 +343,10 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(_run_re_pair(args))
     elif command == "fetch-trust-key":
         sys.exit(_run_fetch_trust_key(args))
+    elif command == "voice":
+        from mobaide.voice.cli import run as run_voice
+
+        sys.exit(run_voice(args))
     else:
         parser.print_help()
         sys.exit(2)

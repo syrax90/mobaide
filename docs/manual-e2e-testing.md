@@ -253,6 +253,7 @@ release builds. Use the simulator over loopback instead.
 | `up` | boot; reuses persisted account/agent/DB (phone stays logged in) |
 | `up --fresh` | wipe state first: new secret, account, agent, empty DB |
 | `up --fake-pty [--smoke]` | echo-backend infra check (no shells/CLIs needed) |
+| `up --fake-voice` | voice input against a tiny generated model with deterministic `fake transcript <n> ms` results (`MOBAIDE_VOICE_FAKE=1`), so the enable → dictate flows need no 670 MB download |
 | `up --install-app` | build + install the app for every client that was synced |
 | `android --install-app` | also run `gradlew :app:installDebug` |
 | `ios --install-app` | also run `xcodebuild` + `xcrun simctl install`/`launch` against the **booted** simulator (uninstalling first when the URL changed) |

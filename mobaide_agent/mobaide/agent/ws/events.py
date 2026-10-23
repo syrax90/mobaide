@@ -56,6 +56,14 @@ async def events_ws(websocket: WebSocket) -> None:
             )
         except Exception:
             logger.exception("events_ws.autoscan_list_snapshot_failed")
+    voice = getattr(websocket.app.state, "voice", None)
+    if voice is not None:
+        try:
+            await websocket.send_json(
+                {"type": "voice.changed", "payload": voice.status().model_dump(mode="json")}
+            )
+        except Exception:
+            logger.exception("events_ws.voice_snapshot_failed")
 
     q = bus.subscribe()
     try:

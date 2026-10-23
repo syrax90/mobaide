@@ -287,6 +287,7 @@ fun AppNavigation(
         ) { entry ->
             TerminalScreen(
                 viewModel = hiltViewModel(),
+                voiceViewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
                 // The session list is not always behind us — a notification tap
                 // or a restored back stack can land here directly — so fall back
@@ -426,6 +427,7 @@ fun AppNavigation(
         composable(Routes.SETTINGS) {
             SettingsScreen(
                 viewModel = hiltViewModel(),
+                voiceViewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
                 onLogout = {
                     navController.navigate(Routes.LOGIN) {

@@ -55,11 +55,14 @@ import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_MIN
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_STEP
 import com.mobaide.app.data.local.TerminalDisplayMode
 import com.mobaide.app.ui.util.openUrlInCustomTab
+import com.mobaide.app.ui.voice.VoiceSettingsSection
+import com.mobaide.app.ui.voice.VoiceViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel,
+    voiceViewModel: VoiceViewModel,
     onBack: () -> Unit,
     onLogout: () -> Unit,
     onManageConnections: () -> Unit = {},
@@ -68,6 +71,7 @@ fun SettingsScreen(
     onOpenSupport: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val voiceState by voiceViewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     PixelScaffold(
@@ -166,6 +170,18 @@ fun SettingsScreen(
                 staticColumns = uiState.terminalStaticColumns,
                 onModeChange = viewModel::setTerminalDisplayMode,
                 onColumnsChange = viewModel::setTerminalStaticColumns,
+            )
+
+            HorizontalDivider(thickness = 2.dp)
+
+            VoiceSettingsSection(
+                state = voiceState,
+                onEnable = voiceViewModel::install,
+                onCancelInstall = voiceViewModel::cancelInstall,
+                onRetry = voiceViewModel::install,
+                onRemove = voiceViewModel::remove,
+                onReinstall = voiceViewModel::reinstall,
+                onShowMicChange = { show -> voiceViewModel.setMicHidden(!show) },
             )
 
             HorizontalDivider(thickness = 2.dp)

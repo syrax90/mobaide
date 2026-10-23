@@ -30,6 +30,8 @@ class AgentEvent:
         - ``autoscan.status``   — payload: <full AutoScanInstance.to_dto()>
         - ``autoscan.event``    — payload: {"project_name": ..., "event": {...}}
         - ``autoscan.list.changed`` — payload: <full AutoScanSessionManager.list_response()>
+        - ``voice.changed``     — payload: <full VoiceStatusResponse> (throttled
+          to 2/s while downloading; state changes are sent at once)
     """
 
     type: str

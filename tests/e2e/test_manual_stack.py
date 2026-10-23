@@ -373,6 +373,26 @@ def test_stale_matcher_covers_the_web_child():
     assert not any(t in "python3.12" for t in name_tokens)
 
 
+def test_build_agent_env_fake_voice_is_opt_in_and_sanitized(monkeypatch, tmp_path):
+    """Voice runs against the real model unless `up --fake-voice` asks for
+    the generated one, and both switches are set explicitly (process env
+    beats the agent's .env)."""
+    monkeypatch.setenv("MOBAIDE_VOICE_FAKE", "1")
+    monkeypatch.setenv("MOBAIDE_VOICE_DIR", str(tmp_path / "elsewhere"))
+    state = {"jwt_secret_key": "secret", "agent_id": "agent-1", "agent_token": "tok"}
+
+    plain = ms.build_parser().parse_args(["up"])
+    assert plain.fake_voice is False
+    env = ms.build_agent_env(state, plain, tmp_path / "agent", 9101)
+    assert env["MOBAIDE_VOICE_FAKE"] == "0"
+    assert env["MOBAIDE_VOICE_DIR"] == ""
+
+    fake = ms.build_parser().parse_args(["up", "--fake-voice"])
+    env = ms.build_agent_env(state, fake, tmp_path / "agent", 9101)
+    assert env["MOBAIDE_VOICE_FAKE"] == "1"
+    assert env["MOBAIDE_VOICE_DIR"] == ""
+
+
 def test_up_parser_emulator_is_opt_in():
     """Plain `up` (the macOS workflow) must not boot anything new; a bare
     --emulator picks the shared AVD name, and an explicit one wins."""

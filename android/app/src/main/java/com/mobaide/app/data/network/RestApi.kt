@@ -46,6 +46,14 @@ import com.mobaide.app.data.network.dto.StopScanRequest
 import com.mobaide.app.data.network.dto.TokenRequest
 import com.mobaide.app.data.network.dto.TokenResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
+import com.mobaide.app.data.network.dto.VoiceDictationAudioRequest
+import com.mobaide.app.data.network.dto.VoiceDictationAudioResponse
+import com.mobaide.app.data.network.dto.VoiceDictationCreateRequest
+import com.mobaide.app.data.network.dto.VoiceDictationFinishRequest
+import com.mobaide.app.data.network.dto.VoiceDictationResponse
+import com.mobaide.app.data.network.dto.VoiceDictationResultResponse
+import com.mobaide.app.data.network.dto.VoiceInstallRequest
+import com.mobaide.app.data.network.dto.VoiceStatusResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -416,6 +424,57 @@ class RestApi(
             .addPathSegment(sessionId)
             .addPathSegment("git")
             .addPathSegment(leaf)
+
+    suspend fun getVoiceStatus(): VoiceStatusResponse =
+        executeCancellable(Request.Builder().url(voiceUrl("status").build()).get().build())
+
+    suspend fun installVoice(): VoiceStatusResponse =
+        postJson(voiceUrl("install").build(), json.encodeToString(VoiceInstallRequest()))
+
+    suspend fun cancelVoiceInstall(): VoiceStatusResponse =
+        postJson(voiceUrl("install", "cancel").build(), "{}")
+
+    suspend fun removeVoice(): VoiceStatusResponse =
+        execute(Request.Builder().url(voiceUrl("model").build()).delete().build())
+
+    // Not cancellable on purpose: a dictation the agent opened must come back
+    // with its id so it can be deleted, or it would hold one of the agent's
+    // two slots until it expires.
+    suspend fun createVoiceDictation(sessionId: String?): VoiceDictationResponse =
+        postJson(
+            voiceUrl("dictations").build(),
+            json.encodeToString(VoiceDictationCreateRequest(session_id = sessionId)),
+        )
+
+    suspend fun appendVoiceAudio(
+        dictationId: String,
+        body: VoiceDictationAudioRequest,
+    ): VoiceDictationAudioResponse = executeCancellable(
+        Request.Builder()
+            .url(voiceUrl("dictations", dictationId, "audio").build())
+            .post(json.encodeToString(body).toRequestBody(jsonMediaType))
+            .build(),
+    )
+
+    suspend fun finishVoiceDictation(dictationId: String, lastSeq: Int): VoiceDictationResultResponse =
+        executeCancellable(
+            Request.Builder()
+                .url(voiceUrl("dictations", dictationId, "finish").build())
+                .post(
+                    json.encodeToString(VoiceDictationFinishRequest(last_seq = lastSeq))
+                        .toRequestBody(jsonMediaType),
+                )
+                .build(),
+        )
+
+    suspend fun deleteVoiceDictation(dictationId: String) =
+        executeRaw(Request.Builder().url(voiceUrl("dictations", dictationId).build()).delete().build())
+
+    private fun voiceUrl(vararg segments: String): HttpUrl.Builder =
+        baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("voice")
+            .apply { segments.forEach { addPathSegment(it) } }
 
     suspend fun getAutoScanList(): AutoScanListResponse {
         val request = Request.Builder()

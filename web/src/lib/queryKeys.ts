@@ -103,6 +103,12 @@ export const queryKeys = {
   /** Which CLIs the agent has installed, and the models each advertises. */
   agentCapabilities: (agentId: string) => ['agent', agentId, 'capabilities'] as const,
   /**
+   * The agent's voice input status. Written by `voice.changed` (a full
+   * snapshot, republished on every events-channel connect) and by the
+   * install / cancel / remove answers.
+   */
+  voiceStatus: (agentId: string) => ['agent', agentId, 'voice'] as const,
+  /**
    * `capabilities.fs.dirs` for the path fields. Its own key rather than an
    * observer of `agentCapabilities`, whose wizard observer deliberately keeps
    * `gcTime: 0` — a second observer would stretch that entry's lifetime.

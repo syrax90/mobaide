@@ -24,7 +24,8 @@
  * `staleTime: Infinity`, because an invalidation landing during a cold fetch is
  * deduped into that fetch and leaves the stale result pinned (CLA-234).
  * `git.changed` is the pointer case; `git.job.progress` / `git.job.done` carry
- * a whole `GitJobResponse` each and are written (`sessionGitJobCache.ts`).
+ * a whole `GitJobResponse` each and are written (`sessionGitJobCache.ts`), as is
+ * `voice.changed`, a whole `VoiceStatusResponse` (`voiceCache.ts`).
  *
  * WEB-10 judged the three `autoscan.*` types by the same rule and none of them
  * is an invalidation: `autoscan.list.changed` and `autoscan.status` carry full
@@ -53,6 +54,7 @@ import { applyAutoScanSnapshot, applyAutoScanStatus } from './autoscanCache';
 import { applyProjectsSnapshot } from './projectsCache';
 import { applySessionsSnapshot, applySessionUpsert } from './sessionCache';
 import { applySessionGitJobEvent } from './sessionGitJobCache';
+import { applyVoiceSnapshot } from './voiceCache';
 import { markSessionsSnapshotApplied } from './sessionsSyncStore';
 import {
   agentStatusChangedSchema,
@@ -306,6 +308,15 @@ export function applyAgentEventEnvelope(
         kind: 'patched',
         type: envelope.type,
         keys: [queryKeys.sessionGitJob(agentId, job.session_id, job.job_id)],
+      };
+    }
+    case 'voice.changed': {
+      const outcome = applyVoiceSnapshot(client, agentId, envelope.payload);
+      if (outcome === 'dropped') return { kind: 'dropped' };
+      return {
+        kind: 'patched',
+        type: envelope.type,
+        keys: [queryKeys.voiceStatus(agentId)],
       };
     }
     default:

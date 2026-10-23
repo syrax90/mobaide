@@ -192,6 +192,35 @@ export function gitCapability(info: AgentVersionInfo | undefined, key: string): 
   return Object.hasOwn(git, key) && (git as Record<string, unknown>)[key] === true;
 }
 
+/** `capabilities.voice`: what dictation needs to know before it starts. */
+export interface VoiceCapability {
+  sampleRate: number;
+  maxSeconds: number;
+  maxChunkBytes: number;
+}
+
+function positiveInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
+}
+
+/**
+ * The agent's voice input limits, or `null` when it does not offer voice.
+ * Present whatever the install state (`GET /api/voice/status` tells that), so
+ * `null` means "an agent too old for voice" and hides the mic entirely.
+ */
+export function voiceCapability(info: AgentVersionInfo | undefined): VoiceCapability | null {
+  if (info === undefined) return null;
+  const voice = info.capabilities.voice;
+  if (typeof voice !== 'object' || voice === null) return null;
+  const fields = voice as Record<string, unknown>;
+  if (fields.dictation !== true) return null;
+  const sampleRate = positiveInteger(fields.sample_rate);
+  const maxSeconds = positiveInteger(fields.max_seconds);
+  const maxChunkBytes = positiveInteger(fields.max_chunk_bytes);
+  if (sampleRate === null || maxSeconds === null || maxChunkBytes === null) return null;
+  return { sampleRate, maxSeconds, maxChunkBytes };
+}
+
 /** `capabilities.fs.<key>`, with `gitCapability`'s explicit-`true` rule. */
 export function fsCapability(info: AgentVersionInfo | undefined, key: string): boolean {
   if (info === undefined) return false;

@@ -25,6 +25,10 @@ reuses this harness's recipe outside pytest.
    (`POST /api/auth/register` → `POST /api/agents`),
 4. boots `python -m mobaide` pointed at the local `ws://` relay with the agent's
    credentials and `MOBAIDE_ENV=test` (fake PTY, insecure-ws opt-in, tmp state),
+   plus `MOBAIDE_VOICE_FAKE=1` and an empty `MOBAIDE_VOICE_DIR` (voice input runs
+   against a tiny generated model under the temp prefix and answers
+   `fake transcript <n> ms`; `test_e2e_voice.py` drives enable → dictate →
+   finish → delete → remove through the relay),
 5. gates readiness on `GET /api/health` → `agents_online >= 1` (not bare HTTP 200,
    which races into WS close 4012), then yields a `MockMobileClient`.
 

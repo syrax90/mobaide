@@ -147,6 +147,8 @@ SANITIZED_ENV_VARS = (
     "MOBAIDE_WEB_PROXY_TARGET",
     "MOBAIDE_WEB_DEV_LOGIN_EMAIL",
     "MOBAIDE_WEB_DEV_LOGIN_PASSWORD",
+    "MOBAIDE_VOICE_FAKE",
+    "MOBAIDE_VOICE_DIR",
 )
 
 _DEPS: SimpleNamespace | None = None
@@ -799,6 +801,11 @@ def build_agent_env(
     )
     if getattr(args, "projects", None):
         env["PROJECTS"] = args.projects
+    # Explicit both ways, like MOBAIDE_ENV: a dev-checkout .env must not point
+    # the throwaway stack at a real voice dir (a client's "remove voice" would
+    # delete it) or fake voice behind the operator's back.
+    env["MOBAIDE_VOICE_FAKE"] = "1" if getattr(args, "fake_voice", False) else "0"
+    env["MOBAIDE_VOICE_DIR"] = ""
     return env
 
 
@@ -2532,6 +2539,10 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--smoke", action="store_true",
                     help="after boot, drive one echo session end-to-end "
                          "(requires --fake-pty)")
+    up.add_argument("--fake-voice", action="store_true",
+                    help="run voice input with MOBAIDE_VOICE_FAKE=1: a tiny "
+                         "generated model and a deterministic transcript, so "
+                         "enable/dictate flows need no 670 MB download")
     up.add_argument("--fresh", action="store_true",
                     help="wipe the state dir first: new secret, account, agent, DB")
     up.add_argument("--email", default=None, help=f"account email (default {DEFAULT_EMAIL})")

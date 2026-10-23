@@ -1,7 +1,7 @@
 # Privacy Policy for Mobaide
 
 **Effective date:** 22 May 2026
-**Last updated:** 4 September 2026
+**Last updated:** 14 October 2026
 
 This Privacy Policy describes how the Mobaide mobile application ("**Mobaide**", "**the app**", "**we**", "**our**") collects, uses, stores, and discloses information about you ("**you**", "**user**") when you install and use the app on an Android or iOS device, when you use the browser client at `app.mobaide.com`, and when you use the supporting Mobaide central server hosted at `api.mobaide.com`.
 
@@ -85,6 +85,7 @@ When you operate a Claude Code or OpenAI Codex session from the app, the followi
 - Keystrokes you type and terminal output emitted by your agent (Claude Code or Codex session I/O).
 - Project and session metadata exchanged between the app and your agent over the WebSocket.
 - The OpenAI API key you submit through the in-app Codex sign-in, on its way to your agent. It passes through the server's in-memory routing only and is handed to the Codex CLI on your own workstation; it is never written to the central server's disk, logs, or backups.
+- Voice dictation audio and its transcript, if you turn voice input on for an agent and dictate. The app records your microphone only while you dictate, and only while it is on screen. The audio is sent over TLS from your device or browser to your own agent — relayed in memory through the central server, or straight to the agent in direct-connection mode — transcribed on your own computer by an open speech-recognition model, and the text is returned to the app's command field for you to review — it is never sent anywhere on its own. Mobaide never stores the audio or the text: the central server keeps neither, and the agent holds audio only in memory until the transcript is ready and never logs audio or text. No third-party speech service is involved.
 
 One narrow exception, iOS only: when a session needs your attention while the app is not open, we send a push alert whose one-line body names the session — using the title the CLI has set, which may be a few words describing what it is doing, or otherwise your project's name. That line is handed to Apple's push service to deliver. See Sections 3.2 and 6. Note that switching notifications off in iOS Settings stops the alert being *shown* to you, but does not stop it being sent — to stop that, sign out from Settings (which asks us to delete the push address, on a best-effort basis), revoke the device, or request account deletion.
 
@@ -135,7 +136,8 @@ For transparency, the app does **not** collect or use:
 - Your phone number, address, or any contact details other than the email address you register with.
 - Your location. No location permission is requested or used and the apps never read the device's position; the only location-related processing is Google deriving a city-level approximation from the IP address of the analytics requests described in Section 3.8, which we never see.
 - Your contacts, calendar, SMS, call logs, or any other personal-information surface on the device.
-- Photos or microphone input. Neither app requests access to your photo library or your microphone.
+- Photos. Neither app requests access to your photo library.
+- Microphone audio outside voice dictation. The microphone is used only while you dictate with voice input, which you turn on yourself; the audio goes to your own agent and is not stored (Section 3.4). Voice input is off until you enable it, and declining the microphone permission leaves every other feature working.
 - Camera imagery. Both apps can scan a pairing QR code, and the two platforms do it differently:
   - **Android:** QR pairing uses the Google Play Services "Code Scanner" module, which runs in a separate Google Play process and only returns the decoded text of the scanned QR code — the Android app does not request the `CAMERA` permission and never receives raw camera frames.
   - **iOS:** there is no equivalent out-of-process scanner, so the iOS app asks for camera permission and reads the camera itself while the scanner sheet is open. Frames are decoded on your device, in the app, purely to read the QR code. They are never recorded, never written to storage, and never sent to the central server or anyone else, and the camera is released as soon as you leave the scanner. You can decline the permission and still pair, using the device-code flow or by adding the agent manually.
@@ -176,13 +178,14 @@ The Android app carries the following permissions. The first group is declared b
 | `INTERNET` | Connect to the central server over WSS/HTTPS. |
 | `POST_NOTIFICATIONS` | Show the "a session is waiting for your input" alert; Android 13 and later ask you before the first one. |
 | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE` | Keep the events connection to your agent alive while the app is in the background so that those alerts arrive without a push service. |
+| `RECORD_AUDIO` | Voice input: record your voice while you dictate, with the app on screen, so your own agent can turn it into text (Section 3.4). Asked the first time you tap the microphone; never used in the background. |
 | `com.google.android.gms.permission.AD_ID` | Lets Google Analytics for Firebase read the resettable Android Advertising ID for ad-install attribution (Section 3.8). Delete or reset the ID in Android's settings to withhold it. |
 | `ACCESS_ADSERVICES_AD_ID`, `ACCESS_ADSERVICES_ATTRIBUTION` | The Android 13+ Privacy Sandbox counterparts of the row above: reading the Advertising ID and receiving install attribution through the system's ad services, merged in by the same SDK. |
 | `com.google.android.finsky.permission.BIND_GET_INSTALL_REFERRER_SERVICE` | Merged in by the same SDK: asks Google Play which ad, if any, led to the installation. |
 | `ACCESS_NETWORK_STATE`, `WAKE_LOCK` | Merged in by Google Play services libraries to defer network work until a connection is available. |
 | `USE_BIOMETRIC`, `USE_FINGERPRINT` | Merged in by the AndroidX security library that encrypts the auth tokens (Section 9); the app never asks for a fingerprint or face. |
 
-The Android app does **not** declare `CAMERA`, `RECORD_AUDIO`, `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION`, `READ_CONTACTS`, `READ_SMS`, `READ_PHONE_STATE`, `READ_EXTERNAL_STORAGE`, or any other sensitive permission.
+The Android app does **not** declare `CAMERA`, `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION`, `READ_CONTACTS`, `READ_SMS`, `READ_PHONE_STATE`, `READ_EXTERNAL_STORAGE`, or any other sensitive permission.
 
 ### iOS
 
@@ -193,8 +196,11 @@ iOS asks you for permission at the moment a feature needs it, and each request c
 | Camera | Only when you open the pairing-QR scanner | Read the pairing QR code shown on your agent host. Frames are decoded on your device and never stored or transmitted (see Section 3.7). |
 | Local network | Only when you connect straight to an agent on your own network ("direct connection" mode), rather than through the relay | Reach your agent at its address on your local network. |
 | Notifications | Once, the first time you finish connecting to an agent | Tell you when a session on your agent is waiting for your input. |
+| Microphone | Only the first time you dictate with voice input | Record your voice while you dictate, so your own agent can turn it into text (Section 3.4). The audio is not stored. |
 
-All three are optional: declining the camera leaves the device-code and manual pairing paths, declining local network leaves relay mode, and declining notifications only means you check the app yourself. The iOS app declares no photo-library, microphone, location, or tracking usage, so iOS will never prompt you for them.
+All four are optional: declining the camera leaves the device-code and manual pairing paths, declining local network leaves relay mode, declining notifications only means you check the app yourself, and declining the microphone only turns voice input off. The iOS app declares no photo-library, location, or tracking usage, so iOS will never prompt you for them.
+
+In the browser client, your browser asks for microphone access the first time you dictate there, and you can withdraw it in the browser's site settings.
 
 ---
 

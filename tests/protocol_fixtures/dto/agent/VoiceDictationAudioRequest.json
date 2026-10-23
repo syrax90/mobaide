@@ -1,0 +1,12 @@
+{
+  "type": "VoiceDictationAudioRequest",
+  "cases": [
+    {
+      "name": "first_chunk",
+      "wire": {
+        "seq": 0,
+        "pcm16_b64": "AAABAAIAAwD//w=="
+      }
+    }
+  ]
+}

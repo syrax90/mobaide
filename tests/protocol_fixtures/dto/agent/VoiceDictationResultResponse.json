@@ -1,0 +1,28 @@
+{
+  "type": "VoiceDictationResultResponse",
+  "cases": [
+    {
+      "name": "done",
+      "wire": {
+        "dictation_id": "9b1f2c3d4e5f60718293a4b5c6d7e8f9",
+        "state": "done",
+        "text": "Rename useSessionModel to use the shared hook.",
+        "duration_ms": 16384
+      }
+    },
+    {
+      "name": "transcribing",
+      "wire": {
+        "dictation_id": "9b1f2c3d4e5f60718293a4b5c6d7e8f9",
+        "state": "transcribing",
+        "text": null,
+        "duration_ms": 16384
+      },
+      "decoded_canonical": {
+        "dictation_id": "9b1f2c3d4e5f60718293a4b5c6d7e8f9",
+        "state": "transcribing",
+        "duration_ms": 16384
+      }
+    }
+  ]
+}

@@ -19,6 +19,7 @@ import { stubMediaQuery } from '../../test/matchMediaStub';
 import { ApiError } from '../../api/errors';
 import type { SessionGitStatus } from '../../api/sessionGitRepository';
 import type { SessionResponse } from '../../protocol/dto/session';
+import type { VoiceStatus } from '../../protocol/dto/voice';
 
 // The real model is the point — where the screen mounts the toolbar is a
 // property of the tree it builds around it — so only the two things a model
@@ -184,6 +185,20 @@ vi.mock('../../api/agentCapabilities', () => ({
   },
 }));
 
+/** The agent's `GET /api/voice/status`, read once `capabilities.voice` is advertised. */
+const voice = vi.hoisted(() => ({ status: null as VoiceStatus | null }));
+
+vi.mock('../../api/voiceRepository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/voiceRepository')>();
+  return {
+    ...actual,
+    getVoiceStatus: () =>
+      voice.status === null
+        ? Promise.reject(new Error('voice status is not under test'))
+        : Promise.resolve(voice.status),
+  };
+});
+
 // Before any persisted store is imported: the sessions panel's pin lives in
 // one, and Node's own `localStorage` throws without `--localstorage-file`.
 stubLocalStorage();
@@ -197,6 +212,7 @@ const { TerminalScreen } = await import('./TerminalScreen');
 const { useSessionsPanelStore } = await import('../../stores/sessionsPanelStore');
 const { WIDE_VIEWPORT_QUERY } = await import('./useWideViewport');
 const { sessionResponseSchema } = await import('../../protocol/dto/session');
+const { voiceStatusSchema } = await import('../../protocol/dto/voice');
 const { markSessionsSynced, resetSessionsSynced } = await import(
   '../../realtime/__testing__/sessionsSynced'
 );
@@ -230,6 +246,7 @@ afterEach(() => {
   sessions.rows = [];
   agentVersion.capabilities = {};
   agentVersion.probes = 0;
+  voice.status = null;
   resetSessionsSynced();
   for (const model of Object.values(useTerminalStore.getState().models)) {
     model.dispose();
@@ -789,14 +806,16 @@ describe('TerminalScreen git changes', () => {
     expect(screen.queryByRole('menuitem', { name: 'Commit…' })).toBeNull();
   });
 
-  it('asks the agent nothing while the row names no folder', async () => {
-    // The probe is gated like the menu it feeds: without a cwd there are no
-    // git routes to offer, so the agent is not asked what it could do.
+  it('offers no git menu while the row names no folder', async () => {
+    // The git menu is gated on a cwd: without one there are no git routes to
+    // offer, whatever the agent advertises. The capabilities probe itself is
+    // shared with the mic (`capabilities.voice`), which does not depend on a
+    // folder, so it still runs - once, never once per consumer.
     agentVersion.capabilities = { git: { commit: true } };
     await renderSynced(row());
     await flush();
 
-    expect(agentVersion.probes).toBe(0);
+    expect(agentVersion.probes).toBe(1);
     expect(more()).toBeNull();
   });
 
@@ -888,6 +907,109 @@ describe('TerminalScreen git changes', () => {
     expect(within(sheet).getByPlaceholderText('Branch, tag or commit')).toBeInTheDocument();
     expect(await within(panel).findByText('app.py')).toBeInTheDocument();
     expect(screen.queryByRole('menuitem')).toBeNull();
+  });
+});
+
+describe('TerminalScreen voice button', () => {
+  const DICTATE = 'Dictate: record speech for your computer to transcribe';
+
+  /** An agent that advertises dictation and answers the given voice state. */
+  const renderWithVoice = (state: string): ReturnType<typeof acquireTerminal> => {
+    agentVersion.capabilities = {
+      voice: { dictation: true, sample_rate: 16000, max_seconds: 120, max_chunk_bytes: 65536 },
+    };
+    voice.status = voiceStatusSchema.parse({
+      state,
+      enabled: state === 'ready',
+      repairing: false,
+      model: {
+        id: 'parakeet',
+        name: 'Parakeet',
+        languages: ['en'],
+        download_bytes: 670_000_000,
+        disk_bytes: 700_000_000,
+        ram_bytes: 1_200_000_000,
+        notice: 'CC-BY-4.0',
+      },
+      progress: null,
+      host: { recommendation: 'ok', reasons: [] },
+      speed_factor: null,
+      error: null,
+    });
+    const model = acquireTerminal('a1', 's1');
+    renderTerminal();
+    return model;
+  };
+
+  /**
+   * Seeded once the button is up, as in the template tests: the null token's
+   * asynchronous `connection` patch would clobber anything applied earlier.
+   */
+  const seed = (
+    model: ReturnType<typeof acquireTerminal>,
+    connection: 'connecting' | 'live',
+    status: string | null,
+  ): void => {
+    act(() => {
+      model.state.setState({
+        connection,
+        status: status === null ? null : { status, pid: undefined, exit_code: undefined },
+      });
+    });
+  };
+
+  it('offers Dictate on a running session and withdraws it once the session ends', async () => {
+    // On the web a transcript can only be pasted into the session, so a
+    // recording on an ended one would be up to two minutes spent for nothing.
+    const model = renderWithVoice('ready');
+    const mic = await screen.findByRole('button', { name: DICTATE });
+    seed(model, 'live', 'running');
+    expect(mic).toBeEnabled();
+
+    seed(model, 'live', 'stopped');
+
+    expect(mic).toBeDisabled();
+  });
+
+  it.each(['stopped', 'crashed'])('keeps Dictate disabled on a %s session', async (status) => {
+    const model = renderWithVoice('ready');
+    const mic = await screen.findByRole('button', { name: DICTATE });
+
+    seed(model, 'live', status);
+
+    expect(mic).toBeDisabled();
+  });
+
+  it('keeps Dictate enabled before the first state frame says anything', async () => {
+    // No status yet is "still connecting", not "ended".
+    const model = renderWithVoice('ready');
+    const mic = await screen.findByRole('button', { name: DICTATE });
+
+    seed(model, 'connecting', null);
+
+    expect(mic).toBeEnabled();
+  });
+
+  it('keeps Dictate enabled while a running session reconnects', async () => {
+    // Gated on the session running, not on the send gate: a reconnect closes
+    // `canSend` for a moment, and the recording can outlast it.
+    const model = renderWithVoice('ready');
+    const mic = await screen.findByRole('button', { name: DICTATE });
+
+    seed(model, 'connecting', 'running');
+
+    expect(mic).toBeEnabled();
+  });
+
+  it('keeps the setup entry enabled on an ended session', async () => {
+    // Off, preparing and failed open the setup dialog, which has nothing to do
+    // with the session, so only the ready mic is gated.
+    const model = renderWithVoice('not_installed');
+    const setup = await screen.findByRole('button', { name: 'Voice input is off. Set it up' });
+
+    seed(model, 'live', 'stopped');
+
+    expect(setup).toBeEnabled();
   });
 });
 

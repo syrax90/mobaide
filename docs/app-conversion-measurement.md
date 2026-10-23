@@ -193,9 +193,10 @@ absence and to refuse to *release* without them:
 - `PrivacyInfo.xcprivacy`: `NSPrivacyTracking` stays `false`; collected types
   are Email Address and User ID (linked, App Functionality), Device ID
   (linked; App Functionality + Analytics + Developer's Advertising),
-  Product Interaction (not linked; Analytics + Developer's Advertising) and
+  Product Interaction (not linked; Analytics + Developer's Advertising),
   Coarse Location (not linked; Analytics — Google derives it from the IP
-  address). `MobaideTests/PrivacyManifestTests.swift` pins it;
+  address) and, for voice input, Audio Data (linked; App Functionality).
+  `MobaideTests/PrivacyManifestTests.swift` pins it;
   `FirebaseConfigurationTests.swift` pins the Info.plist keys. Firebase's own
   xcframeworks ship their manifests and Apple aggregates them into the privacy
   report, so the app manifest must not contradict them.
@@ -312,12 +313,13 @@ the next upload.
 | Location → Approximate location | **Yes** | **Yes** (Google) | Required | Analytics | **New:** derived by Google from the IP address of the analytics requests; the app never reads device location. |
 | App info and performance → Crash logs / Diagnostics | No | No | — | — | No crash reporter; support diagnostics are user-initiated through the user's own mail client. |
 | Messages / Other user content | Carry over | — | — | — | Prompt templates are stored on the relay (app functionality); terminal traffic is relayed in memory only and is ephemeral under Play's definition. Verify the existing answers, they are outside this change. |
+| Audio → Voice or sound recordings | **Yes** | No | **Optional** | App functionality | **Pending — submit with the first Android release that has voice input (#737).** The audio leaves the device through our relay, so it counts as collected; it is **processed ephemerally** (relayed in memory to the user's own agent, never stored). Not shared: it goes to the user's own computer, not a third party. |
 
 ### App Store Connect — App Privacy
 
 Edited under App Store Connect → the app → App Privacy → Data Types → Edit and
 **published**; publishing is independent of a version and has no review. The
-six types below are `PrivacyInfo.xcprivacy` verbatim — Apple cross-reads the
+seven types below are `PrivacyInfo.xcprivacy` verbatim — Apple cross-reads the
 manifest, so keep them in lockstep. Product Interaction, not Advertising Data:
 the app receives nothing about ads (no `NSAdvertisingAttributionReportEndpoint`,
 so SKAdNetwork postbacks go Apple → Google; the SDK's ad events fire only with
@@ -336,6 +338,7 @@ under Apple's definition).
 | Data linked to you | User Content → Other User Content | App Functionality | Carry over: prompt templates. Verify the existing answer. |
 | Data **not** linked to you | Usage Data → Product Interaction | Analytics; Developer's Advertising or Marketing | **New:** app opens, sessions, `agent_paired`. |
 | Data **not** linked to you | Location → Coarse Location | Analytics | **New:** derived by Google from the IP address. |
+| Data linked to you | Audio Data | App Functionality | **Pending — publish with the first iOS release that has voice input (#737).** Already in `PrivacyInfo.xcprivacy`. Apple counts data as collected only when it is kept beyond serving the request in real time, and the relay only forwards it, so it could arguably be omitted; it is declared as the conservative choice unless App Review says otherwise. Not used for tracking. |
 | Diagnostics | — | — | None collected. |
 
 "Developer's Advertising or Marketing" (not "Third-Party Advertising") is the

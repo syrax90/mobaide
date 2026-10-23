@@ -1,6 +1,7 @@
 package com.mobaide.app.ui.terminal
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -39,6 +40,8 @@ fun FullScreenInputSheet(
     onSend: (String) -> Unit,
     onDismiss: () -> Unit,
     enabled: Boolean = true,
+    micButton: (@Composable () -> Unit)? = null,
+    dictationBar: (@Composable () -> Unit)? = null,
 ) {
     val focusRequester = remember { FocusRequester() }
 
@@ -63,15 +66,24 @@ fun FullScreenInputSheet(
                     contentDescription = "Collapse editor",
                     onClick = onDismiss,
                 )
-                PixelIconButton(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Send",
-                    onClick = {
-                        val trimmed = text.text.trimEnd('\n', '\r')
-                        if (trimmed.isNotEmpty()) onSend(trimmed)
-                    },
-                    enabled = enabled && text.text.isNotEmpty(),
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (dictationBar == null) micButton?.invoke()
+                    PixelIconButton(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Send",
+                        onClick = {
+                            val trimmed = text.text.trimEnd('\n', '\r')
+                            if (trimmed.isNotEmpty()) onSend(trimmed)
+                        },
+                        enabled = enabled && text.text.isNotEmpty() && dictationBar == null,
+                    )
+                }
+            }
+            if (dictationBar != null) {
+                Box(modifier = Modifier.padding(horizontal = 8.dp)) { dictationBar() }
             }
             OutlinedTextField(
                 colors = PixelTextFieldDefaults.colors(),

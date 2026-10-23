@@ -8,6 +8,7 @@ import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.GitJobResponse
+import com.mobaide.app.data.network.dto.VoiceStatusResponse
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.long
@@ -171,6 +172,9 @@ class AgentEventBus @Inject constructor(
                 )
                 "git.job.done" -> AgentEvent.GitJobDone(
                     json.decodeFromJsonElement(GitJobResponse.serializer(), payload)
+                )
+                "voice.changed" -> AgentEvent.VoiceChanged(
+                    json.decodeFromJsonElement(VoiceStatusResponse.serializer(), payload)
                 )
                 "autoscan.status" -> AgentEvent.AutoScanStatus(
                     json.decodeFromJsonElement(AutoScanInstanceDto.serializer(), payload)

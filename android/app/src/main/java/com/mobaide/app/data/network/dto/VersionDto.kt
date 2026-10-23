@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -125,6 +126,31 @@ fun VersionInfoResponse.gitCapability(key: String): Boolean = runCatching {
         // "true", which web and iOS reject.
         ?.let { !it.isString && it.booleanOrNull == true }
 }.getOrNull() == true
+
+/** `capabilities.voice`: what dictation needs to know before it starts. */
+data class VoiceCapability(
+    val sampleRate: Int,
+    val maxSeconds: Int,
+    val maxChunkBytes: Int,
+)
+
+/**
+ * The agent's voice input limits, or null when it does not offer voice. The
+ * key is present whatever the install state (`GET /api/voice/status` tells
+ * that), so null means an agent too old for voice: the mic stays hidden.
+ */
+fun VersionInfoResponse.voiceCapability(): VoiceCapability? = runCatching {
+    val voice = capabilities["voice"]?.jsonObject ?: return@runCatching null
+    val dictation = voice["dictation"]?.jsonPrimitive ?: return@runCatching null
+    if (dictation.isString || dictation.booleanOrNull != true) return@runCatching null
+    fun positive(key: String): Int? =
+        voice[key]?.jsonPrimitive?.takeIf { !it.isString }?.intOrNull?.takeIf { it > 0 }
+    VoiceCapability(
+        sampleRate = positive("sample_rate") ?: return@runCatching null,
+        maxSeconds = positive("max_seconds") ?: return@runCatching null,
+        maxChunkBytes = positive("max_chunk_bytes") ?: return@runCatching null,
+    )
+}.getOrNull()
 
 /** `capabilities.fs.<key>`, with [gitCapability]'s explicit-JSON-`true` rule. */
 fun VersionInfoResponse.fsCapability(key: String): Boolean = runCatching {

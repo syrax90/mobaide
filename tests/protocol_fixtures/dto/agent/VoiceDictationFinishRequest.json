@@ -1,0 +1,17 @@
+{
+  "type": "VoiceDictationFinishRequest",
+  "cases": [
+    {
+      "name": "after_chunks",
+      "wire": {
+        "last_seq": 7
+      }
+    },
+    {
+      "name": "no_audio",
+      "wire": {
+        "last_seq": -1
+      }
+    }
+  ]
+}

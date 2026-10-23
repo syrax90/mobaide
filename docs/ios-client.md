@@ -592,7 +592,7 @@ ios/
 │   ├── Core/Storage/             # KeychainStoring, SecItemKeychainStore
 │   ├── Data/                     # Auth (SessionManager, token/identity stores, SignInService,
 │   │                             # Google/Apple sign-in clients), Events (AgentEventBus,
-│   │                             # UserEventBus), Local, Security, Repository
+│   │                             # UserEventBus), Local, Security, Repository, Voice
 │   ├── PrivacyInfo.xcprivacy     # App Store privacy manifest (see below)
 │   ├── Models/                   # one Swift file per Android dto/*.kt file (wire DTOs)
 │   ├── Notifications/            # ForegroundSessionTracker, NotificationService,
@@ -605,7 +605,7 @@ ios/
 │   │                             # (SwiftTerm host, InputBar, keyboard pan, wheel scroll,
 │   │                             # shortcut picker, session model/store), and the feature
 │   │                             # screens (Agents, Projects, Devices, Templates, AutoScan,
-│   │                             # Settings, Support, Update)
+│   │                             # Settings, Support, Update, Voice)
 │   └── Support/                  # Info.plist (protocol keys, CentralServerURL, Google client ids,
 │                                 # reversed-client-id URL scheme, UIAppFonts) + Mobaide.entitlements (SIWA)
 └── MobaideTests/                 # unit tests + fixture round-trip suites
@@ -834,19 +834,23 @@ GoogleAppMeasurement and their transitive dependencies), which App Store
 Connect aggregates with the app's; SwiftTerm uses no Required Reason API and
 needs none.
 
-`NSPrivacyCollectedDataTypes` lists five types, non-tracking throughout
+`NSPrivacyCollectedDataTypes` lists six types, non-tracking throughout
 (`NSPrivacyTracking` is `false`, no tracking domains): email address and user
 ID (linked, app functionality); device ID (linked; app functionality plus
 analytics and developer's advertising, because Google Analytics for Firebase
 keys its events by a Firebase app-instance id — IDFV collection is switched
-off); product interaction and coarse location (not linked; analytics and, for
-product interaction, developer's advertising — the SDK's automatic app-open /
-session events and the single `agent_paired` conversion, with the location
-derived by Google from the request IP). It must stay consistent with the App
-Privacy answers in App Store Connect and with the privacy policy's Section
-3.8; docs/app-conversion-measurement.md carries the App Privacy answers.
+off); audio data (linked, app functionality — the dictated speech of voice
+input, relayed to the user's own agent and never stored; see
+docs/voice-input.md); product interaction and coarse location (not linked;
+analytics and, for product interaction, developer's advertising — the SDK's
+automatic app-open / session events and the single `agent_paired` conversion,
+with the location derived by Google from the request IP). It must stay
+consistent with the App Privacy answers in App Store Connect and with the
+privacy policy's Sections 3.4 and 3.8; docs/app-conversion-measurement.md
+carries the App Privacy answers.
 Terminal I/O is relayed in real time and not retained server-side, so it is
-not "collected" under Apple's definition. `MobaideTests/PrivacyManifestTests.swift`
+not "collected" under Apple's definition (dictation audio is declared anyway,
+as the conservative choice). `MobaideTests/PrivacyManifestTests.swift`
 asserts all of the above against the built bundle, so a dropped or edited
 manifest fails at test time rather than at upload time.
 

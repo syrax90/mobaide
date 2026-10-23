@@ -306,6 +306,56 @@ struct AgentAPI: Sendable {
         )
     }
 
+    // MARK: - Voice input
+
+    func getVoiceStatus() async throws -> VoiceStatusResponse {
+        try await execute(method: "GET", url: "\(try await base())/api/voice/status")
+    }
+
+    func installVoice() async throws -> VoiceStatusResponse {
+        try await execute(method: "POST", url: "\(try await base())/api/voice/install", body: VoiceInstallRequest())
+    }
+
+    func cancelVoiceInstall() async throws -> VoiceStatusResponse {
+        try await execute(method: "POST", url: "\(try await base())/api/voice/install/cancel", rawBody: Data("{}".utf8))
+    }
+
+    func removeVoice() async throws -> VoiceStatusResponse {
+        try await execute(method: "DELETE", url: "\(try await base())/api/voice/model")
+    }
+
+    func createVoiceDictation(sessionId: String?) async throws -> VoiceDictationResponse {
+        try await execute(
+            method: "POST",
+            url: "\(try await base())/api/voice/dictations",
+            body: VoiceDictationCreateRequest(session_id: sessionId)
+        )
+    }
+
+    func appendVoiceAudio(dictationId: String, seq: Int, pcm16B64: String) async throws {
+        try await executeRaw(
+            method: "POST",
+            url: "\(try await base())/api/voice/dictations/\(Self.encodePathSegment(dictationId))/audio",
+            body: VoiceDictationAudioRequest(seq: seq, pcm16_b64: pcm16B64)
+        )
+    }
+
+    func finishVoiceDictation(dictationId: String, lastSeq: Int) async throws -> VoiceDictationResultResponse {
+        try await execute(
+            method: "POST",
+            url: "\(try await base())/api/voice/dictations/\(Self.encodePathSegment(dictationId))/finish",
+            body: VoiceDictationFinishRequest(last_seq: lastSeq)
+        )
+    }
+
+    /// 204 with no body, hence the raw path (`execute` refuses an empty body).
+    func deleteVoiceDictation(dictationId: String) async throws {
+        try await executeRaw(
+            method: "DELETE",
+            url: "\(try await base())/api/voice/dictations/\(Self.encodePathSegment(dictationId))"
+        )
+    }
+
     func getAutoScanList() async throws -> AutoScanListResponse {
         try await execute(method: "GET", url: "\(try await base())/api/autoscan/list")
     }

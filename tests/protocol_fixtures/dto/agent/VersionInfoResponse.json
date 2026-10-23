@@ -27,6 +27,19 @@
       }
     },
     {
+      "name": "voice_capability",
+      "wire": {
+        "name": "mobaide_agent",
+        "server_version": "0.3.14",
+        "protocol_versions": [6, 7],
+        "min_client_version": 6,
+        "capabilities": {
+          "voice": { "dictation": true, "sample_rate": 16000, "max_seconds": 120, "max_chunk_bytes": 65536 }
+        },
+        "latest_agent_version": "0.3.14"
+      }
+    },
+    {
       "name": "missing_capabilities_defaults_to_empty_object",
       "wire": { "name": "central", "server_version": "1.0.0", "protocol_versions": [6], "min_client_version": 6 },
       "decoded_canonical": { "name": "central", "server_version": "1.0.0", "protocol_versions": [6], "min_client_version": 6, "capabilities": {} }

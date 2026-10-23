@@ -1,0 +1,754 @@
+{
+  "type": "VoiceStatusResponse",
+  "cases": [
+    {
+      "name": "not_installed",
+      "wire": {
+        "state": "not_installed",
+        "enabled": false,
+        "repairing": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "progress": null,
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        },
+        "speed_factor": null,
+        "error": null
+      },
+      "decoded_canonical": {
+        "state": "not_installed",
+        "enabled": false,
+        "repairing": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        }
+      }
+    },
+    {
+      "name": "downloading_low_resources",
+      "wire": {
+        "state": "downloading",
+        "enabled": true,
+        "repairing": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "progress": {
+          "done_bytes": 241172480,
+          "total_bytes": 682365212
+        },
+        "host": {
+          "ram_total_bytes": 8589934592,
+          "disk_free_bytes": 48000000000,
+          "cpu_count": 4,
+          "recommendation": "low_resources",
+          "reasons": [
+            {
+              "code": "low_ram",
+              "message": "This computer has 8.6 GB of memory; dictation uses about 700 MB while it runs, which may slow other apps."
+            }
+          ]
+        },
+        "speed_factor": null,
+        "error": null
+      },
+      "decoded_canonical": {
+        "state": "downloading",
+        "enabled": true,
+        "repairing": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "progress": {
+          "done_bytes": 241172480,
+          "total_bytes": 682365212
+        },
+        "host": {
+          "ram_total_bytes": 8589934592,
+          "disk_free_bytes": 48000000000,
+          "cpu_count": 4,
+          "recommendation": "low_resources",
+          "reasons": [
+            {
+              "code": "low_ram",
+              "message": "This computer has 8.6 GB of memory; dictation uses about 700 MB while it runs, which may slow other apps."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "ready",
+      "wire": {
+        "state": "ready",
+        "enabled": true,
+        "repairing": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "progress": null,
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        },
+        "speed_factor": 35.2,
+        "error": null
+      },
+      "decoded_canonical": {
+        "state": "ready",
+        "enabled": true,
+        "repairing": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        },
+        "speed_factor": 35.2
+      }
+    },
+    {
+      "name": "failed",
+      "wire": {
+        "state": "failed",
+        "enabled": true,
+        "repairing": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "progress": null,
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        },
+        "speed_factor": null,
+        "error": {
+          "code": "hash_mismatch",
+          "message": "encoder.int8.onnx from huggingface.co failed verification."
+        }
+      },
+      "decoded_canonical": {
+        "state": "failed",
+        "enabled": true,
+        "repairing": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        },
+        "error": {
+          "code": "hash_mismatch",
+          "message": "encoder.int8.onnx from huggingface.co failed verification."
+        }
+      }
+    },
+    {
+      "name": "unsupported",
+      "wire": {
+        "state": "unsupported",
+        "enabled": false,
+        "repairing": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "progress": null,
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 8,
+          "recommendation": "unsupported",
+          "reasons": [
+            {
+              "code": "libc_unsupported",
+              "message": "Voice input on Linux needs glibc 2.17 or newer (musl is not supported)."
+            }
+          ]
+        },
+        "speed_factor": null,
+        "error": null
+      },
+      "decoded_canonical": {
+        "state": "unsupported",
+        "enabled": false,
+        "repairing": false,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 8,
+          "recommendation": "unsupported",
+          "reasons": [
+            {
+              "code": "libc_unsupported",
+              "message": "Voice input on Linux needs glibc 2.17 or newer (musl is not supported)."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "repairing_downloading",
+      "wire": {
+        "state": "downloading",
+        "enabled": true,
+        "repairing": true,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "progress": {
+          "done_bytes": 667160860,
+          "total_bytes": 682365212
+        },
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        },
+        "speed_factor": null,
+        "error": null
+      },
+      "decoded_canonical": {
+        "state": "downloading",
+        "enabled": true,
+        "repairing": true,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "progress": {
+          "done_bytes": 667160860,
+          "total_bytes": 682365212
+        },
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        }
+      }
+    },
+    {
+      "name": "repairing_cancelled",
+      "wire": {
+        "state": "failed",
+        "enabled": true,
+        "repairing": true,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "progress": null,
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        },
+        "speed_factor": null,
+        "error": {
+          "code": "interrupted",
+          "message": "Voice needs a small update for this agent; retry to finish."
+        }
+      },
+      "decoded_canonical": {
+        "state": "failed",
+        "enabled": true,
+        "repairing": true,
+        "model": {
+          "id": "parakeet-tdt-0.6b-v3-int8",
+          "name": "NVIDIA Parakeet TDT 0.6B v3 (int8)",
+          "languages": [
+            "bg",
+            "cs",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "fi",
+            "fr",
+            "hr",
+            "hu",
+            "it",
+            "lt",
+            "lv",
+            "mt",
+            "nl",
+            "pl",
+            "pt",
+            "ro",
+            "ru",
+            "sk",
+            "sl",
+            "sv",
+            "uk"
+          ],
+          "download_bytes": 682365212,
+          "disk_bytes": 733578420,
+          "ram_bytes": 700000000,
+          "notice": "Parakeet TDT 0.6B v3 (int8 ONNX), the speech-recognition model behind\nMobaide voice input.\n\nModel: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA.\n  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3\nLicense: Creative Commons Attribution 4.0 International (CC BY 4.0).\n  https://creativecommons.org/licenses/by/4.0/\n\nChanges: exported to ONNX and quantized to int8 by the k2-fsa/sherpa-onnx\nproject; the self-test clip (selftest-en.wav) comes from the same\nrepository.\n  https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\n"
+        },
+        "host": {
+          "ram_total_bytes": 17179869184,
+          "disk_free_bytes": 211072233472,
+          "cpu_count": 10,
+          "recommendation": "ok",
+          "reasons": []
+        },
+        "error": {
+          "code": "interrupted",
+          "message": "Voice needs a small update for this agent; retry to finish."
+        }
+      }
+    }
+  ]
+}

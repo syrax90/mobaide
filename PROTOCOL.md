@@ -208,6 +208,123 @@ cadence; they do **not** gate compatibility.
   * Clients fetch each directory once, filter locally while the user types
     within it, and cache listings per agent for 30 s, so typing a whole path
     costs a few requests rather than one per keystroke.
+* Additive delta within proto-v7 (2026-10-14, on-PC voice input — the agent
+  half, #736; the Android/iOS/web half is #737): **eight additive REST
+  routes, one additive event, one additive capability key, no version
+  bump.** Speech-to-text runs on the agent's PC (NVIDIA Parakeet TDT 0.6B v3
+  int8 through sherpa-onnx, CPU only) in a helper process that starts on the
+  first dictation and exits after 3 idle minutes. It is opt-in: nothing is
+  downloaded or started until a client (or ``mobaide-agent voice install``)
+  enables it, and agent updates never fetch the model. Both transports
+  answer byte-identically; the relay runs ``/api/voice/*`` requests off the
+  tunnel reader, so a waiting ``finish`` never stalls other sessions.
+  * ``GET /api/version`` ``capabilities.voice`` = ``{"dictation": true,
+    "sample_rate": 16000, "max_seconds": 120, "max_chunk_bytes": 65536}``
+    whenever the agent build supports voice, whatever the install state;
+    clients offer voice only when the key is present.
+  * ``GET /api/voice/status`` → ``VoiceStatusResponse {"state", "enabled",
+    "repairing", "model": {"id", "name", "languages", "download_bytes",
+    "disk_bytes", "ram_bytes", "notice"}, "progress": {"done_bytes",
+    "total_bytes"} | null, "host":
+    {"ram_total_bytes", "disk_free_bytes", "cpu_count", "recommendation",
+    "reasons": [{"code", "message"}]}, "speed_factor", "error": {"code",
+    "message"} | null}``, every key always present. ``state`` is an open
+    vocabulary (clients treat an unknown value as unavailable):
+    ``unsupported`` (no runtime for this OS, CPU or Python),
+    ``not_installed`` (the default: voice is off), ``queued`` (another
+    Mobaide process — e.g. ``mobaide-agent voice install`` — holds the
+    install lock; the agent re-publishes ``voice.changed`` from disk every
+    2 s while it runs and once it ends — agents older than that publish
+    nothing for it, so clients also poll ``GET /api/voice/status`` every few
+    seconds while ``queued``), ``downloading``, ``verifying``
+    (final checks plus a self-test transcription), ``ready``, ``failed``
+    (``error`` set until a retry; an install whose process died before it
+    finished reports ``failed`` with ``interrupted``). ``host.recommendation`` is ``ok``,
+    ``low_resources`` (warn first; the user may still enable — ``reasons``
+    carry ``low_ram`` under 11.5 GiB, ``low_cpu`` under 4 logical CPUs,
+    ``low_disk`` under 2 GiB free) or ``unsupported`` (``python_unsupported``,
+    ``platform_unsupported``, ``libc_unsupported``, ``disk_insufficient``);
+    ``reasons[].code`` is open, ``message`` is display text. ``languages``
+    are ISO 639-1 codes (25 European; no ja/zh/ko/ar/hi/tr). ``notice`` is
+    the model's attribution and license text (CC BY 4.0 for Parakeet), shown
+    by clients next to the model. ``speed_factor``
+    (seconds of speech per second of transcription, from the self-test) is
+    set only while ``ready``. ``repairing`` is true while voice is enabled
+    with its verified model in place and only the runtime is missing or
+    has not yet passed the self-test with it (the agent re-fetches the
+    ~15 MB runtime by itself after a Python upgrade); clients label that
+    progress as an update, not a first install. ``ready`` needs the files
+    and a passed self-test: a repair whose self-test fails reads ``failed``
+    with ``selftest_failed``, and a retry runs the self-test again.
+  * ``POST /api/voice/install`` ``{"model_id"?}`` (enable, or retry a
+    ``failed`` install; a no-op once ``ready``) and ``POST
+    /api/voice/install/cancel`` answer the status at once; progress arrives
+    as events. While an install, cancel or remove runs, new dictations are
+    refused with ``409 voice_not_ready``. ``DELETE /api/voice/model``
+    turns voice off and deletes the model and runtime. Cancel deletes what
+    was fetched and turns voice off (a ``ready`` install is left alone);
+    while ``repairing`` it only stops the runtime download — the model stays,
+    voice stays enabled, and the status turns ``failed`` with ``interrupted``
+    so a retry fetches just the runtime (``DELETE /api/voice/model`` is the
+    only route that deletes the model). A ``failed`` install keeps its partial files and a retry
+    resumes them; an agent restart mid-download resumes by itself.
+    Refusals: ``409 voice_unsupported``, ``409 install_in_progress``
+    (another process holds the lock, or another model is installing),
+    ``409 files_in_use``, ``422 unknown_model``, ``500 storage_error``.
+    ``error.code`` is open: ``network``, ``http_error``, ``hash_mismatch``,
+    ``size_mismatch``, ``disk_full``, ``io_error``, ``selftest_failed``,
+    ``interrupted`` (a CLI install stopped with Ctrl-C), ``storage_error``,
+    ``internal_error``.
+  * Event ``voice.changed`` on the agent events channel (both transports,
+    and in the connect-time snapshot of each): the full
+    ``VoiceStatusResponse``, throttled to 2/s while downloading; state
+    changes go out at once.
+  * Dictation. ``POST /api/voice/dictations`` ``{"session_id"?}`` →
+    ``VoiceDictationResponse {"dictation_id", "sample_rate", "max_seconds",
+    "max_chunk_bytes"}`` (``session_id`` is reserved for repository
+    hotwords and unused today). ``POST /api/voice/dictations/{id}/audio``
+    ``{"seq", "pcm16_b64"}`` uploads 16 kHz mono little-endian PCM16, at
+    most ``max_chunk_bytes`` raw per chunk (~87 KB of base64, far below the
+    tunnel's 4 MiB frame cap) → ``{"seq", "duration_ms"}``. ``pcm16_b64`` is
+    standard padded base64 with no line breaks (Android: ``Base64.NO_WRAP``). ``seq`` starts at
+    0 and **one audio request is in flight per dictation**; a resent
+    ``seq`` is acknowledged without being appended twice. ``POST
+    /api/voice/dictations/{id}/finish`` ``{"last_seq"}`` — the highest
+    ``seq`` the agent **accepted** (answered 200; a chunk refused with 4xx,
+    e.g. the one that hit ``too_long``, does not count), ``-1`` when none
+    was → ``VoiceDictationResultResponse {"dictation_id",
+    "state", "text", "duration_ms"}``: ``done`` with the transcript, or
+    ``transcribing`` after a 20 s wait (under the relay's 30 s proxy
+    timeout) — call ``finish`` again; it is idempotent and the result is
+    kept for 2 minutes. ``DELETE /api/voice/dictations/{id}`` aborts (204,
+    idempotent). Pause-delimited segments are transcribed while audio is
+    still arriving, so ``finish`` normally waits only for the last one.
+    Refusals (``{"detail": {"code", "message", …}}``): ``409
+    voice_not_ready``, ``409 voice_busy`` (two dictations already open or
+    still transcribing; the relay also answers ``503 voice_busy`` past 32
+    voice requests in flight), ``404 dictation_not_found`` (unknown, aborted, idle for
+    60 s, or open for over 5 minutes), ``409 seq_gap {"expected_seq"}`` (also from ``finish`` while an
+    earlier chunk is missing), ``409 dictation_finished``, ``409 too_long
+    {"max_seconds"}``, ``413 chunk_too_large {"max_chunk_bytes"}``, ``422
+    bad_audio``, ``503 transcription_failed``. ``transcription_failed`` is
+    latched per dictation: once the model fails to load or a segment fails
+    for good, every later ``audio`` and ``finish`` call answers it, so a
+    client learns of it while still recording; a retry needs a new
+    dictation. Clients put the transcript
+    in the composer for review and never send it automatically. Audio stays
+    in memory and is never logged; the auto-updater defers its restart
+    while a dictation is open.
+  * Golden fixtures under ``tests/protocol_fixtures/dto/agent/``:
+    ``VoiceStatusResponse``, ``VoiceInstallRequest``,
+    ``VoiceDictationCreateRequest``, ``VoiceDictationResponse``,
+    ``VoiceDictationAudioRequest``, ``VoiceDictationAudioResponse``,
+    ``VoiceDictationFinishRequest``, ``VoiceDictationResultResponse``, plus a
+    ``voice_capability`` case in ``VersionInfoResponse.json``. Python asserts
+    them against the agent's models, and the iOS registry, the Android DTO
+    tests and the web arm parse them (#737). ``voice/pcm16_chunks.json`` pins
+    the client side of the audio format — chunk size, little-endian PCM16,
+    padded base64 without line breaks, and the Float32→PCM16 rule — for all
+    three clients and the agent's decoder.
 * Additive delta within proto-v7 (2026-09-21, in-session conflict resolver —
   read a conflicted file, write its resolution, take one side, rebuild the
   conflict): **four additive REST routes, one additive status field, one

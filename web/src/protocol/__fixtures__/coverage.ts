@@ -55,6 +55,10 @@ const OWNER = {
    * and the conflict resolver's `GitConflictResponse` and its three
    * `GitConflict*Request` bodies. `FsDirsResponse`, the folder listing behind
    * the path fields' suggestions, is a plain REST body on the same footing.
+   *
+   * #737's voice dictation and install bodies are REST-only and follow them
+   * here too; `VoiceStatusResponse` also rides the `voice.changed` event and
+   * keeps its Zod mirror.
    */
   generated: 'shipped — typed by the generated OpenAPI schema',
   /** Editing a custom agent type on web: CLA-231. */
@@ -84,6 +88,7 @@ export const COVERED_FIXTURES: readonly string[] = [
   'keys/key_chords.json',
   'pairing/qr_payload.json',
   'relay/relay_mapping.json',
+  'voice/pcm16_chunks.json',
   'dto/agent/AntigravityOptionsModel.json',
   'dto/agent/AutoScanFilterDto.json',
   'dto/agent/AutoScanInstanceDto.json',
@@ -98,6 +103,7 @@ export const COVERED_FIXTURES: readonly string[] = [
   'dto/agent/SessionKind.json',
   'dto/agent/SessionResponse.json',
   'dto/agent/VersionInfoResponse.json',
+  'dto/agent/VoiceStatusResponse.json',
   'dto/central/CreateCustomAgentTypeRequest.json',
   'dto/central/CustomAgentTypeDto.json',
   'dto/central/CustomTypeDeletedPayload.json',
@@ -150,6 +156,13 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/StopScanRequest.json': OWNER.generated,
   'dto/agent/TokenRequest.json': OWNER.generated,
   'dto/agent/TokenResponse.json': OWNER.generated,
+  'dto/agent/VoiceDictationAudioRequest.json': OWNER.generated,
+  'dto/agent/VoiceDictationAudioResponse.json': OWNER.generated,
+  'dto/agent/VoiceDictationCreateRequest.json': OWNER.generated,
+  'dto/agent/VoiceDictationFinishRequest.json': OWNER.generated,
+  'dto/agent/VoiceDictationResponse.json': OWNER.generated,
+  'dto/agent/VoiceDictationResultResponse.json': OWNER.generated,
+  'dto/agent/VoiceInstallRequest.json': OWNER.generated,
 
   'dto/central/AgentSummaryResponse.json': OWNER.generated,
   'dto/central/CancelAccountDeletionResponse.json': OWNER.generated,
