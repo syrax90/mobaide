@@ -630,8 +630,12 @@ class ChildProcess:
             pass
 
 
-def kill_tree(psutil_mod, pid: int | None) -> None:
-    """Terminate a process tree; port of tests/e2e/conftest._force_kill_tree."""
+def kill_tree(psutil_mod, pid: int | None, *, spare=None) -> None:
+    """Terminate a process tree; port of tests/e2e/conftest._force_kill_tree.
+
+    ``spare`` (a psutil.Process) is left alive together with its own
+    descendants, e.g. a detached emulator that still has ``pid`` as parent.
+    """
     if not pid or pid == os.getpid():
         return
     try:
@@ -639,6 +643,12 @@ def kill_tree(psutil_mod, pid: int | None) -> None:
     except psutil_mod.NoSuchProcess:
         return
     procs = parent.children(recursive=True)
+    if spare is not None:
+        try:
+            spared = {spare.pid} | {p.pid for p in spare.children(recursive=True)}
+        except psutil_mod.Error:
+            spared = {spare.pid}
+        procs = [p for p in procs if p.pid not in spared]
     procs.append(parent)
     for p in procs:
         try:
@@ -1604,8 +1614,15 @@ def stop_recorded_emulator(runtime: dict, psutil_mod) -> None:
         pass
 
 
-def install_on_emulator_or_device(emu: SimpleNamespace | None, log_path: Path) -> bool:
+def install_on_emulator_or_device(
+    emu: SimpleNamespace | None, log_path: Path, *, emulator_requested: bool
+) -> bool:
     if emu is None:
+        if emulator_requested:
+            # An unpinned installDebug would replace the debug app on every
+            # attached device, physical phones included.
+            log("skipping the app install: the requested emulator is not available")
+            return False
         return run_gradle_install()
     if emu.proc is None:  # reused: already booted, nothing to overlap
         return wait_for_emulator(emu, log_path) and run_gradle_install(emu.serial)
@@ -1962,10 +1979,11 @@ def cmd_up(args: argparse.Namespace) -> int:
     stop_request = state_dir / STOP_REQUEST_NAME
     stop_request.unlink(missing_ok=True)  # a leftover must not stop this run
     # Recorded before anything is spawned so `stop` can find this run and,
-    # after a hard kill, reap exactly what it left behind (the "keep" list
-    # carries the opt-outs teardown would have honored).
+    # after a hard kill, reap exactly what it left behind ("synced" and "keep"
+    # carry what teardown would have restored and the opt-outs it honors).
     state["runtime"] = {
         "started_at": _utc_now(),
+        "synced": [],
         "keep": [
             name for name, kept in (
                 ("android", args.keep_android),
@@ -1994,51 +2012,57 @@ def cmd_up(args: argparse.Namespace) -> int:
         lan_ip = args.host  # bound to one interface: that IS the reachable IP
 
     android = client_sync_state()
+    ios = client_sync_state()
     emulator = None
     android_installed = False
-    if not args.no_android:
-        android.url = resolve_android_url(args, lan_ip)
-        android.rebuild_needed = sync_android_files(state, android.url, save)
-        android.synced = True
-        if args.emulator:
-            # Launched first so its boot overlaps the Gradle build and the
-            # server/agent startup below.
-            emulator = start_emulator(args.emulator, logs_dir / "emulator.log")
-            if emulator is not None:
-                record_emulator(state, emulator, deps.psutil)
-                save()
-        if args.install_app:
-            android_installed = install_on_emulator_or_device(
-                emulator, logs_dir / "emulator.log"
-            )
-    elif args.emulator:
-        log("--emulator ignored: --no-android")
-
-    ios = client_sync_state()
-    if not args.no_ios:
-        if sys.platform == "darwin" or args.ios:
-            ios.url = resolve_ios_url(args, lan_ip)
-            ios.rebuild_needed = sync_ios_files(state, ios.url, save)
-            ios.synced = True
-            if args.install_app:
-                run_xcode_install(
-                    state, state_dir, ios.url, save,
-                    reset_keychain=not args.ios_keep_keychain,
-                )
-        else:
-            log("iOS sync skipped: not macOS (pass --ios to write "
-                "ios/Config/Local.xcconfig anyway)")
-
-    if os.name == "nt" and args.host not in ("127.0.0.1", "localhost"):
-        log(
-            f"binding {args.host}: watch for the Windows Defender Firewall prompt on "
-            "first run and ALLOW Python on Private networks, or the phone cannot connect"
-        )
-
     children: list[ChildProcess] = []
     client = None
     exit_code = 0
+    # The client sync, emulator boot and app install run inside the guard too:
+    # Ctrl+C or SIGTERM during a minutes-long Gradle build or emulator boot
+    # must still stop an owned emulator and restore the client files.
     try:
+        if not args.no_android:
+            android.url = resolve_android_url(args, lan_ip)
+            state["runtime"]["synced"].append("android")
+            android.rebuild_needed = sync_android_files(state, android.url, save)
+            android.synced = True
+            if args.emulator:
+                # Launched first so its boot overlaps the Gradle build and the
+                # server/agent startup below.
+                emulator = start_emulator(args.emulator, logs_dir / "emulator.log")
+                if emulator is not None:
+                    record_emulator(state, emulator, deps.psutil)
+                    save()
+            if args.install_app:
+                android_installed = install_on_emulator_or_device(
+                    emulator, logs_dir / "emulator.log",
+                    emulator_requested=bool(args.emulator),
+                )
+        elif args.emulator:
+            log("--emulator ignored: --no-android")
+
+        if not args.no_ios:
+            if sys.platform == "darwin" or args.ios:
+                ios.url = resolve_ios_url(args, lan_ip)
+                state["runtime"]["synced"].append("ios")
+                ios.rebuild_needed = sync_ios_files(state, ios.url, save)
+                ios.synced = True
+                if args.install_app:
+                    run_xcode_install(
+                        state, state_dir, ios.url, save,
+                        reset_keychain=not args.ios_keep_keychain,
+                    )
+            else:
+                log("iOS sync skipped: not macOS (pass --ios to write "
+                    "ios/Config/Local.xcconfig anyway)")
+
+        if os.name == "nt" and args.host not in ("127.0.0.1", "localhost"):
+            log(
+                f"binding {args.host}: watch for the Windows Defender Firewall prompt on "
+                "first run and ALLOW Python on Private networks, or the phone cannot connect"
+            )
+
         log(f"starting central_server on {args.host}:{args.port} (MOBAIDE_ENV=test)")
         server = ChildProcess(
             "server",
@@ -2217,11 +2241,10 @@ def cmd_android(args: argparse.Namespace) -> int:
         emulator = start_emulator(args.emulator, log_path)
         if emulator is not None and not args.install_app:
             wait_for_emulator(emulator, log_path)
-    if args.install_app:
-        if emulator is None:
-            run_gradle_install()
-        elif install_on_emulator_or_device(emulator, log_path):
-            launch_android_app(emulator)
+    if args.install_app and install_on_emulator_or_device(
+        emulator, log_path, emulator_requested=bool(args.emulator)
+    ) and emulator is not None:
+        launch_android_app(emulator)
     return 0
 
 
@@ -2317,13 +2340,16 @@ def teardown_leftovers(state_dir: Path, state: dict, psutil_mod) -> None:
     """What a run's own teardown does, for a run that died before doing it."""
     runtime = state.get("runtime") or {}
     keep = runtime.get("keep") or []
+    # Only the clients that run synced: a --no-android/--no-ios run must not
+    # revert an override some earlier run deliberately left in place.
+    revert = [c for c in runtime.get("synced") or [] if c not in keep]
     save = lambda: save_state(state_dir, state)  # noqa: E731
     if "emulator" not in keep:
         stop_recorded_emulator(runtime, psutil_mod)
     kill_stale_processes(state, psutil_mod)  # also clears state["runtime"]
-    if "android" not in keep:
+    if "android" in revert:
         revert_android_files(state, save)
-    if "ios" not in keep:
+    if "ios" in revert:
         revert_ios_files(state, save)
     save()
 
@@ -2352,7 +2378,11 @@ def cmd_stop(args: argparse.Namespace) -> int:
             up.wait(timeout=args.timeout)
         except psutil_mod.TimeoutExpired:
             log(f"it did not stop within {args.timeout:.0f}s; killing it")
-            kill_tree(psutil_mod, up.pid)
+            # The emulator is still a descendant despite its own session, so a
+            # plain tree kill would hard-kill it -- ignoring --keep-emulator and
+            # losing the quick-boot snapshot. teardown_leftovers decides its fate.
+            kill_tree(psutil_mod, up.pid, spare=recorded_live_process(
+                state["runtime"], "emulator", psutil_mod))
         else:
             stop_request.unlink(missing_ok=True)
             log("stack stopped")

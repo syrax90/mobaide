@@ -470,8 +470,8 @@ def test_stop_without_a_running_stack_is_a_noop(tmp_path, capsys):
 
 
 def test_teardown_leftovers_honors_the_keep_flags(monkeypatch, tmp_path):
-    """A hard-killed `up --keep-android` must keep its URL when `stop` reaps it,
-    exactly as the run's own teardown would have."""
+    """A hard-killed run's cleanup restores only what that run synced and did
+    not opt to keep, exactly as the run's own teardown would have."""
     _point_client_files_at(monkeypatch, tmp_path)
     _seed_local_properties()
     state = ms.default_state()
@@ -479,12 +479,18 @@ def test_teardown_leftovers_honors_the_keep_flags(monkeypatch, tmp_path):
 
     import psutil
 
-    state["runtime"] = {"keep": ["android"]}
+    state["runtime"] = {"synced": ["android"], "keep": ["android"]}
     ms.teardown_leftovers(tmp_path / "state", state, psutil)
     assert _central_url(ms.ANDROID_URL_FILE) == TEST_URL
     assert state["runtime"] == {}
 
-    state["runtime"] = {"keep": []}
+    # A crashed `up --no-android` never synced Android: an override an
+    # earlier run left in place must survive its cleanup.
+    state["runtime"] = {"synced": [], "keep": []}
+    ms.teardown_leftovers(tmp_path / "state", state, psutil)
+    assert _central_url(ms.ANDROID_URL_FILE) == TEST_URL
+
+    state["runtime"] = {"synced": ["android"], "keep": []}
     ms.teardown_leftovers(tmp_path / "state", state, psutil)
     assert _central_url(ms.ANDROID_URL_FILE) == PROD_URL
     assert not ms.DEBUG_NSC_PATH.exists()
@@ -501,3 +507,51 @@ def test_recorded_live_process_requires_matching_create_time():
     runtime["up_create_time"] -= 3600
     assert ms.recorded_live_process(runtime, "up", psutil) is None
     assert ms.recorded_live_process({}, "up", psutil) is None
+
+
+def test_failed_emulator_never_falls_back_to_an_unpinned_install(monkeypatch):
+    """An unpinned installDebug hits every attached device, so a requested but
+    unavailable emulator must skip the install rather than overwrite the app
+    on a connected phone; without --emulator the old behavior stays."""
+    calls = []
+    monkeypatch.setattr(ms, "run_gradle_install",
+                        lambda *a, **kw: calls.append((a, kw)) or True)
+
+    assert ms.install_on_emulator_or_device(
+        None, Path("emu.log"), emulator_requested=True) is False
+    assert calls == []
+
+    assert ms.install_on_emulator_or_device(
+        None, Path("emu.log"), emulator_requested=False) is True
+    assert calls == [((), {})]
+
+
+def test_kill_tree_spares_the_given_subtree():
+    """A forced `stop` kills the `up` tree, but the detached emulator is still
+    its descendant; the spared subtree must survive so --keep-emulator and the
+    clean `adb emu kill` shutdown are still decided by teardown_leftovers."""
+    import subprocess
+    import sys
+
+    import psutil
+
+    sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+    code = (
+        "import subprocess, sys, time;"
+        f"a = subprocess.Popen({sleeper!r});"
+        f"b = subprocess.Popen({sleeper!r});"
+        "print(a.pid, b.pid, flush=True); time.sleep(60)"
+    )
+    parent = subprocess.Popen([sys.executable, "-c", code],
+                              stdout=subprocess.PIPE, text=True)
+    spared_pid = None
+    try:
+        spared_pid, doomed_pid = map(int, parent.stdout.readline().split())
+        ms.kill_tree(psutil, parent.pid, spare=psutil.Process(spared_pid))
+        assert parent.wait(timeout=10) is not None
+        assert not psutil.pid_exists(doomed_pid) or (
+            psutil.Process(doomed_pid).status() == psutil.STATUS_ZOMBIE)
+        assert psutil.Process(spared_pid).is_running()
+    finally:
+        ms.kill_tree(psutil, spared_pid)
+        ms.kill_tree(psutil, parent.pid)
