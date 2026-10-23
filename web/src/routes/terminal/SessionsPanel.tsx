@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router';
 import { listAgents } from '../../api/agentRepository';
@@ -9,14 +9,19 @@ import type { SessionResponse } from '../../protocol/dto/session';
 import { useSessionsSynced } from '../../realtime';
 import { useLastSessionStore } from '../../stores/lastSessionStore';
 import { useSelectedAgentStore } from '../../stores/selectedAgentStore';
+import { useToastStore } from '../../stores/toastStore';
+import { StopSessionDialog } from '../sessions/StopSessionDialog';
 import {
   attentionChip,
+  canStopSession,
   customTypeNameMap,
+  sessionDialogLabel,
   sessionKindLabel,
   sessionStateTone,
   sessionTitle,
 } from '../sessions/sessionDisplay';
 import { newSessionPath, terminalPath } from '../sessions/terminalPath';
+import { useStopSession } from '../sessions/useStopSession';
 
 interface SessionsPanelProps {
   agentId: string;
@@ -30,8 +35,8 @@ interface SessionsPanelProps {
 
 /**
  * The terminal's left panel (Herdr's sidebar): the route agent's sessions for
- * one-click switching, a shortcut to the create flow, and the account's other
- * agents. Both mobile clients render the same panel as a swipe-in drawer.
+ * one-click switching or stopping, a shortcut to the create flow, and the
+ * account's other agents. Both mobile clients render the same panel as a swipe-in drawer.
  *
  * The sessions query is the one `useSessionGone` already runs for this route,
  * so the panel costs no extra fetch and sees every `sessions.changed` push.
@@ -63,7 +68,27 @@ export function SessionsPanel({
     ...wsBackedQueryOptions,
   });
   const setLastUsedSession = useLastSessionStore((state) => state.setLastUsedSession);
+  const clearLastUsedSession = useLastSessionStore((state) => state.clearLastUsedSession);
   const setSelectedAgent = useSelectedAgentStore((state) => state.setSelectedAgent);
+
+  const [stopTarget, setStopTarget] = useState<SessionResponse | null>(null);
+  const stop = useStopSession(agentId, {
+    onSettled: () => {
+      setStopTarget(null);
+    },
+    onStopped: (stoppedId) => {
+      // The terminal's own gone-check never ejects a session it has seen alive,
+      // so leaving the one on screen is this panel's job — and it must happen
+      // before the eviction tears the live view down under the user. Clearing
+      // last-used first stops auto-resume, which may not have been claimed yet,
+      // from sending the list straight back into the still-cached session.
+      if (stoppedId === sessionId) {
+        clearLastUsedSession(agentId);
+        void navigate('/', { replace: true });
+      }
+      useToastStore.getState().show('Session stopped.', 'success');
+    },
+  });
 
   const names = customTypeNameMap(customTypes.data);
   const current = agents.data?.find((agent) => agent.agentId === agentId);
@@ -140,7 +165,7 @@ export function SessionsPanel({
               const chip = attentionChip(session.attention);
               const kindLabel = sessionKindLabel(session, names);
               return (
-                <li key={session.session_id}>
+                <li key={session.session_id} className="sessions-panel-item">
                   <button
                     type="button"
                     className="sessions-panel-row"
@@ -165,6 +190,20 @@ export function SessionsPanel({
                       </span>
                     )}
                   </button>
+                  {canStopSession(session.state) && (
+                    <button
+                      type="button"
+                      className="button button-icon sessions-panel-stop"
+                      aria-label="Stop session"
+                      title="Stop session"
+                      disabled={stop.isPending}
+                      onClick={() => {
+                        setStopTarget(session);
+                      }}
+                    >
+                      <StopIcon />
+                    </button>
+                  )}
                 </li>
               );
             })}
@@ -209,7 +248,38 @@ export function SessionsPanel({
           </>
         )}
       </div>
+
+      {/* Rendered inside the panel so the overlay form, a `popover="auto"`,
+          stays open beneath the modal: showModal() only hides popovers that
+          are not its ancestors, and clicks in the dialog are not light
+          dismissals of an ancestor. */}
+      {stopTarget !== null && (
+        <StopSessionDialog
+          label={sessionDialogLabel(stopTarget, names)}
+          busy={stop.isPending}
+          onStop={(force) => {
+            stop.mutate({ sessionId: stopTarget.session_id, force });
+          }}
+          onCancel={() => {
+            setStopTarget(null);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** A filled square, the media "stop" glyph, on the same 16-unit pixel grid. */
+function StopIcon() {
+  return (
+    <svg
+      className="sessions-panel-stop-icon"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect x="3" y="3" width="10" height="10" />
+    </svg>
   );
 }
 

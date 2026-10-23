@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigationType } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubLocalStorage } from '../../test/localStorageStub';
@@ -9,7 +9,25 @@ import type { SessionResponse } from '../../protocol/dto/session';
 const api = vi.hoisted(() => ({
   agents: [] as Agent[],
   sessions: [] as SessionResponse[],
+  stops: [] as { sessionId: string; force: boolean }[],
+  stopResult: (): Promise<void> => Promise.resolve(),
+  /** Navigations and evictions in call order — the DOM probe lags a render behind. */
+  trace: [] as string[],
 }));
+
+vi.mock('react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router')>();
+  return {
+    ...actual,
+    useNavigate: () => {
+      const navigate = actual.useNavigate();
+      return ((to: unknown, options?: unknown) => {
+        if (typeof to === 'string') api.trace.push(`navigate:${to}`);
+        return (navigate as (to: unknown, options?: unknown) => unknown)(to, options);
+      }) as ReturnType<typeof actual.useNavigate>;
+    },
+  };
+});
 
 vi.mock('../../api/agentRepository', () => ({
   listAgents: () => Promise.resolve(api.agents),
@@ -17,6 +35,10 @@ vi.mock('../../api/agentRepository', () => ({
 
 vi.mock('../../api/sessionRepository', () => ({
   listSessions: () => Promise.resolve(api.sessions),
+  stopSession: (_agentId: string, sessionId: string, force: boolean) => {
+    api.stops.push({ sessionId, force });
+    return api.stopResult();
+  },
 }));
 
 vi.mock('../../api/customAgentTypeRepository', () => ({
@@ -39,6 +61,9 @@ const { sessionResponseSchema } = await import('../../protocol/dto/session');
 const { useLastSessionStore } = await import('../../stores/lastSessionStore');
 const { useSelectedAgentStore } = await import('../../stores/selectedAgentStore');
 const { SessionsPanel } = await import('./SessionsPanel');
+const { ApiError } = await import('../../api/errors');
+const { useToastStore } = await import('../../stores/toastStore');
+const { setTerminalEvictor } = await import('../../terminal/terminalEviction');
 // No socket is ever built here, so both halves of the synced signal are
 // staged directly, the way `TerminalScreen.test.tsx` does.
 const { markSessionsSynced, resetSessionsSynced } = await import(
@@ -107,6 +132,9 @@ function renderPanel({ docked = false, pinned = false }: { docked?: boolean; pin
 beforeEach(() => {
   api.agents = [agent('a1', 'desktop', true)];
   api.sessions = [];
+  api.stops = [];
+  api.trace = [];
+  api.stopResult = () => Promise.resolve();
   calls.pinned.length = 0;
   calls.closes = 0;
 });
@@ -116,6 +144,8 @@ afterEach(() => {
   resetSessionsSynced();
   useLastSessionStore.setState({ lastUsedSessionIds: {} });
   useSelectedAgentStore.setState({ selectedAgentId: null });
+  useToastStore.setState({ toasts: [] });
+  setTerminalEvictor(null);
 });
 
 describe('SessionsPanel rows', () => {
@@ -265,5 +295,113 @@ describe('SessionsPanel chrome', () => {
     expect(unpin).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(unpin);
     expect(calls.pinned).toEqual([true, false]);
+  });
+});
+
+describe('SessionsPanel stop', () => {
+  const toastMessages = () => useToastStore.getState().toasts.map((t) => [t.message, t.kind]);
+  const rowItem = (list: HTMLElement, title: string): HTMLElement => {
+    const item = within(list).getByRole('button', { name: new RegExp(title) }).closest('li');
+    if (item === null) throw new Error(`no list item for ${title}`);
+    return item;
+  };
+
+  it('offers Stop only on running and starting rows', async () => {
+    markSessionsSynced('a1');
+    api.sessions = [
+      session('s1', { title: 'one' }),
+      session('s2', { title: 'two', state: 'starting' }),
+      session('s3', { title: 'three', state: 'stopped' }),
+    ];
+    renderPanel();
+
+    const list = await screen.findByRole('list', { name: 'Sessions' });
+    expect(within(rowItem(list, 'one')).getByRole('button', { name: 'Stop session' })).toBeEnabled();
+    expect(within(rowItem(list, 'two')).getByRole('button', { name: 'Stop session' })).toBeEnabled();
+    expect(within(rowItem(list, 'three')).queryByRole('button', { name: 'Stop session' })).toBeNull();
+  });
+
+  it('stops another session with the chosen force flag and stays on this terminal', async () => {
+    markSessionsSynced('a1');
+    api.sessions = [session('s1', { title: 'one' }), session('s2', { title: 'two' })];
+    useLastSessionStore.setState({ lastUsedSessionIds: { a1: 's1' } });
+    renderPanel();
+    const list = await screen.findByRole('list', { name: 'Sessions' });
+
+    fireEvent.click(within(rowItem(list, 'two')).getByRole('button', { name: 'Stop session' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Force Stop' }));
+
+    await waitFor(() => {
+      expect(toastMessages()).toEqual([['Session stopped.', 'success']]);
+    });
+    expect(api.stops).toEqual([{ sessionId: 's2', force: true }]);
+    expect(currentPath()).toBe('/agents/a1/sessions/s1');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(calls.closes).toBe(0);
+    expect(useLastSessionStore.getState().lastUsedSessionIds).toEqual({ a1: 's1' });
+  });
+
+  it('leaves for the sessions list before evicting the terminal it stopped', async () => {
+    markSessionsSynced('a1');
+    api.sessions = [session('s1', { title: 'one' })];
+    useLastSessionStore.setState({ lastUsedSessionIds: { a1: 's1', a2: 's9' } });
+    setTerminalEvictor((_agentId, ids) => {
+      api.trace.push(`evict:${ids.join(',')}`);
+    });
+    renderPanel();
+    const list = await screen.findByRole('list', { name: 'Sessions' });
+
+    fireEvent.click(within(rowItem(list, 'one')).getByRole('button', { name: 'Stop session' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+
+    await waitFor(() => {
+      expect(currentPath()).toBe('/');
+    });
+    expect(navigationType()).toBe('REPLACE');
+    expect(api.stops).toEqual([{ sessionId: 's1', force: false }]);
+    // Evicting first would tear the live view down under the user.
+    expect(api.trace).toEqual(['navigate:/', 'evict:s1']);
+    expect(toastMessages()).toEqual([['Session stopped.', 'success']]);
+    // Otherwise an unclaimed auto-resume sends the list straight back into it.
+    expect(useLastSessionStore.getState().lastUsedSessionIds).toEqual({ a2: 's9' });
+  });
+
+  it('treats a 404 on the current session as already stopped and still leaves', async () => {
+    markSessionsSynced('a1');
+    api.sessions = [session('s1', { title: 'one' })];
+    api.stopResult = () =>
+      Promise.reject(
+        new ApiError({ status: 404, message: 'Not found', code: null, retryAfterSeconds: null, detail: null }),
+      );
+    renderPanel();
+    const list = await screen.findByRole('list', { name: 'Sessions' });
+
+    fireEvent.click(within(rowItem(list, 'one')).getByRole('button', { name: 'Stop session' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+
+    await waitFor(() => {
+      expect(currentPath()).toBe('/');
+    });
+    expect(toastMessages()).toEqual([['Session stopped.', 'success']]);
+  });
+
+  it('reports a failed stop and stays put', async () => {
+    markSessionsSynced('a1');
+    api.sessions = [session('s1', { title: 'one' })];
+    api.stopResult = () =>
+      Promise.reject(
+        new ApiError({ status: 500, message: 'boom', code: null, retryAfterSeconds: null, detail: null }),
+      );
+    renderPanel();
+    const list = await screen.findByRole('list', { name: 'Sessions' });
+
+    fireEvent.click(within(rowItem(list, 'one')).getByRole('button', { name: 'Stop session' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+
+    await waitFor(() => {
+      expect(toastMessages()).toEqual([['Failed to stop session: boom', 'error']]);
+    });
+    expect(currentPath()).toBe('/agents/a1/sessions/s1');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });

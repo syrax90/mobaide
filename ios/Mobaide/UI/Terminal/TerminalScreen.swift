@@ -43,6 +43,7 @@ private struct TerminalScreenContent: View {
     @State private var customTypeNames: [String: String]
     @State private var panel: SessionsPanelModel
     @State private var drawerOpen = false
+    @State private var pendingStop: SessionResponse?
     /// Live translation of the terminal's left-edge pan while the finger is
     /// down; nil otherwise. `SideDrawer` follows it before the open verdict.
     @State private var drawerDrag: CGFloat?
@@ -123,6 +124,32 @@ private struct TerminalScreenContent: View {
         router.popTo(.sessionList)
     }
 
+    private var stopPresented: Binding<Bool> {
+        Binding(
+            get: { pendingStop != nil },
+            set: { if !$0 { pendingStop = nil } }
+        )
+    }
+
+    /// `checkSessionStillExists` never leaves a session this screen has seen
+    /// alive, so stopping the one on screen navigates away here instead —
+    /// unless the user switched sessions while the request was in flight.
+    private func stopSession(_ id: String, force: Bool) async {
+        do {
+            guard try await panel.stopSession(id, force: force) else { return }
+        } catch {
+            model.terminalMessage = ToastMessage(text: "Failed to stop session: \(String(describing: error))", tone: .danger)
+            return
+        }
+        if id == sessionId {
+            guard router.path.last == .sessionDetail(sessionId: id) else { return }
+            drawerOpen = false
+            router.popTo(.sessionList)
+        } else {
+            model.terminalMessage = ToastMessage(text: "Session stopped", tone: .ok)
+        }
+    }
+
     /// Pan-don't-resize keyboard layout (Android `ImeFloatingPan` parity):
     /// the screen opts out of SwiftUI keyboard avoidance, then lifts the whole
     /// column by the keyboard overlap as a placement-only offset — the
@@ -175,6 +202,7 @@ private struct TerminalScreenContent: View {
                         drawerOpen = false
                         router.replaceLast(with: .sessionDetail(sessionId: id))
                     },
+                    onStopSession: { pendingStop = $0 },
                     onCreateSession: {
                         drawerOpen = false
                         router.navigate(to: .createSession)
@@ -274,6 +302,21 @@ private struct TerminalScreenContent: View {
             } else if screenVisible {
                 keyboard.start()
             }
+        }
+        .confirmationDialog(
+            "Stop session?",
+            isPresented: stopPresented,
+            presenting: pendingStop
+        ) { session in
+            Button("Stop", role: .destructive) {
+                Task { await stopSession(session.session_id, force: false) }
+            }
+            Button("Force Stop", role: .destructive) {
+                Task { await stopSession(session.session_id, force: true) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { session in
+            Text("Stop “\(SessionDisplay.dialogLabel(session, customTypeNames: panel.customTypeNames))”?")
         }
         .alert("Save as template", isPresented: $showSaveTemplate) {
             TextField("Name", text: $templateName)

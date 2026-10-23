@@ -182,7 +182,10 @@ resizes on keyboard show/hide, so keyboard transitions send no PTY resize
 frames and no SIGWINCH.
 A left-edge swipe on the terminal (or the top-bar `terminal-sessions-button`)
 opens the sessions panel: a `SideDrawer` overlay listing the connected agent's
-sessions, a New session shortcut and the account's other agents. The swipe is
+sessions (running/starting rows carry a Stop button opening a Stop / Force Stop
+/ Cancel confirmation; stopping the on-screen session returns to the sessions
+list, stopping another keeps the terminal), a New session shortcut and the
+account's other agents. The swipe is
 a `UIScreenEdgePanGestureRecognizer` (`mobaide.sessionsDrawer`) on
 `MobaideTerminalView` that the scroll, vertical and selection pans
 `require(toFail:)`, so the navigation controller's interactive-pop swipe is

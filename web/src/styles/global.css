@@ -1248,7 +1248,15 @@ input[type='radio']:checked {
   list-style: none;
 }
 
+.sessions-panel-item {
+  display: flex;
+  align-items: stretch;
+  gap: 0.35rem;
+}
+
 .sessions-panel-row {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -1278,6 +1286,24 @@ input[type='radio']:checked {
 .sessions-panel-row:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.sessions-panel .sessions-panel-stop {
+  min-width: 40px;
+  padding: 0 0.5rem;
+}
+
+.sessions-panel .sessions-panel-stop:not(:disabled) {
+  color: var(--danger);
+}
+
+.sessions-panel-stop-icon {
+  display: block;
+  width: 12px;
+  height: 12px;
+  margin: 0 auto;
+  fill: currentColor;
+  shape-rendering: crispEdges;
 }
 
 .sessions-panel-row-agent {

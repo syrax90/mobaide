@@ -6,11 +6,6 @@ import XCTest
 /// landed, so a dropped tunnel shows "Reconnecting…" instead of a stale list.
 @MainActor
 final class SessionsPanelModelTests: XCTestCase {
-    private struct StubAgentTokens: AgentTokenProviding {
-        func validToken() async -> AgentToken? { nil }
-        func refreshedToken() async -> String? { nil }
-    }
-
     private struct Stack {
         let model: SessionsPanelModel
         let sessionRepository: SessionRepository
@@ -32,7 +27,11 @@ final class SessionsPanelModelTests: XCTestCase {
             sessionManager: harness.sessionManager,
             tokenStore: harness.tokenStore
         )
-        let agentAPI = AgentAPI(baseURL: { "https://agent.test" }, tokens: StubAgentTokens())
+        let agentAPI = AgentAPI(
+            baseURL: { "https://agent.test" },
+            tokens: FakeAgentTokens(token: AgentToken(value: "tok")),
+            client: HTTPClient(session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self]))
+        )
         let sessionRepository = SessionRepository(
             agentAPI: agentAPI,
             agentEventBus: bus,
@@ -159,5 +158,45 @@ final class SessionsPanelModelTests: XCTestCase {
         await waitUntil { !stack.model.agents.isEmpty }
         XCTAssertNil(stack.model.connectedAgent)
         XCTAssertEqual(stack.model.otherAgents.map(\.agent_id), ["a1", "a2"])
+    }
+
+    func testStopSendsTheDeleteAndReportsSuccess() async throws {
+        let stack = makeStack()
+        StubURLProtocol.enqueue(status: 204, body: "")
+
+        let stopped = try await stack.model.stopSession("s1", force: true)
+
+        XCTAssertTrue(stopped)
+        XCTAssertNil(stack.model.stoppingSessionId)
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(request.url?.absoluteString, "https://agent.test/api/sessions/s1?force=true")
+    }
+
+    /// Another client, or a push, got there first: the session the user asked
+    /// to stop is gone, which is the outcome they wanted.
+    func testStopTreatsA404AsAlreadyStopped() async throws {
+        let stack = makeStack()
+        StubURLProtocol.enqueue(status: 404, body: #"{"detail":"Session not found"}"#)
+
+        let stopped = try await stack.model.stopSession("s1", force: false)
+
+        XCTAssertTrue(stopped)
+        XCTAssertNil(stack.model.stoppingSessionId)
+    }
+
+    func testStopRethrowsOtherFailuresAndReenablesTheControls() async {
+        let stack = makeStack()
+        StubURLProtocol.enqueue(status: 503, body: "agent offline")
+
+        do {
+            _ = try await stack.model.stopSession("s1", force: false)
+            XCTFail("a 503 must surface as a failure")
+        } catch let error as APIError {
+            XCTAssertEqual(error.code, 503)
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+        XCTAssertNil(stack.model.stoppingSessionId)
     }
 }
