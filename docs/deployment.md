@@ -597,7 +597,7 @@ Dictation is transcribed **on the agent's PC**, never on a Mobaide server. It is
 
 **How it runs.** A helper process (`python -P -m mobaide.voice.worker`, same interpreter as the agent) starts on the first dictation, at below-normal priority with 2 inference threads and no console window, and exits after 3 idle minutes, which returns all of its memory to the OS; it is also recycled after an hour or 500 requests. The agent process itself never loads the model. The helper reads stdin from the agent and exits when the agent goes away, so it is never left behind. While a dictation is open, the auto-updater defers its restart (a forced update, and the `mobaide-agent update` CLI, do not wait).
 
-**Where files live.** `<state prefix>/voice/` — the install prefix (`/usr/local/mobaide`, `/opt/mobaide`, `C:\Program Files\MobaideAgent`) when writable, else the per-user data dir — outside `releases/`, so release pruning and rollback never touch it; the systemd unit's `ReadWritePaths` already covers it. `settings.json` holds the on/off choice and the last install outcome, `models/<model-id>/` the model plus its `NOTICE` (CC BY 4.0 attribution: created by NVIDIA, int8 ONNX export by k2-fsa/sherpa-onnx), and `runtime/<sherpa-onnx-version>-<python tag>-<platform>/` the sherpa-onnx runtime, unpacked from hash-pinned PyPI wheels without pip — it is not a dependency of the agent wheel, so a platform without a wheel can never break an agent install. A Python upgrade fetches a new runtime; the model stays. `MOBAIDE_VOICE_DIR` overrides the location (a relative path is anchored under the state prefix; the CLI reads it from the agent's environment or `.env`, and `--voice-dir` overrides both).
+**Where files live.** `<state prefix>/voice/` — the install prefix (`/usr/local/mobaide`, `/opt/mobaide`, `C:\Program Files\MobaideAgent`) when writable, else the per-user data dir — outside `releases/`, so release pruning and rollback never touch it; the systemd unit's `ReadWritePaths` already covers it. `settings.json` holds the on/off choice and the last install outcome, `models/<model-id>/` the model plus its `NOTICE` (CC BY 4.0 attribution: created by NVIDIA, int8 ONNX export by k2-fsa/sherpa-onnx), and `runtime/<sherpa-onnx-version>-<python tag>-<platform>/` the sherpa-onnx runtime, unpacked from hash-pinned PyPI wheels without pip — it is not a dependency of the agent wheel, so a platform without a wheel can never break an agent install. A Python upgrade fetches a new runtime; the model stays. `MOBAIDE_VOICE_DIR` overrides the location (a relative path is anchored under the state prefix; the CLI reads it from the agent's environment or `.env`, and `--voice-dir` overrides both). Removing the agent with **Also uninstall Mobaide from this computer** deletes the voice files too (see *Uninstalling the agent*).
 
 **Downloads.** Model files come from the `voice-model-parakeet-tdt-0.6b-v3-int8` release in the public releases repo (`github.com`), falling back to the pinned upstream Hugging Face revision (`huggingface.co`); the two runtime wheels come from PyPI (`files.pythonhosted.org`) — allow those hosts on a filtering proxy. Every file's size and SHA-256 are pinned in the agent's catalog (`mobaide/voice/catalog.py`), so a captive-portal page or a truncated mirror is rejected (`hash_mismatch`) and the next source is tried. Downloads honour `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`, use certifi, retry with backoff and resume from `*.part` files with HTTP Range — after a network drop, a sleeping laptop, or an agent restart (which resumes the install by itself). A `failed` install waits for the user to retry. Offline, enabling fails with `network`; once installed, dictation needs no internet.
 
@@ -710,10 +710,15 @@ see the self-uninstall entry in `PROTOCOL.md`. Here is what happens:
    rest fails.
 3. The agent removes itself. It deletes only the known install entries
    (`releases/`, `trust/`, `mobaide_agent/`, `run/`, `state/`, `logs/`,
-   `svc/`, `bin/`, `current_version`, logs, `users.json`, `projects.json`, …)
-   and then the prefix itself if that left it empty. It never runs a blanket
-   `rm -rf` of a prefix that `MOBAIDE_AGENT_PREFIX` may have pointed
-   somewhere shared.
+   `svc/`, `bin/`, `current_version`, logs, `users.json`, `projects.json`,
+   `voice/`, …) and then the prefix itself if that left it empty. It never
+   runs a blanket `rm -rf` of a prefix that `MOBAIDE_AGENT_PREFIX` may have
+   pointed somewhere shared.
+   First it stops voice input and deletes the voice model and runtime itself,
+   on every OS, so they go even when an older `install.sh` wrote the Linux
+   helper below. A voice dir moved by `MOBAIDE_VOICE_DIR` (or reached through
+   a symlinked `voice/`) loses only what `mobaide-agent voice remove` deletes
+   plus `settings.json` and `.lock`, and is then removed if it is left empty.
    - **Linux:** the agent runs unprivileged, so it only drops
      `<prefix>/run/uninstall-requested`. `install.sh` installs a root-owned
      `mobaide-agent-uninstall.path` unit that watches for that marker. It

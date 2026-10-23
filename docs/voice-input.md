@@ -2,7 +2,7 @@
 
 Voice input lets a user dictate into a session. The app or browser records the microphone and streams the audio to the user's own agent: through the relay, or directly when a phone uses direct-connection mode. The agent transcribes it on that computer with NVIDIA Parakeet TDT 0.6B v3 and returns text, which lands in the composer (mobile) or a review field (web). **Nothing is ever sent automatically**: the user reviews the text and sends it themselves.
 
-It is opt-in per agent. Nothing is downloaded until the user enables voice from the app; enabling shows the real download, disk and memory cost the agent reports, plus a warning on low-spec computers.
+It is opt-in per agent. Nothing is downloaded until the user enables voice from the app; enabling shows the real download, disk and memory cost the agent reports, plus a warning on low-spec computers. Removing the agent with **Also uninstall Mobaide from this computer** stops voice and deletes the model and runtime too (docs/deployment.md, *Uninstalling the agent*).
 
 - Agent half: GH #736 (`mobaide_agent/mobaide/voice/`).
 - Clients: GH #737 (Android, iOS, web).

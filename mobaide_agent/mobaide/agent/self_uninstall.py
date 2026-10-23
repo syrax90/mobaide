@@ -24,6 +24,11 @@ their account with the uninstall option. Removal runs in three steps:
      it.
 3. Exit 0, which no supervisor restarts.
 
+Voice input is stopped first and its model and runtime (~700 MB) deleted by
+the agent itself, before any of the above OS steps: root helpers written by
+an older ``install.sh`` do not list the voice dirs, and on Windows a running
+STT helper would hold its DLLs and model files open.
+
 Only the known install entries are deleted, never the whole prefix:
 ``MOBAIDE_AGENT_PREFIX`` can point at a directory that holds other files.
 """
@@ -37,12 +42,20 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mobaide.agent._env_writer import blank_relay_credentials, env_path_for_prefix
 from mobaide.agent.pairing_qr import clear_pending_pairing
 from mobaide.agent.updater import InstallLayout
+from mobaide.voice.store import VoicePaths, remove_tree
+
+if TYPE_CHECKING:
+    from mobaide.voice.service import VoiceService
 
 logger = logging.getLogger(__name__)
+
+# The voice model and runtime (~700 MB); ``voice-fake`` holds a test install.
+VOICE_PREFIX_ENTRIES: tuple[str, ...] = ("voice", "voice-fake")
 
 # Everything the installers, the launchers and the agent create directly
 # under the prefix. The root helper unit written by deploy/install.sh
@@ -64,6 +77,7 @@ PREFIX_ENTRIES: tuple[str, ...] = (
     "agent.err.log",
     "users.json",
     "projects.json",
+    *VOICE_PREFIX_ENTRIES,
 )
 
 UNINSTALL_MARKER = Path("run") / "uninstall-requested"
@@ -127,6 +141,7 @@ async def handle_uninstall_request(
     prefix: Path,
     *,
     installed: bool,
+    voice: VoiceService | None = None,
     exit_func: Callable[[int], object] = sys.exit,
 ) -> None:
     """Uninstall the agent at ``prefix`` and schedule a clean exit.
@@ -143,15 +158,27 @@ async def handle_uninstall_request(
         )
         return
     logger.warning("agent.uninstall.start prefix=%s", prefix)
+    voice_root: Path | None = None
+    if voice is not None:
+        voice_root = voice.paths.root
+        await voice.shutdown()
     try:
-        await asyncio.to_thread(uninstall, prefix)
+        await asyncio.to_thread(uninstall, prefix, voice_root=voice_root)
     except Exception:
         logger.exception("agent.uninstall.failed prefix=%s", prefix)
     asyncio.get_running_loop().call_later(_EXIT_DELAY_S, exit_func, 0)
 
 
-def uninstall(prefix: Path, *, platform: str = sys.platform) -> None:
+def uninstall(
+    prefix: Path,
+    *,
+    platform: str = sys.platform,
+    voice_root: Path | None = None,
+) -> None:
     """Disarm, unregister and delete the install at ``prefix``. Blocking.
+
+    ``voice_root`` is the running agent's voice dir, which
+    ``MOBAIDE_VOICE_DIR`` can move away from ``<prefix>/voice``.
 
     A failed disarm must not stop the removal: deleting the install takes the
     credentials with it, and on macOS a skipped bootout would leave the
@@ -161,6 +188,10 @@ def uninstall(prefix: Path, *, platform: str = sys.platform) -> None:
         disarm(prefix)
     except Exception:
         logger.exception("agent.uninstall.disarm_failed prefix=%s", prefix)
+    try:
+        remove_voice_files(prefix, voice_root)
+    except Exception:
+        logger.exception("agent.uninstall.voice_remove_failed prefix=%s", prefix)
     if platform.startswith("linux"):
         _uninstall_linux(prefix)
     elif platform == "darwin":
@@ -178,6 +209,37 @@ def disarm(prefix: Path) -> None:
         blank_relay_credentials(env_file, clear_agent_id=True)
     clear_pending_pairing(InstallLayout(prefix=prefix))
     logger.info("agent.uninstall.disarmed env=%s", env_file)
+
+
+def remove_voice_files(prefix: Path, voice_root: Path | None = None) -> None:
+    """Delete the voice dirs under ``prefix``. Where the files live elsewhere
+    (``voice_root``, or the target of a symlinked ``<prefix>/voice``), delete
+    only what the voice layout names there, as ``mobaide-agent voice remove``
+    does, plus the settings and lock; the link itself goes with the other
+    prefix entries."""
+    roots: list[Path] = []
+    for name in VOICE_PREFIX_ENTRIES:
+        path = prefix / name
+        if path.is_symlink():
+            roots.append(path)
+        else:
+            remove_tree(path)
+    if voice_root is not None and voice_root not in [prefix / n for n in VOICE_PREFIX_ENTRIES]:
+        roots.append(voice_root)
+    for root in roots:
+        paths = VoicePaths(root)
+        remove_tree(paths.models_dir)
+        remove_tree(paths.runtime_root)
+        for path in (paths.settings_file, paths.lock_file):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("agent.uninstall.remove_failed path=%s: %s", path, exc)
+        if not root.is_symlink():
+            try:
+                root.rmdir()
+            except OSError:
+                pass
 
 
 def remove_prefix_entries(prefix: Path, *, keep: frozenset[str] = frozenset()) -> None:

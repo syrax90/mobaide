@@ -314,7 +314,9 @@ async def _start_relay_in_process(
 
         async def _on_uninstall_requested() -> None:
             await handle_uninstall_request(
-                uninstall_layout.prefix, installed=installed,
+                uninstall_layout.prefix,
+                installed=installed,
+                voice=getattr(app.state, "voice", None),
             )
 
         relay_client.set_uninstall_callback(_on_uninstall_requested)
