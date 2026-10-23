@@ -325,6 +325,39 @@ async def test_stop_ends_the_worker(make_helper, tmp_path):
     assert _process_gone(pid)
 
 
+async def test_worker_started_after_a_cancelled_spawn_is_reaped(
+    make_helper, tmp_path, monkeypatch
+):
+    """Cancelling the await does not stop the thread inside ``Popen``: the
+    child it still creates must be killed, not left waiting on stdin."""
+    release = threading.Event()
+    spawned: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
+
+    def slow_popen(*args, **kwargs):
+        release.wait(timeout=10)
+        proc = real_popen(*args, **kwargs)
+        spawned.append(proc)
+        return proc
+
+    monkeypatch.setattr(helper_module.subprocess, "Popen", slow_popen)
+    stt = make_helper()
+    request = asyncio.ensure_future(stt.transcribe(_spec(tmp_path), ONE_SECOND, RATE))
+    await asyncio.sleep(0.05)
+
+    request.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    release.set()
+    for _ in range(200):
+        if spawned and spawned[0].poll() is not None:
+            break
+        await asyncio.sleep(0.05)
+
+    assert stt.pid is None
+    assert spawned and spawned[0].poll() is not None
+
+
 async def test_missing_interpreter_is_helper_unavailable(make_helper, tmp_path):
     stt = make_helper(python=str(tmp_path / "no-such-python"))
 

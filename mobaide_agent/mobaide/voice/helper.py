@@ -162,6 +162,21 @@ def _shutdown_process(proc: subprocess.Popen[bytes], graceful: bool) -> None:
             pass
 
 
+def _reap_abandoned_spawn(spawn: asyncio.Future[subprocess.Popen[bytes]]) -> None:
+    if spawn.cancelled() or spawn.exception() is not None:
+        return
+    proc = spawn.result()
+    logger.info("voice.helper_spawn_abandoned pid=%s", proc.pid)
+
+    def reap() -> None:
+        _shutdown_process(proc, graceful=False)
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None:
+                pipe.close()
+
+    threading.Thread(target=reap, name="voice-helper-reap", daemon=True).start()
+
+
 class SttHelper:
     def __init__(
         self,
@@ -306,10 +321,15 @@ class SttHelper:
             kwargs["start_new_session"] = True
         argv = [self._python, "-P", "-m", "mobaide.voice.worker"]
         kwargs["cwd"] = _package_parent()
+        spawn = asyncio.ensure_future(
+            asyncio.to_thread(lambda: subprocess.Popen(argv, **kwargs))
+        )
         try:
-            proc: subprocess.Popen[bytes] = await asyncio.to_thread(
-                lambda: subprocess.Popen(argv, **kwargs)
-            )
+            proc: subprocess.Popen[bytes] = await asyncio.shield(spawn)
+        except asyncio.CancelledError:
+            # The thread still starts the child; nothing would ever stop it.
+            spawn.add_done_callback(_reap_abandoned_spawn)
+            raise
         except OSError as exc:
             raise HelperError("helper_unavailable", str(exc)) from exc
         worker = _Worker(proc=proc, started_at=time.monotonic())
