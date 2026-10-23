@@ -59,6 +59,7 @@ class SessionsPanelTest {
     private class Recorder {
         val selectedSessions = mutableListOf<String>()
         val selectedAgents = mutableListOf<String>()
+        val stops = mutableListOf<String>()
         var creates = 0
         var closes = 0
     }
@@ -71,6 +72,7 @@ class SessionsPanelTest {
                     state = state,
                     currentSessionId = currentSessionId,
                     onSelectSession = { recorder.selectedSessions += it },
+                    onStopSession = { recorder.stops += it.session_id },
                     onCreateSession = { recorder.creates += 1 },
                     onSelectAgent = { recorder.selectedAgents += it.agent_id },
                     onClose = { recorder.closes += 1 },
@@ -196,5 +198,37 @@ class SessionsPanelTest {
         composeRule.onNodeWithText("No active sessions").assertIsDisplayed()
         composeRule.onNodeWithText("Reconnecting…").assertDoesNotExist()
         composeRule.onNodeWithTag(SESSIONS_PANEL_NEW_SESSION_TAG).assertIsDisplayed()
+    }
+
+    @Test
+    fun stopButton_showsOnlyForRunningOrStartingRows_andReportsItsSession() {
+        val recorder = setPanel(
+            SessionsPanelUiState(
+                sessions = listOf(
+                    session("s1"),
+                    session("s2", state = "starting"),
+                    session("s3", state = "stopped"),
+                ),
+                synced = true,
+            ),
+        )
+
+        composeRule.onNodeWithTag(sessionsPanelStopTag("s3")).assertDoesNotExist()
+
+        composeRule.onNodeWithTag(sessionsPanelStopTag("s2")).assertIsEnabled().performClick()
+        composeRule.onNodeWithTag(sessionsPanelStopTag("s1")).assertIsEnabled().performClick()
+        assertEquals(listOf("s2", "s1"), recorder.stops)
+        assertEquals("stop must not double as a switch or close", emptyList<String>(), recorder.selectedSessions)
+        assertEquals(0, recorder.closes)
+    }
+
+    @Test
+    fun stopButton_isDisabledOnlyForTheRowBeingStopped() {
+        val recorder = setPanel(twoSessions.copy(stoppingSessionId = "s2"))
+
+        composeRule.onNodeWithTag(sessionsPanelStopTag("s2")).assertIsNotEnabled().performClick()
+        assertEquals("an in-flight stop must not be resubmitted", emptyList<String>(), recorder.stops)
+
+        composeRule.onNodeWithTag(sessionsPanelStopTag("s1")).assertIsEnabled()
     }
 }

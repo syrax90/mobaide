@@ -17,6 +17,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -48,6 +49,7 @@ class SessionsPanelViewModelTest {
         AgentSummaryResponse(agent_id = id, name = "agent-$id", online = online, created_at = "t")
 
     private class Fixture(
+        val sessionRepo: SessionRepository,
         val agentRepository: AgentRepository,
         val sessionsFlow: MutableStateFlow<List<SessionResponse>>,
         val syncedFlow: MutableStateFlow<Boolean>,
@@ -93,7 +95,7 @@ class SessionsPanelViewModelTest {
 
         val vm = SessionsPanelViewModel(sessionRepo, typesRepo, agentRepository, tokenStore, bus, coordinator)
         return Fixture(
-            agentRepository, sessionsFlow, syncedFlow, connectionFlow, typesFlow,
+            sessionRepo, agentRepository, sessionsFlow, syncedFlow, connectionFlow, typesFlow,
             agentsFlow, switchingFlow, vm,
         )
     }
@@ -207,6 +209,72 @@ class SessionsPanelViewModelTest {
             advanceUntilIdle()
             assertEquals("a2", expectMostRecentItem().switchingAgentId)
             cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun stopSession_success_emitsStopped_andForwardsTheForceFlag() = runTest {
+        val fx = build()
+        coEvery { fx.sessionRepo.deleteSession(any(), any()) } just Runs
+        advanceUntilIdle()
+
+        fx.vm.events.test {
+            fx.vm.stopSession("s2", force = true)
+            advanceUntilIdle()
+            assertEquals(SessionsPanelEvent.Stopped("s2"), awaitItem())
+            expectNoEvents()
+        }
+        coVerify(exactly = 1) { fx.sessionRepo.deleteSession("s2", true) }
+    }
+
+    @Test
+    fun stopSession_failure_emitsStopFailedWithTheListsText_andClearsTheStoppingFlag() = runTest {
+        val fx = build()
+        coEvery { fx.sessionRepo.deleteSession(any(), any()) } throws RuntimeException("agent offline")
+        advanceUntilIdle()
+
+        fx.vm.uiState.test {
+            advanceUntilIdle()
+            fx.vm.events.test {
+                fx.vm.stopSession("s1", force = false)
+                advanceUntilIdle()
+                assertEquals(
+                    SessionsPanelEvent.StopFailed("Failed to stop session: agent offline"),
+                    awaitItem(),
+                )
+            }
+            assertNull("a failed stop must re-enable the row", expectMostRecentItem().stoppingSessionId)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun stopSession_marksTheRowWhileInFlight_andIgnoresASecondStopUntilItSettles() = runTest {
+        val fx = build()
+        val gate = CompletableDeferred<Unit>()
+        coEvery { fx.sessionRepo.deleteSession(any(), any()) } coAnswers { gate.await() }
+        advanceUntilIdle()
+
+        fx.vm.uiState.test {
+            advanceUntilIdle()
+            fx.vm.stopSession("s1", force = false)
+            advanceUntilIdle()
+            assertEquals("s1", expectMostRecentItem().stoppingSessionId)
+
+            fx.vm.stopSession("s2", force = true)
+            advanceUntilIdle()
+            expectNoEvents()
+            coVerify(exactly = 0) { fx.sessionRepo.deleteSession("s2", any()) }
+
+            gate.complete(Unit)
+            advanceUntilIdle()
+            assertNull(expectMostRecentItem().stoppingSessionId)
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 1) { fx.sessionRepo.deleteSession(any(), any()) }
+        fx.vm.events.test {
+            assertEquals(SessionsPanelEvent.Stopped("s1"), awaitItem())
+            expectNoEvents()
         }
     }
 }

@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { listCustomAgentTypes } from '../../api/customAgentTypeRepository';
-import { listSessions, stopSession } from '../../api/sessionRepository';
-import { isApiError } from '../../api/errors';
+import { listSessions } from '../../api/sessionRepository';
 import { ErrorState } from '../../components/ErrorState';
 import { queryKeys, wsBackedQueryOptions } from '../../lib/queryKeys';
 import type { SessionResponse } from '../../protocol/dto/session';
@@ -13,14 +12,13 @@ import {
   useSessionsSynced,
 } from '../../realtime';
 import { useLastSessionStore } from '../../stores/lastSessionStore';
-import { useToastStore } from '../../stores/toastStore';
-import { evictTerminals } from '../../terminal/terminalEviction';
 import { AutoScanSection } from '../autoscan/AutoScanSection';
 import { SessionCard } from './SessionCard';
 import { StopSessionDialog } from './StopSessionDialog';
 import { customTypeNameMap, sessionDialogLabel, sessionKindLabel } from './sessionDisplay';
 import { newSessionPath } from './terminalPath';
 import { useAutoResume } from './useAutoResume';
+import { useStopSession } from './useStopSession';
 
 interface SessionListProps {
   agentId: string;
@@ -28,7 +26,6 @@ interface SessionListProps {
 }
 
 export function SessionList({ agentId, online }: SessionListProps) {
-  const queryClient = useQueryClient();
   const [stopTarget, setStopTarget] = useState<SessionResponse | null>(null);
   const setLastUsedSession = useLastSessionStore((state) => state.setLastUsedSession);
 
@@ -60,37 +57,9 @@ export function SessionList({ agentId, online }: SessionListProps) {
   // terminal on an unreachable agent and never show the offline state.
   useAutoResume(agentId, online ? sessions.data : undefined, synced);
 
-  const stop = useMutation({
-    mutationFn: ({ sessionId, force }: { sessionId: string; force: boolean }) =>
-      stopSession(agentId, sessionId, force),
-    onSuccess: async (_result, { sessionId }) => {
+  const stop = useStopSession(agentId, {
+    onSettled: () => {
       setStopTarget(null);
-      // Before the network settles: this is what actually kills a live PTY view.
-      evictTerminals(agentId, [sessionId]);
-      // The agent publishes `sessions.changed` immediately, which is the honest
-      // source; this only covers the socket being down.
-      await queryClient.invalidateQueries({ queryKey: queryKeys.sessions(agentId) });
-    },
-    onError: (error, { sessionId }) => {
-      setStopTarget(null);
-      // A 404 means the session is already gone — the user's intent is
-      // satisfied, so reconcile rather than report a failure. Without this the
-      // dead card stays on screen (`staleTime: Infinity` never refetches it) and
-      // pressing Stop again just 404s. An unreachable agent answers 503 from the
-      // relay, not 404, so this cannot swallow a real connectivity failure.
-      if (isApiError(error) && error.status === 404) {
-        evictTerminals(agentId, [sessionId]);
-        void queryClient.invalidateQueries({ queryKey: queryKeys.sessions(agentId) });
-        return;
-      }
-      useToastStore
-        .getState()
-        .show(
-          isApiError(error)
-            ? `Failed to stop session: ${error.message}`
-            : 'Failed to stop session',
-          'error',
-        );
     },
   });
 

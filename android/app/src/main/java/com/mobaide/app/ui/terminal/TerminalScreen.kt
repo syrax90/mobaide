@@ -39,6 +39,7 @@ import com.mobaide.app.ui.theme.PxDarkRule
 import com.mobaide.app.ui.theme.PxDarkSurface
 import com.mobaide.app.ui.theme.PxDarkText
 import com.mobaide.app.ui.theme.chromeCaps
+import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.ui.common.pixel.PixelFab
 import com.mobaide.app.ui.common.pixel.PixelIconButton
 import com.mobaide.app.ui.common.pixel.PixelStatusDot
@@ -51,9 +52,13 @@ import androidx.compose.material3.Text
 import com.mobaide.app.ui.common.pixel.PixelTopBar
 import com.mobaide.app.ui.sessions.panel.SessionsDrawer
 import com.mobaide.app.ui.sessions.panel.SessionsPanel
+import com.mobaide.app.ui.sessions.panel.SessionsPanelEvent
 import com.mobaide.app.ui.sessions.panel.SessionsPanelViewModel
+import com.mobaide.app.ui.sessions.panel.StopSessionDialog
 import com.mobaide.app.ui.sessions.panel.edgeSwipeToOpen
+import com.mobaide.app.ui.sessions.sessionKindLabel
 import com.mobaide.app.ui.sessions.sessionStateColor
+import com.mobaide.app.ui.sessions.sessionTitle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -137,9 +142,28 @@ fun TerminalScreen(
     val panelState by panelViewModel.uiState.collectAsStateWithLifecycle()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val drawerScope = rememberCoroutineScope()
+    var stopTarget by remember { mutableStateOf<SessionResponse?>(null) }
 
     LaunchedEffect(viewModel) {
         viewModel.sessionEnded.collect { onSessionEnded() }
+    }
+
+    LaunchedEffect(panelViewModel) {
+        panelViewModel.events.collect { event ->
+            when (event) {
+                // `sessionEnded` never fires for a session this screen has seen
+                // alive, so leaving the stopped one on screen is done here.
+                is SessionsPanelEvent.Stopped -> if (event.sessionId == viewModel.sessionId) {
+                    onSessionEnded()
+                } else {
+                    // Launched, not awaited: a suspended showSnackbar would hold
+                    // back the next event until this one is dismissed.
+                    drawerScope.launch { snackbarHostState.showSnackbar("Session stopped") }
+                }
+                is SessionsPanelEvent.StopFailed ->
+                    drawerScope.launch { snackbarHostState.showSnackbar(event.message) }
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -212,6 +236,7 @@ fun TerminalScreen(
                 state = panelState,
                 currentSessionId = viewModel.sessionId,
                 onSelectSession = onSwitchSession,
+                onStopSession = { stopTarget = it },
                 onCreateSession = {
                     closeDrawer()
                     onCreateSession()
@@ -463,6 +488,17 @@ fun TerminalScreen(
                 renameShortcutTarget = null
             },
             onDismiss = { renameShortcutTarget = null },
+        )
+    }
+
+    stopTarget?.let { target ->
+        StopSessionDialog(
+            label = sessionTitle(target, sessionKindLabel(target, panelState.customTypeNames)),
+            onStop = { force ->
+                panelViewModel.stopSession(target.session_id, force)
+                stopTarget = null
+            },
+            onDismiss = { stopTarget = null },
         )
     }
 

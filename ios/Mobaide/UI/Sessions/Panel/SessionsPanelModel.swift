@@ -14,6 +14,8 @@ final class SessionsPanelModel {
     private(set) var synced = false
     private(set) var customTypeNames: [String: String] = [:]
     private(set) var agents: [AgentSummaryResponse] = []
+    /// The session a panel-started stop is waiting on, if any.
+    private(set) var stoppingSessionId: String?
     let connectedAgentId: String?
 
     private let sessionRepository: SessionRepository
@@ -81,6 +83,17 @@ final class SessionsPanelModel {
         for await list in agentRepository.agents() {
             agents = list
         }
+    }
+
+    /// The row disappears through the agent's `sessions.changed` push, so a
+    /// success needs no refetch here. One stop at a time: a second press while
+    /// one is in flight is ignored rather than queued, and returns false.
+    func stopSession(_ id: String, force: Bool) async throws -> Bool {
+        guard stoppingSessionId == nil else { return false }
+        stoppingSessionId = id
+        defer { stoppingSessionId = nil }
+        try await sessionRepository.deleteSession(id: id, force: force)
+        return true
     }
 
     /// Best effort: the cached list from the agents screen still renders.

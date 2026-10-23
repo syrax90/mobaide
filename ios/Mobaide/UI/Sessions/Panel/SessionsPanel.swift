@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The terminal's left drawer (Herdr's sidebar): the connected agent's
-/// sessions for one-tap switching, a shortcut to the create flow, and the
+/// sessions for one-tap switching or stopping, a shortcut to the create flow, and the
 /// account's other agents. Stateless — the drawer host owns open/closed.
 struct SessionsPanel: View {
     let model: SessionsPanelModel
@@ -9,6 +9,7 @@ struct SessionsPanel: View {
     /// The agent a drawer-started switch is connecting to, if any.
     let switchingAgentId: String?
     let onSelectSession: (String) -> Void
+    let onStopSession: (SessionResponse) -> Void
     let onCreateSession: () -> Void
     let onSelectAgent: (AgentSummaryResponse) -> Void
     let onClose: () -> Void
@@ -35,7 +36,9 @@ struct SessionsPanel: View {
                             SessionsPanelRow(
                                 session: session,
                                 kindLabel: SessionDisplay.kindLabel(session, customTypeNames: model.customTypeNames),
-                                selected: selected
+                                selected: selected,
+                                stopping: model.stoppingSessionId == session.session_id,
+                                onStop: { onStopSession(session) }
                             )
                         }
                         .buttonStyle(.plain)
@@ -144,11 +147,15 @@ struct SessionsPanel: View {
     }
 }
 
-/// One session row: status square, title, `kind · project`, attention chip.
+/// One session row: status square, title, `kind · project`, attention chip,
+/// and — as on the sessions list's card — a stop control nested in the row's
+/// tap target, which a plain-styled outer button leaves independently tappable.
 private struct SessionsPanelRow: View {
     let session: SessionResponse
     let kindLabel: String
     let selected: Bool
+    let stopping: Bool
+    let onStop: () -> Void
 
     @Environment(\.mobaideColors) private var colors
 
@@ -173,6 +180,18 @@ private struct SessionsPanelRow: View {
             Spacer(minLength: 4)
             if let attention = SessionDisplay.attention(session.attention) {
                 PixelChip(attention.text, .status(attention.tone))
+            }
+            if SessionDisplay.canStop(session.state) {
+                Button(action: onStop) {
+                    Image(systemName: "stop.fill")
+                        .foregroundStyle(stopping ? colors.textMuted : colors.danger)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(stopping)
+                .accessibilityLabel("Stop session")
+                .accessibilityIdentifier("sessions-panel-stop-\(session.session_id)")
             }
         }
         .contentShape(Rectangle())

@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -53,11 +54,12 @@ const val SESSIONS_PANEL_CLOSE_TAG = "sessions_panel_close"
 const val SESSIONS_PANEL_NEW_SESSION_TAG = "sessions_panel_new_session"
 
 fun sessionsPanelRowTag(sessionId: String) = "sessions_panel_row_$sessionId"
+fun sessionsPanelStopTag(sessionId: String) = "sessions_panel_stop_$sessionId"
 fun sessionsPanelAgentTag(agentId: String) = "sessions_panel_agent_$agentId"
 
 /**
  * The terminal's left drawer (Herdr's sidebar): the connected agent's
- * sessions for one-tap switching, a shortcut to the create flow, and the
+ * sessions for one-tap switching or stopping, a shortcut to the create flow, and the
  * account's other agents. Stateless — the drawer host owns open/closed.
  */
 @Composable
@@ -65,6 +67,7 @@ fun SessionsPanel(
     state: SessionsPanelUiState,
     currentSessionId: String,
     onSelectSession: (sessionId: String) -> Unit,
+    onStopSession: (SessionResponse) -> Unit,
     onCreateSession: () -> Unit,
     onSelectAgent: (AgentSummaryResponse) -> Unit,
     onClose: () -> Unit,
@@ -147,9 +150,11 @@ fun SessionsPanel(
                     session = session,
                     kindLabel = sessionKindLabel(session, state.customTypeNames),
                     selected = session.session_id == currentSessionId,
+                    stopping = state.stoppingSessionId == session.session_id,
                     onClick = {
                         if (session.session_id == currentSessionId) onClose() else onSelectSession(session.session_id)
                     },
+                    onStop = { onStopSession(session) },
                 )
             }
             item {
@@ -224,7 +229,9 @@ private fun SessionRow(
     session: SessionResponse,
     kindLabel: String,
     selected: Boolean,
+    stopping: Boolean,
     onClick: () -> Unit,
+    onStop: () -> Unit,
 ) {
     val stateColor = MaterialTheme.pixel.sessionStateColor(session.state)
     val ring = if (selected) MaterialTheme.pixel.brand2 else MaterialTheme.pixel.surface2
@@ -261,6 +268,21 @@ private fun SessionRow(
         sessionAttention(session.attention)?.let { attention ->
             Spacer(modifier = Modifier.width(8.dp))
             SessionAttentionChip(attention)
+        }
+        if (session.state == "running" || session.state == "starting") {
+            Spacer(modifier = Modifier.width(8.dp))
+            PixelIconButton(
+                onClick = onStop,
+                enabled = !stopping,
+                compact = true,
+                modifier = Modifier.testTag(sessionsPanelStopTag(session.session_id)),
+            ) {
+                Icon(
+                    Icons.Default.Stop,
+                    contentDescription = "Stop session",
+                    tint = if (stopping) MaterialTheme.pixel.gray else MaterialTheme.colorScheme.error,
+                )
+            }
         }
     }
 }
@@ -332,7 +354,7 @@ private val previewState = SessionsPanelUiState(
 @Composable
 private fun SessionsPanelPreviewDark() {
     MobaideTheme(darkTheme = true) {
-        SessionsPanel(previewState, "abc12345", {}, {}, {}, {})
+        SessionsPanel(previewState, "abc12345", {}, {}, {}, {}, {})
     }
 }
 
@@ -340,6 +362,6 @@ private fun SessionsPanelPreviewDark() {
 @Composable
 private fun SessionsPanelPreviewLight() {
     MobaideTheme(darkTheme = false) {
-        SessionsPanel(previewState, "abc12345", {}, {}, {}, {})
+        SessionsPanel(previewState, "abc12345", {}, {}, {}, {}, {})
     }
 }

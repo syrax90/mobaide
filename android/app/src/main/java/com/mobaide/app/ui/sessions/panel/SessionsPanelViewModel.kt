@@ -11,9 +11,13 @@ import com.mobaide.app.data.repository.AgentSwitchCoordinator
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -27,12 +31,19 @@ data class SessionsPanelUiState(
     val agents: List<AgentSummaryResponse> = emptyList(),
     val connectedAgentId: String? = null,
     val switchingAgentId: String? = null,
+    /** The session a panel-started stop is waiting on, if any. */
+    val stoppingSessionId: String? = null,
 ) {
     val connectedAgent: AgentSummaryResponse?
         get() = agents.firstOrNull { it.agent_id == connectedAgentId }
 
     val otherAgents: List<AgentSummaryResponse>
         get() = agents.filter { it.agent_id != connectedAgentId }
+}
+
+sealed interface SessionsPanelEvent {
+    data class Stopped(val sessionId: String) : SessionsPanelEvent
+    data class StopFailed(val message: String) : SessionsPanelEvent
 }
 
 /**
@@ -43,7 +54,7 @@ data class SessionsPanelUiState(
  */
 @HiltViewModel
 class SessionsPanelViewModel @Inject constructor(
-    sessionRepository: SessionRepository,
+    private val sessionRepository: SessionRepository,
     customAgentTypesRepository: CustomAgentTypesRepository,
     private val agentRepository: AgentRepository,
     tokenStore: TokenStore,
@@ -52,6 +63,11 @@ class SessionsPanelViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val connectedAgentId = tokenStore.getAgentId()
+
+    private val stoppingSessionId = MutableStateFlow<String?>(null)
+
+    private val _events = Channel<SessionsPanelEvent>(Channel.BUFFERED)
+    val events: Flow<SessionsPanelEvent> = _events.receiveAsFlow()
 
     // A snapshot from a dropped tunnel is not agent-authoritative (see
     // `SessionRepository`), so the list reads as synced only while the bus is up.
@@ -68,7 +84,8 @@ class SessionsPanelViewModel @Inject constructor(
         customAgentTypesRepository.observeTypes(),
         agentRepository.observeAgents(),
         agentSwitchCoordinator.switchingAgentId,
-    ) { (sessions, synced), types, agents, switching ->
+        stoppingSessionId,
+    ) { (sessions, synced), types, agents, switching, stopping ->
         SessionsPanelUiState(
             sessions = sessions,
             synced = synced,
@@ -76,6 +93,7 @@ class SessionsPanelViewModel @Inject constructor(
             agents = agents,
             connectedAgentId = connectedAgentId,
             switchingAgentId = switching,
+            stoppingSessionId = stopping,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SessionsPanelUiState())
 
@@ -85,6 +103,23 @@ class SessionsPanelViewModel @Inject constructor(
                 agentRepository.refreshAgents()
             } catch (_: Exception) {
                 // The cached list from the agents screen still renders.
+            }
+        }
+    }
+
+    /** The row disappears through the agent's `sessions.changed` push, so a
+     *  success needs no refetch here. */
+    fun stopSession(sessionId: String, force: Boolean) {
+        if (stoppingSessionId.value != null) return
+        stoppingSessionId.value = sessionId
+        viewModelScope.launch {
+            try {
+                sessionRepository.deleteSession(sessionId, force)
+                _events.send(SessionsPanelEvent.Stopped(sessionId))
+            } catch (e: Exception) {
+                _events.send(SessionsPanelEvent.StopFailed("Failed to stop session: ${e.message}"))
+            } finally {
+                stoppingSessionId.value = null
             }
         }
     }
