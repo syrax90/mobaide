@@ -15,29 +15,70 @@ const failed = (patch: Partial<Extract<DialogState, { kind: 'failed' }>>): Dialo
   ...patch,
 });
 
+interface Calls {
+  recordAgain: number;
+  retry: number;
+  dismiss: number;
+  discard: number;
+  continued: string[];
+  inserted: string[];
+  skip: boolean[];
+}
+
 /** Counts the callbacks the footer buttons reach. */
+const dialog = (
+  calls: Calls,
+  state: DictationState,
+  canRecord: boolean,
+  options: { carried?: string | null; canSend?: boolean; skipReview?: boolean } = {},
+) => (
+  <DictationDialog
+    state={state}
+    carried={options.carried ?? null}
+    agentName="laptop"
+    canSend={options.canSend ?? false}
+    canRecord={canRecord}
+    onStop={() => undefined}
+    onCancel={() => undefined}
+    onRetry={() => {
+      calls.retry += 1;
+    }}
+    onRecordAgain={() => {
+      calls.recordAgain += 1;
+    }}
+    onDismiss={() => {
+      calls.dismiss += 1;
+    }}
+    onContinue={(draft) => {
+      calls.continued.push(draft);
+    }}
+    onDiscard={() => {
+      calls.discard += 1;
+    }}
+    onInsert={(text) => {
+      calls.inserted.push(text);
+      return true;
+    }}
+    skipReview={options.skipReview ?? false}
+    onSkipReviewChange={(skip) => {
+      calls.skip.push(skip);
+    }}
+  />
+);
+
+const newCalls = (): Calls => ({
+  recordAgain: 0,
+  retry: 0,
+  dismiss: 0,
+  discard: 0,
+  continued: [],
+  inserted: [],
+  skip: [],
+});
+
 const renderDialog = (state: DialogState, canRecord: boolean) => {
-  const calls = { recordAgain: 0, retry: 0, dismiss: 0 };
-  render(
-    <DictationDialog
-      state={state}
-      agentName="laptop"
-      canSend={false}
-      canRecord={canRecord}
-      onStop={() => undefined}
-      onCancel={() => undefined}
-      onRetry={() => {
-        calls.retry += 1;
-      }}
-      onRecordAgain={() => {
-        calls.recordAgain += 1;
-      }}
-      onDismiss={() => {
-        calls.dismiss += 1;
-      }}
-      onInsert={() => true}
-    />,
-  );
+  const calls = newCalls();
+  render(dialog(calls, state, canRecord));
   return calls;
 };
 
@@ -94,5 +135,75 @@ describe('DictationDialog Record again', () => {
     expect(retry).toBeEnabled();
     fireEvent.click(retry);
     expect(calls.retry).toBe(1);
+  });
+});
+
+describe('DictationDialog review', () => {
+  const result = (text: string): DialogState => ({ kind: 'result', text });
+  const textField = (): HTMLTextAreaElement => screen.getByRole('textbox');
+
+  it('dictates more from the review, keeping the edited text', () => {
+    const calls = newCalls();
+    render(dialog(calls, result('hello'), true, { canSend: true }));
+    fireEvent.change(textField(), { target: { value: 'hello there' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dictate more: adds to the text' }));
+
+    expect(calls.continued).toEqual(['hello there']);
+  });
+
+  it('offers Dictate again once the text is cleared', () => {
+    const calls = newCalls();
+    render(dialog(calls, result('hello'), true, { canSend: true }));
+    fireEvent.change(textField(), { target: { value: '  ' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dictate again' }));
+
+    expect(calls.continued).toEqual(['  ']);
+  });
+
+  it('refuses to dictate more once the session has ended', () => {
+    render(dialog(newCalls(), result('hello'), false, { canSend: true }));
+
+    expect(screen.getByRole('button', { name: 'Dictate more: adds to the text' })).toBeDisabled();
+  });
+
+  it('appends the next transcript to the carried text and inserts both', () => {
+    const calls = newCalls();
+    const { rerender } = render(dialog(calls, result('hello'), true, { canSend: true }));
+    rerender(dialog(calls, { kind: 'starting' }, true, { canSend: true, carried: 'hello' }));
+
+    rerender(dialog(calls, result('world'), true, { canSend: true, carried: 'hello' }));
+
+    expect(textField().value).toBe('hello world');
+    fireEvent.click(screen.getByRole('button', { name: 'Insert' }));
+    expect(calls.inserted).toEqual(['hello world']);
+  });
+
+  it('returns to the carried text when the extra recording is abandoned', () => {
+    const calls = newCalls();
+    const { rerender } = render(dialog(calls, result('hello'), true, { canSend: true }));
+    rerender(dialog(calls, { kind: 'starting' }, true, { canSend: true, carried: 'hello' }));
+
+    rerender(dialog(calls, { kind: 'idle' }, true, { canSend: true, carried: 'hello' }));
+
+    expect(textField().value).toBe('hello');
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(calls.discard).toBe(1);
+  });
+
+  it('turns the review off from its checkbox and says where to turn it back on', () => {
+    const calls = newCalls();
+    const { rerender } = render(dialog(calls, result('hello'), true, { canSend: true }));
+    const skip = screen.getByRole('checkbox', { name: /without this review/ });
+    expect(skip).not.toBeChecked();
+    expect(screen.queryByText(/Voice input settings/)).toBeNull();
+
+    fireEvent.click(skip);
+    expect(calls.skip).toEqual([true]);
+    rerender(dialog(calls, result('hello'), true, { canSend: true, skipReview: true }));
+
+    expect(screen.getByRole('checkbox', { name: /without this review/ })).toBeChecked();
+    expect(screen.getByText(/laptop.s Voice input settings/)).toBeInTheDocument();
   });
 });

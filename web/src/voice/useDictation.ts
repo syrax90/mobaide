@@ -10,6 +10,12 @@ import { WebAudioRecorder } from './recorder';
 
 const IDLE: DictationState = { kind: 'idle' };
 
+/** Dictating more from the review appends to its text, one space apart. */
+export function joinTranscript(before: string, after: string): string {
+  if (before.trim() === '') return after;
+  return /\s$/.test(before) ? before + after : `${before} ${after}`;
+}
+
 /**
  * One dictation controller per terminal (agent + session). A new pair of ids
  * — another session opened in the same route, an agent switch, leaving the
@@ -25,6 +31,10 @@ export function useDictation(
   capability: VoiceCapability | null,
 ) {
   const [state, setState] = useState<DictationState>(IDLE);
+  // Text kept from the review while the user dictates more: the next result
+  // is appended to it, and a cancel, an empty result or a failure returns to
+  // reviewing it.
+  const [carried, setCarried] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const controllerRef = useRef<DictationController | null>(null);
   const sampleRate = capability?.sampleRate ?? null;
@@ -51,6 +61,7 @@ export function useDictation(
       controller.dispose();
       if (controllerRef.current === controller) controllerRef.current = null;
       setState(IDLE);
+      setCarried(null);
     };
   }, [agentId, sessionId, sampleRate, maxSeconds, queryClient]);
 
@@ -69,8 +80,20 @@ export function useDictation(
   const dismiss = useCallback(() => {
     controllerRef.current?.dismiss();
   }, []);
+  /** Records again from the review, keeping `text` to append the result to. */
+  const continueFrom = useCallback((text: string) => {
+    const controller = controllerRef.current;
+    if (controller === null) return;
+    setCarried(text);
+    controller.toggle();
+  }, []);
+  /** Ends the review: the text was inserted or discarded. */
+  const finish = useCallback(() => {
+    setCarried(null);
+    controllerRef.current?.dismiss();
+  }, []);
 
-  return { state, toggle, stop, cancel, retry, dismiss };
+  return { state, carried, toggle, stop, cancel, retry, dismiss, continueFrom, finish };
 }
 
 /** The agent's display name for copy like "Voice can't run on <agent>". */

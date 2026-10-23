@@ -3,7 +3,7 @@ import { VOICE_RECOMMENDATION_LOW, VOICE_STATE, type VoiceStatus } from '../prot
 import { useVoiceActions, type VoiceAction } from './useVoiceStatus';
 import { isVoiceApiError } from './voiceApi';
 import { installErrorCopy, voiceActionErrorCopy } from './voiceErrorCopy';
-import { useMicHidden, useVoicePrefsStore } from './voicePrefsStore';
+import { useMicHidden, useSkipReview, useVoicePrefsStore } from './voicePrefsStore';
 import {
   formatBytes,
   languageNames,
@@ -42,6 +42,8 @@ export function VoicePanel({
   const actions = useVoiceActions(agentId);
   const hidden = useMicHidden(agentId);
   const setMicHidden = useVoicePrefsStore((state) => state.setMicHidden);
+  const skipReview = useSkipReview(agentId);
+  const setSkipReview = useVoicePrefsStore((state) => state.setSkipReview);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const settings = variant === 'settings';
 
@@ -289,6 +291,18 @@ export function VoicePanel({
             }}
           />
           Show the mic button in sessions
+        </label>
+      )}
+      {settings && status.state !== VOICE_STATE.unsupported && (
+        <label className="voice-toggle">
+          <input
+            type="checkbox"
+            checked={!skipReview}
+            onChange={(event) => {
+              setSkipReview(agentId, !event.target.checked);
+            }}
+          />
+          Review dictated text before it is inserted
         </label>
       )}
       {settings && status.model.notice !== undefined && status.model.notice !== '' && (

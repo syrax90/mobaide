@@ -1,9 +1,11 @@
+import type { ReactNode } from 'react';
 import type { VoiceStatus } from '../../../protocol/dto/voice';
 import {
   voicePreparingLabel,
   voiceProgressPercent,
   type VoiceMicMode,
 } from '../../../voice/voiceStatusView';
+import { AlertIcon, DownloadIcon, MicIcon, MicOffIcon } from './VoiceIcons';
 
 interface VoiceButtonProps {
   mode: Exclude<VoiceMicMode, 'hidden'>;
@@ -13,30 +15,33 @@ interface VoiceButtonProps {
 }
 
 /**
- * The toolbar's voice entry. Its text names the state, so nothing depends
- * on colour: `Dictate` when ready, `Voice` (muted) when off, the install
- * percentage while preparing, `Voice !` after a failed install.
+ * The toolbar's voice entry. Every state has its own glyph, as on Android,
+ * so nothing depends on colour: a mic when ready, a hollow mic when off, a
+ * download arrow (with the percentage) while preparing, `!` after a failed
+ * install. The accessible name spells the state out.
  */
 export function VoiceButton({ mode, status, disabled, onClick }: VoiceButtonProps) {
-  let text: string;
+  let icon: ReactNode;
+  let text: string | null = null;
   let label: string;
   switch (mode) {
     case 'ready':
-      text = 'Dictate';
+      icon = <MicIcon />;
       label = 'Dictate: record speech for your computer to transcribe';
       break;
     case 'off':
-      text = 'Voice';
+      icon = <MicOffIcon />;
       label = 'Voice input is off. Set it up';
       break;
     case 'preparing': {
       const percent = status === undefined ? null : voiceProgressPercent(status);
-      text = percent === null ? 'Voice…' : `Voice ${String(percent)}%`;
+      icon = <DownloadIcon />;
+      text = percent === null ? null : `${String(percent)}%`;
       label = status === undefined ? 'Preparing voice input' : voicePreparingLabel(status);
       break;
     }
     case 'failed':
-      text = 'Voice !';
+      icon = <AlertIcon />;
       label = 'Voice input needs attention. Show details';
       break;
   }
@@ -49,7 +54,8 @@ export function VoiceButton({ mode, status, disabled, onClick }: VoiceButtonProp
       disabled={disabled}
       onClick={onClick}
     >
-      {text}
+      {icon}
+      {text !== null && <span aria-hidden="true">{text}</span>}
     </button>
   );
 }

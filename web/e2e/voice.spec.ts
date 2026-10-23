@@ -43,7 +43,7 @@ const NOT_INSTALLED = {
     languages: ['de', 'en', 'fr'],
     download_bytes: 682365212,
     disk_bytes: 733578420,
-    ram_bytes: 2000000000,
+    ram_bytes: 700000000,
     notice: 'Model: nvidia/parakeet-tdt-0.6b-v3, created by NVIDIA. CC BY 4.0.',
   },
   progress: null,
@@ -231,6 +231,46 @@ test('records, transcribes on the agent and inserts the text without sending it'
     log.ptyFrames.filter((sent) => sent[0] === 0x69).map((sent) => sent.toString('utf8'));
   await expect.poll(inputs).toEqual([`i\x1b[200~${TRANSCRIPT}\x1b[201~`]);
   expect(log.deletes).toEqual([]);
+});
+
+test('dictates more from the review, then skips the review once it is turned off', async ({
+  page,
+}) => {
+  const log = await stubVoiceTerminal(page, { status: () => READY });
+  await openSession(page);
+  const recording = page.getByRole('dialog', { name: 'Recording' });
+  const review = page.getByRole('dialog', { name: 'Review' });
+  const record = async (): Promise<void> => {
+    const sent = log.audio.length;
+    await expect(recording).toBeVisible();
+    await expect.poll(() => log.audio.length, { timeout: 10_000 }).toBeGreaterThan(sent);
+    await recording.getByRole('button', { name: 'Stop' }).click();
+  };
+
+  await dictateButton(page).click();
+  await record();
+  await expect(review.getByRole('textbox')).toHaveValue(TRANSCRIPT);
+
+  await review.getByRole('button', { name: 'Dictate more: adds to the text' }).click();
+  await record();
+  await expect(review.getByRole('textbox')).toHaveValue(`${TRANSCRIPT} ${TRANSCRIPT}`);
+  await review.getByRole('checkbox', { name: /without this review/ }).check();
+  await review.getByRole('button', { name: 'Insert' }).click();
+  await expect(review).toBeHidden();
+
+  await dictateButton(page).click();
+  await record();
+
+  // Straight to the prompt: no review, still no Enter.
+  const inputs = () =>
+    log.ptyFrames.filter((sent) => sent[0] === 0x69).map((sent) => sent.toString('utf8'));
+  await expect
+    .poll(inputs)
+    .toEqual([
+      `i\x1b[200~${TRANSCRIPT} ${TRANSCRIPT}\x1b[201~`,
+      `i\x1b[200~${TRANSCRIPT}\x1b[201~`,
+    ]);
+  await expect(review).toBeHidden();
 });
 
 test('cancelling a recording deletes the dictation on the agent', async ({ page }) => {
