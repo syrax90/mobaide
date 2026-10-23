@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import re
 import secrets
 import shutil
@@ -64,6 +65,14 @@ DEFAULT_EMAIL = "dev@test.local"
 DEFAULT_PASSWORD = "Qwe>123"
 DEFAULT_AGENT_NAME = "manual-e2e-agent"
 DEFAULT_WEB_PORT = 5173
+DEFAULT_AVD = "Mobaide-E2E"
+# A cold first boot of a freshly created AVD takes minutes on a laptop;
+# quick-boot snapshots bring later boots down to seconds.
+EMULATOR_BOOT_TIMEOUT = 420.0
+DEFAULT_STOP_TIMEOUT = 90.0
+# Dropped into the state dir by `stop`; `up` polls for it. Windows has no
+# SIGTERM a second shell could send, so this is the cross-platform stop path.
+STOP_REQUEST_NAME = "stop.request"
 
 # Internal wiring only: seeded via ADMIN_SEED_EMAIL/ADMIN_SEED_PASSWORD so the
 # script can authenticate the admin-gated /api/health counts for its own
@@ -74,6 +83,7 @@ _HEALTH_ADMIN_PASSWORD = "ManualStackHealthAdminPass123!"
 DEFAULT_STATE_DIR = Path(tempfile.gettempdir()) / "mobaide-manual-e2e"
 
 ANDROID_DIR = REPO_ROOT / "android"
+ANDROID_APP_ID = "com.mobaide.app"
 LOCAL_PROPERTIES_PATH = ANDROID_DIR / "local.properties"
 DEBUG_NSC_PATH = (
     ANDROID_DIR / "app" / "src" / "debug" / "res" / "xml"
@@ -446,16 +456,133 @@ def detect_lan_ips(psutil_mod=None) -> tuple[str, list[str]]:
 # --------------------------------------------------------------------------
 
 
+_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+_PROCESS_SET_QUOTA = 0x0100
+_PROCESS_TERMINATE = 0x0001
+_KILL_ON_CLOSE_JOB: int | None = None
+_KILL_ON_CLOSE_JOB_FAILED = False
+
+
+def _kill_on_close_job() -> int | None:
+    """Lazily create this process's KILL_ON_JOB_CLOSE job (Windows only).
+
+    Same recipe as mobaide/launcher/__main__.py. The handle is never closed on
+    purpose: the kernel closes it when this process dies, and that close is
+    what reaps the job's members.
+    """
+    global _KILL_ON_CLOSE_JOB, _KILL_ON_CLOSE_JOB_FAILED
+    if os.name != "nt" or _KILL_ON_CLOSE_JOB_FAILED:
+        return None
+    if _KILL_ON_CLOSE_JOB is not None:
+        return _KILL_ON_CLOSE_JOB
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _BasicLimit(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _ExtendedLimit(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BasicLimit),
+                ("IoInfo", ctypes.c_uint64 * 6),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
+        info = _ExtendedLimit()
+        info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(
+            wintypes.HANDLE(job),
+            _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        ):
+            kernel32.CloseHandle(wintypes.HANDLE(job))
+            raise OSError(ctypes.get_last_error(), "SetInformationJobObject failed")
+    except (OSError, AttributeError, ImportError) as exc:
+        log(f"WARNING: no kill-on-close job object ({exc}); a hard-killed run "
+            "leaves its children to the next `up`/`stop`/`clean`")
+        _KILL_ON_CLOSE_JOB_FAILED = True
+        return None
+    _KILL_ON_CLOSE_JOB = job
+    return job
+
+
+def bind_child_lifetime(pid: int) -> None:
+    """Windows only: make a child die with this script, however it dies.
+
+    On POSIX ``kill -TERM`` runs the finally-based teardown. Windows has no
+    such signal: Stop-Process, Task Manager, a closed console or a supervising
+    tool's stop all TerminateProcess this script, skip every finally block and
+    leave server/agent/vite holding their ports. Assigned to a KILL_ON_JOB_CLOSE
+    job, the child -- and everything it spawns afterwards, PTY shells included
+    -- is reaped by the kernel the moment this process exits. Best-effort:
+    the recorded-pid reaping in `up`/`stop`/`clean` stays the fallback.
+    """
+    job = _kill_on_close_job()
+    if job is None:
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    handle = kernel32.OpenProcess(_PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, pid)
+    if not handle:
+        return
+    try:
+        kernel32.AssignProcessToJobObject(wintypes.HANDLE(job), wintypes.HANDLE(handle))
+    finally:
+        kernel32.CloseHandle(wintypes.HANDLE(handle))
+
+
 class ChildProcess:
     """A streamed subprocess with a tail ring-buffer and psutil tree teardown."""
 
-    def __init__(self, name: str, args: list[str], env: dict, cwd: Path, log_path: Path):
+    def __init__(
+        self,
+        name: str,
+        args: list[str],
+        env: dict,
+        cwd: Path,
+        log_path: Path,
+        *,
+        ignore_console_ctrl_c: bool = False,
+    ):
         self.name = name
         self.tail: deque[str] = deque(maxlen=200)
         self._log_file = open(log_path, "a", encoding="utf-8")
-        # No creationflags on Windows on purpose: the children share this
+        # By default no creationflags on Windows: the children share this
         # console, so Ctrl+C reaches them too and uvicorn begins its own
         # graceful shutdown; kill_tree() is the idempotent mop-up.
+        # ignore_console_ctrl_c is for `npm run dev` on Windows: npm and vite
+        # run through .cmd shims, and cmd.exe answers Ctrl+C with a
+        # "Terminate batch job (Y/N)?" prompt that reads the shared console.
+        # A new process group never receives the console Ctrl+C; kill_tree()
+        # stops it instead.
+        extra: dict = {}
+        if ignore_console_ctrl_c and os.name == "nt":
+            extra["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            extra["stdin"] = subprocess.DEVNULL
         self.proc = subprocess.Popen(
             args,
             env=env,
@@ -466,7 +593,9 @@ class ChildProcess:
             encoding="utf-8",
             errors="replace",
             bufsize=1,
+            **extra,
         )
+        bind_child_lifetime(self.proc.pid)
         self._pump_thread = threading.Thread(target=self._pump, daemon=True)
         self._pump_thread.start()
 
@@ -501,8 +630,12 @@ class ChildProcess:
             pass
 
 
-def kill_tree(psutil_mod, pid: int | None) -> None:
-    """Terminate a process tree; port of tests/e2e/conftest._force_kill_tree."""
+def kill_tree(psutil_mod, pid: int | None, *, spare=None) -> None:
+    """Terminate a process tree; port of tests/e2e/conftest._force_kill_tree.
+
+    ``spare`` (a psutil.Process) is left alive together with its own
+    descendants, e.g. a detached emulator that still has ``pid`` as parent.
+    """
     if not pid or pid == os.getpid():
         return
     try:
@@ -510,6 +643,12 @@ def kill_tree(psutil_mod, pid: int | None) -> None:
     except psutil_mod.NoSuchProcess:
         return
     procs = parent.children(recursive=True)
+    if spare is not None:
+        try:
+            spared = {spare.pid} | {p.pid for p in spare.children(recursive=True)}
+        except psutil_mod.Error:
+            spared = {spare.pid}
+        procs = [p for p in procs if p.pid not in spared]
     procs.append(parent)
     for p in procs:
         try:
@@ -577,6 +716,25 @@ def kill_stale_processes(state: dict, psutil_mod) -> None:
         log(f"reaping stale {name} from a previous run (pid {pid})")
         kill_tree(psutil_mod, pid)
     state["runtime"] = {}
+
+
+def recorded_live_process(runtime: dict, name: str, psutil_mod):
+    """The live process recorded under ``name``, or None.
+
+    Same identity gate as kill_stale_processes: pid AND create_time must match,
+    so a recycled pid is never mistaken for this script's process.
+    """
+    pid = runtime.get(f"{name}_pid")
+    created = runtime.get(f"{name}_create_time")
+    if not pid or created is None:
+        return None
+    try:
+        proc = psutil_mod.Process(pid)
+        if abs(proc.create_time() - created) > 1.0:
+            return None
+    except psutil_mod.Error:
+        return None
+    return proc
 
 
 # --------------------------------------------------------------------------
@@ -1009,7 +1167,7 @@ def sync_android_files(state: dict, url: str, save) -> bool:
     """
     rebuild_needed = ANDROID_URL_FILE.sync(state, url)
 
-    nsc_rel = DEBUG_NSC_PATH.relative_to(REPO_ROOT)
+    nsc_rel = DEBUG_NSC_PATH.relative_to(REPO_ROOT).as_posix()
     existing_nsc = (
         DEBUG_NSC_PATH.read_text(encoding="utf-8") if DEBUG_NSC_PATH.exists() else None
     )
@@ -1038,7 +1196,7 @@ def revert_android_files(state: dict, save) -> None:
         content = DEBUG_NSC_PATH.read_text(encoding="utf-8")
         if NSC_MARKER in content:
             DEBUG_NSC_PATH.unlink()
-            log(f"{DEBUG_NSC_PATH.relative_to(REPO_ROOT)}: removed")
+            log(f"{DEBUG_NSC_PATH.relative_to(REPO_ROOT).as_posix()}: removed")
             # Prune the (empty) generated dirs: xml/ -> res/ -> debug/
             for directory in (
                 DEBUG_NSC_PATH.parent,
@@ -1051,11 +1209,11 @@ def revert_android_files(state: dict, save) -> None:
                     break
         else:
             log(
-                f"{DEBUG_NSC_PATH.relative_to(REPO_ROOT)}: not generated by this "
+                f"{DEBUG_NSC_PATH.relative_to(REPO_ROOT).as_posix()}: not generated by this "
                 "script (marker missing); leaving it alone"
             )
     else:
-        log(f"{DEBUG_NSC_PATH.relative_to(REPO_ROOT)}: absent; nothing to revert")
+        log(f"{DEBUG_NSC_PATH.relative_to(REPO_ROOT).as_posix()}: absent; nothing to revert")
     save()
 
 
@@ -1085,7 +1243,16 @@ def revert_ios_files(state: dict, save) -> None:
     save()
 
 
-def run_gradle_install() -> bool:
+def run_gradle_install(
+    serial: str | None = None, before_install: Callable[[], bool] | None = None
+) -> bool:
+    """``gradlew :app:installDebug``, warn-only.
+
+    ``serial`` pins the install to one device (ANDROID_SERIAL) instead of every
+    attached one. ``before_install`` is the emulator boot wait: the APK is
+    assembled first so the build overlaps the boot, and installDebug then only
+    finds it up to date.
+    """
     gradlew = ANDROID_DIR / ("gradlew.bat" if os.name == "nt" else "gradlew")
     if not gradlew.exists():
         log(f"WARNING: {gradlew} not found; skipping app install")
@@ -1096,6 +1263,24 @@ def run_gradle_install() -> bool:
             "NOTE: CENTRAL_SERVER_URL is set in this shell; unsetting it for the "
             "Gradle build so android/local.properties wins"
         )
+    if serial:
+        env["ANDROID_SERIAL"] = serial
+    if before_install is not None:
+        log("building the debug app while the emulator boots "
+            "(gradlew :app:assembleDebug) ...")
+        try:
+            result = subprocess.run(
+                [str(gradlew), ":app:assembleDebug"], cwd=str(ANDROID_DIR), env=env
+            )
+        except OSError as exc:
+            log(f"WARNING: could not run gradlew ({exc}); install the app manually")
+            return False
+        if result.returncode != 0:
+            log("WARNING: gradlew :app:assembleDebug failed (needs a JDK); "
+                "the stack itself is unaffected")
+            return False
+        if not before_install():
+            return False
     log("building + installing the debug app (gradlew :app:installDebug) ...")
     try:
         result = subprocess.run([str(gradlew), ":app:installDebug"], cwd=str(ANDROID_DIR), env=env)
@@ -1110,6 +1295,354 @@ def run_gradle_install() -> bool:
         return False
     log("debug app installed")
     return True
+
+
+# --------------------------------------------------------------------------
+# Android emulator (--emulator)
+# --------------------------------------------------------------------------
+
+
+def android_sdk_dir() -> Path | None:
+    """ANDROID_HOME / ANDROID_SDK_ROOT, else Android Studio's per-OS default."""
+    candidates = [os.environ.get("ANDROID_HOME"), os.environ.get("ANDROID_SDK_ROOT")]
+    if os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            candidates.append(str(Path(local_app_data) / "Android" / "Sdk"))
+    elif sys.platform == "darwin":
+        candidates.append(str(Path.home() / "Library" / "Android" / "sdk"))
+    else:
+        candidates.append(str(Path.home() / "Android" / "Sdk"))
+    for candidate in candidates:
+        if candidate and Path(candidate).is_dir():
+            return Path(candidate)
+    return None
+
+
+def sdk_tool(sdk: Path | None, *parts: str, windows_suffix: str = ".exe") -> str | None:
+    """An SDK binary (adb, emulator, avdmanager) from the SDK, else from PATH."""
+    name = parts[-1] + (windows_suffix if os.name == "nt" else "")
+    if sdk is not None:
+        path = sdk.joinpath(*parts[:-1], name)
+        if path.exists():
+            return str(path)
+    return shutil.which(parts[-1])
+
+
+def _run_tool(
+    cmd: list[str], *, timeout: float = 30, stdin_text: str | None = None
+) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            input=stdin_text,
+            stdin=None if stdin_text is not None else subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def parse_adb_devices(output: str) -> dict[str, str]:
+    """``adb devices`` -> {serial: state} (device / offline / unauthorized)."""
+    devices: dict[str, str] = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and not line.startswith(("*", "List of")):
+            devices[parts[0]] = parts[1]
+    return devices
+
+
+def parse_avd_list(output: str) -> list[str]:
+    """``emulator -list-avds`` names, minus any INFO/WARNING chatter."""
+    return [
+        line.strip() for line in output.splitlines()
+        if re.fullmatch(r"[A-Za-z0-9._-]+", line.strip())
+    ]
+
+
+def pick_system_image(sdk: Path, machine: str | None = None) -> str | None:
+    """sdkmanager id of the best installed phone image for this host's CPU.
+
+    4 KB-page images beat the ``*_ps16k`` 16 KB-page ones (the app is not
+    what is under test there), then the newest stable API level, then Play
+    Store > Google APIs > AOSP. Previews (``android-CANARY``) and TV/Wear/
+    Automotive images are never picked.
+    """
+    machine = (machine or platform.machine()).lower()
+    abi = "arm64-v8a" if machine in ("arm64", "aarch64") else "x86_64"
+    tag_rank = {"google_apis_playstore": 0, "google_apis": 1, "default": 2}
+    best: tuple[tuple, str] | None = None
+    for abi_dir in sdk.glob(f"system-images/android-*/*/{abi}"):
+        api_dir, tag = abi_dir.parent.parent.name, abi_dir.parent.name
+        match = re.fullmatch(r"android-(\d+)(?:\.(\d+))?", api_dir)
+        base_tag = tag.removesuffix("_ps16k")
+        if match is None or base_tag not in tag_rank:
+            continue
+        if not (abi_dir / "source.properties").exists():
+            continue  # half-downloaded package
+        key = (
+            not tag.endswith("_ps16k"),
+            int(match.group(1)),
+            int(match.group(2) or 0),
+            -tag_rank[base_tag],
+        )
+        if best is None or key > best[0]:
+            best = (key, f"system-images;{api_dir};{tag};{abi}")
+    return best[1] if best else None
+
+
+def avd_config_path(name: str) -> Path:
+    avd_home = os.environ.get("ANDROID_AVD_HOME")
+    base = Path(avd_home) if avd_home else Path.home() / ".android" / "avd"
+    return base / f"{name}.avd" / "config.ini"
+
+
+def enable_hardware_keyboard(config_path: Path) -> None:
+    """Let the host keyboard type into the emulator (avdmanager defaults to no).
+
+    The app under test is a terminal; typing through the on-screen keyboard
+    only is the main thing that makes manual testing on an emulator slow.
+    """
+    try:
+        lines = config_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    out = [line for line in lines if not line.startswith("hw.keyboard")]
+    out.append("hw.keyboard=yes")
+    config_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def create_avd(sdk: Path | None, name: str) -> bool:
+    """One-time AVD creation from the best installed system image."""
+    avdmanager = sdk_tool(sdk, "cmdline-tools", "latest", "bin", "avdmanager",
+                          windows_suffix=".bat")
+    package = pick_system_image(sdk) if sdk is not None else None
+    if avdmanager is None or package is None:
+        missing = "avdmanager (SDK cmdline-tools)" if avdmanager is None else (
+            "an installed phone system image")
+        log(f"WARNING: AVD '{name}' does not exist and it cannot be created: "
+            f"{missing} not found. Create it in Android Studio's Device Manager, "
+            "or install an image with `sdkmanager \"system-images;android-36;"
+            "google_apis;x86_64\"` and re-run")
+        return False
+    log(f"creating AVD '{name}' from {package} (one-time) ...")
+    result = None
+    # Hardware profile ids differ between cmdline-tools releases; fall back to
+    # avdmanager's default profile when pixel_7 is unknown. "no" answers the
+    # "custom hardware profile?" prompt.
+    for device_args in (["--device", "pixel_7"], []):
+        result = _run_tool(
+            [avdmanager, "create", "avd", "--name", name, "--package", package,
+             *device_args],
+            timeout=180,
+            stdin_text="no\n",
+        )
+        if result is not None and result.returncode == 0:
+            enable_hardware_keyboard(avd_config_path(name))
+            log(f"AVD '{name}' created")
+            return True
+    detail = (result.stderr or result.stdout).strip()[-400:] if result else "could not run"
+    log(f"WARNING: avdmanager could not create AVD '{name}': {detail}")
+    return False
+
+
+def adb_devices(adb: str) -> dict[str, str]:
+    result = _run_tool([adb, "devices"], timeout=30)
+    return parse_adb_devices(result.stdout) if result and result.returncode == 0 else {}
+
+
+def emulator_avd_name(adb: str, serial: str) -> str | None:
+    result = _run_tool([adb, "-s", serial, "emu", "avd", "name"], timeout=10)
+    if result is None or result.returncode != 0:
+        return None
+    first = result.stdout.strip().splitlines()
+    return first[0].strip() if first else None
+
+
+def _loopback_port_free(port: int) -> bool:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def free_emulator_port(devices: dict[str, str]) -> int | None:
+    """First even console port (and its odd adb port) nobody uses."""
+    for port in range(5554, 5684, 2):
+        if f"emulator-{port}" in devices:
+            continue
+        if _loopback_port_free(port) and _loopback_port_free(port + 1):
+            return port
+    return None
+
+
+def start_emulator(avd: str, log_path: Path) -> SimpleNamespace | None:
+    """Reuse the AVD if it already runs, else create (once) and launch it.
+
+    Returns without waiting for the boot so callers can overlap it with other
+    work; ``proc`` is None for a reused emulator (not ours to stop). Warn-only,
+    like run_gradle_install: a missing SDK must never take the stack down.
+    """
+    sdk = android_sdk_dir()
+    adb = sdk_tool(sdk, "platform-tools", "adb")
+    emulator = sdk_tool(sdk, "emulator", "emulator")
+    if adb is None or emulator is None:
+        log("WARNING: Android SDK adb/emulator not found (set ANDROID_HOME); "
+            "skipping the emulator")
+        return None
+    devices = adb_devices(adb)
+    for serial, device_state in devices.items():
+        if serial.startswith("emulator-") and device_state in ("device", "offline"):
+            if emulator_avd_name(adb, serial) == avd:
+                log(f"emulator '{avd}' is already running as {serial}; reusing it")
+                return SimpleNamespace(avd=avd, serial=serial, adb=adb, proc=None)
+
+    listed = _run_tool([emulator, "-list-avds"], timeout=60)
+    if avd not in parse_avd_list(listed.stdout if listed else ""):
+        if not create_avd(sdk, avd):
+            return None
+    port = free_emulator_port(devices)
+    if port is None:
+        log("WARNING: no free emulator console port in 5554-5682; "
+            "skipping the emulator")
+        return None
+
+    # Detached from this console and process group: Ctrl+C here must not
+    # hard-kill it (teardown asks it to shut down cleanly so its quick-boot
+    # snapshot stays valid), and it is not a supervised child -- closing its
+    # window must not take the stack down.
+    detach: dict = (
+        {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
+        if os.name == "nt" else {"start_new_session": True}
+    )
+    log(f"booting emulator '{avd}' as emulator-{port} (log: {log_path})")
+    try:
+        with open(log_path, "a", encoding="utf-8") as log_file:
+            proc = subprocess.Popen(
+                [emulator, "-avd", avd, "-port", str(port)],
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                **detach,
+            )
+    except OSError as exc:
+        log(f"WARNING: could not launch the emulator ({exc})")
+        return None
+    return SimpleNamespace(avd=avd, serial=f"emulator-{port}", adb=adb, proc=proc)
+
+
+def wait_for_emulator(emu: SimpleNamespace, log_path: Path,
+                      timeout: float = EMULATOR_BOOT_TIMEOUT) -> bool:
+    """Block until Android reports boot completed, then wake + unlock it."""
+    deadline = time.monotonic() + timeout
+    announced = False
+    while time.monotonic() < deadline:
+        if emu.proc is not None and emu.proc.poll() is not None:
+            log(f"WARNING: the emulator exited during boot (code "
+                f"{emu.proc.returncode}); see {log_path} -- usually missing "
+                "hardware acceleration (enable the Windows Hypervisor Platform "
+                "on Windows) or an AVD already open elsewhere")
+            return False
+        result = _run_tool(
+            [emu.adb, "-s", emu.serial, "shell", "getprop", "sys.boot_completed"],
+            timeout=15,
+        )
+        if result is not None and result.stdout.strip() == "1":
+            # KEYCODE_WAKEUP + KEYCODE_MENU dismiss the swipe-only lock screen.
+            _run_tool([emu.adb, "-s", emu.serial, "shell", "input", "keyevent", "224"])
+            _run_tool([emu.adb, "-s", emu.serial, "shell", "input", "keyevent", "82"])
+            log(f"emulator {emu.serial} is booted")
+            return True
+        if not announced:
+            log(f"waiting for {emu.serial} to finish booting "
+                f"(up to {timeout:.0f}s; a first cold boot takes minutes) ...")
+            announced = True
+        time.sleep(2)
+    log(f"WARNING: {emu.serial} did not finish booting within {timeout:.0f}s")
+    return False
+
+
+def launch_android_app(emu: SimpleNamespace) -> None:
+    result = _run_tool([
+        emu.adb, "-s", emu.serial, "shell", "monkey", "-p", ANDROID_APP_ID,
+        "-c", "android.intent.category.LAUNCHER", "1",
+    ])
+    if result is not None and result.returncode == 0:
+        log(f"launched {ANDROID_APP_ID} on {emu.serial}")
+    else:
+        log(f"WARNING: could not launch {ANDROID_APP_ID} on {emu.serial}")
+
+
+def record_emulator(state: dict, emu: SimpleNamespace, psutil_mod) -> None:
+    """Mark an emulator this run booted as ours to shut down on stop."""
+    if emu.proc is None:
+        return
+    record_runtime_process(state, "emulator", emu.proc.pid, psutil_mod)
+    state["runtime"]["emulator_serial"] = emu.serial
+    state["runtime"]["emulator_avd"] = emu.avd
+
+
+def stop_recorded_emulator(runtime: dict, psutil_mod) -> None:
+    """Shut down an emulator a run booted, cleanly first.
+
+    ``adb emu kill`` lets it save its quick-boot snapshot (the next boot takes
+    seconds instead of minutes); a hard kill is only the fallback.
+    """
+    proc = recorded_live_process(runtime, "emulator", psutil_mod)
+    if proc is None:
+        return
+    serial = runtime.get("emulator_serial")
+    log(f"shutting down the emulator this stack booted ({serial})")
+    adb = sdk_tool(android_sdk_dir(), "platform-tools", "adb")
+    if adb and serial:
+        _run_tool([adb, "-s", serial, "emu", "kill"], timeout=15)
+    try:
+        proc.wait(timeout=30)
+    except psutil_mod.TimeoutExpired:
+        log("emulator did not shut down within 30s; killing it")
+        kill_tree(psutil_mod, proc.pid)
+    except psutil_mod.Error:
+        pass
+
+
+def install_on_emulator_or_device(
+    emu: SimpleNamespace | None, log_path: Path, *, emulator_requested: bool
+) -> bool:
+    if emu is None:
+        if emulator_requested:
+            # An unpinned installDebug would replace the debug app on every
+            # attached device, physical phones included.
+            log("skipping the app install: the requested emulator is not available")
+            return False
+        return run_gradle_install()
+    if emu.proc is None:  # reused: already booted, nothing to overlap
+        return wait_for_emulator(emu, log_path) and run_gradle_install(emu.serial)
+    return run_gradle_install(
+        emu.serial, before_install=lambda: wait_for_emulator(emu, log_path)
+    )
+
+
+def carry_over_emulator(runtime: dict, args: argparse.Namespace, psutil_mod) -> dict:
+    """Ownership of an emulator a hard-killed run booted.
+
+    Adopted (so this run reuses it and stops it on exit) when this run asks
+    for the same AVD, otherwise shut down -- the dead run would have.
+    """
+    if recorded_live_process(runtime, "emulator", psutil_mod) is None:
+        return {}
+    if args.emulator == runtime.get("emulator_avd") and not args.no_android:
+        return {k: v for k, v in runtime.items() if k.startswith("emulator_")}
+    stop_recorded_emulator(runtime, psutil_mod)
+    return {}
 
 
 def booted_simulator_udid() -> str | None:
@@ -1265,6 +1798,7 @@ def print_ready_banner(
     all_ips: list[str],
     android: SimpleNamespace,
     ios: SimpleNamespace,
+    emulator: SimpleNamespace | None = None,
 ) -> None:
     port = args.port
     gradle_cmd = (
@@ -1314,6 +1848,14 @@ def print_ready_banner(
             else "restored to its previous value on stop"
         )
         lines.append(f"      local.properties {restore_note}")
+        if emulator is not None:
+            if emulator.proc is None:
+                fate = "already running; left running on stop"
+            elif args.keep_emulator:
+                fate = "booted by this stack; kept on stop (--keep-emulator)"
+            else:
+                fate = "booted by this stack; shut down on stop"
+            lines.append(f"  Android emulator:   {emulator.avd} as {emulator.serial} ({fate})")
     else:
         lines.append("  Android files:      NOT synced (--no-android); run "
                      "`python tests/e2e/manual_stack.py android` when needed")
@@ -1341,6 +1883,7 @@ def print_ready_banner(
     lines += [
         "  Stop:               Ctrl+C (state persists; the next `up` reuses "
         "this account + agent)",
+        "      or from another shell: python tests/e2e/manual_stack.py stop",
         bar,
     ]
     print("\n".join(lines), flush=True)
@@ -1394,6 +1937,7 @@ def cmd_up(args: argparse.Namespace) -> int:
 
     state_dir = args.state_dir
     preserved_clients: dict[str, dict] = {}
+    adopted_emulator: dict = {}
     if args.fresh and (state_dir / "state.json").exists():
         # Consume the old state BEFORE deleting it: reap any crashed run's
         # children (their pids live only here) and carry the per-client
@@ -1404,6 +1948,9 @@ def cmd_up(args: argparse.Namespace) -> int:
         except (OSError, ValueError):
             old_state = None
         if old_state:
+            adopted_emulator = carry_over_emulator(
+                old_state.get("runtime") or {}, args, deps.psutil
+            )
             kill_stale_processes(old_state, deps.psutil)
             preserved_clients = {
                 key: old_state[key]
@@ -1425,7 +1972,29 @@ def cmd_up(args: argparse.Namespace) -> int:
     save = lambda: save_state(state_dir, state)  # noqa: E731
     save()
 
+    adopted_emulator = adopted_emulator or carry_over_emulator(
+        state.get("runtime") or {}, args, deps.psutil
+    )
     kill_stale_processes(state, deps.psutil)
+    stop_request = state_dir / STOP_REQUEST_NAME
+    stop_request.unlink(missing_ok=True)  # a leftover must not stop this run
+    # Recorded before anything is spawned so `stop` can find this run and,
+    # after a hard kill, reap exactly what it left behind ("synced" and "keep"
+    # carry what teardown would have restored and the opt-outs it honors).
+    state["runtime"] = {
+        "started_at": _utc_now(),
+        "synced": [],
+        "keep": [
+            name for name, kept in (
+                ("android", args.keep_android),
+                ("ios", args.keep_ios),
+                ("emulator", args.keep_emulator),
+            ) if kept
+        ],
+        **adopted_emulator,
+    }
+    record_runtime_process(state, "up", os.getpid(), deps.psutil)
+    save()
     check_port_free(args.host, args.port)
     probe_host = local_probe_host(args.host)
 
@@ -1443,38 +2012,57 @@ def cmd_up(args: argparse.Namespace) -> int:
         lan_ip = args.host  # bound to one interface: that IS the reachable IP
 
     android = client_sync_state()
-    if not args.no_android:
-        android.url = resolve_android_url(args, lan_ip)
-        android.rebuild_needed = sync_android_files(state, android.url, save)
-        android.synced = True
-        if args.install_app:
-            run_gradle_install()
-
     ios = client_sync_state()
-    if not args.no_ios:
-        if sys.platform == "darwin" or args.ios:
-            ios.url = resolve_ios_url(args, lan_ip)
-            ios.rebuild_needed = sync_ios_files(state, ios.url, save)
-            ios.synced = True
-            if args.install_app:
-                run_xcode_install(
-                    state, state_dir, ios.url, save,
-                    reset_keychain=not args.ios_keep_keychain,
-                )
-        else:
-            log("iOS sync skipped: not macOS (pass --ios to write "
-                "ios/Config/Local.xcconfig anyway)")
-
-    if os.name == "nt" and args.host not in ("127.0.0.1", "localhost"):
-        log(
-            f"binding {args.host}: watch for the Windows Defender Firewall prompt on "
-            "first run and ALLOW Python on Private networks, or the phone cannot connect"
-        )
-
+    emulator = None
+    android_installed = False
     children: list[ChildProcess] = []
     client = None
     exit_code = 0
+    # The client sync, emulator boot and app install run inside the guard too:
+    # Ctrl+C or SIGTERM during a minutes-long Gradle build or emulator boot
+    # must still stop an owned emulator and restore the client files.
     try:
+        if not args.no_android:
+            android.url = resolve_android_url(args, lan_ip)
+            state["runtime"]["synced"].append("android")
+            android.rebuild_needed = sync_android_files(state, android.url, save)
+            android.synced = True
+            if args.emulator:
+                # Launched first so its boot overlaps the Gradle build and the
+                # server/agent startup below.
+                emulator = start_emulator(args.emulator, logs_dir / "emulator.log")
+                if emulator is not None:
+                    record_emulator(state, emulator, deps.psutil)
+                    save()
+            if args.install_app:
+                android_installed = install_on_emulator_or_device(
+                    emulator, logs_dir / "emulator.log",
+                    emulator_requested=bool(args.emulator),
+                )
+        elif args.emulator:
+            log("--emulator ignored: --no-android")
+
+        if not args.no_ios:
+            if sys.platform == "darwin" or args.ios:
+                ios.url = resolve_ios_url(args, lan_ip)
+                state["runtime"]["synced"].append("ios")
+                ios.rebuild_needed = sync_ios_files(state, ios.url, save)
+                ios.synced = True
+                if args.install_app:
+                    run_xcode_install(
+                        state, state_dir, ios.url, save,
+                        reset_keychain=not args.ios_keep_keychain,
+                    )
+            else:
+                log("iOS sync skipped: not macOS (pass --ios to write "
+                    "ios/Config/Local.xcconfig anyway)")
+
+        if os.name == "nt" and args.host not in ("127.0.0.1", "localhost"):
+            log(
+                f"binding {args.host}: watch for the Windows Defender Firewall prompt on "
+                "first run and ALLOW Python on Private networks, or the phone cannot connect"
+            )
+
         log(f"starting central_server on {args.host}:{args.port} (MOBAIDE_ENV=test)")
         server = ChildProcess(
             "server",
@@ -1484,7 +2072,6 @@ def cmd_up(args: argparse.Namespace) -> int:
             logs_dir / "server.log",
         )
         children.append(server)
-        state["runtime"] = {"started_at": _utc_now()}
         record_runtime_process(state, "server", server.proc.pid, deps.psutil)
         save()
         wait_for_http_ok(
@@ -1542,6 +2129,7 @@ def cmd_up(args: argparse.Namespace) -> int:
                 build_web_env(args, state),
                 WEB_DIR,
                 logs_dir / "web.log",
+                ignore_console_ctrl_c=True,
             )
             children.append(web)
             record_runtime_process(state, "web", web.proc.pid, deps.psutil)
@@ -1551,13 +2139,20 @@ def cmd_up(args: argparse.Namespace) -> int:
                 deps, f"http://localhost:{args.web_port}/", timeout=90, child=web
             )
 
-        print_ready_banner(args, state, lan_ip, all_ips, android, ios)
+        print_ready_banner(args, state, lan_ip, all_ips, android, ios, emulator)
 
         if args.web and not args.no_browser:
             open_web_client(args.web_port)
+        if android_installed and emulator is not None:
+            # Only now: launched earlier, the app would open on a server that
+            # is not listening yet.
+            launch_android_app(emulator)
 
         while True:
             time.sleep(1)
+            if stop_request.exists():
+                log("stop requested (`manual_stack.py stop`): shutting down")
+                return exit_code
             for child in children:
                 if not child.alive():
                     child.dump_tail()
@@ -1573,6 +2168,9 @@ def cmd_up(args: argparse.Namespace) -> int:
             child.stop(deps.psutil)
         if client is not None:
             client.close()
+        if not args.keep_emulator:
+            stop_recorded_emulator(state["runtime"], deps.psutil)
+        stop_request.unlink(missing_ok=True)
         state["runtime"] = {}
         state_exists = (state_dir / "state.json").exists()
         if state_exists:
@@ -1634,8 +2232,19 @@ def cmd_android(args: argparse.Namespace) -> int:
     changed = sync_android_files(state, url, save)
     if changed:
         log("URL changed: rebuild + reinstall the debug app so it bakes the new value")
-    if args.install_app:
-        run_gradle_install()
+    emulator = None
+    log_path = args.state_dir / "logs" / "emulator.log"
+    if args.emulator:
+        # Not recorded as owned: a one-shot command has no teardown, so an
+        # emulator it boots simply stays up for the testing that follows.
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        emulator = start_emulator(args.emulator, log_path)
+        if emulator is not None and not args.install_app:
+            wait_for_emulator(emulator, log_path)
+    if args.install_app and install_on_emulator_or_device(
+        emulator, log_path, emulator_requested=bool(args.emulator)
+    ) and emulator is not None:
+        launch_android_app(emulator)
     return 0
 
 
@@ -1677,6 +2286,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         android = state.get("android") or {}
         if android.get("managed_url"):
             log(f"android:   CENTRAL_SERVER_URL={android['managed_url']}")
+        runtime_info = state.get("runtime") or {}
+        if runtime_info.get("emulator_serial"):
+            log(f"emulator:  {runtime_info.get('emulator_avd')} as "
+                f"{runtime_info['emulator_serial']} (booted by this stack)")
     else:
         log(f"no state at {state_path} (stack never ran with this --state-dir)")
 
@@ -1716,6 +2329,73 @@ def cmd_status(args: argparse.Namespace) -> int:
         client.close()
 
 
+def _read_state(state_dir: Path) -> dict | None:
+    try:
+        return json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def teardown_leftovers(state_dir: Path, state: dict, psutil_mod) -> None:
+    """What a run's own teardown does, for a run that died before doing it."""
+    runtime = state.get("runtime") or {}
+    keep = runtime.get("keep") or []
+    # Only the clients that run synced: a --no-android/--no-ios run must not
+    # revert an override some earlier run deliberately left in place.
+    revert = [c for c in runtime.get("synced") or [] if c not in keep]
+    save = lambda: save_state(state_dir, state)  # noqa: E731
+    if "emulator" not in keep:
+        stop_recorded_emulator(runtime, psutil_mod)
+    kill_stale_processes(state, psutil_mod)  # also clears state["runtime"]
+    if "android" in revert:
+        revert_android_files(state, save)
+    if "ios" in revert:
+        revert_ios_files(state, save)
+    save()
+
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    """Gracefully stop the `up` that owns --state-dir, from any shell.
+
+    The cross-platform counterpart of Ctrl+C / ``kill -TERM``: the running
+    `up` polls for the request file and runs its normal teardown (children,
+    owned emulator, file restore). A run that ignores it is killed and its
+    leftovers reaped; a run that already died is just reaped.
+    """
+    state_dir = args.state_dir
+    state = _read_state(state_dir)
+    if not state or not state.get("runtime"):
+        log(f"no running stack recorded in {state_dir}; nothing to stop")
+        return 0
+    deps = load_deps(auto_install=False)
+    psutil_mod = deps.psutil
+    stop_request = state_dir / STOP_REQUEST_NAME
+    up = recorded_live_process(state["runtime"], "up", psutil_mod)
+    if up is not None:
+        log(f"asking the running stack (pid {up.pid}) to stop ...")
+        stop_request.write_text(_utc_now() + "\n", encoding="utf-8")
+        try:
+            up.wait(timeout=args.timeout)
+        except psutil_mod.TimeoutExpired:
+            log(f"it did not stop within {args.timeout:.0f}s; killing it")
+            # The emulator is still a descendant despite its own session, so a
+            # plain tree kill would hard-kill it -- ignoring --keep-emulator and
+            # losing the quick-boot snapshot. teardown_leftovers decides its fate.
+            kill_tree(psutil_mod, up.pid, spare=recorded_live_process(
+                state["runtime"], "emulator", psutil_mod))
+        else:
+            stop_request.unlink(missing_ok=True)
+            log("stack stopped")
+            return 0
+        state = _read_state(state_dir) or state
+    else:
+        log("the recorded `up` is gone (hard-killed?); reaping what it left behind")
+    stop_request.unlink(missing_ok=True)
+    teardown_leftovers(state_dir, state, psutil_mod)
+    log("stack stopped")
+    return 0
+
+
 def cmd_clean(args: argparse.Namespace) -> int:
     state_dir = args.state_dir
     state_path = state_dir / "state.json"
@@ -1730,6 +2410,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
         try:
             import psutil as psutil_mod
 
+            stop_recorded_emulator(state.get("runtime") or {}, psutil_mod)
             kill_stale_processes(state, psutil_mod)
         except ImportError:
             log("psutil not installed; skipping stale-process reaping")
@@ -1781,6 +2462,16 @@ def _add_android_args(parser: argparse.ArgumentParser) -> None:
         help="URL baked into the app: auto | emulator (10.0.2.2) | reverse "
              "(127.0.0.1 via adb reverse) | an explicit http(s) URL",
     )
+    parser.add_argument(
+        "--emulator",
+        nargs="?",
+        const=DEFAULT_AVD,
+        default=None,
+        metavar="AVD",
+        help=f"boot (or reuse) an Android emulator, default AVD {DEFAULT_AVD} "
+             "(created once from the newest installed system image if missing); "
+             "with --install-app the app is installed and launched on it",
+    )
 
 
 def _add_ios_args(parser: argparse.ArgumentParser) -> None:
@@ -1823,6 +2514,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="on stop, leave the test CENTRAL_SERVER_URL in "
                          "android/local.properties instead of restoring the "
                          "previous value (e.g. https://mobaide.com)")
+    up.add_argument("--keep-emulator", action="store_true",
+                    help="on stop, leave an emulator that --emulator booted "
+                         "running (default: shut it down)")
     up.add_argument("--no-ios", action="store_true",
                     help="do not touch ios/Config/Local.xcconfig")
     up.add_argument("--ios", action="store_true",
@@ -1891,6 +2585,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="server port (default: last used, then 9000)")
     status.set_defaults(func=cmd_status)
 
+    stop = sub.add_parser("stop", help="gracefully stop a running `up` from "
+                                       "another shell (works on Windows, where "
+                                       "there is no kill -TERM)")
+    _add_common_args(stop)
+    stop.add_argument("--timeout", type=float, default=DEFAULT_STOP_TIMEOUT,
+                      help="seconds to wait for a clean shutdown before killing "
+                           f"(default: {DEFAULT_STOP_TIMEOUT:.0f})")
+    stop.set_defaults(func=cmd_stop)
+
     clean = sub.add_parser("clean", help="kill stale processes, revert both "
                                          "clients' files, delete the state dir")
     _add_common_args(clean)
@@ -1909,7 +2612,7 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
 
     argv = list(sys.argv[1:] if argv is None else argv)
-    known = {"up", "android", "ios", "status", "clean"}
+    known = {"up", "android", "ios", "status", "stop", "clean"}
     if not argv:
         argv = ["up"]
     elif argv[0] not in known and argv[0] not in ("-h", "--help"):
