@@ -293,10 +293,10 @@ class TestFinish:
     async def test_quiet_speech_below_the_voice_level_reaches_the_helper(
         self, manager, fake_helper
     ):
-        """Words at about -52 dBFS between digital silence, as an ungained
-        phone microphone records them."""
+        """Words at about -52 dBFS over a faint hiss, as an ungained phone
+        microphone records them."""
         did = await manager.create()
-        speech = b"".join(_silence(0.3) + _tone(0.3, amplitude=113) for _ in range(4))
+        speech = b"".join(_tone(0.3, amplitude=5) + _tone(0.3, amplitude=113) for _ in range(4))
         last_seq = await _send(manager, did, speech)
 
         result = await manager.finish(did, last_seq)

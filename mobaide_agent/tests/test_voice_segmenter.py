@@ -2,8 +2,8 @@
 ≥500 ms pause once it holds ≥5 s, is force-cut at the quietest frame of its
 last 2 s at 25 s, steady speech and a quieter word above the noise floor
 never read as a pause, a segment is unvoiced only when no frame reaches
-``VOICE_RMS`` or ``VOICE_SNR`` times the noise floor (above digital
-silence), and each segment carries its own peak frame RMS."""
+``VOICE_RMS`` or ``VOICE_SNR`` times the noise floor (measured over
+frames that are not digital zeros), and each segment carries its own peak frame RMS."""
 from __future__ import annotations
 
 import math
@@ -150,7 +150,7 @@ def _bursts(seconds: float, speech: int, noise: int) -> bytes:
     return out
 
 
-@pytest.mark.parametrize("noise", [0, 28], ids=["digital-silence", "room-noise-rms-20"])
+@pytest.mark.parametrize("noise", [5, 28], ids=["low-hiss", "room-noise-rms-20"])
 def test_quiet_speech_below_the_voice_level_is_voiced(noise):
     seg = PauseSegmenter(RATE)
 
@@ -180,6 +180,26 @@ def test_hiss_below_the_silence_level_after_digital_silence_is_unvoiced():
 
     assert tail is not None
     assert not tail.voiced
+
+
+def test_room_noise_right_after_a_zero_frame_is_unvoiced():
+    seg = PauseSegmenter(RATE)
+
+    assert seg.feed(_silence(0.02) + _tone(2.5, amplitude=71)) == []
+    tail = seg.flush()
+
+    assert tail is not None
+    assert not tail.voiced
+
+
+def test_quiet_speech_over_a_low_hiss_after_zeros_is_voiced():
+    seg = PauseSegmenter(RATE)
+
+    assert seg.feed(_silence(0.5) + _bursts(4.0, speech=113, noise=5)) == []
+    tail = seg.flush()
+
+    assert tail is not None
+    assert tail.voiced
 
 
 def test_a_quieter_word_above_the_noise_floor_is_not_a_pause():

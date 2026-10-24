@@ -8,10 +8,10 @@ A frame is quiet when its RMS is under
 quietest frame of the last few seconds) and also under ``PEAK_RATIO`` of the
 loudest frame of the segment, so steady speech can never read as a pause.
 
-A segment is skipped instead of transcribed only when none of its frames is
-voiced: at least ``VOICE_RMS``, or ``VOICE_SNR`` times the noise floor (and
-above digital silence). The phone clients record without gain, so quiet
-speech can sit well below ``VOICE_RMS`` and is caught by the floor test.
+A segment is skipped only when no frame is voiced: at least ``VOICE_RMS``, or
+above ``SILENCE_RMS`` and ``VOICE_SNR`` times a noise floor that ignores the
+digital-zero frames a microphone delivers while starting. Phones record without
+gain, so quiet speech below ``VOICE_RMS`` is caught by the floor test.
 """
 from __future__ import annotations
 
@@ -34,6 +34,8 @@ PEAK_RATIO = 0.3
 VOICE_RMS = 200.0
 # About -70 dBFS: only digital silence or a dead input stays below it.
 SILENCE_RMS = 10.0
+# Below it a frame is digital zeros, which no live microphone produces.
+ZERO_RMS = 1.0
 VOICE_SNR = 3.0
 
 
@@ -64,6 +66,9 @@ class PauseSegmenter:
         self._recent: collections.deque[float] = collections.deque(
             maxlen=int(FLOOR_WINDOW_SECONDS * frames_per_second)
         )
+        self._audible: collections.deque[float] = collections.deque(
+            maxlen=int(FLOOR_WINDOW_SECONDS * frames_per_second)
+        )
         self._buf = bytearray()
         self._rms: list[float] = []
         self._quiet: list[bool] = []
@@ -80,6 +85,8 @@ class PauseSegmenter:
             start = len(self._rms) * fb
             rms = _frame_rms(bytes(self._buf[start : start + fb]))
             self._recent.append(rms)
+            if rms >= ZERO_RMS:
+                self._audible.append(rms)
             self._peak = max(self._peak, rms)
             floor = min(self._recent)
             quiet = rms < max(ABS_QUIET_RMS, NOISE_FACTOR * floor) and (
@@ -87,7 +94,10 @@ class PauseSegmenter:
             )
             self._rms.append(rms)
             self._quiet.append(quiet)
-            self._voiced.append(rms >= min(VOICE_RMS, max(SILENCE_RMS, VOICE_SNR * floor)))
+            audible_floor = min(self._audible, default=math.inf)
+            self._voiced.append(
+                rms >= min(VOICE_RMS, max(SILENCE_RMS, VOICE_SNR * audible_floor))
+            )
             self._quiet_run = self._quiet_run + 1 if quiet else 0
             frames = len(self._rms)
             if frames >= self._min_frames and self._quiet_run >= self._pause_frames:
