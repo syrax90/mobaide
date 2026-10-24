@@ -2,8 +2,8 @@
 ≥500 ms pause once it holds ≥5 s, is force-cut at the quietest frame of its
 last 2 s at 25 s, steady speech and a quieter word above the noise floor
 never read as a pause, a segment is unvoiced only when no frame reaches
-``VOICE_RMS`` or ``VOICE_SNR`` times the noise floor (measured over
-frames that are not digital zeros), and each segment carries its own peak frame RMS."""
+``VOICE_RMS`` or ``VOICE_SNR`` times the non-zero noise floor, and each segment
+carries its peak RMS."""
 from __future__ import annotations
 
 import math
@@ -200,6 +200,16 @@ def test_quiet_speech_over_a_low_hiss_after_zeros_is_voiced():
 
     assert tail is not None
     assert tail.voiced
+
+
+def test_a_faint_frame_before_long_digital_silence_does_not_lower_the_floor_for_later_noise():
+    seg = PauseSegmenter(RATE)
+
+    closed = seg.feed(_tone(0.02, amplitude=4) + _silence(4.0) + _tone(2.0, amplitude=71))
+    tail = seg.flush()
+
+    assert tail is not None
+    assert not any(s.voiced for s in [*closed, tail])
 
 
 def test_a_quieter_word_above_the_noise_floor_is_not_a_pause():

@@ -66,9 +66,6 @@ class PauseSegmenter:
         self._recent: collections.deque[float] = collections.deque(
             maxlen=int(FLOOR_WINDOW_SECONDS * frames_per_second)
         )
-        self._audible: collections.deque[float] = collections.deque(
-            maxlen=int(FLOOR_WINDOW_SECONDS * frames_per_second)
-        )
         self._buf = bytearray()
         self._rms: list[float] = []
         self._quiet: list[bool] = []
@@ -85,8 +82,6 @@ class PauseSegmenter:
             start = len(self._rms) * fb
             rms = _frame_rms(bytes(self._buf[start : start + fb]))
             self._recent.append(rms)
-            if rms >= ZERO_RMS:
-                self._audible.append(rms)
             self._peak = max(self._peak, rms)
             floor = min(self._recent)
             quiet = rms < max(ABS_QUIET_RMS, NOISE_FACTOR * floor) and (
@@ -94,7 +89,7 @@ class PauseSegmenter:
             )
             self._rms.append(rms)
             self._quiet.append(quiet)
-            audible_floor = min(self._audible, default=math.inf)
+            audible_floor = min((r for r in self._recent if r >= ZERO_RMS), default=math.inf)
             self._voiced.append(
                 rms >= min(VOICE_RMS, max(SILENCE_RMS, VOICE_SNR * audible_floor))
             )
