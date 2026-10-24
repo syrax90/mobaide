@@ -557,9 +557,7 @@ private fun InputField(
         minLines = 1,
         maxLines = 10,
         enabled = enabled,
-        textStyle = MaterialTheme.typography.bodyMedium.copy(
-            fontFamily = ChromeFontFamily,
-        ),
+        textStyle = MaterialTheme.typography.bodyMedium,
         // Verbatim input: this text is written straight to the PTY. Capitalization
         // is spelled out rather than left to Compose's default so the intent
         // survives a future default change (iOS parity).
