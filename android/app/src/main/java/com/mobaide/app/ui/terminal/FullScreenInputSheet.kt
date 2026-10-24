@@ -27,7 +27,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -96,9 +95,7 @@ fun FullScreenInputSheet(
                     .focusRequester(focusRequester),
                 placeholder = { Text("Compose your prompt...") },
                 enabled = enabled,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = ChromeFontFamily,
-                ),
+                textStyle = MaterialTheme.typography.bodyMedium,
                 // Same verbatim-input rule as the inline composer this sheet
                 // expands. `imeAction` is left unset so the multi-line default
                 // (newline, not send) is preserved.
