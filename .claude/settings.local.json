@@ -1,5 +1,8 @@
-﻿{
-    "enabledPlugins":  {
-                           "linear@claude-plugins-official":  false
-                       }
+{
+  "enabledPlugins": {
+    "linear@claude-plugins-official": false
+  },
+  "disabledMcpjsonServers": [
+    "linear"
+  ]
 }

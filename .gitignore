@@ -67,3 +67,4 @@ ios/Config/Local.xcconfig
 ios/buildServer.json
 android/app/google-services.json
 ios/Mobaide/GoogleService-Info.plist
+.claude/settings.local.json
