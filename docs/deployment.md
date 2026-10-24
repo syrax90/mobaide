@@ -426,6 +426,8 @@ irm https://get.mobaide.com/install.ps1 | iex
 
 The script self-elevates via UAC, auto-installs Python 3.12 (`winget` fast path, python.org installer fallback), stages the signed release into `<prefix>\releases\<version>\venv\` (default prefix `C:\Program Files\MobaideAgent`), writes `<prefix>\current_version`, and registers a **per-user Scheduled Task** named `MobaideAgent`. The task is pinned to the installing user (`$env:USERNAME`) with `-LogonType Interactive` and triggered `-AtLogOn`, so the agent process tree runs in that user's session — `%USERPROFILE%` resolves to `C:\Users\<u>`, and the Claude CLI in the agent's PTY sees the user's `~/.claude` credentials and skills, just like a desktop terminal session does. After the task starts, the script waits for the agent to report healthy and for the supervisor to write the pairing nonce file, then renders the pairing QR code in the console window for the operator to scan from the Mobaide mobile app. This ordering ensures the QR is shown only once the agent is ready to accept a pairing claim, eliminating the race where scans during boot left `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` empty.
 
+The installer also writes `<prefix>\bin\mobaide-agent.cmd` and appends `<prefix>\bin` to the installing user's PATH (`HKCU\Environment`, the same account the task and the `.env` ACL belong to). `mobaide-agent show-qr`, `mobaide-agent re-pair` and the other maintenance verbs then work from any **new** terminal window; the elevated install window can use them right away. The shim reads `<prefix>\current_version` on every call, so auto-updates and rollbacks never break it. Verbs that change files under `%ProgramFiles%` (such as `re-pair`) need an elevated terminal, and the command says so when it hits that. Installs made before the shim existed get it by re-running the one-liner (re-runs keep the pairing).
+
 > **Requires an interactive logon.** The task only runs while the installing user has an interactive session (the lock screen is fine; a full logoff stops the task). Headless / unattended Windows hosts (build agents, CI runners, Windows servers without a logged-in user) are out of scope for this installer — there is no service-account mode. Multi-user machines: each user re-runs the installer in their own session and gets their own task pinned to themselves (no shared agent state across local accounts), mirroring Linux's `$SUDO_USER` semantics.
 
 #### Architecture
@@ -435,6 +437,7 @@ The agent runs under a per-user Scheduled Task. The Scheduled Task action points
 ```
 <prefix>\
 ├── current_version              # text file: "X.Y.Z"
+├── bin\mobaide-agent.cmd        # version-independent CLI shim (on the user PATH)
 ├── releases\<version>\
 │   ├── .installed               # completion sentinel — release is runnable
 │   └── venv\                    # per-release venv (mobaide + deps)
@@ -540,6 +543,25 @@ for the operator to scan from the Mobaide mobile app. If the operator misses
 the QR, run `mobaide-agent show-qr` on the agent host to re-render the most-recent
 pending QR (or initiate a fresh one if the cached nonce expired). See
 [docs/qr-pairing.md](qr-pairing.md) for the full flow.
+
+**The `mobaide-agent` command.** The release venv's console script moves with
+every update, so the installer writes a small shim at
+`/usr/local/bin/mobaide-agent`, which is on the default PATH of mainstream
+Linux distros and of macOS (`/etc/paths`). It reads `<prefix>/current_version`
+on every call, so auto-updates and rollbacks never break it. Run it as the
+agent's user. Run as root (`sudo mobaide-agent …`), it switches to that user
+first: root never executes the user-writable release, and the CLI never leaves
+root-owned files the agent cannot read. A `re-pair` started that way may not
+be able to restart the service itself; it then prints the
+`sudo systemctl restart mobaide-agent` to run. On RHEL-family distros sudo's
+`secure_path` leaves out `/usr/local/bin`; there, write
+`sudo /usr/local/bin/mobaide-agent …`. When
+`/usr/local/bin/mobaide-agent` already exists and was not written by the
+installer, or the install ran without root, the shim goes to
+`<prefix>/bin/mobaide-agent` instead and the installer prints that full path.
+Installs made before the shim existed get it by re-running the install
+one-liner (re-runs keep the pairing); until then, run
+`<prefix>/releases/$(cat <prefix>/current_version)/venv/bin/mobaide-agent`.
 
 Until paired, the agent exposes `pairing_pending: true` on `/api/health`.
 Re-running the installer never clobbers paired credentials; pass
@@ -724,7 +746,8 @@ see the self-uninstall entry in `PROTOCOL.md`. Here is what happens:
      `mobaide-agent-uninstall.path` unit that watches for that marker. It
      starts `mobaide-agent-uninstall.service`, which runs
      `/usr/local/libexec/mobaide-agent-uninstall`. That script disables and
-     stops `mobaide-agent`, deletes the install, removes all three units and
+     stops `mobaide-agent`, deletes the install and the
+     `/usr/local/bin/mobaide-agent` command, removes all three units and
      finally itself.
      Installs made before this helper existed get a partial uninstall:
      everything is deleted except an `exit 0` stub at
@@ -732,12 +755,15 @@ see the self-uninstall entry in `PROTOCOL.md`. Here is what happens:
      Finish by hand with
      `sudo systemctl disable mobaide-agent && sudo rm -f /etc/systemd/system/mobaide-agent.service && sudo rm -rf /opt/mobaide`,
      or re-run the installer first so a later remote uninstall is complete.
-   - **macOS:** the agent deletes the install and
-     `~/Library/LaunchAgents/com.mobaide.agent.plist`, then runs
+   - **macOS:** the agent deletes the install,
+     `~/Library/LaunchAgents/com.mobaide.agent.plist` and the
+     `/usr/local/bin/mobaide-agent` command, then runs
      `launchctl bootout gui/<uid>/com.mobaide.agent`, which stops it.
      `/usr/local/mobaide` itself stays behind (empty) when `/usr/local`
-     is root-owned.
-   - **Windows:** the agent deletes the `MobaideAgent` Scheduled Task. It
+     is root-owned, and so does the command when `/usr/local/bin` is; run,
+     it says the agent is gone and to `sudo rm` it.
+   - **Windows:** the agent removes `<prefix>\bin` from the user's PATH and
+     deletes the `MobaideAgent` Scheduled Task. It
      starts a one-shot `MobaideAgentCleanup` task, run by the base Python
      interpreter outside the install, that retries deleting
      `%ProgramFiles%\MobaideAgent` until the agent's files unlock, then
@@ -764,11 +790,12 @@ talking to the relay.
 sudo systemctl disable --now mobaide-agent mobaide-agent-uninstall.path
 sudo rm -f /etc/systemd/system/mobaide-agent.service \
   /etc/systemd/system/mobaide-agent-uninstall.{path,service} \
-  /usr/local/libexec/mobaide-agent-uninstall
+  /usr/local/libexec/mobaide-agent-uninstall /usr/local/bin/mobaide-agent
 sudo systemctl daemon-reload && sudo rm -rf /opt/mobaide
 # macOS
 launchctl bootout gui/$(id -u)/com.mobaide.agent
-rm -f ~/Library/LaunchAgents/com.mobaide.agent.plist && sudo rm -rf /usr/local/mobaide
+rm -f ~/Library/LaunchAgents/com.mobaide.agent.plist
+sudo rm -rf /usr/local/mobaide /usr/local/bin/mobaide-agent
 ```
 
 ```powershell
@@ -776,6 +803,9 @@ rm -f ~/Library/LaunchAgents/com.mobaide.agent.plist && sudo rm -rf /usr/local/m
 Unregister-ScheduledTask -TaskName MobaideAgent -Confirm:$false
 Remove-Item -Recurse -Force "$env:ProgramFiles\MobaideAgent"
 ```
+
+On Windows, also remove `C:\Program Files\MobaideAgent\bin` from your user
+`Path` (Start → "Edit environment variables for your account").
 
 Then remove the agent from your account in the app.
 

@@ -549,8 +549,13 @@ gap; an operator-set `SSL_CERT_FILE` still takes precedence on the launcher's
 │   └── 0.2.0/
 │       ├── .installed
 │       └── venv/
-└── bin/                             # macOS/Windows launcher shims
+└── bin/                             # launcher wrapper; Windows mobaide-agent.cmd
 ```
+
+The `mobaide-agent` command the installers put on PATH
+(`/usr/local/bin/mobaide-agent` on Linux/macOS, `bin\mobaide-agent.cmd` on
+Windows) reads `current_version` on every call, so an update or rollback never
+strands it on a pruned release.
 
 A release is **complete/runnable** only once a `.installed` marker file exists
 in `releases/<v>/`, written as the last install step (after pip + the wheel).

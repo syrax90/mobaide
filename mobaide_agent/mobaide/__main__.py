@@ -39,6 +39,7 @@ import argparse
 import asyncio
 import os
 import platform
+import shlex
 import socket
 import subprocess
 import sys
@@ -329,27 +330,85 @@ def main(argv: list[str] | None = None) -> None:
 
     if command == "run":
         _run_agent()
-    elif command == "update":
-        sys.exit(_run_update())
-    elif command == "pair-qr":
-        sys.exit(_run_pair_qr(args))
-    elif command == "pair":
-        sys.exit(_run_pair(args))
-    elif command == "show-trust-fp":
-        sys.exit(_run_show_trust_fp(args))
-    elif command == "show-qr":
-        sys.exit(_run_show_qr(args))
-    elif command == "re-pair":
-        sys.exit(_run_re_pair(args))
-    elif command == "fetch-trust-key":
-        sys.exit(_run_fetch_trust_key(args))
-    elif command == "voice":
+        return
+    try:
+        rc = _dispatch(parser, command, args)
+    except PermissionError as exc:
+        rc = _report_permission_denied(
+            args, exc, sys.argv[1:] if argv is None else argv
+        )
+    sys.exit(rc)
+
+
+def _dispatch(
+    parser: argparse.ArgumentParser, command: str, args: argparse.Namespace
+) -> int:
+    if command == "update":
+        return _run_update()
+    if command == "pair-qr":
+        return _run_pair_qr(args)
+    if command == "pair":
+        return _run_pair(args)
+    if command == "show-trust-fp":
+        return _run_show_trust_fp(args)
+    if command == "show-qr":
+        return _run_show_qr(args)
+    if command == "re-pair":
+        return _run_re_pair(args)
+    if command == "fetch-trust-key":
+        return _run_fetch_trust_key(args)
+    if command == "voice":
         from mobaide.voice.cli import run as run_voice
 
-        sys.exit(run_voice(args))
+        return run_voice(args)
+    parser.print_help()
+    return 2
+
+
+def _report_permission_denied(
+    args: argparse.Namespace, exc: PermissionError, argv: list[str]
+) -> int:
+    """Turn a PermissionError from a maintenance verb into advice.
+
+    The ``mobaide-agent`` command is on PATH for every account, but the
+    install belongs to one: on POSIX the agent's user owns the prefix and its
+    0600 files; on Windows the prefix sits under Program Files and only an
+    elevated process may write there.
+    """
+    from mobaide.agent.install_paths import default_prefix
+
+    target = exc.filename or str(exc)
+    sys.stderr.write(f"mobaide-agent: permission denied: {target}\n")
+    if sys.platform == "win32":
+        sys.stderr.write(
+            "Run this command from an elevated terminal "
+            "(right-click the terminal, Run as administrator).\n"
+        )
+        return 13
+    prefix = Path(args.prefix) if getattr(args, "prefix", None) else default_prefix()
+    try:
+        owner = prefix.owner()
+    except (OSError, KeyError, NotImplementedError):
+        owner = ""
+    if owner and owner != _current_user():
+        sys.stderr.write(
+            f"This agent is installed for the user '{owner}'. Run it as "
+            f"that user:\n    sudo -u {owner} mobaide-agent {shlex.join(argv)}\n"
+        )
     else:
-        parser.print_help()
-        sys.exit(2)
+        sys.stderr.write(
+            f"Check the ownership and permissions of {target}.\n"
+        )
+    return 13
+
+
+def _current_user() -> str:
+    import getpass
+
+    try:
+        return getpass.getuser()
+    except (OSError, KeyError):
+        return ""
 
 
 def _run_agent() -> None:

@@ -29,6 +29,12 @@ set -euo pipefail
 : "${MOBAIDE_RUN_AS_USER:=}"
 : "${MOBAIDE_AGENT_INSTALL_URL:=https://get.mobaide.com/install.sh}"
 
+# The `mobaide-agent` command the banners advertise. The marker line lets a
+# re-run, the root uninstall helper and mobaide.agent.self_uninstall tell our
+# shim apart from a file someone else put there; keep the three in sync.
+CLI_SHIM_PATH="/usr/local/bin/mobaide-agent"
+CLI_SHIM_MARKER="mobaide-agent CLI shim"
+
 info()  { printf '[INFO]  %s\n' "$*"; }
 warn()  { printf '[WARN]  %s\n' "$*" >&2; }
 error() { printf '[ERROR] %s\n' "$*" >&2; }
@@ -748,9 +754,7 @@ else:
         info "Agent reports pairing_pending=false; already paired. Skipping QR."
         return 0
     fi
-    local version release_dir pending_file
-    version="$(cat "${MOBAIDE_AGENT_PREFIX}/current_version")"
-    release_dir="${MOBAIDE_AGENT_PREFIX}/releases/${version}"
+    local pending_file
     pending_file="${MOBAIDE_AGENT_PREFIX}/run/pending_pairing.json"
     info "Waiting for pairing nonce at ${pending_file} (timeout ${pending_timeout_sec}s)"
     local deadline=$(( $(date +%s) + pending_timeout_sec ))
@@ -762,7 +766,7 @@ else:
 (no ${pending_file}). The service likely cannot reach central_server. Check:
     curl -fsS ${MOBAIDE_AGENT_MANIFEST_URL%/api/*}/api/v1/agent/trust_key
 The service is still running; once connectivity is restored it will
-initiate a nonce on its own. Run 'mobaide-agent show-qr' to re-display."
+initiate a nonce on its own. Run '$CLI_CMD show-qr' to re-display."
     fi
     info "Rendering pairing QR (scan from the Mobaide mobile app)"
     # --require-pending guards against a double-initiate race with the
@@ -770,8 +774,9 @@ initiate a nonce on its own. Run 'mobaide-agent show-qr' to re-display."
     # exits 7, never initiates a second nonce. Two concurrent
     # /ws/pairing/{nonce} dials for the same nonce would race; the
     # central server rejects the loser with WS close 4001.
-    "$release_dir/venv/bin/mobaide-agent" show-qr --require-pending \
-        --prefix "$MOBAIDE_AGENT_PREFIX"
+    # Rendered through the installed command, so a broken shim fails the
+    # install instead of the operator's later recovery attempt.
+    "$CLI_SHIM" show-qr --require-pending --prefix "$MOBAIDE_AGENT_PREFIX"
 }
 
 resolve_run_as_user() {
@@ -1011,6 +1016,7 @@ if cd -P -- "\$PREFIX" 2>/dev/null && [ "\$(pwd -P)" = "\$PREFIX" ]; then
     cd /
     rmdir -- "\$PREFIX" 2>/dev/null || true
 fi
+if grep -qF '$CLI_SHIM_MARKER' $CLI_SHIM_PATH 2>/dev/null; then rm -f $CLI_SHIM_PATH; fi
 rm -f $svc_unit $path_unit /etc/systemd/system/mobaide-agent.service
 systemctl daemon-reload
 rm -f -- "\$0"
@@ -1218,6 +1224,98 @@ desktop login for $RUN_USER (or run the agent under a different supervisor)."
     fi
 }
 
+sh_single_quote() {
+    # Print $1 as a single-quoted POSIX shell literal ('…', with each
+    # embedded ' written as '\'').
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+write_cli_shim() {
+    # Generate the `mobaide-agent` command at $1. The release venv's console
+    # script moves with every update and rollback, so the shim reads
+    # <prefix>/current_version on each call instead of pinning a release.
+    # Install-time values are baked in as quoted literals; the quoted heredoc
+    # below resolves at call time. Written to a temp file and renamed, so a
+    # hand-made symlink at $1 is replaced rather than followed.
+    local target="$1"
+    local tmp="$target.tmp.$$"
+    {
+        printf '#!/bin/sh\n'
+        printf '# %s, written by the Mobaide agent installer.\n' "$CLI_SHIM_MARKER"
+        printf 'default_prefix=%s\n' "$(sh_single_quote "$MOBAIDE_AGENT_PREFIX")"
+        printf 'run_user=%s\n' "$(sh_single_quote "$RUN_USER")"
+        printf 'install_url=%s\n' "$(sh_single_quote "$MOBAIDE_AGENT_INSTALL_URL")"
+        cat <<'SHIM'
+prefix="${MOBAIDE_AGENT_PREFIX:-$default_prefix}"
+version="$(cat "$prefix/current_version" 2>/dev/null)"
+cli="$prefix/releases/$version/venv/bin/mobaide-agent"
+if [ -z "$version" ] || [ ! -x "$cli" ]; then
+    echo "mobaide-agent: no Mobaide agent is installed at $prefix." >&2
+    echo "Re-run the installer (curl -fsSL $install_url | bash), or delete this leftover command: sudo rm $0" >&2
+    exit 127
+fi
+# The release venv is writable by the agent's user, so root never runs it.
+# Running as that user also keeps every file the CLI writes readable by the
+# agent (a root-owned 0600 .env would lock it out).
+if [ "$(id -u)" -eq 0 ] && [ -n "$run_user" ] && [ "$run_user" != root ]; then
+    if command -v sudo >/dev/null 2>&1; then
+        exec sudo -u "$run_user" -H -- env MOBAIDE_AGENT_PREFIX="$prefix" "$cli" "$@"
+    fi
+    if command -v runuser >/dev/null 2>&1; then
+        exec runuser -u "$run_user" -- env MOBAIDE_AGENT_PREFIX="$prefix" "$cli" "$@"
+    fi
+    echo "mobaide-agent: run this as $run_user, not as root." >&2
+    exit 1
+fi
+MOBAIDE_AGENT_PREFIX="$prefix"
+export MOBAIDE_AGENT_PREFIX
+exec "$cli" "$@"
+SHIM
+    } > "$tmp"
+    chmod 0755 "$tmp"
+    mv -f "$tmp" "$target"
+}
+
+cli_shim_target_is_ours() {
+    # True when $1 is free, a shim an earlier run wrote, or a hand-made
+    # symlink into this install's releases — the usual workaround before the
+    # shim existed, pinned to one release that auto-update later prunes.
+    local target="$1"
+    if [ -L "$target" ]; then
+        case "$(readlink "$target")" in
+            "$MOBAIDE_AGENT_PREFIX"/releases/*) return 0 ;;
+        esac
+        return 1
+    fi
+    [ -e "$target" ] || return 0
+    grep -qF "$CLI_SHIM_MARKER" "$target" 2>/dev/null
+}
+
+install_cli_shim() {
+    # Put `mobaide-agent` on PATH. Sets script-scoped CLI_SHIM (the path the
+    # installer runs) and CLI_CMD (what the banners tell the operator to type).
+    # A root install owns /usr/local/bin, which every mainstream Linux distro
+    # and macOS (/etc/paths) put on PATH, and keeps the shim root-owned. A
+    # non-root install (a user-writable prefix on macOS) gets it in
+    # <prefix>/bin and is told the full path.
+    if [ "$(id -u)" -eq 0 ]; then
+        if cli_shim_target_is_ours "$CLI_SHIM_PATH"; then
+            mkdir -p "$(dirname "$CLI_SHIM_PATH")"
+            write_cli_shim "$CLI_SHIM_PATH"
+            CLI_SHIM="$CLI_SHIM_PATH"
+            CLI_CMD="mobaide-agent"
+            info "Installed the mobaide-agent command at $CLI_SHIM_PATH"
+            return 0
+        fi
+        warn "$CLI_SHIM_PATH exists and was not written by this installer; leaving it alone."
+    fi
+    CLI_SHIM="$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent"
+    mkdir -p "$(dirname "$CLI_SHIM")"
+    write_cli_shim "$CLI_SHIM"
+    CLI_CMD="$CLI_SHIM"
+    info "Installed the mobaide-agent command at $CLI_SHIM (not on PATH; run it by its full path)"
+}
+
 print_completion() {
     echo
     echo "============================================"
@@ -1231,8 +1329,8 @@ print_completion() {
         echo "  Logs:    tail -f $MOBAIDE_AGENT_PREFIX/agent.err.log"
     fi
     echo
-    echo "  Re-render QR:  mobaide-agent show-qr"
-    echo "  Re-pair:       mobaide-agent re-pair"
+    echo "  Re-render QR:  $CLI_CMD show-qr"
+    echo "  Re-pair:       $CLI_CMD re-pair"
     echo "============================================"
 }
 
@@ -1283,6 +1381,7 @@ main() {
         resolve_run_as_user_macos
         install_launchd_plist
     fi
+    install_cli_shim
 
     local health_json
     health_json="$(wait_agent_healthy 60)"

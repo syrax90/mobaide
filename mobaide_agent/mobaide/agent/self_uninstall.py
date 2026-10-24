@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import ntpath
 import os
 import shutil
 import subprocess
@@ -79,6 +80,14 @@ PREFIX_ENTRIES: tuple[str, ...] = (
     "projects.json",
     *VOICE_PREFIX_ENTRIES,
 )
+
+# The `mobaide-agent` command a root install.sh puts on PATH, and the marker
+# line that tells it apart from a file someone else put there. Keep both in
+# sync with CLI_SHIM_PATH / CLI_SHIM_MARKER in deploy/install.sh.
+CLI_SHIM_PATH = Path("/usr/local/bin/mobaide-agent")
+CLI_SHIM_MARKER = "mobaide-agent CLI shim"
+# install.ps1 puts <prefix>\bin, which holds mobaide-agent.cmd, on the user PATH.
+WINDOWS_CLI_DIR = "bin"
 
 UNINSTALL_MARKER = Path("run") / "uninstall-requested"
 SYSTEMD_HELPER_PATH_UNIT = Path("/etc/systemd/system/mobaide-agent-uninstall.path")
@@ -308,6 +317,7 @@ def _uninstall_macos(prefix: Path) -> None:
         remove_prefix_entries(prefix)
     except Exception:
         logger.exception("agent.uninstall.remove_failed prefix=%s", prefix)
+    _remove_cli_shim(prefix)
     logger.info("agent.uninstall.bootout label=%s", LAUNCHD_LABEL)
     # Last step: bootout stops this very process. ``remove`` covers a job the
     # installer's legacy fallback loaded outside the gui/<uid> domain.
@@ -315,7 +325,77 @@ def _uninstall_macos(prefix: Path) -> None:
         _run(["launchctl", "remove", LAUNCHD_LABEL])
 
 
+def _remove_cli_shim(prefix: Path) -> None:
+    """Delete the ``mobaide-agent`` command install.sh wrote for this install.
+
+    ``/usr/local/bin`` is usually root-owned, so on macOS this often fails;
+    the leftover shim then says the agent is gone and how to delete it.
+    """
+    try:
+        text = CLI_SHIM_PATH.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return
+    if CLI_SHIM_MARKER not in text or str(prefix) not in text:
+        return
+    try:
+        CLI_SHIM_PATH.unlink()
+    except OSError as exc:
+        logger.info(
+            "agent.uninstall.cli_shim_left path=%s: %s — remove it with: sudo rm %s",
+            CLI_SHIM_PATH, exc, CLI_SHIM_PATH,
+        )
+
+
+def _path_entry_key(entry: str) -> str:
+    """Compare PATH entries the way Windows resolves them."""
+    return ntpath.expandvars(entry).strip('"').replace("/", "\\").rstrip("\\").casefold()
+
+
+def _remove_user_path_entry(directory: Path) -> None:
+    """Drop ``directory`` from the user PATH that install.ps1 extended.
+
+    Every other entry and the value kind (REG_EXPAND_SZ, so ``%VAR%`` entries
+    keep working) are written back exactly as they were, and only when the
+    entry was actually there.
+    """
+    import winreg
+
+    wanted = _path_entry_key(str(directory))
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        "Environment",
+        0,
+        winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE,
+    ) as key:
+        try:
+            value, kind = winreg.QueryValueEx(key, "Path")
+        except FileNotFoundError:
+            return
+        entries = str(value).split(";")
+        kept = [e for e in entries if not e or _path_entry_key(e) != wanted]
+        if len(kept) == len(entries):
+            return
+        winreg.SetValueEx(key, "Path", 0, kind, ";".join(kept))
+    _broadcast_environment_change()
+
+
+def _broadcast_environment_change() -> None:
+    """Tell Explorer, and so every terminal opened from it, that PATH changed."""
+    import ctypes
+
+    result = ctypes.c_size_t()
+    # HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG, 5 s timeout.
+    ctypes.windll.user32.SendMessageTimeoutW(  # type: ignore[attr-defined]
+        0xFFFF, 0x001A, 0, "Environment", 0x0002, 5000, ctypes.byref(result)
+    )
+
+
 def _uninstall_windows(prefix: Path) -> None:
+    cli_dir = prefix / WINDOWS_CLI_DIR
+    try:
+        _remove_user_path_entry(cli_dir)
+    except Exception as exc:
+        logger.warning("agent.uninstall.path_entry_failed dir=%s: %s", cli_dir, exc)
     python = _base_pythonw(prefix)
     if python is None:
         logger.warning(

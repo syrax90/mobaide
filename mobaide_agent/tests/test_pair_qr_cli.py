@@ -11,13 +11,20 @@ from __future__ import annotations
 import argparse
 import base64
 import io
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from mobaide.__main__ import _run_pair_qr, _run_re_pair, _run_show_qr
+from mobaide.__main__ import (
+    _report_permission_denied,
+    _run_pair_qr,
+    _run_re_pair,
+    _run_show_qr,
+    main,
+)
 from mobaide.agent._env_writer import env_path_for_prefix
 from mobaide.agent.pairing_qr import (
     PAIRING_WEB_ORIGIN_ENV,
@@ -436,3 +443,99 @@ class TestRunRePair:
         _run_re_pair(_ns(prefix=str(tmp_path), no_restart=True))
 
         assert not pending_pairing_path(layout).exists()
+
+
+def _unknown_owner(_path: Path) -> str:
+    raise KeyError(1234)
+
+
+class TestPermissionDenied:
+    """``mobaide-agent`` is on PATH for every account but the install belongs
+    to one, so a PermissionError from a verb becomes advice and exit 13
+    instead of a traceback."""
+
+    _ENV_FILE = "/opt/mobaide/mobaide_agent/.env"
+
+    @pytest.fixture
+    def denied(self) -> PermissionError:
+        return PermissionError(13, "Permission denied", self._ENV_FILE)
+
+    @pytest.fixture
+    def posix(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr("mobaide.__main__._current_user", lambda: "alice")
+
+    @pytest.mark.usefixtures("posix")
+    def test_main_exits_13_with_the_command_to_run_as_the_owner(
+        self, monkeypatch, capsys, denied
+    ):
+        def refuse(_args: argparse.Namespace) -> int:
+            raise denied
+
+        monkeypatch.setattr("mobaide.__main__._run_re_pair", refuse)
+        monkeypatch.setattr(Path, "owner", lambda self: "mobaide")
+
+        with pytest.raises(SystemExit) as excinfo:
+            main(["re-pair", "--prefix", "/opt/mobaide", "--fresh"])
+
+        assert excinfo.value.code == 13
+        err = capsys.readouterr().err
+        assert f"mobaide-agent: permission denied: {self._ENV_FILE}" in err
+        assert (
+            "sudo -u mobaide mobaide-agent re-pair --prefix /opt/mobaide --fresh"
+            in err
+        )
+
+    @pytest.mark.usefixtures("posix")
+    def test_without_prefix_flag_asks_who_owns_the_default_install(
+        self, monkeypatch, capsys, denied
+    ):
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", "/srv/mobaide")
+        asked: list[Path] = []
+
+        def owner(path: Path) -> str:
+            asked.append(path)
+            return "mobaide"
+
+        monkeypatch.setattr(Path, "owner", owner)
+
+        rc = _report_permission_denied(_ns(prefix=None), denied, ["show-qr"])
+
+        assert rc == 13
+        assert asked == [Path("/srv/mobaide")]
+        assert "sudo -u mobaide mobaide-agent show-qr" in capsys.readouterr().err
+
+    @pytest.mark.usefixtures("posix")
+    @pytest.mark.parametrize(
+        "owner",
+        [lambda self: "alice", _unknown_owner],
+        ids=["same-user", "unknown-owner"],
+    )
+    def test_without_another_owner_points_at_the_file(
+        self, monkeypatch, capsys, denied, owner
+    ):
+        monkeypatch.setattr(Path, "owner", owner)
+
+        rc = _report_permission_denied(
+            _ns(prefix="/opt/mobaide"), denied, ["re-pair"]
+        )
+
+        assert rc == 13
+        err = capsys.readouterr().err
+        assert f"Check the ownership and permissions of {self._ENV_FILE}" in err
+        assert "sudo" not in err
+
+    def test_windows_asks_for_an_elevated_terminal(
+        self, monkeypatch, capsys, denied
+    ):
+        monkeypatch.setattr(sys, "platform", "win32")
+
+        rc = _report_permission_denied(
+            _ns(prefix=r"C:\Program Files\MobaideAgent"), denied, ["re-pair"]
+        )
+
+        assert rc == 13
+        err = capsys.readouterr().err
+        assert f"mobaide-agent: permission denied: {self._ENV_FILE}" in err
+        assert "elevated terminal" in err
+        assert "sudo" not in err

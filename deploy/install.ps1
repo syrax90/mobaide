@@ -1147,7 +1147,8 @@ Or from PowerShell:
 function Show-PairingQrFromService {
     param(
         [Parameter(Mandatory=$true)] [string] $Prefix,
-        [Parameter(Mandatory=$true)] [string] $Version,
+        # Install-CliShim's result: the shim to run and the command to print.
+        [Parameter(Mandatory=$true)] [hashtable] $Cli,
         $Health,
         [int] $PendingTimeoutSec = 60
     )
@@ -1184,14 +1185,8 @@ Agent is up but did not initiate pairing within ${PendingTimeoutSec}s
     Test-NetConnection -ComputerName api.mobaide.com -Port 443
     Get-Content "$Prefix\logs\agent.err.log" -Tail 50
 The agent is still running; once connectivity is restored it will
-initiate a nonce on its own. Run `mobaide-agent show-qr` to re-display.
+initiate a nonce on its own. Run: $($Cli.Command) show-qr
 "@
-    }
-    $releaseDir = Join-Path (Join-Path $Prefix "releases") $Version
-    $releaseScripts = Join-Path $releaseDir "venv\Scripts"
-    $mobaideAgent = Join-Path $releaseScripts "mobaide-agent.exe"
-    if (-not (Test-Path -LiteralPath $mobaideAgent)) {
-        $mobaideAgent = Join-Path $releaseScripts "mobaide-agent"
     }
     Write-Info "Rendering pairing QR (scan from the Mobaide mobile app)"
     # ``--require-pending`` keeps this call from initiating a second
@@ -1201,9 +1196,14 @@ initiate a nonce on its own. Run `mobaide-agent show-qr` to re-display.
     # makes the CLI render-from-file only; on exit 7 (file vanished
     # between our Test-Path and the CLI's load) we hard-fail rather
     # than fall through to a fresh initiate.
-    & $mobaideAgent show-qr --require-pending --prefix $Prefix
+    #
+    # Rendered through the installed shim, so a broken shim fails the
+    # install instead of the operator's later recovery attempt. No
+    # --prefix: the shim exports the prefix it lives in.
+    $shim = $Cli.Path
+    & $shim show-qr --require-pending
     if ($LASTEXITCODE -ne 0) {
-        Write-Fail "mobaide-agent show-qr --require-pending failed (exit $LASTEXITCODE). Run `mobaide-agent show-qr` from a new PowerShell window."
+        Write-Fail "mobaide-agent show-qr --require-pending failed (exit $LASTEXITCODE). Run: $($Cli.Command) show-qr"
     }
 }
 
@@ -1342,8 +1342,112 @@ function Install-Service {
     Start-ScheduledTask -TaskName $Script:ServiceName
 }
 
+# Tells running programs (Explorer, and so every terminal opened from it)
+# that the persistent environment changed. Best-effort: without it the new
+# PATH entry still applies from the next sign-in.
+function Send-EnvironmentChange {
+    try {
+        if (-not ('MobaideInstaller.NativeMethods' -as [type])) {
+            Add-Type -Namespace MobaideInstaller -Name NativeMethods -MemberDefinition @'
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+'@
+        }
+        $result = [UIntPtr]::Zero
+        # HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG, 5 s timeout.
+        [MobaideInstaller.NativeMethods]::SendMessageTimeout([IntPtr]0xffff, 0x1a, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$result) | Out-Null
+    } catch {
+        Write-Warn "Could not announce the PATH change: $($_.Exception.Message). If a new terminal does not find mobaide-agent, sign out and back in."
+    }
+}
+
+# Appends $Directory to the current user's persistent PATH unless an
+# equivalent entry is already there, then refreshes this session's PATH.
+# The raw value is read unexpanded and written back verbatim with the same
+# value kind, so %VAR% entries survive: an [Environment]::SetEnvironmentVariable
+# round-trip would expand them and store REG_SZ, and setx truncates PATH at
+# 1024 characters. -SubKey exists for tests.
+function Add-UserPathEntry {
+    param(
+        [Parameter(Mandatory=$true)] [string] $Directory,
+        [string] $SubKey = 'Environment'
+    )
+    $wanted = $Directory.Trim('"').TrimEnd('\')
+    $added = $false
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($SubKey)
+    try {
+        $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $present = @($raw -split ';' | Where-Object {
+            $_ -and ([Environment]::ExpandEnvironmentVariables($_).Trim('"').TrimEnd('\') -ieq $wanted)
+        })
+        if ($present.Count -eq 0) {
+            if ($raw) {
+                $kind = $key.GetValueKind('Path')
+                $value = $raw.TrimEnd(';') + ';' + $Directory
+            } else {
+                $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString
+                $value = $Directory
+            }
+            $key.SetValue('Path', $value, $kind)
+            $added = $true
+        }
+    } finally {
+        $key.Close()
+    }
+    if ($added) {
+        Send-EnvironmentChange
+    }
+    Update-CurrentSessionPath
+}
+
+# Puts `mobaide-agent` on PATH. The release venv's console script moves with
+# every update and rollback, so the shim reads <prefix>\current_version on
+# each call instead of pinning a release, and derives the prefix from its own
+# location. It lives in the admin-only <prefix>\bin; the PATH entry goes to
+# the installing user, the same account the Scheduled Task and the .env ACL
+# belong to. Returns @{ Path = <shim>; Command = <what the banners print> }.
+function Install-CliShim {
+    param([Parameter(Mandatory=$true)] [string] $Prefix)
+    $binDir = Join-Path $Prefix "bin"
+    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+    $shim = Join-Path $binDir "mobaide-agent.cmd"
+    # Escape cmd.exe metacharacters for the echo line (a custom install URL
+    # may carry & or %).
+    $installUrl = ($Script:InstallUrl -replace '([\^&|<>])', '^$1') -replace '%', '%%'
+    $lines = @(
+        '@echo off'
+        'rem mobaide-agent CLI shim, written by the Mobaide agent installer.'
+        'setlocal EnableExtensions DisableDelayedExpansion'
+        'for %%I in ("%~dp0..") do set "MOBAIDE_AGENT_PREFIX=%%~fI"'
+        'set "version="'
+        'if exist "%MOBAIDE_AGENT_PREFIX%\current_version" for /f "usebackq delims=" %%V in ("%MOBAIDE_AGENT_PREFIX%\current_version") do if not defined version set "version=%%V"'
+        'if not defined version goto missing'
+        'set "cli=%MOBAIDE_AGENT_PREFIX%\releases\%version%\venv\Scripts\mobaide-agent.exe"'
+        'if not exist "%cli%" goto missing'
+        '"%cli%" %*'
+        'exit /b %ERRORLEVEL%'
+        ':missing'
+        '>&2 echo mobaide-agent: no Mobaide agent is installed at %MOBAIDE_AGENT_PREFIX%.'
+        ">&2 echo Re-run the installer from PowerShell: irm $installUrl ^| iex"
+        'exit /b 9009'
+    )
+    # ASCII with CRLF: cmd.exe misreads a UTF-8 BOM and can lose `goto`
+    # labels in LF-only batch files.
+    [System.IO.File]::WriteAllText($shim, (($lines -join "`r`n") + "`r`n"), [System.Text.Encoding]::ASCII)
+    Write-Info "Installed the mobaide-agent command at $shim"
+
+    $command = 'mobaide-agent'
+    try {
+        Add-UserPathEntry -Directory $binDir
+    } catch {
+        Write-Warn "Could not add $binDir to your PATH: $($_.Exception.Message)"
+        $command = "& '$shim'"
+    }
+    return @{ Path = $shim; Command = $command }
+}
+
 function Write-Completion {
-    param($Version)
+    param($Version, $Command)
     Write-Host ""
     Write-Host "============================================"
     Write-Host "  Mobaide agent installed"
@@ -1351,9 +1455,13 @@ function Write-Completion {
     Write-Host "  Version: $Version"
     Write-Host "  Task:    $Script:ServiceName (Running as $env:USERNAME)"
     Write-Host ""
-    Write-Host "  Re-render QR:  mobaide-agent show-qr"
-    Write-Host "  Re-pair:       mobaide-agent re-pair"
+    Write-Host "  Re-render QR:  $Command show-qr"
+    Write-Host "  Re-pair:       $Command re-pair"
     Write-Host "  Restart:       Stop-ScheduledTask $Script:ServiceName; Start-ScheduledTask $Script:ServiceName"
+    if ($Command -eq 'mobaide-agent') {
+        Write-Host ""
+        Write-Host "  Open a new terminal window to use mobaide-agent (PATH was updated for $env:USERNAME)."
+    }
     Write-Host "============================================"
 }
 
@@ -1419,10 +1527,11 @@ function Main {
     # service fails to start (Wait-AgentHealthy hard-fails with an
     # Event-Viewer pointer).
     Install-Service -PythonExe $python -PythonwExe $pythonwExe
+    $cli = Install-CliShim -Prefix $Script:Prefix
     $health = Wait-AgentHealthy -Prefix $Script:Prefix -TimeoutSec 60
-    Show-PairingQrFromService -Prefix $Script:Prefix -Version $version -Health $health
+    Show-PairingQrFromService -Prefix $Script:Prefix -Cli $cli -Health $health
 
-    Write-Completion -Version $version
+    Write-Completion -Version $version -Command $cli.Command
 }
 
 Main

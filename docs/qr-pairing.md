@@ -330,6 +330,14 @@ mobaide-agent show-qr
 This re-renders the most-recent pending QR; if the cached nonce has
 expired, it initiates a fresh one.
 
+`mobaide-agent` is a shim the installer puts on PATH:
+`/usr/local/bin/mobaide-agent` on Linux and macOS (or `<prefix>/bin/mobaide-agent`,
+which the installer prints by its full path, when it cannot use that location),
+and `<prefix>\bin` on the installing user's PATH on Windows (open a new
+terminal after installing).
+Installs made before the shim existed need the installer re-run; see
+[The `mobaide-agent` command](deployment.md#linux-systemd-and-macos-launchd--automated).
+
 The installers pass `--require-pending` to `show-qr` so that the
 installer itself never initiates a fresh nonce — the running service
 is the single initiator. This prevents a race on `/ws/pairing/{nonce}`
