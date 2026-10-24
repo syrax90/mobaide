@@ -91,6 +91,14 @@ TITLE_COALESCE_SECONDS = 0.5
 # pause, with margin for ConPTY input coalescing on Windows hosts.
 SUBMIT_CR_DELAY_SECONDS = 0.2
 
+# Pause between the line-clear keys clients prepend to a submit (Ctrl+A,
+# Ctrl+K) and a bracketed paste that follows them. Claude CLI mishandles a
+# paste it collapses to "[Pasted text #N]" when those keys share its stdin
+# chunk: the following CR is swallowed and the prompt is never submitted.
+PASTE_PREFIX_DELAY_SECONDS = 0.2
+
+BRACKETED_PASTE_START = b"\x1b[200~"
+
 # Pause after Ctrl+C so the TUI cancels stale input and redraws a fresh
 # prompt before replacement text arrives.
 EXECUTE_CLEAR_DELAY_SECONDS = 0.1
@@ -551,6 +559,10 @@ class TerminalSession:
         without submitting. A bare CR arriving as its own read after
         ``SUBMIT_CR_DELAY_SECONDS`` is parsed as a discrete Enter keypress.
 
+        Bytes ahead of a bracketed paste go out as their own write too, after
+        which ``PASTE_PREFIX_DELAY_SECONDS`` passes before the paste — see
+        that constant for why.
+
         Awaited inline by the frame dispatchers, so frames for this session
         queue behind the delay — that ordering is intentional: bytes typed
         right after a submit logically follow the Enter.
@@ -558,6 +570,11 @@ class TerminalSession:
         Callers guard empty ``data``; an empty submit is dropped upstream so
         a buggy client cannot fire a bare Enter on a stale composer.
         """
+        paste_at = data.find(BRACKETED_PASTE_START)
+        if paste_at > 0:
+            await self.write(data[:paste_at])
+            await asyncio.sleep(PASTE_PREFIX_DELAY_SECONDS)
+            data = data[paste_at:]
         await self.write(data)
         await asyncio.sleep(SUBMIT_CR_DELAY_SECONDS)
         await self.write(b"\r")
