@@ -229,6 +229,50 @@ class TestGeneratedShim:
         assert not (tmp_path / "pwned").exists()
 
 
+class TestShimTempFile:
+    """``write_cli_shim`` runs as root into a directory the agent's user may
+    be able to write, so its temp file must not have a guessable name."""
+
+    def test_leaves_only_the_shim_behind(self, tmp_path):
+        shim = _write_shim(tmp_path / "mobaide-agent", tmp_path / "mobaide")
+
+        assert [p.name for p in tmp_path.glob("mobaide-agent*")] == ["mobaide-agent"]
+        if sys.platform != "win32":
+            assert shim.stat().st_mode & 0o777 == 0o755
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+    def test_does_not_write_through_a_symlink_at_the_old_temp_name(self, tmp_path):
+        victim = tmp_path / "victim"
+        victim.write_text("precious\n", encoding="utf-8")
+        victim.chmod(0o600)
+        target = tmp_path / "bin" / "mobaide-agent"
+        target.parent.mkdir()
+        harness = (
+            "set -eu\n"
+            + _globals(tmp_path / "mobaide", "mobaide")
+            + _functions("sh_single_quote", "write_cli_shim")
+            + f"target={shlex.quote(_sh_path(target))}\n"
+            + f'ln -s {shlex.quote(_sh_path(victim))} "$target.tmp.$$"\n'
+            + 'write_cli_shim "$target"\n'
+        )
+
+        proc = _bash(harness, tmp_path)
+
+        assert proc.returncode == 0, proc.stderr
+        assert victim.read_text(encoding="utf-8") == "precious\n"
+        assert victim.stat().st_mode & 0o777 == 0o600
+        assert not target.is_symlink()
+        assert _install_sh_constant("CLI_SHIM_MARKER") in target.read_text(
+            encoding="utf-8"
+        )
+
+    def test_temp_name_comes_from_mktemp(self):
+        body = _sh_function_body("write_cli_shim")
+
+        assert re.search(r'^\s*tmp="\$\(mktemp ', body, re.M), body
+        assert "$$" not in body, body
+
+
 class TestShimAsRoot:
     def test_drops_to_the_run_user_through_sudo(self, tmp_path):
         prefix = tmp_path / "mobaide"

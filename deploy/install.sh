@@ -1236,9 +1236,13 @@ write_cli_shim() {
     # <prefix>/current_version on each call instead of pinning a release.
     # Install-time values are baked in as quoted literals; the quoted heredoc
     # below resolves at call time. Written to a temp file and renamed, so a
-    # hand-made symlink at $1 is replaced rather than followed.
+    # hand-made symlink at $1 is replaced rather than followed. mktemp creates
+    # the temp file exclusively: the target dir can be writable by the agent's
+    # user, who could otherwise plant a symlink at a predictable name for
+    # root's redirect to follow.
     local target="$1"
-    local tmp="$target.tmp.$$"
+    local tmp
+    tmp="$(mktemp "$target.XXXXXX")"
     {
         printf '#!/bin/sh\n'
         printf '# %s, written by the Mobaide agent installer.\n' "$CLI_SHIM_MARKER"
