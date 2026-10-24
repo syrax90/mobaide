@@ -7,6 +7,11 @@ A frame is quiet when its RMS is under
 ``max(ABS_QUIET_RMS, NOISE_FACTOR × noise floor)`` (the floor being the
 quietest frame of the last few seconds) and also under ``PEAK_RATIO`` of the
 loudest frame of the segment, so steady speech can never read as a pause.
+
+A segment is skipped instead of transcribed only when none of its frames is
+voiced: at least ``VOICE_RMS``, or ``VOICE_SNR`` times the noise floor (and
+above digital silence). The phone clients record without gain, so quiet
+speech can sit well below ``VOICE_RMS`` and is caught by the floor test.
 """
 from __future__ import annotations
 
@@ -22,19 +27,22 @@ MAX_SEGMENT_SECONDS = 25.0
 PAUSE_MS = 500
 CUT_SEARCH_SECONDS = 2.0
 FLOOR_WINDOW_SECONDS = 3.0
-ABS_QUIET_RMS = 250.0
+ABS_QUIET_RMS = 60.0
 NOISE_FACTOR = 2.5
 PEAK_RATIO = 0.3
-# About -44 dBFS: room noise stays below it, any spoken word goes above.
+# About -44 dBFS: always voiced, whatever the noise floor.
 VOICE_RMS = 200.0
+# About -70 dBFS: only digital silence or a dead input stays below it.
+SILENCE_RMS = 10.0
+VOICE_SNR = 3.0
 
 
 @dataclass(frozen=True)
 class Segment:
     pcm: bytes
-    # False when no frame reaches VOICE_RMS: the segment is skipped, not
-    # transcribed.
+    # False when no frame is voiced: the segment is skipped, not transcribed.
     voiced: bool
+    peak_rms: float
 
 
 def _frame_rms(frame: bytes) -> float:
@@ -59,6 +67,7 @@ class PauseSegmenter:
         self._buf = bytearray()
         self._rms: list[float] = []
         self._quiet: list[bool] = []
+        self._voiced: list[bool] = []
         self._quiet_run = 0
         self._peak = 0.0
 
@@ -72,11 +81,13 @@ class PauseSegmenter:
             rms = _frame_rms(bytes(self._buf[start : start + fb]))
             self._recent.append(rms)
             self._peak = max(self._peak, rms)
-            quiet = rms < max(ABS_QUIET_RMS, NOISE_FACTOR * min(self._recent)) and (
+            floor = min(self._recent)
+            quiet = rms < max(ABS_QUIET_RMS, NOISE_FACTOR * floor) and (
                 rms < PEAK_RATIO * self._peak
             )
             self._rms.append(rms)
             self._quiet.append(quiet)
+            self._voiced.append(rms >= min(VOICE_RMS, max(SILENCE_RMS, VOICE_SNR * floor)))
             self._quiet_run = self._quiet_run + 1 if quiet else 0
             frames = len(self._rms)
             if frames >= self._min_frames and self._quiet_run >= self._pause_frames:
@@ -92,11 +103,13 @@ class PauseSegmenter:
             return None
         segment = Segment(
             pcm=bytes(self._buf[: len(self._buf) - len(self._buf) % 2]),
-            voiced=any(rms >= VOICE_RMS for rms in self._rms),
+            voiced=any(self._voiced),
+            peak_rms=max(self._rms, default=0.0),
         )
         self._buf = bytearray()
         self._rms.clear()
         self._quiet.clear()
+        self._voiced.clear()
         self._quiet_run = 0
         self._peak = 0.0
         return segment
@@ -105,11 +118,13 @@ class PauseSegmenter:
         size = frames * self._frame_bytes
         segment = Segment(
             pcm=bytes(self._buf[:size]),
-            voiced=any(rms >= VOICE_RMS for rms in self._rms[:frames]),
+            voiced=any(self._voiced[:frames]),
+            peak_rms=max(self._rms[:frames], default=0.0),
         )
         del self._buf[:size]
         del self._rms[:frames]
         del self._quiet[:frames]
+        del self._voiced[:frames]
         self._peak = max(self._rms, default=0.0)
         run = 0
         for quiet in reversed(self._quiet):

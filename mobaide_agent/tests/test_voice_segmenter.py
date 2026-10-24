@@ -1,11 +1,15 @@
 """Pause segmentation of a dictation: a segment closes in the middle of a
 ≥500 ms pause once it holds ≥5 s, is force-cut at the quietest frame of its
-last 2 s at 25 s, steady speech never reads as a pause, and only a segment
-with no frame above ``VOICE_RMS`` is marked unvoiced."""
+last 2 s at 25 s, steady speech and a quieter word above the noise floor
+never read as a pause, a segment is unvoiced only when no frame reaches
+``VOICE_RMS`` or ``VOICE_SNR`` times the noise floor (above digital
+silence), and each segment carries its own peak frame RMS."""
 from __future__ import annotations
 
 import math
 from array import array
+
+import pytest
 
 from mobaide.voice.segmenter import PauseSegmenter
 
@@ -135,3 +139,73 @@ def test_flush_drops_a_trailing_odd_byte():
 
     assert tail is not None
     assert len(tail.pcm) % 2 == 0
+
+
+def _bursts(seconds: float, speech: int, noise: int) -> bytes:
+    """Speech-like audio: 0.3 s words at ``speech`` amplitude between 0.3 s
+    gaps of ``noise`` amplitude, starting with a gap."""
+    out = b""
+    while len(out) < seconds * RATE * 2:
+        out += _tone(0.3, amplitude=noise) + _tone(0.3, amplitude=speech)
+    return out
+
+
+@pytest.mark.parametrize("noise", [0, 28], ids=["digital-silence", "room-noise-rms-20"])
+def test_quiet_speech_below_the_voice_level_is_voiced(noise):
+    seg = PauseSegmenter(RATE)
+
+    assert seg.feed(_bursts(4.0, speech=113, noise=noise)) == []
+    tail = seg.flush()
+
+    assert tail is not None
+    assert tail.voiced
+
+
+def test_room_noise_fluctuating_under_the_snr_is_unvoiced():
+    noise = b"".join(_tone(0.1, amplitude=85) + _tone(0.1, amplitude=212) for _ in range(20))
+    seg = PauseSegmenter(RATE)
+
+    assert seg.feed(noise) == []
+    tail = seg.flush()
+
+    assert tail is not None
+    assert not tail.voiced
+
+
+def test_hiss_below_the_silence_level_after_digital_silence_is_unvoiced():
+    seg = PauseSegmenter(RATE)
+
+    seg.feed(_silence(1.0) + _tone(2.0, amplitude=12))
+    tail = seg.flush()
+
+    assert tail is not None
+    assert not tail.voiced
+
+
+def test_a_quieter_word_above_the_noise_floor_is_not_a_pause():
+    speech = b"".join(_tone(0.4) + _silence(0.1) for _ in range(12))
+    seg = PauseSegmenter(RATE)
+
+    assert seg.feed(speech + _tone(0.6, amplitude=141) + _tone(1.0)) == []
+
+
+def test_each_segment_carries_its_own_peak_rms():
+    seg = PauseSegmenter(RATE)
+
+    closed = seg.feed(_tone(6.0, amplitude=3000) + _silence(0.6) + _tone(1.0, amplitude=1000))
+    tail = seg.flush()
+
+    assert len(closed) == 1
+    assert closed[0].peak_rms == pytest.approx(3000 / math.sqrt(2), rel=0.01)
+    assert tail is not None
+    assert tail.peak_rms == pytest.approx(1000 / math.sqrt(2), rel=0.01)
+
+
+def test_flush_of_silence_has_zero_peak_rms():
+    seg = PauseSegmenter(RATE)
+    seg.feed(_silence(1.0))
+
+    tail = seg.flush()
+
+    assert tail is not None
+    assert tail.peak_rms == 0.0
