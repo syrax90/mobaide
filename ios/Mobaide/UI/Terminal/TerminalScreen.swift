@@ -27,6 +27,10 @@ private struct TerminalScreenContent: View {
     @State private var templateName = ""
     @State private var showShortcutPicker = false
     @State private var showFullScreenInput = false
+    /// Set by the expanded editor's Send. Dismissing a sheet hands first
+    /// responder back to the inline composer that held it at presentation, so
+    /// without this the keyboard pops straight back up after a send.
+    @State private var releaseComposerFocusOnDismiss = false
     /// Tracks `onAppear`/`onDisappear` so the keyboard observer is only ever
     /// restarted onto a screen that is still mounted (see `showFullScreenInput`
     /// below).
@@ -295,8 +299,15 @@ private struct TerminalScreenContent: View {
         .sheet(isPresented: $showShortcutPicker) {
             ShortcutPickerSheet(model: model)
         }
-        .sheet(isPresented: $showFullScreenInput) {
-            FullScreenInputSheet(model: model, voice: voice)
+        .sheet(isPresented: $showFullScreenInput, onDismiss: {
+            if releaseComposerFocusOnDismiss {
+                releaseComposerFocusOnDismiss = false
+                model.dismissSoftKeyboard()
+            }
+        }) {
+            FullScreenInputSheet(model: model, voice: voice) {
+                releaseComposerFocusOnDismiss = true
+            }
         }
         .sheet(isPresented: Bindable(voice).setupVisible, onDismiss: { voice.hideSetup() }) {
             VoiceSetupSheet(voice: voice)
