@@ -7,6 +7,7 @@ import SwiftUI
 struct FullScreenInputSheet: View {
     @Bindable var model: TerminalSessionModel
     var voice: VoiceInputModel?
+    var onSent: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.mobaideColors) private var colors
@@ -36,6 +37,7 @@ struct FullScreenInputSheet: View {
                         }
                         Button {
                             model.submitComposer()
+                            onSent()
                             dismiss()
                         } label: {
                             Image(systemName: "paperplane.fill")
