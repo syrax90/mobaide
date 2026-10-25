@@ -1,5 +1,12 @@
 # mobaide_agent Changelog
 
+## [0.3.18](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.17...agent-v0.3.18) (2026-10-25)
+
+
+### Bug Fixes
+
+* **agent:** submit long multi-line prompts in one tap ([4440e52](https://github.com/syrax90/claude_mobile/commit/4440e52f793f8e6464d2a623db0d677823351a9d))
+
 ## [0.3.17](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.16...agent-v0.3.17) (2026-10-23)
 
 
