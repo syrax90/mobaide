@@ -38,8 +38,13 @@ final class SessionsPanelModel {
         self.customAgentTypesRepository = customAgentTypesRepository
         self.agentRepository = agentRepository
         self.connectedAgentId = connectedAgentId
+        // Seeded from the caches rather than empty: a terminal that opens with
+        // the drawer already up (a stop hand-off) must not flash
+        // "Reconnecting…" on its first frame.
         sessions = sessionRepository.currentSessions
         listSynced = sessionRepository.sessionsSynced
+        busConnected = agentEventBus.currentConnectionState == .connected
+        synced = listSynced && busConnected
         customTypeNames = Self.typeNames(customAgentTypesRepository.currentTypes)
         agents = agentRepository.currentAgents
     }

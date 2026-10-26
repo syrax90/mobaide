@@ -1161,6 +1161,12 @@ input[type='radio']:checked {
   }
 }
 
+/* Carried over from the terminal whose session was just stopped: it is
+   already in place, so it must not slide in again. */
+.sessions-panel-carried:popover-open {
+  animation: none;
+}
+
 .sessions-panel-body {
   display: flex;
   flex: 1;
@@ -1257,6 +1263,53 @@ input[type='radio']:checked {
 .sessions-panel-item-current {
   background: var(--surface);
   box-shadow: inset 0 0 0 2px var(--brand-2);
+}
+
+/* Stopping the session on screen hands the selection to the nearest one: the
+   stopped row dims while the stop is in flight, then folds out of the list
+   (the zero-height item's negative margin cancels its gap), and the frame
+   settles on the new current row as its terminal fades in. */
+.sessions-panel-item-stopping,
+.sessions-panel-item-leaving {
+  opacity: 0.4;
+}
+
+.sessions-panel-item-leaving {
+  overflow: hidden;
+  animation: sessions-panel-item-leave 240ms steps(4) forwards;
+}
+
+@keyframes sessions-panel-item-leave {
+  from {
+    max-height: 64px;
+  }
+
+  to {
+    max-height: 0;
+    margin-bottom: -0.5rem;
+    opacity: 0;
+  }
+}
+
+.sessions-panel-item-arriving {
+  animation: sessions-panel-item-arrive 240ms steps(4);
+}
+
+@keyframes sessions-panel-item-arrive {
+  from {
+    background: transparent;
+    box-shadow: inset 0 0 0 2px var(--surface-2);
+  }
+}
+
+.terminal-page-arriving {
+  animation: terminal-page-arrive 240ms steps(4);
+}
+
+@keyframes terminal-page-arrive {
+  from {
+    opacity: 0;
+  }
 }
 
 .sessions-panel-item .sessions-panel-row {
@@ -4377,6 +4430,11 @@ body:has(dialog[open]) {
   *::after {
     animation: none !important;
     transition: none !important;
+  }
+
+  /* Without its fold-out animation a stopped row would stay on screen. */
+  .sessions-panel-item-leaving {
+    display: none;
   }
 }
 

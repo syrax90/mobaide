@@ -6,6 +6,7 @@ import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
+import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.AgentRepository
 import com.mobaide.app.data.repository.AgentSwitchCoordinator
@@ -75,14 +76,37 @@ class SessionsPanelViewModel @Inject constructor(
 
     // A snapshot from a dropped tunnel is not agent-authoritative (see
     // `SessionRepository`), so the list reads as synced only while the bus is up.
+    private fun isSynced(synced: Boolean, connection: AgentEventBus.ConnState) =
+        synced && connection == AgentEventBus.ConnState.Connected
+
     private val liveSessions = combine(
         sessionRepository.observeSessionList(),
         sessionRepository.observeSessionsSynced(),
         agentEventBus.connection,
     ) { sessions, synced, connection ->
-        sessions to (synced && connection == AgentEventBus.ConnState.Connected)
+        sessions to isSynced(synced, connection)
     }
 
+    private fun panelState(
+        sessions: List<SessionResponse>,
+        synced: Boolean,
+        types: List<CustomAgentTypeDto>,
+        agents: List<AgentSummaryResponse>,
+        switching: String?,
+        stopping: String?,
+    ) = SessionsPanelUiState(
+        sessions = sessions,
+        synced = synced,
+        customTypeNames = types.associate { "custom_${it.id}" to it.name },
+        agents = agents,
+        connectedAgentId = connectedAgentId,
+        switchingAgentId = switching,
+        stoppingSessionId = stopping,
+    )
+
+    // Seeded from the caches rather than empty: a terminal that opens with the
+    // drawer already up (a stop hand-off) must not flash "Reconnecting…" or
+    // fade every row in on its first frame.
     val uiState: StateFlow<SessionsPanelUiState> = combine(
         liveSessions,
         customAgentTypesRepository.observeTypes(),
@@ -90,16 +114,22 @@ class SessionsPanelViewModel @Inject constructor(
         agentSwitchCoordinator.switchingAgentId,
         stoppingSessionId,
     ) { (sessions, synced), types, agents, switching, stopping ->
-        SessionsPanelUiState(
-            sessions = sessions,
-            synced = synced,
-            customTypeNames = types.associate { "custom_${it.id}" to it.name },
-            agents = agents,
-            connectedAgentId = connectedAgentId,
-            switchingAgentId = switching,
-            stoppingSessionId = stopping,
-        )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SessionsPanelUiState())
+        panelState(sessions, synced, types, agents, switching, stopping)
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        panelState(
+            sessions = sessionRepository.observeSessionList().value,
+            synced = isSynced(
+                sessionRepository.observeSessionsSynced().value,
+                agentEventBus.connection.value,
+            ),
+            types = customAgentTypesRepository.observeTypes().value,
+            agents = agentRepository.observeAgents().value,
+            switching = agentSwitchCoordinator.switchingAgentId.value,
+            stopping = null,
+        ),
+    )
 
     init {
         viewModelScope.launch {

@@ -2,6 +2,8 @@ package com.mobaide.app.ui.terminal
 
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -67,6 +69,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -78,6 +81,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalView
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -93,6 +97,8 @@ import com.mobaide.app.ui.voice.findActivity
 import com.mobaide.app.ui.voice.rememberMicPermissionRequest
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.withResumed
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.ui.theme.TerminalBackground
@@ -107,6 +113,9 @@ import kotlinx.coroutines.withTimeoutOrNull
  *  duration control, so it must never be the thing that ends a snackbar. */
 private const val SHEET_SNACKBAR_TIMEOUT_MS = 130_000L
 
+/** The terminal's fade-out before a stop hand-off, and the next one's fade-in. */
+private const val STOP_HAND_OFF_FADE_MS = 250
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TerminalScreen(
@@ -116,6 +125,11 @@ fun TerminalScreen(
     onSessionEnded: () -> Unit = onBack,
     panelViewModel: SessionsPanelViewModel = hiltViewModel(),
     onSwitchSession: (sessionId: String) -> Unit = {},
+    /** Replaces this terminal with [sessionId] under the still-open drawer,
+     *  after this terminal's own session was stopped from the panel. */
+    onSwitchAfterStop: (sessionId: String, stoppedSessionId: String) -> Unit = { id, _ -> onSwitchSession(id) },
+    /** Set when this terminal is the target of such a hand-off. */
+    stoppedSessionId: String? = null,
     onCreateSession: () -> Unit = {},
     onOpenGitChanges: () -> Unit = {},
     onOpenGitCommit: () -> Unit = {},
@@ -154,9 +168,22 @@ fun TerminalScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val shortcutSheetSnackbarHostState = remember { SnackbarHostState() }
     val panelState by panelViewModel.uiState.collectAsStateWithLifecycle()
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val drawerState = rememberDrawerState(if (stoppedSessionId != null) DrawerValue.Open else DrawerValue.Closed)
     val drawerScope = rememberCoroutineScope()
     var stopTarget by remember { mutableStateOf<SessionResponse?>(null) }
+    // Set while the panel hands the selection from this stopped session to the
+    // next one, before the terminals swap.
+    var handOff by remember { mutableStateOf<StopHandOff?>(null) }
+    // Saveable so returning to this entry from a pushed screen does not replay it.
+    var fadeInDone by rememberSaveable { mutableStateOf(stoppedSessionId == null) }
+    val terminalAlpha = remember { Animatable(if (fadeInDone) 1f else 0f) }
+    LaunchedEffect(Unit) {
+        if (!fadeInDone) {
+            terminalAlpha.animateTo(1f, tween(STOP_HAND_OFF_FADE_MS))
+            fadeInDone = true
+        }
+    }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
 
     LaunchedEffect(viewModel) {
         viewModel.sessionEnded.collect { onSessionEnded() }
@@ -232,7 +259,21 @@ fun TerminalScreen(
                 // alive, so leaving the stopped one on screen is done here: for
                 // the nearest open session, or the list when none is left.
                 is SessionsPanelEvent.Stopped -> if (event.sessionId == viewModel.sessionId) {
-                    event.nextSessionId?.let(onSwitchSession) ?: onSessionEnded()
+                    val next = event.nextSessionId
+                    if (next == null) {
+                        onSessionEnded()
+                    } else {
+                        // The panel moves its selection while this terminal fades
+                        // out, then the terminals swap. Leaving this screen
+                        // meanwhile disposes the scope and drops the swap.
+                        handOff = StopHandOff(stoppedId = event.sessionId, nextId = next)
+                        drawerScope.launch {
+                            terminalAlpha.animateTo(0f, tween(STOP_HAND_OFF_FADE_MS))
+                            lifecycle.withResumed {
+                                if (drawerState.isOpen) onSwitchAfterStop(next, event.sessionId) else onSwitchSession(next)
+                            }
+                        }
+                    }
                 } else {
                     // Launched, not awaited: a suspended showSnackbar would hold
                     // back the next event until this one is dismissed.
@@ -312,7 +353,8 @@ fun TerminalScreen(
         drawerContent = {
             SessionsPanel(
                 state = panelState,
-                currentSessionId = viewModel.sessionId,
+                currentSessionId = handOff?.nextId ?: viewModel.sessionId,
+                departingSessionId = handOff?.stoppedId ?: stoppedSessionId,
                 onSelectSession = onSwitchSession,
                 onStopSession = { stopTarget = it },
                 onCreateSession = {
@@ -409,6 +451,7 @@ fun TerminalScreen(
                     .fillMaxSize()
                     .padding(padding)
                     .clipToBounds()
+                    .graphicsLayer { alpha = terminalAlpha.value }
                     .edgeSwipeToOpen(enabled = !drawerState.isOpen, onOpen = openDrawer),
             ) {
                 Column(
@@ -678,3 +721,5 @@ private fun ConnectionOverlay(state: ConnectionState) {
         }
     }
 }
+
+private data class StopHandOff(val stoppedId: String, val nextId: String)

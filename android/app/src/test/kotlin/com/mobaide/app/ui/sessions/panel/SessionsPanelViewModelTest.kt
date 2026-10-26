@@ -66,6 +66,8 @@ class SessionsPanelViewModelTest {
         initialSynced: Boolean = true,
         initialConnection: AgentEventBus.ConnState = AgentEventBus.ConnState.Connected,
         refreshFails: Boolean = false,
+        initialSessions: List<SessionResponse> = emptyList(),
+        initialAgents: List<AgentSummaryResponse> = emptyList(),
     ): Fixture {
         val sessionRepo = mockk<SessionRepository>()
         val typesRepo = mockk<CustomAgentTypesRepository>()
@@ -74,11 +76,11 @@ class SessionsPanelViewModelTest {
         val bus = mockk<AgentEventBus>()
         val coordinator = mockk<AgentSwitchCoordinator>()
 
-        val sessionsFlow = MutableStateFlow<List<SessionResponse>>(emptyList())
+        val sessionsFlow = MutableStateFlow(initialSessions)
         val syncedFlow = MutableStateFlow(initialSynced)
         val connectionFlow = MutableStateFlow(initialConnection)
         val typesFlow = MutableStateFlow<List<CustomAgentTypeDto>>(emptyList())
-        val agentsFlow = MutableStateFlow<List<AgentSummaryResponse>>(emptyList())
+        val agentsFlow = MutableStateFlow(initialAgents)
         val switchingFlow = MutableStateFlow<String?>(null)
 
         every { sessionRepo.observeSessionList() } returns sessionsFlow
@@ -113,6 +115,18 @@ class SessionsPanelViewModelTest {
             assertEquals(listOf("a1", "a2"), expectMostRecentItem().agents.map { it.agent_id })
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun uiState_isSeededFromTheCachesBeforeAnyCollection() {
+        val fx = build(initialSessions = listOf(session("s1")), initialAgents = listOf(agent("a1")))
+
+        // A terminal that opens with the drawer up (a stop hand-off) renders
+        // this value on its first frame: no "Reconnecting…", no rows fading in.
+        val state = fx.vm.uiState.value
+        assertTrue(state.synced)
+        assertEquals(listOf("s1"), state.sessions.map { it.session_id })
+        assertEquals("a1", state.connectedAgent?.agent_id)
     }
 
     @Test
