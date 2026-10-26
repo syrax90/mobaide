@@ -62,6 +62,10 @@ _AGENT_RESTART_TIMEOUT_S = 15
 _AGENT_STOP_TIMEOUT_S = 30
 _WINDOWS_STOP_POLL_INTERVAL_S = 0.5
 _WINDOWS_STOP_POLL_TIMEOUT_S = 10.0
+_LOCAL_HEALTH_TIMEOUT_S = 3.0
+# Matches install.ps1 / install.sh's wait for the service's pending file.
+_SERVICE_PENDING_TIMEOUT_S = 60.0
+_SERVICE_PENDING_POLL_S = 0.5
 
 # Set ``creationflags=_WINDOWS_NO_WINDOW`` on every subprocess invocation
 # on Windows. The agent runs under ``pythonw.exe`` via the Scheduled Task
@@ -670,7 +674,7 @@ def _run_fetch_trust_key(args: argparse.Namespace) -> int:
             )
         return 0
 
-    return _try_restart_service()
+    return _try_restart_service(prefix)
 
 
 def _run_pair_qr(args: argparse.Namespace) -> int:
@@ -806,7 +810,7 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
     )
     if args.no_restart:
         return 0
-    return _try_restart_service()
+    return _try_restart_service(prefix)
 
 
 def _confirm_device_pairing(account_hint: str, hostname: str) -> bool:
@@ -1079,7 +1083,7 @@ def _run_pair(args: argparse.Namespace) -> int:
     )
     if args.no_restart:
         return 0
-    return _try_restart_service()
+    return _try_restart_service(prefix)
 
 
 def _run_show_trust_fp(args: argparse.Namespace) -> int:
@@ -1124,6 +1128,20 @@ def _run_show_qr(args: argparse.Namespace) -> int:
     running agent service is the single initiator of the pairing
     nonce; two competing initiates would race for the same WebSocket
     endpoint.
+
+    Without the flag, the agent answering on ``PORT`` is asked first. An
+    agent still booting into pairing mode (right after ``re-pair``) is
+    waited for, so this process does not initiate a nonce that the
+    service then replaces. An agent that reports it is paired while
+    ``.env`` holds no credentials started before they were blanked and
+    would never answer the QR, so nothing is rendered.
+
+    Returns:
+        0   rendered, or already paired.
+        7   no pending file to render (``--require-pending``, or the
+            agent did not publish one in time).
+        9   the running agent is still paired with its old credentials.
+        Other codes come from the ``pair-qr --print`` fall-through.
     """
     from mobaide.agent._env_writer import env_path_for_prefix, parse_env_file
     from mobaide.agent.install_paths import default_prefix
@@ -1137,8 +1155,8 @@ def _run_show_qr(args: argparse.Namespace) -> int:
     prefix = Path(args.prefix) if args.prefix else default_prefix()
     layout = InstallLayout(prefix=prefix)
     env_file = env_path_for_prefix(prefix)
-    if env_file.exists():
-        env_kv = parse_env_file(env_file)
+    env_kv = parse_env_file(env_file) if env_file.exists() else None
+    if env_kv is not None:
         if env_kv.get("RELAY_AGENT_ID", "").strip() and env_kv.get(
             "RELAY_AGENT_TOKEN", ""
         ).strip():
@@ -1149,6 +1167,36 @@ def _run_show_qr(args: argparse.Namespace) -> int:
             return 0
 
     pending = load_pending_pairing(layout)
+    require_pending = getattr(args, "require_pending", False)
+    if (
+        env_kv is not None
+        and env_kv.get("RELAY_SERVER_URL", "").strip()
+        and not require_pending
+    ):
+        health = _local_agent_health(env_kv)
+        agent_pairing = health.get("pairing_pending") if health else None
+        if agent_pairing is False:
+            sys.stderr.write(
+                "mobaide-agent show-qr: the agent running on this machine is "
+                "still paired with the credentials it started with, but "
+                f"{env_file} no longer has them, so it would never answer a "
+                "pairing QR. Restart it into pairing mode by running "
+                "'mobaide-agent re-pair' again, then run "
+                "'mobaide-agent show-qr'.\n"
+            )
+            return 9
+        if agent_pairing is True and pending is None:
+            pending = _wait_for_service_pending_pairing(layout)
+            if pending is None:
+                sys.stderr.write(
+                    "mobaide-agent show-qr: the agent is waiting to pair but "
+                    f"has not published a pairing QR within "
+                    f"{_SERVICE_PENDING_TIMEOUT_S:.0f}s; it most likely cannot "
+                    "reach the relay and keeps retrying on its own. Check the "
+                    "agent logs, then run 'mobaide-agent show-qr' again.\n"
+                )
+                return 7
+
     if pending is not None:
         sys.stdout.write(
             "[mobaide-agent] Pending pairing QR — scan from the Mobaide "
@@ -1162,7 +1210,7 @@ def _run_show_qr(args: argparse.Namespace) -> int:
         )
         return 0
 
-    if getattr(args, "require_pending", False):
+    if require_pending:
         sys.stderr.write(
             "mobaide-agent show-qr: no pending-pairing file at "
             f"{layout.prefix / 'run' / 'pending_pairing.json'} and "
@@ -1176,6 +1224,55 @@ def _run_show_qr(args: argparse.Namespace) -> int:
         prefix=str(prefix), print=True, wait=False, no_restart=True
     )
     return _run_pair_qr(fake_args)
+
+
+def _local_agent_health(env_kv: dict[str, str]) -> dict | None:
+    """The ``/api/health`` body of the agent on this host, or None.
+
+    Dials 127.0.0.1 on the ``.env`` ``PORT`` (HOST is the bind address, not
+    the contact address), as the installer does, over a direct connection so
+    an ``HTTP_PROXY`` cannot intercept it. None when nothing answers or the
+    answer is not an agent's health body.
+    """
+    import http.client
+    import json
+
+    try:
+        port = int(env_kv.get("PORT", "").strip() or "8000")
+    except ValueError:
+        return None
+    if not 0 < port < 65536:
+        return None
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=_LOCAL_HEALTH_TIMEOUT_S)
+    try:
+        conn.request("GET", "/api/health")
+        resp = conn.getresponse()
+        if resp.status != 200:
+            return None
+        body = json.loads(resp.read().decode("utf-8"))
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    finally:
+        conn.close()
+    if not isinstance(body, dict) or "pairing_pending" not in body:
+        return None
+    return body
+
+
+def _wait_for_service_pending_pairing(layout):
+    """Poll for the pending-pairing file the agent service publishes."""
+    from mobaide.agent.pairing_qr import load_pending_pairing
+
+    sys.stdout.write(
+        "[mobaide-agent] Waiting for the agent to publish its pairing QR...\n"
+    )
+    sys.stdout.flush()
+    deadline = time.monotonic() + _SERVICE_PENDING_TIMEOUT_S
+    while True:
+        pending = load_pending_pairing(layout)
+        if pending is not None or time.monotonic() >= deadline:
+            return pending
+        time.sleep(_SERVICE_PENDING_POLL_S)
 
 
 def _run_re_pair(args: argparse.Namespace) -> int:
@@ -1248,7 +1345,7 @@ def _run_re_pair(args: argparse.Namespace) -> int:
             "'mobaide-agent show-qr' to render a fresh QR.\n"
         )
         return 0
-    rc = _try_restart_service()
+    rc = _try_restart_service(prefix)
     sys.stdout.write(
         "[mobaide-agent] After the service restarts, run "
         "'mobaide-agent show-qr' to render the new QR for the mobile app.\n"
@@ -1256,14 +1353,14 @@ def _run_re_pair(args: argparse.Namespace) -> int:
     return rc
 
 
-def _try_restart_service() -> int:
+def _try_restart_service(prefix: Path | None = None) -> int:
     """Best-effort service restart. Never fails the pair operation."""
     if sys.platform.startswith("linux"):
         return _try_restart_systemd()
     if sys.platform == "darwin":
         return _try_restart_launchd()
     if sys.platform == "win32":
-        return _try_restart_windows_service()
+        return _try_restart_windows_service(prefix)
     sys.stdout.write(
         "[mobaide-agent] No supervisor known for this platform; "
         "restart the agent process manually.\n"
@@ -1348,7 +1445,7 @@ def _try_restart_launchd() -> int:
     return 0
 
 
-def _try_restart_windows_service() -> int:
+def _try_restart_windows_service(prefix: Path | None = None) -> int:
     """Restart the agent on Windows.
 
     Probes for the per-user Scheduled Task first (post-migration shape);
@@ -1358,7 +1455,7 @@ def _try_restart_windows_service() -> int:
     name = "MobaideAgent"
     rc, _, _ = _run_with_timeout(["schtasks.exe", "/Query", "/TN", name])
     if rc == 0:
-        return _restart_windows_scheduled_task(name)
+        return _restart_windows_scheduled_task(name, prefix)
     rc, _, _ = _run_with_timeout(["sc.exe", "query", name])
     if rc == 0:
         return _restart_windows_scm_service(name)
@@ -1369,7 +1466,7 @@ def _try_restart_windows_service() -> int:
     return 0
 
 
-def _restart_windows_scheduled_task(name: str) -> int:
+def _restart_windows_scheduled_task(name: str, prefix: Path | None = None) -> int:
     """End and re-Run the Scheduled Task ``name``.
 
     ``schtasks.exe /End`` terminates any running instance and is
@@ -1377,11 +1474,36 @@ def _restart_windows_scheduled_task(name: str) -> int:
     poll for ``Status: Ready`` so the subsequent ``/Run`` does not
     race with the still-tearing-down instance, then ``/Run`` to start
     a fresh one.
+
+    ``/End`` terminates only the supervisor. One that predates its
+    kill-on-close Job Object leaves the launcher and agent running with
+    the port and the relay credentials they booted with, and the new
+    instance then exits on the port clash while the stale agent keeps
+    serving — so a re-pair renders a QR that no agent is waiting on. Any
+    process still running from the install is therefore stopped before
+    ``/Run``.
     """
+    from mobaide.agent.install_paths import default_prefix
+
+    install = os.path.abspath(prefix if prefix is not None else default_prefix())
+    procs = _windows_processes()
+    try:
+        inside = procs.runs_inside_install(procs.list_processes(), os.getpid(), install)
+    except OSError:
+        inside = False
+    if inside:
+        sys.stdout.write(
+            f"[mobaide-agent] Not restarting {name}: this command is running "
+            "inside one of the agent's own terminal sessions, and stopping the "
+            "agent would end it before it could start the agent again. Run the "
+            "command again from a terminal outside Mobaide.\n"
+        )
+        return 0
     _run_with_timeout(
         ["schtasks.exe", "/End", "/TN", name], timeout=_AGENT_STOP_TIMEOUT_S,
     )
     _wait_for_windows_scheduled_task_ready(name)
+    _stop_leftover_windows_agent(install)
     rc, _, _ = _run_with_timeout(["schtasks.exe", "/Run", "/TN", name])
     if rc == 0:
         sys.stdout.write(f"[mobaide-agent] Restarted {name} Scheduled Task.\n")
@@ -1393,6 +1515,46 @@ def _restart_windows_scheduled_task(name: str) -> int:
         f"    Start-ScheduledTask -TaskName {name}\n"
     )
     return 0
+
+
+def _windows_processes():
+    from mobaide.agent import windows_processes
+
+    return windows_processes
+
+
+def _stop_leftover_windows_agent(install: str) -> None:
+    """Stop every process still running from ``install`` and wait for it.
+
+    Best-effort: a process that will not stop is reported, and the restart
+    goes ahead.
+    """
+    procs = _windows_processes()
+    try:
+        pids = procs.install_process_ids(
+            procs.list_processes(), install, keep_pid=os.getpid(),
+        )
+        if not pids:
+            return
+        remaining = procs.terminate(pids, timeout_s=_WINDOWS_STOP_POLL_TIMEOUT_S)
+    except OSError as exc:
+        sys.stdout.write(
+            f"[mobaide-agent] Could not check for agent processes left "
+            f"running from {install}: {exc}\n"
+        )
+        return
+    if remaining:
+        ids = ", ".join(str(pid) for pid in remaining)
+        sys.stdout.write(
+            f"[mobaide-agent] Could not stop leftover agent process(es) {ids}; "
+            "the restarted agent may fail to start. Stop them from an elevated "
+            f"PowerShell:\n    Stop-Process -Force -Id {ids}\n"
+        )
+        return
+    sys.stdout.write(
+        f"[mobaide-agent] Stopped {len(pids)} leftover agent process(es) "
+        f"running from {install}.\n"
+    )
 
 
 def _restart_windows_scm_service(name: str) -> int:

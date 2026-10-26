@@ -328,7 +328,18 @@ mobaide-agent show-qr
 ```
 
 This re-renders the most-recent pending QR; if the cached nonce has
-expired, it initiates a fresh one.
+expired, it initiates a fresh one. It first asks the agent answering on
+`127.0.0.1:<PORT>` for `/api/health`:
+
+* `pairing_pending: true` with no pending file yet (the service is still
+  booting, e.g. right after `re-pair`): it waits up to 60 s for the
+  service's own QR rather than initiating a nonce the service would then
+  replace, and exits 7 if none appears.
+* `pairing_pending: false` while `.env` holds no credentials: the running
+  agent started before they were blanked and still serves them, so it
+  would never answer a QR. `show-qr` renders nothing and exits 9; restart
+  the agent by running `mobaide-agent re-pair` again.
+* nothing answering: unchanged — render the pending file, or initiate.
 
 `mobaide-agent` is a shim the installer puts on PATH:
 `/usr/local/bin/mobaide-agent` on Linux and macOS (or `<prefix>/bin/mobaide-agent`,
@@ -672,6 +683,8 @@ it, so the user sees "waiting for the agent" until the timeout. Mitigations:
 | `pair-qr` returns 4 ("trust key not pinned") | Agent never ran `fetch-trust-key` | Run `mobaide-agent fetch-trust-key` |
 | `pair-qr` returns 5 ("fingerprint mismatch") | Server's trust key was rotated since the agent pinned it | Re-fetch the trust key (re-run `fetch-trust-key`); confirm rotation was intentional |
 | Mobile shows "Pairing code consumed or expired" (HTTP 410) | QR scanned twice, or after TTL | Render a fresh QR via `show-qr` |
+| `show-qr` exits 9 ("still paired with the credentials it started with") | The agent running on the host booted before `re-pair` blanked `.env`, so it is still paired and no pairing monitor is waiting on any QR. On Windows this was the normal outcome of `re-pair` before the supervisor's kill-on-close Job Object: `schtasks /End` killed only the supervisor, the orphaned agent kept the port, and the restarted one exited (Task Scheduler last result 3) | Run `mobaide-agent re-pair` again from a terminal outside Mobaide: its restart now also stops any agent process left running from the install before starting the task. Re-run the installer once to get the supervisor that ends its whole process tree |
+| `show-qr` exits 7 without `--require-pending` | The agent is in pairing mode but did not publish a QR within 60 s — most likely it cannot reach the relay | Check the agent logs; it retries on its own, so run `show-qr` again later |
 | Mobile shows "Trust key changed — possible MITM" | TOFS pin diverges from scanned fingerprint | If you intentionally rotated the relay key, clear the app's data; otherwise treat as a security incident |
 | `pair-qr --wait` exits 6 | Pairing WS transport, TTL, or signature failure | Re-run; check relay logs |
 | `pair <code>` exits 8 | The relay refused the code: unknown, expired, superseded by a newer code, or already redeemed by another machine | Get a fresh code in the app and re-run. A repeated 8 with "already redeemed from this machine" means the first redeem's response was lost — the nonce is unrecoverable, so mint a new code |

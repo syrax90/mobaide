@@ -42,6 +42,17 @@ sys.path.insert(0, str(_REPO_ROOT / "deploy"))
 
 import windows_launcher  # noqa: E402
 
+_REAL_BIND_DESCENDANTS = windows_launcher._bind_descendants_to_supervisor
+
+
+@pytest.fixture(autouse=True)
+def _no_kill_on_close_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ``main`` from putting the pytest process in a kill-on-close job:
+    joining one cannot be undone, and pytest's children would die with it."""
+    monkeypatch.setattr(
+        windows_launcher, "_bind_descendants_to_supervisor", lambda: None
+    )
+
 
 class TestDefaultPrefix:
     """Precedence: ``--prefix`` argv > ``MOBAIDE_AGENT_PREFIX`` env >
@@ -1391,6 +1402,97 @@ class TestMainWiresStderrRedirect:
             "stderr log under one prefix and current_version reads "
             f"under another. Got {prefix_calls!r}"
         )
+
+
+class TestBindDescendantsToSupervisor:
+    """``schtasks /End`` terminates only the supervisor. Without the job the
+    launcher and agent it started kept running -- holding the agent port and
+    the relay credentials they booted with -- so the task's next start could
+    not bind and exited, and a re-pair never completed.
+    """
+
+    def test_main_binds_after_redirect_and_before_supervise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        order: list[str] = []
+        monkeypatch.setattr(windows_launcher, "_install_signal_handlers", lambda: None)
+        monkeypatch.setattr(
+            windows_launcher, "_redirect_supervisor_stderr",
+            lambda _prefix: order.append("redirect"),
+        )
+        monkeypatch.setattr(
+            windows_launcher, "_bind_descendants_to_supervisor",
+            lambda: order.append("bind"),
+        )
+
+        def fake_supervise(_prefix: Path) -> int:
+            order.append("supervise")
+            return 0
+
+        monkeypatch.setattr(windows_launcher, "_supervise", fake_supervise)
+
+        windows_launcher.main(["--prefix", r"D:\foo"])
+
+        # After the redirect so a failure is logged; before the first spawn
+        # so the launcher is born inside the job.
+        assert order == ["redirect", "bind", "supervise"]
+
+    def test_no_op_on_non_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(windows_launcher, "_descendant_job", None)
+
+        _REAL_BIND_DESCENDANTS()
+
+        assert windows_launcher._descendant_job is None
+
+    def test_failure_is_logged_not_raised(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import ctypes
+
+        def refuse(*_args, **_kwargs):
+            raise OSError("no jobs here")
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(ctypes, "WinDLL", refuse, raising=False)
+        monkeypatch.setattr(windows_launcher, "_descendant_job", None)
+
+        _REAL_BIND_DESCENDANTS()
+
+        assert windows_launcher._descendant_job is None
+        assert "without a kill-on-close job" in capsys.readouterr().err
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Objects")
+    def test_terminating_the_supervisor_kills_what_it_started(self) -> None:
+        psutil = pytest.importorskip("psutil")
+        script = (
+            "import subprocess, sys, time\n"
+            f"sys.path.insert(0, {str(_REPO_ROOT / 'deploy')!r})\n"
+            "import windows_launcher\n"
+            "windows_launcher._bind_descendants_to_supervisor()\n"
+            "assert windows_launcher._descendant_job\n"
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+            "print(child.pid, flush=True)\n"
+            "time.sleep(120)\n"
+        )
+        supervisor = subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdout=subprocess.PIPE,
+            text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        child = None
+        try:
+            assert supervisor.stdout is not None
+            child = psutil.Process(int(supervisor.stdout.readline()))
+            # TerminateProcess, as Task Scheduler's /End does.
+            supervisor.kill()
+            supervisor.wait(timeout=10)
+            child.wait(timeout=10)
+        finally:
+            supervisor.kill()
+            if child is not None and child.is_running():
+                child.kill()
 
 
 class TestParseArgs:

@@ -18,6 +18,7 @@ from unittest.mock import patch
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+import mobaide.__main__ as _main
 from mobaide.__main__ import (
     _report_permission_denied,
     _run_pair_qr,
@@ -34,6 +35,14 @@ from mobaide.agent.pairing_qr import (
     save_pending_pairing,
 )
 from mobaide.agent.updater import InstallLayout
+
+_REAL_LOCAL_AGENT_HEALTH = _main._local_agent_health
+
+
+@pytest.fixture(autouse=True)
+def _no_local_agent(monkeypatch):
+    """No test may reach whatever agent really listens on this host's PORT."""
+    monkeypatch.setattr(_main, "_local_agent_health", lambda _env_kv: None)
 
 
 def _ns(**overrides) -> argparse.Namespace:
@@ -333,6 +342,180 @@ class TestRunShowQrRequirePending:
         out = capsys.readouterr().out
         assert "Already paired" in out
         assert "Pairing QR" not in out
+
+
+def _agent_reports(monkeypatch, health):
+    monkeypatch.setattr(_main, "_local_agent_health", lambda _env_kv: health)
+
+
+def _forbid_initiate():
+    return patch(
+        "mobaide.agent.pairing_monitor.initiate_pairing",
+        side_effect=AssertionError("show-qr must not initiate its own nonce"),
+    )
+
+
+class TestRunShowQrAsksTheRunningAgent:
+    """``show-qr`` checks the agent answering on PORT before rendering.
+
+    After ``re-pair`` the operator may run ``show-qr`` while the service is
+    still booting; a nonce initiated here would be replaced by the one the
+    service initiates. And an agent that started before ``re-pair`` blanked
+    the credentials keeps serving them, so a QR shown then is never answered.
+    """
+
+    def test_stale_paired_agent_refuses_to_render(self, tmp_path, capsys, monkeypatch):
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_pending(tmp_path)
+        _agent_reports(monkeypatch, {"status": "ok", "pairing_pending": False})
+
+        rc = _run_show_qr(_ns(prefix=str(tmp_path)))
+
+        assert rc == 9
+        captured = capsys.readouterr()
+        assert "MOBA1|" not in captured.out
+        assert "still paired" in captured.err
+        assert "mobaide-agent re-pair" in captured.err
+
+    def test_waits_for_the_service_to_publish_its_qr(self, tmp_path, capsys, monkeypatch):
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _agent_reports(monkeypatch, {"status": "ok", "pairing_pending": True})
+        published: list[str] = []
+        monkeypatch.setattr(
+            _main.time, "sleep", lambda _s: published.append(_seed_pending(tmp_path))
+        )
+
+        with _forbid_initiate():
+            rc = _run_show_qr(_ns(prefix=str(tmp_path)))
+
+        assert rc == 0
+        lines = capsys.readouterr().out.split("\n")
+        assert "Waiting for the agent to publish its pairing QR" in lines[0]
+        assert published[0] in lines
+
+    def test_service_that_never_publishes_returns_7(self, tmp_path, capsys, monkeypatch):
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _agent_reports(monkeypatch, {"status": "ok", "pairing_pending": True})
+        monkeypatch.setattr(_main, "_SERVICE_PENDING_TIMEOUT_S", 0.0)
+
+        with _forbid_initiate():
+            rc = _run_show_qr(_ns(prefix=str(tmp_path)))
+
+        assert rc == 7
+        assert "has not published a pairing QR" in capsys.readouterr().err
+
+    def test_pairing_agent_with_pending_renders_without_waiting(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        payload = _seed_pending(tmp_path)
+        _agent_reports(monkeypatch, {"status": "ok", "pairing_pending": True})
+
+        rc = _run_show_qr(_ns(prefix=str(tmp_path)))
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert payload in out.split("\n")
+        assert "Waiting" not in out
+
+    def test_no_agent_answering_keeps_the_initiate_fall_through(
+        self, tmp_path, capsys
+    ):
+        # Nothing on PORT -> unchanged behaviour: initiate from this process,
+        # here stopping at the missing trust key.
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+
+        rc = _run_show_qr(_ns(prefix=str(tmp_path)))
+
+        assert rc == 4
+        assert "trust key not pinned" in capsys.readouterr().err
+
+    def test_require_pending_never_asks_the_agent(self, tmp_path, monkeypatch):
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_pending(tmp_path)
+        monkeypatch.setattr(
+            _main,
+            "_local_agent_health",
+            lambda _env_kv: pytest.fail("installer path must not probe the agent"),
+        )
+
+        assert _run_show_qr(_ns(prefix=str(tmp_path), require_pending=True)) == 0
+
+    def test_relay_mode_off_never_asks_the_agent(self, tmp_path, monkeypatch):
+        _seed_env(tmp_path)
+        monkeypatch.setattr(
+            _main,
+            "_local_agent_health",
+            lambda _env_kv: pytest.fail("no relay configured, nothing to pair"),
+        )
+
+        assert _run_show_qr(_ns(prefix=str(tmp_path))) == 2
+
+
+class TestLocalAgentHealth:
+    @pytest.fixture
+    def serve(self):
+        import http.server
+        import threading
+
+        servers = []
+
+        def start(status: int, body: bytes) -> int:
+            class Handler(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):
+                    self.send_response(status)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, format, *args):
+                    pass
+
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            servers.append(server)
+            return server.server_address[1]
+
+        yield start
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+
+    def test_returns_the_agent_health_body(self, serve):
+        port = serve(200, b'{"status": "ok", "pairing_pending": true}')
+
+        assert _REAL_LOCAL_AGENT_HEALTH({"PORT": str(port)}) == {
+            "status": "ok",
+            "pairing_pending": True,
+        }
+
+    @pytest.mark.parametrize(
+        "status,body",
+        [
+            (200, b'{"status": "ok"}'),
+            (200, b"<html>not an agent</html>"),
+            (503, b'{"pairing_pending": true}'),
+        ],
+    )
+    def test_ignores_answers_that_are_not_an_agent_health_body(
+        self, serve, status, body
+    ):
+        port = serve(status, body)
+
+        assert _REAL_LOCAL_AGENT_HEALTH({"PORT": str(port)}) is None
+
+    def test_nothing_listening_returns_none(self):
+        import socket
+
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+
+        assert _REAL_LOCAL_AGENT_HEALTH({"PORT": str(port)}) is None
+
+    @pytest.mark.parametrize("port", ["not-a-port", "0", "70000"])
+    def test_unusable_port_returns_none(self, port):
+        assert _REAL_LOCAL_AGENT_HEALTH({"PORT": port}) is None
 
 
 class TestRunRePair:
