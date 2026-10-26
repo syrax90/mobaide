@@ -127,6 +127,30 @@ export function canStopSession(state: string): boolean {
   return state === 'running' || state === 'starting';
 }
 
+/**
+ * Where to go after stopping the session on screen: the closest open session
+ * to the stopped row — below first, then above, widening outward. Positions
+ * come from `snapshot`, the list as the user saw it when confirming the stop,
+ * because the agent's push can drop the stopped row before the stop resolves;
+ * a candidate must still be open in `current`. `null` means none is left.
+ */
+export function nearestOpenSession(
+  snapshot: readonly SessionResponse[],
+  current: readonly SessionResponse[],
+  stoppedId: string,
+): string | null {
+  const index = snapshot.findIndex((session) => session.session_id === stoppedId);
+  if (index < 0) return null;
+  const isOpen = (id: string) =>
+    current.some((session) => session.session_id === id && canStopSession(session.state));
+  for (let distance = 1; distance < snapshot.length; distance++) {
+    for (const candidate of [snapshot[index + distance], snapshot[index - distance]]) {
+      if (candidate !== undefined && isOpen(candidate.session_id)) return candidate.session_id;
+    }
+  }
+  return null;
+}
+
 /** `custom_<id>` → display name, for the kind-label fallback. */
 export function customTypeNameMap(
   types: readonly { id: string; name: string }[] | undefined,

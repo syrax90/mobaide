@@ -63,6 +63,7 @@ const { useSelectedAgentStore } = await import('../../stores/selectedAgentStore'
 const { SessionsPanel } = await import('./SessionsPanel');
 const { ApiError } = await import('../../api/errors');
 const { useToastStore } = await import('../../stores/toastStore');
+const { queryKeys } = await import('../../lib/queryKeys');
 const { setTerminalEvictor } = await import('../../terminal/terminalEviction');
 // No socket is ever built here, so both halves of the synced signal are
 // staged directly, the way `TerminalScreen.test.tsx` does.
@@ -107,9 +108,13 @@ const calls = {
   closes: 0,
 };
 
-function renderPanel({ docked = false, pinned = false }: { docked?: boolean; pinned?: boolean } = {}) {
+function renderPanel({
+  docked = false,
+  pinned = false,
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+}: { docked?: boolean; pinned?: boolean; client?: QueryClient } = {}) {
   return render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/agents/a1/sessions/s1']}>
         <Probe />
         <SessionsPanel
@@ -364,6 +369,72 @@ describe('SessionsPanel stop', () => {
     expect(toastMessages()).toEqual([['Session stopped.', 'success']]);
     // Otherwise an unclaimed auto-resume sends the list straight back into it.
     expect(useLastSessionStore.getState().lastUsedSessionIds).toEqual({ a2: 's9' });
+  });
+
+  it('moves to the nearest open session below instead of the list, before evicting', async () => {
+    markSessionsSynced('a1');
+    api.sessions = [
+      session('s0', { title: 'zero' }),
+      session('s1', { title: 'one' }),
+      session('s2', { title: 'two' }),
+    ];
+    useLastSessionStore.setState({ lastUsedSessionIds: { a1: 's1', a2: 's9' } });
+    setTerminalEvictor((_agentId, ids) => {
+      api.trace.push(`evict:${ids.join(',')}`);
+    });
+    renderPanel();
+    const list = await screen.findByRole('list', { name: 'Sessions' });
+
+    fireEvent.click(within(rowItem(list, 'one')).getByRole('button', { name: 'Stop session' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+
+    await waitFor(() => {
+      expect(currentPath()).toBe('/agents/a1/sessions/s2');
+    });
+    expect(navigationType()).toBe('REPLACE');
+    expect(api.trace).toEqual(['navigate:/agents/a1/sessions/s2', 'evict:s1']);
+    expect(useLastSessionStore.getState().lastUsedSessionIds).toEqual({ a1: 's2', a2: 's9' });
+    expect(toastMessages()).toEqual([['Session stopped.', 'success']]);
+  });
+
+  it('picks by the list as confirmed even when the stopped row is pushed away mid-stop', async () => {
+    markSessionsSynced('a1');
+    api.sessions = [
+      session('s0', { title: 'zero' }),
+      session('s1', { title: 'one' }),
+      session('s2', { title: 'two' }),
+      session('s3', { title: 'three' }),
+    ];
+    let resolveStop = () => {};
+    api.stopResult = () =>
+      new Promise<void>((resolve) => {
+        resolveStop = resolve;
+      });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderPanel({ client });
+    const list = await screen.findByRole('list', { name: 'Sessions' });
+
+    fireEvent.click(within(rowItem(list, 'one')).getByRole('button', { name: 'Stop session' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await waitFor(() => {
+      expect(api.stops).toEqual([{ sessionId: 's1', force: false }]);
+    });
+    // The agent's push lands first: the stopped row is gone and its old
+    // neighbour below has ended, so only the snapshot still knows the order.
+    client.setQueryData(queryKeys.sessions('a1'), [
+      session('s0', { title: 'zero' }),
+      session('s2', { title: 'two', state: 'stopped' }),
+      session('s3', { title: 'three' }),
+    ]);
+    await waitFor(() => {
+      expect(within(list).queryByRole('button', { name: /one/ })).toBeNull();
+    });
+    resolveStop();
+
+    await waitFor(() => {
+      expect(currentPath()).toBe('/agents/a1/sessions/s0');
+    });
+    expect(useLastSessionStore.getState().lastUsedSessionIds).toEqual({ a1: 's0' });
   });
 
   it('treats a 404 on the current session as already stopped and still leaves', async () => {

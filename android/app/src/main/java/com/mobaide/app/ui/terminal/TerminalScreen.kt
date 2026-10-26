@@ -229,9 +229,10 @@ fun TerminalScreen(
         panelViewModel.events.collect { event ->
             when (event) {
                 // `sessionEnded` never fires for a session this screen has seen
-                // alive, so leaving the stopped one on screen is done here.
+                // alive, so leaving the stopped one on screen is done here: for
+                // the nearest open session, or the list when none is left.
                 is SessionsPanelEvent.Stopped -> if (event.sessionId == viewModel.sessionId) {
-                    onSessionEnded()
+                    event.nextSessionId?.let(onSwitchSession) ?: onSessionEnded()
                 } else {
                     // Launched, not awaited: a suspended showSnackbar would hold
                     // back the next event until this one is dismissed.

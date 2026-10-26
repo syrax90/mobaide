@@ -4,6 +4,7 @@ import {
   attentionChip,
   canStopSession,
   customTypeNameMap,
+  nearestOpenSession,
   sessionDialogLabel,
   sessionHeaderLabel,
   sessionKindLabel,
@@ -175,6 +176,64 @@ describe('canStopSession', () => {
     expect(canStopSession('stopping')).toBe(false);
     expect(canStopSession('stopped')).toBe(false);
     expect(canStopSession('crashed')).toBe(false);
+  });
+});
+
+describe('nearestOpenSession', () => {
+  const row = (id: string, state = 'running') => session({ session_id: id, state });
+
+  it('prefers the row below, then the row above', () => {
+    const list = [row('a'), row('b'), row('c')];
+
+    expect(nearestOpenSession(list, list, 'b')).toBe('c');
+    expect(nearestOpenSession(list, list, 'c')).toBe('b');
+    expect(nearestOpenSession(list, list, 'a')).toBe('b');
+  });
+
+  it('widens outward past rows that are not open', () => {
+    const list = [row('a'), row('b', 'stopped'), row('c'), row('d', 'crashed'), row('e')];
+
+    // One away on both sides is closed; two below beats two above.
+    expect(nearestOpenSession(list, list, 'c')).toBe('e');
+    expect(nearestOpenSession(list, [row('a'), row('c'), row('d', 'crashed')], 'c')).toBe('a');
+  });
+
+  it('counts a starting session as open', () => {
+    const list = [row('a', 'stopping'), row('b'), row('c', 'starting')];
+
+    expect(nearestOpenSession(list, list, 'b')).toBe('c');
+  });
+
+  it('keeps the snapshot positions after the stopped row has left the current list', () => {
+    // The agent's push dropped the stopped row before the stop resolved.
+    const snapshot = [row('a'), row('b'), row('c'), row('d')];
+    const current = [row('a'), row('c'), row('d')];
+
+    expect(nearestOpenSession(snapshot, current, 'b')).toBe('c');
+  });
+
+  it('skips a neighbour that has since gone or stopped', () => {
+    const snapshot = [row('a'), row('b'), row('c'), row('d')];
+
+    expect(nearestOpenSession(snapshot, [row('a'), row('b'), row('d')], 'b')).toBe('a');
+    expect(nearestOpenSession(snapshot, [row('a', 'stopped'), row('c', 'stopping'), row('d')], 'b')).toBe(
+      'd',
+    );
+  });
+
+  it('ignores sessions that only appeared after the snapshot', () => {
+    const snapshot = [row('a', 'stopped'), row('b')];
+
+    expect(nearestOpenSession(snapshot, [row('a', 'stopped'), row('z')], 'b')).toBeNull();
+  });
+
+  it('returns null when no open session is left', () => {
+    expect(nearestOpenSession([row('a')], [], 'a')).toBeNull();
+    expect(nearestOpenSession([row('a', 'stopped'), row('b')], [row('a', 'stopped')], 'b')).toBeNull();
+  });
+
+  it('returns null when the stopped session was not in the snapshot', () => {
+    expect(nearestOpenSession([row('a'), row('b')], [row('a'), row('b')], 'x')).toBeNull();
   });
 });
 

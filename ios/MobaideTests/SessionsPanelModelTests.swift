@@ -166,7 +166,7 @@ final class SessionsPanelModelTests: XCTestCase {
 
         let stopped = try await stack.model.stopSession("s1", force: true)
 
-        XCTAssertTrue(stopped)
+        XCTAssertEqual(stopped, SessionsPanelModel.StoppedSession(nextSessionId: nil))
         XCTAssertNil(stack.model.stoppingSessionId)
         let request = try XCTUnwrap(StubURLProtocol.requests.first)
         XCTAssertEqual(request.httpMethod, "DELETE")
@@ -181,7 +181,7 @@ final class SessionsPanelModelTests: XCTestCase {
 
         let stopped = try await stack.model.stopSession("s1", force: false)
 
-        XCTAssertTrue(stopped)
+        XCTAssertEqual(stopped, SessionsPanelModel.StoppedSession(nextSessionId: nil))
         XCTAssertNil(stack.model.stoppingSessionId)
     }
 
@@ -198,5 +198,86 @@ final class SessionsPanelModelTests: XCTestCase {
             XCTFail("unexpected error \(error)")
         }
         XCTAssertNil(stack.model.stoppingSessionId)
+    }
+
+    func testStopNamesTheNearestOpenSessionFromTheLiveList() async throws {
+        let stack = makeStack()
+        stack.sessionRepository.start()
+        await stack.bus.start()
+        let connection = try await stack.factory.connection(1)
+        connection.emit(.opened)
+        connection.emit(.text(
+            #"{"type":"sessions.changed","payload":{"sessions":["#
+                + #"{"session_id":"s1","state":"running","created_at":"t"},"#
+                + #"{"session_id":"s2","state":"running","created_at":"t"},"#
+                + #"{"session_id":"s3","state":"starting","created_at":"t"}]}}"#
+        ))
+        await waitUntil { stack.sessionRepository.currentSessions.count == 3 }
+        StubURLProtocol.enqueue(status: 204, body: "")
+
+        let stopped = try await stack.model.stopSession("s2", force: false)
+
+        XCTAssertEqual(stopped, SessionsPanelModel.StoppedSession(nextSessionId: "s3"))
+    }
+
+    private func row(_ id: String, _ state: String = "running") -> SessionResponse {
+        makeSessionResponse(id: id, state: state)
+    }
+
+    private func nearest(_ snapshot: [SessionResponse], _ current: [SessionResponse], _ stoppedId: String) -> String? {
+        SessionsPanelModel.nearestOpenSessionId(snapshot: snapshot, current: current, stoppedId: stoppedId)
+    }
+
+    func testNearestPrefersTheRowBelowThenTheRowAbove() {
+        let list = [row("a"), row("b"), row("c")]
+
+        XCTAssertEqual(nearest(list, list, "b"), "c")
+        XCTAssertEqual(nearest(list, list, "c"), "b")
+        XCTAssertEqual(nearest(list, list, "a"), "b")
+    }
+
+    func testNearestWidensOutwardPastRowsThatAreNotOpen() {
+        let list = [row("a"), row("b", "stopped"), row("c"), row("d", "crashed"), row("e")]
+
+        // One away on both sides is closed; two below beats two above.
+        XCTAssertEqual(nearest(list, list, "c"), "e")
+        XCTAssertEqual(nearest(list, [row("a"), row("c"), row("d", "crashed")], "c"), "a")
+    }
+
+    func testNearestCountsAStartingSessionAsOpen() {
+        let list = [row("a", "stopping"), row("b"), row("c", "starting")]
+
+        XCTAssertEqual(nearest(list, list, "b"), "c")
+    }
+
+    /// The agent's push can drop the stopped row before the stop resolves.
+    func testNearestKeepsTheSnapshotPositionsAfterTheStoppedRowLeft() {
+        let snapshot = [row("a"), row("b"), row("c"), row("d")]
+
+        XCTAssertEqual(nearest(snapshot, [row("a"), row("c"), row("d")], "b"), "c")
+    }
+
+    func testNearestSkipsANeighbourThatHasSinceGoneOrStopped() {
+        let snapshot = [row("a"), row("b"), row("c"), row("d")]
+
+        XCTAssertEqual(nearest(snapshot, [row("a"), row("b"), row("d")], "b"), "a")
+        XCTAssertEqual(nearest(snapshot, [row("a", "stopped"), row("c", "stopping"), row("d")], "b"), "d")
+    }
+
+    func testNearestIgnoresSessionsThatOnlyAppearedAfterTheSnapshot() {
+        let snapshot = [row("a", "stopped"), row("b")]
+
+        XCTAssertNil(nearest(snapshot, [row("a", "stopped"), row("z")], "b"))
+    }
+
+    func testNearestIsNilWhenNoOpenSessionIsLeft() {
+        XCTAssertNil(nearest([row("a")], [], "a"))
+        XCTAssertNil(nearest([row("a", "stopped"), row("b")], [row("a", "stopped")], "b"))
+    }
+
+    func testNearestIsNilWhenTheStoppedSessionWasNotInTheSnapshot() {
+        let list = [row("a"), row("b")]
+
+        XCTAssertNil(nearest(list, list, "x"))
     }
 }

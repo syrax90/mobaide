@@ -86,18 +86,50 @@ final class SessionsPanelModel {
         }
     }
 
+    struct StoppedSession: Equatable {
+        /// The open session to show instead when the stopped one is on screen,
+        /// or nil when none is left.
+        let nextSessionId: String?
+    }
+
     /// The row disappears through the agent's `sessions.changed` push, so a
     /// success needs no refetch here. One stop at a time: the panel disables
     /// every stop control while one is in flight, and a second call returns
-    /// false. A 404 means the session is already gone, so it counts as stopped.
-    func stopSession(_ id: String, force: Bool) async throws -> Bool {
-        guard stoppingSessionId == nil else { return false }
+    /// nil. A 404 means the session is already gone, so it counts as stopped.
+    func stopSession(_ id: String, force: Bool) async throws -> StoppedSession? {
+        guard stoppingSessionId == nil else { return nil }
         stoppingSessionId = id
         defer { stoppingSessionId = nil }
+        // Positions are read before the request: the agent's push can drop the
+        // stopped row before the stop resolves.
+        let snapshot = sessionRepository.currentSessions
         do {
             try await sessionRepository.deleteSession(id: id, force: force)
         } catch let error as APIError where error.code == 404 {}
-        return true
+        return StoppedSession(nextSessionId: Self.nearestOpenSessionId(
+            snapshot: snapshot,
+            current: sessionRepository.currentSessions,
+            stoppedId: id
+        ))
+    }
+
+    /// The closest open session to the stopped row — below first, then above,
+    /// widening outward. Positions come from `snapshot`, the list as it was
+    /// when the stop was confirmed; a candidate must still be open in `current`.
+    static func nearestOpenSessionId(
+        snapshot: [SessionResponse],
+        current: [SessionResponse],
+        stoppedId: String
+    ) -> String? {
+        guard let index = snapshot.firstIndex(where: { $0.session_id == stoppedId }) else { return nil }
+        let open = Set(current.filter { SessionDisplay.canStop($0.state) }.map(\.session_id))
+        for distance in 1..<snapshot.count {
+            for candidate in [index + distance, index - distance] where snapshot.indices.contains(candidate) {
+                let id = snapshot[candidate].session_id
+                if open.contains(id) { return id }
+            }
+        }
+        return nil
     }
 
     /// Best effort: the cached list from the agents screen still renders.
