@@ -16,6 +16,7 @@ import asyncio
 import base64
 import binascii
 import logging
+import math
 import time
 import uuid
 from collections.abc import Callable
@@ -64,6 +65,8 @@ class _Dictation:
     # already decided, so later segments must not respawn the worker and
     # reload the model just to fail again.
     failure: VoiceError | None = None
+    skipped_segments: int = 0
+    peak_rms: float = 0.0
 
     @property
     def duration_ms(self) -> int:
@@ -200,6 +203,9 @@ class DictationManager:
         return dictation
 
     def _start_part(self, dictation: _Dictation, segment: Segment) -> asyncio.Task[str]:
+        dictation.peak_rms = max(dictation.peak_rms, segment.peak_rms)
+        if not segment.voiced:
+            dictation.skipped_segments += 1
         previous = dictation.parts[-1] if dictation.parts else None
         task = asyncio.ensure_future(self._transcribe(dictation, segment, previous))
         task.add_done_callback(consume_exception)
@@ -248,9 +254,10 @@ class DictationManager:
             segments = len(dictation.parts)
             dictation.parts = []
         logger.info(
-            "voice.dictation_finished dictation_id=%s duration_ms=%d segments=%d tail_ms=%d",
-            dictation.id, dictation.duration_ms, segments,
-            int((dictation.finished_at - started) * 1000),
+            "voice.dictation_finished dictation_id=%s duration_ms=%d segments=%d skipped=%d "
+            "peak_dbfs=%d tail_ms=%d",
+            dictation.id, dictation.duration_ms, segments, dictation.skipped_segments,
+            _dbfs(dictation.peak_rms), int((dictation.finished_at - started) * 1000),
         )
         return " ".join(text for text in texts if text)
 
@@ -295,6 +302,11 @@ class DictationManager:
         self._background.add(task)
         task.add_done_callback(self._background.discard)
         task.add_done_callback(consume_exception)
+
+
+def _dbfs(rms: float) -> int:
+    """A 16-bit RMS level in dBFS; silence reads as -99."""
+    return max(-99, round(20 * math.log10(rms / 32768))) if rms > 0 else -99
 
 
 def _fresh(error: VoiceError) -> VoiceError:

@@ -3,11 +3,13 @@
 ``transcribing`` then ``done``, idempotence, segment order), the single
 retry after a helper crash, the failure latch (a model that cannot load is
 loaded once and fails the next chunk), abort, and the reaper on a pinned
-clock."""
+clock, plus the counts and peak level of the ``voice.dictation_finished``
+log line."""
 from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import math
 from array import array
 from pathlib import Path
@@ -39,9 +41,9 @@ def _tone(seconds: float, amplitude: int = 3000) -> bytes:
 
 
 def _voiced_silent_voiced() -> bytes:
-    """Speech, a pause, five seconds of room noise below the voice level
+    """Speech, a pause, five seconds of hiss below the silence level
     closed by a quieter pause (a silent segment), then speech again."""
-    return _tone(6.0) + _silence(0.6) + _tone(5.0, amplitude=212) + _tone(0.6, amplitude=42) + _tone(1.0)
+    return _tone(6.0) + _silence(0.6) + _tone(5.0, amplitude=12) + _tone(0.6, amplitude=3) + _tone(1.0)
 
 
 def _silence(seconds: float) -> bytes:
@@ -287,6 +289,20 @@ class TestFinish:
 
         assert (result.state, result.text) == ("done", "")
         assert fake_helper.calls == 0
+
+    async def test_quiet_speech_below_the_voice_level_reaches_the_helper(
+        self, manager, fake_helper
+    ):
+        """Words at about -52 dBFS over a faint hiss, as an ungained phone
+        microphone records them."""
+        did = await manager.create()
+        speech = b"".join(_tone(0.3, amplitude=5) + _tone(0.3, amplitude=113) for _ in range(4))
+        last_seq = await _send(manager, did, speech)
+
+        result = await manager.finish(did, last_seq)
+
+        assert (result.state, result.text) == ("done", "2400ms")
+        assert fake_helper.calls == 1
 
     async def test_finish_without_audio(self, manager):
         did = await manager.create()
@@ -637,3 +653,41 @@ class TestReaper:
         clock.now += 2
         await asyncio.sleep(0.02)
         await _raises("dictation_not_found", manager.finish(did, 0))
+
+
+class TestFinishedLog:
+    @staticmethod
+    def _finished_line(caplog) -> str:
+        lines = [
+            r.getMessage() for r in caplog.records
+            if r.getMessage().startswith("voice.dictation_finished ")
+        ]
+        assert len(lines) == 1
+        return lines[0]
+
+    async def test_counts_skipped_segments_and_reports_the_peak_level(self, manager, caplog):
+        did = await manager.create()
+        last_seq = await _send(manager, did, _tone(6.0, amplitude=3000) + _silence(1.6))
+
+        with caplog.at_level(logging.INFO, logger="mobaide.voice.dictation"):
+            await manager.finish(did, last_seq)
+
+        assert " segments=2 skipped=1 peak_dbfs=-24 tail_ms=" in self._finished_line(caplog)
+
+    @pytest.mark.parametrize(
+        ("pcm", "fields"),
+        [
+            (None, "segments=0 skipped=0 peak_dbfs=-99"),
+            (_silence(1.0), "segments=1 skipped=1 peak_dbfs=-99"),
+            (b"\x01\x00" + _silence(1.0), "segments=1 skipped=1 peak_dbfs=-99"),
+        ],
+        ids=["no-audio", "digital-silence", "below-minus-99-dbfs"],
+    )
+    async def test_silence_reads_minus_99_dbfs(self, manager, caplog, pcm, fields):
+        did = await manager.create()
+        last_seq = -1 if pcm is None else await _send(manager, did, pcm)
+
+        with caplog.at_level(logging.INFO, logger="mobaide.voice.dictation"):
+            await manager.finish(did, last_seq)
+
+        assert f" {fields} tail_ms=" in self._finished_line(caplog)
