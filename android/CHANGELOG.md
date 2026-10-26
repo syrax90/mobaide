@@ -1,5 +1,21 @@
 # Android Changelog
 
+## [3.6.12](https://github.com/syrax90/claude_mobile/compare/android-v3.6.11...android-v3.6.12) (2026-10-26)
+
+
+### Features
+
+* **android,ios,web:** animate the hand-off to the nearest session after stopping the current one ([66942ef](https://github.com/syrax90/claude_mobile/commit/66942ef836df00c70591008a5fc0dc347ab1f822))
+* **android,ios,web:** animate the hand-off to the nearest session after stopping the current one ([d785cd5](https://github.com/syrax90/claude_mobile/commit/d785cd51be37b71604a1c24f0325e2f7c8e79394))
+* **android,ios,web:** move to the nearest open session after stopping the current one ([19f707e](https://github.com/syrax90/claude_mobile/commit/19f707ed52e4b6f79b38084baf1476b6f43d72ca))
+* **android,ios,web:** move to the nearest open session after stopping the current one ([c56f442](https://github.com/syrax90/claude_mobile/commit/c56f442ba532f5a6d778d1ee1c8f0f5cc8fdc39d))
+
+
+### Bug Fixes
+
+* **android:** keep the cursor in view in Static terminal mode while typing ([b4073eb](https://github.com/syrax90/claude_mobile/commit/b4073eb3d5cafc3136b1548cd27fd29df4f2f7ee))
+* **android:** keep the cursor in view in Static terminal mode while typing ([cd4c0a6](https://github.com/syrax90/claude_mobile/commit/cd4c0a64d4e284e5f473e2bce1ec948ff18a4a73))
+
 ## [3.6.11](https://github.com/syrax90/claude_mobile/compare/android-v3.6.10...android-v3.6.11) (2026-10-23)
 
 

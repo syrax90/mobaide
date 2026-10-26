@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.14](https://github.com/syrax90/claude_mobile/compare/web-v0.1.13...web-v0.1.14) (2026-10-26)
+
+
+### Features
+
+* **android,ios,web:** animate the hand-off to the nearest session after stopping the current one ([66942ef](https://github.com/syrax90/claude_mobile/commit/66942ef836df00c70591008a5fc0dc347ab1f822))
+* **android,ios,web:** animate the hand-off to the nearest session after stopping the current one ([d785cd5](https://github.com/syrax90/claude_mobile/commit/d785cd51be37b71604a1c24f0325e2f7c8e79394))
+* **android,ios,web:** move to the nearest open session after stopping the current one ([19f707e](https://github.com/syrax90/claude_mobile/commit/19f707ed52e4b6f79b38084baf1476b6f43d72ca))
+* **android,ios,web:** move to the nearest open session after stopping the current one ([c56f442](https://github.com/syrax90/claude_mobile/commit/c56f442ba532f5a6d778d1ee1c8f0f5cc8fdc39d))
+
 ## [0.1.13](https://github.com/syrax90/claude_mobile/compare/web-v0.1.12...web-v0.1.13) (2026-10-23)
 
 
