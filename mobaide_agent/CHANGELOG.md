@@ -1,5 +1,14 @@
 # mobaide_agent Changelog
 
+## [0.3.19](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.18...agent-v0.3.19) (2026-10-26)
+
+
+### Bug Fixes
+
+* **agent:** put mobaide-agent on PATH after install ([cff50c5](https://github.com/syrax90/claude_mobile/commit/cff50c50e7fa029ca64569f237515f7c0241944b))
+* **agent:** stop the orphaned agent so re-pair can pair again on Windows ([02cc41c](https://github.com/syrax90/claude_mobile/commit/02cc41c31b584abb30571bb6583e1809b4bca3f6))
+* **agent:** stop voice dictation silently dropping quiet speech ([95d5978](https://github.com/syrax90/claude_mobile/commit/95d59786ceba2868b3852a8671ee9e4ac8042b4b))
+
 ## [0.3.18](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.17...agent-v0.3.18) (2026-10-25)
 
 
