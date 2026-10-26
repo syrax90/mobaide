@@ -140,11 +140,14 @@ private struct TerminalScreenContent: View {
     }
 
     /// `checkSessionStillExists` never leaves a session this screen has seen
-    /// alive, so stopping the one on screen navigates away here instead —
-    /// unless the user switched sessions while the request was in flight.
+    /// alive, so stopping the one on screen navigates away here instead — to
+    /// the nearest open session, or the list when none is left — unless the
+    /// user switched sessions while the request was in flight.
     private func stopSession(_ id: String, force: Bool) async {
+        let stopped: SessionsPanelModel.StoppedSession
         do {
-            guard try await panel.stopSession(id, force: force) else { return }
+            guard let result = try await panel.stopSession(id, force: force) else { return }
+            stopped = result
         } catch {
             model.terminalMessage = ToastMessage(text: "Failed to stop session: \(String(describing: error))", tone: .danger)
             return
@@ -152,7 +155,11 @@ private struct TerminalScreenContent: View {
         if id == sessionId {
             guard router.path.last == .sessionDetail(sessionId: id) else { return }
             drawerOpen = false
-            router.popTo(.sessionList)
+            if let next = stopped.nextSessionId {
+                router.replaceLast(with: .sessionDetail(sessionId: next))
+            } else {
+                router.popTo(.sessionList)
+            }
         } else {
             model.terminalMessage = ToastMessage(text: "Session stopped", tone: .ok)
         }

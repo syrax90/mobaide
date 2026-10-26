@@ -44,7 +44,9 @@ data class SessionsPanelUiState(
 }
 
 sealed interface SessionsPanelEvent {
-    data class Stopped(val sessionId: String) : SessionsPanelEvent
+    /** [nextSessionId] is the open session to show instead when the stopped
+     *  one is on screen, or null when none is left. */
+    data class Stopped(val sessionId: String, val nextSessionId: String?) : SessionsPanelEvent
     data class StopFailed(val message: String) : SessionsPanelEvent
 }
 
@@ -115,15 +117,22 @@ class SessionsPanelViewModel @Inject constructor(
     fun stopSession(sessionId: String, force: Boolean) {
         if (stoppingSessionId.value != null) return
         stoppingSessionId.value = sessionId
+        // Positions are read before the request: the agent's push can drop the
+        // stopped row before the stop resolves.
+        val snapshot = sessionRepository.observeSessionList().value
+        fun stopped() = SessionsPanelEvent.Stopped(
+            sessionId,
+            nearestOpenSessionId(snapshot, sessionRepository.observeSessionList().value, sessionId),
+        )
         viewModelScope.launch {
             try {
                 sessionRepository.deleteSession(sessionId, force)
-                _events.send(SessionsPanelEvent.Stopped(sessionId))
+                _events.send(stopped())
             } catch (e: ApiException) {
                 // A 404 means the session is already gone, so the stop the user
                 // asked for has happened.
                 _events.send(
-                    if (e.code == 404) SessionsPanelEvent.Stopped(sessionId)
+                    if (e.code == 404) stopped()
                     else SessionsPanelEvent.StopFailed("Failed to stop session: ${e.message}"),
                 )
             } catch (e: Exception) {
@@ -137,4 +146,27 @@ class SessionsPanelViewModel @Inject constructor(
     fun switchAgent(agent: AgentSummaryResponse) {
         agentSwitchCoordinator.switchAndOpenSessions(agent)
     }
+}
+
+/**
+ * The closest open session to the stopped row — below first, then above,
+ * widening outward. Positions come from [snapshot], the list as it was when the
+ * stop was confirmed; a candidate must still be open in [current].
+ */
+internal fun nearestOpenSessionId(
+    snapshot: List<SessionResponse>,
+    current: List<SessionResponse>,
+    stoppedId: String,
+): String? {
+    val index = snapshot.indexOfFirst { it.session_id == stoppedId }
+    if (index < 0) return null
+    val open = current
+        .filter { it.state == "running" || it.state == "starting" }
+        .mapTo(HashSet()) { it.session_id }
+    for (distance in 1 until snapshot.size) {
+        for (candidate in listOf(snapshot.getOrNull(index + distance), snapshot.getOrNull(index - distance))) {
+            if (candidate != null && candidate.session_id in open) return candidate.session_id
+        }
+    }
+    return null
 }

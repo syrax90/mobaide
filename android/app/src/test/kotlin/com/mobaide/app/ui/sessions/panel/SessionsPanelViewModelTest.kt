@@ -43,8 +43,8 @@ class SessionsPanelViewModelTest {
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
 
-    private fun session(id: String): SessionResponse =
-        SessionResponse(session_id = id, state = "running", created_at = "2026-04-11T00:00:00Z")
+    private fun session(id: String, state: String = "running"): SessionResponse =
+        SessionResponse(session_id = id, state = state, created_at = "2026-04-11T00:00:00Z")
 
     private fun agent(id: String, online: Boolean = true): AgentSummaryResponse =
         AgentSummaryResponse(agent_id = id, name = "agent-$id", online = online, created_at = "t")
@@ -222,7 +222,7 @@ class SessionsPanelViewModelTest {
         fx.vm.events.test {
             fx.vm.stopSession("s2", force = true)
             advanceUntilIdle()
-            assertEquals(SessionsPanelEvent.Stopped("s2"), awaitItem())
+            assertEquals(SessionsPanelEvent.Stopped("s2", nextSessionId = null), awaitItem())
             expectNoEvents()
         }
         coVerify(exactly = 1) { fx.sessionRepo.deleteSession("s2", true) }
@@ -258,7 +258,7 @@ class SessionsPanelViewModelTest {
         fx.vm.events.test {
             fx.vm.stopSession("s1", force = false)
             advanceUntilIdle()
-            assertEquals(SessionsPanelEvent.Stopped("s1"), awaitItem())
+            assertEquals(SessionsPanelEvent.Stopped("s1", nextSessionId = null), awaitItem())
             expectNoEvents()
         }
     }
@@ -305,7 +305,73 @@ class SessionsPanelViewModelTest {
         }
         coVerify(exactly = 1) { fx.sessionRepo.deleteSession(any(), any()) }
         fx.vm.events.test {
-            assertEquals(SessionsPanelEvent.Stopped("s1"), awaitItem())
+            assertEquals(SessionsPanelEvent.Stopped("s1", nextSessionId = null), awaitItem())
+            expectNoEvents()
+        }
+    }
+
+    @Test
+    fun stopSession_success_namesTheNearestOpenSessionBelow() = runTest {
+        val fx = build()
+        fx.sessionsFlow.value = listOf(session("s1"), session("s2"), session("s3"))
+        coEvery { fx.sessionRepo.deleteSession(any(), any()) } just Runs
+        advanceUntilIdle()
+
+        fx.vm.events.test {
+            fx.vm.stopSession("s2", force = false)
+            advanceUntilIdle()
+            assertEquals(SessionsPanelEvent.Stopped("s2", nextSessionId = "s3"), awaitItem())
+            expectNoEvents()
+        }
+    }
+
+    @Test
+    fun stopSession_alreadyGone404_stillNamesTheNearestOpenSession() = runTest {
+        val fx = build()
+        fx.sessionsFlow.value = listOf(session("s1"), session("s2"))
+        coEvery { fx.sessionRepo.deleteSession(any(), any()) } throws ApiException(404, "not found")
+        advanceUntilIdle()
+
+        fx.vm.events.test {
+            fx.vm.stopSession("s2", force = false)
+            advanceUntilIdle()
+            assertEquals(SessionsPanelEvent.Stopped("s2", nextSessionId = "s1"), awaitItem())
+            expectNoEvents()
+        }
+    }
+
+    @Test
+    fun stopSession_usesPositionsFromBeforeTheRequest_andTheListAfterIt() = runTest {
+        val fx = build()
+        fx.sessionsFlow.value = listOf(session("s1"), session("s2"), session("s3"), session("s4"))
+        val gate = CompletableDeferred<Unit>()
+        coEvery { fx.sessionRepo.deleteSession(any(), any()) } coAnswers { gate.await() }
+        advanceUntilIdle()
+
+        fx.vm.events.test {
+            fx.vm.stopSession("s2", force = false)
+            advanceUntilIdle()
+            // The agent's push lands before the stop resolves: the stopped row
+            // is gone and its old neighbour below has ended.
+            fx.sessionsFlow.value = listOf(session("s1"), session("s3", state = "stopped"), session("s4"))
+            gate.complete(Unit)
+            advanceUntilIdle()
+            assertEquals(SessionsPanelEvent.Stopped("s2", nextSessionId = "s1"), awaitItem())
+            expectNoEvents()
+        }
+    }
+
+    @Test
+    fun stopSession_withNoOtherOpenSession_namesNone() = runTest {
+        val fx = build()
+        fx.sessionsFlow.value = listOf(session("s1", state = "stopped"), session("s2"))
+        coEvery { fx.sessionRepo.deleteSession(any(), any()) } just Runs
+        advanceUntilIdle()
+
+        fx.vm.events.test {
+            fx.vm.stopSession("s2", force = false)
+            advanceUntilIdle()
+            assertEquals(SessionsPanelEvent.Stopped("s2", nextSessionId = null), awaitItem())
             expectNoEvents()
         }
     }

@@ -870,7 +870,9 @@ Stop icon button inside its frame (the `<li>` carries the frame, since a button
 cannot nest in the row button), as on Android, opening the same Stop / Force Stop / Cancel confirmation as the list;
 both surfaces share the mutation in `routes/sessions/useStopSession.ts`.
 Stopping another session just drops its row ("Session stopped" toast);
-stopping the one on screen navigates to `/` ("Session stopped." toast).
+stopping the one on screen navigates to the nearest open (running/starting)
+session by panel position, below first then above, and to `/` only when none
+remains ("Session stopped." toast).
 Failures toast "Failed to stop session: …". Android and iOS open the same list
 from a left-edge swipe or the top-bar button.
 

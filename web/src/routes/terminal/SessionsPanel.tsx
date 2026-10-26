@@ -15,6 +15,7 @@ import {
   attentionChip,
   canStopSession,
   customTypeNameMap,
+  nearestOpenSession,
   sessionDialogLabel,
   sessionKindLabel,
   sessionStateTone,
@@ -72,6 +73,7 @@ export function SessionsPanel({
   const setSelectedAgent = useSelectedAgentStore((state) => state.setSelectedAgent);
 
   const [stopTarget, setStopTarget] = useState<SessionResponse | null>(null);
+  const stopSnapshot = useRef<readonly SessionResponse[]>([]);
   const stop = useStopSession(agentId, {
     onSettled: () => {
       setStopTarget(null);
@@ -79,12 +81,19 @@ export function SessionsPanel({
     onStopped: (stoppedId) => {
       // The terminal's own gone-check never ejects a session it has seen alive,
       // so leaving the one on screen is this panel's job — and it must happen
-      // before the eviction tears the live view down under the user. Clearing
-      // last-used first stops auto-resume, which may not have been claimed yet,
-      // from sending the list straight back into the still-cached session.
+      // before the eviction tears the live view down under the user. The
+      // nearest open session takes its place; only with none left does the
+      // list open, after clearing last-used so auto-resume, which may not have
+      // been claimed yet, cannot send it straight back into the cached session.
       if (stoppedId === sessionId) {
-        clearLastUsedSession(agentId);
-        void navigate('/', { replace: true });
+        const next = nearestOpenSession(stopSnapshot.current, sessions.data ?? [], stoppedId);
+        if (next !== null) {
+          setLastUsedSession(agentId, next);
+          void navigate(terminalPath(agentId, next), { replace: true });
+        } else {
+          clearLastUsedSession(agentId);
+          void navigate('/', { replace: true });
+        }
       }
       useToastStore.getState().show('Session stopped.', 'success');
     },
@@ -264,6 +273,7 @@ export function SessionsPanel({
           label={sessionDialogLabel(stopTarget, names)}
           busy={stop.isPending}
           onStop={(force) => {
+            stopSnapshot.current = sessions.data ?? [];
             stop.mutate({ sessionId: stopTarget.session_id, force });
           }}
           onCancel={() => {
