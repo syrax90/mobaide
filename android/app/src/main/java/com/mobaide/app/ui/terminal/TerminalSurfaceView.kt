@@ -39,12 +39,16 @@ import com.termux.view.TerminalViewClient
  * combined with [TerminalView]'s symmetric `requestDisallowInterceptTouchEvent(true)` on
  * vertically-dominant scrolls, keeps vertical scrollback and horizontal panning cleanly
  * independent on any device.
+ *
+ * [cursorReveal] is the session's typing latch: terminal keystrokes and paste arm it here, and
+ * each painted update lets the HSV pan to the cursor column (Static mode only).
  */
 @Composable
 fun TerminalSurfaceView(
     session: TerminalSession,
     sessionCallback: TerminalSessionCallback,
     displayConfig: TerminalDisplayConfig,
+    cursorReveal: TerminalCursorReveal,
     onResize: (rows: Int, cols: Int) -> Unit,
     onRowTapped: (text: String, isCurrentInput: Boolean) -> Unit = { _, _ -> },
     onRowCopyToInput: (text: String, isCurrentInput: Boolean) -> Unit = { _, _ -> },
@@ -87,6 +91,10 @@ fun TerminalSurfaceView(
         terminalViewRef.value?.let(reportCursorAnchor)
     }
     client.pasteSessionActive = pasteFromClipboardEnabled
+    // Factory-installed hooks (onInvalidate, paste, drag) outlive the first composition and a
+    // session switch hands in another session's latch.
+    val currentCursorReveal by rememberUpdatedState(cursorReveal)
+    client.onUserKeyInput = { cursorReveal.armAtCursor(session) }
 
     DisposableEffect(sessionCallback) {
         onDispose {
@@ -155,6 +163,7 @@ fun TerminalSurfaceView(
                 sessionCallback.onInvalidate = {
                     onScreenUpdated()
                     reportCursorAnchor(this)
+                    (parent as? TerminalHorizontalScrollView)?.revealCursor(this, currentCursorReveal)
                 }
                 reportCursorAnchor(this)
                 sessionCallback.onCopyToClipboard = { text -> appCtx.copyToClipboard("Terminal output", text, isSensitive = true) }
@@ -170,7 +179,10 @@ fun TerminalSurfaceView(
                 // do not merge them here.
                 sessionCallback.onPasteFromClipboard = { pasteSession ->
                     val text = appCtx.readClipboardText()
-                    if (!text.isNullOrEmpty()) pasteSession.emulator?.paste(text)
+                    if (!text.isNullOrEmpty()) {
+                        currentCursorReveal.armAtCursor(pasteSession)
+                        pasteSession.emulator?.paste(text)
+                    }
                 }
                 applyDisplayConfig(isStatic, staticCols)
                 viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
@@ -182,6 +194,7 @@ fun TerminalSurfaceView(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                 )
                 addView(terminalView)
+                onHorizontalDragStart = { currentCursorReveal.disarm() }
             }
         },
         update = { hsv ->
@@ -191,6 +204,7 @@ fun TerminalSurfaceView(
                 sessionCallback.onInvalidate = {
                     view.onScreenUpdated()
                     reportCursorAnchor(view)
+                    hsv.revealCursor(view, currentCursorReveal)
                 }
                 // Replayed sessions carry content before the first live frame.
                 reportCursorAnchor(view)
@@ -310,6 +324,9 @@ private class TerminalViewClientImpl : TerminalViewClient {
     var onSelectionCopyToInput: (String) -> Unit = {}
     var onScrollSettled: (Int) -> Unit = {}
 
+    /** Keyboard-originated input (IME commit, IME key events, hardware keys) — arms the cursor reveal. */
+    var onUserKeyInput: () -> Unit = {}
+
     /** Session half of the Paste gate (Live + running), pushed by recomposition. */
     var pasteSessionActive = false
 
@@ -331,14 +348,20 @@ private class TerminalViewClientImpl : TerminalViewClient {
     override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
     override fun isTerminalViewSelected(): Boolean = true
     override fun copyModeChanged(copyMode: Boolean) {}
-    override fun onKeyDown(keyCode: Int, e: android.view.KeyEvent?, session: TerminalSession?): Boolean = false
+    override fun onKeyDown(keyCode: Int, e: android.view.KeyEvent?, session: TerminalSession?): Boolean {
+        if (e?.isSystem != true) onUserKeyInput()
+        return false
+    }
     override fun onKeyUp(keyCode: Int, e: android.view.KeyEvent?): Boolean = false
     override fun onLongPress(event: android.view.MotionEvent?): Boolean = false
     override fun readControlKey(): Boolean = ctrlDown.also { ctrlDown = false }
     override fun readAltKey(): Boolean = altDown.also { altDown = false }
     override fun readShiftKey(): Boolean = shiftDown.also { shiftDown = false }
     override fun readFnKey(): Boolean = fnDown.also { fnDown = false }
-    override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession?): Boolean = false
+    override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession?): Boolean {
+        onUserKeyInput()
+        return false
+    }
     override fun onEmulatorSet() {}
     override fun logError(tag: String?, message: String?) {}
     override fun logWarn(tag: String?, message: String?) {}

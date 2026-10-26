@@ -363,6 +363,7 @@ final class TerminalSessionModel {
         let multiline = text.unicodeScalars.contains("\n")
         let body = multiline ? "\u{1B}[200~\(text)\u{1B}[201~" : text
         enqueue(.submit("\u{01}\u{0B}" + body))
+        terminalView.armCursorReveal()
         setFollowMode(true)
         inputText = ""
         composerSelection = nil
@@ -389,11 +390,15 @@ final class TerminalSessionModel {
     }
 
     func sendBytes(_ data: Data) {
-        // Any user-originated write dismisses a live selection (Android drops
-        // it from `onKeyDown` and on every IME commit). Deliberately here and
-        // not in `sendTerminalBytes`: emulator auto-replies produced while
-        // parsing output take that function's `isApplyingEmulatorOutput` branch
-        // and bypass this, so a bare `ESC[6n` cannot kill a selection.
+        terminalView.armCursorReveal()
+        sendUserBytes(data)
+    }
+
+    /// Any user-originated write dismisses a live selection. Deliberately here
+    /// and not in `sendTerminalBytes`: emulator auto-replies produced while
+    /// parsing output take that function's `isApplyingEmulatorOutput` branch
+    /// and bypass this, so a bare `ESC[6n` cannot kill a selection.
+    private func sendUserBytes(_ data: Data) {
         endSelection()
         enqueue(.input(data))
         setFollowMode(true)
@@ -420,7 +425,10 @@ final class TerminalSessionModel {
             enqueue(.input(data))
             return
         }
-        sendBytes(data)
+        // Not `sendBytes`: this path also carries mouse clicks and wheel
+        // reports, which must not arm the cursor reveal. Keystrokes armed it in
+        // the terminal view before SwiftTerm sent them.
+        sendUserBytes(data)
     }
 
     func sendControlKey(_ bytes: [UInt8]) {
@@ -486,6 +494,7 @@ final class TerminalSessionModel {
     /// Ctrl+C-clears, types the payload, then sends CR).
     func sendTappedRow(text: String, isCurrentInput: Bool) {
         guard connectionState == .live else { return }
+        terminalView.armCursorReveal()
         setFollowMode(true)
         if isCurrentInput {
             enqueue(.input("\r"))

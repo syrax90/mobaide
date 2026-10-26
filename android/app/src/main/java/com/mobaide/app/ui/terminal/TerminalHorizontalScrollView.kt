@@ -5,6 +5,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.widget.HorizontalScrollView
+import com.termux.view.TerminalView
 import kotlin.math.abs
 
 /**
@@ -29,6 +30,8 @@ import kotlin.math.abs
  * Both `onInterceptTouchEvent` and `onTouchEvent` short-circuit to a transparent passthrough
  * when the child fits the viewport (Full display mode), so events flow straight to the child
  * untouched.
+ *
+ * [revealCursor] pans to the cursor column while the user types (see [TerminalCursorReveal]).
  */
 internal class TerminalHorizontalScrollView(context: Context) : HorizontalScrollView(context) {
 
@@ -36,6 +39,10 @@ internal class TerminalHorizontalScrollView(context: Context) : HorizontalScroll
     private var downX: Float = 0f
     private var downY: Float = 0f
     private var horizontalDragDecided: Boolean = false
+    private var touchActive: Boolean = false
+
+    /** Fired when the user claims a horizontal pan: their intent outranks a pending cursor reveal. */
+    var onHorizontalDragStart: (() -> Unit)? = null
 
     init {
         isFillViewport = true
@@ -57,6 +64,7 @@ internal class TerminalHorizontalScrollView(context: Context) : HorizontalScroll
                     val dy = abs(ev.y - downY)
                     if (dx > touchSlop && dx > dy) {
                         horizontalDragDecided = true
+                        onHorizontalDragStart?.invoke()
                     }
                 }
             }
@@ -70,6 +78,40 @@ internal class TerminalHorizontalScrollView(context: Context) : HorizontalScroll
 
     override fun onTouchEvent(ev: MotionEvent): Boolean =
         if (hasHorizontalOverflow()) super.onTouchEvent(ev) else false
+
+    // Tracked here, not in the intercept/touch handlers: a vertical scrollback drag makes the
+    // child disallow intercept, after which neither sees the lift.
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> touchActive = true
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> touchActive = false
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    /**
+     * Pans the minimum needed (plus lookahead) to bring the cursor cell on screen, when [reveal]
+     * is armed and the cursor moved. Instant [scrollTo], no animation: only the offset changes,
+     * never a size, so the PTY never sees a resize.
+     */
+    fun revealCursor(view: TerminalView, reveal: TerminalCursorReveal) {
+        if (!reveal.isArmed || touchActive || view.isSelectingText) return
+        if (view.parent !== this || !hasHorizontalOverflow() || view.rendererFontWidth <= 0f) return
+        val emulator = view.mEmulator ?: return
+        // A paint can land mid-frame (coalesced ESU..BSU, safety flush) with the cursor already
+        // partway into the next frame; iOS never paints there at all.
+        if (emulator.isSynchronizedOutputActive) return
+        val col = emulator.cursorCol
+        if (!reveal.shouldReveal(col, emulator.cursorRow)) return
+        val target = TerminalCursorReveal.targetScrollX(
+            cursorX = view.getPointX(col).toFloat(),
+            cellWidth = view.rendererFontWidth,
+            viewportWidth = width,
+            contentWidth = view.width,
+            currentScrollX = scrollX,
+        ) ?: return
+        scrollTo(target, 0)
+    }
 
     private fun hasHorizontalOverflow(): Boolean {
         val child = getChildAt(0) ?: return false
