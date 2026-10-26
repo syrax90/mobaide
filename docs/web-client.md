@@ -869,10 +869,15 @@ so per-session dialog state resets. Each running/starting row has a compact
 Stop icon button inside its frame (the `<li>` carries the frame, since a button
 cannot nest in the row button), as on Android, opening the same Stop / Force Stop / Cancel confirmation as the list;
 both surfaces share the mutation in `routes/sessions/useStopSession.ts`.
-Stopping another session just drops its row ("Session stopped" toast);
+Stopping another session folds its row out of the list ("Session stopped" toast);
 stopping the one on screen navigates to the nearest open (running/starting)
 session by panel position, below first then above, and to `/` only when none
-remains ("Session stopped." toast).
+remains ("Session stopped." toast). The row dims while the stop is in flight.
+The switch hands off through `stores/stopHandOffStore.ts` because
+`TerminalView` remounts per session: the overlay stays open (no second
+slide-in), the stopped row folds out at its old position, the frame settles on
+the new current row and the terminal fades in; the next model is acquired
+before navigating so no "Attaching…" frame unmounts the panel.
 Failures toast "Failed to stop session: …". Android and iOS open the same list
 from a left-edge swipe or the top-bar button.
 

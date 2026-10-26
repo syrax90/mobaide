@@ -8,7 +8,7 @@ object Routes {
     const val VERIFY_EMAIL = "verify_email/{email}"
     const val AGENT_LIST = "agent_list"
     const val SESSION_LIST = "session_list"
-    const val SESSION_DETAIL = "session_detail/{sessionId}"
+    const val SESSION_DETAIL = "session_detail/{sessionId}?stopped={stopped}"
     const val CREATE_SESSION = "create_session"
     const val SETTINGS = "settings"
     const val SUPPORT = "support"
@@ -28,7 +28,11 @@ object Routes {
     const val FORGOT_PASSWORD = "forgot_password"
     const val RESET_PASSWORD = "reset_password/{email}"
 
-    fun sessionDetail(sessionId: String) = "session_detail/$sessionId"
+    /** [stoppedSessionId] marks a hand-off from the terminal whose session was
+     *  just stopped from its sessions panel: the drawer arrives already open. */
+    fun sessionDetail(sessionId: String, stoppedSessionId: String? = null) =
+        if (stoppedSessionId == null) "session_detail/$sessionId"
+        else "session_detail/$sessionId?stopped=${Uri.encode(stoppedSessionId)}"
     fun autoScanDetail(projectName: String) =
         "auto_scan_detail/${Uri.encode(projectName)}"
     fun verifyEmail(email: String) = "verify_email/${Uri.encode(email)}"

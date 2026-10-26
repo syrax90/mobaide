@@ -64,7 +64,11 @@ class SessionsPanelTest {
         var closes = 0
     }
 
-    private fun setPanel(state: SessionsPanelUiState, currentSessionId: String = "s1"): Recorder {
+    private fun setPanel(
+        state: SessionsPanelUiState,
+        currentSessionId: String = "s1",
+        departingSessionId: String? = null,
+    ): Recorder {
         val recorder = Recorder()
         composeRule.setContent {
             MobaideTheme(darkTheme = true) {
@@ -76,6 +80,7 @@ class SessionsPanelTest {
                     onCreateSession = { recorder.creates += 1 },
                     onSelectAgent = { recorder.selectedAgents += it.agent_id },
                     onClose = { recorder.closes += 1 },
+                    departingSessionId = departingSessionId,
                 )
             }
         }
@@ -106,6 +111,19 @@ class SessionsPanelTest {
         // No OSC title yet: the composite is the headline and the detail line
         // repeats the kind, the way the list screen's card does.
         composeRule.onNodeWithTag(sessionsPanelRowTag("s2")).assert(hasText("Codex · api"))
+    }
+
+    @Test
+    fun aDepartingRow_isInert_whileTheOthersStayLive() {
+        val recorder = setPanel(twoSessions, currentSessionId = "s2", departingSessionId = "s1")
+
+        // The stopped session's row lingers until the agent's push drops it;
+        // reopening or re-stopping it would only reach a dead session.
+        composeRule.onNodeWithTag(sessionsPanelRowTag("s1")).performClick()
+        assertEquals(emptyList<String>(), recorder.selectedSessions)
+        composeRule.onNodeWithTag(sessionsPanelStopTag("s1")).assertIsNotEnabled()
+        composeRule.onNodeWithTag(sessionsPanelStopTag("s2")).assertIsEnabled()
+        composeRule.onNodeWithTag(sessionsPanelRowTag("s2")).assertIsSelected()
     }
 
     @Test

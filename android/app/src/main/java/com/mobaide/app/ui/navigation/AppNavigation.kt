@@ -1,5 +1,7 @@
 package com.mobaide.app.ui.navigation
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -8,6 +10,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -283,11 +286,28 @@ fun AppNavigation(
 
         composable(
             route = Routes.SESSION_DETAIL,
-            arguments = listOf(navArgument("sessionId") { type = NavType.StringType }),
+            arguments = listOf(
+                navArgument("sessionId") { type = NavType.StringType },
+                navArgument("stopped") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+            // A stop hand-off swaps terminals under an open drawer that both
+            // screens draw identically; the default cross-fade would dim it.
+            // The terminal's own fade-out/in carries the switch instead.
+            enterTransition = {
+                if (targetState.isStopHandOff()) EnterTransition.None else null
+            },
+            exitTransition = {
+                if (targetState.isStopHandOff()) ExitTransition.None else null
+            },
         ) { entry ->
             TerminalScreen(
                 viewModel = hiltViewModel(),
                 voiceViewModel = hiltViewModel(),
+                stoppedSessionId = entry.arguments?.getString("stopped"),
                 onBack = { navController.popBackStack() },
                 // The session list is not always behind us — a notification tap
                 // or a restored back stack can land here directly — so fall back
@@ -328,6 +348,12 @@ fun AppNavigation(
                 // entry (and its ViewModel, bound to the old session id).
                 onSwitchSession = { sessionId ->
                     navController.navigate(Routes.sessionDetail(sessionId)) {
+                        popUpTo(Routes.SESSION_DETAIL) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onSwitchAfterStop = { sessionId, stoppedSessionId ->
+                    navController.navigate(Routes.sessionDetail(sessionId, stoppedSessionId)) {
                         popUpTo(Routes.SESSION_DETAIL) { inclusive = true }
                         launchSingleTop = true
                     }
@@ -505,3 +531,6 @@ private fun NavController.navigateFromCreate(route: String) {
         popUpTo(Routes.SESSION_LIST)
     }
 }
+
+private fun NavBackStackEntry.isStopHandOff(): Boolean =
+    destination.route == Routes.SESSION_DETAIL && arguments?.getString("stopped") != null

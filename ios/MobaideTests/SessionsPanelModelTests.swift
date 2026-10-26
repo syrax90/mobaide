@@ -147,6 +147,40 @@ final class SessionsPanelModelTests: XCTestCase {
         XCTAssertFalse(late.synced)
     }
 
+    func testInitSeedsSyncedFromALiveBusAndSnapshot() async throws {
+        let stack = makeStack()
+        let observeSessions = Task { await stack.model.observeSessions() }
+        let observeSynced = Task { await stack.model.observeSessionsSynced() }
+        let observeConnection = Task { await stack.model.observeConnection() }
+        defer {
+            observeSessions.cancel()
+            observeSynced.cancel()
+            observeConnection.cancel()
+        }
+        stack.sessionRepository.start()
+        await stack.bus.start()
+        let connection = try await stack.factory.connection(1)
+        connection.emit(.opened)
+        connection.emit(.text(snapshot("s1", "running")))
+        await waitUntil { stack.model.synced }
+
+        let late = SessionsPanelModel(
+            sessionRepository: stack.sessionRepository,
+            agentEventBus: stack.bus,
+            customAgentTypesRepository: CustomAgentTypesRepository(
+                centralAPI: TerminalTestSupport.stubbedCentralAPI(),
+                userIdentityStore: SessionHarness().userIdentityStore
+            ),
+            agentRepository: stack.agentRepository,
+            connectedAgentId: "a1"
+        )
+
+        // A terminal that opens with the drawer up (a stop hand-off) must show
+        // the list on its first frame, not "Reconnecting…".
+        XCTAssertTrue(late.synced)
+        XCTAssertEqual(late.sessions.map(\.session_id), ["s1"])
+    }
+
     func testNoConnectedAgentIdListsEveryAgentAsOther() async throws {
         let stack = makeStack(connectedAgentId: nil)
         let observe = Task { await stack.model.observeAgents() }

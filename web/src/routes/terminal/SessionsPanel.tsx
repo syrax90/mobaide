@@ -9,6 +9,8 @@ import type { SessionResponse } from '../../protocol/dto/session';
 import { useSessionsSynced } from '../../realtime';
 import { useLastSessionStore } from '../../stores/lastSessionStore';
 import { useSelectedAgentStore } from '../../stores/selectedAgentStore';
+import { type DepartingSession, useStopHandOffStore } from '../../stores/stopHandOffStore';
+import { acquireTerminal } from '../../terminal/terminalStore';
 import { useToastStore } from '../../stores/toastStore';
 import { StopSessionDialog } from '../sessions/StopSessionDialog';
 import {
@@ -32,6 +34,12 @@ interface SessionsPanelProps {
   pinned: boolean;
   onPinnedChange: (pinned: boolean) => void;
   onClose: () => void;
+  /**
+   * Set when this panel opens on the session that replaced a stopped one: the
+   * stopped row, which fades out of the list, and a settling frame on the
+   * current row.
+   */
+  handOff?: { departing: DepartingSession | null } | null;
 }
 
 /**
@@ -49,6 +57,7 @@ export function SessionsPanel({
   pinned,
   onPinnedChange,
   onClose,
+  handOff = null,
 }: SessionsPanelProps) {
   const navigate = useNavigate();
   const synced = useSessionsSynced(agentId);
@@ -74,11 +83,19 @@ export function SessionsPanel({
 
   const [stopTarget, setStopTarget] = useState<SessionResponse | null>(null);
   const stopSnapshot = useRef<readonly SessionResponse[]>([]);
+  // Kept on screen as a fading row even after the agent's push drops it, so a
+  // stop reads as the row leaving rather than vanishing.
+  const [departing, setDeparting] = useState<DepartingSession | null>(
+    handOff?.departing ?? null,
+  );
   const stop = useStopSession(agentId, {
     onSettled: () => {
       setStopTarget(null);
     },
     onStopped: (stoppedId) => {
+      const index = stopSnapshot.current.findIndex((s) => s.session_id === stoppedId);
+      const stoppedRow = stopSnapshot.current[index];
+      const stopped = stoppedRow === undefined ? null : { session: stoppedRow, index };
       // The terminal's own gone-check never ejects a session it has seen alive,
       // so leaving the one on screen is this panel's job — and it must happen
       // before the eviction tears the live view down under the user. The
@@ -88,12 +105,23 @@ export function SessionsPanel({
       if (stoppedId === sessionId) {
         const next = nearestOpenSession(stopSnapshot.current, sessions.data ?? [], stoppedId);
         if (next !== null) {
+          useStopHandOffStore.getState().setHandOff({
+            agentId,
+            sessionId: next,
+            departing: stopped,
+            overlayOpen: !docked,
+          });
+          // Acquired ahead of the route so the next terminal renders on its
+          // first frame instead of "Attaching…", which would unmount the panel.
+          acquireTerminal(agentId, next);
           setLastUsedSession(agentId, next);
           void navigate(terminalPath(agentId, next), { replace: true });
         } else {
           clearLastUsedSession(agentId);
           void navigate('/', { replace: true });
         }
+      } else {
+        setDeparting(stopped);
       }
       useToastStore.getState().show('Session stopped.', 'success');
     },
@@ -109,6 +137,26 @@ export function SessionsPanel({
   useEffect(() => {
     if (!docked) headingRef.current?.focus();
   }, [docked]);
+
+  // The selection moved without a click, possibly onto a row scrolled away.
+  const currentRef = useRef<HTMLLIElement>(null);
+  const arriving = handOff !== null;
+  useEffect(() => {
+    if (arriving) currentRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [arriving]);
+
+  const rows: { session: SessionResponse; leaving: boolean }[] = (sessions.data ?? []).map(
+    (session) => ({
+      session,
+      leaving: session.session_id === departing?.session.session_id,
+    }),
+  );
+  if (departing !== null && rows.length > 0 && !rows.some((row) => row.leaving)) {
+    rows.splice(Math.min(departing.index, rows.length), 0, {
+      session: departing.session,
+      leaving: true,
+    });
+  }
 
   const open = (session: SessionResponse) => {
     if (session.session_id === sessionId) {
@@ -169,17 +217,30 @@ export function SessionsPanel({
           <p className="sessions-panel-note">No active sessions</p>
         ) : (
           <ul className="sessions-panel-list" aria-label="Sessions">
-            {sessions.data.map((session) => {
+            {rows.map(({ session, leaving }) => {
               const selected = session.session_id === sessionId;
               const chip = attentionChip(session.attention);
               const kindLabel = sessionKindLabel(session, names);
+              const stopping = stop.isPending && stop.variables.sessionId === session.session_id;
+              const itemClass = [
+                'sessions-panel-item',
+                selected && 'sessions-panel-item-current',
+                selected && arriving && 'sessions-panel-item-arriving',
+                stopping && 'sessions-panel-item-stopping',
+                leaving && 'sessions-panel-item-leaving',
+              ]
+                .filter(Boolean)
+                .join(' ');
               return (
                 // The item, not the row button, carries the frame so the stop
                 // control sits inside it, as on both mobile clients; a button
                 // cannot nest inside another.
                 <li
                   key={session.session_id}
-                  className={`sessions-panel-item${selected ? ' sessions-panel-item-current' : ''}`}
+                  ref={selected ? currentRef : undefined}
+                  className={itemClass}
+                  aria-hidden={leaving ? 'true' : undefined}
+                  inert={leaving}
                 >
                   <button
                     type="button"

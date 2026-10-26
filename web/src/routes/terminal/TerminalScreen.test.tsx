@@ -210,6 +210,7 @@ const { acquireTerminal, evictTerminalSessions, useTerminalStore } = await impor
 const { useToastStore } = await import('../../stores/toastStore');
 const { TerminalScreen } = await import('./TerminalScreen');
 const { useSessionsPanelStore } = await import('../../stores/sessionsPanelStore');
+const { useStopHandOffStore } = await import('../../stores/stopHandOffStore');
 const { WIDE_VIEWPORT_QUERY } = await import('./useWideViewport');
 const { sessionResponseSchema } = await import('../../protocol/dto/session');
 const { voiceStatusSchema } = await import('../../protocol/dto/voice');
@@ -1031,6 +1032,46 @@ describe('TerminalScreen sessions panel', () => {
 
   afterEach(() => {
     stubViewport(false);
+    useStopHandOffStore.setState({ handOff: null });
+  });
+
+  it('arrives from a stop hand-off with the overlay still open, without sliding it in again', () => {
+    acquireTerminal('a1', 's1');
+    useStopHandOffStore.getState().setHandOff({
+      agentId: 'a1',
+      sessionId: 's1',
+      departing: null,
+      overlayOpen: true,
+    });
+    const { container } = renderTerminal({ strict: true });
+
+    const panel = overlay();
+    expect(panel).not.toBeNull();
+    expect(panel).toHaveClass('sessions-panel-carried');
+    expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(container.querySelector('.terminal-page')).toHaveClass('terminal-page-arriving');
+    // Consumed: a later visit to this session opens plainly.
+    expect(useStopHandOffStore.getState().handOff).toBeNull();
+
+    // Any later opening is an ordinary one and slides in.
+    fireEvent.click(screen.getByRole('button', { name: 'Close sessions panel' }));
+    fireEvent.click(toggle());
+    expect(overlay()).not.toHaveClass('sessions-panel-carried');
+  });
+
+  it('ignores a hand-off meant for another session', () => {
+    acquireTerminal('a1', 's1');
+    useStopHandOffStore.getState().setHandOff({
+      agentId: 'a1',
+      sessionId: 's9',
+      departing: null,
+      overlayOpen: true,
+    });
+    const { container } = renderTerminal();
+
+    expect(overlay()).toBeNull();
+    expect(container.querySelector('.terminal-page')).not.toHaveClass('terminal-page-arriving');
+    expect(useStopHandOffStore.getState().handOff?.sessionId).toBe('s9');
   });
 
   it('opens the panel as a popover from the Sessions button and hands focus back on close', () => {

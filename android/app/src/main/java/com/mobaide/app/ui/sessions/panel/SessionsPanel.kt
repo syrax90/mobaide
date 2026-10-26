@@ -1,5 +1,8 @@
 package com.mobaide.app.ui.sessions.panel
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -24,8 +28,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.selected
@@ -48,6 +56,7 @@ import com.mobaide.app.ui.theme.ChromeFontFamily
 import com.mobaide.app.ui.theme.MobaideTheme
 import com.mobaide.app.ui.theme.chromeCaps
 import com.mobaide.app.ui.theme.pixel
+import kotlinx.coroutines.flow.first
 
 const val SESSIONS_PANEL_TAG = "sessions_panel"
 const val SESSIONS_PANEL_CLOSE_TAG = "sessions_panel_close"
@@ -57,10 +66,17 @@ fun sessionsPanelRowTag(sessionId: String) = "sessions_panel_row_$sessionId"
 fun sessionsPanelStopTag(sessionId: String) = "sessions_panel_stop_$sessionId"
 fun sessionsPanelAgentTag(agentId: String) = "sessions_panel_agent_$agentId"
 
+/** How long the selection frame takes to move to another row. */
+const val SESSIONS_PANEL_SELECTION_MS = 250
+
 /**
  * The terminal's left drawer (Herdr's sidebar): the connected agent's
  * sessions for one-tap switching or stopping, a shortcut to the create flow, and the
  * account's other agents. Stateless — the drawer host owns open/closed.
+ *
+ * [departingSessionId] is a session already stopped from this panel whose row
+ * may still be listed until the agent's push drops it: it is dimmed and inert
+ * meanwhile, as is the row of a stop still in flight.
  */
 @Composable
 fun SessionsPanel(
@@ -72,7 +88,21 @@ fun SessionsPanel(
     onSelectAgent: (AgentSummaryResponse) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    departingSessionId: String? = null,
 ) {
+    val listState = rememberLazyListState()
+    // The selection can move without a tap (a stop hands it to the nearest
+    // session), so bring the current row into view whenever it changes.
+    LaunchedEffect(currentSessionId) {
+        val index = state.sessions.indexOfFirst { it.session_id == currentSessionId }
+        if (index < 0) return@LaunchedEffect
+        val item = index + if (state.synced) 0 else 1
+        val layout = snapshotFlow { listState.layoutInfo }.first { it.visibleItemsInfo.isNotEmpty() }
+        val shown = layout.visibleItemsInfo.firstOrNull { it.index == item }
+        val fullyShown = shown != null && shown.offset >= layout.viewportStartOffset &&
+            shown.offset + shown.size <= layout.viewportEndOffset
+        if (!fullyShown) listState.animateScrollToItem(item)
+    }
     Column(
         modifier = modifier
             .fillMaxHeight()
@@ -130,6 +160,7 @@ fun SessionsPanel(
         }
 
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
@@ -150,11 +181,15 @@ fun SessionsPanel(
                     session = session,
                     kindLabel = sessionKindLabel(session, state.customTypeNames),
                     selected = session.session_id == currentSessionId,
-                    stopping = state.stoppingSessionId != null,
+                    stopping = state.stoppingSessionId != null || session.session_id == departingSessionId,
+                    departing = session.session_id == departingSessionId ||
+                        session.session_id == state.stoppingSessionId,
                     onClick = {
                         if (session.session_id == currentSessionId) onClose() else onSelectSession(session.session_id)
                     },
                     onStop = { onStopSession(session) },
+                    // Fades a stopped row out and slides its neighbours into the gap.
+                    modifier = Modifier.animateItem(),
                 )
             }
             item {
@@ -230,17 +265,37 @@ private fun SessionRow(
     kindLabel: String,
     selected: Boolean,
     stopping: Boolean,
+    departing: Boolean,
     onClick: () -> Unit,
     onStop: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val stateColor = MaterialTheme.pixel.sessionStateColor(session.state)
-    val ring = if (selected) MaterialTheme.pixel.brand2 else MaterialTheme.pixel.surface2
+    val selectionSpec = tween<Color>(SESSIONS_PANEL_SELECTION_MS)
+    val ring by animateColorAsState(
+        targetValue = if (selected) MaterialTheme.pixel.brand2 else MaterialTheme.pixel.surface2,
+        animationSpec = selectionSpec,
+        label = "sessionRowRing",
+    )
+    // Toward a transparent surface, not Color.Transparent (transparent black):
+    // the fade would pass through a dark tint otherwise.
+    val fill by animateColorAsState(
+        targetValue = MaterialTheme.pixel.surface.copy(alpha = if (selected) 1f else 0f),
+        animationSpec = selectionSpec,
+        label = "sessionRowFill",
+    )
+    val contentAlpha by animateFloatAsState(
+        targetValue = if (departing) 0.4f else 1f,
+        animationSpec = tween(SESSIONS_PANEL_SELECTION_MS),
+        label = "sessionRowAlpha",
+    )
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .background(if (selected) MaterialTheme.pixel.surface else Color.Transparent)
+            .alpha(contentAlpha)
+            .background(fill)
             .pixelFrame(ring)
-            .clickable(onClick = onClick)
+            .clickable(enabled = !departing, onClick = onClick)
             .semantics { this.selected = selected }
             .testTag(sessionsPanelRowTag(session.session_id))
             .padding(horizontal = 12.dp, vertical = 10.dp),

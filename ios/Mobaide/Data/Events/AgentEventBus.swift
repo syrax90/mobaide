@@ -50,6 +50,10 @@ actor AgentEventBus {
         connectionBroadcaster.subscribe()
     }
 
+    nonisolated var currentConnectionState: BusConnectionState {
+        connectionBroadcaster.latestValue ?? .disconnected
+    }
+
     var unknownEnvelopeCount: Int { unknownEnvelopeTypeTotal }
 
     /// Idempotent. Binds the lifecycle to auth-state transitions; the

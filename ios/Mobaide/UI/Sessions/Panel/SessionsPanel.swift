@@ -3,9 +3,14 @@ import SwiftUI
 /// The terminal's left drawer (Herdr's sidebar): the connected agent's
 /// sessions for one-tap switching or stopping, a shortcut to the create flow, and the
 /// account's other agents. Stateless — the drawer host owns open/closed.
+///
+/// `departingSessionId` is a session already stopped from this panel whose row
+/// may still be listed until the agent's push drops it: it is dimmed and inert
+/// meanwhile, as is the row of a stop still in flight.
 struct SessionsPanel: View {
     let model: SessionsPanelModel
     let currentSessionId: String
+    var departingSessionId: String?
     /// The agent a drawer-started switch is connecting to, if any.
     let switchingAgentId: String?
     let onSelectSession: (String) -> Void
@@ -16,68 +21,89 @@ struct SessionsPanel: View {
 
     @Environment(\.mobaideColors) private var colors
 
+    /// How long the selection frame takes to move, and a stopped row to fade out.
+    static let selectionAnimation = Animation.easeInOut(duration: 0.25)
+
     var body: some View {
         VStack(spacing: 0) {
             header
             PixelDivider()
             agentLine
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    if !model.synced {
-                        note("Reconnecting…")
-                    } else if model.sessions.isEmpty {
-                        note("No active sessions")
-                    }
-                    ForEach(model.sessions, id: \.session_id) { session in
-                        let selected = session.session_id == currentSessionId
-                        Button {
-                            if selected { onClose() } else { onSelectSession(session.session_id) }
-                        } label: {
-                            SessionsPanelRow(
-                                session: session,
-                                kindLabel: SessionDisplay.kindLabel(session, customTypeNames: model.customTypeNames),
-                                selected: selected,
-                                stopping: model.stoppingSessionId != nil,
-                                onStop: { onStopSession(session) }
-                            )
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        if !model.synced {
+                            note("Reconnecting…")
+                        } else if model.sessions.isEmpty {
+                            note("No active sessions")
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(selected ? .isSelected : [])
-                        .accessibilityIdentifier("sessions-panel-row-\(session.session_id)")
-                    }
-                    Button(action: onCreateSession) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "plus")
-                            Text("New session")
-                        }
-                        .font(MobaideTypography.chromeBody)
-                        .foregroundStyle(colors.accent)
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                        .padding(.horizontal, 4)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("sessions-panel-new-session")
-
-                    let others = model.otherAgents
-                    if !others.isEmpty {
-                        PixelSectionHeader("Agents")
-                            .padding(.top, 8)
-                            .padding(.horizontal, 4)
-                        ForEach(others, id: \.agent_id) { agent in
-                            let switching = switchingAgentId == agent.agent_id
+                        ForEach(model.sessions, id: \.session_id) { session in
+                            let selected = session.session_id == currentSessionId
+                            let departing = session.session_id == departingSessionId
+                                || session.session_id == model.stoppingSessionId
                             Button {
-                                onSelectAgent(agent)
+                                if selected { onClose() } else { onSelectSession(session.session_id) }
                             } label: {
-                                agentRow(agent, switching: switching)
+                                SessionsPanelRow(
+                                    session: session,
+                                    kindLabel: SessionDisplay.kindLabel(session, customTypeNames: model.customTypeNames),
+                                    selected: selected,
+                                    stopping: model.stoppingSessionId != nil || session.session_id == departingSessionId,
+                                    onStop: { onStopSession(session) }
+                                )
+                                .opacity(departing ? 0.4 : 1)
                             }
                             .buttonStyle(.plain)
-                            .disabled(!agent.online || switchingAgentId != nil)
-                            .accessibilityIdentifier("sessions-panel-agent-\(agent.agent_id)")
+                            .disabled(departing)
+                            .accessibilityAddTraits(selected ? .isSelected : [])
+                            .accessibilityIdentifier("sessions-panel-row-\(session.session_id)")
+                            .transition(.opacity)
+                        }
+                        Button(action: onCreateSession) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "plus")
+                                Text("New session")
+                            }
+                            .font(MobaideTypography.chromeBody)
+                            .foregroundStyle(colors.accent)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .padding(.horizontal, 4)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("sessions-panel-new-session")
+
+                        let others = model.otherAgents
+                        if !others.isEmpty {
+                            PixelSectionHeader("Agents")
+                                .padding(.top, 8)
+                                .padding(.horizontal, 4)
+                            ForEach(others, id: \.agent_id) { agent in
+                                let switching = switchingAgentId == agent.agent_id
+                                Button {
+                                    onSelectAgent(agent)
+                                } label: {
+                                    agentRow(agent, switching: switching)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(!agent.online || switchingAgentId != nil)
+                                .accessibilityIdentifier("sessions-panel-agent-\(agent.agent_id)")
+                            }
                         }
                     }
+                    .padding(EdgeInsets(top: 4, leading: 12, bottom: 16, trailing: 12))
+                    // A stopped row fades out and its neighbours close the gap; the
+                    // selection frame and dimming follow the same curve.
+                    .animation(Self.selectionAnimation, value: model.sessions.map(\.session_id))
+                    .animation(Self.selectionAnimation, value: currentSessionId)
+                    .animation(Self.selectionAnimation, value: departingSessionId)
+                    .animation(Self.selectionAnimation, value: model.stoppingSessionId)
                 }
-                .padding(EdgeInsets(top: 4, leading: 12, bottom: 16, trailing: 12))
+                // The selection can move without a tap (a stop hands it to the
+                // nearest session), so keep the current row in view.
+                .onChange(of: currentSessionId) { _, id in
+                    withAnimation(Self.selectionAnimation) { proxy.scrollTo(id) }
+                }
             }
         }
         .accessibilityIdentifier("sessions-panel")

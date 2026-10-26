@@ -185,7 +185,11 @@ opens the sessions panel: a `SideDrawer` overlay listing the connected agent's
 sessions (running/starting rows carry a Stop button opening a Stop / Force Stop
 / Cancel confirmation; stopping the on-screen session moves to the nearest open
 session by panel position, below first then above, and returns to the sessions
-list only when none remains; stopping another keeps the terminal), a New session shortcut and the
+list only when none remains; stopping another keeps the terminal). On that
+switch the drawer stays open: the selection frame moves to the next row and the
+stopped row dims while the terminal fades out, then `SessionDetailScreen`
+(whose identity survives `replaceLast`) opens the next terminal with the drawer
+up and fades it in. The list also has a New session shortcut and the
 account's other agents. The swipe is
 a `UIScreenEdgePanGestureRecognizer` (`mobaide.sessionsDrawer`) on
 `MobaideTerminalView` that the scroll, vertical and selection pans

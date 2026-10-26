@@ -19,6 +19,7 @@ import {
 import type { SessionResponse } from '../../protocol/dto/session';
 import { isSessionRunning } from '../../protocol/dto/terminalState';
 import { useSessionsPanelStore } from '../../stores/sessionsPanelStore';
+import { peekStopHandOff, useStopHandOffStore } from '../../stores/stopHandOffStore';
 import { useTerminalPrefsStore } from '../../stores/terminalPrefsStore';
 import { useToastStore } from '../../stores/toastStore';
 import { useVisibleSessionStore } from '../../stores/visibleSessionStore';
@@ -161,9 +162,21 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // under the template dialogs, and it returns focus to the menu that opened
   // it rather than to the grid.
   const [changesOpen, setChangesOpen] = useState(false);
+  // Read once, then cleared: this visit took over from a session stopped in the
+  // panel, which stays open and finishes the switch's motion.
+  const [handOff] = useState(() => peekStopHandOff(model.agentId, model.sessionId));
+  useEffect(() => {
+    if (handOff !== null) useStopHandOffStore.getState().clearHandOff(handOff);
+  }, [handOff]);
   // The sessions panel: `open` is per visit, `pinned` persists. Docked beside
   // the grid only when pinned on a wide viewport; otherwise it slides over.
-  const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(handOff?.overlayOpen === true);
+  // An overlay carried over from the previous terminal is already in place and
+  // must not slide in again; any later opening does.
+  const [overlayCarried, setOverlayCarried] = useState(handOff?.overlayOpen === true);
+  useEffect(() => {
+    if (!sessionsOpen) setOverlayCarried(false);
+  }, [sessionsOpen]);
   const pinned = useSessionsPanelStore((state) => state.pinned);
   const setPinned = useSessionsPanelStore((state) => state.setPinned);
   const wide = useWideViewport();
@@ -335,6 +348,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
         if (!next && wide) setSessionsOpen(true);
       }}
       onClose={closeSessions}
+      handOff={handOff}
     />
   );
 
@@ -345,9 +359,11 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
           in a row, and the narrower stage refits the grid once. */}
       {docked && <aside className="sessions-panel sessions-panel-docked">{sessionsPanel}</aside>}
       {sessionsOpen && !docked && (
-        <SessionsPanelOverlay onClose={closeSessions}>{sessionsPanel}</SessionsPanelOverlay>
+        <SessionsPanelOverlay onClose={closeSessions} carried={overlayCarried}>
+          {sessionsPanel}
+        </SessionsPanelOverlay>
       )}
-      <section className="terminal-page">
+      <section className={`terminal-page${handOff !== null ? ' terminal-page-arriving' : ''}`}>
         <header className="terminal-bar">
           <button
             type="button"
@@ -691,6 +707,8 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
 
 interface SessionsPanelOverlayProps {
   onClose: () => void;
+  /** Already on screen before this mount (a stop hand-off): skip the slide-in. */
+  carried: boolean;
   children: ReactNode;
 }
 
@@ -700,7 +718,7 @@ interface SessionsPanelOverlayProps {
  * and the UA `::backdrop` is the scrim. Mounted only while open, the way that
  * viewer and `Modal` are, so the top-layer entry comes and goes with it.
  */
-function SessionsPanelOverlay({ onClose, children }: SessionsPanelOverlayProps) {
+function SessionsPanelOverlay({ onClose, carried, children }: SessionsPanelOverlayProps) {
   const ref = useRef<HTMLElement>(null);
   // Set while this component closes the popover itself (unmount: a switch, or
   // a pin that turns it into the docked rail). The toggle event that follows
@@ -722,7 +740,7 @@ function SessionsPanelOverlay({ onClose, children }: SessionsPanelOverlayProps) 
   return (
     <aside
       ref={ref}
-      className="sessions-panel"
+      className={`sessions-panel${carried ? ' sessions-panel-carried' : ''}`}
       popover="auto"
       aria-label="Sessions panel"
       onToggle={(event) => {

@@ -7,16 +7,34 @@ import SwiftUI
 struct SessionDetailScreen: View {
     let sessionId: String
     @Environment(\.appContainer) private var container
+    @Environment(Router.self) private var router
+    /// Outlives the in-place route swap (this view's identity is reused), so
+    /// the next terminal can open with the drawer already up.
+    @State private var handOff: StopHandOff?
 
     var body: some View {
         if let container {
-            TerminalScreenContent(container: container, sessionId: sessionId)
-                // The sessions drawer swaps the route in place; the content's
-                // `@State` model is seeded in `init`, so a reused identity would
-                // keep rendering the previous session.
-                .id(sessionId)
+            TerminalScreenContent(
+                container: container,
+                sessionId: sessionId,
+                stoppedSessionId: handOff?.nextId == sessionId ? handOff?.stoppedId : nil,
+                onSwitchAfterStop: { next, stopped in
+                    handOff = StopHandOff(stoppedId: stopped, nextId: next)
+                    router.replaceLast(with: .sessionDetail(sessionId: next))
+                }
+            )
+            // The sessions drawer swaps the route in place; the content's
+            // `@State` model is seeded in `init`, so a reused identity would
+            // keep rendering the previous session.
+            .id(sessionId)
         }
     }
+}
+
+/// A stopped session on screen handing its terminal to the nearest open one.
+private struct StopHandOff: Equatable {
+    let stoppedId: String
+    let nextId: String
 }
 
 private struct TerminalScreenContent: View {
@@ -48,8 +66,13 @@ private struct TerminalScreenContent: View {
     /// Voice input for the connected agent: the composer's mic and dictation.
     @State private var voice: VoiceInputModel
     @State private var panel: SessionsPanelModel
-    @State private var drawerOpen = false
+    @State private var drawerOpen: Bool
     @State private var pendingStop: SessionResponse?
+    /// Set while the panel hands the selection from this stopped session to
+    /// the next one, before the terminals swap.
+    @State private var handOff: StopHandOff?
+    /// The terminal fades out before a stop hand-off and the next one fades in.
+    @State private var terminalOpacity: Double
     /// Live translation of the terminal's left-edge pan while the finger is
     /// down; nil otherwise. `SideDrawer` follows it before the open verdict.
     @State private var drawerDrag: CGFloat?
@@ -58,13 +81,23 @@ private struct TerminalScreenContent: View {
     private let customAgentTypesRepository: CustomAgentTypesRepository
     private let agentAPI: AgentAPI
     private let sessionId: String
+    /// Set when this terminal is the target of a stop hand-off.
+    private let stoppedSessionId: String?
+    private let onSwitchAfterStop: (_ next: String, _ stopped: String) -> Void
 
     @Environment(Router.self) private var router
     @Environment(DeepLinkCoordinator.self) private var deepLink
     @Environment(\.mobaideColors) private var colors
     @Environment(\.scenePhase) private var scenePhase
 
-    init(container: AppContainer, sessionId: String) {
+    private static let handOffFade = Animation.easeInOut(duration: 0.25)
+
+    init(
+        container: AppContainer,
+        sessionId: String,
+        stoppedSessionId: String?,
+        onSwitchAfterStop: @escaping (_ next: String, _ stopped: String) -> Void
+    ) {
         let session = container.sessionRepository.currentSessions.first { $0.session_id == sessionId }
         _model = State(initialValue: container.terminalSessionStore.model(
             id: sessionId,
@@ -90,6 +123,10 @@ private struct TerminalScreenContent: View {
         customAgentTypesRepository = container.customAgentTypesRepository
         agentAPI = container.agentAPI
         self.sessionId = sessionId
+        self.stoppedSessionId = stoppedSessionId
+        self.onSwitchAfterStop = onSwitchAfterStop
+        _drawerOpen = State(initialValue: stoppedSessionId != nil)
+        _terminalOpacity = State(initialValue: stoppedSessionId != nil ? 0 : 1)
     }
 
     /// Empty only until the row resolves from either source below.
@@ -154,11 +191,29 @@ private struct TerminalScreenContent: View {
         }
         if id == sessionId {
             guard router.path.last == .sessionDetail(sessionId: id) else { return }
-            drawerOpen = false
-            if let next = stopped.nextSessionId {
-                router.replaceLast(with: .sessionDetail(sessionId: next))
-            } else {
+            guard let next = stopped.nextSessionId else {
+                drawerOpen = false
                 router.popTo(.sessionList)
+                return
+            }
+            // The panel moves its selection while this terminal fades out; the
+            // swap follows unless the user left meanwhile.
+            withAnimation(Self.handOffFade) {
+                handOff = StopHandOff(stoppedId: id, nextId: next)
+                terminalOpacity = 0
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+            guard router.path.last == .sessionDetail(sessionId: id) else {
+                // Something else was opened on top: this screen must still show
+                // its (stopped) terminal when the user comes back to it.
+                handOff = nil
+                terminalOpacity = 1
+                return
+            }
+            if drawerOpen {
+                onSwitchAfterStop(next, id)
+            } else {
+                router.replaceLast(with: .sessionDetail(sessionId: next))
             }
         } else {
             model.terminalMessage = ToastMessage(text: "Session stopped", tone: .ok)
@@ -204,6 +259,7 @@ private struct TerminalScreenContent: View {
                 )
             }
             .offset(y: -keyboard.transition.lift)
+            .opacity(terminalOpacity)
             connectionOverlay
             // Beside the overlay, outside the lifted column: the drawer must
             // not move with the keyboard. It is dismissed on open instead,
@@ -212,7 +268,8 @@ private struct TerminalScreenContent: View {
             SideDrawer(isOpen: $drawerOpen, dragTranslation: drawerDrag) {
                 SessionsPanel(
                     model: panel,
-                    currentSessionId: sessionId,
+                    currentSessionId: handOff?.nextId ?? sessionId,
+                    departingSessionId: handOff?.stoppedId ?? stoppedSessionId,
                     switchingAgentId: deepLink.isSwitchingAgent ? deepLink.pendingAgentId : nil,
                     onSelectSession: { id in
                         drawerOpen = false
@@ -410,6 +467,9 @@ private struct TerminalScreenContent: View {
             }
         }
         .onAppear {
+            if terminalOpacity < 1, handOff == nil {
+                withAnimation(Self.handOffFade) { terminalOpacity = 1 }
+            }
             screenVisible = true
             model.markVisible()
             keyboard.onKeyboardWillHide = { model.syncTerminalKeyboardState() }

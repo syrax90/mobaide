@@ -63,6 +63,7 @@ const { useSelectedAgentStore } = await import('../../stores/selectedAgentStore'
 const { SessionsPanel } = await import('./SessionsPanel');
 const { ApiError } = await import('../../api/errors');
 const { useToastStore } = await import('../../stores/toastStore');
+const { useStopHandOffStore } = await import('../../stores/stopHandOffStore');
 const { queryKeys } = await import('../../lib/queryKeys');
 const { setTerminalEvictor } = await import('../../terminal/terminalEviction');
 // No socket is ever built here, so both halves of the synced signal are
@@ -112,7 +113,13 @@ function renderPanel({
   docked = false,
   pinned = false,
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
-}: { docked?: boolean; pinned?: boolean; client?: QueryClient } = {}) {
+  handOff = null,
+}: {
+  docked?: boolean;
+  pinned?: boolean;
+  client?: QueryClient;
+  handOff?: { departing: { session: SessionResponse; index: number } | null } | null;
+} = {}) {
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/agents/a1/sessions/s1']}>
@@ -128,6 +135,7 @@ function renderPanel({
           onClose={() => {
             calls.closes += 1;
           }}
+          handOff={handOff}
         />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -150,6 +158,7 @@ afterEach(() => {
   useLastSessionStore.setState({ lastUsedSessionIds: {} });
   useSelectedAgentStore.setState({ selectedAgentId: null });
   useToastStore.setState({ toasts: [] });
+  useStopHandOffStore.setState({ handOff: null });
   setTerminalEvictor(null);
 });
 
@@ -395,6 +404,96 @@ describe('SessionsPanel stop', () => {
     expect(api.trace).toEqual(['navigate:/agents/a1/sessions/s2', 'evict:s1']);
     expect(useLastSessionStore.getState().lastUsedSessionIds).toEqual({ a1: 's2', a2: 's9' });
     expect(toastMessages()).toEqual([['Session stopped.', 'success']]);
+  });
+
+  it('hands the next terminal the stopped row and the open overlay', async () => {
+    markSessionsSynced('a1');
+    api.sessions = [
+      session('s0', { title: 'zero' }),
+      session('s1', { title: 'one' }),
+      session('s2', { title: 'two' }),
+    ];
+    renderPanel();
+    const list = await screen.findByRole('list', { name: 'Sessions' });
+
+    fireEvent.click(within(rowItem(list, 'one')).getByRole('button', { name: 'Stop session' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+
+    await waitFor(() => {
+      expect(currentPath()).toBe('/agents/a1/sessions/s2');
+    });
+    expect(useStopHandOffStore.getState().handOff).toEqual({
+      agentId: 'a1',
+      sessionId: 's2',
+      departing: { session: session('s1', { title: 'one' }), index: 1 },
+      overlayOpen: true,
+    });
+  });
+
+  it('does not ask a docked rail to reopen as an overlay', async () => {
+    markSessionsSynced('a1');
+    api.sessions = [session('s1', { title: 'one' }), session('s2', { title: 'two' })];
+    renderPanel({ docked: true, pinned: true });
+    const list = await screen.findByRole('list', { name: 'Sessions' });
+
+    fireEvent.click(within(rowItem(list, 'one')).getByRole('button', { name: 'Stop session' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+
+    await waitFor(() => {
+      expect(currentPath()).toBe('/agents/a1/sessions/s2');
+    });
+    expect(useStopHandOffStore.getState().handOff?.overlayOpen).toBe(false);
+  });
+
+  it('keeps another stopped row on screen as a leaving, inert item after the push drops it', async () => {
+    markSessionsSynced('a1');
+    api.sessions = [
+      session('s1', { title: 'one' }),
+      session('s2', { title: 'two' }),
+      session('s3', { title: 'three' }),
+    ];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderPanel({ client });
+    const list = await screen.findByRole('list', { name: 'Sessions' });
+
+    fireEvent.click(within(rowItem(list, 'two')).getByRole('button', { name: 'Stop session' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await waitFor(() => {
+      expect(toastMessages()).toEqual([['Session stopped.', 'success']]);
+    });
+    client.setQueryData(queryKeys.sessions('a1'), [
+      session('s1', { title: 'one' }),
+      session('s3', { title: 'three' }),
+    ]);
+
+    await waitFor(() => {
+      expect(list.querySelectorAll('li')).toHaveLength(3);
+    });
+    const items = [...list.querySelectorAll('li')];
+    expect(items[1]).toHaveClass('sessions-panel-item-leaving');
+    expect(items[1]).toHaveAttribute('aria-hidden', 'true');
+    expect(items[1]).toHaveAttribute('inert');
+    // Hidden from the accessibility tree: only the live rows are buttons.
+    expect(within(list).queryByRole('button', { name: /two/ })).toBeNull();
+    expect(items[0]).not.toHaveClass('sessions-panel-item-leaving');
+  });
+
+  it('opens on a hand-off with the stopped row leaving at its old place and the new row settling', async () => {
+    markSessionsSynced('a1');
+    api.sessions = [session('s0', { title: 'zero' }), session('s1', { title: 'one' })];
+    renderPanel({
+      handOff: { departing: { session: session('sx', { title: 'gone' }), index: 1 } },
+    });
+    const list = await screen.findByRole('list', { name: 'Sessions' });
+
+    const items = [...list.querySelectorAll('li')];
+    expect(items).toHaveLength(3);
+    expect(items[1]).toHaveClass('sessions-panel-item-leaving');
+    expect(rowItem(list, 'one')).toHaveClass(
+      'sessions-panel-item-current',
+      'sessions-panel-item-arriving',
+    );
+    expect(rowItem(list, 'zero')).not.toHaveClass('sessions-panel-item-arriving');
   });
 
   it('picks by the list as confirmed even when the stopped row is pushed away mid-stop', async () => {
