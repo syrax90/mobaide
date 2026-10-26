@@ -48,6 +48,9 @@ $Script:InstallUrl = if ($env:MOBAIDE_AGENT_INSTALL_URL) {
 } else {
     "https://get.mobaide.com/install.ps1"
 }
+# This file's path when run as `-File install.ps1` or `& .\install.ps1`;
+# empty under `irm | iex`, even when that runs inside another script.
+$Script:InstallerPath = $PSCommandPath
 # Scheduled-Task supervisor URL. Co-versioned with install.ps1 itself: the
 # publish-gh-pages workflow ships both files together on every push to
 # main, so an installer change that depends on a new supervisor API can
@@ -176,12 +179,39 @@ function Test-IsAdmin {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+# The command the elevated PowerShell runs: the relevant MOBAIDE_* env vars
+# reinstated, then the installer. Under `irm | iex` the script is not on disk,
+# so it is fetched again from InstallUrl; run from a file, that same file runs,
+# so a local or modified copy is not swapped for the published one.
+function Get-ElevatedInstallCommand {
+    $passthrough = @(
+        'MOBAIDE_AGENT_PREFIX', 'MOBAIDE_AGENT_MANIFEST_URL',
+        'MOBAIDE_AGENT_TRUST_KEY_B64', 'MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH',
+        'MOBAIDE_AGENT_INSTALL_URL', 'MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL',
+        'MOBAIDE_AGENT_SKIP_INSTALL_QR', 'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL',
+        'MOBAIDE_AGENT_CLAUDE_BIN_HINT', 'MOBAIDE_AGENT_CODEX_BIN_HINT',
+        'MOBAIDE_AGENT_AGY_BIN_HINT'
+    )
+    $envStmts = foreach ($name in $passthrough) {
+        $val = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ($val) {
+            $escaped = $val -replace "'", "''"
+            "`$env:$name = '$escaped'"
+        }
+    }
+    $prefix = if ($envStmts) { ($envStmts -join '; ') + '; ' } else { '' }
+    if ($Script:InstallerPath) {
+        $pathEscaped = $Script:InstallerPath -replace "'", "''"
+        return "$prefix" + "& '$pathEscaped'"
+    }
+    $urlEscaped = $Script:InstallUrl -replace "'", "''"
+    return "$prefix" + "irm '$urlEscaped' | iex"
+}
+
 # `irm | iex` runs the script inline in the caller's PowerShell, so we cannot
 # use `#Requires -RunAsAdministrator` (which errors confusingly before our own
-# messages run) and cannot just re-exec ourselves from disk (the script does
-# not live on disk). Instead: detect non-admin and re-launch via UAC with
-# `Start-Process -Verb RunAs`, passing a command that re-fetches and pipes the
-# same install URL, with the relevant MOBAIDE_* env vars reinstated.
+# messages run). Instead: detect non-admin and re-launch via UAC with
+# `Start-Process -Verb RunAs`, running Get-ElevatedInstallCommand.
 function Assert-AdminOrElevate {
     if (Test-IsAdmin) { return }
     Write-Info "Not running elevated; relaunching under UAC to register the Scheduled Task."
@@ -211,24 +241,7 @@ function Assert-AdminOrElevate {
     if ($agyBin) {
         $env:MOBAIDE_AGENT_AGY_BIN_HINT = $agyBin
     }
-    $passthrough = @(
-        'MOBAIDE_AGENT_PREFIX', 'MOBAIDE_AGENT_MANIFEST_URL',
-        'MOBAIDE_AGENT_TRUST_KEY_B64', 'MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH',
-        'MOBAIDE_AGENT_INSTALL_URL', 'MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL',
-        'MOBAIDE_AGENT_SKIP_INSTALL_QR', 'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL',
-        'MOBAIDE_AGENT_CLAUDE_BIN_HINT', 'MOBAIDE_AGENT_CODEX_BIN_HINT',
-        'MOBAIDE_AGENT_AGY_BIN_HINT'
-    )
-    $envStmts = foreach ($name in $passthrough) {
-        $val = [Environment]::GetEnvironmentVariable($name, 'Process')
-        if ($val) {
-            $escaped = $val -replace "'", "''"
-            "`$env:$name = '$escaped'"
-        }
-    }
-    $prefix = if ($envStmts) { ($envStmts -join '; ') + '; ' } else { '' }
-    $urlEscaped = $Script:InstallUrl -replace "'", "''"
-    $cmd = "$prefix" + "irm '$urlEscaped' | iex"
+    $cmd = Get-ElevatedInstallCommand
     $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-Command', $cmd)
     try {
         Start-Process -FilePath 'powershell.exe' -ArgumentList $psArgs -Verb RunAs -Wait
@@ -790,6 +803,35 @@ except InvalidSignature:
     if ($LASTEXITCODE -ne 0) { Write-Fail "Manifest signature verification failed" }
 }
 
+# Stops the Scheduled Task and every process still running from $Prefix.
+# Stop-ScheduledTask alone is not enough: a launcher or agent left behind by an
+# earlier install outlives its task, keeps serving, and keeps the release dir
+# locked (a running .exe or loaded .dll cannot be moved or deleted).
+# Returns $true when the task was running or any process was stopped.
+function Stop-AgentProcesses {
+    param([Parameter(Mandatory=$true)] [string] $Prefix)
+    $stopped = $false
+    $task = Get-ScheduledTask -TaskName $Script:ServiceName -ErrorAction SilentlyContinue
+    if ($task -and $task.State -eq 'Running') {
+        Stop-ScheduledTask -TaskName $Script:ServiceName -ErrorAction SilentlyContinue
+        $stopped = $true
+    }
+    $root = $Prefix.TrimEnd('\') + '\'
+    $procs = @(Get-CimInstance Win32_Process | Where-Object {
+        $_.ProcessId -ne $PID -and $_.ExecutablePath -and
+        $_.ExecutablePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)
+    })
+    foreach ($proc in $procs) {
+        Write-Info "Stopping $($proc.Name) (PID $($proc.ProcessId)) running from $Prefix"
+        Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+        $stopped = $true
+    }
+    if ($procs) {
+        Wait-Process -Id $procs.ProcessId -Timeout 15 -ErrorAction SilentlyContinue
+    }
+    return $stopped
+}
+
 function Install-Release {
     param($PythonExe, $ManifestPath)
     # Parse the manifest in PowerShell so the staging step does not depend
@@ -822,12 +864,17 @@ function Install-Release {
     # Mirrors deploy/install.sh's stage_release and the updater's _swap_into_place.
     $releaseBackup = $null
     $staged = $false
+    $agentStopped = $false
     # $tmp is created BEFORE the try so the finally always has it to remove; the
     # move-aside runs INSIDE the try so a failing Move-Item / New-Item is covered
     # by the same restore path as a later download / pip failure.
     $tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("mobaide-agent-" + [guid]::NewGuid()))
     try {
         if (Test-Path $releaseDir) {
+            # Only a same-version reinstall moves a release the agent may be
+            # running from; an upgrade stages beside it and Install-Service
+            # stops the agent later, keeping the download window online.
+            $agentStopped = Stop-AgentProcesses -Prefix $Script:Prefix
             $releaseBackup = Join-Path (Join-Path $Script:Prefix "releases") ".old-$version-$PID"
             if (Test-Path $releaseBackup) { Remove-Item -Recurse -Force $releaseBackup }
             Move-Item -Force $releaseDir $releaseBackup
@@ -929,6 +976,11 @@ print(wheel_path)
                 Remove-Item -Recurse -Force $releaseDir -ErrorAction SilentlyContinue
                 Move-Item -Force $releaseBackup $releaseDir
             }
+        }
+        # A failed reinstall leaves the previous release in place; bring the
+        # agent this function stopped back up on it.
+        if ($agentStopped -and -not $staged) {
+            Start-ScheduledTask -TaskName $Script:ServiceName -ErrorAction SilentlyContinue
         }
     }
 
@@ -1269,14 +1321,12 @@ function Install-Service {
     # registered the Scheduled Task, unregister it before re-creating
     # so Register-ScheduledTask -Force has a clean slate (and so a
     # changed Execute / Argument path doesn't leave a stale entry).
+    # Stopping by prefix also catches processes an earlier install left behind,
+    # which would otherwise keep running beside the agent started below.
+    Stop-AgentProcesses -Prefix $Script:Prefix | Out-Null
     $existingTask = Get-ScheduledTask -TaskName $Script:ServiceName -ErrorAction SilentlyContinue
     if ($existingTask) {
         Write-Info "Unregistering existing Scheduled Task $Script:ServiceName before re-registering"
-        try {
-            Stop-ScheduledTask -TaskName $Script:ServiceName -ErrorAction SilentlyContinue
-        } catch {
-            # Stop-ScheduledTask on a not-currently-running task is harmless noise.
-        }
         Unregister-ScheduledTask -TaskName $Script:ServiceName -Confirm:$false -ErrorAction Stop
     }
 
