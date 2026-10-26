@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
+import re
 import subprocess
 import sys
 import time
@@ -271,6 +273,84 @@ class TestInstallShHelper:
         assert words[:3] == ["rm", "-rf", "--one-file-system"]
         assert tuple(words[4:]) == PREFIX_ENTRIES
 
+    def test_cli_shim_path_and_marker_match_install_sh(self):
+        """install.sh writes the shim the agent removes on macOS."""
+        text = (_REPO_ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+
+        assert re.findall(r'^CLI_SHIM_PATH="(.*)"$', text, re.M) == [
+            self_uninstall.CLI_SHIM_PATH.as_posix()
+        ]
+        assert re.findall(r'^CLI_SHIM_MARKER="(.*)"$', text, re.M) == [
+            self_uninstall.CLI_SHIM_MARKER
+        ]
+
+
+def _cli_shim_text(prefix: Path) -> str:
+    """The head of the shim install.sh writes for ``prefix``."""
+    return (
+        "#!/bin/sh\n"
+        f"# {self_uninstall.CLI_SHIM_MARKER}, written by the Mobaide agent "
+        "installer.\n"
+        f"default_prefix='{prefix}'\n"
+        "run_user='mobaide'\n"
+    )
+
+
+@pytest.fixture
+def cli_shim(tmp_path, monkeypatch) -> Path:
+    """Move /usr/local/bin/mobaide-agent under tmp_path."""
+    shim = tmp_path / "usr-local-bin" / "mobaide-agent"
+    shim.parent.mkdir()
+    monkeypatch.setattr(self_uninstall, "CLI_SHIM_PATH", shim)
+    return shim
+
+
+class TestRemoveCliShim:
+    def test_removes_the_shim_written_for_this_install(self, prefix, cli_shim):
+        cli_shim.write_text(_cli_shim_text(prefix), encoding="utf-8")
+
+        self_uninstall._remove_cli_shim(prefix)
+
+        assert not cli_shim.exists()
+
+    def test_keeps_a_command_the_installer_did_not_write(self, prefix, cli_shim):
+        foreign = f"#!/bin/sh\nexec {prefix}/releases/0.9.0/venv/bin/mobaide-agent\n"
+        cli_shim.write_text(foreign, encoding="utf-8")
+
+        self_uninstall._remove_cli_shim(prefix)
+
+        assert cli_shim.read_text(encoding="utf-8") == foreign
+
+    def test_keeps_the_shim_of_another_install(self, prefix, cli_shim, tmp_path):
+        other = _cli_shim_text(tmp_path / "other-prefix")
+        cli_shim.write_text(other, encoding="utf-8")
+
+        self_uninstall._remove_cli_shim(prefix)
+
+        assert cli_shim.read_text(encoding="utf-8") == other
+
+    def test_no_shim_is_fine(self, prefix, cli_shim):
+        self_uninstall._remove_cli_shim(prefix)
+
+        assert not cli_shim.exists()
+
+    def test_root_owned_shim_is_left_without_failing(
+        self, prefix, cli_shim, monkeypatch
+    ):
+        cli_shim.write_text(_cli_shim_text(prefix), encoding="utf-8")
+        real_unlink = Path.unlink
+
+        def refuse_shim(self, *args, **kwargs):
+            if self == cli_shim:
+                raise PermissionError("/usr/local/bin is root-owned")
+            return real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", refuse_shim)
+
+        self_uninstall._remove_cli_shim(prefix)
+
+        assert cli_shim.exists()
+
 
 class TestUninstallLinux:
     def test_helper_unit_present_only_drops_the_marker(
@@ -373,6 +453,7 @@ class TestUninstallLinux:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs the pwd module")
+@pytest.mark.usefixtures("cli_shim")
 class TestUninstallMacos:
     @pytest.fixture
     def home(self, tmp_path, monkeypatch) -> Path:
@@ -479,6 +560,22 @@ class TestUninstallMacos:
 
         assert [c[:2] for c in commands] == [["launchctl", "bootout"]]
 
+    def test_removes_the_cli_shim_before_booting_out(
+        self, prefix, home, cli_shim, monkeypatch
+    ):
+        cli_shim.write_text(_cli_shim_text(prefix), encoding="utf-8")
+        shim_present: list[bool] = []
+
+        def fake_run(cmd: list[str]) -> int:
+            shim_present.append(cli_shim.exists())
+            return 0
+
+        monkeypatch.setattr(self_uninstall, "_run", fake_run)
+
+        uninstall(prefix, platform="darwin")
+
+        assert shim_present == [False]
+
 
 class TestUninstallWindows:
     @pytest.fixture
@@ -486,6 +583,34 @@ class TestUninstallWindows:
         python = tmp_path / "Python312" / "pythonw.exe"
         monkeypatch.setattr(self_uninstall, "_base_pythonw", lambda _p: python)
         return python
+
+    @pytest.fixture(autouse=True)
+    def path_entries(self, monkeypatch) -> list[Path]:
+        """Record PATH cleanups instead of editing the real user PATH."""
+        removed: list[Path] = []
+        monkeypatch.setattr(
+            self_uninstall, "_remove_user_path_entry", removed.append
+        )
+        return removed
+
+    def test_takes_the_cli_directory_off_the_user_path(
+        self, prefix, base_python, commands, path_entries
+    ):
+        uninstall(prefix, platform="win32")
+
+        assert path_entries == [prefix / "bin"]
+
+    def test_failed_path_cleanup_still_uninstalls(
+        self, prefix, base_python, commands, monkeypatch
+    ):
+        def broken(_directory: Path) -> None:
+            raise OSError("HKCU\\Environment is locked")
+
+        monkeypatch.setattr(self_uninstall, "_remove_user_path_entry", broken)
+
+        uninstall(prefix, platform="win32")
+
+        assert [c[1] for c in commands] == ["/Create", "/Run", "/Delete"]
 
     def test_registers_runs_cleanup_task_then_deletes_agent_task(
         self, prefix, base_python, commands
@@ -627,6 +752,114 @@ class TestUninstallWindows:
             ["schtasks.exe", "/Delete", "/TN", "MobaideAgent", "/F"]
         ]
         assert not (prefix / "uninstall_cleanup.py").exists()
+
+
+class _FakeWinreg:
+    """The slice of ``winreg`` that ``_remove_user_path_entry`` uses, backed
+    by one in-memory key, so no test reaches the real registry."""
+
+    HKEY_CURRENT_USER = "HKCU"
+    KEY_QUERY_VALUE = 0x1
+    KEY_SET_VALUE = 0x2
+    REG_SZ = 1
+    REG_EXPAND_SZ = 2
+
+    def __init__(self, path: tuple[str, int] | None) -> None:
+        self.values: dict[str, tuple[str, int]] = {}
+        if path is not None:
+            self.values["Path"] = path
+        self.opened: list[tuple[str, str]] = []
+        self.writes = 0
+
+    def OpenKey(self, root, sub_key, reserved, access):
+        self.opened.append((root, sub_key))
+        return contextlib.nullcontext(sub_key)
+
+    def QueryValueEx(self, key, name):
+        try:
+            return self.values[name]
+        except KeyError:
+            raise FileNotFoundError(name) from None
+
+    def SetValueEx(self, key, name, reserved, kind, value):
+        self.values[name] = (value, kind)
+        self.writes += 1
+
+
+_CLI_DIR = Path(r"C:\Program Files\MobaideAgent\bin")
+
+
+class TestRemoveUserPathEntry:
+    @pytest.fixture
+    def broadcasts(self, monkeypatch) -> list[None]:
+        sent: list[None] = []
+        monkeypatch.setattr(
+            self_uninstall, "_broadcast_environment_change",
+            lambda: sent.append(None),
+        )
+        return sent
+
+    @staticmethod
+    def _registry(monkeypatch, path: tuple[str, int] | None) -> _FakeWinreg:
+        fake = _FakeWinreg(path)
+        monkeypatch.setitem(sys.modules, "winreg", fake)
+        return fake
+
+    def test_drops_the_entry_and_writes_the_rest_back_verbatim(
+        self, monkeypatch, broadcasts
+    ):
+        registry = self._registry(monkeypatch, (
+            r"%USERPROFILE%\bin;C:\Tools;;C:\Program Files\MobaideAgent\bin;D:\x",
+            _FakeWinreg.REG_EXPAND_SZ,
+        ))
+
+        self_uninstall._remove_user_path_entry(_CLI_DIR)
+
+        assert registry.opened == [("HKCU", "Environment")]
+        assert registry.values["Path"] == (
+            r"%USERPROFILE%\bin;C:\Tools;;D:\x", _FakeWinreg.REG_EXPAND_SZ
+        )
+        assert broadcasts == [None]
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            r"c:\program files\mobaideagent\BIN" "\\",
+            r'"C:\Program Files\MobaideAgent\bin"',
+            "C:/Program Files/MobaideAgent/bin",
+            r"%MOBAIDE_TEST_ROOT%\bin",
+        ],
+        ids=["case-and-trailing-slash", "quoted", "forward-slashes", "env-var"],
+    )
+    def test_matches_the_entry_however_it_is_spelled(
+        self, monkeypatch, broadcasts, entry
+    ):
+        monkeypatch.setenv("MOBAIDE_TEST_ROOT", r"C:\Program Files\MobaideAgent")
+        registry = self._registry(
+            monkeypatch, (rf"C:\Tools;{entry}", _FakeWinreg.REG_SZ)
+        )
+
+        self_uninstall._remove_user_path_entry(_CLI_DIR)
+
+        assert registry.values["Path"] == (r"C:\Tools", _FakeWinreg.REG_SZ)
+
+    def test_path_without_the_entry_is_not_rewritten(self, monkeypatch, broadcasts):
+        raw = r"C:\Program Files\MobaideAgent;C:\Program Files\MobaideAgent\bin2"
+        registry = self._registry(monkeypatch, (raw, _FakeWinreg.REG_EXPAND_SZ))
+
+        self_uninstall._remove_user_path_entry(_CLI_DIR)
+
+        assert registry.writes == 0
+        assert registry.values["Path"] == (raw, _FakeWinreg.REG_EXPAND_SZ)
+        assert broadcasts == []
+
+    def test_no_user_path_is_fine(self, monkeypatch, broadcasts):
+        registry = self._registry(monkeypatch, None)
+
+        self_uninstall._remove_user_path_entry(_CLI_DIR)
+
+        assert registry.writes == 0
+        assert broadcasts == []
 
 
 class TestBasePythonw:

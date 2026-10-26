@@ -22,11 +22,54 @@ CI hosts that have no ``schtasks.exe`` or ``sc.exe`` on PATH.
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Callable
 
 import pytest
 
 import mobaide.__main__ as _main
+
+
+class _FakeWindowsProcesses:
+    """Stand-in for ``mobaide.agent.windows_processes``.
+
+    Records calls into ``events`` so a test can share that list with the
+    ``_run_with_timeout`` recorder and assert the interleaving.
+    """
+
+    def __init__(self) -> None:
+        self.events: list = []
+        self.inside = False
+        self.leftover: list[int] = []
+        self.remaining: list[int] = []
+        self.list_error: OSError | None = None
+
+    def list_processes(self) -> list:
+        if self.list_error is not None:
+            raise self.list_error
+        return []
+
+    def runs_inside_install(self, _processes, _pid: int, prefix: str) -> bool:
+        self.events.append(("inside", prefix))
+        return self.inside
+
+    def install_process_ids(self, _processes, prefix: str, *, keep_pid: int) -> list[int]:
+        self.events.append(("leftover", prefix, keep_pid))
+        return list(self.leftover)
+
+    def terminate(self, pids, *, timeout_s: float) -> list[int]:
+        self.events.append(("terminate", list(pids)))
+        return list(self.remaining)
+
+
+@pytest.fixture(autouse=True)
+def fake_processes(monkeypatch: pytest.MonkeyPatch) -> _FakeWindowsProcesses:
+    """Keep every test here off the real process table: on a Windows host the
+    real helpers would stop whatever runs from the default install prefix."""
+    fake = _FakeWindowsProcesses()
+    monkeypatch.setattr(_main, "_windows_processes", lambda: fake)
+    return fake
 
 
 def _install_run_with_timeout_recorder(
@@ -358,6 +401,130 @@ class TestRestartWindowsScheduledTask:
             f"wait closes the schtasks tear-down race; got ordering "
             f"{ordering!r}"
         )
+
+
+class TestRestartStopsLeftoverAgent:
+    """``/End`` kills only the supervisor. With an older supervisor the
+    launcher and agent survive it, keep the agent port and the credentials
+    they booted with, and the instance ``/Run`` starts exits on the port
+    clash -- after ``re-pair`` that left a QR no agent was waiting on.
+    """
+
+    def test_stops_leftover_processes_between_end_and_run(
+        self, monkeypatch: pytest.MonkeyPatch, fake_processes: _FakeWindowsProcesses
+    ) -> None:
+        fake_processes.leftover = [10, 13]
+        _silence_waits(monkeypatch)
+        calls = _install_run_with_timeout_recorder(monkeypatch, lambda _cmd: (0, "", ""))
+        fake_processes.events = calls
+
+        _main._restart_windows_scheduled_task("MobaideAgent", Path(r"D:\agent"))
+
+        install = os.path.abspath(Path(r"D:\agent"))
+        assert calls == [
+            ("inside", install),
+            ["schtasks.exe", "/End", "/TN", "MobaideAgent"],
+            ("leftover", install, os.getpid()),
+            ("terminate", [10, 13]),
+            ["schtasks.exe", "/Run", "/TN", "MobaideAgent"],
+        ]
+
+    def test_reports_how_many_processes_it_stopped(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        fake_processes: _FakeWindowsProcesses,
+    ) -> None:
+        fake_processes.leftover = [10, 13]
+        _silence_waits(monkeypatch)
+        _install_run_with_timeout_recorder(monkeypatch, lambda _cmd: (0, "", ""))
+
+        _main._restart_windows_scheduled_task("MobaideAgent", Path(r"D:\agent"))
+
+        assert "Stopped 2 leftover agent process(es)" in capsys.readouterr().out
+
+    def test_nothing_left_over_prints_nothing_extra(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        fake_processes: _FakeWindowsProcesses,
+    ) -> None:
+        _silence_waits(monkeypatch)
+        _install_run_with_timeout_recorder(monkeypatch, lambda _cmd: (0, "", ""))
+
+        _main._restart_windows_scheduled_task("MobaideAgent")
+
+        assert not any(e[0] == "terminate" for e in fake_processes.events)
+        assert "leftover" not in capsys.readouterr().out
+
+    def test_names_processes_that_would_not_stop_and_still_runs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        fake_processes: _FakeWindowsProcesses,
+    ) -> None:
+        fake_processes.leftover = [10, 13]
+        fake_processes.remaining = [13]
+        _silence_waits(monkeypatch)
+        calls = _install_run_with_timeout_recorder(monkeypatch, lambda _cmd: (0, "", ""))
+
+        rc = _main._restart_windows_scheduled_task("MobaideAgent")
+
+        assert rc == 0
+        assert ["schtasks.exe", "/Run", "/TN", "MobaideAgent"] in calls
+        out = capsys.readouterr().out
+        assert "Could not stop leftover agent process(es) 13" in out
+        assert "Stop-Process -Force -Id 13" in out
+
+    def test_process_table_failure_does_not_block_the_restart(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        fake_processes: _FakeWindowsProcesses,
+    ) -> None:
+        fake_processes.list_error = OSError("snapshot failed")
+        _silence_waits(monkeypatch)
+        calls = _install_run_with_timeout_recorder(monkeypatch, lambda _cmd: (0, "", ""))
+
+        rc = _main._restart_windows_scheduled_task("MobaideAgent")
+
+        assert rc == 0
+        assert calls == [
+            ["schtasks.exe", "/End", "/TN", "MobaideAgent"],
+            ["schtasks.exe", "/Run", "/TN", "MobaideAgent"],
+        ]
+        assert "snapshot failed" in capsys.readouterr().out
+
+    def test_skips_restart_from_inside_an_agent_session(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        fake_processes: _FakeWindowsProcesses,
+    ) -> None:
+        # The supervisor's job takes the session -- and this command -- down
+        # with the agent, so /End would leave nothing alive to issue /Run.
+        fake_processes.inside = True
+        _silence_waits(monkeypatch)
+        calls = _install_run_with_timeout_recorder(monkeypatch, lambda _cmd: (0, "", ""))
+
+        rc = _main._restart_windows_scheduled_task("MobaideAgent")
+
+        assert rc == 0
+        assert calls == []
+        out = capsys.readouterr().out
+        assert "Not restarting MobaideAgent" in out
+        assert "outside Mobaide" in out
+
+    def test_dispatcher_threads_the_install_prefix_through(
+        self, monkeypatch: pytest.MonkeyPatch, fake_processes: _FakeWindowsProcesses
+    ) -> None:
+        _silence_waits(monkeypatch)
+        _install_run_with_timeout_recorder(monkeypatch, lambda _cmd: (0, "", ""))
+        monkeypatch.setattr(_main.sys, "platform", "win32")
+
+        _main._try_restart_service(Path(r"D:\custom"))
+
+        assert ("inside", os.path.abspath(Path(r"D:\custom"))) in fake_processes.events
 
 
 class TestRestartWindowsScmService:

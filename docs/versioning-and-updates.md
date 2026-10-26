@@ -549,8 +549,13 @@ gap; an operator-set `SSL_CERT_FILE` still takes precedence on the launcher's
 │   └── 0.2.0/
 │       ├── .installed
 │       └── venv/
-└── bin/                             # macOS/Windows launcher shims
+└── bin/                             # launcher wrapper; Windows mobaide-agent.cmd
 ```
+
+The `mobaide-agent` command the installers put on PATH
+(`/usr/local/bin/mobaide-agent` on Linux/macOS, `bin\mobaide-agent.cmd` on
+Windows) reads `current_version` on every call, so an update or rollback never
+strands it on a pruned release.
 
 A release is **complete/runnable** only once a `.installed` marker file exists
 in `releases/<v>/`, written as the last install step (after pip + the wheel).
@@ -819,11 +824,18 @@ Both scripts are auto-published from `deploy/` to the root of the
     Software Foundation signer before execution). Fails with a
     manual-download message only when both paths fail. Set
     `MOBAIDE_AGENT_SKIP_PYTHON_INSTALL=1` to opt out and require a
-    pre-installed interpreter (CI / locked-down hosts). Override the
-    re-fetch URL used by the elevation re-launch via
-    `MOBAIDE_AGENT_INSTALL_URL` (parallel to the Linux side).
+    pre-installed interpreter (CI / locked-down hosts). Under `irm | iex`
+    the elevation re-launch fetches the installer again from
+    `MOBAIDE_AGENT_INSTALL_URL` (parallel to the Linux side); run from a
+    file (`-File .\install.ps1`), it re-runs that same file instead.
 5. Download tarball + wheel, verify sha256s, extract under
    `<prefix>/releases/<version>/`, install the wheel into a fresh venv.
+   On Windows, reinstalling the version already installed first stops the
+   agent and every process still running from the prefix, since Windows
+   cannot move a release dir whose executables are running; the agent is
+   restarted on the previous release if staging then fails. Service
+   registration (step 8) stops leftover prefix processes the same way, so no
+   agent from an earlier install keeps running beside the new one.
 6. Atomically pin `<prefix>/current_version`.
 7. Generate `<prefix>/mobaide_agent/.env` via `python -m mobaide.agent.config init-env` — writes a random `JWT_SECRET_KEY` and prefills `RELAY_SERVER_URL=wss://mobaide.com`. On Windows, if the pre-elevation `Find-ClaudeBinary` helper located `claude.cmd`, the path is forwarded via `MOBAIDE_AGENT_CLAUDE_BIN_HINT` and written as `MOBAIDE_CLAUDE_BIN` into the agent's `.env`. The optional Codex CLI is auto-detected identically: the parallel `Find-CodexBinary` helper probes the same `%APPDATA%\npm` locations for `codex.cmd`, forwards it via `MOBAIDE_AGENT_CODEX_BIN_HINT`, and writes `MOBAIDE_CODEX_BIN` (a miss is silent — Codex is the optional secondary agent). The optional Antigravity CLI is auto-detected the same way: the parallel `Find-AgyBinary` helper probes the standalone `agy` install locations (`%USERPROFILE%\.local\bin`, the `Antigravity` program folders) for `agy.exe` / `agy.cmd`, forwards it via `MOBAIDE_AGENT_AGY_BIN_HINT`, and writes `MOBAIDE_AGY_BIN` (also a silent miss — Antigravity is an optional managed agent). Re-running never overwrites an already-paired `.env` (pass `--force` to regenerate; paired credentials are preserved regardless).
 8. Register the service:

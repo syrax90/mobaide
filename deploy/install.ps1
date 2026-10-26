@@ -48,6 +48,9 @@ $Script:InstallUrl = if ($env:MOBAIDE_AGENT_INSTALL_URL) {
 } else {
     "https://get.mobaide.com/install.ps1"
 }
+# This file's path when run as `-File install.ps1` or `& .\install.ps1`;
+# empty under `irm | iex`, even when that runs inside another script.
+$Script:InstallerPath = $PSCommandPath
 # Scheduled-Task supervisor URL. Co-versioned with install.ps1 itself: the
 # publish-gh-pages workflow ships both files together on every push to
 # main, so an installer change that depends on a new supervisor API can
@@ -176,12 +179,39 @@ function Test-IsAdmin {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+# The command the elevated PowerShell runs: the relevant MOBAIDE_* env vars
+# reinstated, then the installer. Under `irm | iex` the script is not on disk,
+# so it is fetched again from InstallUrl; run from a file, that same file runs,
+# so a local or modified copy is not swapped for the published one.
+function Get-ElevatedInstallCommand {
+    $passthrough = @(
+        'MOBAIDE_AGENT_PREFIX', 'MOBAIDE_AGENT_MANIFEST_URL',
+        'MOBAIDE_AGENT_TRUST_KEY_B64', 'MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH',
+        'MOBAIDE_AGENT_INSTALL_URL', 'MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL',
+        'MOBAIDE_AGENT_SKIP_INSTALL_QR', 'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL',
+        'MOBAIDE_AGENT_CLAUDE_BIN_HINT', 'MOBAIDE_AGENT_CODEX_BIN_HINT',
+        'MOBAIDE_AGENT_AGY_BIN_HINT'
+    )
+    $envStmts = foreach ($name in $passthrough) {
+        $val = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ($val) {
+            $escaped = $val -replace "'", "''"
+            "`$env:$name = '$escaped'"
+        }
+    }
+    $prefix = if ($envStmts) { ($envStmts -join '; ') + '; ' } else { '' }
+    if ($Script:InstallerPath) {
+        $pathEscaped = $Script:InstallerPath -replace "'", "''"
+        return "$prefix" + "& '$pathEscaped'"
+    }
+    $urlEscaped = $Script:InstallUrl -replace "'", "''"
+    return "$prefix" + "irm '$urlEscaped' | iex"
+}
+
 # `irm | iex` runs the script inline in the caller's PowerShell, so we cannot
 # use `#Requires -RunAsAdministrator` (which errors confusingly before our own
-# messages run) and cannot just re-exec ourselves from disk (the script does
-# not live on disk). Instead: detect non-admin and re-launch via UAC with
-# `Start-Process -Verb RunAs`, passing a command that re-fetches and pipes the
-# same install URL, with the relevant MOBAIDE_* env vars reinstated.
+# messages run). Instead: detect non-admin and re-launch via UAC with
+# `Start-Process -Verb RunAs`, running Get-ElevatedInstallCommand.
 function Assert-AdminOrElevate {
     if (Test-IsAdmin) { return }
     Write-Info "Not running elevated; relaunching under UAC to register the Scheduled Task."
@@ -211,24 +241,7 @@ function Assert-AdminOrElevate {
     if ($agyBin) {
         $env:MOBAIDE_AGENT_AGY_BIN_HINT = $agyBin
     }
-    $passthrough = @(
-        'MOBAIDE_AGENT_PREFIX', 'MOBAIDE_AGENT_MANIFEST_URL',
-        'MOBAIDE_AGENT_TRUST_KEY_B64', 'MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH',
-        'MOBAIDE_AGENT_INSTALL_URL', 'MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL',
-        'MOBAIDE_AGENT_SKIP_INSTALL_QR', 'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL',
-        'MOBAIDE_AGENT_CLAUDE_BIN_HINT', 'MOBAIDE_AGENT_CODEX_BIN_HINT',
-        'MOBAIDE_AGENT_AGY_BIN_HINT'
-    )
-    $envStmts = foreach ($name in $passthrough) {
-        $val = [Environment]::GetEnvironmentVariable($name, 'Process')
-        if ($val) {
-            $escaped = $val -replace "'", "''"
-            "`$env:$name = '$escaped'"
-        }
-    }
-    $prefix = if ($envStmts) { ($envStmts -join '; ') + '; ' } else { '' }
-    $urlEscaped = $Script:InstallUrl -replace "'", "''"
-    $cmd = "$prefix" + "irm '$urlEscaped' | iex"
+    $cmd = Get-ElevatedInstallCommand
     $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-Command', $cmd)
     try {
         Start-Process -FilePath 'powershell.exe' -ArgumentList $psArgs -Verb RunAs -Wait
@@ -790,6 +803,35 @@ except InvalidSignature:
     if ($LASTEXITCODE -ne 0) { Write-Fail "Manifest signature verification failed" }
 }
 
+# Stops the Scheduled Task and every process still running from $Prefix.
+# Stop-ScheduledTask alone is not enough: a launcher or agent left behind by an
+# earlier install outlives its task, keeps serving, and keeps the release dir
+# locked (a running .exe or loaded .dll cannot be moved or deleted).
+# Returns $true when the task was running or any process was stopped.
+function Stop-AgentProcesses {
+    param([Parameter(Mandatory=$true)] [string] $Prefix)
+    $stopped = $false
+    $task = Get-ScheduledTask -TaskName $Script:ServiceName -ErrorAction SilentlyContinue
+    if ($task -and $task.State -eq 'Running') {
+        Stop-ScheduledTask -TaskName $Script:ServiceName -ErrorAction SilentlyContinue
+        $stopped = $true
+    }
+    $root = $Prefix.TrimEnd('\') + '\'
+    $procs = @(Get-CimInstance Win32_Process | Where-Object {
+        $_.ProcessId -ne $PID -and $_.ExecutablePath -and
+        $_.ExecutablePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)
+    })
+    foreach ($proc in $procs) {
+        Write-Info "Stopping $($proc.Name) (PID $($proc.ProcessId)) running from $Prefix"
+        Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+        $stopped = $true
+    }
+    if ($procs) {
+        Wait-Process -Id $procs.ProcessId -Timeout 15 -ErrorAction SilentlyContinue
+    }
+    return $stopped
+}
+
 function Install-Release {
     param($PythonExe, $ManifestPath)
     # Parse the manifest in PowerShell so the staging step does not depend
@@ -822,12 +864,17 @@ function Install-Release {
     # Mirrors deploy/install.sh's stage_release and the updater's _swap_into_place.
     $releaseBackup = $null
     $staged = $false
+    $agentStopped = $false
     # $tmp is created BEFORE the try so the finally always has it to remove; the
     # move-aside runs INSIDE the try so a failing Move-Item / New-Item is covered
     # by the same restore path as a later download / pip failure.
     $tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("mobaide-agent-" + [guid]::NewGuid()))
     try {
         if (Test-Path $releaseDir) {
+            # Only a same-version reinstall moves a release the agent may be
+            # running from; an upgrade stages beside it and Install-Service
+            # stops the agent later, keeping the download window online.
+            $agentStopped = Stop-AgentProcesses -Prefix $Script:Prefix
             $releaseBackup = Join-Path (Join-Path $Script:Prefix "releases") ".old-$version-$PID"
             if (Test-Path $releaseBackup) { Remove-Item -Recurse -Force $releaseBackup }
             Move-Item -Force $releaseDir $releaseBackup
@@ -929,6 +976,11 @@ print(wheel_path)
                 Remove-Item -Recurse -Force $releaseDir -ErrorAction SilentlyContinue
                 Move-Item -Force $releaseBackup $releaseDir
             }
+        }
+        # A failed reinstall leaves the previous release in place; bring the
+        # agent this function stopped back up on it.
+        if ($agentStopped -and -not $staged) {
+            Start-ScheduledTask -TaskName $Script:ServiceName -ErrorAction SilentlyContinue
         }
     }
 
@@ -1147,7 +1199,8 @@ Or from PowerShell:
 function Show-PairingQrFromService {
     param(
         [Parameter(Mandatory=$true)] [string] $Prefix,
-        [Parameter(Mandatory=$true)] [string] $Version,
+        # Install-CliShim's result: the shim to run and the command to print.
+        [Parameter(Mandatory=$true)] [hashtable] $Cli,
         $Health,
         [int] $PendingTimeoutSec = 60
     )
@@ -1184,14 +1237,8 @@ Agent is up but did not initiate pairing within ${PendingTimeoutSec}s
     Test-NetConnection -ComputerName api.mobaide.com -Port 443
     Get-Content "$Prefix\logs\agent.err.log" -Tail 50
 The agent is still running; once connectivity is restored it will
-initiate a nonce on its own. Run `mobaide-agent show-qr` to re-display.
+initiate a nonce on its own. Run: $($Cli.Command) show-qr
 "@
-    }
-    $releaseDir = Join-Path (Join-Path $Prefix "releases") $Version
-    $releaseScripts = Join-Path $releaseDir "venv\Scripts"
-    $mobaideAgent = Join-Path $releaseScripts "mobaide-agent.exe"
-    if (-not (Test-Path -LiteralPath $mobaideAgent)) {
-        $mobaideAgent = Join-Path $releaseScripts "mobaide-agent"
     }
     Write-Info "Rendering pairing QR (scan from the Mobaide mobile app)"
     # ``--require-pending`` keeps this call from initiating a second
@@ -1201,9 +1248,14 @@ initiate a nonce on its own. Run `mobaide-agent show-qr` to re-display.
     # makes the CLI render-from-file only; on exit 7 (file vanished
     # between our Test-Path and the CLI's load) we hard-fail rather
     # than fall through to a fresh initiate.
-    & $mobaideAgent show-qr --require-pending --prefix $Prefix
+    #
+    # Rendered through the installed shim, so a broken shim fails the
+    # install instead of the operator's later recovery attempt. No
+    # --prefix: the shim exports the prefix it lives in.
+    $shim = $Cli.Path
+    & $shim show-qr --require-pending
     if ($LASTEXITCODE -ne 0) {
-        Write-Fail "mobaide-agent show-qr --require-pending failed (exit $LASTEXITCODE). Run `mobaide-agent show-qr` from a new PowerShell window."
+        Write-Fail "mobaide-agent show-qr --require-pending failed (exit $LASTEXITCODE). Run: $($Cli.Command) show-qr"
     }
 }
 
@@ -1269,14 +1321,12 @@ function Install-Service {
     # registered the Scheduled Task, unregister it before re-creating
     # so Register-ScheduledTask -Force has a clean slate (and so a
     # changed Execute / Argument path doesn't leave a stale entry).
+    # Stopping by prefix also catches processes an earlier install left behind,
+    # which would otherwise keep running beside the agent started below.
+    Stop-AgentProcesses -Prefix $Script:Prefix | Out-Null
     $existingTask = Get-ScheduledTask -TaskName $Script:ServiceName -ErrorAction SilentlyContinue
     if ($existingTask) {
         Write-Info "Unregistering existing Scheduled Task $Script:ServiceName before re-registering"
-        try {
-            Stop-ScheduledTask -TaskName $Script:ServiceName -ErrorAction SilentlyContinue
-        } catch {
-            # Stop-ScheduledTask on a not-currently-running task is harmless noise.
-        }
         Unregister-ScheduledTask -TaskName $Script:ServiceName -Confirm:$false -ErrorAction Stop
     }
 
@@ -1342,8 +1392,112 @@ function Install-Service {
     Start-ScheduledTask -TaskName $Script:ServiceName
 }
 
+# Tells running programs (Explorer, and so every terminal opened from it)
+# that the persistent environment changed. Best-effort: without it the new
+# PATH entry still applies from the next sign-in.
+function Send-EnvironmentChange {
+    try {
+        if (-not ('MobaideInstaller.NativeMethods' -as [type])) {
+            Add-Type -Namespace MobaideInstaller -Name NativeMethods -MemberDefinition @'
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+'@
+        }
+        $result = [UIntPtr]::Zero
+        # HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG, 5 s timeout.
+        [MobaideInstaller.NativeMethods]::SendMessageTimeout([IntPtr]0xffff, 0x1a, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$result) | Out-Null
+    } catch {
+        Write-Warn "Could not announce the PATH change: $($_.Exception.Message). If a new terminal does not find mobaide-agent, sign out and back in."
+    }
+}
+
+# Appends $Directory to the current user's persistent PATH unless an
+# equivalent entry is already there, then refreshes this session's PATH.
+# The raw value is read unexpanded and written back verbatim with the same
+# value kind, so %VAR% entries survive: an [Environment]::SetEnvironmentVariable
+# round-trip would expand them and store REG_SZ, and setx truncates PATH at
+# 1024 characters. -SubKey exists for tests.
+function Add-UserPathEntry {
+    param(
+        [Parameter(Mandatory=$true)] [string] $Directory,
+        [string] $SubKey = 'Environment'
+    )
+    $wanted = $Directory.Trim('"').TrimEnd('\')
+    $added = $false
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($SubKey)
+    try {
+        $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $present = @($raw -split ';' | Where-Object {
+            $_ -and ([Environment]::ExpandEnvironmentVariables($_).Trim('"').TrimEnd('\') -ieq $wanted)
+        })
+        if ($present.Count -eq 0) {
+            if ($raw) {
+                $kind = $key.GetValueKind('Path')
+                $value = $raw.TrimEnd(';') + ';' + $Directory
+            } else {
+                $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString
+                $value = $Directory
+            }
+            $key.SetValue('Path', $value, $kind)
+            $added = $true
+        }
+    } finally {
+        $key.Close()
+    }
+    if ($added) {
+        Send-EnvironmentChange
+    }
+    Update-CurrentSessionPath
+}
+
+# Puts `mobaide-agent` on PATH. The release venv's console script moves with
+# every update and rollback, so the shim reads <prefix>\current_version on
+# each call instead of pinning a release, and derives the prefix from its own
+# location. It lives in the admin-only <prefix>\bin; the PATH entry goes to
+# the installing user, the same account the Scheduled Task and the .env ACL
+# belong to. Returns @{ Path = <shim>; Command = <what the banners print> }.
+function Install-CliShim {
+    param([Parameter(Mandatory=$true)] [string] $Prefix)
+    $binDir = Join-Path $Prefix "bin"
+    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+    $shim = Join-Path $binDir "mobaide-agent.cmd"
+    # Escape cmd.exe metacharacters for the echo line (a custom install URL
+    # may carry & or %).
+    $installUrl = ($Script:InstallUrl -replace '([\^&|<>])', '^$1') -replace '%', '%%'
+    $lines = @(
+        '@echo off'
+        'rem mobaide-agent CLI shim, written by the Mobaide agent installer.'
+        'setlocal EnableExtensions DisableDelayedExpansion'
+        'for %%I in ("%~dp0..") do set "MOBAIDE_AGENT_PREFIX=%%~fI"'
+        'set "version="'
+        'if exist "%MOBAIDE_AGENT_PREFIX%\current_version" for /f "usebackq delims=" %%V in ("%MOBAIDE_AGENT_PREFIX%\current_version") do if not defined version set "version=%%V"'
+        'if not defined version goto missing'
+        'set "cli=%MOBAIDE_AGENT_PREFIX%\releases\%version%\venv\Scripts\mobaide-agent.exe"'
+        'if not exist "%cli%" goto missing'
+        '"%cli%" %*'
+        'exit /b %ERRORLEVEL%'
+        ':missing'
+        '>&2 echo mobaide-agent: no Mobaide agent is installed at %MOBAIDE_AGENT_PREFIX%.'
+        ">&2 echo Re-run the installer from PowerShell: irm $installUrl ^| iex"
+        'exit /b 9009'
+    )
+    # ASCII with CRLF: cmd.exe misreads a UTF-8 BOM and can lose `goto`
+    # labels in LF-only batch files.
+    [System.IO.File]::WriteAllText($shim, (($lines -join "`r`n") + "`r`n"), [System.Text.Encoding]::ASCII)
+    Write-Info "Installed the mobaide-agent command at $shim"
+
+    $command = 'mobaide-agent'
+    try {
+        Add-UserPathEntry -Directory $binDir
+    } catch {
+        Write-Warn "Could not add $binDir to your PATH: $($_.Exception.Message)"
+        $command = "& '$shim'"
+    }
+    return @{ Path = $shim; Command = $command }
+}
+
 function Write-Completion {
-    param($Version)
+    param($Version, $Command)
     Write-Host ""
     Write-Host "============================================"
     Write-Host "  Mobaide agent installed"
@@ -1351,9 +1505,13 @@ function Write-Completion {
     Write-Host "  Version: $Version"
     Write-Host "  Task:    $Script:ServiceName (Running as $env:USERNAME)"
     Write-Host ""
-    Write-Host "  Re-render QR:  mobaide-agent show-qr"
-    Write-Host "  Re-pair:       mobaide-agent re-pair"
+    Write-Host "  Re-render QR:  $Command show-qr"
+    Write-Host "  Re-pair:       $Command re-pair"
     Write-Host "  Restart:       Stop-ScheduledTask $Script:ServiceName; Start-ScheduledTask $Script:ServiceName"
+    if ($Command -eq 'mobaide-agent') {
+        Write-Host ""
+        Write-Host "  Open a new terminal window to use mobaide-agent (PATH was updated for $env:USERNAME)."
+    }
     Write-Host "============================================"
 }
 
@@ -1419,10 +1577,11 @@ function Main {
     # service fails to start (Wait-AgentHealthy hard-fails with an
     # Event-Viewer pointer).
     Install-Service -PythonExe $python -PythonwExe $pythonwExe
+    $cli = Install-CliShim -Prefix $Script:Prefix
     $health = Wait-AgentHealthy -Prefix $Script:Prefix -TimeoutSec 60
-    Show-PairingQrFromService -Prefix $Script:Prefix -Version $version -Health $health
+    Show-PairingQrFromService -Prefix $Script:Prefix -Cli $cli -Health $health
 
-    Write-Completion -Version $version
+    Write-Completion -Version $version -Command $cli.Command
 }
 
 Main
