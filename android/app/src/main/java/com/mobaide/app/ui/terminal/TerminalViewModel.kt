@@ -154,6 +154,9 @@ class TerminalViewModel @Inject constructor(
     /** Termux session driving the renderer. Survives recomposition; created once in init. */
     val session: TerminalSession
 
+    /** Static-mode typing latch: user sends arm it, the surface pans to the cursor on paint. */
+    val cursorReveal = TerminalCursorReveal()
+
     init {
         // 10k transcript rows holds the server's 4 MB ring even after wrap
         // expansion through ANSI/redraws; the Termux emulator clamps to its
@@ -546,6 +549,7 @@ class TerminalViewModel @Inject constructor(
 
     fun sendInput(text: String) {
         setFollowMode(true)
+        cursorReveal.armAtCursor(session)
         // Wrap multi-line input in xterm bracketed-paste markers so Ink/React TUIs
         // (Claude CLI) treat the whole buffer as a single paste instead of submitting
         // on every embedded LF. Single-line input stays raw — bracketed-paste markers
@@ -576,6 +580,7 @@ class TerminalViewModel @Inject constructor(
 
     /** Send raw bytes (Ctrl-C, Esc, arrow keys, ...) to the PTY. */
     fun sendBytes(bytes: ByteArray) {
+        cursorReveal.armAtCursor(session)
         setFollowMode(true)
         enqueueInput(bytes)
     }
@@ -615,7 +620,10 @@ class TerminalViewModel @Inject constructor(
             enqueueInput(bytes)
             return
         }
-        sendBytes(bytes)
+        // Not sendBytes: this funnel also carries mouse clicks and wheel reports, which must
+        // not arm the cursor reveal. Keystrokes arm it at the surface, before reaching here.
+        setFollowMode(true)
+        enqueueInput(bytes)
     }
 
     private suspend fun loadShortcutRecents(kindKey: String) {
@@ -674,6 +682,7 @@ class TerminalViewModel @Inject constructor(
     fun sendTappedRow(text: String, isCurrentInput: Boolean) {
         if (_connectionState.value != ConnectionState.Live) return
         setFollowMode(true)
+        cursorReveal.armAtCursor(session)
         val frame = if (isCurrentInput) {
             TerminalProtocol.encodeInput("\r".toByteArray(Charsets.UTF_8))
         } else {

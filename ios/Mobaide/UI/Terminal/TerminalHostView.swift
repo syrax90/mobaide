@@ -61,6 +61,30 @@ final class MobaideTerminalView: TerminalView {
         return resigned
     }
 
+    /// Static-mode typing latch: every keyboard-originated write arms it and
+    /// `TerminalPanScrollView` pans to the cursor on the next painted updates.
+    let cursorReveal = TerminalCursorReveal()
+
+    func armCursorReveal() {
+        let cursor = getTerminal().getCursorLocation()
+        cursorReveal.arm(col: cursor.x, row: cursor.y)
+    }
+
+    override func insertText(_ text: String) {
+        armCursorReveal()
+        super.insertText(text)
+    }
+
+    override func deleteBackward() {
+        armCursorReveal()
+        super.deleteBackward()
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if isFirstResponder { armCursorReveal() }
+        super.pressesBegan(presses, with: event)
+    }
+
     func configureAppearance() {
         nativeBackgroundColor = UIColor(MobaideColors.terminalBackground)
         nativeForegroundColor = UIColor(MobaideColors.terminalForeground)
@@ -545,6 +569,7 @@ final class MobaideTerminalView: TerminalView {
     // MARK: - Fling
 
     private(set) var flingTask: Task<Void, Never>?
+    private var flingGeneration = 0
 
     /// Momentum after the finger lifts, Android `onFling`.
     ///
@@ -567,7 +592,14 @@ final class MobaideTerminalView: TerminalView {
         )
         guard !steps.isEmpty else { return }
         let anchor = wheelAnchor
+        flingGeneration &+= 1
+        let generation = flingGeneration
         flingTask = Task { [weak self] in
+            // A fling that runs out on its own must not leave a finished task
+            // behind: `flingTask != nil` reads as "still flinging".
+            defer {
+                if let self, self.flingGeneration == generation { self.flingTask = nil }
+            }
             for step in steps {
                 try? await Task.sleep(for: TerminalWheelScroll.flingFrameInterval)
                 guard !Task.isCancelled, let self, self.wheelScrollMode == arm else { return }
@@ -580,6 +612,10 @@ final class MobaideTerminalView: TerminalView {
         flingTask?.cancel()
         flingTask = nil
     }
+
+    /// A finger is on the terminal (Android's HSV `touchActive`): a scrollback or
+    /// wheel drag must not have a pending cursor reveal pan sideways under it.
+    private(set) var isTouchActive = false
 
     /// Tap-to-stop, the `UIScrollView` convention the outer
     /// `TerminalPanScrollView` already honors for its own fling. It has to hang
@@ -594,6 +630,7 @@ final class MobaideTerminalView: TerminalView {
     /// runs before any recognizer can be asked to begin — which is what makes
     /// the decision latchable.
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        isTouchActive = true
         cancelFling()
         dismissedKeyboardOnCurrentTouch = isSoftKeyboardCovering
         if dismissedKeyboardOnCurrentTouch {
@@ -604,6 +641,22 @@ final class MobaideTerminalView: TerminalView {
             spendSingleTapRecognizers()
         }
         super.touchesBegan(touches, with: event)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        updateTouchActive(endingWith: event)
+        super.touchesEnded(touches, with: event)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        updateTouchActive(endingWith: event)
+        super.touchesCancelled(touches, with: event)
+    }
+
+    private func updateTouchActive(endingWith event: UIEvent?) {
+        isTouchActive = event?.touches(for: self)?.contains {
+            $0.phase != .ended && $0.phase != .cancelled
+        } ?? false
     }
 
     /// Takes the dismissing touch away from the taps that could act on it alone,
@@ -1178,6 +1231,7 @@ struct TerminalHostView: UIViewRepresentable {
         func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
         func rangeChanged(source: TerminalView, startY: Int, endY: Int) {
             panHost?.caretDidMove()
+            panHost?.revealCursorIfArmed()
         }
     }
 }

@@ -143,6 +143,33 @@ final class TerminalPanScrollView: UIScrollView {
         setNeedsLayout()
     }
 
+    /// Only the content offset changes — never a size — so the PTY never sees a
+    /// resize. Run only from `rangeChanged`, which fires per painted update
+    /// (never mid-parse, unlike `scrolled`); the sync guard covers a freeze
+    /// whose deadline expired.
+    func revealCursorIfArmed() {
+        let reveal = terminalView.cursorReveal
+        guard reveal.isArmed,
+              displayConfig.mode == .static,
+              terminalView.superview === self,
+              !isDragging, !isDecelerating,
+              !terminalView.isTouchActive, terminalView.flingTask == nil,
+              !terminalView.isDecelerating,
+              !terminalView.isSelectionActive,
+              !terminalView.isSynchronizedOutputActive else { return }
+        let cursor = terminalView.getTerminal().getCursorLocation()
+        guard reveal.shouldReveal(col: cursor.x, row: cursor.y) else { return }
+        let cellWidth = terminalView.cellSize.width
+        guard let target = TerminalCursorReveal.targetOffsetX(
+            cursorX: CGFloat(cursor.x) * cellWidth,
+            cellWidth: cellWidth,
+            viewportWidth: bounds.width,
+            contentWidth: contentSize.width,
+            currentOffsetX: contentOffset.x
+        ) else { return }
+        setContentOffset(CGPoint(x: target, y: contentOffset.y), animated: false)
+    }
+
     private func currentCounterPan(boxHeight: CGFloat) -> CGFloat {
         let anchor = caretAnchorBottomOverride ?? TerminalKeyboardPan.caretAnchorBottom(
             caretFrame: terminalView.caretFrame,
@@ -237,6 +264,11 @@ final class TerminalPanScrollView: UIScrollView {
            !claimsHorizontalPan() {
             return false
         }
-        return super.gestureRecognizerShouldBegin(gestureRecognizer)
+        let begins = super.gestureRecognizerShouldBegin(gestureRecognizer)
+        // The user's own pan outranks a pending cursor reveal.
+        if begins, gestureRecognizer === panGestureRecognizer {
+            terminalView.cursorReveal.disarm()
+        }
+        return begins
     }
 }
