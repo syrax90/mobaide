@@ -16,6 +16,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoes
 from ..templates_dir import resolve_templates_dir
 
 _TEMPLATE_NAME = "marketing_landing.html"
+_VOICE_TEMPLATE_NAME = "marketing_voice_input.html"
 _FAVICON_RELATIVE_PATH = ("site", "img", "favicon.ico")
 
 _SITE_ASSET_DIR = "site"
@@ -59,10 +60,36 @@ def render_landing(
     startup matches ``render_privacy`` and is much better than a deployment that
     boots and then serves an empty home page.
     """
+    return _render_page(
+        _TEMPLATE_NAME, site_origin, app_origin, asset_version, templates_dir
+    )
+
+
+def render_voice_input(
+    site_origin: str,
+    app_origin: str,
+    asset_version: str,
+    *,
+    templates_dir: Path | None = None,
+) -> str:
+    """Render the ``/voice-input`` feature page; same contract as
+    :func:`render_landing`."""
+    return _render_page(
+        _VOICE_TEMPLATE_NAME, site_origin, app_origin, asset_version, templates_dir
+    )
+
+
+def _render_page(
+    template_name: str,
+    site_origin: str,
+    app_origin: str,
+    asset_version: str,
+    templates_dir: Path | None,
+) -> str:
     target = templates_dir if templates_dir is not None else resolve_templates_dir()
-    template_path = target / _TEMPLATE_NAME
+    template_path = target / template_name
     if not template_path.is_file():
-        raise FileNotFoundError(f"landing template missing: {template_path}")
+        raise FileNotFoundError(f"marketing template missing: {template_path}")
 
     env = Environment(
         loader=FileSystemLoader(str(target)),
@@ -71,7 +98,7 @@ def render_landing(
         autoescape=select_autoescape(default_for_string=True, default=True),
         undefined=StrictUndefined,
     )
-    return env.get_template(_TEMPLATE_NAME).render(
+    return env.get_template(template_name).render(
         site_origin=site_origin,
         app_origin=app_origin,
         asset_version=asset_version,
@@ -135,7 +162,7 @@ def render_robots(site_origin: str) -> str:
 
 
 def render_sitemap(site_origin: str) -> str:
-    """Sitemap covering the two public, indexable pages.
+    """Sitemap covering the public, indexable pages.
 
     ``lastmod`` is deliberately omitted rather than stamped at render time: the
     page is pre-rendered per process start, so a startup timestamp would claim
@@ -150,6 +177,7 @@ def render_sitemap(site_origin: str) -> str:
         f"<priority>{priority}</priority></url>"
         for path, freq, priority in (
             ("/", "weekly", "1.0"),
+            ("/voice-input", "monthly", "0.8"),
             ("/privacy.html", "monthly", "0.3"),
         )
     )

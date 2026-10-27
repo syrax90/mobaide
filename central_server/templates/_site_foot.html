@@ -1,0 +1,37 @@
+{#
+  Footer shared by the marketing pages (`/` and `/voice-input`). The
+  "Cookie settings" control is rendered only where the consent banner lives
+  (`with_consent_settings`): on a page without the banner, site.js never arms
+  it, so it would stay hidden anyway — leaving it out keeps the markup honest.
+#}
+<footer class="site-foot">
+  <div class="foot-top">
+    <img class="brand-mark" src="/static/site/img/wordmark.png?v={{ asset_version }}"
+         width="227" height="40" alt="Mobaide">
+    <nav class="foot-nav" aria-label="Footer">
+      <a href="/voice-input">Voice input</a>
+      <a href="/privacy.html">Privacy policy</a>
+      {% if with_consent_settings | default(false) %}
+      {# Reopens the consent banner so a stored choice can be reversed on the
+         site itself (GDPR Art. 7(3)). Hidden until site.js arms the consent
+         flow — on any non-production host the control would do nothing. #}
+      <button class="consent-settings" type="button" data-consent-settings>Cookie settings</button>
+      {% endif %}
+      <a href="/portal/delete-account-info">Account deletion</a>
+      <a href="{{ app_origin }}/login">Sign in</a>
+      <a href="https://github.com/syrax90/mobaide-community/discussions" rel="noopener">Community</a>
+      <a href="mailto:support@mobaide.com">Email support</a>
+    </nav>
+  </div>
+  <p class="disclaimer">
+    Mobaide is an independent app and is not affiliated with or endorsed by
+    Anthropic, OpenAI, Google, Apple, NVIDIA or Linear. “Claude” and “Claude
+    Code” are trademarks of Anthropic. “Codex” is a trademark of OpenAI.
+    “Antigravity” is a trademark of Google. NVIDIA is a trademark of NVIDIA
+    Corporation. Google Play and the Google Play logo are trademarks of
+    Google LLC. Apple and the Apple logo are trademarks of Apple Inc.,
+    registered in the U.S. and other countries; App Store is a service mark of
+    Apple Inc. All other trademarks are the property of their respective owners.
+  </p>
+  <p class="disclaimer">&copy; Mobaide — developed by Pavel Timonin</p>
+</footer>

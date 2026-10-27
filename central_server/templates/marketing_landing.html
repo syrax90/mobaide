@@ -94,6 +94,7 @@
   <nav class="site-nav" aria-label="Site">
     <a href="#how">How it works</a>
     <a href="#features">Features</a>
+    <a href="/voice-input">Voice input</a>
     <a href="#faq">FAQ</a>
     <a class="btn btn-ghost" href="{{ app_origin }}/login">Sign in</a>
   </nav>
@@ -237,6 +238,21 @@
   <section id="features" class="section" data-reveal>
     <h2 class="h-pixel">What you get</h2>
     <div class="grid">
+
+      {# The short mention; /voice-input carries the full story. Same accuracy
+         rules: opt-in per computer, transcribed on the user's own machine,
+         never sent on its own. #}
+      <article class="card card-feature notch">
+        <span class="chip chip-brand chip-sm">New</span>
+        <h3>Dictate your prompts</h3>
+        <p>
+          Tap the mic and say what you want instead of thumb-typing it. Your own
+          computer turns the speech into text — in 25 languages — and the text
+          waits in the command field until you send it. Opt-in, and the audio
+          is never stored.
+        </p>
+        <p><a class="card-link" href="/voice-input">How voice input works <span aria-hidden="true">→</span></a></p>
+      </article>
 
       <article class="card notch">
         <h3>Built-in agents, fully configurable</h3>
@@ -568,11 +584,12 @@
       <details>
         <summary>What leaves my machine?</summary>
         <p>
-          Session traffic is <strong>relayed, not stored</strong>: your keystrokes
-          and the terminal output pass through the relay's in-memory routing and
-          are then discarded — never appended to its database, log files or
-          backups. Server-side logs record connection and error events, never
-          session payloads.
+          Session traffic is <strong>relayed, not stored</strong>: your keystrokes,
+          the terminal output and any
+          <a href="/voice-input">voice dictation</a> audio pass through the
+          relay's in-memory routing and are then discarded — never appended to
+          its database, log files or backups. Server-side logs record
+          connection and error events, never session payloads.
         </p>
         <p>
           The relay does persist the things that have to sync across your
@@ -625,33 +642,8 @@
 
 </main>
 
-<footer class="site-foot">
-  <div class="foot-top">
-    <img class="brand-mark" src="/static/site/img/wordmark.png?v={{ asset_version }}"
-         width="227" height="40" alt="Mobaide">
-    <nav class="foot-nav" aria-label="Footer">
-      <a href="/privacy.html">Privacy policy</a>
-      {# Reopens the consent banner so a stored choice can be reversed on the
-         site itself (GDPR Art. 7(3)). Hidden until site.js arms the consent
-         flow — on any non-production host the control would do nothing. #}
-      <button class="consent-settings" type="button" data-consent-settings>Cookie settings</button>
-      <a href="/portal/delete-account-info">Account deletion</a>
-      <a href="{{ app_origin }}/login">Sign in</a>
-      <a href="https://github.com/syrax90/mobaide-community/discussions" rel="noopener">Community</a>
-      <a href="mailto:support@mobaide.com">Email support</a>
-    </nav>
-  </div>
-  <p class="disclaimer">
-    Mobaide is an independent app and is not affiliated with or endorsed by
-    Anthropic, OpenAI, Google, Apple or Linear. “Claude” and “Claude Code” are
-    trademarks of Anthropic. “Codex” is a trademark of OpenAI. “Antigravity” is a
-    trademark of Google. Google Play and the Google Play logo are trademarks of
-    Google LLC. Apple and the Apple logo are trademarks of Apple Inc.,
-    registered in the U.S. and other countries; App Store is a service mark of
-    Apple Inc. All other trademarks are the property of their respective owners.
-  </p>
-  <p class="disclaimer">&copy; Mobaide — developed by Pavel Timonin</p>
-</footer>
+{% set with_consent_settings = true %}
+{% include "_site_foot.html" %}
 
 {# Cookie-consent banner for the Google Ads tag. Ships `hidden`; site.js
    reveals it when no stored choice exists — or when the footer's "Cookie

@@ -29,8 +29,9 @@ _FAVICON_CACHE_CONTROL = "public, max-age=86400"
 _CRAWLER_CACHE_CONTROL = "public, max-age=3600"
 
 # Security headers for every path here come from the `_SITE_PATHS` bucket of
-# `security_headers.SecurityHeadersMiddleware`. The landing page needs no
-# relaxation to satisfy that policy: its CSS and JS are external same-origin
+# `security_headers.SecurityHeadersMiddleware` (`/` alone takes the widened
+# `_LANDING_CSP`, for the consent-gated Ads tag). Both pages need no
+# relaxation to satisfy the strict site policy: its CSS and JS are external same-origin
 # files, its icons are inline <svg> markup rather than data: URIs, its font is
 # same-origin, and the JSON-LD block is a data block that CSP does not treat as
 # executable script. Keep it that way — `test_marketing.py` scans the rendered
@@ -41,6 +42,13 @@ _CRAWLER_CACHE_CONTROL = "public, max-age=3600"
 @router.api_route("/", methods=_PUBLIC_METHODS, response_class=HTMLResponse)
 async def landing_page(request: Request) -> HTMLResponse:
     response = HTMLResponse(request.app.state.marketing_html)
+    response.headers["Cache-Control"] = _CACHE_CONTROL
+    return response
+
+
+@router.api_route("/voice-input", methods=_PUBLIC_METHODS, response_class=HTMLResponse)
+async def voice_input_page(request: Request) -> HTMLResponse:
+    response = HTMLResponse(request.app.state.voice_input_html)
     response.headers["Cache-Control"] = _CACHE_CONTROL
     return response
 

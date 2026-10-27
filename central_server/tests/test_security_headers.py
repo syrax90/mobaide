@@ -118,6 +118,7 @@ RETIRED_FEATURE_NAMES = ("interest-cohort", "browsing-topics")
 CSP_BY_PATH = (
     ("/", LANDING_CSP),
     ("/privacy.html", SITE_CSP),
+    ("/voice-input", SITE_CSP),
     ("/robots.txt", SITE_CSP),
     ("/sitemap.xml", SITE_CSP),
     ("/favicon.ico", SITE_CSP),
@@ -137,6 +138,7 @@ CSP_BY_PATH = (
 PERMISSIONS_POLICY_BY_PATH = (
     ("/", BASELINE_PERMISSIONS_POLICY),
     ("/privacy.html", BASELINE_PERMISSIONS_POLICY),
+    ("/voice-input", BASELINE_PERMISSIONS_POLICY),
     ("/portal/delete-account-info", BASELINE_PERMISSIONS_POLICY),
     ("/dashboard/login", BASELINE_PERMISSIONS_POLICY),
     ("/api/version", BASELINE_PERMISSIONS_POLICY),

@@ -30,6 +30,7 @@ from .marketing.loader import (
     render_landing,
     render_robots,
     render_sitemap,
+    render_voice_input,
 )
 from .shortcuts.service import ShortcutService
 from .static_files import CachedStaticFiles, resolve_static_dir
@@ -443,6 +444,9 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     # same origin.
     app.state.web_app_origin = config.web_app_base_url.rstrip("/")
     app.state.marketing_html = render_landing(
+        _site_origin, app.state.web_app_origin, app.state.asset_version
+    )
+    app.state.voice_input_html = render_voice_input(
         _site_origin, app.state.web_app_origin, app.state.asset_version
     )
     app.state.marketing_robots = render_robots(_site_origin)

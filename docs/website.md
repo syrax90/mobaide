@@ -5,7 +5,9 @@ aggregators and social cards scrape the apex and its Open Graph tags — before
 this page, `https://mobaide.com/` answered `{"detail":"Not Found"}`.
 
 It is served by `central_server`, not by a separate static host, so it ships and
-deploys with the relay and needs no extra infrastructure.
+deploys with the relay and needs no extra infrastructure. A second marketing
+page, the voice input feature page at `/voice-input`, is served the same way —
+see *The voice input page* below.
 
 **This doc also governs the design system itself, not just the landing page.**
 `site.css` is shared by the apex page *and* the three static pages under
@@ -35,14 +37,16 @@ ships its own copy of the Departure Mono woff2 + OFL under `web/public/fonts/`
 
 | Path | What |
 |---|---|
-| `central_server/central_server/marketing/router.py` | Routes: `GET /`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico`. Owns the response headers. |
-| `central_server/central_server/marketing/loader.py` | Renders the page + crawler files once at startup. |
-| `central_server/templates/marketing_landing.html` | **All page copy.** Edit here. |
+| `central_server/central_server/marketing/router.py` | Routes: `GET /`, `/voice-input`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico`. Owns the response headers. |
+| `central_server/central_server/marketing/loader.py` | Renders both pages + crawler files once at startup. |
+| `central_server/templates/marketing_landing.html` | **All landing-page copy.** Edit here. |
+| `central_server/templates/marketing_voice_input.html` | **All `/voice-input` copy.** |
+| `central_server/templates/_site_foot.html` | Footer shared by both marketing pages (nav, trademark disclaimer). |
 | `central_server/static/site/site.css` | Stylesheet (the "modern pixel" design system) — **shared by the landing page and the `portal_base.html` pages.** Owns every token, the `@font-face`, the pixel kit, `.btn`, `.card` and the `.site-head`/`.site-foot` chrome. |
 | `central_server/static/site/portal.css` | Additions `site.css` lacks: forms, alerts, tables, choice fieldsets, legal-doc layout. Loaded **after** `site.css`. Declares no tokens and no `@font-face`. |
 | `central_server/templates/portal_base.html` | Shell for the static pages — loads both sheets, carries the shared chrome markup, and loads **no script at all**. |
 | `central_server/static/style.css` | **Admin dashboard only.** Light sheet (`--primary: #0d6efd`, `--radius: 6px`), not part of this design system. |
-| `central_server/static/site/site.js` | Reveal-on-scroll, hero typewriter, the install-command copy buttons, the Android/iOS screenshot switch, and the cookie-consent banner with its post-consent Google Ads gtag.js loader. Landing page only — `portal_base.html` deliberately does not load it. |
+| `central_server/static/site/site.js` | Reveal-on-scroll, hero typewriter, the install-command copy buttons, the Android/iOS screenshot switch, and the cookie-consent banner with its post-consent Google Ads gtag.js loader. The two marketing pages only — `portal_base.html` deliberately does not load it. |
 | `central_server/static/site/img/`, `fonts/` | Assets — see *Regenerating assets*. |
 | `central_server/tests/test_marketing.py` | Route, header, and copy-accuracy tests. |
 | `central_server/tests/test_portal_assets.py` | Static-page asset stamping + the `portal.css` invariants. |
@@ -96,8 +100,8 @@ rationale as `/privacy.html`) and the two crawler/favicon TTLs.
 
 Everything else is set site-wide by
 `central_server/central_server/security_headers.py`, which serves this router's
-paths. `/robots.txt`, `/sitemap.xml`, `/favicon.ico` and `/privacy.html` get the
-strict site policy:
+paths. `/voice-input`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico` and
+`/privacy.html` get the strict site policy:
 
 ```
 Content-Security-Policy: default-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'
@@ -445,6 +449,40 @@ them and any future `hx-indicator` is silently dead.
 `.badge*`, `.info-grid`, `.qr-*`, `.token-display`, `.search-bar`, `.user-row` and
 `.detail-row` are intentionally **not** ported: they stay in `static/style.css`
 for the admin dashboard.
+
+## The voice input page
+
+`/voice-input` explains voice input (dictation, GH #736/#737 — see
+[`docs/voice-input.md`](voice-input.md)) to visitors: how a dictation travels,
+why it is transcribed on the user's own computer, per-platform setup steps, the
+download/disk/memory cost, the 25 languages, where the audio goes, and an FAQ.
+The landing page points at it from the header nav, a highlighted first feature
+card, the "What leaves my machine?" answer and the shared footer; the sitemap
+lists it.
+
+- **Strict CSP, no consent banner.** It is in `_SITE_PATHS` (soakable, like
+  `/privacy.html`), not in the `/`-only `_LANDING_CSP` bucket. It loads
+  `site.css` and `site.js`, but ships no `[data-consent-banner]`, so
+  `setUpConsentBanner()` returns before it could inject gtag — under the strict
+  policy an injection would be CSP-blocked anyway. The shared footer renders
+  the "Cookie settings" control only when the including page sets
+  `with_consent_settings` (the landing page does).
+- **Same copy rules as the landing page.** No inline style or script, no
+  cross-origin subresource, none of the accuracy-table claims (no direct mode
+  — the clients' direct-connection dictation path is not described), and the
+  TLS claim scoped with "going through the relay". `TestVoiceInputPage` in
+  `test_marketing.py` pins all of it, plus the voice facts the page states.
+- **Where the numbers come from.** `mobaide_agent/mobaide/voice/catalog.py`
+  (languages, download size, ~700 MB while transcribing), `host.py` (the
+  12 GB / 4 cores / 2 GB recommendation and the unsupported cases),
+  `dictation.py` (the two-minute cap), `helper.py` (the three-minute idle
+  exit), and the *Voice input* section of [`docs/deployment.md`](deployment.md)
+  (disk, download hosts, the CLI). Change the page when any of them changes.
+- **The hero is a drawn mock, not a screenshot.** The session, the recording
+  bar and the command field are HTML/CSS (`.voice-demo`, `.dict-*` in
+  `site.css`) inside one `role="img"`; the transcript reuses the landing page's
+  typewriter (`[data-typewriter]`, one per page) and its watchdogs, and the
+  waveform and recording dot stop under `prefers-reduced-motion`.
 
 ## Screenshots and the platform switch
 
