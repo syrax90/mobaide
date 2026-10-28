@@ -24,6 +24,9 @@ Covers the contract documented in ``docs/website.md``:
   ``CachedStaticFiles`` cache tiers.
 - Unit-level loader tests, including the trailing-slash normalisation of
   ``site_base_url``.
+- ``/voice-input``, the voice input feature page: the same copy and CSP
+  self-containment rules, under the strict site policy with no consent
+  banner, and linked from the landing page.
 """
 from __future__ import annotations
 
@@ -40,6 +43,7 @@ from central_server.marketing.loader import (
     render_landing,
     render_robots,
     render_sitemap,
+    render_voice_input,
 )
 from central_server.static_files import resolve_static_dir
 
@@ -118,7 +122,35 @@ VERIFIED_CLAIMS = (
 PRODUCT_NAMES = ("Claude Code", "Codex CLI", "Antigravity CLI")
 
 # Every path the marketing router owns.
-MARKETING_PATHS = ("/", "/robots.txt", "/sitemap.xml", "/favicon.ico")
+MARKETING_PATHS = (
+    "/", "/voice-input", "/robots.txt", "/sitemap.xml", "/favicon.ico"
+)
+
+# Byte-identical to ``security_headers._SITE_CSP``: the voice page carries no
+# consent banner, so it must not inherit the landing page's Google origins.
+SITE_CSP = (
+    "default-src 'self'; "
+    "base-uri 'none'; "
+    "form-action 'none'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'"
+)
+
+# Facts the voice page states, each traceable to mobaide_agent/mobaide/voice/:
+# opt-in (service.py installs nothing until asked), the 25 Parakeet v3
+# languages (catalog.py), the 120 s cap (dictation.py), ~700 MB while
+# transcribing (catalog.py ram_bytes) and the review-before-send rule the
+# three clients share. Lower case, matched against a lower-cased body.
+VOICE_VERIFIED_CLAIMS = (
+    "opt-in",
+    "25 languages",
+    "two minutes",
+    "700 mb",
+    "nothing is sent until you send it",
+    "going through the relay",
+)
+
+VOICE_INSTALL_COMMAND = "mobaide-agent voice install"
 
 # The only two surfaces a crawler could reach; /privacy.html stays crawlable.
 UNINDEXABLE_PATHS = ("/api/", "/portal/")
@@ -176,6 +208,13 @@ _INLINE_HANDLER_RE = re.compile(r"<[a-z][^>]*\son[a-z]+\s*=", re.IGNORECASE)
 @pytest.fixture
 async def landing(client) -> str:
     response = await client.get("/")
+    assert response.status_code == 200, response.text
+    return response.text
+
+
+@pytest.fixture
+async def voice_page(client) -> str:
+    response = await client.get("/voice-input")
     assert response.status_code == 200, response.text
     return response.text
 
@@ -439,6 +478,7 @@ class TestCrawlerFiles:
             for element in ET.fromstring(response.text).findall(".//{*}loc")
         ]
         assert f"{config.site_base_url}/" in locs
+        assert f"{config.site_base_url}/voice-input" in locs
 
     async def test_favicon_is_served_at_the_root_path(self, client) -> None:
         """Browsers and scrapers probe ``/favicon.ico`` regardless of the
@@ -576,6 +616,17 @@ class TestMarketingLoader:
         home page — same contract as ``render_privacy``."""
         with pytest.raises(FileNotFoundError):
             render_landing(
+                "https://example.test",
+                "https://app.example.test",
+                "0.0.0",
+                templates_dir=tmp_path,
+            )
+
+    def test_render_voice_input_raises_when_the_template_is_missing(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(FileNotFoundError):
+            render_voice_input(
                 "https://example.test",
                 "https://app.example.test",
                 "0.0.0",
@@ -725,3 +776,101 @@ class TestAttributionCookie:
         """The cookie is written by script after Accept; a server-rendered
         reference would mean the HTML started carrying attribution logic."""
         assert "mobaide_ads" not in landing
+
+
+class TestVoiceInputPage:
+    """``/voice-input``: the feature page the landing page links to."""
+
+    async def test_serves_html_with_the_documented_cache_window(
+        self, client
+    ) -> None:
+        response = await client.get("/voice-input")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert response.headers["Cache-Control"] == "public, max-age=300"
+
+    async def test_takes_the_strict_site_policy(self, client) -> None:
+        """No banner here means no consent, so none of the landing page's
+        Google origins may be admitted."""
+        response = await client.get("/voice-input")
+        assert response.headers["Content-Security-Policy"] == SITE_CSP
+
+    async def test_microphone_stays_denied(self, client) -> None:
+        """The page describes dictation; it never records. Only the browser
+        client's origin may ask for the microphone."""
+        response = await client.get("/voice-input")
+        assert "microphone=()" in response.headers["Permissions-Policy"]
+
+    async def test_carries_no_consent_banner_or_google_tag(self, voice_page) -> None:
+        assert "data-consent-banner" not in voice_page
+        assert "data-consent-settings" not in voice_page
+        assert "googletagmanager" not in voice_page
+
+    async def test_the_landing_page_links_to_it(self, landing) -> None:
+        assert 'href="/voice-input"' in landing
+
+    @pytest.mark.parametrize("phrase", CONTRADICTED_CLAIMS)
+    async def test_claims_the_code_contradicts_are_absent(
+        self, voice_page, phrase
+    ) -> None:
+        assert phrase not in voice_page.lower()
+
+    @pytest.mark.parametrize("phrase", VOICE_VERIFIED_CLAIMS)
+    async def test_verified_claims_are_stated(self, voice_page, phrase) -> None:
+        """Whitespace-collapsed, because the copy wraps mid-sentence in the
+        template source."""
+        assert phrase in " ".join(voice_page.lower().split())
+
+    @pytest.mark.parametrize("name", PRODUCT_NAMES)
+    async def test_product_names_are_spelled_exactly(
+        self, voice_page, name
+    ) -> None:
+        assert name in voice_page
+
+    async def test_no_inline_style_or_script(self, voice_page) -> None:
+        assert _INLINE_STYLE_RE.search(voice_page) is None
+        assert _INLINE_HANDLER_RE.search(voice_page) is None
+        inline = [
+            tag
+            for tag in _SCRIPT_OPEN_TAG_RE.findall(voice_page)
+            if "src=" not in tag and 'type="application/ld+json"' not in tag
+        ]
+        assert inline == []
+
+    async def test_no_subresource_is_loaded_cross_origin(self, voice_page) -> None:
+        offenders = []
+        for tag in _SUBRESOURCE_TAG_RE.findall(voice_page):
+            if 'rel="canonical"' in tag:
+                continue
+            url = _SUBRESOURCE_URL_RE.search(tag)
+            if url is not None and url.group(1).startswith(("http://", "https://")):
+                offenders.append(tag)
+        assert offenders == []
+
+    async def test_canonical_and_og_url_name_the_page_on_the_site_origin(
+        self, voice_page, config
+    ) -> None:
+        expected = f"{config.site_base_url}/voice-input"
+        assert _capture(voice_page, ABSOLUTE_URL_PATTERNS[0].values[0]) == expected
+        assert _capture(voice_page, ABSOLUTE_URL_PATTERNS[1].values[0]) == expected
+
+    async def test_every_image_resolves_to_a_shipped_asset(
+        self, voice_page
+    ) -> None:
+        """A renamed or missing screenshot would 404 silently behind a 7-day
+        cached page; the files must ship in ``static/site/img``."""
+        static_dir = resolve_static_dir()
+        sources = re.findall(r'<img\b[^>]*\ssrc="/static/([^"?]+)', voice_page)
+        assert sources
+        missing = [src for src in sources if not (static_dir / src).is_file()]
+        assert missing == []
+
+    async def test_the_cli_command_appears_once_with_its_copy_button(
+        self, voice_page
+    ) -> None:
+        """Same single-source rule as the install one-liners: ``site.js``
+        copies from the ``<code>`` element, so no second copy may exist."""
+        assert voice_page.count(VOICE_INSTALL_COMMAND) == 1
+        buttons = _COPY_BUTTON_RE.findall(voice_page)
+        assert len(buttons) == 1
+        assert _ARIA_LABEL_RE.search(buttons[0]) is not None

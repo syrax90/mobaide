@@ -162,9 +162,11 @@ _DENIED_FEATURES = "camera=(), microphone=(), geolocation=(), payment=(), usb=()
 _BASELINE_PERMISSIONS_POLICY = f"{_DENIED_FEATURES}, identity-credentials-get=()"
 
 # `/` is deliberately absent: the landing page has its own `_LANDING_CSP`
-# bucket, matched ahead of these sets in `_headers_for()`.
+# bucket, matched ahead of these sets in `_headers_for()`. `/voice-input` loads
+# the landing page's own same-origin assets but carries no consent banner, so
+# no Google origin may load there and the strict policy is all it needs.
 _SITE_PATHS = frozenset(
-    {"/robots.txt", "/sitemap.xml", "/favicon.ico", "/privacy.html"}
+    {"/robots.txt", "/sitemap.xml", "/favicon.ico", "/privacy.html", "/voice-input"}
 )
 
 # The subset of `_SITE_PATHS` that marketing/router.py already served in

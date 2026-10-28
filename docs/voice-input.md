@@ -7,6 +7,7 @@ It is opt-in per agent. Nothing is downloaded until the user enables voice from 
 - Agent half: GH #736 (`mobaide_agent/mobaide/voice/`).
 - Clients: GH #737 (Android, iOS, web).
 - Wire contract: PROTOCOL.md, proto-v7 delta "2026-10-14, on-PC voice input". It covers `capabilities.voice`, `/api/voice/*`, the `voice.changed` event and the error codes.
+- Public explainer: `mobaide.com/voice-input` (`central_server/templates/marketing_voice_input.html`, docs/website.md *The voice input page*). It restates the costs, limits and setup steps below, so update it with them.
 
 ## Client module (same shape on all three)
 

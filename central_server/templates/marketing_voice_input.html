@@ -1,0 +1,544 @@
+{#
+  Voice input feature page (/voice-input). Rendered once at startup by
+  marketing/loader.py, like the landing page, and held to the same two hard
+  constraints (central_server/tests/test_marketing.py enforces both):
+
+  1. NO inline `style="..."` and NO inline <script>. The page is served under
+     the strict site CSP (`default-src 'self'`, no Google origins at all), so
+     it also carries no consent banner: site.js finds none and loads nothing.
+  2. Every claim is checked against the code — the voice numbers come from
+     mobaide_agent/mobaide/voice/ (catalog.py, host.py, dictation.py,
+     helper.py) and docs/voice-input.md. Never describe a direct/LAN mode,
+     never write "end-to-end", and keep "opt-in" and "never sent on its own".
+#}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice input — dictate to Claude Code, Codex CLI and Antigravity CLI | Mobaide</title>
+<meta name="description" content="Dictate prompts to Claude Code, Codex CLI and Antigravity CLI from your phone or browser. Your own computer turns the audio into text with an open speech model — 25 languages, nothing stored, nothing sent until you send it.">
+<link rel="canonical" href="{{ site_origin }}/voice-input">
+<meta name="theme-color" content="#121212">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mobaide">
+<meta property="og:url" content="{{ site_origin }}/voice-input">
+<meta property="og:title" content="Mobaide voice input — dictate to your coding agents">
+<meta property="og:description" content="Speak your prompt on your phone or in the browser. Your own computer transcribes it in 25 languages, and the text waits in the command field until you send it.">
+<meta property="og:image" content="{{ site_origin }}/static/site/img/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Mobaide — run AI coding agents on your computer, from your phone">
+<meta property="og:locale" content="en_US">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Mobaide voice input — dictate to your coding agents">
+<meta name="twitter:description" content="Speak your prompt on your phone or in the browser. Your own computer transcribes it in 25 languages, and the text waits in the command field until you send it.">
+<meta name="twitter:image" content="{{ site_origin }}/static/site/img/og.png">
+
+<link rel="icon" href="/static/site/img/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="apple-touch-icon" href="/static/site/img/apple-touch-icon.png?v={{ asset_version }}">
+{# Byte-identical to the landing page's preload and the @font-face url() —
+   see the note there on why the font carries no `?v=`. #}
+<link rel="preload" href="/static/site/fonts/DepartureMono-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/site/site.css?v={{ asset_version }}">
+{# Not deferred, for the same reason as on the landing page: its first
+   statement sets the `js` class the reveal and typewriter start states key on. #}
+<script src="/static/site/site.js?v={{ asset_version }}"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-head">
+  <a class="brand" href="/" aria-label="Mobaide home">
+    <img class="brand-mark" src="/static/site/img/wordmark.png?v={{ asset_version }}"
+         width="227" height="40" alt="Mobaide">
+  </a>
+  <nav class="site-nav" aria-label="Site">
+    <a href="#how">How it works</a>
+    <a href="#setup">Set up</a>
+    <a href="#faq">FAQ</a>
+    <a class="btn btn-ghost" href="{{ app_origin }}/login">Sign in</a>
+  </nav>
+</header>
+
+<main id="main">
+
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="hero-kicker"><span class="chip chip-brand chip-sm">New</span> Voice input</p>
+      <h1>Dictate to your coding agents.</h1>
+      <p class="lede">
+        <strong>Your own computer does the listening.</strong> Say your prompt
+        instead of thumb-typing it: Mobaide records while you talk, your
+        Windows, macOS or Linux machine turns the audio into text, and the text
+        waits in the command field for you to check. Nothing is sent until you
+        send it.
+      </p>
+      <div class="cta">
+        <a class="btn" href="#setup">Set it up</a>
+        <a class="btn btn-ghost" href="#how">See how it works</a>
+      </div>
+      <p class="cta-note">
+        Free and opt-in. In the Android and iOS apps and in the browser, for
+        Claude Code, Codex CLI, Antigravity CLI, a raw terminal or your own
+        agent types.
+      </p>
+    </div>
+
+    <div class="hero-term">
+      {# A drawn mock of the whole flow — the recording bar as the apps draw it
+         (cancel, elapsed time, level meter, stop), then the transcript waiting
+         in the command field; the real captures are in #screens. role="img"
+         makes the panel one described picture, so a screen reader hears the
+         caption instead of three disconnected fragments. #}
+      <div class="term px-frame voice-demo" role="img"
+           aria-label="A Claude Code session in Mobaide while you dictate: a recording bar with a level meter, and the transcript waiting in the command field until you send it.">
+        <div class="term-bar"><span class="term-dot"></span>claude — ~/dev/api-server</div>
+        <pre class="term-body"><code><span class="t-line">Reading src/upload/client.py …</span>
+<span class="t-line"><span class="c-ok">✓</span> 48 tests passed</span>
+<span class="t-line c-dim">What should I do next?</span></code></pre>
+        <div class="dict-bar">
+          <span class="dict-cancel">
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="m3 3 10 10M13 3 3 13"/></svg>
+          </span>
+          <span class="dict-rec"><span class="dict-dot"></span>0:07</span>
+          <span class="dict-level"><span class="dict-level-fill"></span></span>
+          <span class="dict-stop"></span>
+        </div>
+        <div class="dict-field">
+          {# Lines are kept to ~28 characters so the field needs no horizontal
+             scroll even at a 320px viewport. #}
+          <p class="dict-text" data-typewriter><span class="t-line"><span class="t-ink">Now add retries with backoff</span></span><span class="t-line"><span class="t-ink">to the upload client and</span></span><span class="t-line"><span class="t-ink">cover it with a test.</span></span></p>
+          <span class="dict-btn">
+            <svg viewBox="0 0 24 24" width="18" height="18" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="11"/><rect x="5" y="9" width="2" height="5"/><rect x="17" y="9" width="2" height="5"/><rect x="7" y="14" width="10" height="2"/><rect x="11" y="16" width="2" height="3"/><rect x="7" y="19" width="10" height="2"/></svg>
+          </span>
+          <span class="dict-btn dict-btn-send">
+            <svg viewBox="0 0 24 24" width="18" height="18" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="3" y="11" width="14" height="2"/><rect x="13" y="7" width="2" height="10"/><rect x="15" y="9" width="2" height="6"/><rect x="17" y="10" width="2" height="4"/><rect x="19" y="11" width="2" height="2"/></svg>
+          </span>
+        </div>
+        <p class="dict-note"><span class="c-ok">✓</span> Transcribed on macbook-pro</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="strip" aria-label="At a glance">
+    <ul class="strip-list">
+      <li><span class="px-bullet"></span><strong>25 languages</strong>, detected automatically</li>
+      <li><span class="px-bullet"></span>Runs on your CPU — no GPU</li>
+      <li><span class="px-bullet"></span>Audio and text are never stored</li>
+      <li><span class="px-bullet"></span>Free, and off until you turn it on</li>
+    </ul>
+  </section>
+
+  <section id="how" class="section" data-reveal>
+    <h2 class="h-pixel">How it works</h2>
+    <p class="section-lede">
+      Your voice takes the same path as your keystrokes: from your phone or
+      browser, through the Mobaide relay, to the agent on your own computer.
+      The difference is that your computer writes it down for you first.
+    </p>
+    <ol class="flow">
+      <li class="flow-node">
+        <span class="flow-ico">
+          <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="11"/><rect x="5" y="9" width="2" height="5"/><rect x="17" y="9" width="2" height="5"/><rect x="7" y="14" width="10" height="2"/><rect x="11" y="16" width="2" height="3"/><rect x="7" y="19" width="10" height="2"/></svg>
+        </span>
+        <span class="step-n">01</span>
+        <h3>Tap the mic and talk</h3>
+        <p>
+          In the command field on Android and iOS, or in the session toolbar in
+          the browser. A level meter shows it hears you; stop whenever you are
+          done.
+        </p>
+      </li>
+      <li class="flow-node">
+        <span class="flow-ico">
+          <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="3" y="7" width="12" height="2"/><rect x="15" y="5" width="2" height="6"/><rect x="17" y="6" width="2" height="4"/><rect x="19" y="7" width="2" height="2"/><rect x="9" y="15" width="12" height="2"/><rect x="7" y="13" width="2" height="6"/><rect x="5" y="14" width="2" height="4"/><rect x="3" y="15" width="2" height="2"/></svg>
+        </span>
+        <span class="step-n">02</span>
+        <h3>The relay passes it on</h3>
+        <p>
+          The audio streams in short chunks over TLS through the Mobaide relay,
+          which routes it in memory to your agent and keeps nothing.
+        </p>
+      </li>
+      <li class="flow-node">
+        <span class="flow-ico">
+          <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M2 3h20v13H2zM4 5v9h16V5z"/><rect x="9" y="17" width="6" height="2"/><rect x="6" y="19" width="12" height="2"/></svg>
+        </span>
+        <span class="step-n">03</span>
+        <h3>Your computer transcribes</h3>
+        <p>
+          The agent runs NVIDIA's open Parakeet speech model on its own CPU and
+          turns the audio into text. No cloud speech service is involved.
+        </p>
+      </li>
+      <li class="flow-node">
+        <span class="flow-ico">
+          <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M1 6h22v12H1zM3 8v8h18V8z"/><rect x="5" y="11" width="8" height="2"/><rect x="15" y="9" width="2" height="6"/></svg>
+        </span>
+        <span class="step-n">04</span>
+        <h3>You review, then send</h3>
+        <p>
+          The text appears in the command field — in a review box in the
+          browser. Fix a word if you need to; nothing reaches the agent until
+          you send it.
+        </p>
+      </li>
+    </ol>
+  </section>
+
+  <section id="screens" class="section" data-reveal>
+    <h2 class="h-pixel">See it in the app</h2>
+    <p class="section-lede">
+      The same recording controls on every platform: the elapsed time, a level
+      meter that moves with your voice, <strong>Stop</strong> to transcribe what
+      you said and <strong>✕</strong> to throw it away.
+    </p>
+    {# Bare app captures — the phone body and the browser chrome are drawn by
+       .device and .browser, as on the landing page. #}
+    <div class="voice-shots">
+      <figure class="shot">
+        <div class="device">
+          <img src="/static/site/img/shot-android-voice.webp?v={{ asset_version }}" width="420" height="827"
+               loading="lazy" decoding="async"
+               alt="Mobaide for Android recording a dictation in an Antigravity CLI session: under the command field, a cancel button, the elapsed time, a level meter and a stop button.">
+        </div>
+        <figcaption><strong>Android.</strong> The recording bar sits under the command field.</figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="device">
+          <img src="/static/site/img/shot-ios-voice.webp?v={{ asset_version }}" width="420" height="852"
+               loading="lazy" decoding="async"
+               alt="Mobaide for iOS recording a dictation in an Antigravity CLI session: above the message field, a cancel button, the elapsed time, a level meter and a stop button.">
+        </div>
+        <figcaption><strong>iPhone.</strong> The bar sits right above the message field and its mic.</figcaption>
+      </figure>
+    </div>
+    <figure class="shot voice-shot-web">
+      <div class="browser">
+        <div class="browser-bar" aria-hidden="true"><span class="browser-dot"></span><span class="browser-dot"></span><span class="browser-dot"></span><span class="browser-url">app.mobaide.com</span></div>
+        <img src="/static/site/img/shot-web-voice.webp?v={{ asset_version }}" width="1600" height="838"
+             loading="lazy" decoding="async"
+             alt="The Mobaide web app recording a dictation over an Antigravity CLI session: a Recording dialog with the elapsed time, a level meter, Cancel and Stop, opened from the mic in the session toolbar.">
+      </div>
+      <figcaption><strong>Browser.</strong> The mic in the session toolbar opens a recording dialog; the text then waits in a review box.</figcaption>
+    </figure>
+  </section>
+
+  <section id="why" class="section" data-reveal>
+    <h2 class="h-pixel">Why on your own computer</h2>
+    <div class="grid">
+
+      <article class="card notch">
+        <h3>Private by design</h3>
+        <p>
+          Your voice goes to one place: the computer you already trust with your
+          code. The relay never stores it, the agent holds it only in memory
+          until the text is ready, and neither ever logs the audio or the text.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <h3>Nothing sent behind your back</h3>
+        <p>
+          A misheard word should never become a command. The transcript always
+          waits in the command field, so you read it, edit it, and send it
+          yourself.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <h3>No GPU, no fuss</h3>
+        <p>
+          Transcription runs on the CPU at below-normal priority, so it gives
+          way to your other work. It loads only when you dictate and frees its
+          memory after three quiet minutes.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <h3>Speak your language</h3>
+        <p>
+          Twenty-five languages, and the model works out which one you are
+          speaking — there is nothing to switch when you change language.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <h3>Every session kind</h3>
+        <p>
+          The transcript is plain text in the command field, so it works for
+          Claude Code, Codex CLI, Antigravity CLI, a raw terminal and your own
+          agent types alike.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <h3>Off until you want it</h3>
+        <p>
+          Voice input is opt-in per computer. Nothing downloads until you
+          enable it, the app shows the cost first, and you can remove it again
+          at any time.
+        </p>
+      </article>
+
+    </div>
+  </section>
+
+  <section id="setup" class="section" data-reveal>
+    <h2 class="h-pixel">Set it up</h2>
+    <p class="section-lede">
+      Turn it on once for each computer. Your agent already supports voice input
+      if it has updated itself to version 0.3.17 or later — agents update on
+      their own.
+    </p>
+    <div class="grid">
+
+      <article class="card notch">
+        <h3>On Android</h3>
+        <ol class="card-steps">
+          <li>Open a session and tap the mic in the command field — or go to <strong>Settings → Voice input</strong>.</li>
+          <li>Check the download and memory cost, then tap <strong>Enable voice input</strong>.</li>
+          <li>Allow the microphone the first time you dictate.</li>
+        </ol>
+      </article>
+
+      <article class="card notch">
+        <h3>On iPhone and iPad</h3>
+        <ol class="card-steps">
+          <li>Open a session and tap the mic in the message field — or go to <strong>Settings → Voice input</strong>.</li>
+          <li>Check the download and memory cost, then tap <strong>Enable voice input</strong>.</li>
+          <li>Allow the microphone the first time you dictate.</li>
+        </ol>
+      </article>
+
+      <article class="card notch">
+        <h3>In the browser</h3>
+        <ol class="card-steps">
+          <li>At <a href="{{ app_origin }}/">app.mobaide.com</a>, open <strong>Agents</strong> and choose <strong>Voice input</strong> on your computer's card (it must be online).</li>
+          <li>Check the cost, then choose <strong>Enable voice input</strong>.</li>
+          <li>In a session, press the mic in the toolbar and allow the microphone when the browser asks.</li>
+        </ol>
+      </article>
+
+    </div>
+    <p class="fineprint fineprint-after">
+      The download runs on your computer in the background, about 0.7 GB once.
+      You can close the app meanwhile — the mic switches on by itself when voice
+      input is ready.
+    </p>
+  </section>
+
+  <section id="requirements" class="section" data-reveal>
+    <h2 class="h-pixel">What it needs</h2>
+    <dl class="spec">
+      <div class="spec-row">
+        <dt>Computer</dt>
+        <dd>Windows, macOS or Linux on 64-bit x86 or ARM — the computer that already runs your Mobaide agent.</dd>
+      </div>
+      <div class="spec-row">
+        <dt>Download</dt>
+        <dd>About 0.7 GB, once: the speech model plus a small runtime. Agent updates never download the model again.</dd>
+      </div>
+      <div class="spec-row">
+        <dt>Disk</dt>
+        <dd>Up to about 730 MB. Removing voice input frees it.</dd>
+      </div>
+      <div class="spec-row">
+        <dt>Memory</dt>
+        <dd>None while idle. About 700 MB while a dictation is transcribed, released after three idle minutes.</dd>
+      </div>
+      <div class="spec-row">
+        <dt>Recommended</dt>
+        <dd>12 GB of memory, 4 CPU cores and 2 GB of free disk. On a smaller computer the app warns you first, and you can still turn it on.</dd>
+      </div>
+      <div class="spec-row">
+        <dt>Per dictation</dt>
+        <dd>Up to two minutes. Dictate again to add more.</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section id="languages" class="section section-tight" data-reveal>
+    <h2 class="h-pixel">25 languages</h2>
+    <ul class="chips" aria-label="Supported languages">
+      <li class="chip">Bulgarian</li>
+      <li class="chip">Croatian</li>
+      <li class="chip">Czech</li>
+      <li class="chip">Danish</li>
+      <li class="chip">Dutch</li>
+      <li class="chip">English</li>
+      <li class="chip">Estonian</li>
+      <li class="chip">Finnish</li>
+      <li class="chip">French</li>
+      <li class="chip">German</li>
+      <li class="chip">Greek</li>
+      <li class="chip">Hungarian</li>
+      <li class="chip">Italian</li>
+      <li class="chip">Latvian</li>
+      <li class="chip">Lithuanian</li>
+      <li class="chip">Maltese</li>
+      <li class="chip">Polish</li>
+      <li class="chip">Portuguese</li>
+      <li class="chip">Romanian</li>
+      <li class="chip">Russian</li>
+      <li class="chip">Slovak</li>
+      <li class="chip">Slovenian</li>
+      <li class="chip">Spanish</li>
+      <li class="chip">Swedish</li>
+      <li class="chip">Ukrainian</li>
+    </ul>
+    <p class="fineprint">
+      The model detects the language as you speak. Japanese, Chinese, Korean,
+      Arabic, Hindi and Turkish are not supported yet.
+    </p>
+  </section>
+
+  <section id="privacy" class="section" data-reveal>
+    <h2 class="h-pixel">Where your voice goes</h2>
+    <ul class="checklist">
+      <li><span class="px-bullet"></span>The microphone records only while you dictate, and only with Mobaide on screen.</li>
+      <li><span class="px-bullet"></span>Going through the relay, the audio is TLS-encrypted on every hop and goes only to your own agent.</li>
+      <li><span class="px-bullet"></span>The relay routes it in memory and keeps neither the audio nor the text.</li>
+      <li><span class="px-bullet"></span>Your agent holds the audio in memory until the text is ready, then drops it. It never logs or saves the audio or the text.</li>
+      <li><span class="px-bullet"></span>No third-party speech service is involved. The only extra downloads are the model and its runtime, once, from GitHub (Hugging Face as a fallback) and PyPI.</li>
+    </ul>
+    <p class="fineprint">
+      The <a href="/privacy.html">privacy policy</a> describes voice input in
+      full. The model is NVIDIA Parakeet TDT 0.6B v3, released under CC BY 4.0;
+      the apps show its license in the voice input settings.
+    </p>
+  </section>
+
+  <section id="faq" class="section" data-reveal>
+    <h2 class="h-pixel">Questions</h2>
+    <div class="faq">
+
+      <details>
+        <summary>Is voice input free?</summary>
+        <p>
+          Yes. It is part of Mobaide, with no subscription and no per-minute
+          fee — the transcription runs on hardware you already own.
+        </p>
+      </details>
+
+      <details>
+        <summary>Will it send my prompt by itself?</summary>
+        <p>
+          No. The transcript always waits in the command field — or in the
+          browser's review box — until you send it. In the browser you can tick
+          <strong>Insert dictated text directly</strong> to skip the review box;
+          the text still lands in the session's input without pressing Enter.
+        </p>
+      </details>
+
+      <details>
+        <summary>How long can I talk?</summary>
+        <p>
+          Up to two minutes per dictation. The last 15 seconds count down, then
+          it stops and transcribes what you said. Dictate again to add more.
+        </p>
+      </details>
+
+      <details>
+        <summary>What if my connection drops or I switch apps?</summary>
+        <p>
+          A shaky connection does not stop the recording: the audio is kept in
+          memory and re-sent when the connection comes back, and if a dictation
+          still fails, <strong>Retry</strong> reuses the recording — you never
+          have to say it twice. Leaving the app, hiding the
+          browser tab or taking a call stops the recording and transcribes what
+          it captured so far.
+        </p>
+      </details>
+
+      <details>
+        <summary>Why don't I see the mic?</summary>
+        <p>
+          The agent must be online and at version 0.3.17 or later — it updates
+          itself. A computer the voice model cannot run on (for example a 32-bit
+          Python) shows no mic. If you chose <strong>Hide the mic for this
+          agent</strong>, turn it back on in the agent's voice input settings.
+        </p>
+      </details>
+
+      <details>
+        <summary>Can I still use my keyboard's dictation?</summary>
+        <p>
+          Yes. The command field is an ordinary text field, so your phone's
+          keyboard dictation keeps working. Mobaide's voice input is the option
+          that keeps your audio between your device and your own computer, and
+          it works the same way in a desktop browser.
+        </p>
+      </details>
+
+      <details>
+        <summary>How do I turn it off or remove it?</summary>
+        <p>
+          Open <strong>Settings → Voice input</strong> in the app, or the
+          agent's <strong>Voice input</strong> settings in the browser, and
+          choose <strong>Remove</strong>. That deletes the model and frees the
+          disk space. Removing the agent from the app with
+          <strong>Also uninstall Mobaide from this computer</strong> deletes it
+          too.
+        </p>
+      </details>
+
+      <details>
+        <summary>Can I set it up on the computer itself?</summary>
+        <p>
+          Yes, which helps on a headless machine. Run this as the user the agent
+          runs as — from an elevated prompt on Windows:
+        </p>
+        {# The command lives only in this <code>; site.js copies it from here. #}
+        <div class="copyblock copyblock-faq">
+          <div class="copyblock-head">
+            <span class="copyblock-label c-dim"># on the agent's computer</span>
+            <button type="button" class="copy-btn" data-copy aria-label="Copy the voice install command">
+              <svg class="copy-ico" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.75 5.75h8.5v8.5h-8.5z"/><path d="M10.25 5.75V1.75H1.75v8.5h4"/></svg>
+              <svg class="copy-ico-done" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m2.5 8.25 3.5 3.5 7.5-7.5"/></svg>
+            </button>
+            <span class="sr-only" role="status"></span>
+          </div>
+          <pre class="code px-frame"><code>mobaide-agent voice install</code></pre>
+        </div>
+        <p>
+          The apps pick up the result on their own. <code>mobaide-agent voice
+          status</code> shows the state and the cost.
+        </p>
+      </details>
+
+    </div>
+  </section>
+
+  <section class="section" data-reveal>
+    <div class="cta-panel notch">
+      <h2 class="h-pixel">Try it on your next prompt</h2>
+      <p class="section-lede">
+        New to Mobaide? Install the agent on your computer, pair your phone with
+        one QR scan, then turn on voice input.
+      </p>
+      <div class="cta">
+        <a class="badge-link" href="https://play.google.com/store/apps/details?id=com.mobaide.app" rel="noopener">
+          {# Unmodified official badges — see docs/website.md, Store badge rules. #}
+          <img src="/static/site/img/google-play-badge.png?v={{ asset_version }}"
+               width="323" height="125" alt="Get it on Google Play">
+        </a>
+        <a class="badge-link badge-apple" href="https://apps.apple.com/app/id6797191741" rel="noopener">
+          <img src="/static/site/img/app-store-badge.svg?v={{ asset_version }}"
+               width="120" height="40" alt="Download on the App Store">
+        </a>
+      </div>
+      <div class="cta">
+        <a class="btn" href="{{ app_origin }}/">Open the web app</a>
+        <a class="btn btn-ghost" href="/#how">Install the agent</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+{% include "_site_foot.html" %}
+</body>
+</html>
