@@ -712,8 +712,12 @@ h1 {
   box-shadow: inset 0 0 0 2px var(--brand-2);
 }
 
-.card-feature .chip {
-  margin-bottom: 12px;
+/* Icon plus, on the voice card, its "New" chip. */
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
 }
 
 .card-link {
@@ -1173,20 +1177,28 @@ h1 {
   font-size: 0.9375rem;
 }
 
-.flow-ico {
+/* Shared by the voice page's flow steps and the landing page's feature
+   cards. */
+.flow-ico,
+.card-ico {
   display: inline-flex;
+  flex: none;
   align-items: center;
   justify-content: center;
   width: 44px;
   height: 44px;
-  margin-bottom: 14px;
   background: var(--brand);
   color: #fff;
   box-shadow: var(--px) var(--px) 0 0 var(--brand-2);
   vertical-align: middle;
 }
 
-.flow-ico svg {
+.flow-ico {
+  margin-bottom: 14px;
+}
+
+.flow-ico svg,
+.card-ico svg {
   fill: currentColor;
 }
 
