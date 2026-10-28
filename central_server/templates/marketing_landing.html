@@ -243,7 +243,12 @@
          rules: opt-in per computer, transcribed on the user's own machine,
          never sent on its own. #}
       <article class="card card-feature notch">
-        <span class="chip chip-brand chip-sm">New</span>
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="11"/><rect x="5" y="9" width="2" height="5"/><rect x="17" y="9" width="2" height="5"/><rect x="7" y="14" width="10" height="2"/><rect x="11" y="16" width="2" height="3"/><rect x="7" y="19" width="10" height="2"/></svg>
+          </span>
+          <span class="chip chip-brand chip-sm">New</span>
+        </div>
         <h3>Dictate your prompts</h3>
         <p>
           Tap the mic and say what you want instead of thumb-typing it. Your own
@@ -255,6 +260,11 @@
       </article>
 
       <article class="card notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="3" y="5" width="18" height="2"/><rect x="13" y="3" width="4" height="6"/><rect x="3" y="11" width="18" height="2"/><rect x="6" y="9" width="4" height="6"/><rect x="3" y="17" width="18" height="2"/><rect x="15" y="15" width="4" height="6"/></svg>
+          </span>
+        </div>
         <h3>Built-in agents, fully configurable</h3>
         <p>
           Claude Code, Codex CLI and Antigravity CLI each launch with their own
@@ -265,6 +275,11 @@
       </article>
 
       <article class="card notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M3 3h18v18H3zM5 5v14h14V5z"/><rect x="11" y="7" width="2" height="10"/><rect x="7" y="11" width="10" height="2"/></svg>
+          </span>
+        </div>
         <h3>Your own agent types</h3>
         <p>
           Define an agent from any command your shell can run, with whatever
@@ -274,6 +289,11 @@
       </article>
 
       <article class="card notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="5" y="2" width="4" height="4"/><rect x="6" y="6" width="2" height="12"/><rect x="5" y="18" width="4" height="4"/><rect x="15" y="4" width="4" height="4"/><rect x="16" y="8" width="2" height="5"/><rect x="8" y="13" width="10" height="2"/></svg>
+          </span>
+        </div>
         <h3>Optional Git worktrees — for every kind</h3>
         <p>
           Start any session in its own dedicated Git worktree, so parallel runs
@@ -285,6 +305,11 @@
       </article>
 
       <article class="card notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="11" y="2" width="2" height="10"/><rect x="7" y="4" width="2" height="2"/><rect x="5" y="6" width="2" height="2"/><rect x="3" y="8" width="2" height="8"/><rect x="5" y="16" width="2" height="2"/><rect x="7" y="18" width="2" height="2"/><rect x="9" y="20" width="6" height="2"/><rect x="15" y="18" width="2" height="2"/><rect x="17" y="16" width="2" height="2"/><rect x="19" y="8" width="2" height="8"/><rect x="17" y="6" width="2" height="2"/><rect x="15" y="4" width="2" height="2"/></svg>
+          </span>
+        </div>
         <h3>It survives a reboot</h3>
         {# Keep each service name on one source line: the copy-accuracy test
            greps for these phrases, and a line break inside <strong> splits the
@@ -299,6 +324,11 @@
       </article>
 
       <article class="card notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M1 5h22v14H1zM3 7v10h18V7z"/><rect x="5" y="9" width="2" height="2"/><rect x="9" y="9" width="2" height="2"/><rect x="13" y="9" width="2" height="2"/><rect x="17" y="9" width="2" height="2"/><rect x="7" y="13" width="10" height="2"/></svg>
+          </span>
+        </div>
         <h3>Shortcuts you define</h3>
         <p>
           Build control-key chords from Ctrl, Alt or Shift plus a key — letters,
@@ -309,18 +339,26 @@
       </article>
 
       <article class="card notch">
-        <h3>Linear Auto Scan</h3>
-        {# "on a Git project" is load-bearing: Auto Scan is not gated on
-           is_git in the picker, so a non-Git project silently runs in the
-           project root instead. Same qualifier rule as the worktree card. #}
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M4 2h16v20H4zM6 4v16h12V4z"/><rect x="11" y="6" width="2" height="6"/><rect x="9" y="8" width="6" height="2"/><rect x="9" y="15" width="6" height="2"/></svg>
+          </span>
+        </div>
+        <h3>Git management</h3>
         <p>
-          Point a Git project at a Linear filter and the agent picks up matching
-          issues on its own, creates a worktree for each, and launches Claude
-          Code to work on it — while you watch the scan log from the app.
+          Read diffs, stage, discard and commit in a session's Changes view.
+          Fetch, pull and push with live progress, rebase, resolve merge
+          conflicts, and create or check out branches — all run by Git on your
+          own machine, with the credentials it already has.
         </p>
       </article>
 
       <article class="card notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M1 3h22v18H1zM3 5v14h18V5z"/><rect x="5" y="8" width="2" height="2"/><rect x="7" y="10" width="2" height="2"/><rect x="5" y="12" width="2" height="2"/><rect x="11" y="13" width="6" height="2"/></svg>
+          </span>
+        </div>
         <h3>A real PTY, not a log tail</h3>
         <p>
           {# Deliberately no line count: reconnect replays from a byte ring
@@ -334,6 +372,11 @@
       </article>
 
       <article class="card notch">
+        <div class="card-head">
+          <span class="card-ico">
+            <svg viewBox="0 0 24 24" width="24" height="24" shape-rendering="crispEdges" aria-hidden="true" focusable="false"><rect x="2" y="3" width="4" height="4"/><rect x="8" y="4" width="14" height="2"/><rect x="2" y="10" width="4" height="4"/><rect x="8" y="11" width="14" height="2"/><rect x="2" y="17" width="4" height="4"/><rect x="8" y="18" width="14" height="2"/></svg>
+          </span>
+        </div>
         <h3>Run several at once</h3>
         <p>
           Up to 32 concurrent sessions on one agent — a Claude Code run, a Codex
