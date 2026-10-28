@@ -336,7 +336,7 @@ not take the relay down. A trailing slash is stripped in both places.
 `config.web_app_base_url` (`WEB_APP_BASE_URL`, default `https://app.mobaide.com`)
 is a **third** origin, and it is the one every account link on this host resolves
 against: the header and footer "Sign in" buttons, the hero "Open the web app"
-CTA, the feature card and FAQ entry that name the browser client, and the
+CTA and the FAQ entry that names the browser client, and the
 cross-links in the two surviving `/portal/*` pages. It is hoisted to
 `app.state.web_app_origin` alongside `asset_version`, for the same reason: the
 landing pre-render, `portal/router.py::_portal_context` and `legal/router.py` all
