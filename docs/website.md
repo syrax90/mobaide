@@ -478,11 +478,19 @@ lists it.
   `dictation.py` (the two-minute cap), `helper.py` (the three-minute idle
   exit), and the *Voice input* section of [`docs/deployment.md`](deployment.md)
   (disk, download hosts, the CLI). Change the page when any of them changes.
-- **The hero is a drawn mock, not a screenshot.** The session, the recording
-  bar and the command field are HTML/CSS (`.voice-demo`, `.dict-*` in
-  `site.css`) inside one `role="img"`; the transcript reuses the landing page's
-  typewriter (`[data-typewriter]`, one per page) and its watchdogs, and the
-  waveform and recording dot stop under `prefers-reduced-motion`.
+- **The hero is a drawn mock; the real captures are in `#screens`.** The mock
+  shows what no single capture can — recording, then the transcript waiting in
+  the command field — as HTML/CSS (`.voice-demo`, `.dict-*` in `site.css`)
+  inside one `role="img"`. Its recording bar copies the apps' (cancel, elapsed
+  time, level meter, stop), so keep the two in step if the clients' bar
+  changes. The transcript reuses the landing page's typewriter
+  (`[data-typewriter]`, one per page) and its watchdogs; the level meter and
+  recording dot stop under `prefers-reduced-motion`.
+- **Three captures, two frames.** `#screens` shows `shot-android-voice.webp`
+  and `shot-ios-voice.webp` side by side in the `.device` phone frame, then
+  `shot-web-voice.webp` in `.browser` — the wide sibling of `.device`, a drawn
+  title bar with `app.mobaide.com` — capped at 880px so it stays in proportion
+  with the phones. All three are bare captures, like the landing page's.
 
 ## Screenshots and the platform switch
 
@@ -622,7 +630,11 @@ a one-off script, not committed; recreate it when assets need to change:
    composites with a headline and phone frame already baked in, which would
    double-frame against the CSS device frame. Resize to 420px wide, WebP quality 72,
    and name the output `shot-<android|ios>-<slug>.webp`; the template declares each
-   file's encoded height, so record it as you go.
+   file's encoded height, so record it as you go. The `/voice-input` captures
+   are the `voice-recognition.*` files in those two trees, plus the web app's
+   `web-app/Screenshots/voice-recognition.png`, which ships as
+   `shot-web-voice.webp` at 1600px wide, quality 80 — the higher width and
+   quality keep its small terminal text legible in the 880px frame.
 4. Icons: `favicon.ico` multi-size 16/32/48; `apple-touch-icon.png` at 180px
    quantized to 64 colours.
 5. OG card: 1200×630 **PNG or JPEG** (several scrapers reject WebP), composed

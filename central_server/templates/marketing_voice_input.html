@@ -87,19 +87,23 @@
     </div>
 
     <div class="hero-term">
-      {# A drawn mock, not a screenshot: the session above, the dictation bar
-         while recording, then the transcript waiting in the command field.
-         role="img" makes the whole panel one described picture, so a screen
-         reader hears the caption instead of three disconnected fragments. #}
+      {# A drawn mock of the whole flow — the recording bar as the apps draw it
+         (cancel, elapsed time, level meter, stop), then the transcript waiting
+         in the command field; the real captures are in #screens. role="img"
+         makes the panel one described picture, so a screen reader hears the
+         caption instead of three disconnected fragments. #}
       <div class="term px-frame voice-demo" role="img"
-           aria-label="A Claude Code session in Mobaide while you dictate: a recording bar with a sound meter, and the transcript waiting in the command field until you send it.">
+           aria-label="A Claude Code session in Mobaide while you dictate: a recording bar with a level meter, and the transcript waiting in the command field until you send it.">
         <div class="term-bar"><span class="term-dot"></span>claude — ~/dev/api-server</div>
         <pre class="term-body"><code><span class="t-line">Reading src/upload/client.py …</span>
 <span class="t-line"><span class="c-ok">✓</span> 48 tests passed</span>
 <span class="t-line c-dim">What should I do next?</span></code></pre>
         <div class="dict-bar">
+          <span class="dict-cancel">
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="m3 3 10 10M13 3 3 13"/></svg>
+          </span>
           <span class="dict-rec"><span class="dict-dot"></span>0:07</span>
-          <span class="dict-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+          <span class="dict-level"><span class="dict-level-fill"></span></span>
           <span class="dict-stop"></span>
         </div>
         <div class="dict-field">
@@ -182,6 +186,44 @@
         </p>
       </li>
     </ol>
+  </section>
+
+  <section id="screens" class="section" data-reveal>
+    <h2 class="h-pixel">See it in the app</h2>
+    <p class="section-lede">
+      The same recording controls on every platform: the elapsed time, a level
+      meter that moves with your voice, <strong>Stop</strong> to transcribe what
+      you said and <strong>✕</strong> to throw it away.
+    </p>
+    {# Bare app captures — the phone body and the browser chrome are drawn by
+       .device and .browser, as on the landing page. #}
+    <div class="voice-shots">
+      <figure class="shot">
+        <div class="device">
+          <img src="/static/site/img/shot-android-voice.webp?v={{ asset_version }}" width="420" height="827"
+               loading="lazy" decoding="async"
+               alt="Mobaide for Android recording a dictation in an Antigravity CLI session: under the command field, a cancel button, the elapsed time, a level meter and a stop button.">
+        </div>
+        <figcaption><strong>Android.</strong> The recording bar sits under the command field.</figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="device">
+          <img src="/static/site/img/shot-ios-voice.webp?v={{ asset_version }}" width="420" height="852"
+               loading="lazy" decoding="async"
+               alt="Mobaide for iOS recording a dictation in an Antigravity CLI session: above the message field, a cancel button, the elapsed time, a level meter and a stop button.">
+        </div>
+        <figcaption><strong>iPhone.</strong> The bar sits right above the message field and its mic.</figcaption>
+      </figure>
+    </div>
+    <figure class="shot voice-shot-web">
+      <div class="browser">
+        <div class="browser-bar" aria-hidden="true"><span class="browser-dot"></span><span class="browser-dot"></span><span class="browser-dot"></span><span class="browser-url">app.mobaide.com</span></div>
+        <img src="/static/site/img/shot-web-voice.webp?v={{ asset_version }}" width="1600" height="838"
+             loading="lazy" decoding="async"
+             alt="The Mobaide web app recording a dictation over an Antigravity CLI session: a Recording dialog with the elapsed time, a level meter, Cancel and Stop, opened from the mic in the session toolbar.">
+      </div>
+      <figcaption><strong>Browser.</strong> The mic in the session toolbar opens a recording dialog; the text then waits in a review box.</figcaption>
+    </figure>
   </section>
 
   <section id="why" class="section" data-reveal>

@@ -1030,52 +1030,49 @@ h1 {
   animation: blink 1000ms steps(1, end) infinite;
 }
 
-.dict-wave {
-  display: flex;
+/* The level meter as the apps draw it: an --accent fill on a dark track,
+   pumped by a stepped scaleX so it stays crisp and costs no layout. */
+.dict-level {
   flex: 1 1 auto;
-  align-items: center;
-  gap: 3px;
   min-width: 0;
-  height: 24px;
-  overflow: hidden;
-}
-
-.dict-wave i {
-  flex: 0 0 4px;
-  height: 12px;
-  background: var(--accent);
-  animation: wave 1100ms steps(4, end) infinite alternate;
-}
-
-/* Two overlapping cycles (3 and 4) give 12 distinct bar shapes without an
-   inline style per bar, which the CSP would block. */
-.dict-wave i:nth-child(3n + 1) {
   height: 8px;
-  animation-delay: -300ms;
+  background: var(--bg);
 }
 
-.dict-wave i:nth-child(3n + 2) {
-  height: 20px;
-  animation-delay: -700ms;
+.dict-level-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--accent);
+  transform: scaleX(0.6);
+  transform-origin: left center;
+  animation: level 1400ms steps(5, end) infinite alternate;
 }
 
-.dict-wave i:nth-child(4n + 3) {
-  height: 16px;
-  animation-duration: 900ms;
-}
-
-.dict-wave i:nth-child(4n) {
-  height: 24px;
-  animation-delay: -500ms;
-}
-
-@keyframes wave {
+@keyframes level {
   from {
-    transform: scaleY(0.35);
+    transform: scaleX(0.25);
   }
   to {
-    transform: scaleY(1);
+    transform: scaleX(0.8);
   }
+}
+
+.dict-cancel {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: var(--text-muted);
+  box-shadow: inset 0 0 0 2px var(--gray);
+}
+
+.dict-cancel svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
 }
 
 .dict-stop {
@@ -1320,6 +1317,57 @@ h1 {
   font-size: 0.875em;
 }
 
+/* Two phones side by side, then the browser capture at full width below. */
+.voice-shots {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 300px));
+  justify-content: center;
+  gap: clamp(16px, 4vw, 56px);
+}
+
+/* Capped so the desktop capture stays in proportion with the phone row
+   above it; its dialog text is still legible at this width. */
+.voice-shot-web {
+  max-width: 880px;
+  margin: clamp(32px, 5vw, 56px) auto 0;
+}
+
+/* Browser chrome around a bare capture, the wide sibling of .device. */
+.browser {
+  padding: 0 8px 8px;
+  background: var(--surface-2);
+  box-shadow:
+    inset 0 0 0 2px var(--rule),
+    var(--px) var(--px) 0 0 var(--brand);
+}
+
+.browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 4px;
+}
+
+.browser-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--rule);
+}
+
+.browser-url {
+  margin-left: 10px;
+  padding: 2px 10px;
+  background: var(--bg);
+  color: var(--gray);
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-sm);
+}
+
+.browser img {
+  display: block;
+  width: 100%;
+}
+
 .cta-panel {
   padding: clamp(28px, 4vw, 44px);
   background: var(--bg-2);
@@ -1425,7 +1473,7 @@ h1 {
 
   .t-line.is-typing::after,
   .dict-dot,
-  .dict-wave i {
+  .dict-level-fill {
     animation: none;
   }
 }

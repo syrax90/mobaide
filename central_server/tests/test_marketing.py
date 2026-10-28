@@ -854,6 +854,17 @@ class TestVoiceInputPage:
         assert _capture(voice_page, ABSOLUTE_URL_PATTERNS[0].values[0]) == expected
         assert _capture(voice_page, ABSOLUTE_URL_PATTERNS[1].values[0]) == expected
 
+    async def test_every_image_resolves_to_a_shipped_asset(
+        self, voice_page
+    ) -> None:
+        """A renamed or missing screenshot would 404 silently behind a 7-day
+        cached page; the files must ship in ``static/site/img``."""
+        static_dir = resolve_static_dir()
+        sources = re.findall(r'<img\b[^>]*\ssrc="/static/([^"?]+)', voice_page)
+        assert sources
+        missing = [src for src in sources if not (static_dir / src).is_file()]
+        assert missing == []
+
     async def test_the_cli_command_appears_once_with_its_copy_button(
         self, voice_page
     ) -> None:
