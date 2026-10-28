@@ -76,10 +76,17 @@ final class AppContainer {
             tokenStore: tokenStore,
             userIdentityStore: userIdentityStore
         )
+        // Signed-out launch: agent credentials and saved profiles must not
+        // outlive the user session, including ones older builds left behind.
+        if initialState == .unauthenticated {
+            tokenStore.clear()
+            connectionStore.clear()
+        }
         let sessionManager = SessionManager(
             tokenStore: tokenStore,
             userIdentityStore: userIdentityStore,
             preferencesStore: preferencesStore,
+            connectionStore: connectionStore,
             initialState: initialState
         )
 

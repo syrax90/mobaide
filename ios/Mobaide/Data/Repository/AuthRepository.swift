@@ -56,14 +56,15 @@ struct AuthRepository: Sendable {
         guard let token = response.access_token else {
             throw APIError(code: -1, errorBody: "verify-email response missing access_token")
         }
-        userIdentityStore.saveUserSession(
-            accessToken: token,
-            email: response.email,
-            userId: response.user_id,
-            role: response.role,
-            scheduledDeletionAt: response.scheduled_deletion_at
-        )
-        await sessionManager.markUserLoggedIn()
+        await sessionManager.markUserLoggedIn(userId: response.user_id) { [userIdentityStore] in
+            userIdentityStore.saveUserSession(
+                accessToken: token,
+                email: response.email,
+                userId: response.user_id,
+                role: response.role,
+                scheduledDeletionAt: response.scheduled_deletion_at
+            )
+        }
         return .success(email: response.email, scheduledDeletionAt: response.scheduled_deletion_at)
     }
 
@@ -138,6 +139,7 @@ struct AuthRepository: Sendable {
         guard let userToken = userIdentityStore.getUserAccessToken() else {
             throw APIError(code: -1, errorBody: "Not signed in")
         }
+        let requestUserId = userIdentityStore.getUserId()
         if await sessionManager.isLoggedIn() {
             await sessionManager.agentDisconnect()
         }
@@ -146,10 +148,14 @@ struct AuthRepository: Sendable {
             agentId: agentId,
             request: MobileTokenRequest(mobile_device_id: deviceId, mobile_device_name: deviceName, platform: "ios")
         )
-        // A sign-out that landed while the mint was in flight wins: persisting
-        // the relay credentials now would resurrect fullyConnected with no user.
+        // A sign-out or account switch during the mint wins: persisting now would
+        // resurrect fullyConnected with no user, or hand this agent to the next account.
+        // The profile write runs inside `persist` so sign-out's `connectionStore.clear()`
+        // is strictly before or after it.
         try Task.checkCancellation()
-        let connected = await sessionManager.tryMarkAgentConnected { [tokenStore] in
+        let connected = await sessionManager.tryMarkAgentConnected(
+            expectedUserId: requestUserId
+        ) { [tokenStore, connectionStore] in
             tokenStore.saveRelayCredentials(
                 serverUrl: AppConfig.centralServerURL,
                 agentId: agentId,
@@ -158,31 +164,30 @@ struct AuthRepository: Sendable {
                 accessToken: tokens.access_token,
                 refreshToken: tokens.refresh_token
             )
+            if let existing = connectionStore.listProfiles()
+                .first(where: { $0.mode == "relay" && $0.agentId == agentId }) {
+                connectionStore.saveProfile(
+                    ConnectionStore.ConnectionProfile(
+                        id: existing.id,
+                        label: existing.label,
+                        mode: existing.mode,
+                        agentUrl: existing.agentUrl,
+                        relayServerUrl: existing.relayServerUrl,
+                        agentId: existing.agentId,
+                        pairingId: existing.pairingId,
+                        deviceId: existing.deviceId,
+                        accessToken: tokens.access_token,
+                        refreshToken: tokens.refresh_token,
+                        createdAt: existing.createdAt
+                    )
+                )
+                connectionStore.setActiveProfileId(existing.id)
+            } else {
+                connectionStore.captureActiveProfile(tokenStore: tokenStore, label: "Agent: \(friendlyName)")
+            }
         }
         guard connected else {
             throw APIError(code: -1, errorBody: "Signed out while connecting")
-        }
-
-        if let existing = connectionStore.listProfiles()
-            .first(where: { $0.mode == "relay" && $0.agentId == agentId }) {
-            connectionStore.saveProfile(
-                ConnectionStore.ConnectionProfile(
-                    id: existing.id,
-                    label: existing.label,
-                    mode: existing.mode,
-                    agentUrl: existing.agentUrl,
-                    relayServerUrl: existing.relayServerUrl,
-                    agentId: existing.agentId,
-                    pairingId: existing.pairingId,
-                    deviceId: existing.deviceId,
-                    accessToken: tokens.access_token,
-                    refreshToken: tokens.refresh_token,
-                    createdAt: existing.createdAt
-                )
-            )
-            connectionStore.setActiveProfileId(existing.id)
-        } else {
-            connectionStore.captureActiveProfile(tokenStore: tokenStore, label: "Agent: \(friendlyName)")
         }
     }
 
@@ -285,14 +290,15 @@ struct AuthRepository: Sendable {
         guard response.status != Self.statusVerificationRequired, let token = response.access_token else {
             return .verificationRequired(email: response.email.isEmpty ? requestedEmail : response.email)
         }
-        userIdentityStore.saveUserSession(
-            accessToken: token,
-            email: response.email,
-            userId: response.user_id,
-            role: response.role,
-            scheduledDeletionAt: response.scheduled_deletion_at
-        )
-        await sessionManager.markUserLoggedIn()
+        await sessionManager.markUserLoggedIn(userId: response.user_id) { [userIdentityStore] in
+            userIdentityStore.saveUserSession(
+                accessToken: token,
+                email: response.email,
+                userId: response.user_id,
+                role: response.role,
+                scheduledDeletionAt: response.scheduled_deletion_at
+            )
+        }
         return .success(email: response.email, scheduledDeletionAt: response.scheduled_deletion_at)
     }
 

@@ -23,7 +23,7 @@ final class AuthStateModelTests: XCTestCase {
     func testBindReplaysLatestStateWhenTransitionPrecedesBind() async throws {
         let harness = SessionHarness()
         // Cold-start race: the transition lands before the UI binds.
-        await harness.sessionManager.markUserLoggedIn()
+        await harness.sessionManager.markUserLoggedIn(userId: "u1") { @Sendable in }
 
         let model = AuthStateModel(initial: .unauthenticated)
         model.bind(to: harness.sessionManager)
@@ -38,7 +38,7 @@ final class AuthStateModelTests: XCTestCase {
         model.bind(to: harness.sessionManager)
         XCTAssertEqual(model.state, .unauthenticated)
 
-        await harness.sessionManager.markUserLoggedIn()
+        await harness.sessionManager.markUserLoggedIn(userId: "u1") { @Sendable in }
         try await waitForState { model.state == .userOnly }
 
         await harness.sessionManager.markAgentConnected()

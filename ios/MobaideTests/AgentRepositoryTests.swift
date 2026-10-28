@@ -110,4 +110,45 @@ final class AgentRepositoryTests: XCTestCase {
         try await repo.deleteAgent(agentId: "a1")
         XCTAssertTrue(repo.currentAgents.isEmpty)  // removed locally, no stale tappable row
     }
+
+    func testRefreshDropsResponseWhenAccountSwitchesMidFlight() async throws {
+        let session = SessionHarness(userLoggedIn: true)
+        let repo = AgentHarness(session: session).agentRepository
+        let identity = session.userIdentityStore
+        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: true))
+        StubURLProtocol.onRequest = { _ in
+            identity.saveUserSession(
+                accessToken: "user-token-2",
+                email: "other@example.com",
+                userId: "u2",
+                role: "user"
+            )
+        }
+
+        try await repo.refreshAgents()
+
+        XCTAssertTrue(
+            repo.currentAgents.isEmpty,
+            "a list landing after an account switch must not show the previous account's agents"
+        )
+    }
+
+    func testRefreshAppliesResponseWhenTokenRotatesForSameUserMidFlight() async throws {
+        let session = SessionHarness(userLoggedIn: true)
+        let repo = AgentHarness(session: session).agentRepository
+        let identity = session.userIdentityStore
+        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: true))
+        StubURLProtocol.onRequest = { _ in
+            identity.saveUserSession(
+                accessToken: "rotated-token",
+                email: "user@example.com",
+                userId: "u1",
+                role: "user"
+            )
+        }
+
+        try await repo.refreshAgents()
+
+        XCTAssertEqual(repo.currentAgents.map(\.agent_id), ["a1"], "the guard keys on user id, not on the token")
+    }
 }
