@@ -8,6 +8,7 @@ stubWebStorage('localStorage');
 const { bootstrapSession, resetSessionBootstrap, useSessionStore } =
   await import('./sessionStore');
 const { resetSessionTransport } = await import('./sessionTransport');
+const { getDeviceId, resetDeviceIdCache } = await import('./deviceIdentity');
 const { resetSingleFlight } = await import('./singleFlight');
 
 const STORAGE_KEY = 'mobaide-session';
@@ -91,6 +92,24 @@ describe('bootstrapSession cookie restore', () => {
     expect(sessionStorage.getItem(STORAGE_KEY)).toBe(
       JSON.stringify(state.session),
     );
+  });
+
+  it('adopts the device id the restored session is bound to', async () => {
+    // Safari's ITP clears localStorage after seven idle days but keeps the
+    // 30-day cookie. A fresh id here would get every agent mint refused as
+    // "a different device", so the id comes from the restored token instead.
+    const bound = '22222222-2222-4222-8222-222222222222';
+    const claims = btoa(JSON.stringify({ sub: 'user-1', device_id: bound }));
+    document.cookie = `${MARKER}=1; Path=/; Secure`;
+    stubFetch(
+      httpResponse(200, { ...restoredBody(), access_token: `h.${claims}.s` }),
+    );
+    resetDeviceIdCache();
+
+    await bootstrapSession();
+
+    expect(getDeviceId()).toBe(bound);
+    expect(localStorage.getItem('mobaide-device-id')).toBe(bound);
   });
 
   it('sends the cookie and the origin proof, and no body', async () => {

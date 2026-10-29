@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 # auth-failure / protocol-incompatibility / token-not-valid-for-agent
 # semantics — admin force-disconnect must NOT collide with those or the
 # client will wipe its session on what should be a transient boot.
+WS_CLOSE_AUTH_FAILED = 4001  # credentials rejected (e.g. device revoked)
 WS_CLOSE_ADMIN_FORCE_DISCONNECT = 4011  # non-destructive admin boot
 WS_CLOSE_ADMIN_REVOKED = 4010  # admin unregistered the user/agent
 
@@ -173,6 +174,8 @@ class UserClient:
     # did not verify; such a socket never suppresses a push, because there is no
     # way to tell which device it would be suppressing for.
     bound_device_id: str | None = None
+    # Device named by the JWT's ``device_id`` claim; None for unbound sessions.
+    token_device_id: str | None = None
     send_queue: asyncio.Queue[str] = field(
         default_factory=lambda: asyncio.Queue(maxsize=_MOBILE_QUEUE_SIZE)
     )
@@ -386,6 +389,49 @@ class RoutingTable:
                 reason_code,
             )
         return len(clients)
+
+    async def disconnect_device(
+        self,
+        user_id: str,
+        device_id: str,
+        code: int = WS_CLOSE_AUTH_FAILED,
+        reason_code: str = "device_revoked",
+    ) -> int:
+        """Close every live socket a revoked device holds.
+
+        Code 4001 rather than 4010: the clients render 4010 on the user socket as
+        "account removed", while 4001 is the "credentials rejected" path a
+        revoked device's REST calls already take. Returns the number of
+        sockets closed.
+        """
+        mobiles: list[MobileClient] = []
+        for channels in self._mobile_clients.values():
+            for clients in channels.values():
+                matched = [c for c in clients if c.device_id == device_id]
+                clients.difference_update(matched)
+                mobiles.extend(matched)
+        user_clients = self._user_clients.get(user_id, set())
+        users = [
+            c
+            for c in user_clients
+            if device_id in (c.token_device_id, c.bound_device_id)
+        ]
+        user_clients.difference_update(users)
+        if not user_clients:
+            self._user_clients.pop(user_id, None)
+        for client in [*mobiles, *users]:
+            await safe_send_reason_and_close(client.websocket, code, reason_code)
+        closed = len(mobiles) + len(users)
+        if closed:
+            logger.info(
+                "routing.device_disconnected user_id=%s device_id=%s "
+                "mobile=%d user=%d",
+                user_id,
+                device_id,
+                len(mobiles),
+                len(users),
+            )
+        return closed
 
     async def disconnect_agent(
         self,

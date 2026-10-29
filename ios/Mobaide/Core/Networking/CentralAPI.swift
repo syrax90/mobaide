@@ -36,27 +36,41 @@ struct CentralAPI: Sendable {
         try await execute(method: "GET", path: "/api/version")
     }
 
-    func register(email: String, password: String) async throws -> UserAuthResponse {
-        try await execute(method: "POST", path: "/api/auth/register", body: UserRegisterRequest(email: email, password: password))
+    func register(email: String, password: String, deviceId: String? = nil) async throws -> UserAuthResponse {
+        try await execute(
+            method: "POST", path: "/api/auth/register",
+            body: UserRegisterRequest(email: email, password: password, device_id: deviceId)
+        )
     }
 
-    func login(email: String, password: String) async throws -> UserAuthResponse {
-        try await execute(method: "POST", path: "/api/auth/login", body: UserLoginRequest(email: email, password: password))
+    func login(email: String, password: String, deviceId: String? = nil) async throws -> UserAuthResponse {
+        try await execute(
+            method: "POST", path: "/api/auth/login",
+            body: UserLoginRequest(email: email, password: password, device_id: deviceId)
+        )
     }
 
-    func loginWithGoogle(idToken: String) async throws -> UserAuthResponse {
-        try await execute(method: "POST", path: "/api/auth/google", body: GoogleAuthRequest(id_token: idToken))
+    func loginWithGoogle(idToken: String, deviceId: String? = nil) async throws -> UserAuthResponse {
+        try await execute(
+            method: "POST", path: "/api/auth/google",
+            body: GoogleAuthRequest(id_token: idToken, device_id: deviceId)
+        )
     }
 
-    func loginWithApple(idToken: String, nonce: String) async throws -> UserAuthResponse {
-        try await execute(method: "POST", path: "/api/auth/apple", body: AppleAuthRequest(id_token: idToken, nonce: nonce))
+    func loginWithApple(idToken: String, nonce: String, deviceId: String? = nil) async throws -> UserAuthResponse {
+        try await execute(
+            method: "POST", path: "/api/auth/apple",
+            body: AppleAuthRequest(id_token: idToken, nonce: nonce, device_id: deviceId)
+        )
     }
 
-    func verifyEmail(email: String, code: String, password: String? = nil) async throws -> UserAuthResponse {
+    func verifyEmail(
+        email: String, code: String, password: String? = nil, deviceId: String? = nil
+    ) async throws -> UserAuthResponse {
         try await execute(
             method: "POST",
             path: "/api/auth/verify-email",
-            body: VerifyEmailRequest(email: email, code: code, password: password)
+            body: VerifyEmailRequest(email: email, code: code, password: password, device_id: deviceId)
         )
     }
 

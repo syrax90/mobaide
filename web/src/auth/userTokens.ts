@@ -13,6 +13,7 @@
  * what Android's `CentralAuthInterceptor` and iOS's `SessionInvalidatorAdapter`
  * do today.
  */
+import { jwtClaims } from './jwtClaims';
 import { readSession } from './sessionTransport';
 import { singleFlight, USER_REFRESH_KEY } from './singleFlight';
 import { useSessionStore } from './sessionStore';
@@ -38,18 +39,11 @@ const EXPIRY_LEEWAY_SECONDS = 60;
  * sending garbage.
  */
 export function expiresInSeconds(token: string): number | null {
-  const payload = token.split('.')[1];
-  if (payload === undefined) return 0;
-  try {
-    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
-    const claims: unknown = JSON.parse(json);
-    if (typeof claims !== 'object' || claims === null) return 0;
-    const exp = (claims as Record<string, unknown>).exp;
-    if (typeof exp !== 'number') return null;
-    return exp - Math.floor(Date.now() / 1000);
-  } catch {
-    return 0;
-  }
+  const claims = jwtClaims(token);
+  if (claims === null) return 0;
+  const exp = claims.exp;
+  if (typeof exp !== 'number') return null;
+  return exp - Math.floor(Date.now() / 1000);
 }
 
 export function isAccessTokenExpiringSoon(token: string): boolean {

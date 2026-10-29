@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -29,7 +30,11 @@ from fastapi import (
 )
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from ..auth.dependencies import get_non_admin_api_user
+from ..auth.dependencies import (
+    DEVICE_REVOKED_DETAIL,
+    get_non_admin_api_user,
+    require_mintable_device,
+)
 from ..auth.models import (
     MobileRefreshRequest,
     MobileTokenResponse,
@@ -383,6 +388,9 @@ async def _complete_pairing(
                 ),
             )
 
+    started = int(time.time())
+    await require_mintable_device(request, user, mobile_device_id)
+
     # Device registry is last-login-wins: an authenticated claim always
     # takes the device over, revoking the prior account's refresh tokens.
     # The upsert runs before the nonce CAS, so a claim that later loses
@@ -400,6 +408,16 @@ async def _complete_pairing(
             mobile_device_id,
             previous_owner,
             user.sub,
+        )
+    if await request.app.state.auth_service.device_revoked_since(
+        mobile_device_id, started
+    ):
+        # A revoke landed after the guard, and the upsert may have cleared its
+        # revoked_at: revoke again and refuse before the nonce is spent.
+        await db.revoke_mobile_device(mobile_device_id, user.sub)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=DEVICE_REVOKED_DETAIL,
         )
 
     if current_agent_id:

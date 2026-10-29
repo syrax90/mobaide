@@ -451,3 +451,66 @@ class TestSafeSendReasonAndClose:
         ws.close = AsyncMock(side_effect=RuntimeError("dead"))
         await safe_send_reason_and_close(ws, 4001, "boot")
         ws.send_text.assert_awaited_once()
+
+
+class TestDisconnectDevice:
+    """``RoutingTable.disconnect_device`` closes what a revoked device holds:
+    its mobile sockets on every agent, and the user's sockets tied to it by
+    the JWT claim or the verified ``bound_device_id`` hint.
+    """
+
+    async def test_closes_only_the_devices_sockets_of_that_user(
+        self, routing: RoutingTable
+    ):
+        revoked_mobiles = [
+            MobileClient(device_id="dev-1", websocket=_RecordingWs()),
+            MobileClient(device_id="dev-1", websocket=_RecordingWs()),
+        ]
+        kept_mobile = MobileClient(device_id="dev-2", websocket=_RecordingWs())
+        routing.register_mobile("a1", "session_io:s1", revoked_mobiles[0])
+        routing.register_mobile("a2", "events", revoked_mobiles[1])
+        routing.register_mobile("a1", "session_io:s1", kept_mobile)
+        by_claim = UserClient(
+            user_id="u1", device_id="log-1", websocket=_RecordingWs(),
+            token_device_id="dev-1",
+        )
+        by_hint = UserClient(
+            user_id="u1", device_id="log-2", websocket=_RecordingWs(),
+            bound_device_id="dev-1",
+        )
+        unbound = UserClient(user_id="u1", device_id="log-3", websocket=_RecordingWs())
+        other_user = UserClient(
+            user_id="u2", device_id="log-4", websocket=_RecordingWs(),
+            token_device_id="dev-1",
+        )
+        for client in (by_claim, by_hint, unbound):
+            routing.register_user_client("u1", client)
+        routing.register_user_client("u2", other_user)
+
+        count = await routing.disconnect_device("u1", "dev-1")
+
+        assert count == 4
+        for client in (*revoked_mobiles, by_claim, by_hint):
+            assert client.websocket.events == [
+                ("text", json.dumps({"reason": "device_revoked"})),
+                ("close", (4001, "device_revoked")),
+            ]
+        for client in (kept_mobile, unbound, other_user):
+            assert client.websocket.events == []
+        assert routing.get_mobile_clients("a1", "session_io:s1") == {kept_mobile}
+        assert routing.get_mobile_clients("a2", "events") == set()
+        assert routing.get_user_clients("u1") == {unbound}
+        assert routing.get_user_clients("u2") == {other_user}
+
+    async def test_drops_the_user_entry_once_its_last_socket_closes(
+        self, routing: RoutingTable
+    ):
+        client = UserClient(
+            user_id="u1", device_id="log-1", websocket=_RecordingWs(),
+            token_device_id="dev-1",
+        )
+        routing.register_user_client("u1", client)
+
+        assert await routing.disconnect_device("u1", "dev-1") == 1
+        assert "u1" not in routing._user_clients
+        assert await routing.disconnect_device("ghost", "dev-1") == 0

@@ -71,8 +71,12 @@ class CentralApi(
         return execute(request)
     }
 
-    suspend fun register(email: String, password: String): UserAuthResponse {
-        val body = json.encodeToString(UserRegisterRequest(email, password))
+    suspend fun register(
+        email: String,
+        password: String,
+        deviceId: String? = null,
+    ): UserAuthResponse {
+        val body = json.encodeToString(UserRegisterRequest(email, password, deviceId))
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/auth/register")
@@ -81,8 +85,12 @@ class CentralApi(
         return execute(request)
     }
 
-    suspend fun login(email: String, password: String): UserAuthResponse {
-        val body = json.encodeToString(UserLoginRequest(email, password))
+    suspend fun login(
+        email: String,
+        password: String,
+        deviceId: String? = null,
+    ): UserAuthResponse {
+        val body = json.encodeToString(UserLoginRequest(email, password, deviceId))
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/auth/login")
@@ -91,8 +99,8 @@ class CentralApi(
         return execute(request)
     }
 
-    suspend fun loginWithGoogle(idToken: String): UserAuthResponse {
-        val body = json.encodeToString(GoogleAuthRequest(idToken))
+    suspend fun loginWithGoogle(idToken: String, deviceId: String? = null): UserAuthResponse {
+        val body = json.encodeToString(GoogleAuthRequest(idToken, deviceId))
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/auth/google")
@@ -105,8 +113,9 @@ class CentralApi(
         email: String,
         code: String,
         password: String? = null,
+        deviceId: String? = null,
     ): UserAuthResponse {
-        val body = json.encodeToString(VerifyEmailRequest(email, code, password))
+        val body = json.encodeToString(VerifyEmailRequest(email, code, password, deviceId))
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/auth/verify-email")
