@@ -90,8 +90,15 @@ CREATE TABLE IF NOT EXISTS mobile_devices (
     revoked_at       TEXT,
     platform         TEXT,
     push_token       TEXT,
-    push_environment TEXT,
-    tokens_valid_after INTEGER
+    push_environment TEXT
+);
+
+-- Device revocation watermarks. No foreign key on purpose: the record must
+-- outlive the device row (handover, account deletion), or deleting a later
+-- owner would bring the revoked device's stolen tokens back to life.
+CREATE TABLE IF NOT EXISTS device_revocations (
+    device_id          TEXT PRIMARY KEY,
+    tokens_valid_after INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS pairing_tokens (
@@ -290,8 +297,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_agent_types_owner_name
 AGENT_UNINSTALL_REQUEST_TTL = timedelta(days=30)
 
 
-# Consume-time predicate over a refresh row ``t`` LEFT JOINed to its device
-# ``d``: the row must postdate the device's revoke watermark, by the same
+# Consume-time predicate over a refresh row ``t`` LEFT JOINed to its device's
+# ``device_revocations`` row ``d``: the row must postdate the watermark, by the same
 # whole-second rule that rejects JWTs (``iat <= tokens_valid_after``).
 _ISSUED_AFTER_DEVICE_REVOKE = (
     "(d.tokens_valid_after IS NULL "
@@ -782,26 +789,22 @@ class Database:
             await self._conn.execute("PRAGMA user_version = 21")
 
         if version < 22:
-            # Device revocation enforced on already-issued JWTs: the per-device
-            # ``tokens_valid_after`` watermark plus the device a user-session
-            # refresh token is bound to. Devices revoked before this version
-            # get their watermark from ``revoked_at``, so their old tokens die
-            # with the upgrade.
-            for table, column, ddl in (
-                ("mobile_devices", "tokens_valid_after", "INTEGER"),
-                ("user_refresh_tokens", "device_id", "TEXT"),
-            ):
-                cursor = await self._conn.execute(f"PRAGMA table_info({table})")
-                cols = {r[1] for r in await cursor.fetchall()}
-                if cols and column not in cols:
-                    await self._conn.execute(
-                        f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"
-                    )
+            # Revocation of issued JWTs: ``device_revocations`` plus the device
+            # a user-session refresh token is bound to. Devices revoked before
+            # this version get their watermark from ``revoked_at``, so their
+            # old tokens die with the upgrade.
+            cursor = await self._conn.execute("PRAGMA table_info(user_refresh_tokens)")
+            cols = {r[1] for r in await cursor.fetchall()}
+            if cols and "device_id" not in cols:
+                await self._conn.execute(
+                    "ALTER TABLE user_refresh_tokens ADD COLUMN device_id TEXT"
+                )
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute(
-                "UPDATE mobile_devices "
-                "SET tokens_valid_after = CAST(strftime('%s', revoked_at) AS INTEGER) "
-                "WHERE revoked_at IS NOT NULL AND tokens_valid_after IS NULL"
+                "INSERT OR IGNORE INTO device_revocations "
+                "(device_id, tokens_valid_after) "
+                "SELECT device_id, CAST(strftime('%s', revoked_at) AS INTEGER) "
+                "FROM mobile_devices WHERE revoked_at IS NOT NULL"
             )
             await self._conn.execute("PRAGMA user_version = 22")
 
@@ -2969,11 +2972,11 @@ class Database:
         refresh its mobile sessions nor keep alerting hardware it no
         longer uses. Already-issued access JWTs stay valid until they
         need a refresh — unlike an explicit device revoke, which also
-        kills them through ``tokens_valid_after``.
+        kills them through its ``device_revocations`` watermark.
 
         Re-registering a previously revoked device under the same owner
         clears ``revoked_at`` — possession of a valid user JWT proves
-        account control (Bitwarden semantics). ``tokens_valid_after`` is
+        account control (Bitwarden semantics). The revocation watermark is
         kept, so tokens issued before the revoke stay dead; callers must
         first check the caller's session postdates it
         (``auth.dependencies.require_mintable_device``).
@@ -3053,26 +3056,36 @@ class Database:
         and was previously active. Clears the push token so a revoked device
         stops receiving pushes even if it is later re-paired.
 
-        Also sets ``tokens_valid_after``: every JWT bound to this device and
-        issued in or before this second is rejected from now on, on both
-        the mobile and the user axis. The watermark is never cleared, so a
-        later re-registration does not bring those tokens back."""
+        Also records the device's watermark in ``device_revocations``: every
+        JWT bound to this device and issued in or before this second is
+        rejected from now on, on both the mobile and the user axis. The
+        record is never cleared — not by re-registration, handover, or
+        account deletion — so nothing brings those tokens back."""
         now = datetime.now(timezone.utc)
         cursor = await self.conn.execute(
-            "UPDATE mobile_devices SET revoked_at = ?, tokens_valid_after = ?, "
+            "UPDATE mobile_devices SET revoked_at = ?, "
             "    push_token = NULL, push_environment = NULL "
             "WHERE device_id = ? AND user_id = ? AND revoked_at IS NULL",
-            (now.isoformat(), int(now.timestamp()), device_id, user_id),
+            (now.isoformat(), device_id, user_id),
         )
+        revoked = cursor.rowcount == 1
+        if revoked:
+            await self.conn.execute(
+                "INSERT INTO device_revocations (device_id, tokens_valid_after) "
+                "VALUES (?, ?) ON CONFLICT(device_id) DO UPDATE SET "
+                "    tokens_valid_after = MAX(tokens_valid_after, "
+                "                             excluded.tokens_valid_after)",
+                (device_id, int(now.timestamp())),
+            )
         await self.conn.commit()
-        return cursor.rowcount == 1
+        return revoked
 
     async def device_tokens_valid_after(self, device_id: str) -> int | None:
         """The device's revocation watermark: a JWT bound to it is valid only
         when its ``iat`` is greater. ``None`` when the device was never
-        revoked or has no row."""
+        revoked."""
         cursor = await self.conn.execute(
-            "SELECT tokens_valid_after FROM mobile_devices WHERE device_id = ?",
+            "SELECT tokens_valid_after FROM device_revocations WHERE device_id = ?",
             (device_id,),
         )
         row = await cursor.fetchone()
@@ -3224,7 +3237,7 @@ class Database:
         now = _now_iso()
         cursor = await self.conn.execute(
             "SELECT t.mobile_device_id, t.agent_id FROM mobile_refresh_tokens t "
-            "LEFT JOIN mobile_devices d ON d.device_id = t.mobile_device_id "
+            "LEFT JOIN device_revocations d ON d.device_id = t.mobile_device_id "
             "WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ? "
             f"AND {_ISSUED_AFTER_DEVICE_REVOKE}",
             (token_hash, now),
@@ -3292,7 +3305,7 @@ class Database:
         now = _now_iso()
         cursor = await self.conn.execute(
             "SELECT t.user_id, t.device_id FROM user_refresh_tokens t "
-            "LEFT JOIN mobile_devices d ON d.device_id = t.device_id "
+            "LEFT JOIN device_revocations d ON d.device_id = t.device_id "
             "WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ? "
             f"AND {_ISSUED_AFTER_DEVICE_REVOKE}",
             (token_hash, now),

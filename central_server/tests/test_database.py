@@ -1017,6 +1017,47 @@ class TestMobileDevices:
         assert await db.device_tokens_valid_after("dev-1") == watermark
         assert await db.device_tokens_valid_after("dev-unknown") is None
 
+    async def test_revoke_keeps_the_later_watermark_and_a_refused_revoke_writes_none(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        stranger = await db.create_user(email="stranger@test.local", password_hash="h")
+        for device_id in ("dev-later", "dev-earlier", "dev-foreign"):
+            await db.upsert_mobile_device(device_id=device_id, user_id=owner, name="A")
+        now = int(datetime.now(timezone.utc).timestamp())
+        await _set_watermark(db, "dev-later", now + 3600)
+        await _set_watermark(db, "dev-earlier", now - 3600)
+
+        await db.revoke_mobile_device("dev-later", owner)
+        await db.revoke_mobile_device("dev-earlier", owner)
+        assert await db.revoke_mobile_device("dev-foreign", stranger) is False
+
+        assert await db.device_tokens_valid_after("dev-later") == now + 3600
+        assert await db.device_tokens_valid_after("dev-earlier") >= now
+        assert await db.device_tokens_valid_after("dev-foreign") is None
+
+    async def test_watermark_outlives_a_handover_and_the_new_owners_deletion(
+        self, db: Database
+    ):
+        first = await _create_test_user(db)
+        second = await db.create_user(email="second@test.local", password_hash="h")
+        await db.upsert_mobile_device(device_id="dev-1", user_id=first, name="A")
+        await db.revoke_mobile_device("dev-1", first)
+        watermark = await db.device_tokens_valid_after("dev-1")
+
+        previous = await db.upsert_mobile_device(
+            device_id="dev-1", user_id=second, name="B"
+        )
+        await db.delete_user(second)
+
+        assert previous == first
+        cursor = await db.conn.execute(
+            "SELECT COUNT(*) FROM mobile_devices WHERE device_id = 'dev-1'"
+        )
+        assert (await cursor.fetchone())[0] == 0
+        assert watermark is not None
+        assert await db.device_tokens_valid_after("dev-1") == watermark
+
     async def test_revoke_user_refresh_tokens_for_device_spares_other_sessions(
         self, db: Database
     ):
@@ -1094,8 +1135,10 @@ class TestMobileDevices:
 
 async def _set_watermark(db: Database, device_id: str, valid_after: int) -> None:
     await db.conn.execute(
-        "UPDATE mobile_devices SET tokens_valid_after = ? WHERE device_id = ?",
-        (valid_after, device_id),
+        "INSERT INTO device_revocations (device_id, tokens_valid_after) "
+        "VALUES (?, ?) ON CONFLICT(device_id) DO UPDATE SET "
+        "    tokens_valid_after = excluded.tokens_valid_after",
+        (device_id, valid_after),
     )
     await db.conn.commit()
 
@@ -2472,7 +2515,7 @@ class TestAgentUninstallMigration:
 
 
 class TestDeviceTokenRevocationMigration:
-    async def test_v22_adds_columns_and_backfills_the_watermark(self, tmp_path):
+    async def test_v22_creates_and_backfills_the_revocation_table(self, tmp_path):
         db_path = str(tmp_path / "pre_v22.db")
         db = Database(db_path)
         await db.connect()
@@ -2485,9 +2528,10 @@ class TestDeviceTokenRevocationMigration:
             "SELECT revoked_at FROM mobile_devices WHERE device_id = 'dev-gone'"
         )
         revoked_at = (await cursor.fetchone())[0]
-        # Simulate a v21 on-disk schema: drop the new columns and roll
-        # user_version back so reopening replays the v22 block.
-        await db.conn.execute("ALTER TABLE mobile_devices DROP COLUMN tokens_valid_after")
+        # Simulate a v21 on-disk schema: drop the new table and column and
+        # roll user_version back so reopening replays the v22 block. The
+        # device row keeps its ``revoked_at``.
+        await db.conn.execute("DROP TABLE device_revocations")
         await db.conn.execute("ALTER TABLE user_refresh_tokens DROP COLUMN device_id")
         await db.conn.execute("PRAGMA user_version = 21")
         await db.conn.commit()
@@ -2502,6 +2546,8 @@ class TestDeviceTokenRevocationMigration:
             datetime.fromisoformat(revoked_at).timestamp()
         )
         assert await db.device_tokens_valid_after("dev-live") is None
+        cursor = await db.conn.execute("PRAGMA table_info(mobile_devices)")
+        assert "tokens_valid_after" not in {row[1] for row in await cursor.fetchall()}
         # Pre-existing user sessions survive, unbound.
         assert await db.validate_and_consume_user_refresh("r-legacy") == (owner, None)
         await db.close()

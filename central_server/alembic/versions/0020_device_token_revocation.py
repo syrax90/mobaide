@@ -1,4 +1,4 @@
-"""Device revocation reaches issued JWTs: watermark + session device binding.
+"""Device revocation reaches issued JWTs: watermark table + session device binding.
 
 Mirrors the runtime migration in ``central_server/db/database.py`` (guarded by
 ``PRAGMA user_version < 22``). Alembic is the out-of-band migration path for
@@ -21,21 +21,21 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("mobile_devices") as batch_op:
-        batch_op.add_column(
-            sa.Column("tokens_valid_after", sa.Integer(), nullable=True)
-        )
+    op.create_table(
+        "device_revocations",
+        sa.Column("device_id", sa.Text(), primary_key=True),
+        sa.Column("tokens_valid_after", sa.Integer(), nullable=False),
+    )
     with op.batch_alter_table("user_refresh_tokens") as batch_op:
         batch_op.add_column(sa.Column("device_id", sa.Text(), nullable=True))
     op.execute(
-        "UPDATE mobile_devices "
-        "SET tokens_valid_after = CAST(strftime('%s', revoked_at) AS INTEGER) "
-        "WHERE revoked_at IS NOT NULL AND tokens_valid_after IS NULL"
+        "INSERT OR IGNORE INTO device_revocations (device_id, tokens_valid_after) "
+        "SELECT device_id, CAST(strftime('%s', revoked_at) AS INTEGER) "
+        "FROM mobile_devices WHERE revoked_at IS NOT NULL"
     )
 
 
 def downgrade() -> None:
     with op.batch_alter_table("user_refresh_tokens") as batch_op:
         batch_op.drop_column("device_id")
-    with op.batch_alter_table("mobile_devices") as batch_op:
-        batch_op.drop_column("tokens_valid_after")
+    op.drop_table("device_revocations")

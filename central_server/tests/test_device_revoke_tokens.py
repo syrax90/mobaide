@@ -18,6 +18,8 @@ from starlette.websockets import WebSocketDisconnect
 
 from central_server.auth import service as auth_service_module
 from central_server.auth.dependencies import DEVICE_REVOKED_DETAIL
+from central_server.relay import mobile_ws as mobile_ws_module
+from central_server.relay import user_ws as user_ws_module
 from central_server.relay.mobile_proxy import MobileProxy
 from central_server.relay.routing import (
     WS_CLOSE_AGENT_TRANSIENT_OFFLINE,
@@ -59,7 +61,7 @@ def _rotated_a_minute_later():
 async def _move_revoke_to_half_a_minute_ago(db, device_id: str) -> int:
     watermark = int(time.time()) - 30
     await db.conn.execute(
-        "UPDATE mobile_devices SET tokens_valid_after = ? WHERE device_id = ?",
+        "UPDATE device_revocations SET tokens_valid_after = ? WHERE device_id = ?",
         (watermark, device_id),
     )
     await db.conn.commit()
@@ -82,6 +84,25 @@ def _revoke_first(monkeypatch, db, method: str, user_id: str) -> None:
         return await original(*args, **kwargs)
 
     monkeypatch.setattr(db, method, hooked)
+
+
+def _revoke_after_socket_auth(
+    monkeypatch, module, auth_name: str, app, user_id: str
+) -> list[int]:
+    """Land a full device revoke — DB writes, then the route's socket sweep —
+    after ``module.<auth_name>`` accepts the socket but before the handler
+    registers it. Returns the sweep's closed-socket counts."""
+    original = getattr(module, auth_name)
+    swept: list[int] = []
+
+    async def hooked(websocket):
+        payload = await original(websocket)
+        await _revoke_like_the_route(app.state.db, user_id)
+        swept.append(await app.state.routing.disconnect_device(user_id, _DEV))
+        return payload
+
+    monkeypatch.setattr(module, auth_name, hooked)
+    return swept
 
 
 def _record_stored_tokens(monkeypatch, db, method: str) -> list[str]:
@@ -135,6 +156,16 @@ def _ws_close_code(app, path: str) -> int:
         with TestClient(app).websocket_connect(path) as ws:
             ws.receive_text()
     return excinfo.value.code
+
+
+def _ws_frames_until_close(app, path: str) -> tuple[list[str], int, str]:
+    """Every text frame the server sends, then its close code and reason."""
+    frames: list[str] = []
+    with pytest.raises(WebSocketDisconnect) as excinfo:
+        with TestClient(app).websocket_connect(path) as ws:
+            while True:
+                frames.append(ws.receive_text())
+    return frames, excinfo.value.code, excinfo.value.reason
 
 
 class _RecordingWs:
@@ -516,3 +547,100 @@ class TestRevokeDuringRotation:
         assert mobile_refresh.status_code == 401
         assert stored_user == []
         assert stored_mobile == []
+
+
+class TestRevokeDuringSocketSetup:
+    """A revoke whose socket sweep runs between authentication and
+    registration finds nothing to close; the handler itself must catch it.
+    The timeout turns a socket left open by a regression into a failure."""
+
+    @pytest.mark.timeout(10)
+    async def test_bound_user_socket_closes_4001_when_the_revoke_lands_mid_setup(
+        self, client, app, viewer_user, monkeypatch
+    ):
+        user_id = viewer_user["id"]
+        bound = (await _sign_in(client, device_id=_DEV))["access_token"]
+        await app.state.db.upsert_mobile_device(
+            device_id=_DEV, user_id=user_id, name="Pixel 8"
+        )
+        swept = _revoke_after_socket_auth(
+            monkeypatch, user_ws_module, "ws_authenticate_user", app, user_id
+        )
+
+        frames, code, reason = _ws_frames_until_close(
+            app, f"/ws/user-events?token={bound}"
+        )
+
+        assert swept == [0]
+        assert frames == [json.dumps({"reason": "device_revoked"})]
+        assert (code, reason) == (4001, "device_revoked")
+        assert app.state.routing.get_user_clients(user_id) == set()
+
+    @pytest.mark.timeout(10)
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/relay/ws/session/{agent_id}/s1",
+            "/relay/ws/sessions/{agent_id}",
+            "/relay/ws/events/{agent_id}",
+            "/relay/ws/autoscan/{agent_id}",
+        ],
+    )
+    async def test_mobile_socket_closes_4001_when_the_revoke_lands_mid_setup(
+        self,
+        client,
+        app,
+        api_auth_headers,
+        viewer_user,
+        registered_agent,
+        monkeypatch,
+        path,
+    ):
+        user_id = viewer_user["id"]
+        agent_id, _ = registered_agent
+        minted = await _mint(client, api_auth_headers, agent_id, _DEV)
+        access = minted.json()["access_token"]
+        app.state.routing.register_agent(agent_id, _RecordingWs())
+        swept = _revoke_after_socket_auth(
+            monkeypatch, mobile_ws_module, "ws_authenticate_mobile", app, user_id
+        )
+
+        frames, code, reason = _ws_frames_until_close(
+            app, f"{path.format(agent_id=agent_id)}?token={access}"
+        )
+
+        assert swept == [0]
+        assert frames == [json.dumps({"reason": "device_revoked"})]
+        assert (code, reason) == (4001, "device_revoked")
+        assert app.state.routing.get_all_mobile_for_agent(agent_id) == []
+
+
+class TestRevokeOutlivesTheDeviceRow:
+    async def test_deleting_a_later_owner_does_not_revive_the_revoked_tokens(
+        self, client, proxy_app, api_auth_headers, viewer_user, registered_agent
+    ):
+        db = proxy_app.state.db
+        agent_id, _ = registered_agent
+        with _issued_a_minute_ago():
+            old_user = (await _sign_in(client, device_id=_DEV))["access_token"]
+            old_mobile = (
+                await _mint(client, _bearer(old_user), agent_id, _DEV)
+            ).json()["access_token"]
+        await client.delete(f"/api/devices/{_DEV}", headers=api_auth_headers)
+        watermark = await _move_revoke_to_half_a_minute_ago(db, _DEV)
+        auth_service = proxy_app.state.auth_service
+        await auth_service.register_user("second@test.local", "second-pw123")
+        second_uid, _role, second_token, _scheduled = await auth_service.login_user(
+            "second@test.local", "second-pw123"
+        )
+        second_agent_id, _ = await db.register_agent("second-agent", second_uid)
+        handover = await _mint(client, _bearer(second_token), second_agent_id, _DEV)
+        assert handover.status_code == 200
+        assert [d["device_id"] for d in await db.list_user_devices(second_uid)] == [_DEV]
+
+        await db.delete_user(second_uid)
+
+        assert await db.device_tokens_valid_after(_DEV) == watermark
+        assert await _proxy_status(client, agent_id, old_mobile) == 401
+        old_user_resp = await client.get("/api/devices", headers=_bearer(old_user))
+        assert old_user_resp.status_code == 401

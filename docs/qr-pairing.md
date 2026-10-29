@@ -311,9 +311,11 @@ Two cases return `403` instead of moving the row, on `POST
 /api/agents/{id}/token` and on pairing claim/confirm: a session bound to
 one device (its user JWT carries the `device_id` sent at sign-in) naming a
 different device, and a session issued at or before the device's revoke.
-Revoking a device sets a per-device `tokens_valid_after` watermark that is
-never cleared, so re-registration keeps it: every JWT bound to that device
-(mobile access token, or user JWT with a `device_id` claim) with `iat` at or
+Revoking a device records a `tokens_valid_after` watermark in the
+`device_revocations(device_id, tokens_valid_after)` table. The row is never
+cleared and has no foreign key, so it survives re-registration, handover of
+the device to another account, and deletion of any account: every JWT bound to that
+device (mobile access token, or user JWT with a `device_id` claim) with `iat` at or
 before the watermark is rejected, while a fresh sign-in on the device after
 the revoke may register it again. User sessions signed in without a
 `device_id` are not bound and survive a revoke.

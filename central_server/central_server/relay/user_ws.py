@@ -42,8 +42,17 @@ import secrets
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
-from ..auth.dependencies import WebSocketAuthError, ws_authenticate_user
-from .routing import RoutingTable, UserClient
+from ..auth.dependencies import (
+    WebSocketAuthError,
+    token_predates_device_revoke,
+    ws_authenticate_user,
+)
+from .routing import (
+    WS_CLOSE_AUTH_FAILED,
+    RoutingTable,
+    UserClient,
+    safe_send_reason_and_close,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +85,14 @@ async def user_events(websocket: WebSocket) -> None:
         token_device_id=payload.device_id,
     )
     routing.register_user_client(user_id, client)
+    # A device revoke whose disconnect_device ran during the setup above found
+    # nothing to close; re-check now that a later one would see this socket.
+    if await token_predates_device_revoke(websocket, payload.device_id, payload.iat):
+        routing.unregister_user_client(user_id, client)
+        await safe_send_reason_and_close(
+            websocket, WS_CLOSE_AUTH_FAILED, "device_revoked"
+        )
+        return
     logger.info(
         "user_events.connected user_id=%s device=%s bound=%s",
         user_id, device_id, bound_device_id,

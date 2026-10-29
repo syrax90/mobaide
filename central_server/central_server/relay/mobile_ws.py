@@ -18,13 +18,20 @@ import uuid
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
-from ..auth.dependencies import WebSocketAuthError, ws_authenticate_mobile
+from ..auth.dependencies import (
+    WebSocketAuthError,
+    token_predates_device_revoke,
+    ws_authenticate_mobile,
+)
+from ..auth.models import MobileTokenPayload
 from ..monitoring import record_send_queue_drop
 from .envelope import CH_AUTOSCAN, CH_CONTROL, CH_SESSION_IO, encode
 from .routing import (
     WS_CLOSE_AGENT_TRANSIENT_OFFLINE,
+    WS_CLOSE_AUTH_FAILED,
     MobileClient,
     RoutingTable,
+    safe_send_reason_and_close,
     try_enqueue_control,
 )
 
@@ -87,8 +94,8 @@ def _request_events_snapshot(routing: RoutingTable, agent_id: str) -> None:
 
 async def _validate_mobile_connection(
     websocket: WebSocket, agent_id: str
-) -> str | None:
-    """Authenticate and validate pairing. Returns device_id or None on failure."""
+) -> MobileTokenPayload | None:
+    """Authenticate and validate pairing. Returns the token payload or None on failure."""
     try:
         payload = await ws_authenticate_mobile(websocket)
     except WebSocketAuthError:
@@ -111,7 +118,32 @@ async def _validate_mobile_connection(
         )
         return None
 
-    return payload.sub
+    return payload
+
+
+async def _register_mobile(
+    websocket: WebSocket,
+    agent_id: str,
+    channel_key: str,
+    client: MobileClient,
+    payload: MobileTokenPayload,
+) -> bool:
+    """Register ``client``, then re-check its device was not revoked meanwhile.
+
+    A revoke whose ``disconnect_device`` ran between authentication and
+    registration found nothing to close. Registering first and checking
+    after closes that gap: a later revoke sees the client in routing, and
+    an earlier one is caught here. Returns False (socket closed) on a hit.
+    """
+    routing: RoutingTable = websocket.app.state.routing
+    routing.register_mobile(agent_id, channel_key, client)
+    if await token_predates_device_revoke(websocket, payload.sub, payload.iat):
+        routing.unregister_mobile(agent_id, channel_key, client)
+        await safe_send_reason_and_close(
+            websocket, WS_CLOSE_AUTH_FAILED, "device_revoked"
+        )
+        return False
+    return True
 
 
 @router.websocket("/ws/session/{agent_id}/{session_id}")
@@ -119,14 +151,18 @@ async def relay_session_io(
     websocket: WebSocket, agent_id: str, session_id: str
 ) -> None:
     """Binary PTY relay — bidirectional."""
-    device_id = await _validate_mobile_connection(websocket, agent_id)
-    if device_id is None:
+    payload = await _validate_mobile_connection(websocket, agent_id)
+    if payload is None:
         return
+    device_id = payload.sub
 
     routing: RoutingTable = websocket.app.state.routing
     client = MobileClient(device_id=device_id, websocket=websocket)
     channel_key = f"session_io:{session_id}"
-    routing.register_mobile(agent_id, channel_key, client)
+    if not await _register_mobile(
+        websocket, agent_id, channel_key, client, payload
+    ):
+        return
 
     _send_session_lifecycle(
         routing, agent_id, session_id, "mobile_session_attach"
@@ -158,14 +194,18 @@ async def relay_session_io(
 @router.websocket("/ws/sessions/{agent_id}")
 async def relay_sessions_list(websocket: WebSocket, agent_id: str) -> None:
     """Session list relay — agent-to-mobile only."""
-    device_id = await _validate_mobile_connection(websocket, agent_id)
-    if device_id is None:
+    payload = await _validate_mobile_connection(websocket, agent_id)
+    if payload is None:
         return
+    device_id = payload.sub
 
     routing: RoutingTable = websocket.app.state.routing
     client = MobileClient(device_id=device_id, websocket=websocket)
     channel_key = "sessions_list"
-    routing.register_mobile(agent_id, channel_key, client)
+    if not await _register_mobile(
+        websocket, agent_id, channel_key, client, payload
+    ):
+        return
 
     _request_events_snapshot(routing, agent_id)
 
@@ -178,14 +218,18 @@ async def relay_sessions_list(websocket: WebSocket, agent_id: str) -> None:
 @router.websocket("/ws/events/{agent_id}")
 async def relay_events(websocket: WebSocket, agent_id: str) -> None:
     """Events relay — agent-to-mobile only."""
-    device_id = await _validate_mobile_connection(websocket, agent_id)
-    if device_id is None:
+    payload = await _validate_mobile_connection(websocket, agent_id)
+    if payload is None:
         return
+    device_id = payload.sub
 
     routing: RoutingTable = websocket.app.state.routing
     client = MobileClient(device_id=device_id, websocket=websocket)
     channel_key = "events"
-    routing.register_mobile(agent_id, channel_key, client)
+    if not await _register_mobile(
+        websocket, agent_id, channel_key, client, payload
+    ):
+        return
 
     _request_events_snapshot(routing, agent_id)
 
@@ -205,15 +249,19 @@ async def relay_autoscan(websocket: WebSocket, agent_id: str) -> None:
     ``open_autoscan`` message on connect and a ``close_autoscan`` on
     teardown so it can spawn / cancel the matching stream task.
     """
-    device_id = await _validate_mobile_connection(websocket, agent_id)
-    if device_id is None:
+    payload = await _validate_mobile_connection(websocket, agent_id)
+    if payload is None:
         return
+    device_id = payload.sub
 
     routing: RoutingTable = websocket.app.state.routing
     subscription_id = uuid.uuid4().hex
     channel_key = f"autoscan:{subscription_id}"
     client = MobileClient(device_id=device_id, websocket=websocket)
-    routing.register_mobile(agent_id, channel_key, client)
+    if not await _register_mobile(
+        websocket, agent_id, channel_key, client, payload
+    ):
+        return
 
     agent_conn = routing.get_agent(agent_id)
     if agent_conn is None:

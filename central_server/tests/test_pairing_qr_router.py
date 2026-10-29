@@ -675,7 +675,7 @@ class TestClaimDeviceReassignment:
         # The viewer's session was signed in after the prior owner's revoke:
         # back-date the watermark so it is strictly older than the session.
         await qr_app.state.db.conn.execute(
-            "UPDATE mobile_devices SET tokens_valid_after = tokens_valid_after - 60 "
+            "UPDATE device_revocations SET tokens_valid_after = tokens_valid_after - 60 "
             "WHERE device_id = ?",
             (_SHARED_DEV_UUID,),
         )

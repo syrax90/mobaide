@@ -61,15 +61,16 @@ async def _agent_still_exists(request_or_ws: Request | WebSocket, agent_id: str)
     return await db.get_agent(agent_id) is not None
 
 
-async def _token_predates_device_revoke(
+async def token_predates_device_revoke(
     request_or_ws: Request | WebSocket, device_id: str | None, iat: int
 ) -> bool:
     """Return ``True`` iff ``device_id`` was revoked at or after ``iat``.
 
-    The device's ``tokens_valid_after`` watermark is the whole revocation
-    record: it outlives a re-registration, so a token issued before the
-    revoke stays dead while a fresh sign-in on the same device works.
-    JWT ``iat`` has one-second resolution, so a token minted in the revoke's own second is rejected too.
+    The device's ``device_revocations`` watermark is the whole revocation
+    record: it outlives a re-registration and the device row itself, so a
+    token issued before the revoke stays dead while a fresh sign-in on the
+    same device works. JWT ``iat`` has one-second resolution, so a token
+    minted in the revoke's own second is rejected too.
     """
     if device_id is None:
         return False
@@ -114,7 +115,7 @@ async def ws_authenticate_mobile(websocket: WebSocket) -> MobileTokenPayload:
         await websocket.close(code=4010, reason="admin_revoked")
         raise _auth_failed(f"Mobile token references missing agent: {payload.agent_id}")
 
-    if await _token_predates_device_revoke(websocket, payload.sub, payload.iat):
+    if await token_predates_device_revoke(websocket, payload.sub, payload.iat):
         await websocket.close(code=4001, reason="Invalid token")
         raise _auth_failed(f"Mobile token predates device revoke: {payload.sub}")
 
@@ -154,7 +155,7 @@ async def ws_authenticate_user(websocket: WebSocket) -> UserTokenPayload:
         await websocket.close(code=4010, reason="admin_revoked")
         raise _auth_failed(f"Dashboard token references missing user: {payload.sub}")
 
-    if await _token_predates_device_revoke(websocket, payload.device_id, payload.iat):
+    if await token_predates_device_revoke(websocket, payload.device_id, payload.iat):
         await websocket.close(code=4001, reason="Invalid token")
         raise _auth_failed(
             f"Dashboard token predates device revoke: {payload.device_id}"
@@ -192,7 +193,7 @@ async def _get_session_user(
         )
     if not await _user_still_exists(
         request, user_payload.sub
-    ) or await _token_predates_device_revoke(
+    ) or await token_predates_device_revoke(
         request, user_payload.device_id, user_payload.iat
     ):
         raise HTTPException(
@@ -269,7 +270,7 @@ async def get_api_user(request: Request) -> UserTokenPayload:
             detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if await _token_predates_device_revoke(
+    if await token_predates_device_revoke(
         request, user_payload.device_id, user_payload.iat
     ):
         logger.info(
@@ -343,7 +344,7 @@ async def get_mobile_user(request: Request) -> MobileTokenPayload:
             detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if await _token_predates_device_revoke(request, payload.sub, payload.iat):
+    if await token_predates_device_revoke(request, payload.sub, payload.iat):
         logger.info(
             "mobile_token_rejected reason=device_revoked device_id=%s",
             payload.sub,
@@ -380,7 +381,7 @@ async def require_mintable_device(
             detail="This session belongs to a different device. "
             "Sign in again on this device.",
         )
-    if await _token_predates_device_revoke(request, device_id, user.iat):
+    if await token_predates_device_revoke(request, device_id, user.iat):
         logger.info(
             "device_mint_refused reason=device_revoked sub=%s device_id=%s",
             user.sub,

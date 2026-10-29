@@ -258,6 +258,7 @@ Some of the third parties listed in Section 6 (in particular Google, Apple, Anth
 | Account record (email, password hash, Google `sub`, Apple `sub`) | Until you delete your account (see Section 10). |
 | Hashed mobile refresh tokens | Invalidated as soon as you revoke the device, reset your password, or delete your account. By default these tokens carry no expiry, so signing out on the phone — which deletes the app's own copies — does not by itself invalidate the stored hash; revoking the device does. The hash itself is then kept, marked revoked, as a security audit record until your account is deleted, at which point it is purged with the rest of your data. |
 | APNs device token (iOS) | Until you revoke the device or request account deletion (dropped immediately on request, not only once the 14-day grace window ends). Signing out from Settings also asks us to remove it, on a best-effort basis. Apple additionally retires tokens on its own, and a token Apple reports as gone is deleted on our side. |
+| Device revocation record (the random device identifier of a device you revoked, and the second it was revoked) | Kept indefinitely, including after you delete your account, so that credentials issued to that device before the revocation can never become valid again. It holds no account identifier, email address or device name. |
 | Hashed pairing tokens | At most 5 minutes (the lifetime of a QR pairing nonce). Tokens that have served their purpose are scrubbed shortly after consumption. |
 | Email-verification / password-reset OTP token hashes | Active code: up to its TTL (15 min for email verification, 30 min for password reset). Consumed code: at most 24 hours, then permanently deleted. |
 | Prompt templates | Until you delete them, or — if you delete your account — purged together with your account: immediately for *Immediate* deletion, or at the end of the 14-day grace window for *Scheduled* deletion. |
@@ -269,7 +270,7 @@ Some of the third parties listed in Section 6 (in particular Google, Apple, Anth
 | Support correspondence (the email you send to our support address and our replies) | Kept only as long as necessary to handle your request and for a reasonable period afterwards, then deleted. |
 | Server-side backups | Rolled over within 30 days. |
 
-After account deletion, all directly identifying data (other than the minimal deletion audit record described above) is purged from the live database within 30 days; backup rotations remove it within an additional 30 days.
+After account deletion, all directly identifying data (other than the minimal deletion audit record and the device revocation records described above) is purged from the live database within 30 days; backup rotations remove it within an additional 30 days.
 
 ---
 
@@ -305,7 +306,7 @@ If you are in the EU/EEA, the UK, or another jurisdiction with comparable rights
   - **By email:** send `paveltimonin90@gmail.com` a deletion request from the email address registered to your Mobaide account. We will complete the deletion within 30 days and send you a confirmation.
   - **Public information page (no sign-in required):** `https://mobaide.com/portal/delete-account-info` describes the steps and timing. This is also the URL listed on the Google Play "Data deletion" entry.
 
-  Once the deletion completes (immediately for *Immediate* mode, at the end of the 14-day window for *Scheduled* mode), your account record, paired devices, prompt templates, refresh tokens, and all dependent rows are purged from the live database. A minimal audit record of the deletion request is retained as described in Section 8.
+  Once the deletion completes (immediately for *Immediate* mode, at the end of the 14-day window for *Scheduled* mode), your account record, paired devices, prompt templates, refresh tokens, and all dependent rows are purged from the live database. A minimal audit record of the deletion request, and any device revocation records, are retained as described in Section 8.
 - **Restrict** processing in specific circumstances.
 - **Object** to processing carried out under our legitimate interest (Art. 6(1)(f)) — in particular our operational logs.
 - **Portability** — receive a machine-readable copy of the data you provided to us.
