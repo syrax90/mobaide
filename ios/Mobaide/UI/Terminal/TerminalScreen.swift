@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Terminal screen (Android `TerminalScreen`), the real body for the
 /// `sessionDetail` route. The session model is pulled from the app-scoped
@@ -441,6 +442,10 @@ private struct TerminalScreenContent: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { voice.interrupt() }
         }
+        // The idle timer would dim and lock the screen mid-dictation.
+        .onChange(of: voice.dictation.isActive) { _, active in
+            UIApplication.shared.isIdleTimerDisabled = active
+        }
         .task {
             checkSessionStillExists()
             for await sessions in sessionRepository.sessions() {
@@ -480,6 +485,7 @@ private struct TerminalScreenContent: View {
             model.markHidden()
             keyboard.stop()
             voice.leave()
+            UIApplication.shared.isIdleTimerDisabled = false
         }
     }
 
