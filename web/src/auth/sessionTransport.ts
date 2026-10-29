@@ -19,6 +19,7 @@
  * Hydration reports what it found and lets `bootstrapSession` do the asking.
  */
 import type { InvalidationReason } from './authState';
+import { adoptSessionDeviceId } from './deviceIdentity';
 
 const STORAGE_KEY = 'mobaide-session';
 const CHANNEL_NAME = 'mobaide-session';
@@ -221,6 +222,16 @@ export function clearSignedInMarker(): void {
 // through the bearer middleware); sessionStorage is the durable mirror.
 let current: UserSession | null = null;
 
+/**
+ * Install a session as this tab's own. Every way a session arrives — sign-in,
+ * rotation, a peer tab, hydration — passes here, so the device id always
+ * follows the session's binding.
+ */
+function setCurrent(session: UserSession | null): void {
+  current = session;
+  if (session !== null) adoptSessionDeviceId(session.accessToken);
+}
+
 function persist(session: UserSession | null): void {
   try {
     if (session === null) {
@@ -312,14 +323,14 @@ export function getAccessToken(): string | null {
 
 /** Adopt a session locally and tell other tabs, so rotation propagates. */
 export function writeSession(session: UserSession, broadcast = true): void {
-  current = session;
+  setCurrent(session);
   persist(session);
   if (broadcast) post({ type: 'update', session });
 }
 
 /** Adopt a session without telling anyone — for applying a remote update. */
 export function adoptSession(session: UserSession | null): void {
-  current = session;
+  setCurrent(session);
   persist(session);
 }
 
@@ -417,13 +428,13 @@ export async function hydrateSession(): Promise<HydrationResult> {
   }
   const own = parseSession(raw);
   if (own !== null) {
-    current = own;
+    setCurrent(own);
     return { kind: 'session', session: own };
   }
 
   const offered = await requestPeerSession();
   if (offered !== null) {
-    current = offered;
+    setCurrent(offered);
     persist(offered);
     return { kind: 'session', session: offered };
   }
