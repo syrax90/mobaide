@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Port of Android `AuthRepository`: orchestrates the central-server user
 /// auth flows and the agent connect flow. Persists identity/tokens to the
@@ -17,12 +18,17 @@ struct AuthRepository: Sendable {
     let userIdentityStore: UserIdentityStore
     let sessionManager: SessionManager
     let connectionStore: ConnectionStore
+    /// Shared by every copy of this struct, so the screen that verifies sees
+    /// what the screen that registered remembered.
+    let pendingVerification = PendingVerificationCredential()
 
     // MARK: - Central-server user auth
 
     func register(email: String, password: String) async throws -> AuthResult {
         let response = try await centralAPI.register(email: email, password: password)
-        return try await finaliseOrFlagVerification(requestedEmail: email, response: response)
+        let result = try await finaliseOrFlagVerification(requestedEmail: email, response: response)
+        pendingVerification.remember(result, password: password)
+        return result
     }
 
     func loginWithPassword(email: String, password: String) async throws -> AuthResult {
@@ -31,11 +37,15 @@ struct AuthRepository: Sendable {
             response = try await centralAPI.login(email: email, password: password)
         } catch let error as APIError {
             if let pendingEmail = parseVerificationRequired(error) {
-                return .verificationRequired(email: pendingEmail)
+                let result = AuthResult.verificationRequired(email: pendingEmail)
+                pendingVerification.remember(result, password: password)
+                return result
             }
             throw error
         }
-        return try await finaliseOrFlagVerification(requestedEmail: email, response: response)
+        let result = try await finaliseOrFlagVerification(requestedEmail: email, response: response)
+        pendingVerification.remember(result, password: password)
+        return result
     }
 
     func loginWithGoogle(idToken: String) async throws -> AuthResult {
@@ -51,7 +61,12 @@ struct AuthRepository: Sendable {
     }
 
     func verifyEmail(email: String, code: String) async throws -> AuthResult {
-        let response = try await centralAPI.verifyEmail(email: email, code: code)
+        let response = try await centralAPI.verifyEmail(
+            email: email,
+            code: code,
+            password: pendingVerification.password(for: email)
+        )
+        pendingVerification.clear()
         if response.role == Self.roleAdmin { throw AdminLoginNotSupported() }
         guard let token = response.access_token else {
             throw APIError(code: -1, errorBody: "verify-email response missing access_token")
@@ -349,5 +364,40 @@ struct AuthRepository: Sendable {
 
     private func decodeErrorBody<T: Decodable>(_ type: T.Type, from error: APIError) -> T? {
         try? WireJSON.decoder().decode(T.self, from: Data(error.errorBody.utf8))
+    }
+}
+
+/// The password typed on the way to the code screen, held in memory only so
+/// `verifyEmail` can prove it: if someone re-registered the address in the
+/// meantime, the server installs this one instead of theirs.
+final class PendingVerificationCredential: Sendable {
+    private struct Entry {
+        let email: String
+        let password: String
+    }
+
+    private let entry = OSAllocatedUnfairLock<Entry?>(initialState: nil)
+
+    func remember(_ result: AuthResult, password: String) {
+        let next: Entry?
+        if case let .verificationRequired(email) = result {
+            next = Entry(email: Self.normalised(email), password: password)
+        } else {
+            next = nil
+        }
+        entry.withLock { $0 = next }
+    }
+
+    func password(for email: String) -> String? {
+        let key = Self.normalised(email)
+        return entry.withLock { $0?.email == key ? $0?.password : nil }
+    }
+
+    func clear() {
+        entry.withLock { $0 = nil }
+    }
+
+    private static func normalised(_ email: String) -> String {
+        email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }

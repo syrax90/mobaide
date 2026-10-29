@@ -144,6 +144,8 @@ async def register(
             ad_attribution=body.ad_attribution,
             client_ip=request.client.host if request.client else None,
         )
+    except ResendRateLimitedError as exc:
+        raise _resend_rate_limited(exc)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -386,7 +388,7 @@ async def verify_email(
     auth_service = request.app.state.auth_service
     try:
         user_id, role, token, scheduled_deletion_at = await auth_service.verify_email(
-            body.email, body.code
+            body.email, body.code, body.password
         )
     except ExpiredVerificationCodeError:
         raise HTTPException(
@@ -429,15 +431,19 @@ async def resend_verification(
     try:
         await auth_service.resend_verification(body.email, background_tasks)
     except ResendRateLimitedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={
-                "error": "resend_rate_limited",
-                "cooldown_seconds_remaining": exc.cooldown_seconds_remaining,
-            },
-            headers={"Retry-After": str(exc.cooldown_seconds_remaining)},
-        )
+        raise _resend_rate_limited(exc)
     return ResendVerificationResponse(status="sent", cooldown_seconds_remaining=0)
+
+
+def _resend_rate_limited(exc: ResendRateLimitedError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={
+            "error": "resend_rate_limited",
+            "cooldown_seconds_remaining": exc.cooldown_seconds_remaining,
+        },
+        headers={"Retry-After": str(exc.cooldown_seconds_remaining)},
+    )
 
 
 async def _require_reset_ip_quota(request: Request) -> None:

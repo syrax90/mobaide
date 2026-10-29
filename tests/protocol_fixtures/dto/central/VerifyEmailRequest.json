@@ -1,6 +1,7 @@
 {
   "type": "VerifyEmailRequest",
   "cases": [
-    { "name": "full", "wire": { "email": "e@x.com", "code": "123456" } }
+    { "name": "full", "wire": { "email": "e@x.com", "code": "123456" } },
+    { "name": "with_password", "wire": { "email": "e@x.com", "code": "123456", "password": "pw" } }
   ]
 }

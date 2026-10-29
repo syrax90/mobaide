@@ -112,6 +112,105 @@ class TestUserRegistration:
         with pytest.raises(ValueError, match="Invalid"):
             await auth.login_user("google@example.com", "anything")
 
+    async def test_unverified_row_not_taken_over_when_verification_bypassed(
+        self, auth: AuthService, db: Database
+    ):
+        await db.create_user(
+            email="legacy@example.com", password_hash="h", email_verified=False
+        )
+        with pytest.raises(ValueError, match="already registered"):
+            await auth.register_user("legacy@example.com", "other456")
+        user = await db.get_user_by_email("legacy@example.com")
+        assert user["password_hash"] == "h"
+
+
+def _patch_google(monkeypatch, *, sub: str, email: str) -> None:
+    async def _verify(self, token_str):
+        return {"sub": sub, "email": email, "email_verified": True}
+
+    monkeypatch.setattr(AuthService, "_verify_google_id_token", _verify)
+
+
+class TestGoogleEmailLink:
+    async def test_linking_unverified_account_drops_its_password(
+        self, auth: AuthService, db: Database, monkeypatch
+    ):
+        user_id = await db.create_user(
+            email="squatted@example.com", password_hash="h", email_verified=False
+        )
+        _patch_google(monkeypatch, sub="g-owner", email="squatted@example.com")
+
+        linked_id, _role, _token, is_new = await auth.google_authenticate("tok")
+
+        assert (linked_id, is_new) == (user_id, False)
+        user = await db.get_user_by_id(user_id)
+        assert user["password_hash"] is None
+        assert user["google_sub"] == "g-owner"
+        assert user["email_verified"] == 1
+
+    async def test_linking_verified_account_keeps_its_password(
+        self, auth: AuthService, db: Database, monkeypatch
+    ):
+        await auth.register_user("owner@example.com", "pass123")
+        _patch_google(monkeypatch, sub="g-owner", email="owner@example.com")
+
+        await auth.google_authenticate("tok")
+
+        user_id, _role, _token, _scheduled = await auth.login_user(
+            "owner@example.com", "pass123"
+        )
+        user = await db.get_user_by_id(user_id)
+        assert user["google_sub"] == "g-owner"
+
+    async def test_linking_unverified_account_clears_its_attribution_and_code(
+        self, auth: AuthService, db: Database, monkeypatch
+    ):
+        user_id = await db.create_user(
+            email="squatted@example.com",
+            password_hash="h",
+            email_verified=False,
+            ad_click_id="Cj0K_squatter",
+            ad_click_kind="gclid",
+            ads_consent=True,
+            ad_attribution_sig="sig-squatter",
+        )
+        await db.create_verification_token(user_id, "code-hash", 900)
+        _patch_google(monkeypatch, sub="g-owner", email="squatted@example.com")
+
+        await auth.google_authenticate("tok")
+
+        user = await db.get_user_by_id(user_id)
+        assert (
+            user["ad_click_id"],
+            user["ads_consent"],
+            user["ad_attribution_sig"],
+        ) == (None, 0, None)
+        assert await db.consume_verification_token(user_id, "code-hash", 5) != "ok"
+
+
+class TestGoogleSubVerification:
+    async def test_verifying_own_unverified_row_drops_password_keeps_attribution(
+        self, auth: AuthService, db: Database, monkeypatch
+    ):
+        user_id = await db.create_user(
+            email="gsub@example.com",
+            password_hash="h",
+            google_sub="g-1",
+            email_verified=False,
+            ad_click_id="Cj0K_owner",
+            ad_click_kind="gclid",
+            ads_consent=True,
+        )
+        _patch_google(monkeypatch, sub="g-1", email="gsub@example.com")
+
+        signed_in_id, _role, _token, is_new = await auth.google_authenticate("tok")
+
+        assert (signed_in_id, is_new) == (user_id, False)
+        user = await db.get_user_by_id(user_id)
+        assert user["password_hash"] is None
+        assert user["email_verified"] == 1
+        assert (user["ad_click_id"], user["ads_consent"]) == ("Cj0K_owner", 1)
+
 
 class TestDashboardToken:
     async def test_create_and_decode_user_token(self, auth: AuthService):

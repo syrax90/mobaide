@@ -98,6 +98,8 @@ extension UserAuthResponse {
 struct VerifyEmailRequest: Codable, Equatable, Sendable {
     let email: String
     let code: String
+    /// The password typed to reach the code screen; see `AuthRepository.verifyEmail`.
+    var password: String? = nil
 }
 
 struct ResendVerificationRequest: Codable, Equatable, Sendable {

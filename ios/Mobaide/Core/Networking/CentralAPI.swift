@@ -52,8 +52,12 @@ struct CentralAPI: Sendable {
         try await execute(method: "POST", path: "/api/auth/apple", body: AppleAuthRequest(id_token: idToken, nonce: nonce))
     }
 
-    func verifyEmail(email: String, code: String) async throws -> UserAuthResponse {
-        try await execute(method: "POST", path: "/api/auth/verify-email", body: VerifyEmailRequest(email: email, code: code))
+    func verifyEmail(email: String, code: String, password: String? = nil) async throws -> UserAuthResponse {
+        try await execute(
+            method: "POST",
+            path: "/api/auth/verify-email",
+            body: VerifyEmailRequest(email: email, code: code, password: password)
+        )
     }
 
     func resendVerification(email: String) async throws -> ResendVerificationResponse {
