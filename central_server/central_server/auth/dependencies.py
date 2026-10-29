@@ -13,6 +13,11 @@ from .service import AuthService
 
 logger = logging.getLogger(__name__)
 
+DEVICE_REVOKED_DETAIL = (
+    "This device was revoked. "
+    "Sign out and sign in again on this device to reconnect it."
+)
+
 
 class WebSocketAuthError(Exception):
     """Raised when WebSocket authentication fails (connection already closed)."""
@@ -383,6 +388,5 @@ async def require_mintable_device(
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="This device was revoked. "
-            "Sign out and sign in again on this device to reconnect it.",
+            detail=DEVICE_REVOKED_DETAIL,
         )

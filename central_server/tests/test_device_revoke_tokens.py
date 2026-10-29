@@ -17,6 +17,7 @@ from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from central_server.auth import service as auth_service_module
+from central_server.auth.dependencies import DEVICE_REVOKED_DETAIL
 from central_server.relay.mobile_proxy import MobileProxy
 from central_server.relay.routing import (
     WS_CLOSE_AGENT_TRANSIENT_OFFLINE,
@@ -45,6 +46,16 @@ def _issued_a_minute_ago():
         yield
 
 
+@contextmanager
+def _rotated_a_minute_later():
+    """Run every refresh inside the block on a clock one minute ahead, so its
+    ``started`` second falls strictly after a watermark written just before."""
+    future = time.time() + 60
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(auth_service_module, "time", SimpleNamespace(time=lambda: future))
+        yield
+
+
 async def _move_revoke_to_half_a_minute_ago(db, device_id: str) -> int:
     watermark = int(time.time()) - 30
     await db.conn.execute(
@@ -53,6 +64,37 @@ async def _move_revoke_to_half_a_minute_ago(db, device_id: str) -> int:
     )
     await db.conn.commit()
     return watermark
+
+
+async def _revoke_like_the_route(db, user_id: str) -> None:
+    """The DB writes ``DELETE /api/devices/{id}`` makes for ``_DEV``."""
+    await db.revoke_mobile_device(_DEV, user_id)
+    await db.revoke_all_refresh_tokens_for_device(_DEV)
+    await db.revoke_user_refresh_tokens_for_device(user_id, _DEV)
+
+
+def _revoke_first(monkeypatch, db, method: str, user_id: str) -> None:
+    """Land a device revoke right before ``db.<method>`` runs."""
+    original = getattr(db, method)
+
+    async def hooked(*args, **kwargs):
+        await _revoke_like_the_route(db, user_id)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(db, method, hooked)
+
+
+def _record_stored_tokens(monkeypatch, db, method: str) -> list[str]:
+    """Collect every raw refresh token ``db.<method>`` stores."""
+    original = getattr(db, method)
+    stored: list[str] = []
+
+    async def recording(*args, **kwargs):
+        stored.append(kwargs["raw_token"])
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(db, method, recording)
+    return stored
 
 
 def _bearer(token: str) -> dict[str, str]:
@@ -351,3 +393,126 @@ class TestRevokeClosesLiveSockets:
         assert kept_user.websocket.events == []
         assert routing.get_user_clients(user_id) == {kept_user}
         assert routing.get_mobile_clients(agent_id, "session_io:s1") == {kept_mobile}
+
+
+class TestRevokeDuringRotation:
+    async def test_user_refresh_is_refused_when_the_revoke_lands_before_the_store(
+        self, client, app, viewer_user, monkeypatch
+    ):
+        db = app.state.db
+        user_id = viewer_user["id"]
+        session = await _sign_in(client, device_id=_DEV, refreshable=True)
+        await db.upsert_mobile_device(device_id=_DEV, user_id=user_id, name="Pixel 8")
+        stored = _record_stored_tokens(monkeypatch, db, "store_user_refresh_token")
+        _revoke_first(monkeypatch, db, "store_user_refresh_token", user_id)
+
+        resp = await client.post(
+            "/api/auth/refresh", json={"refresh_token": session["refresh_token"]}
+        )
+
+        assert resp.status_code == 401
+        assert len(stored) == 1
+        assert await db.validate_and_consume_user_refresh(stored[0]) is None
+        assert await db.list_user_devices(user_id) == []
+
+    async def test_mobile_refresh_is_refused_when_the_revoke_lands_before_the_store(
+        self, client, app, api_auth_headers, viewer_user, registered_agent, monkeypatch
+    ):
+        db = app.state.db
+        user_id = viewer_user["id"]
+        agent_id, _ = registered_agent
+        minted = await _mint(client, api_auth_headers, agent_id, _DEV)
+        stored = _record_stored_tokens(monkeypatch, db, "store_refresh_token")
+        _revoke_first(monkeypatch, db, "store_refresh_token", user_id)
+
+        resp = await client.post(
+            "/api/mobile/refresh",
+            json={"refresh_token": minted.json()["refresh_token"]},
+        )
+
+        assert resp.status_code == 401
+        assert len(stored) == 1
+        assert await db.validate_and_consume_refresh(stored[0]) is None
+        assert await db.list_user_devices(user_id) == []
+
+    @pytest.mark.parametrize(
+        "revoke_before", ["upsert_mobile_device", "store_refresh_token"]
+    )
+    async def test_mint_is_refused_when_the_revoke_lands_mid_mint(
+        self,
+        client,
+        app,
+        api_auth_headers,
+        viewer_user,
+        registered_agent,
+        monkeypatch,
+        revoke_before,
+    ):
+        db = app.state.db
+        user_id = viewer_user["id"]
+        agent_id, _ = registered_agent
+        assert (await _mint(client, api_auth_headers, agent_id, _DEV)).status_code == 200
+        stored = _record_stored_tokens(monkeypatch, db, "store_refresh_token")
+        _revoke_first(monkeypatch, db, revoke_before, user_id)
+
+        resp = await _mint(client, api_auth_headers, agent_id, _DEV)
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == DEVICE_REVOKED_DETAIL
+        assert len(stored) == 1
+        assert await db.validate_and_consume_refresh(stored[0]) is None
+        # A revoke before the upsert had its revoked_at cleared by it.
+        assert await db.list_user_devices(user_id) == []
+
+    async def test_a_revoke_from_before_a_fresh_sign_in_does_not_stop_rotation(
+        self, client, app, api_auth_headers, viewer_user, registered_agent
+    ):
+        db = app.state.db
+        agent_id, _ = registered_agent
+        await db.upsert_mobile_device(
+            device_id=_DEV, user_id=viewer_user["id"], name="Pixel 8"
+        )
+        await client.delete(f"/api/devices/{_DEV}", headers=api_auth_headers)
+        await _move_revoke_to_half_a_minute_ago(db, _DEV)
+        session = await _sign_in(client, device_id=_DEV, refreshable=True)
+        minted = await _mint(client, _bearer(session["access_token"]), agent_id, _DEV)
+        assert minted.status_code == 200
+
+        user_refresh = await client.post(
+            "/api/auth/refresh", json={"refresh_token": session["refresh_token"]}
+        )
+        mobile_refresh = await client.post(
+            "/api/mobile/refresh",
+            json={"refresh_token": minted.json()["refresh_token"]},
+        )
+
+        assert user_refresh.status_code == 200
+        assert mobile_refresh.status_code == 200
+
+    async def test_refresh_is_refused_when_the_watermark_predates_it_but_the_rows_are_live(
+        self, client, app, api_auth_headers, viewer_user, registered_agent, monkeypatch
+    ):
+        db = app.state.db
+        user_id = viewer_user["id"]
+        agent_id, _ = registered_agent
+        session = await _sign_in(client, device_id=_DEV, refreshable=True)
+        minted = await _mint(client, api_auth_headers, agent_id, _DEV)
+        stored_user = _record_stored_tokens(monkeypatch, db, "store_user_refresh_token")
+        stored_mobile = _record_stored_tokens(monkeypatch, db, "store_refresh_token")
+        # The revoke's watermark is written; its bulk refresh-token revokes
+        # have not run yet.
+        assert await db.revoke_mobile_device(_DEV, user_id) is True
+
+        with _rotated_a_minute_later():
+            user_refresh = await client.post(
+                "/api/auth/refresh", json={"refresh_token": session["refresh_token"]}
+            )
+            mobile_refresh = await client.post(
+                "/api/mobile/refresh",
+                json={"refresh_token": minted.json()["refresh_token"]},
+            )
+
+        assert user_refresh.status_code == 401
+        assert mobile_refresh.status_code == 401
+        assert stored_user == []
+        assert stored_mobile == []

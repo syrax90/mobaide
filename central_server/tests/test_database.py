@@ -1047,6 +1047,73 @@ class TestMobileDevices:
         assert count == 1
         assert await db.validate_and_consume_refresh("r-1") is None
 
+    async def test_consume_refuses_a_live_refresh_row_from_the_watermark_second(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("a", owner)
+        await db.upsert_mobile_device(device_id="dev-1", user_id=owner, name="A")
+        await db.store_refresh_token("r-mobile", "dev-1", agent_id, 60)
+        await db.store_user_refresh_token("r-user", owner, 60, device_id="dev-1")
+        first, last = await _refresh_row_seconds(db)
+
+        await _set_watermark(db, "dev-1", last)
+        refused_mobile = await db.validate_and_consume_refresh("r-mobile")
+        refused_user = await db.validate_and_consume_user_refresh("r-user")
+        # The refusal did not consume the rows: once the watermark is an
+        # earlier second, the same tokens rotate.
+        await _set_watermark(db, "dev-1", first - 1)
+
+        assert refused_mobile is None
+        assert refused_user is None
+        assert await db.validate_and_consume_refresh("r-mobile") == ("dev-1", agent_id)
+        assert await db.validate_and_consume_user_refresh("r-user") == (owner, "dev-1")
+
+    async def test_consume_ignores_watermarks_of_other_or_unregistered_devices(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("a", owner)
+        await db.upsert_mobile_device(device_id="dev-1", user_id=owner, name="A")
+        await db.store_user_refresh_token("unbound", owner, 60)
+        await db.store_refresh_token("ghost-mobile", "dev-ghost", agent_id, 60)
+        await db.store_user_refresh_token("ghost-user", owner, 60, device_id="dev-ghost")
+        _, last = await _refresh_row_seconds(db)
+        await _set_watermark(db, "dev-1", last + 60)
+
+        assert await db.validate_and_consume_user_refresh("unbound") == (owner, None)
+        assert await db.validate_and_consume_refresh("ghost-mobile") == (
+            "dev-ghost",
+            agent_id,
+        )
+        assert await db.validate_and_consume_user_refresh("ghost-user") == (
+            owner,
+            "dev-ghost",
+        )
+
+
+async def _set_watermark(db: Database, device_id: str, valid_after: int) -> None:
+    await db.conn.execute(
+        "UPDATE mobile_devices SET tokens_valid_after = ? WHERE device_id = ?",
+        (valid_after, device_id),
+    )
+    await db.conn.commit()
+
+
+async def _refresh_row_seconds(db: Database) -> tuple[int, int]:
+    """Oldest and newest ``created_at`` across both refresh tables, in epoch
+    seconds, so a watermark can sit on either side of every row."""
+    cursor = await db.conn.execute(
+        "SELECT MIN(created_at), MAX(created_at) FROM ("
+        "    SELECT created_at FROM mobile_refresh_tokens"
+        "    UNION ALL SELECT created_at FROM user_refresh_tokens)"
+    )
+    oldest, newest = await cursor.fetchone()
+    return (
+        int(datetime.fromisoformat(oldest).timestamp()),
+        int(datetime.fromisoformat(newest).timestamp()),
+    )
+
 
 class TestPushTokens:
     """Push-token lifecycle on ``mobile_devices``: registration,

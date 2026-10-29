@@ -973,16 +973,32 @@ class AuthService:
     ) -> tuple[str, str] | None:
         """Exchange a refresh token for a new access+refresh pair.
 
-        Returns None if the refresh token is invalid/expired/revoked.
+        Returns None if the refresh token is invalid/expired/revoked, or if
+        the device was revoked while this rotation was in flight.
         Looks up the agent owner to include user_id in the new token.
         """
+        started = int(time.time())
         result = await self._db.validate_and_consume_refresh(refresh_token)
         if result is None:
             return None
         mobile_device_id, agent_id = result
         agent = await self._db.get_agent(agent_id)
         user_id = agent["owner_user_id"] if agent else ""
-        return await self.create_mobile_tokens(mobile_device_id, agent_id, user_id)
+        tokens = await self.create_mobile_tokens(mobile_device_id, agent_id, user_id)
+        if await self.device_revoked_since(mobile_device_id, started):
+            await self._db.revoke_all_refresh_tokens_for_device(mobile_device_id)
+            return None
+        return tokens
+
+    async def device_revoked_since(self, device_id: str, since: int) -> bool:
+        """Whether ``device_id`` was revoked at or after epoch second ``since``.
+
+        A revoke between a rotation's consume and store misses the new row in
+        its bulk revoke. A watermark written before the consume is refused
+        there; a later one is caught by re-reading it after the store.
+        """
+        valid_after = await self._db.device_tokens_valid_after(device_id)
+        return valid_after is not None and valid_after >= since
 
     def decode_mobile_token(self, token: str) -> MobileTokenPayload:
         """Decode and validate a mobile access JWT. Raises jwt.InvalidTokenError."""
@@ -1104,8 +1120,10 @@ class AuthService:
         refreshing, and so ``role`` / ``scheduled_deletion_at`` stay current
         for the client without needing a separate profile endpoint. The
         device binding travels with the refresh row, so the rotated session
-        stays bound to the same device.
+        stays bound to the same device; a revoke of that device that lands
+        mid-rotation retires the replacement and returns None.
         """
+        started = int(time.time())
         consumed = await self._db.validate_and_consume_user_refresh(refresh_token)
         if consumed is None:
             return None
@@ -1116,6 +1134,11 @@ class AuthService:
         access, refresh, expires_in = await self.issue_refreshable_session(
             user["id"], user["email"], user["role"], device_id
         )
+        if device_id is not None and await self.device_revoked_since(
+            device_id, started
+        ):
+            await self._db.revoke_user_refresh_token(refresh)
+            return None
         return user, access, refresh, expires_in
 
     async def revoke_user_session(self, refresh_token: str) -> bool:

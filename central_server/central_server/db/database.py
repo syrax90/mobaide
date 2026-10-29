@@ -290,6 +290,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_agent_types_owner_name
 AGENT_UNINSTALL_REQUEST_TTL = timedelta(days=30)
 
 
+# Consume-time predicate over a refresh row ``t`` LEFT JOINed to its device
+# ``d``: the row must postdate the device's revoke watermark, by the same
+# whole-second rule that rejects JWTs (``iat <= tokens_valid_after``).
+_ISSUED_AFTER_DEVICE_REVOKE = (
+    "(d.tokens_valid_after IS NULL "
+    "OR CAST(strftime('%s', t.created_at) AS INTEGER) > d.tokens_valid_after)"
+)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -3207,12 +3216,17 @@ class Database:
         """Validate a refresh token. Returns (mobile_device_id, agent_id) or None.
 
         Consumes (revokes) the token on success — caller must issue a new one.
+        A token issued at or before its device's revoke watermark is refused
+        even while its row is still live, which closes the window between a
+        device revoke's watermark write and its bulk refresh-token revoke.
         """
         token_hash = _hash_token(raw_token)
         now = _now_iso()
         cursor = await self.conn.execute(
-            "SELECT mobile_device_id, agent_id FROM mobile_refresh_tokens "
-            "WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
+            "SELECT t.mobile_device_id, t.agent_id FROM mobile_refresh_tokens t "
+            "LEFT JOIN mobile_devices d ON d.device_id = t.mobile_device_id "
+            "WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ? "
+            f"AND {_ISSUED_AFTER_DEVICE_REVOKE}",
             (token_hash, now),
         )
         row = await cursor.fetchone()
@@ -3271,13 +3285,16 @@ class Database:
         Rotates: the presented token is revoked on success, so the caller
         must issue a replacement. Replaying a consumed token returns None —
         there is deliberately no reuse-detection cascade here, matching
-        ``validate_and_consume_refresh``.
+        ``validate_and_consume_refresh``, including its refusal of a bound
+        token issued at or before its device's revoke watermark.
         """
         token_hash = _hash_token(raw_token)
         now = _now_iso()
         cursor = await self.conn.execute(
-            "SELECT user_id, device_id FROM user_refresh_tokens "
-            "WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
+            "SELECT t.user_id, t.device_id FROM user_refresh_tokens t "
+            "LEFT JOIN mobile_devices d ON d.device_id = t.device_id "
+            "WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ? "
+            f"AND {_ISSUED_AFTER_DEVICE_REVOKE}",
             (token_hash, now),
         )
         row = await cursor.fetchone()
