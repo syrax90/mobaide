@@ -90,6 +90,12 @@ struct ConnectionStore: Sendable {
         }
     }
 
+    /// Remove every saved profile. Profiles hold non-expiring relay tokens,
+    /// so they must not outlive the user session that minted them.
+    func clear() {
+        keychain.removeAll()
+    }
+
     /// Capture the current `TokenStore` state into a new profile and make it active.
     @discardableResult
     func captureActiveProfile(tokenStore: TokenStore, label: String) -> ConnectionProfile {

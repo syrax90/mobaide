@@ -17,6 +17,8 @@ struct ConnectionsScreen: View {
 
 private struct ConnectionsContent: View {
     @State private var model: ConnectionsModel
+    @State private var confirmSignOut = false
+    @State private var pendingRemoval: ConnectionStore.ConnectionProfile?
 
     @Environment(Router.self) private var router
     @Environment(\.mobaideColors) private var colors
@@ -25,7 +27,11 @@ private struct ConnectionsContent: View {
         _model = State(initialValue: ConnectionsModel(
             connectionStore: container.connectionStore,
             tokenStore: container.tokenStore,
-            sessionManager: container.sessionManager
+            sessionManager: container.sessionManager,
+            email: container.userIdentityStore.getUserEmail(),
+            onSignOut: { [pushRegistration = container.pushRegistrationCoordinator] in
+                pushRegistration.handleSignOut()
+            }
         ))
     }
 
@@ -50,15 +56,42 @@ private struct ConnectionsContent: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                // Android parity: "add connection" routes to the login
-                // surface; QR pairing (iOS-06) will take over this entry.
+                // Saved profiles belong to the signed-in account, so another
+                // account's connection needs a sign-out first; signing in
+                // over a live session would mix two identities.
                 Button {
-                    router.navigate(to: .login)
+                    confirmSignOut = true
                 } label: {
                     Image(systemName: "plus")
                 }
                 .accessibilityLabel("Add connection")
             }
+        }
+        .confirmationDialog(
+            "Log out to add an account?",
+            isPresented: $confirmSignOut,
+            titleVisibility: .visible
+        ) {
+            Button("Log out", role: .destructive) {
+                Task { await model.signOut() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(signOutMessage)
+        }
+        .confirmationDialog(
+            "Remove connection?",
+            isPresented: Binding(
+                get: { pendingRemoval != nil },
+                set: { if !$0 { pendingRemoval = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingRemoval
+        ) { profile in
+            Button("Remove", role: .destructive) { model.removeProfile(id: profile.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { profile in
+            Text("Remove \u{201C}\(profile.label)\u{201D} from this device? You need to connect to the agent again to restore it.")
         }
         .onAppear { model.load() }
     }
@@ -84,7 +117,7 @@ private struct ConnectionsContent: View {
             Spacer()
             if !isActive {
                 Button {
-                    model.removeProfile(id: profile.id)
+                    pendingRemoval = profile
                 } label: {
                     Image(systemName: "trash")
                         .foregroundStyle(colors.danger)
@@ -110,6 +143,11 @@ private struct ConnectionsContent: View {
         }
     }
 
+    private var signOutMessage: String {
+        let owner = model.email.map { "Saved connections belong to \($0)." } ?? "Saved connections belong to this account."
+        return "\(owner) To connect with another account, log out first. Logging out removes the saved connections from this device."
+    }
+
     private func subtitle(for profile: ConnectionStore.ConnectionProfile) -> String {
         profile.mode == "relay"
             ? "Relay: \(profile.relayServerUrl ?? "unknown")"
@@ -125,16 +163,23 @@ final class ConnectionsModel {
 
     private let connectionStore: ConnectionStore
     private let tokenStore: TokenStore
+    let email: String?
+
     private let sessionManager: SessionManager
+    private let onSignOut: @MainActor () -> Void
 
     init(
         connectionStore: ConnectionStore,
         tokenStore: TokenStore,
-        sessionManager: SessionManager
+        sessionManager: SessionManager,
+        email: String? = nil,
+        onSignOut: @escaping @MainActor () -> Void = {}
     ) {
         self.connectionStore = connectionStore
         self.tokenStore = tokenStore
         self.sessionManager = sessionManager
+        self.email = email
+        self.onSignOut = onSignOut
         load()
     }
 
@@ -160,5 +205,13 @@ final class ConnectionsModel {
     func removeProfile(id: String) {
         connectionStore.removeProfile(id: id)
         load()
+    }
+
+    /// Same order as `SettingsModel.logout`: the push-token clear snapshots
+    /// the credentials the logout wipes. The router resets to the login root
+    /// on the `.unauthenticated` transition.
+    func signOut() async {
+        onSignOut()
+        await sessionManager.userLogout()
     }
 }

@@ -122,6 +122,7 @@ final class FakeRefreshTransport: @unchecked Sendable {
 struct SessionHarness {
     let agentKeychain = InMemoryKeychainStore()
     let userKeychain = InMemoryKeychainStore()
+    let connectionStore = ConnectionStore(keychain: InMemoryKeychainStore())
     let refreshTransport: FakeRefreshTransport
     let tokenStore: TokenStore
     let userIdentityStore: UserIdentityStore
@@ -165,6 +166,7 @@ struct SessionHarness {
             tokenStore: tokenStore,
             userIdentityStore: userIdentityStore,
             preferencesStore: preferencesStore,
+            connectionStore: connectionStore,
             refreshTransport: transport.transport()
         )
     }

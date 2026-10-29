@@ -221,6 +221,77 @@ final class AuthRepositoryTests: XCTestCase {
         XCTAssertEqual(try verifyBodies(), [["email": "user@example.com", "code": "123456"]])
     }
 
+    // MARK: - Account switch
+
+    private func seedSessionProfile(_ session: SessionHarness) {
+        session.connectionStore.saveProfile(ConnectionStore.ConnectionProfile(
+            id: "p-a",
+            label: "Agent: a1",
+            mode: "relay",
+            relayServerUrl: "https://relay.example.com",
+            agentId: "a1",
+            pairingId: "pair-1",
+            deviceId: "device-1",
+            accessToken: "relay-access",
+            refreshToken: "relay-refresh"
+        ))
+    }
+
+    func testLoginAsDifferentAccountWipesPreviousAccountAgentAccess() async throws {
+        // The identity is saved inside `markUserLoggedIn`'s persist step: saved
+        // before it, the user-id check would see the new account and skip the
+        // teardown.
+        let switchHarness = RepositoryHarness(session: SessionHarness(userLoggedIn: true, agentConnected: true))
+        let session = switchHarness.session
+        seedSessionProfile(session)
+        StubURLProtocol.enqueue(status: 200, body: """
+        {"access_token":"jwt-b","user_id":"u2","email":"b@example.com","role":"user","status":"ok"}
+        """)
+
+        _ = try await switchHarness.repository.loginWithPassword(email: "b@example.com", password: "pw")
+
+        XCTAssertEqual(session.userIdentityStore.getUserId(), "u2")
+        XCTAssertEqual(session.userIdentityStore.getUserAccessToken(), "jwt-b")
+        XCTAssertNil(session.tokenStore.getAccessToken(), "the previous account's agent tokens are gone")
+        XCTAssertNil(session.tokenStore.getAgentUrl())
+        XCTAssertTrue(session.connectionStore.listProfiles().isEmpty, "the previous account's saved profiles are gone")
+        let state = await session.sessionManager.currentAuthState
+        XCTAssertEqual(state, .userOnly)
+    }
+
+    func testVerifyEmailAsDifferentAccountWipesPreviousAccountAgentAccess() async throws {
+        let switchHarness = RepositoryHarness(session: SessionHarness(userLoggedIn: true, agentConnected: true))
+        let session = switchHarness.session
+        seedSessionProfile(session)
+        StubURLProtocol.enqueue(status: 200, body: """
+        {"access_token":"jwt-b","user_id":"u2","email":"b@example.com","role":"user"}
+        """)
+
+        _ = try await switchHarness.repository.verifyEmail(email: "b@example.com", code: "123456")
+
+        XCTAssertEqual(session.userIdentityStore.getUserId(), "u2")
+        XCTAssertEqual(session.userIdentityStore.getUserAccessToken(), "jwt-b")
+        XCTAssertNil(session.tokenStore.getAccessToken())
+        XCTAssertTrue(session.connectionStore.listProfiles().isEmpty)
+    }
+
+    func testLoginAsSameAccountKeepsAgentAccess() async throws {
+        let sameHarness = RepositoryHarness(session: SessionHarness(userLoggedIn: true, agentConnected: true))
+        let session = sameHarness.session
+        seedSessionProfile(session)
+        let agentToken = session.tokenStore.getAccessToken()
+        StubURLProtocol.enqueue(status: 200, body: """
+        {"access_token":"jwt-rotated","user_id":"u1","email":"user@example.com","role":"user","status":"ok"}
+        """)
+
+        _ = try await sameHarness.repository.loginWithPassword(email: "user@example.com", password: "pw")
+
+        XCTAssertEqual(session.userIdentityStore.getUserAccessToken(), "jwt-rotated")
+        XCTAssertNotNil(agentToken)
+        XCTAssertEqual(session.tokenStore.getAccessToken(), agentToken)
+        XCTAssertEqual(session.connectionStore.listProfiles().map(\.id), ["p-a"])
+    }
+
     func testResendVerificationRateLimitMapping() async throws {
         StubURLProtocol.enqueue(status: 429, body: """
         {"detail":{"error":"rate_limited","cooldown_seconds_remaining":30}}
@@ -395,6 +466,79 @@ final class AuthRepositoryTests: XCTestCase {
         } catch {
             XCTFail("unexpected error \(error)")
         }
+    }
+
+    /// Runs `transition` against the session while the relay mint is in
+    /// flight: the request is issued, its response not yet applied.
+    private func duringMint(_ transition: @escaping @Sendable () async -> Void) {
+        let released = DispatchSemaphore(value: 0)
+        StubURLProtocol.onRequest = { _ in
+            StubURLProtocol.onRequest = nil
+            Task {
+                await transition()
+                released.signal()
+            }
+            XCTAssertEqual(released.wait(timeout: .now() + 2), .success, "the mid-mint transition never landed")
+        }
+    }
+
+    private func assertConnectRefused(_ harness: RepositoryHarness) async {
+        do {
+            try await harness.repository.connectAgentViaRelay(
+                agentId: "a1", friendlyName: "A", deviceId: "dev-1", deviceName: "iPhone"
+            )
+            XCTFail("expected APIError")
+        } catch let error as APIError {
+            XCTAssertEqual(error.code, -1)
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
+    func testConnectAgentViaRelaySignOutDuringMintPersistsNothing() async {
+        let harness = RepositoryHarness(session: SessionHarness(userLoggedIn: true))
+        let sessionManager = harness.session.sessionManager
+        StubURLProtocol.enqueue(status: 200, body: """
+        {"access_token":"fresh-at","refresh_token":"fresh-rt","token_type":"bearer"}
+        """)
+        duringMint { await sessionManager.invalidateUserSession(.manual) }
+
+        await assertConnectRefused(harness)
+
+        XCTAssertNil(harness.session.tokenStore.getAccessToken())
+        XCTAssertNil(harness.session.tokenStore.getAgentId())
+        XCTAssertTrue(harness.connectionStore.listProfiles().isEmpty, "no profile is written after the sign-out purge")
+        XCTAssertNil(harness.connectionStore.getActiveProfileId())
+        let state = await sessionManager.currentAuthState
+        XCTAssertEqual(state, .unauthenticated)
+    }
+
+    func testConnectAgentViaRelayAccountSwitchDuringMintKeepsAgentFromNextAccount() async {
+        // The mint ran on account u1's token: its credentials open u1's agent,
+        // so account u2 signing in meanwhile must not end up connected to it.
+        let harness = RepositoryHarness(session: SessionHarness(userLoggedIn: true))
+        let sessionManager = harness.session.sessionManager
+        let identity = harness.session.userIdentityStore
+        StubURLProtocol.enqueue(status: 200, body: """
+        {"access_token":"fresh-at","refresh_token":"fresh-rt","token_type":"bearer"}
+        """)
+        duringMint {
+            await sessionManager.markUserLoggedIn(userId: "u2") {
+                identity.saveUserSession(
+                    accessToken: "jwt-b", email: "b@example.com", userId: "u2", role: "user"
+                )
+            }
+        }
+
+        await assertConnectRefused(harness)
+
+        XCTAssertEqual(identity.getUserId(), "u2")
+        XCTAssertNil(harness.session.tokenStore.getAccessToken(), "u1's relay token must not reach u2")
+        XCTAssertNil(harness.session.tokenStore.getAgentId())
+        XCTAssertNil(harness.session.tokenStore.getRelayServerUrl())
+        XCTAssertTrue(harness.connectionStore.listProfiles().isEmpty)
+        let state = await sessionManager.currentAuthState
+        XCTAssertEqual(state, .userOnly)
     }
 
     func testRemoveRelayProfileDropsOnlyTheMatchingProfile() {

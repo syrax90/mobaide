@@ -9,14 +9,17 @@ final class ConnectionsModelTests: XCTestCase {
     override func setUp() {
         super.setUp()
         harness = SessionHarness(userLoggedIn: true, agentConnected: true)
-        connectionStore = ConnectionStore(keychain: InMemoryKeychainStore())
+        // The store the SessionManager purges, as in AppContainer.
+        connectionStore = harness.connectionStore
     }
 
-    private func makeModel() -> ConnectionsModel {
+    private func makeModel(onSignOut: @escaping @MainActor () -> Void = {}) -> ConnectionsModel {
         ConnectionsModel(
             connectionStore: connectionStore,
             tokenStore: harness.tokenStore,
-            sessionManager: harness.sessionManager
+            sessionManager: harness.sessionManager,
+            email: harness.userIdentityStore.getUserEmail(),
+            onSignOut: onSignOut
         )
     }
 
@@ -107,5 +110,27 @@ final class ConnectionsModelTests: XCTestCase {
         model.removeProfile(id: direct.id)
         XCTAssertTrue(model.profiles.isEmpty)
         XCTAssertNil(model.activeProfileId)
+    }
+
+    func testSignOutRunsHookWhileCredentialsExistThenEndsUnauthenticated() async {
+        _ = seedProfiles()
+        var hookSawUserToken: String?
+        var hookSawAgentToken: String?
+        let session: SessionHarness = harness
+        let model = makeModel(onSignOut: {
+            // The push-token unregister needs the credentials the logout wipes.
+            hookSawUserToken = session.userIdentityStore.getUserAccessToken()
+            hookSawAgentToken = session.tokenStore.getAccessToken()
+        })
+
+        await model.signOut()
+
+        XCTAssertEqual(hookSawUserToken, "user-token")
+        XCTAssertNotNil(hookSawAgentToken)
+        let state = await harness.sessionManager.currentAuthState
+        XCTAssertEqual(state, .unauthenticated)
+        XCTAssertFalse(harness.userIdentityStore.isUserLoggedIn())
+        XCTAssertNil(harness.tokenStore.getAccessToken())
+        XCTAssertTrue(connectionStore.listProfiles().isEmpty, "signing out removes the saved connections")
     }
 }

@@ -207,6 +207,16 @@ fun TerminalScreen(
             wasRecording = recording
         }
     }
+    // The screen would time out and lock mid-dictation.
+    val voiceView = LocalView.current
+    val dictating = when (voiceState.dictation) {
+        DictationState.Starting, is DictationState.Recording, is DictationState.Transcribing -> true
+        else -> false
+    }
+    DisposableEffect(voiceView, dictating) {
+        voiceView.keepScreenOn = dictating
+        onDispose { voiceView.keepScreenOn = false }
+    }
     // Leaving the terminal (back, or another screen pushed over it) cancels a
     // dictation, so the microphone never stays open behind another screen; a
     // configuration change recreates this composition and must not.
