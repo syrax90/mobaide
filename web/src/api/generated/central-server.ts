@@ -1876,6 +1876,8 @@ export interface components {
             code: string;
             /** Email */
             email: string;
+            /** Password */
+            password?: string | null;
             /**
              * Refreshable
              * @default false

@@ -121,6 +121,106 @@ final class AuthRepositoryTests: XCTestCase {
         XCTAssertEqual(state, .userOnly)
     }
 
+    // MARK: - verify-email carries the password typed on the way there
+
+    private static let pendingBody = """
+    {"user_id":"u1","email":"user@example.com","role":"user","status":"verification_required"}
+    """
+    private static let verifiedBody = """
+    {"access_token":"jwt-2","user_id":"u1","email":"user@example.com","role":"user"}
+    """
+
+    private func verifyBodies() throws -> [JSONValue] {
+        try zip(StubURLProtocol.requests, StubURLProtocol.bodies)
+            .filter { $0.0.url?.path == "/api/auth/verify-email" }
+            .map { try WireJSON.decoder().decode(JSONValue.self, from: $0.1) }
+    }
+
+    func testVerifyEmailSendsThePasswordTypedAtRegistration() async throws {
+        StubURLProtocol.enqueue(status: 200, body: Self.pendingBody)
+        StubURLProtocol.enqueue(status: 200, body: Self.verifiedBody)
+
+        _ = try await repository.register(email: "user@example.com", password: "pw-1")
+        _ = try await repository.verifyEmail(email: "user@example.com", code: "123456")
+
+        XCTAssertEqual(
+            try verifyBodies(),
+            [["email": "user@example.com", "code": "123456", "password": "pw-1"]]
+        )
+    }
+
+    func testVerifyEmailMatchesTheLogin403AddressIgnoringCaseAndSpaces() async throws {
+        StubURLProtocol.enqueue(status: 403, body: """
+        {"detail":{"error":"verification_required","email":"pending@example.com"}}
+        """)
+        StubURLProtocol.enqueue(status: 200, body: Self.verifiedBody)
+
+        _ = try await repository.loginWithPassword(email: "Pending@Example.com", password: "pw-2")
+        _ = try await repository.verifyEmail(email: " PENDING@example.com ", code: "123456")
+
+        XCTAssertEqual(
+            try verifyBodies(),
+            [["email": " PENDING@example.com ", "code": "123456", "password": "pw-2"]]
+        )
+    }
+
+    func testVerifyEmailForAnotherAddressOmitsThePassword() async throws {
+        StubURLProtocol.enqueue(status: 200, body: Self.pendingBody)
+        StubURLProtocol.enqueue(status: 200, body: Self.verifiedBody)
+
+        _ = try await repository.register(email: "user@example.com", password: "pw-1")
+        _ = try await repository.verifyEmail(email: "other@example.com", code: "123456")
+
+        XCTAssertEqual(try verifyBodies(), [["email": "other@example.com", "code": "123456"]])
+    }
+
+    func testVerifyEmailSuccessForgetsThePassword() async throws {
+        StubURLProtocol.enqueue(status: 200, body: Self.pendingBody)
+        StubURLProtocol.enqueue(status: 200, body: Self.verifiedBody)
+        StubURLProtocol.enqueue(status: 200, body: Self.verifiedBody)
+
+        _ = try await repository.register(email: "user@example.com", password: "pw-1")
+        _ = try await repository.verifyEmail(email: "user@example.com", code: "123456")
+        _ = try await repository.verifyEmail(email: "user@example.com", code: "654321")
+
+        XCTAssertEqual(try verifyBodies(), [
+            ["email": "user@example.com", "code": "123456", "password": "pw-1"],
+            ["email": "user@example.com", "code": "654321"],
+        ])
+    }
+
+    func testVerifyEmailFailureKeepsThePasswordForTheRetry() async throws {
+        StubURLProtocol.enqueue(status: 200, body: Self.pendingBody)
+        StubURLProtocol.enqueue(status: 400, body: #"{"detail":{"error":"verification_code_invalid"}}"#)
+        StubURLProtocol.enqueue(status: 200, body: Self.verifiedBody)
+
+        _ = try await repository.register(email: "user@example.com", password: "pw-1")
+        do {
+            _ = try await repository.verifyEmail(email: "user@example.com", code: "000000")
+            XCTFail("expected APIError")
+        } catch let error as APIError {
+            XCTAssertEqual(error.code, 400)
+        }
+        _ = try await repository.verifyEmail(email: "user@example.com", code: "123456")
+
+        XCTAssertEqual(try verifyBodies(), [
+            ["email": "user@example.com", "code": "000000", "password": "pw-1"],
+            ["email": "user@example.com", "code": "123456", "password": "pw-1"],
+        ])
+    }
+
+    func testVerifyEmailAfterALaterSignInSendsNoStalePassword() async throws {
+        StubURLProtocol.enqueue(status: 200, body: Self.pendingBody)
+        StubURLProtocol.enqueue(status: 200, body: Self.verifiedBody)
+        StubURLProtocol.enqueue(status: 200, body: Self.verifiedBody)
+
+        _ = try await repository.register(email: "user@example.com", password: "pw-1")
+        _ = try await repository.loginWithPassword(email: "user@example.com", password: "pw-3")
+        _ = try await repository.verifyEmail(email: "user@example.com", code: "123456")
+
+        XCTAssertEqual(try verifyBodies(), [["email": "user@example.com", "code": "123456"]])
+    }
+
     func testResendVerificationRateLimitMapping() async throws {
         StubURLProtocol.enqueue(status: 429, body: """
         {"detail":{"error":"rate_limited","cooldown_seconds_remaining":30}}

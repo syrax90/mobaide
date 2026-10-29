@@ -57,7 +57,8 @@ _background_email_tasks: set[asyncio.Task] = set()
 def _ad_attribution_columns(
     attribution: AdAttribution | None, secret: str, client_ip: str | None
 ) -> dict[str, Any]:
-    """Map a sign-up request's attribution onto ``create_user`` kwargs.
+    """Map a sign-up request's attribution onto ``create_user`` (or
+    ``take_over_unverified_signup``) kwargs.
 
     Only a value this server signed is used at all, and only one whose
     network fingerprint matches the sign-up's own address counts as consent
@@ -267,8 +268,9 @@ class AuthService:
 
         When ``consume_rate_limit_slot`` is True the initial email consumes
         a resend-rate-limit slot so that follow-up resends honour the
-        per-email cooldown. This is used by ``register_user``; resend
-        callers acquire the slot themselves (and may be blocked by it).
+        per-email cooldown. This is used by a first-time registration;
+        resend and signup-takeover callers acquire the slot themselves
+        (and may be blocked by it).
         """
         if consume_rate_limit_slot and self._resend_limiter is not None:
             # Bump the counter even on fresh registration; if a previous
@@ -318,11 +320,25 @@ class AuthService:
         obtain a JWT. When False (CI bypass), the user is marked verified
         immediately and a JWT is returned.
 
+        An abandoned signup (unverified, password-only, code window over)
+        is taken over: the password is replaced and a fresh code is sent,
+        with the same response as a first registration.
+
         Raises ValueError if the email is already registered.
+        Raises ResendRateLimitedError if a takeover would exceed the resend
+        limits.
         """
         existing = await self._db.get_user_by_email(email)
         if existing is not None:
-            raise ValueError("Email already registered")
+            if not await self._is_abandoned_signup(existing):
+                raise ValueError("Email already registered")
+            return await self._reregister_abandoned_signup(
+                existing,
+                password,
+                background_tasks,
+                ad_attribution=ad_attribution,
+                client_ip=client_ip,
+            )
 
         password_hash = await self._hash_password(password)
 
@@ -369,6 +385,81 @@ class AuthService:
             access_token=token,
         )
 
+    async def _is_abandoned_signup(self, user: Mapping[str, Any]) -> bool:
+        """Whether ``user`` is an email+password signup nobody finished.
+
+        A live code blocks the takeover: a client that does not send the
+        password with the code (see ``verify_email``) would otherwise let
+        anyone swap the password just before the address owner types the
+        code they were sent, and the owner would verify the stranger's one.
+        """
+        return (
+            self._config.email_verification_required
+            and not user.get("email_verified")
+            and user.get("google_sub") is None
+            and user.get("apple_sub") is None
+            and not await self._db.has_live_verification_token(user["id"])
+        )
+
+    async def _reregister_abandoned_signup(
+        self,
+        user: Mapping[str, Any],
+        password: str,
+        background_tasks: BackgroundTasks | None,
+        *,
+        ad_attribution: AdAttribution | None,
+        client_ip: str | None,
+    ) -> RegisterResult:
+        if self._resend_limiter is not None:
+            wait = await self._resend_limiter.try_acquire(user["email"])
+            if wait is not None:
+                raise ResendRateLimitedError(wait)
+        password_hash = await self._hash_password(password)
+        # The first registrant's attribution (and consent) is replaced too:
+        # it may have been a squatter's, never the address owner's.
+        taken_over = await self._db.take_over_unverified_signup(
+            user["id"],
+            password_hash,
+            **_ad_attribution_columns(
+                ad_attribution, self._config.jwt_secret_key, client_ip
+            ),
+        )
+        if not taken_over:
+            raise ValueError("Email already registered")
+        await self._issue_verification_code(
+            user["id"], user["email"], background_tasks
+        )
+        logger.info("register.reregistered_unverified user_id=%s", user["id"])
+        return RegisterResult(
+            user_id=user["id"],
+            email=user["email"],
+            role=user["role"],
+            status="verification_required",
+            access_token=None,
+        )
+
+    async def _drop_unproven_password(
+        self, user: Mapping[str, Any], *, linked_by_email: bool = True
+    ) -> None:
+        """Clear what an unverified account's registrant left behind.
+
+        Nobody proved owning the address when the password and the sign-up
+        attribution were set, so they may be a squatter's; keeping them past
+        the provider's verification would hand them the account. Runs after
+        the provider link (which blocks further takeovers) and before the row
+        is marked verified. A row the provider identity itself created
+        (``linked_by_email=False``) keeps its attribution: that registrant
+        was the identity holder.
+        """
+        if user.get("email_verified"):
+            return
+        await self._db.clear_unverified_password(user["id"])
+        await self._db.invalidate_verification_tokens_for_user(user["id"])
+        if linked_by_email:
+            await self._db.clear_user_ad_attribution(user["id"])
+        if user.get("password_hash") is not None:
+            logger.info("oauth_link.dropped_unverified_password user_id=%s", user["id"])
+
     async def login_user(
         self, email: str, password: str
     ) -> tuple[str, str, str, str | None]:
@@ -410,9 +501,14 @@ class AuthService:
         )
 
     async def verify_email(
-        self, email: str, code: str
+        self, email: str, code: str, password: str | None = None
     ) -> tuple[str, str, str, str | None]:
         """Consume a verification code and mark the user verified.
+
+        ``password`` is the one the client's user typed to get here. If
+        someone re-registered the address since, the stored hash is theirs;
+        the code proves address ownership like a password reset does, so the
+        typed password is installed with the verification.
 
         Returns (user_id, role, jwt_token, scheduled_deletion_at) on success.
         ``scheduled_deletion_at`` is rarely non-null on this path (the user
@@ -439,7 +535,17 @@ class AuthService:
             self._config.email_verification_max_attempts,
         )
         if outcome == "ok":
-            await self._db.mark_user_verified(user["id"])
+            # Always (re)written rather than compared: a takeover may have
+            # landed after ``user`` was read. A provider-linked row keeps
+            # whatever it has; that identity never chose a password here.
+            password_hash = None
+            if (
+                password is not None
+                and user.get("google_sub") is None
+                and user.get("apple_sub") is None
+            ):
+                password_hash = await self._hash_password(password)
+            await self._db.mark_user_verified(user["id"], password_hash)
             if self._resend_limiter is not None:
                 await self._resend_limiter.reset(email)
             token = self._create_user_token(user["id"], user["email"], user["role"])
@@ -705,6 +811,7 @@ class AuthService:
         if user is not None:
             if email_verified and not user.get("email_verified"):
                 # Google vouches for the address → clear any pending OTP flow.
+                await self._drop_unproven_password(user, linked_by_email=False)
                 await self._db.mark_user_verified(user["id"])
             token = self._create_user_token(user["id"], user["email"], user["role"])
             return user["id"], user["role"], token, False
@@ -714,6 +821,7 @@ class AuthService:
             user = await self._db.get_user_by_email(email)
             if user is not None:
                 await self._db.link_google_to_user(user["id"], google_sub)
+                await self._drop_unproven_password(user)
                 if not user.get("email_verified"):
                     await self._db.mark_user_verified(user["id"])
                 token = self._create_user_token(
@@ -865,6 +973,7 @@ class AuthService:
         user = await self._db.get_user_by_apple_sub(apple_sub)
         if user is not None:
             if email_verified and not user.get("email_verified"):
+                await self._drop_unproven_password(user, linked_by_email=False)
                 await self._db.mark_user_verified(user["id"])
             token = self._create_user_token(user["id"], user["email"], user["role"])
             return user["id"], user["role"], token, False
@@ -890,6 +999,7 @@ class AuthService:
                         "Email already registered with a different Apple identity"
                     )
                 await self._db.link_apple_to_user(user["id"], apple_sub)
+                await self._drop_unproven_password(user)
                 if not user.get("email_verified"):
                     await self._db.mark_user_verified(user["id"])
                 token = self._create_user_token(

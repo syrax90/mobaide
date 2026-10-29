@@ -101,8 +101,12 @@ class CentralApi(
         return execute(request)
     }
 
-    suspend fun verifyEmail(email: String, code: String): UserAuthResponse {
-        val body = json.encodeToString(VerifyEmailRequest(email, code))
+    suspend fun verifyEmail(
+        email: String,
+        code: String,
+        password: String? = null,
+    ): UserAuthResponse {
+        val body = json.encodeToString(VerifyEmailRequest(email, code, password))
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/auth/verify-email")

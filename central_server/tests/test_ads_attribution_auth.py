@@ -1,5 +1,5 @@
 """The three account-creating auth paths store the web sign-up's click
-attribution on the new row — and nowhere else."""
+attribution on the new row (or on an abandoned signup they take over)."""
 from __future__ import annotations
 
 import time

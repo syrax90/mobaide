@@ -346,6 +346,123 @@ class AuthRepositoryTest {
         assertEquals(42, (result as ResendOutcome.RateLimited).cooldownSecondsRemaining)
     }
 
+    private val pendingResponse = UserAuthResponse(
+        access_token = null,
+        user_id = "u9",
+        email = "v@test.com",
+        role = "viewer",
+        status = "verification_required",
+    )
+
+    private val verifiedResponse = UserAuthResponse(
+        access_token = "verified-token",
+        user_id = "u9",
+        email = "v@test.com",
+        role = "viewer",
+    )
+
+    /** Stubs verify-email and records the password each call sent. */
+    private fun recordVerifyPasswords(centralApi: CentralApi): MutableList<String?> {
+        val sent = mutableListOf<String?>()
+        coEvery { centralApi.verifyEmail(any(), any(), captureNullable(sent)) } returns
+            verifiedResponse
+        return sent
+    }
+
+    @Test
+    fun verifyEmail_afterRegisterNeedsVerification_sendsTheRegisterPassword() = runTest {
+        val centralApi = newCentralApi()
+        coEvery { centralApi.register("v@test.com", "pw-1") } returns pendingResponse
+        val sent = recordVerifyPasswords(centralApi)
+        val repo = newRepo(centralApi = centralApi)
+
+        repo.register("v@test.com", "pw-1")
+        repo.verifyEmail("v@test.com", "123456")
+
+        assertEquals(listOf<String?>("pw-1"), sent)
+    }
+
+    @Test
+    fun verifyEmail_afterLogin403_matchesTheServerEmailIgnoringCaseAndSpaces() = runTest {
+        val centralApi = newCentralApi()
+        val body = """{"detail":{"error":"verification_required","email":"p@test.com"}}"""
+        coEvery { centralApi.login("P@Test.com", "pw-2") } throws ApiException(403, body)
+        val sent = recordVerifyPasswords(centralApi)
+        val repo = newRepo(centralApi = centralApi)
+
+        repo.loginWithPassword("P@Test.com", "pw-2")
+        repo.verifyEmail(" P@TEST.com ", "123456")
+
+        assertEquals(listOf<String?>("pw-2"), sent)
+    }
+
+    @Test
+    fun verifyEmail_forAnotherEmail_sendsNoPassword() = runTest {
+        val centralApi = newCentralApi()
+        coEvery { centralApi.register("v@test.com", "pw-1") } returns pendingResponse
+        val sent = recordVerifyPasswords(centralApi)
+        val repo = newRepo(centralApi = centralApi)
+
+        repo.register("v@test.com", "pw-1")
+        repo.verifyEmail("other@test.com", "123456")
+
+        assertEquals(listOf<String?>(null), sent)
+    }
+
+    @Test
+    fun verifyEmail_success_forgetsThePassword() = runTest {
+        val centralApi = newCentralApi()
+        coEvery { centralApi.register("v@test.com", "pw-1") } returns pendingResponse
+        val sent = recordVerifyPasswords(centralApi)
+        val repo = newRepo(centralApi = centralApi)
+
+        repo.register("v@test.com", "pw-1")
+        repo.verifyEmail("v@test.com", "123456")
+        repo.verifyEmail("v@test.com", "654321")
+
+        assertEquals(listOf("pw-1", null), sent)
+    }
+
+    @Test
+    fun verifyEmail_failure_keepsThePasswordForTheRetry() = runTest {
+        val centralApi = newCentralApi()
+        coEvery { centralApi.register("v@test.com", "pw-1") } returns pendingResponse
+        val sent = mutableListOf<String?>()
+        coEvery {
+            centralApi.verifyEmail("v@test.com", "000000", captureNullable(sent))
+        } throws ApiException(400, """{"detail":{"error":"verification_code_invalid"}}""")
+        coEvery {
+            centralApi.verifyEmail("v@test.com", "123456", captureNullable(sent))
+        } returns verifiedResponse
+        val repo = newRepo(centralApi = centralApi)
+
+        repo.register("v@test.com", "pw-1")
+        try {
+            repo.verifyEmail("v@test.com", "000000")
+            fail("expected ApiException")
+        } catch (e: ApiException) {
+            assertEquals(400, e.code)
+        }
+        repo.verifyEmail("v@test.com", "123456")
+
+        assertEquals(listOf<String?>("pw-1", "pw-1"), sent)
+    }
+
+    @Test
+    fun verifyEmail_afterALaterSignIn_sendsNoStalePassword() = runTest {
+        val centralApi = newCentralApi()
+        coEvery { centralApi.register("v@test.com", "pw-1") } returns pendingResponse
+        coEvery { centralApi.login("v@test.com", "pw-3") } returns verifiedResponse
+        val sent = recordVerifyPasswords(centralApi)
+        val repo = newRepo(centralApi = centralApi)
+
+        repo.register("v@test.com", "pw-1")
+        repo.loginWithPassword("v@test.com", "pw-3")
+        repo.verifyEmail("v@test.com", "123456")
+
+        assertEquals(listOf<String?>(null), sent)
+    }
+
     @Test
     fun register_admin_throws_andDoesNotPersistSession() = runTest {
         val centralApi = newCentralApi()
