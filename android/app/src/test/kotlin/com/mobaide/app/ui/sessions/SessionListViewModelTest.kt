@@ -6,12 +6,16 @@ import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
+import com.mobaide.app.data.network.dto.ForceUpdateResponse
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.AgentUpdateRepository
 import com.mobaide.app.data.repository.AgentVersionMonitor
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
+import com.mobaide.app.data.review.ReviewPromptCoordinator
+import com.mobaide.app.data.review.ReviewPromptState
+import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.Runs
 import io.mockk.coEvery
@@ -147,11 +151,31 @@ class SessionListViewModelTest {
         )
     }
 
-    private fun Fixture.buildVm(): SessionListViewModel =
+    private fun Fixture.buildVm(
+        reviewPromptCoordinator: ReviewPromptCoordinator = mockk(relaxed = true),
+    ): SessionListViewModel =
         SessionListViewModel(
             sessionRepo, autoScanRepo, prefs, bus, versionMonitor, updateRepo,
-            customTypesRepo,
+            customTypesRepo, reviewPromptCoordinator,
         )
+
+    /**
+     * A real review coordinator over [Fixture.prefs] holding one healthy,
+     * clean visit, so whether the outing was spoiled shows as the good-session
+     * count once the list settles. First launch, so it never requests.
+     */
+    private class ReviewOuting(prefs: PreferencesStore) {
+        var goodSessions = 0
+        val coordinator = ReviewPromptCoordinator(prefs, ForegroundSessionTracker())
+
+        init {
+            coEvery { prefs.incrementReviewGoodSessions() } answers {
+                goodSessions += 1
+                ReviewPromptState(launchCount = 1, goodSessions = goodSessions, lastRequestedAtMs = null)
+            }
+            coordinator.recordTerminalVisit(healthyMs = 60_000, endedCleanly = true)
+        }
+    }
 
     // ---- init() side-effects -----------------------------------------------
 
@@ -512,6 +536,44 @@ class SessionListViewModelTest {
         advanceUntilIdle()
 
         assertEquals("Failed to stop scan: network", vm.uiState.value.error)
+    }
+
+    @Test
+    fun forceUpdateNow_signatureFailed_spoilsTheReviewOuting() = runTest {
+        val fx = newFixture()
+        val review = ReviewOuting(fx.prefs)
+        val vm = fx.buildVm(review.coordinator)
+        advanceUntilIdle()
+        coEvery { fx.updateRepo.forceUpdateNow() } returns
+            Result.success(ForceUpdateResponse(outcome = "signature_failed"))
+
+        vm.forceUpdateNow()
+        advanceUntilIdle()
+        vm.onScreenResumed()
+        advanceUntilIdle()
+
+        assertEquals("Update rejected: signature verification failed.", vm.uiState.value.error)
+        assertEquals(0, review.goodSessions)
+    }
+
+    @Test
+    fun forceUpdateNow_staged_isNotAnError_forTheReviewOuting() = runTest {
+        // `error` also carries this success text, which is why the VM, not
+        // the screen's error effect, decides what spoils the outing.
+        val fx = newFixture()
+        val review = ReviewOuting(fx.prefs)
+        val vm = fx.buildVm(review.coordinator)
+        advanceUntilIdle()
+        coEvery { fx.updateRepo.forceUpdateNow() } returns
+            Result.success(ForceUpdateResponse(outcome = "staged"))
+
+        vm.forceUpdateNow()
+        advanceUntilIdle()
+        vm.onScreenResumed()
+        advanceUntilIdle()
+
+        assertEquals("Update staged — agent restarting…", vm.uiState.value.error)
+        assertEquals(1, review.goodSessions)
     }
 
     // ---- clearError ---------------------------------------------------------

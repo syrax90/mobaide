@@ -108,6 +108,7 @@ class TerminalViewModelSuspendTest {
             foregroundSessionTracker = foregroundSessionTracker,
             appForegroundTracker = appForegroundTracker,
             preferencesStore = preferencesStore,
+            reviewPromptCoordinator = mockk(relaxed = true),
         )
         vm.suspendPolicy = policy
         vm.markScreenVisible()

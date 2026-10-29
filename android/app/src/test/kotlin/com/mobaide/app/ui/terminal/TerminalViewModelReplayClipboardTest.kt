@@ -89,6 +89,7 @@ class TerminalViewModelReplayClipboardTest {
             foregroundSessionTracker = ForegroundSessionTracker(),
             appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
+            reviewPromptCoordinator = mockk(relaxed = true),
         ).also { it.sessionCallback.onCopyToClipboard = { text -> copied += text } }
 
     private fun outputFrame(payload: ByteArray): ByteString =

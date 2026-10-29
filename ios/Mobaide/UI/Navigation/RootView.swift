@@ -1,3 +1,4 @@
+import StoreKit
 import SwiftUI
 
 /// Mirror of Android `AppNavigation`: the auth state picks the stack root
@@ -9,6 +10,8 @@ struct RootView: View {
     @Environment(AuthStateModel.self) private var authStateModel
     @Environment(Router.self) private var router
     @Environment(DeepLinkCoordinator.self) private var deepLink
+    @Environment(\.appContainer) private var container
+    @Environment(\.requestReview) private var requestReview
 
     @State private var toast: ToastMessage?
 
@@ -30,6 +33,11 @@ struct RootView: View {
                 toast = ToastMessage(text: newValue)
                 deepLink.clearSwitchError()
             }
+        }
+        // StoreKit decides whether the sheet shows (at most 3 times a year,
+        // never in TestFlight) and reports nothing back.
+        .onChange(of: container?.reviewPromptCoordinator.requestCount) { _, _ in
+            requestReview()
         }
         .onChange(of: deepLink.isSwitchingAgent, initial: true) { _, switching in
             // The switch clears the stack and takes a network round trip; say

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -29,8 +30,10 @@ import com.mobaide.app.data.local.ThemeMode
 import com.mobaide.app.data.repository.AgentSwitchCoordinator
 import com.mobaide.app.data.repository.ServerCompatibility
 import com.mobaide.app.data.repository.VersionGateRepository
+import com.mobaide.app.data.review.ReviewPromptCoordinator
 import com.mobaide.app.notifications.SessionEventService
 import com.mobaide.app.ui.navigation.AppNavigation
+import com.mobaide.app.ui.review.InAppReviewManager
 import com.mobaide.app.ui.theme.MobaideTheme
 import com.mobaide.app.ui.update.InAppUpdateManager
 import dagger.hilt.android.AndroidEntryPoint
@@ -68,6 +71,15 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var agentSwitchCoordinator: AgentSwitchCoordinator
 
+    @Inject
+    lateinit var reviewPromptCoordinator: ReviewPromptCoordinator
+
+    @Inject
+    lateinit var inAppReviewManager: InAppReviewManager
+
+    /** When the review card was last launched, on the monotonic clock; 0 before the first one. */
+    private var reviewLaunchedAtMs = 0L
+
     /** Session id from a tapped notification; consumed by [AppNavigation]. */
     private val deepLinkSessionId = MutableStateFlow<String?>(null)
 
@@ -86,6 +98,10 @@ class MainActivity : ComponentActivity() {
         // pairing done elsewhere before this install's first connect still
         // counts (iOS parity: AppContainer.start()).
         lifecycleScope.launch { agentPairedConversion.armIfNeeded() }
+        // A recreation (rotation, theme change) is not a launch.
+        if (savedInstanceState == null) {
+            lifecycleScope.launch { reviewPromptCoordinator.recordLaunch() }
+        }
         maybeRequestNotificationPermission()
         consumeSessionExtra(intent)
 
@@ -99,6 +115,23 @@ class MainActivity : ComponentActivity() {
                     if (state == SessionManager.AuthState.FullyConnected) {
                         SessionEventService.start(this@MainActivity)
                     }
+                }
+            }
+        }
+
+        // Collected only while resumed, so a request made while nothing could
+        // show the card is dropped without starting the cooldown.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                reviewPromptCoordinator.requests.collect {
+                    inAppReviewManager.launchReview(
+                        activity = this@MainActivity,
+                        stillWanted = reviewPromptCoordinator::isReviewMoment,
+                        onLaunch = {
+                            reviewLaunchedAtMs = SystemClock.elapsedRealtime()
+                            reviewPromptCoordinator.markReviewLaunched()
+                        },
+                    )
                 }
             }
         }
@@ -186,8 +219,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        lifecycleScope.launch {
-            inAppUpdateManager.checkForUpdate(this@MainActivity)
+        // The review card pauses this activity and resumes it on close; a
+        // flexible-update dialog right behind it would stack two Play pop-ups.
+        val justReviewed = reviewLaunchedAtMs != 0L &&
+            SystemClock.elapsedRealtime() - reviewLaunchedAtMs < UPDATE_CHECK_PAUSE_AFTER_REVIEW_MS
+        if (!justReviewed) {
+            lifecycleScope.launch {
+                inAppUpdateManager.checkForUpdate(this@MainActivity)
+            }
         }
     }
 
@@ -235,5 +274,7 @@ class MainActivity : ComponentActivity() {
 
         /** Normal reads finish in single-digit ms; far below the ~5s ANR bar. */
         private const val THEME_LOAD_TIMEOUT_MS = 500L
+
+        private const val UPDATE_CHECK_PAUSE_AFTER_REVIEW_MS = 60_000L
     }
 }

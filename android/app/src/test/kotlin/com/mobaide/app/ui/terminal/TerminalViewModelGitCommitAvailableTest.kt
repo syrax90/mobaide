@@ -84,6 +84,7 @@ class TerminalViewModelGitCommitAvailableTest {
             foregroundSessionTracker = ForegroundSessionTracker(),
             appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
+            reviewPromptCoordinator = mockk(relaxed = true),
         )
     }
 
@@ -169,6 +170,7 @@ class TerminalViewModelGitSyncAvailableTest {
             foregroundSessionTracker = ForegroundSessionTracker(),
             appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
+            reviewPromptCoordinator = mockk(relaxed = true),
         )
     }
 

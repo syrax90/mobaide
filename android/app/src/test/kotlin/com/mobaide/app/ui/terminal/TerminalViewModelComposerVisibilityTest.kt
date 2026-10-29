@@ -69,6 +69,7 @@ class TerminalViewModelComposerVisibilityTest {
             foregroundSessionTracker = ForegroundSessionTracker(),
             appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
+            reviewPromptCoordinator = mockk(relaxed = true),
         )
 
     private fun feed(vm: TerminalViewModel, sequence: String) {

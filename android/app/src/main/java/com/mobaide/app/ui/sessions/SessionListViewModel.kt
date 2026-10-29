@@ -11,7 +11,9 @@ import com.mobaide.app.data.repository.AgentVersionMonitor
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
+import com.mobaide.app.data.review.ReviewPromptCoordinator
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -48,6 +50,7 @@ class SessionListViewModel @Inject constructor(
     private val agentVersionMonitor: AgentVersionMonitor,
     private val agentUpdateRepository: AgentUpdateRepository,
     private val customAgentTypesRepository: CustomAgentTypesRepository,
+    private val reviewPromptCoordinator: ReviewPromptCoordinator,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SessionListUiState())
@@ -57,6 +60,8 @@ class SessionListViewModel @Inject constructor(
     val autoResumeSessionId: SharedFlow<String> = _autoResumeSessionId.asSharedFlow()
 
     private var didTryAutoResume = false
+
+    private var reviewMoment: Job? = null
 
     init {
         agentEventBus.start()
@@ -178,11 +183,17 @@ class SessionListViewModel @Inject constructor(
                         "staged" -> "Update staged — agent restarting…"
                         "no_change" -> "Agent is already up to date."
                         "deferred" -> "Agent busy — will retry when idle."
-                        "signature_failed" -> "Update rejected: signature verification failed."
+                        "signature_failed" -> {
+                            reviewPromptCoordinator.noteError()
+                            "Update rejected: signature verification failed."
+                        }
                         else -> "Update outcome: ${resp.outcome}"
                     }
                 },
-                onFailure = { e -> "Update failed: ${e.message ?: e::class.simpleName}" },
+                onFailure = { e ->
+                    reviewPromptCoordinator.noteError()
+                    "Update failed: ${e.message ?: e::class.simpleName}"
+                },
             )
             _uiState.update { it.copy(error = msg) }
         }
@@ -193,6 +204,7 @@ class SessionListViewModel @Inject constructor(
             try {
                 sessionRepository.deleteSession(sessionId)
             } catch (e: Exception) {
+                reviewPromptCoordinator.noteError()
                 _uiState.update { it.copy(error = "Failed to stop session: ${e.message}") }
             }
         }
@@ -203,6 +215,7 @@ class SessionListViewModel @Inject constructor(
             try {
                 autoScanRepository.stopScan(projectName)
             } catch (e: Exception) {
+                reviewPromptCoordinator.noteError()
                 _uiState.update { it.copy(error = "Failed to stop scan: ${e.message}") }
             }
         }
@@ -212,6 +225,18 @@ class SessionListViewModel @Inject constructor(
         viewModelScope.launch {
             preferencesStore.setExternalSessionsNoticeDismissed()
         }
+    }
+
+    /** The list is on screen: the moment a finished outing may ask for a review. */
+    fun onScreenResumed() {
+        reviewMoment?.cancel()
+        reviewMoment = viewModelScope.launch { reviewPromptCoordinator.sessionListShown() }
+    }
+
+    fun onScreenPaused() {
+        reviewMoment?.cancel()
+        reviewMoment = null
+        reviewPromptCoordinator.sessionListHidden()
     }
 
     fun clearError() {

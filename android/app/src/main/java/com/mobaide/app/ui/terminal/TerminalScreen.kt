@@ -269,6 +269,7 @@ fun TerminalScreen(
                 // alive, so leaving the stopped one on screen is done here: for
                 // the nearest open session, or the list when none is left.
                 is SessionsPanelEvent.Stopped -> if (event.sessionId == viewModel.sessionId) {
+                    viewModel.markEndedByUser()
                     val next = event.nextSessionId
                     if (next == null) {
                         onSessionEnded()
@@ -289,8 +290,10 @@ fun TerminalScreen(
                     // back the next event until this one is dismissed.
                     drawerScope.launch { snackbarHostState.showSnackbar("Session stopped") }
                 }
-                is SessionsPanelEvent.StopFailed ->
+                is SessionsPanelEvent.StopFailed -> {
+                    viewModel.noteReviewError()
                     drawerScope.launch { snackbarHostState.showSnackbar(event.message) }
+                }
             }
         }
     }

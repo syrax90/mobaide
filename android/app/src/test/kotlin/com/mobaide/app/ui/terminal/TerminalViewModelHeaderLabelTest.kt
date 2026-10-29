@@ -94,6 +94,7 @@ class TerminalViewModelHeaderLabelTest {
             foregroundSessionTracker = ForegroundSessionTracker(),
             appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
+            reviewPromptCoordinator = mockk(relaxed = true),
         )
     }
 
@@ -150,6 +151,7 @@ class TerminalViewModelHeaderLabelTest {
                 foregroundSessionTracker = ForegroundSessionTracker(),
                 appForegroundTracker = AppForegroundTracker(),
                 preferencesStore = preferencesStore,
+                reviewPromptCoordinator = mockk(relaxed = true),
             )
             runCurrent()
 
@@ -179,6 +181,7 @@ class TerminalViewModelHeaderLabelTest {
                 foregroundSessionTracker = ForegroundSessionTracker(),
                 appForegroundTracker = AppForegroundTracker(),
                 preferencesStore = preferencesStore,
+                reviewPromptCoordinator = mockk(relaxed = true),
             )
             runCurrent()
 

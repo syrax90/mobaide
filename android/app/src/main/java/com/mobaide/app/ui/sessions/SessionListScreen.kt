@@ -46,6 +46,7 @@ import androidx.compose.ui.Modifier
 import com.mobaide.app.ui.theme.ChromeFontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
@@ -85,6 +86,11 @@ fun SessionListScreen(
         viewModel.autoResumeSessionId.collect { sessionId ->
             onSessionClick(sessionId)
         }
+    }
+
+    LifecycleResumeEffect(viewModel) {
+        viewModel.onScreenResumed()
+        onPauseOrDispose { viewModel.onScreenPaused() }
     }
 
     PixelScaffold(

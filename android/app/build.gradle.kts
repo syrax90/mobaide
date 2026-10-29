@@ -265,6 +265,9 @@ dependencies {
     // Google Play in-app updates (flexible + immediate flows)
     implementation(libs.play.app.update.ktx)
 
+    // Google Play in-app review card (the store rating prompt)
+    implementation(libs.play.review.ktx)
+
     // Google Code Scanner. GMS-rendered scanner UI; no CAMERA
     // permission required — the GMS module hosts the camera in a
     // separate process and only returns the scanned barcode value.

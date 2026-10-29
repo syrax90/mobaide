@@ -187,11 +187,13 @@ private struct TerminalScreenContent: View {
             guard let result = try await panel.stopSession(id, force: force) else { return }
             stopped = result
         } catch {
+            model.noteReviewError()
             model.terminalMessage = ToastMessage(text: "Failed to stop session: \(String(describing: error))", tone: .danger)
             return
         }
         if id == sessionId {
             guard router.path.last == .sessionDetail(sessionId: id) else { return }
+            model.markEndedByUser()
             guard let next = stopped.nextSessionId else {
                 drawerOpen = false
                 router.popTo(.sessionList)

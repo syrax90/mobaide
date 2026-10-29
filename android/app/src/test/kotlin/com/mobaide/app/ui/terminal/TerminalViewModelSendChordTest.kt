@@ -96,6 +96,7 @@ class TerminalViewModelSendChordTest {
             foregroundSessionTracker = ForegroundSessionTracker(),
             appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
+            reviewPromptCoordinator = mockk(relaxed = true),
         )
 
     /** Strip the frame-type prefix byte to get the raw PTY payload. */

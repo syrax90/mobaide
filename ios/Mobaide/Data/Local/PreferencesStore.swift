@@ -15,6 +15,12 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyTerminalDisplayMode = "terminal_display_mode"
     static let keyTerminalStaticColumns = "terminal_static_columns"
     static let keyExternalSessionsNoticeDismissed = "external_sessions_notice_dismissed"
+    // Device-local, not account-scoped (device backups carry them): no sign-out
+    // sweep touches them, since the store's quota follows the device's store
+    // account, not the Mobaide one.
+    static let keyReviewLaunchCount = "review_prompt_launch_count"
+    static let keyReviewGoodSessions = "review_prompt_good_sessions"
+    static let keyReviewLastRequestedAt = "review_prompt_last_requested_at"
     /// Same key as the web client's `localStorage` entry.
     static let keyThemePreference = "mobaide-theme"
 
@@ -127,6 +133,29 @@ struct PreferencesStore: @unchecked Sendable {
 
     func setExternalSessionsNoticeDismissed() {
         defaults.set(true, forKey: Self.keyExternalSessionsNoticeDismissed)
+    }
+
+    func incrementReviewLaunchCount() {
+        defaults.set(defaults.integer(forKey: Self.keyReviewLaunchCount) + 1, forKey: Self.keyReviewLaunchCount)
+    }
+
+    /// Counts one more good session and returns the counters as written.
+    func incrementReviewGoodSessions() -> ReviewPromptState {
+        let goodSessions = defaults.integer(forKey: Self.keyReviewGoodSessions) + 1
+        defaults.set(goodSessions, forKey: Self.keyReviewGoodSessions)
+        let lastRequestedAt = (defaults.object(forKey: Self.keyReviewLastRequestedAt) as? Double)
+            .map { Date(timeIntervalSince1970: $0) }
+        return ReviewPromptState(
+            launchCount: defaults.integer(forKey: Self.keyReviewLaunchCount),
+            goodSessions: goodSessions,
+            lastRequestedAt: lastRequestedAt
+        )
+    }
+
+    /// Starts the cooldown and the next run of good sessions from zero.
+    func markReviewRequested(at date: Date) {
+        defaults.set(date.timeIntervalSince1970, forKey: Self.keyReviewLastRequestedAt)
+        defaults.set(0, forKey: Self.keyReviewGoodSessions)
     }
 
     /// Whether the user hid the session mic for this agent (undone in

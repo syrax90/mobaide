@@ -63,6 +63,7 @@ class TerminalViewModelInsertTranscriptTest {
             foregroundSessionTracker = ForegroundSessionTracker(),
             appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
+            reviewPromptCoordinator = mockk(relaxed = true),
         )
 
     private fun TerminalViewModel.typed(text: String, selection: TextRange) =
