@@ -757,6 +757,19 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
         except PairingMonitorError as exc:
             sys.stderr.write(f"mobaide-agent pair-qr: {exc}\n")
             return 5
+        except urllib_error.HTTPError as exc:
+            if exc.code != 429:
+                sys.stderr.write(
+                    f"mobaide-agent pair-qr: cannot reach central server: {exc}\n"
+                )
+                return 3
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            wait = f" Retry in {retry_after}s." if retry_after else ""
+            sys.stderr.write(
+                "mobaide-agent pair-qr: the central server is rate-limiting "
+                f"pairing requests from this network.{wait}\n"
+            )
+            return 3
         except (urllib_error.URLError, OSError) as exc:
             sys.stderr.write(
                 f"mobaide-agent pair-qr: cannot reach central server: {exc}\n"

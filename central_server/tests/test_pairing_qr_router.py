@@ -25,8 +25,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
+from httpx import ASGITransport, AsyncClient
 
 from central_server.auth.dependencies import DEVICE_REVOKED_DETAIL
+from central_server.auth.rate_limit import ResendRateLimiter
 from central_server.config import CentralServerConfig
 from central_server.pairing.qr_signer import compute_trust_key_fp, hash_pairing_nonce
 from central_server.pairing.ws_handlers import PairingWsRegistry
@@ -180,6 +182,80 @@ class TestInitiate:
             f"{meta.get('relay_url')!r}. The QR payload also carries it: "
             f"{resp.json()['qr_payload']!r}"
         )
+
+
+async def _count_pairing_tokens(db) -> int:
+    cur = await db.conn.execute("SELECT COUNT(*) FROM pairing_tokens")
+    (count,) = await cur.fetchone()
+    return count
+
+
+class TestInitiateRateLimiting:
+    """The per-IP hourly cap on the anonymous initiate endpoint.
+
+    ``qr_app`` leaves ``pairing_initiate_ip_limiter`` unwired, so the rest
+    of this module exercises the falls-open branch. ASGITransport reports
+    one synthetic ``request.client.host``, so every call through ``client``
+    shares one IP key.
+    """
+
+    async def test_the_per_ip_cap_returns_429_with_retry_after(
+        self, client, qr_app
+    ):
+        qr_app.state.pairing_initiate_ip_limiter = ResendRateLimiter(
+            cooldown_seconds=0, hourly_cap=2
+        )
+        for _ in range(2):
+            resp = await client.post(
+                "/api/pairing/initiate", json={"hostname": "alpha"},
+            )
+            assert resp.status_code == 200, resp.text
+
+        resp = await client.post(
+            "/api/pairing/initiate", json={"hostname": "alpha"},
+        )
+
+        assert resp.status_code == 429, resp.text
+        assert resp.headers.get("Retry-After")
+        detail = resp.json()["detail"]
+        assert detail["error"] == "pairing_initiate_rate_limited"
+        assert detail["retry_after_seconds"] > 0
+        assert resp.headers["Retry-After"] == str(detail["retry_after_seconds"])
+        # The refused call never reached the handler's insert.
+        assert await _count_pairing_tokens(qr_app.state.db) == 2
+
+    async def test_another_ip_keeps_its_own_quota(self, client, qr_app):
+        qr_app.state.pairing_initiate_ip_limiter = ResendRateLimiter(
+            cooldown_seconds=0, hourly_cap=1
+        )
+        resp = await client.post(
+            "/api/pairing/initiate", json={"hostname": "alpha"},
+        )
+        assert resp.status_code == 200, resp.text
+        resp = await client.post(
+            "/api/pairing/initiate", json={"hostname": "alpha"},
+        )
+        assert resp.status_code == 429, resp.text
+
+        other_transport = ASGITransport(app=qr_app, client=("203.0.113.7", 4242))
+        async with AsyncClient(
+            transport=other_transport, base_url="https://test"
+        ) as other:
+            resp = await other.post(
+                "/api/pairing/initiate", json={"hostname": "beta"},
+            )
+
+        assert resp.status_code == 200, resp.text
+
+    async def test_a_zero_cap_disables_the_limit(self, client, qr_app):
+        qr_app.state.pairing_initiate_ip_limiter = ResendRateLimiter(
+            cooldown_seconds=0, hourly_cap=0
+        )
+        for _ in range(5):
+            resp = await client.post(
+                "/api/pairing/initiate", json={"hostname": "alpha"},
+            )
+            assert resp.status_code == 200, resp.text
 
 
 class TestClaim:

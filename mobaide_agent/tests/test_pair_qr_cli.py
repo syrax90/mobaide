@@ -151,6 +151,61 @@ class TestRunPairQrEarlyExits:
         assert rc == 3
         assert "central server" in capsys.readouterr().err.lower()
 
+    @pytest.mark.parametrize(
+        ("headers", "expected_tail"),
+        [
+            ({"Retry-After": "120"}, "this network. Retry in 120s.\n"),
+            ({}, "this network.\n"),
+        ],
+    )
+    def test_initiate_rate_limited_names_the_limit_and_returns_3(
+        self, tmp_path, capsys, monkeypatch, headers, expected_tail
+    ):
+        import urllib.error
+
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
+
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.HTTPError(
+                "https://relay.test/api/pairing/initiate",
+                429, "Too Many Requests", headers, io.BytesIO(b""),
+            ),
+        ):
+            rc = _run_pair_qr(_ns(prefix=str(tmp_path), print=True))
+
+        assert rc == 3
+        err = capsys.readouterr().err
+        assert "rate-limiting pairing requests" in err
+        assert err.endswith(expected_tail)
+        assert "cannot reach central server" not in err
+
+    def test_initiate_other_http_error_keeps_cannot_reach_message(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        import urllib.error
+
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
+
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.HTTPError(
+                "https://relay.test/api/pairing/initiate",
+                503, "Service Unavailable", {"Retry-After": "30"},
+                io.BytesIO(b""),
+            ),
+        ):
+            rc = _run_pair_qr(_ns(prefix=str(tmp_path), print=True))
+
+        assert rc == 3
+        err = capsys.readouterr().err
+        assert "cannot reach central server" in err
+        assert "rate-limiting" not in err
+
     def test_render_prints_payload_line_and_browser_link(
         self, tmp_path, capsys, monkeypatch
     ):

@@ -29,6 +29,7 @@ from typing import Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 import mobaide._http as _http
+from websockets.exceptions import InvalidHandshake
 
 from ._env_writer import (
     atomic_write,
@@ -59,7 +60,33 @@ _DEVICE_CODE_REDEEM_PATH = "/api/pairing/device-code/redeem"
 _DEVICE_CODE_ACCEPT_PATH = "/api/pairing/device-code/accept"
 _BACKOFF_FLOOR_S = 2.0
 _BACKOFF_CEIL_S = 60.0
+# A claim wait that lasted this long proves the relay, the WS path and the
+# local clock all work, so the next cycle may start from the backoff floor.
+# Anything shorter is a fast failure and must keep growing the backoff.
+_HEALTHY_WAIT_S = 30.0
 from .install_paths import ALLOW_INSECURE_HTTPS_BOOTSTRAP_ENV as _ALLOW_INSECURE_FETCH_ENV
+
+
+def _nonce_still_valid(pending: PendingPairing) -> bool:
+    """Same local-clock expiry test ``load_pending_pairing`` applies."""
+    parsed = parse_qr_payload(pending.qr_payload)
+    return parsed is not None and parsed.exp_unix > int(time.time())
+
+
+def _handshake_status(cause: BaseException | None) -> int | None:
+    """HTTP status of a rejected WS handshake, across websockets versions.
+
+    ``InvalidStatus`` (websockets >= 14) carries ``response.status_code``;
+    the legacy ``InvalidStatusCode`` (13) carries ``status_code``. Read by
+    attribute so the deprecated legacy class is never imported.
+    """
+    if not isinstance(cause, InvalidHandshake):
+        return None
+    response = getattr(cause, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is None:
+        status = getattr(cause, "status_code", None)
+    return status if isinstance(status, int) else None
 
 
 def _initiate_url(relay_server_url: str) -> str:
@@ -503,6 +530,14 @@ async def run_pairing_monitor(
         return
 
     backoff = _BACKOFF_FLOOR_S
+    # A fresh nonce lives only here until the WS reaches ``ready`` (see the
+    # save below). Reusing it after a pre-``ready`` WS failure keeps a
+    # broken WS path from minting a new nonce on every retry.
+    unsaved: PendingPairing | None = None
+    # Set once a 403 has discarded a nonce, cleared on ``ready``. A proxy
+    # that refuses every upgrade with 403 then costs one extra initiate,
+    # then one per TTL, not one per retry.
+    dropped_after_403 = False
     while True:
         try:
             pending = load_pending_pairing(layout)
@@ -511,6 +546,12 @@ async def run_pairing_monitor(
                 pending is not None, env_path,
             )
             fresh_nonce = False
+            if pending is None and unsaved is not None:
+                if _nonce_still_valid(unsaved):
+                    pending = unsaved
+                    fresh_nonce = True
+                else:
+                    unsaved = None
             if pending is None:
                 try:
                     pending = await _initiate_with_metadata(
@@ -521,7 +562,7 @@ async def run_pairing_monitor(
                         current_agent_id=current_agent_id,
                     )
                     fresh_nonce = True
-                    backoff = _BACKOFF_FLOOR_S
+                    unsaved = pending
                 except Exception as exc:
                     # Catch-all rather than the narrow (PairingMonitorError,
                     # URLError, OSError) triplet: the server can return
@@ -540,6 +581,16 @@ async def run_pairing_monitor(
                     await asyncio.sleep(backoff)
                     backoff = min(_BACKOFF_CEIL_S, backoff * 2)
                     continue
+                if not _nonce_still_valid(pending):
+                    logger.warning(
+                        "pairing_monitor.clock_skew nonce=%s expires_at=%s "
+                        "local_now=%s: the relay's fresh nonce is already "
+                        "expired by this machine's clock, so the system clock "
+                        "is ahead of the relay. Pairing cannot complete until "
+                        "the clock is corrected (enable NTP time sync).",
+                        pending.nonce[:8], pending.expires_at,
+                        datetime.now().astimezone().isoformat(timespec="seconds"),
+                    )
 
             parsed = parse_qr_payload(pending.qr_payload)
             if parsed is None:
@@ -549,6 +600,7 @@ async def run_pairing_monitor(
                     pending.nonce[:8],
                 )
                 clear_pending_pairing(layout)
+                unsaved = None
                 continue
             timeout_s = max(1.0, parsed.exp_unix - time.time())
 
@@ -565,13 +617,17 @@ async def run_pairing_monitor(
             # than the initiate handler produced — agent then rejected its
             # own credentials. Anchoring the on-disk signal to the WS-ready
             # handshake closes the race at the source.
+            wait_started: float | None = None
             try:
                 async with PairingWsClient.connect(pending.ws_url) as conn:
                     # Server is now in the ready-for-dispatch state. Safe
                     # to publish the pending-pairing file and render the QR.
                     if fresh_nonce:
                         save_pending_pairing(layout, pending)
+                        unsaved = None
+                    dropped_after_403 = False
                     await _render_pending_to_stdout(pending)
+                    wait_started = time.monotonic()
                     claim = await conn.wait_for_claim(
                         timeout_s=timeout_s,
                         trust_pub_key_b64=pinned_pub_key,
@@ -593,6 +649,27 @@ async def run_pairing_monitor(
                 # evicts the entry once the nonce truly expires, so a
                 # permanently broken WS (signature mismatch, dead server)
                 # still rolls over to a fresh nonce within the 120 s TTL.
+                #
+                # Backoff resets only after a long, healthy wait (a TTL
+                # rollover or a late drop). A fast failure keeps doubling it,
+                # otherwise every retry would re-initiate at the floor
+                # interval and hammer the relay's anonymous initiate endpoint.
+                if (
+                    wait_started is not None
+                    and time.monotonic() - wait_started >= _HEALTHY_WAIT_S
+                ):
+                    backoff = _BACKOFF_FLOOR_S
+                # The relay refuses a bad nonce (duplicate waiter, unknown,
+                # TTL) before ``accept()``, which surfaces as HTTP 403: mint
+                # a fresh one. Other handshake failures keep reusing it, so
+                # a broken WS path stays at one initiate per TTL.
+                if (
+                    unsaved is not None
+                    and not dropped_after_403
+                    and _handshake_status(exc.__cause__) == 403
+                ):
+                    unsaved = None
+                    dropped_after_403 = True
                 logger.warning(
                     "pairing_monitor.ws_failed nonce=%s: %s; retaining pending so "
                     "the next reconnect can trigger the server's recovery path "
