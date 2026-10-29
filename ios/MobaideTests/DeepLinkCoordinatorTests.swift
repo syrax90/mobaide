@@ -118,7 +118,7 @@ final class DeepLinkCoordinatorTests: XCTestCase {
         XCTAssertNil(coordinator.pendingSessionId)
 
         // A later re-login must not resurrect the cleared deep link.
-        await sessionManager.markUserLoggedIn()
+        await sessionManager.markUserLoggedIn(userId: "u1") { @Sendable in }
         await sessionManager.markAgentConnected()
         await waitUntil(timeout: .milliseconds(200)) { false }
         XCTAssertEqual(router.path, [], "a cleared stash must not replay after re-login")

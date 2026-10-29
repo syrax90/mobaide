@@ -31,7 +31,13 @@ final class TemplatesRepository: TemplateSyncApplying {
     // MARK: - TemplateSyncApplying
 
     func refreshTemplates() async throws {
-        setTemplates(try await centralAPI.listTemplates(userToken: try userToken()))
+        // Account-generation guard (`ShortcutsRepository.refreshShortcuts`):
+        // a response for the previous account must not repopulate the cache
+        // after sign-out or an account switch cleared it.
+        let requestUserId = userIdentityStore.getUserId()
+        let list = try await centralAPI.listTemplates(userToken: try userToken())
+        guard userIdentityStore.getUserId() == requestUserId else { return }
+        setTemplates(list)
     }
 
     func applyUpserted(_ template: TemplateDto) async {
@@ -54,26 +60,38 @@ final class TemplatesRepository: TemplateSyncApplying {
 
     // MARK: - Mutations
 
+    // Same account-generation guard as `refreshTemplates`: a response landing
+    // after an account switch still returns the server row, but skips the
+    // cache write the new account observes.
+
     @discardableResult
     func createTemplate(name: String, body: String) async throws -> TemplateDto {
+        let requestUserId = userIdentityStore.getUserId()
         let created = try await centralAPI.createTemplate(userToken: try userToken(), name: name, body: body)
-        await applyUpserted(created)
+        if userIdentityStore.getUserId() == requestUserId {
+            await applyUpserted(created)
+        }
         return created
     }
 
     @discardableResult
     func updateTemplate(templateId: String, update: UpdateTemplateRequest) async throws -> TemplateDto {
+        let requestUserId = userIdentityStore.getUserId()
         let updated = try await centralAPI.updateTemplate(
             userToken: try userToken(),
             templateId: templateId,
             update: update
         )
-        await applyUpserted(updated)
+        if userIdentityStore.getUserId() == requestUserId {
+            await applyUpserted(updated)
+        }
         return updated
     }
 
     func deleteTemplate(templateId: String) async throws {
+        let requestUserId = userIdentityStore.getUserId()
         try await centralAPI.deleteTemplate(userToken: try userToken(), templateId: templateId)
+        guard userIdentityStore.getUserId() == requestUserId else { return }
         await applyDeleted(templateId: templateId)
     }
 

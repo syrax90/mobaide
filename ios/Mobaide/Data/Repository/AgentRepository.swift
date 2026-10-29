@@ -31,7 +31,12 @@ final class AgentRepository: AgentStatusApplying {
     // MARK: - AgentStatusApplying
 
     func refreshAgents() async throws {
+        // Account-generation guard (`ShortcutsRepository.refreshShortcuts`):
+        // a response for the previous account must not repopulate the cache
+        // after sign-out or an account switch cleared it.
+        let requestUserId = userIdentityStore.getUserId()
         let list = try await centralAPI.listAgents(userToken: try userToken())
+        guard userIdentityStore.getUserId() == requestUserId else { return }
         setAgents(list)
     }
 

@@ -69,6 +69,8 @@ enum InvalidationReason: Equatable, Sendable {
 ///   "session expired" event exactly once.
 /// - `agentDisconnect` always clears agent tokens but only demotes the
 ///   state when currently `fullyConnected`.
+/// - `invalidateUserSession` also purges `ConnectionStore`: saved profiles
+///   carry non-expiring relay tokens, so sign-out must not leave them behind.
 /// - Only `.tokenRejected` / `.accountRemoved` emit on `sessionEvents`
 ///   (replay-1 so a pre-subscription invalidation is still delivered);
 ///   `.manual` is silent. `markUserLoggedIn` clears the replay cache so a
@@ -93,6 +95,7 @@ actor SessionManager {
     private let tokenStore: TokenStore
     private let userIdentityStore: UserIdentityStore
     private let preferencesStore: PreferencesStore
+    private let connectionStore: ConnectionStore
     private let refreshTransport: RefreshTransport
 
     private let authStateBroadcaster = Broadcaster<AuthState>.stateFlow()
@@ -106,12 +109,14 @@ actor SessionManager {
         tokenStore: TokenStore,
         userIdentityStore: UserIdentityStore,
         preferencesStore: PreferencesStore,
+        connectionStore: ConnectionStore,
         initialState: AuthState? = nil,
         refreshTransport: RefreshTransport? = nil
     ) {
         self.tokenStore = tokenStore
         self.userIdentityStore = userIdentityStore
         self.preferencesStore = preferencesStore
+        self.connectionStore = connectionStore
         self.refreshTransport = refreshTransport ?? Self.defaultRefreshTransport()
         let initial = initialState
             ?? AuthState.initial(tokenStore: tokenStore, userIdentityStore: userIdentityStore)
@@ -147,9 +152,16 @@ actor SessionManager {
 
     // MARK: - Transitions
 
-    /// Mark the user as logged in after a successful register/login/verify
-    /// against the central server.
-    func markUserLoggedIn() {
+    /// Mark the user logged in after a successful register/login/verify; `persist` saves the identity.
+    /// A different account than the one on file first gets the sign-out teardown
+    /// (`.unauthenticated` → `.userOnly`) and a purge of account-scoped stores,
+    /// even when no session was live.
+    func markUserLoggedIn(userId: String, persist: () -> Void) {
+        if userIdentityStore.getUserId() != userId {
+            invalidateUserSession(.manual)
+            clearAccountScopedStores()
+        }
+        persist()
         sessionEventsBroadcaster.clearReplay()
         setState(.userOnly)
     }
@@ -160,13 +172,12 @@ actor SessionManager {
         setState(.fullyConnected)
     }
 
-    /// `markAgentConnected()` for a completer that may have lost the user
-    /// meanwhile: a sign-out that landed while the agent tokens were being
-    /// minted wins. Actor-isolated with `invalidateUserSession`, so the
-    /// sign-out is either strictly before (nothing persisted, `false`) or
-    /// strictly after (its `tokenStore.clear()` wipes what `persist` wrote).
-    func tryMarkAgentConnected(persist: () -> Void) -> Bool {
-        guard isUserAuthenticated() else { return false }
+    /// `markAgentConnected()` for a completer that may have lost the user meanwhile:
+    /// a sign-out or account switch during the mint wins. Actor-isolated with
+    /// `invalidateUserSession`, so sign-out is strictly before (nothing persisted,
+    /// `false`) or strictly after (its purge wipes what `persist` wrote).
+    func tryMarkAgentConnected(expectedUserId: String?, persist: () -> Void) -> Bool {
+        guard isUserAuthenticated(), userIdentityStore.getUserId() == expectedUserId else { return false }
         persist()
         setState(.fullyConnected)
         return true
@@ -203,8 +214,7 @@ actor SessionManager {
     func invalidateUserSession(_ reason: InvalidationReason) {
         if state == .unauthenticated { return }
         userIdentityStore.clearUserSession()
-        preferencesStore.removeAllRecentCustomPaths()
-        tokenStore.clear()
+        clearAccountScopedStores()
         setState(.unauthenticated)
         cancelInFlightRefresh()
         switch reason {
@@ -213,6 +223,12 @@ actor SessionManager {
         case .manual:
             break
         }
+    }
+
+    private func clearAccountScopedStores() {
+        preferencesStore.removeAllRecentCustomPaths()
+        tokenStore.clear()
+        connectionStore.clear()
     }
 
     // MARK: - Refresh
