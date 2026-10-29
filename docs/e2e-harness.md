@@ -50,16 +50,6 @@ via `POST /proxy/{agent_id}/api/sessions` (the agent's `FakePtyBackend` — no r
 shell, no `claude`/`codex` CLI), attaches the relay session WebSocket, and asserts
 a sent marker is echoed back through the binary `o` (output) frame.
 
-`tests/e2e/test_e2e_pairing_loop.py` does not use `e2e_stack`. It boots its own relay with
-an Ed25519 signing keypair, so QR pairing works, and boots agents with **no** credentials, so
-their boot-time pairing monitor runs. Each agent reaches the relay through `FaultProxy`, a
-loopback TCP proxy. The proxy counts `POST /api/pairing/initiate` calls and injects
-`/ws/pairing/` faults: a 502, a 403, a dropped connection, or a lost `ready` frame. A
-`sitecustomize` shim moves the agent's wall clock ahead of the relay's. A second relay with
-`PAIRING_INITIATE_IP_HOURLY_CAP=3` covers the per-IP 429 path. The scenarios check that an
-agent stuck on a broken pairing path backs off and does not hammer the relay. That bug once
-sent about one initiate every 4 s. The module takes about 4 minutes.
-
 ## Prerequisites
 
 - Python 3.12+, with **both** packages installed editable from the repo root:
