@@ -367,6 +367,13 @@ async def require_mintable_device(
     fresh device id and outlive the revoke of its own. An unbound session
     issued before the device's revoke may not bring it back; a sign-in
     made after the revoke may (Bitwarden semantics).
+
+    The mismatch is a 401, not a 403: the session can never be used on this
+    install again, so every client's 401 path signs it out and the next
+    sign-in binds to the right id. The install gets a new id while the
+    session survives when iOS restores Keychain tokens onto a new iPhone
+    (the device id is "this device only"), or when Safari clears the web
+    client's ``localStorage`` but keeps its refresh cookie.
     """
     if user.device_id is not None and user.device_id != device_id:
         logger.info(
@@ -377,9 +384,10 @@ async def require_mintable_device(
             device_id,
         )
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="This session belongs to a different device. "
             "Sign in again on this device.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
     if await token_predates_device_revoke(request, device_id, user.iat):
         logger.info(

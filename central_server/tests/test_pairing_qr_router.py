@@ -26,6 +26,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
+from central_server.auth.dependencies import DEVICE_REVOKED_DETAIL
 from central_server.config import CentralServerConfig
 from central_server.pairing.qr_signer import compute_trust_key_fp, hash_pairing_nonce
 from central_server.pairing.ws_handlers import PairingWsRegistry
@@ -925,7 +926,7 @@ class TestClaimForARevokedOrForeignDevice:
         nonce, refused = await self._claim(client, qr_app, headers, _NEW_DEV_UUID)
         retry = await self._claim_nonce(client, qr_app, headers, nonce, _CLAIM_DEV_UUID)
 
-        assert refused.status_code == 403
+        assert refused.status_code == 401
         assert retry.status_code == 200, retry.text
         devices = await qr_app.state.db.list_user_devices(viewer_user["id"])
         assert [d["device_id"] for d in devices] == [_CLAIM_DEV_UUID]
@@ -943,3 +944,25 @@ class TestClaimForARevokedOrForeignDevice:
 
         assert resp.status_code == 403
         assert await db.list_user_devices(viewer_user["id"]) == []
+
+    async def test_claim_is_refused_when_the_revoke_lands_mid_claim(
+        self, client, qr_app, api_auth_headers, viewer_user, monkeypatch
+    ):
+        db = qr_app.state.db
+        user_id = viewer_user["id"]
+        await db.upsert_mobile_device(device_id=_CLAIM_DEV_UUID, user_id=user_id, name="Pixel")
+        upsert = db.upsert_mobile_device
+
+        async def revoke_then_upsert(**kwargs):
+            await db.revoke_mobile_device(_CLAIM_DEV_UUID, user_id)
+            return await upsert(**kwargs)
+
+        monkeypatch.setattr(db, "upsert_mobile_device", revoke_then_upsert)
+
+        _nonce, resp = await self._claim(client, qr_app, api_auth_headers, _CLAIM_DEV_UUID)
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == DEVICE_REVOKED_DETAIL
+        # The upsert cleared the revoke's revoked_at; the claim restored it.
+        assert await db.list_user_devices(user_id) == []
+        assert await db.list_agents_for_user(user_id) == []

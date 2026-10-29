@@ -307,11 +307,13 @@ factory-reset/hand-me-down device re-register) without any manual
 release step — agents themselves still require the explicit release
 described above.
 
-Two cases return `403` instead of moving the row, on `POST
-/api/agents/{id}/token` and on pairing claim/confirm: a session bound to
-one device (its user JWT carries the `device_id` sent at sign-in) naming a
-different device, and a session issued at or before the device's revoke.
-Revoking a device records a `tokens_valid_after` watermark in the
+Two cases refuse to move the row, on `POST /api/agents/{id}/token` and on
+pairing claim/confirm. A session bound to one device (its user JWT carries
+the `device_id` sent at sign-in) naming a different device gets `401`, so
+the client signs out and the next sign-in binds to the id it now has — an
+iPhone restored from a backup keeps its Keychain tokens but gets a new device
+id. A session issued at or before the device's revoke gets `403`, and so does
+a mint or claim that a revoke overtakes mid-request. Revoking a device records a `tokens_valid_after` watermark in the
 `device_revocations(device_id, tokens_valid_after)` table. The row is never
 cleared and has no foreign key, so it survives re-registration, handover of
 the device to another account, and deletion of any account: every JWT bound to that

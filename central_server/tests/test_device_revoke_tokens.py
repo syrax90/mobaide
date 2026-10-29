@@ -387,7 +387,9 @@ class TestMintingForARevokedDevice:
 
         resp = await _mint(client, _bearer(bound), agent_id, _OTHER_DEV)
 
-        assert resp.status_code == 403
+        # 401, so every client's existing 401 path signs the session out.
+        assert resp.status_code == 401
+        assert resp.headers["www-authenticate"] == "Bearer"
         assert await app.state.db.list_user_devices(viewer_user["id"]) == []
 
 
