@@ -1894,6 +1894,8 @@ export interface components {
             device_id?: string | null;
             /** Email */
             email: string;
+            /** Password */
+            password?: string | null;
             /**
              * Refreshable
              * @default false

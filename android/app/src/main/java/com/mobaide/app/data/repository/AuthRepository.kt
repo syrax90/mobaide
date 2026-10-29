@@ -125,6 +125,18 @@ class AuthRepository(
     private val errorJson = Json { ignoreUnknownKeys = true }
 
     /**
+     * The password typed on the way to the code screen, kept in memory only
+     * so [verifyEmail] can prove it: if someone re-registered the address in
+     * the meantime, the server installs this one instead of theirs.
+     */
+    @Volatile
+    private var pendingVerification: PendingVerification? = null
+
+    private data class PendingVerification(val email: String, val password: String) {
+        override fun toString() = "PendingVerification(email=$email)"
+    }
+
+    /**
      * Sent with every sign-in so the server binds the session to this
      * install and revoking the device signs it out. A storage failure
      * degrades to an unbound session rather than blocking sign-in.
@@ -140,6 +152,7 @@ class AuthRepository(
     suspend fun register(email: String, password: String): AuthResult {
         val response = centralApi.register(email, password, deviceIdOrNull())
         return finaliseOrFlagVerification(email, response)
+            .alsoRememberPending(password)
     }
 
     suspend fun loginWithPassword(email: String, password: String): AuthResult {
@@ -147,11 +160,12 @@ class AuthRepository(
             centralApi.login(email, password, deviceIdOrNull())
         } catch (e: ApiException) {
             parseVerificationRequired(e)?.let { pending ->
-                return AuthResult.VerificationRequired(pending)
+                return AuthResult.VerificationRequired(pending).alsoRememberPending(password)
             }
             throw e
         }
         return finaliseOrFlagVerification(email, response)
+            .alsoRememberPending(password)
     }
 
     suspend fun loginWithGoogle(idToken: String): AuthResult {
@@ -162,7 +176,11 @@ class AuthRepository(
     }
 
     suspend fun verifyEmail(email: String, code: String): AuthResult.Success {
-        val response = centralApi.verifyEmail(email, code, deviceIdOrNull())
+        val password = pendingVerification
+            ?.takeIf { it.email.equals(email.trim(), ignoreCase = true) }
+            ?.password
+        val response = centralApi.verifyEmail(email, code, password, deviceIdOrNull())
+        pendingVerification = null
         if (response.role == ROLE_ADMIN) throw AdminLoginNotSupportedException()
         val token = response.access_token
             ?: error("verify-email response missing access_token")
@@ -258,6 +276,12 @@ class AuthRepository(
         )
         sessionManager.markUserLoggedIn()
         return AuthResult.Success(response.email, response.scheduled_deletion_at)
+    }
+
+    private fun AuthResult.alsoRememberPending(password: String): AuthResult {
+        pendingVerification = (this as? AuthResult.VerificationRequired)
+            ?.let { PendingVerification(it.email.trim(), password) }
+        return this
     }
 
     private fun parseVerificationRequired(e: ApiException): String? {

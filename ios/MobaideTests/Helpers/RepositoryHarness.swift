@@ -11,7 +11,8 @@ struct RepositoryHarness {
 
     init(session: SessionHarness = SessionHarness()) {
         self.session = session
-        connectionStore = ConnectionStore(keychain: InMemoryKeychainStore())
+        // The store the SessionManager purges, as in AppContainer.
+        connectionStore = session.connectionStore
         let client = HTTPClient(
             session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self])
         )

@@ -226,13 +226,15 @@ final class UserEventBusTests: XCTestCase {
         let none = await harness.transportFactory.assertNoConnection(beyond: 0)
         XCTAssertTrue(none)
 
-        harness.session.userIdentityStore.saveUserSession(
-            accessToken: "user-token",
-            email: "user@example.com",
-            userId: "u1",
-            role: "user"
-        )
-        await harness.session.sessionManager.markUserLoggedIn()
+        let identity = harness.session.userIdentityStore
+        await harness.session.sessionManager.markUserLoggedIn(userId: "u1") {
+            identity.saveUserSession(
+                accessToken: "user-token",
+                email: "user@example.com",
+                userId: "u1",
+                role: "user"
+            )
+        }
 
         _ = try await harness.transportFactory.connection(1)
     }
@@ -456,6 +458,83 @@ final class UserEventBusTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(1))
         }
         XCTAssertEqual(harness.shortcutSync.clearCount, 1)
+    }
+
+    // MARK: - Account switch
+
+    private static func saveSecondAccount(_ identity: UserIdentityStore) {
+        identity.saveUserSession(
+            accessToken: "user-token-b",
+            email: "b@example.com",
+            userId: "u2",
+            role: "user"
+        )
+    }
+
+    private static func token(of connection: FakeWebSocketConnection) -> String? {
+        URLComponents(url: connection.url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "token" })?.value
+    }
+
+    func testAccountSwitchFromUserOnlyClearsCachesAndRebindsSocketToNewAccount() async throws {
+        let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
+        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
+        try await assertAccountSwitchRebinds(harness)
+    }
+
+    func testAccountSwitchFromFullyConnectedClearsCachesAndRebindsSocketToNewAccount() async throws {
+        let harness = BusHarness(session: SessionHarness(userLoggedIn: true, agentConnected: true))
+        try await assertAccountSwitchRebinds(harness)
+    }
+
+    private func assertAccountSwitchRebinds(_ harness: BusHarness) async throws {
+        let states = StreamCollector(harness.bus.connectionStates())
+        await harness.bus.start()
+        let first = try await harness.transportFactory.connection(1)
+        first.emit(.opened)
+        _ = try await states.next(where: { $0 == .connected })
+        XCTAssertEqual(Self.token(of: first), "user-token")
+
+        let identity = harness.session.userIdentityStore
+        await harness.session.sessionManager.markUserLoggedIn(userId: "u2") {
+            UserEventBusTests.saveSecondAccount(identity)
+        }
+
+        let second = try await harness.transportFactory.connection(2)
+        XCTAssertEqual(Self.token(of: second), "user-token-b", "the user socket follows the new account")
+        XCTAssertEqual(first.closeCalls.count, 1, "the previous account's socket is closed")
+        XCTAssertEqual(harness.agentStatus.clearCount, 1)
+        XCTAssertEqual(harness.templateSync.clearCount, 1)
+        XCTAssertEqual(harness.shortcutSync.clearCount, 1)
+        XCTAssertEqual(harness.customTypeSync.clearCount, 1)
+        XCTAssertNil(harness.session.tokenStore.getAccessToken(), "the previous account's agent creds are wiped")
+    }
+
+    func testSameAccountReLoginKeepsSocketAndCaches() async throws {
+        let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
+        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
+        let states = StreamCollector(harness.bus.connectionStates())
+        await harness.bus.start()
+        let connection = try await harness.transportFactory.connection(1)
+        connection.emit(.opened)
+        _ = try await states.next(where: { $0 == .connected })
+
+        let identity = harness.session.userIdentityStore
+        await harness.session.sessionManager.markUserLoggedIn(userId: "u1") {
+            identity.saveUserSession(
+                accessToken: "user-token",
+                email: "user@example.com",
+                userId: "u1",
+                role: "user"
+            )
+        }
+
+        let noNew = await harness.transportFactory.assertNoConnection(beyond: 1)
+        XCTAssertTrue(noNew)
+        XCTAssertEqual(harness.agentStatus.clearCount, 0)
+        XCTAssertEqual(harness.templateSync.clearCount, 0)
+        XCTAssertEqual(harness.shortcutSync.clearCount, 0)
+        XCTAssertEqual(harness.customTypeSync.clearCount, 0)
     }
 
     func testTokenRejectedCloseInvalidatesSession() async throws {

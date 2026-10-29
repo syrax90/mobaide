@@ -10,7 +10,11 @@ configure it, or debug a failed delivery.
 Verification only runs for **email + password** registration. Google OAuth
 sign-ins are already vouched for by Google (via the `email_verified` claim on
 the ID token) and bypass the flow. The admin account created by the seeder is
-also auto-verified.
+also auto-verified. When a Google or Apple sign-in links to (or verifies) an
+existing *unverified* email+password account, the password nobody proved they
+were entitled to set, any pending codes and (when linked by email) the sign-up
+ad attribution are dropped, so a squatter's registration cannot survive the
+real owner's social sign-in.
 
 ## The happy path
 
@@ -30,10 +34,11 @@ also auto-verified.
     │
  VerifyEmailScreen
     │  POST /api/auth/verify-email
-    │  {email, code}
+    │  {email, code, password?}
     ├──────────────────────────▶
     │                           atomic CAS on email_verification_tokens
     │                           mark user email_verified, verified_at
+    │                           (+ install `password` if sent)
     │                           issue JWT
     │   200 {access_token, ...}
     │◀──────────────────────────
@@ -52,6 +57,16 @@ also auto-verified.
 | Resend too soon | 429 with `Retry-After` header. Android disables the "Resend" button for the returned seconds. |
 | Resend beyond hourly cap | 429 with a much longer `Retry-After`. |
 | Duplicate email on register | 409 as before. |
+| Re-register an abandoned signup | An unverified, password-only account (no Google/Apple link) whose code window is over (the TTL has elapsed, consumed codes included) is taken over by `POST /api/auth/register`: the password and sign-up ad attribution are replaced, a fresh code is sent, and the answer is `verification_required` like a first signup. While a code is still within its TTL, and for verified or Google/Apple-linked accounts, register still answers 409. The takeover uses the per-email resend limiter, so it can answer 429 `resend_rate_limited` with the same body and `Retry-After` as `/resend-verification`. |
+
+`POST /api/auth/verify-email` accepts an optional `password`. After a correct
+code it is hashed and installed atomically with `email_verified` (skipped for
+Google/Apple-linked accounts), so if someone re-registered the address in
+between, the password of whoever holds the code wins. Omitted, the stored
+password is kept. Android, iOS and web keep the password typed at register (or
+at a login answered `verification_required`) in memory only and send it with
+the code. Clients that do not send it (older builds, or a web reload / process
+death on the code screen) verify whatever password is stored.
 
 The in-memory rate limiter is per-normalised-email (`email.lower().trim()`),
 with two thresholds: a short cooldown between consecutive sends and a

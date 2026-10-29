@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from central_server.db.database import Database
 
 _AD_COLUMNS = (
@@ -158,6 +160,24 @@ class TestAttributionStorage:
             row["ads_consent"],
         ) == (None, None, None, 0)
         assert await db.clear_user_ad_attribution(user) is False
+
+    @pytest.mark.parametrize(
+        "claimed",
+        [{"email_verified": True}, {"google_sub": "g-1"}, {"apple_sub": "a-1"}],
+    )
+    async def test_take_over_unverified_signup_leaves_claimed_rows_alone(
+        self, db, claimed
+    ):
+        user = await _user(
+            db, ad_click_id="abc", ad_click_kind="gclid", ads_consent=True, **claimed
+        )
+        assert await db.take_over_unverified_signup(user, "new-hash") is False
+        row = await _row(db, user)
+        assert (row["password_hash"], row["ad_click_id"], row["ads_consent"]) == (
+            "hash",
+            "abc",
+            1,
+        )
 
     async def test_purge_uses_click_time_then_created_at_and_skips_unconsented(
         self, db

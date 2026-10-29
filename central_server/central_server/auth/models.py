@@ -285,6 +285,11 @@ class MeResponse(BaseModel):
 class VerifyEmailRequest(RefreshableSessionRequest):
     email: str
     code: str
+    # The password the user typed at registration (or at the login that
+    # answered verification_required). When it differs from the stored one,
+    # someone else re-registered the address in between, and the code
+    # holder's password wins.
+    password: str | None = None
 
 
 class ResendVerificationRequest(BaseModel):

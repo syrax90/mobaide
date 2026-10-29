@@ -88,6 +88,27 @@ function fail(response: Response, error: unknown): never {
   throw toApiError(response, error);
 }
 
+/**
+ * The password typed on the way to the code screen, held in this module only
+ * (never storage or router state) so `verifyEmail` can prove it: if someone
+ * re-registered the address in the meantime, the server installs this one
+ * instead of theirs. A reload drops it and verification falls back to the
+ * code alone.
+ */
+let pendingVerification: { email: string; password: string } | null = null;
+
+function normaliseEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function rememberPending(outcome: AuthOutcome, password: string): AuthOutcome {
+  pendingVerification =
+    outcome.kind === 'verificationRequired'
+      ? { email: normaliseEmail(outcome.email), password }
+      : null;
+  return outcome;
+}
+
 /** The `ad_attribution` field for an account-creating body, or nothing. */
 function adAttributionField(): { ad_attribution?: AdAttribution } {
   const ad_attribution = readAdAttribution();
@@ -109,7 +130,7 @@ export async function register(
     },
   });
   if (error !== undefined || data === undefined) fail(response, error);
-  return toOutcome(data);
+  return rememberPending(toOutcome(data), password);
 }
 
 export async function login(
@@ -132,11 +153,12 @@ export async function login(
     if (apiError.status === 403 && apiError.code === 'verification_required') {
       const detail = apiError.detail as { email?: unknown } | null;
       const target = typeof detail?.email === 'string' ? detail.email : email;
+      rememberPending({ kind: 'verificationRequired', email: target }, password);
       throw new VerificationRequiredError(target);
     }
     throw apiError;
   }
-  return toOutcome(data);
+  return rememberPending(toOutcome(data), password);
 }
 
 export async function loginWithGoogle(idToken: string): Promise<AuthOutcome> {
@@ -180,6 +202,10 @@ export async function verifyEmail(
   email: string,
   code: string,
 ): Promise<AuthOutcome> {
+  const password =
+    pendingVerification?.email === normaliseEmail(email)
+      ? pendingVerification.password
+      : undefined;
   const { data, error, response } = await relayClient.POST(
     '/api/auth/verify-email',
     {
@@ -189,10 +215,12 @@ export async function verifyEmail(
         refreshable: true,
         session_transport: 'cookie',
         device_id: getDeviceId(),
+        ...(password === undefined ? {} : { password }),
       },
     },
   );
   if (error !== undefined || data === undefined) fail(response, error);
+  pendingVerification = null;
   return toOutcome(data);
 }
 

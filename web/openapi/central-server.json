@@ -1924,6 +1924,17 @@
             "title": "Email",
             "type": "string"
           },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
+          },
           "refreshable": {
             "default": false,
             "title": "Refreshable",

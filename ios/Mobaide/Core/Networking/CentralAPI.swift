@@ -64,10 +64,13 @@ struct CentralAPI: Sendable {
         )
     }
 
-    func verifyEmail(email: String, code: String, deviceId: String? = nil) async throws -> UserAuthResponse {
+    func verifyEmail(
+        email: String, code: String, password: String? = nil, deviceId: String? = nil
+    ) async throws -> UserAuthResponse {
         try await execute(
-            method: "POST", path: "/api/auth/verify-email",
-            body: VerifyEmailRequest(email: email, code: code, device_id: deviceId)
+            method: "POST",
+            path: "/api/auth/verify-email",
+            body: VerifyEmailRequest(email: email, code: code, password: password, device_id: deviceId)
         )
     }
 

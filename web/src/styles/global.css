@@ -1040,6 +1040,16 @@ input[type='radio']:checked {
  * route in a 60rem column, which would waste most of the grid. `:has()` keeps
  * that knowledge in CSS instead of threading a layout flag through RootLayout.
  */
+/*
+ * The shell's `min-height` lets a tall child stretch the page past the
+ * viewport. A docked sessions panel with many sessions is such a child: it
+ * would grow the row, the stage with it, and push the prompt below the fold.
+ * A fixed height makes the panel's list scroll instead.
+ */
+.app-shell:has(.terminal-page) {
+  height: 100%;
+}
+
 .app-main:has(.terminal-page) {
   max-width: none;
   padding: 0;

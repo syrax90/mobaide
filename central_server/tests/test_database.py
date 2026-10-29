@@ -1448,6 +1448,74 @@ class TestUserCRUD:
         assert user["google_sub"] == "g-abc"
 
 
+class TestUnverifiedSignupGuards:
+    async def test_consumed_code_within_ttl_blocks_takeover(self, db: Database):
+        user_id = await db.create_user(
+            email="u@example.com", password_hash="owner-hash"
+        )
+        await db.create_verification_token(user_id, "code-hash", ttl_seconds=300)
+        assert await db.consume_verification_token(user_id, "code-hash", 5) == "ok"
+
+        assert await db.has_live_verification_token(user_id) is True
+        assert await db.take_over_unverified_signup(user_id, "new-hash") is False
+        user = await db.get_user_by_id(user_id)
+        assert user["password_hash"] == "owner-hash"
+
+    async def test_expired_code_allows_takeover(self, db: Database):
+        user_id = await db.create_user(
+            email="u@example.com", password_hash="owner-hash"
+        )
+        await db.create_verification_token(user_id, "code-hash", ttl_seconds=300)
+        await db.conn.execute(
+            "UPDATE email_verification_tokens SET expires_at = ? WHERE user_id = ?",
+            ("2000-01-01T00:00:00+00:00", user_id),
+        )
+        await db.conn.commit()
+
+        assert await db.has_live_verification_token(user_id) is False
+        assert await db.take_over_unverified_signup(user_id, "new-hash") is True
+        user = await db.get_user_by_id(user_id)
+        assert user["password_hash"] == "new-hash"
+
+    async def test_mark_user_verified_installs_a_given_hash(self, db: Database):
+        user_id = await db.create_user(email="u@example.com", password_hash="old")
+
+        await db.mark_user_verified(user_id, "typed-hash")
+
+        user = await db.get_user_by_id(user_id)
+        assert (user["email_verified"], user["password_hash"]) == (1, "typed-hash")
+
+    async def test_mark_user_verified_without_hash_keeps_the_stored_one(
+        self, db: Database
+    ):
+        user_id = await db.create_user(email="u@example.com", password_hash="old")
+
+        await db.mark_user_verified(user_id)
+
+        user = await db.get_user_by_id(user_id)
+        assert (user["email_verified"], user["password_hash"]) == (1, "old")
+
+    async def test_clear_unverified_password_clears_an_unverified_row(
+        self, db: Database
+    ):
+        user_id = await db.create_user(email="u@example.com", password_hash="h")
+
+        await db.clear_unverified_password(user_id)
+
+        assert (await db.get_user_by_id(user_id))["password_hash"] is None
+
+    async def test_clear_unverified_password_leaves_a_verified_row_alone(
+        self, db: Database
+    ):
+        user_id = await db.create_user(
+            email="u@example.com", password_hash="h", email_verified=True
+        )
+
+        await db.clear_unverified_password(user_id)
+
+        assert (await db.get_user_by_id(user_id))["password_hash"] == "h"
+
+
 class TestAdminOwnedAgentPurgeMigration:
     """Verify that migration v4 purges admin-owned agents + dependents.
 

@@ -168,6 +168,88 @@ class TestAppleEndpoint:
         assert user["apple_sub"] == APPLE_SUB
         assert user["email_verified"] == 1
 
+    async def test_linking_unverified_account_drops_its_password(
+        self, apple_client, apple_db, monkeypatch
+    ):
+        user_id = await apple_db.create_user(
+            email="squatted@example.com", password_hash="x", email_verified=False
+        )
+        _patch_decode(monkeypatch, _idinfo(email="squatted@example.com"))
+        resp = await apple_client.post(
+            "/api/auth/apple", json={"id_token": "tok", "nonce": NONCE}
+        )
+        assert resp.status_code == 200
+        user = await apple_db.get_user_by_id(user_id)
+        assert user["password_hash"] is None
+        assert user["email_verified"] == 1
+
+    async def test_linking_verified_account_keeps_its_password(
+        self, apple_client, apple_db, monkeypatch
+    ):
+        user_id = await apple_db.create_user(
+            email="owner@example.com", password_hash="x", email_verified=True
+        )
+        _patch_decode(monkeypatch, _idinfo(email="owner@example.com"))
+        resp = await apple_client.post(
+            "/api/auth/apple", json={"id_token": "tok", "nonce": NONCE}
+        )
+        assert resp.status_code == 200
+        user = await apple_db.get_user_by_id(user_id)
+        assert user["password_hash"] == "x"
+        assert user["apple_sub"] == APPLE_SUB
+
+    async def test_linking_unverified_account_clears_its_attribution(
+        self, apple_client, apple_db, monkeypatch
+    ):
+        user_id = await apple_db.create_user(
+            email="squatted@example.com",
+            password_hash="x",
+            email_verified=False,
+            ad_click_id="Cj0K_squatter",
+            ad_click_kind="gclid",
+            ads_consent=True,
+            ad_attribution_sig="sig-squatter",
+        )
+        await apple_db.create_verification_token(user_id, "code-hash", 900)
+        _patch_decode(monkeypatch, _idinfo(email="squatted@example.com"))
+        resp = await apple_client.post(
+            "/api/auth/apple", json={"id_token": "tok", "nonce": NONCE}
+        )
+        assert resp.status_code == 200
+        user = await apple_db.get_user_by_id(user_id)
+        assert (
+            user["ad_click_id"],
+            user["ads_consent"],
+            user["ad_attribution_sig"],
+        ) == (None, 0, None)
+        assert (
+            await apple_db.consume_verification_token(user_id, "code-hash", 5)
+            != "ok"
+        )
+
+    async def test_verifying_own_unverified_row_drops_password_keeps_attribution(
+        self, apple_client, apple_db, monkeypatch
+    ):
+        user_id = await apple_db.create_user(
+            email="own@example.com",
+            password_hash="x",
+            apple_sub=APPLE_SUB,
+            email_verified=False,
+            ad_click_id="Cj0K_owner",
+            ad_click_kind="gclid",
+            ads_consent=True,
+        )
+        _patch_decode(monkeypatch, _idinfo(email="own@example.com"))
+        resp = await apple_client.post(
+            "/api/auth/apple", json={"id_token": "tok", "nonce": NONCE}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["user_id"] == user_id
+        user = await apple_db.get_user_by_id(user_id)
+        assert user["password_hash"] is None
+        assert user["email_verified"] == 1
+        assert (user["ad_click_id"], user["ads_consent"]) == ("Cj0K_owner", 1)
+
     async def test_email_verified_string_coercion(
         self, apple_client, apple_db, monkeypatch
     ):

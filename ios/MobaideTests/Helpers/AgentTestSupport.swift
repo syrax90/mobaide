@@ -29,7 +29,7 @@ struct AgentHarness {
             client: client
         )
         self.centralAPI = centralAPI
-        let connectionStore = ConnectionStore(keychain: InMemoryKeychainStore())
+        let connectionStore = session.connectionStore
         self.connectionStore = connectionStore
         agentRepository = AgentRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)
         templatesRepository = TemplatesRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)

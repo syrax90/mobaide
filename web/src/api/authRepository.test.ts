@@ -292,6 +292,94 @@ describe('verification routing', () => {
   });
 });
 
+describe('verify-email password', () => {
+  const pendingBody = {
+    ...okBody,
+    access_token: null,
+    refresh_token: null,
+    status: 'verification_required',
+  };
+
+  function verifyBodies(): Record<string, unknown>[] {
+    return relay.calls
+      .filter((call) => call.path === '/api/auth/verify-email')
+      .map((call) => call.body);
+  }
+
+  it('sends the password typed at a registration that needs verification', async () => {
+    succeed(pendingBody);
+    succeed(okBody);
+
+    await register('user@example.com', 'hunter22');
+    await verifyEmail('user@example.com', '123456');
+
+    expect(verifyBodies()[0]!.password).toBe('hunter22');
+  });
+
+  it('matches the address a 403 login named, ignoring case and spaces', async () => {
+    failWith(403, {
+      detail: { error: 'verification_required', email: 'normalised@example.com' },
+    });
+    succeed(okBody);
+
+    await expect(login('Normalised@Example.com', 'hunter33')).rejects.toThrow(
+      VerificationRequiredError,
+    );
+    await verifyEmail(' NORMALISED@example.com ', '123456');
+
+    expect(verifyBodies()[0]!.password).toBe('hunter33');
+  });
+
+  it('omits the password when verifying a different address', async () => {
+    succeed(pendingBody);
+    succeed(okBody);
+
+    await register('user@example.com', 'hunter22');
+    await verifyEmail('other@example.com', '123456');
+
+    expect('password' in verifyBodies()[0]!).toBe(false);
+  });
+
+  it('forgets the password once verification succeeds', async () => {
+    succeed(pendingBody);
+    succeed(okBody);
+    succeed(okBody);
+
+    await register('user@example.com', 'hunter22');
+    await verifyEmail('user@example.com', '123456');
+    await verifyEmail('user@example.com', '654321');
+
+    expect(verifyBodies().map((body) => body.password)).toEqual(['hunter22', undefined]);
+    expect('password' in verifyBodies()[1]!).toBe(false);
+  });
+
+  it('keeps the password for a retry after a wrong code', async () => {
+    succeed(pendingBody);
+    failWith(400, { detail: { error: 'verification_code_invalid' } });
+    succeed(okBody);
+
+    await register('user@example.com', 'hunter22');
+    await expect(verifyEmail('user@example.com', '000000')).rejects.toBeInstanceOf(
+      ApiError,
+    );
+    await verifyEmail('user@example.com', '123456');
+
+    expect(verifyBodies().map((body) => body.password)).toEqual(['hunter22', 'hunter22']);
+  });
+
+  it('drops a pending password when a later sign-in lands a session', async () => {
+    succeed(pendingBody);
+    succeed(okBody);
+    succeed(okBody);
+
+    await register('user@example.com', 'hunter22');
+    await login('user@example.com', 'hunter44');
+    await verifyEmail('user@example.com', '123456');
+
+    expect('password' in verifyBodies()[0]!).toBe(false);
+  });
+});
+
 describe('resendVerification', () => {
   it('reports the server cooldown instead of failing on a 429', async () => {
     failWith(429, { detail: { error: 'resend_rate_limited' } }, { 'Retry-After': '42' });

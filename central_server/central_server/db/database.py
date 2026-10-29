@@ -856,8 +856,9 @@ class Database:
         ``email_verified=True`` is used by the admin seeder and by the
         Google/Apple OAuth paths (when the provider vouches for the address),
         which all bypass the OTP flow. The ``ad_*`` / ``ads_consent`` columns
-        are written here only — attribution is a fact about how the account
-        came to exist, never updated afterwards.
+        are a fact about how the account came to exist: written here, and
+        otherwise only replaced by ``take_over_unverified_signup`` when
+        someone re-registers an abandoned unverified signup.
         """
         user_id = uuid.uuid4().hex[:12]
         now = _now_iso()
@@ -940,16 +941,32 @@ class Database:
         )
         await self.conn.commit()
 
-    async def mark_user_verified(self, user_id: str) -> None:
-        """Mark a user as email-verified (idempotent)."""
+    async def mark_user_verified(
+        self, user_id: str, password_hash: str | None = None
+    ) -> None:
+        """Mark a user as email-verified (idempotent).
+
+        A ``password_hash`` is installed in the same statement, so no
+        signup takeover can land between the two.
+        """
         now = _now_iso()
         await self.conn.execute(
             "UPDATE users "
             "SET email_verified = 1, "
             "    verified_at = COALESCE(verified_at, ?), "
+            "    password_hash = COALESCE(?, password_hash), "
             "    updated_at = ? "
             "WHERE id = ?",
-            (now, now, user_id),
+            (now, password_hash, now, user_id),
+        )
+        await self.conn.commit()
+
+    async def clear_unverified_password(self, user_id: str) -> None:
+        """Drop the password of a still-unverified user."""
+        await self.conn.execute(
+            "UPDATE users SET password_hash = NULL, updated_at = ? "
+            "WHERE id = ? AND email_verified = 0",
+            (_now_iso(), user_id),
         )
         await self.conn.commit()
 
@@ -2663,8 +2680,26 @@ class Database:
         await self.conn.commit()
         return "invalid"
 
+    _CODE_WINDOW_OPEN = (
+        "EXISTS (SELECT 1 FROM email_verification_tokens t "
+        "WHERE t.user_id = users.id AND t.expires_at > ?)"
+    )
+
+    async def has_live_verification_token(self, user_id: str) -> bool:
+        """True while a verification code issued to the user is within its TTL.
+
+        Consumed and exhausted codes count too: a code consumed a moment ago
+        means a verification is completing, and anyone who knows the email
+        can burn the attempt budget, so neither may end the code window.
+        """
+        cursor = await self.conn.execute(
+            f"SELECT 1 FROM users WHERE id = ? AND {self._CODE_WINDOW_OPEN}",
+            (user_id, _now_iso()),
+        )
+        return await cursor.fetchone() is not None
+
     async def invalidate_verification_tokens_for_user(self, user_id: str) -> None:
-        """Mark all active verification tokens for a user as consumed (used on resend)."""
+        """Mark all active verification tokens for a user as consumed."""
         now = _now_iso()
         await self.conn.execute(
             "UPDATE email_verification_tokens "
@@ -2752,6 +2787,46 @@ class Database:
         )
         await self.conn.commit()
         return "invalid"
+
+    async def take_over_unverified_signup(
+        self,
+        user_id: str,
+        password_hash: str,
+        ad_click_id: str | None = None,
+        ad_click_kind: str | None = None,
+        ad_click_at: str | None = None,
+        ads_consent: bool = False,
+        ad_attribution_sig: str | None = None,
+    ) -> bool:
+        """Re-register an unfinished email+password signup in place.
+
+        Replaces the password and the sign-up attribution only while the row
+        is still unverified, unlinked and outside any code window, so a
+        concurrent verification or Google/Apple link wins. Returns whether
+        the row was taken over.
+        """
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "UPDATE users SET password_hash = ?, ad_click_id = ?, "
+            "ad_click_kind = ?, ad_click_at = ?, ads_consent = ?, "
+            "ad_attribution_sig = ?, updated_at = ? "
+            "WHERE id = ? AND email_verified = 0 "
+            "AND google_sub IS NULL AND apple_sub IS NULL "
+            f"AND NOT {self._CODE_WINDOW_OPEN}",
+            (
+                password_hash,
+                ad_click_id,
+                ad_click_kind,
+                ad_click_at,
+                1 if ads_consent else 0,
+                ad_attribution_sig,
+                now,
+                user_id,
+                now,
+            ),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
 
     async def update_user_password(
         self, user_id: str, password_hash: str

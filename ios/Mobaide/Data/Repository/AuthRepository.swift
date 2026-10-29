@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Port of Android `AuthRepository`: orchestrates the central-server user
 /// auth flows and the agent connect flow. Persists identity/tokens to the
@@ -20,6 +21,9 @@ struct AuthRepository: Sendable {
     /// Sent with every sign-in so the server binds the session to this
     /// install and revoking the device signs it out. `nil` sends none.
     var deviceIdentityStore: DeviceIdentityStore? = nil
+    /// Shared by every copy of this struct, so the screen that verifies sees
+    /// what the screen that registered remembered.
+    let pendingVerification = PendingVerificationCredential()
 
     // MARK: - Central-server user auth
 
@@ -27,7 +31,9 @@ struct AuthRepository: Sendable {
 
     func register(email: String, password: String) async throws -> AuthResult {
         let response = try await centralAPI.register(email: email, password: password, deviceId: deviceId)
-        return try await finaliseOrFlagVerification(requestedEmail: email, response: response)
+        let result = try await finaliseOrFlagVerification(requestedEmail: email, response: response)
+        pendingVerification.remember(result, password: password)
+        return result
     }
 
     func loginWithPassword(email: String, password: String) async throws -> AuthResult {
@@ -36,11 +42,15 @@ struct AuthRepository: Sendable {
             response = try await centralAPI.login(email: email, password: password, deviceId: deviceId)
         } catch let error as APIError {
             if let pendingEmail = parseVerificationRequired(error) {
-                return .verificationRequired(email: pendingEmail)
+                let result = AuthResult.verificationRequired(email: pendingEmail)
+                pendingVerification.remember(result, password: password)
+                return result
             }
             throw error
         }
-        return try await finaliseOrFlagVerification(requestedEmail: email, response: response)
+        let result = try await finaliseOrFlagVerification(requestedEmail: email, response: response)
+        pendingVerification.remember(result, password: password)
+        return result
     }
 
     func loginWithGoogle(idToken: String) async throws -> AuthResult {
@@ -56,19 +66,26 @@ struct AuthRepository: Sendable {
     }
 
     func verifyEmail(email: String, code: String) async throws -> AuthResult {
-        let response = try await centralAPI.verifyEmail(email: email, code: code, deviceId: deviceId)
+        let response = try await centralAPI.verifyEmail(
+            email: email,
+            code: code,
+            password: pendingVerification.password(for: email),
+            deviceId: deviceId
+        )
+        pendingVerification.clear()
         if response.role == Self.roleAdmin { throw AdminLoginNotSupported() }
         guard let token = response.access_token else {
             throw APIError(code: -1, errorBody: "verify-email response missing access_token")
         }
-        userIdentityStore.saveUserSession(
-            accessToken: token,
-            email: response.email,
-            userId: response.user_id,
-            role: response.role,
-            scheduledDeletionAt: response.scheduled_deletion_at
-        )
-        await sessionManager.markUserLoggedIn()
+        await sessionManager.markUserLoggedIn(userId: response.user_id) { [userIdentityStore] in
+            userIdentityStore.saveUserSession(
+                accessToken: token,
+                email: response.email,
+                userId: response.user_id,
+                role: response.role,
+                scheduledDeletionAt: response.scheduled_deletion_at
+            )
+        }
         return .success(email: response.email, scheduledDeletionAt: response.scheduled_deletion_at)
     }
 
@@ -143,6 +160,7 @@ struct AuthRepository: Sendable {
         guard let userToken = userIdentityStore.getUserAccessToken() else {
             throw APIError(code: -1, errorBody: "Not signed in")
         }
+        let requestUserId = userIdentityStore.getUserId()
         if await sessionManager.isLoggedIn() {
             await sessionManager.agentDisconnect()
         }
@@ -151,10 +169,14 @@ struct AuthRepository: Sendable {
             agentId: agentId,
             request: MobileTokenRequest(mobile_device_id: deviceId, mobile_device_name: deviceName, platform: "ios")
         )
-        // A sign-out that landed while the mint was in flight wins: persisting
-        // the relay credentials now would resurrect fullyConnected with no user.
+        // A sign-out or account switch during the mint wins: persisting now would
+        // resurrect fullyConnected with no user, or hand this agent to the next account.
+        // The profile write runs inside `persist` so sign-out's `connectionStore.clear()`
+        // is strictly before or after it.
         try Task.checkCancellation()
-        let connected = await sessionManager.tryMarkAgentConnected { [tokenStore] in
+        let connected = await sessionManager.tryMarkAgentConnected(
+            expectedUserId: requestUserId
+        ) { [tokenStore, connectionStore] in
             tokenStore.saveRelayCredentials(
                 serverUrl: AppConfig.centralServerURL,
                 agentId: agentId,
@@ -163,31 +185,30 @@ struct AuthRepository: Sendable {
                 accessToken: tokens.access_token,
                 refreshToken: tokens.refresh_token
             )
+            if let existing = connectionStore.listProfiles()
+                .first(where: { $0.mode == "relay" && $0.agentId == agentId }) {
+                connectionStore.saveProfile(
+                    ConnectionStore.ConnectionProfile(
+                        id: existing.id,
+                        label: existing.label,
+                        mode: existing.mode,
+                        agentUrl: existing.agentUrl,
+                        relayServerUrl: existing.relayServerUrl,
+                        agentId: existing.agentId,
+                        pairingId: existing.pairingId,
+                        deviceId: existing.deviceId,
+                        accessToken: tokens.access_token,
+                        refreshToken: tokens.refresh_token,
+                        createdAt: existing.createdAt
+                    )
+                )
+                connectionStore.setActiveProfileId(existing.id)
+            } else {
+                connectionStore.captureActiveProfile(tokenStore: tokenStore, label: "Agent: \(friendlyName)")
+            }
         }
         guard connected else {
             throw APIError(code: -1, errorBody: "Signed out while connecting")
-        }
-
-        if let existing = connectionStore.listProfiles()
-            .first(where: { $0.mode == "relay" && $0.agentId == agentId }) {
-            connectionStore.saveProfile(
-                ConnectionStore.ConnectionProfile(
-                    id: existing.id,
-                    label: existing.label,
-                    mode: existing.mode,
-                    agentUrl: existing.agentUrl,
-                    relayServerUrl: existing.relayServerUrl,
-                    agentId: existing.agentId,
-                    pairingId: existing.pairingId,
-                    deviceId: existing.deviceId,
-                    accessToken: tokens.access_token,
-                    refreshToken: tokens.refresh_token,
-                    createdAt: existing.createdAt
-                )
-            )
-            connectionStore.setActiveProfileId(existing.id)
-        } else {
-            connectionStore.captureActiveProfile(tokenStore: tokenStore, label: "Agent: \(friendlyName)")
         }
     }
 
@@ -290,14 +311,15 @@ struct AuthRepository: Sendable {
         guard response.status != Self.statusVerificationRequired, let token = response.access_token else {
             return .verificationRequired(email: response.email.isEmpty ? requestedEmail : response.email)
         }
-        userIdentityStore.saveUserSession(
-            accessToken: token,
-            email: response.email,
-            userId: response.user_id,
-            role: response.role,
-            scheduledDeletionAt: response.scheduled_deletion_at
-        )
-        await sessionManager.markUserLoggedIn()
+        await sessionManager.markUserLoggedIn(userId: response.user_id) { [userIdentityStore] in
+            userIdentityStore.saveUserSession(
+                accessToken: token,
+                email: response.email,
+                userId: response.user_id,
+                role: response.role,
+                scheduledDeletionAt: response.scheduled_deletion_at
+            )
+        }
         return .success(email: response.email, scheduledDeletionAt: response.scheduled_deletion_at)
     }
 
@@ -348,5 +370,40 @@ struct AuthRepository: Sendable {
 
     private func decodeErrorBody<T: Decodable>(_ type: T.Type, from error: APIError) -> T? {
         try? WireJSON.decoder().decode(T.self, from: Data(error.errorBody.utf8))
+    }
+}
+
+/// The password typed on the way to the code screen, held in memory only so
+/// `verifyEmail` can prove it: if someone re-registered the address in the
+/// meantime, the server installs this one instead of theirs.
+final class PendingVerificationCredential: Sendable {
+    private struct Entry {
+        let email: String
+        let password: String
+    }
+
+    private let entry = OSAllocatedUnfairLock<Entry?>(initialState: nil)
+
+    func remember(_ result: AuthResult, password: String) {
+        let next: Entry?
+        if case let .verificationRequired(email) = result {
+            next = Entry(email: Self.normalised(email), password: password)
+        } else {
+            next = nil
+        }
+        entry.withLock { $0 = next }
+    }
+
+    func password(for email: String) -> String? {
+        let key = Self.normalised(email)
+        return entry.withLock { $0?.email == key ? $0?.password : nil }
+    }
+
+    func clear() {
+        entry.withLock { $0 = nil }
+    }
+
+    private static func normalised(_ email: String) -> String {
+        email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }

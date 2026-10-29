@@ -192,6 +192,45 @@ class CentralApiTest {
         }
     }
 
+    @Test
+    fun verifyEmail_withPassword_sendsItInTheBody() = runTest {
+        val (api, client) = newApi()
+        val captured = stubCall(client) { req ->
+            responseFor(req, 200, bodyJson = userAuthResponseJson)
+        }
+
+        api.verifyEmail("alice@example.com", "123456", "s3cret")
+
+        assertEquals(
+            "https://central.example.com/api/auth/verify-email",
+            captured.captured.url.toString(),
+        )
+        val buffer = okio.Buffer()
+        captured.captured.body!!.writeTo(buffer)
+        val body = buffer.readUtf8()
+        assertTrue(
+            "verify body must carry the password -- was: $body",
+            body.contains("\"password\":\"s3cret\""),
+        )
+    }
+
+    @Test
+    fun verifyEmail_withoutPassword_omitsTheKey() = runTest {
+        val (api, client) = newApi()
+        val captured = stubCall(client) { req ->
+            responseFor(req, 200, bodyJson = userAuthResponseJson)
+        }
+
+        api.verifyEmail("alice@example.com", "123456")
+
+        val buffer = okio.Buffer()
+        captured.captured.body!!.writeTo(buffer)
+        assertEquals(
+            """{"email":"alice@example.com","code":"123456"}""",
+            buffer.readUtf8(),
+        )
+    }
+
     // ---- Trailing-slash trimming on centralServerUrl -------------------------
 
     @Test

@@ -68,6 +68,8 @@ data class UserAuthResponse(
 data class VerifyEmailRequest(
     val email: String,
     val code: String,
+    /** The password typed to reach the code screen; see AuthRepository.verifyEmail. */
+    val password: String? = null,
     /** Per-install device id; binds the session so revoking the device signs it out. */
     val device_id: String? = null,
 )
