@@ -219,6 +219,18 @@
               }
             ]
           },
+          "device_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
           "id_token": {
             "minLength": 1,
             "title": "Id Token",
@@ -962,6 +974,18 @@
                 "type": "null"
               }
             ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           },
           "id_token": {
             "title": "Id Token",
@@ -1711,6 +1735,18 @@
       },
       "UserLoginRequest": {
         "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
           "email": {
             "title": "Email",
             "type": "string"
@@ -1777,6 +1813,18 @@
                 "type": "null"
               }
             ]
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           },
           "email": {
             "title": "Email",
@@ -1859,6 +1907,18 @@
           "code": {
             "title": "Code",
             "type": "string"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           },
           "email": {
             "title": "Email",
@@ -2880,7 +2940,7 @@
     },
     "/api/devices/{device_id}": {
       "delete": {
-        "description": "Revoke one of the authenticated user's devices.\n\nIdempotency / safety: returns 404 if the device does not belong to the\nuser (or was already revoked). On success, also invalidates every\noutstanding refresh token bound to that device across all agents \u2014 the\nrevoked device fails on its next ``/api/mobile/refresh`` round-trip\nand signs out, while the user's other devices stay logged in.",
+        "description": "Revoke one of the authenticated user's devices.\n\nIdempotency / safety: returns 404 if the device does not belong to the\nuser (or was already revoked). On success the device is cut off at\nonce, while the user's other devices stay logged in:\n\n* every access JWT bound to it \u2014 mobile tokens, and user sessions that\n  named it at sign-in \u2014 fails auth from now on (the\n  ``tokens_valid_after`` watermark ``revoke_mobile_device`` sets);\n* its mobile refresh tokens across all agents and its bound user-session\n  refresh tokens are revoked;\n* its live sockets are closed with 4001.\n\nA user session signed in without a ``device_id`` is not bound to the\ndevice and survives; only fresh sign-ins can re-register the device.",
         "operationId": "revoke_device_api_devices__device_id__delete",
         "parameters": [
           {

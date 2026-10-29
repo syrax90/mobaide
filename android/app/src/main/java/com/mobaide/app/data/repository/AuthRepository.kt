@@ -1,6 +1,7 @@
 package com.mobaide.app.data.repository
 
 import com.mobaide.app.data.auth.ConnectionStore
+import com.mobaide.app.data.auth.DeviceIdentityStore
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.auth.UserIdentityStore
@@ -14,6 +15,7 @@ import com.mobaide.app.data.network.dto.ResetErrorBody
 import com.mobaide.app.data.network.dto.ResetIpRateLimitedErrorBody
 import com.mobaide.app.data.network.dto.UserAuthResponse
 import com.mobaide.app.data.network.dto.VerificationRequiredErrorBody
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 
 /**
@@ -117,18 +119,32 @@ class AuthRepository(
     private val userIdentityStore: UserIdentityStore,
     private val sessionManager: SessionManager,
     private val connectionStore: ConnectionStore,
+    private val deviceIdentityStore: DeviceIdentityStore,
 ) {
 
     private val errorJson = Json { ignoreUnknownKeys = true }
 
+    /**
+     * Sent with every sign-in so the server binds the session to this
+     * install and revoking the device signs it out. A storage failure
+     * degrades to an unbound session rather than blocking sign-in.
+     */
+    private suspend fun deviceIdOrNull(): String? = try {
+        deviceIdentityStore.getOrCreateDeviceId()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }
+
     suspend fun register(email: String, password: String): AuthResult {
-        val response = centralApi.register(email, password)
+        val response = centralApi.register(email, password, deviceIdOrNull())
         return finaliseOrFlagVerification(email, response)
     }
 
     suspend fun loginWithPassword(email: String, password: String): AuthResult {
         val response = try {
-            centralApi.login(email, password)
+            centralApi.login(email, password, deviceIdOrNull())
         } catch (e: ApiException) {
             parseVerificationRequired(e)?.let { pending ->
                 return AuthResult.VerificationRequired(pending)
@@ -139,14 +155,14 @@ class AuthRepository(
     }
 
     suspend fun loginWithGoogle(idToken: String): AuthResult {
-        val response = centralApi.loginWithGoogle(idToken)
+        val response = centralApi.loginWithGoogle(idToken, deviceIdOrNull())
         // Google OAuth always returns a verified user server-side, so any
         // VerificationRequired here would be unexpected — surface generically.
         return finaliseOrFlagVerification(response.email, response)
     }
 
     suspend fun verifyEmail(email: String, code: String): AuthResult.Success {
-        val response = centralApi.verifyEmail(email, code)
+        val response = centralApi.verifyEmail(email, code, deviceIdOrNull())
         if (response.role == ROLE_ADMIN) throw AdminLoginNotSupportedException()
         val token = response.access_token
             ?: error("verify-email response missing access_token")

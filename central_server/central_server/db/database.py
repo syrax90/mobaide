@@ -90,7 +90,8 @@ CREATE TABLE IF NOT EXISTS mobile_devices (
     revoked_at       TEXT,
     platform         TEXT,
     push_token       TEXT,
-    push_environment TEXT
+    push_environment TEXT,
+    tokens_valid_after INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS pairing_tokens (
@@ -120,7 +121,8 @@ CREATE TABLE IF NOT EXISTS user_refresh_tokens (
     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
-    revoked_at TEXT
+    revoked_at TEXT,
+    device_id  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS email_verification_tokens (
@@ -769,6 +771,30 @@ class Database:
                 )
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 21")
+
+        if version < 22:
+            # Device revocation enforced on already-issued JWTs: the per-device
+            # ``tokens_valid_after`` watermark plus the device a user-session
+            # refresh token is bound to. Devices revoked before this version
+            # get their watermark from ``revoked_at``, so their old tokens die
+            # with the upgrade.
+            for table, column, ddl in (
+                ("mobile_devices", "tokens_valid_after", "INTEGER"),
+                ("user_refresh_tokens", "device_id", "TEXT"),
+            ):
+                cursor = await self._conn.execute(f"PRAGMA table_info({table})")
+                cols = {r[1] for r in await cursor.fetchall()}
+                if cols and column not in cols:
+                    await self._conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"
+                    )
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute(
+                "UPDATE mobile_devices "
+                "SET tokens_valid_after = CAST(strftime('%s', revoked_at) AS INTEGER) "
+                "WHERE revoked_at IS NOT NULL AND tokens_valid_after IS NULL"
+            )
+            await self._conn.execute("PRAGMA user_version = 22")
 
         await self._conn.commit()
 
@@ -2933,12 +2959,15 @@ class Database:
         wipes its push registration, so the previous account can neither
         refresh its mobile sessions nor keep alerting hardware it no
         longer uses. Already-issued access JWTs stay valid until they
-        need a refresh — the same soft-sign-out semantics as an explicit
-        device revoke (see ``devices/router.py``).
+        need a refresh — unlike an explicit device revoke, which also
+        kills them through ``tokens_valid_after``.
 
         Re-registering a previously revoked device under the same owner
         clears ``revoked_at`` — possession of a valid user JWT proves
-        account control (Bitwarden semantics).
+        account control (Bitwarden semantics). ``tokens_valid_after`` is
+        kept, so tokens issued before the revoke stay dead; callers must
+        first check the caller's session postdates it
+        (``auth.dependencies.require_mintable_device``).
 
         Concurrency: a competing claim by another user can interleave
         between this handover and the caller's subsequent refresh-token
@@ -3013,15 +3042,32 @@ class Database:
     ) -> bool:
         """Revoke a device. Returns True iff the device belonged to the user
         and was previously active. Clears the push token so a revoked device
-        stops receiving pushes even if it is later re-paired."""
+        stops receiving pushes even if it is later re-paired.
+
+        Also sets ``tokens_valid_after``: every JWT bound to this device and
+        issued in or before this second is rejected from now on, on both
+        the mobile and the user axis. The watermark is never cleared, so a
+        later re-registration does not bring those tokens back."""
+        now = datetime.now(timezone.utc)
         cursor = await self.conn.execute(
-            "UPDATE mobile_devices SET revoked_at = ?, "
+            "UPDATE mobile_devices SET revoked_at = ?, tokens_valid_after = ?, "
             "    push_token = NULL, push_environment = NULL "
             "WHERE device_id = ? AND user_id = ? AND revoked_at IS NULL",
-            (_now_iso(), device_id, user_id),
+            (now.isoformat(), int(now.timestamp()), device_id, user_id),
         )
         await self.conn.commit()
         return cursor.rowcount == 1
+
+    async def device_tokens_valid_after(self, device_id: str) -> int | None:
+        """The device's revocation watermark: a JWT bound to it is valid only
+        when its ``iat`` is greater. ``None`` when the device was never
+        revoked or has no row."""
+        cursor = await self.conn.execute(
+            "SELECT tokens_valid_after FROM mobile_devices WHERE device_id = ?",
+            (device_id,),
+        )
+        row = await cursor.fetchone()
+        return row["tokens_valid_after"] if row else None
 
     async def set_push_token(
         self,
@@ -3181,13 +3227,19 @@ class Database:
         return row["mobile_device_id"], row["agent_id"]
 
     async def store_user_refresh_token(
-        self, raw_token: str, user_id: str, expire_minutes: int
+        self,
+        raw_token: str,
+        user_id: str,
+        expire_minutes: int,
+        device_id: str | None = None,
     ) -> None:
         """Persist a hashed user-session refresh token.
 
         Mirrors ``store_refresh_token`` on the mobile axis, including the
         year-9999 sentinel for the never-expires case, so both families
-        answer the same ``expires_at > now`` predicate.
+        answer the same ``expires_at > now`` predicate. ``device_id`` binds
+        the session to a registered device, so rotation keeps the binding
+        and revoking that device retires the session.
         """
         now = datetime.now(timezone.utc)
         if expire_minutes == 0:
@@ -3198,15 +3250,23 @@ class Database:
             ).isoformat()
         await self.conn.execute(
             "INSERT INTO user_refresh_tokens "
-            "(token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-            (_hash_token(raw_token), user_id, now.isoformat(), expires_at_iso),
+            "(token_hash, user_id, created_at, expires_at, device_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                _hash_token(raw_token),
+                user_id,
+                now.isoformat(),
+                expires_at_iso,
+                device_id,
+            ),
         )
         await self.conn.commit()
 
     async def validate_and_consume_user_refresh(
         self, raw_token: str
-    ) -> str | None:
-        """Validate a user-session refresh token, returning its ``user_id``.
+    ) -> tuple[str, str | None] | None:
+        """Validate a user-session refresh token, returning
+        ``(user_id, device_id)``.
 
         Rotates: the presented token is revoked on success, so the caller
         must issue a replacement. Replaying a consumed token returns None —
@@ -3216,7 +3276,7 @@ class Database:
         token_hash = _hash_token(raw_token)
         now = _now_iso()
         cursor = await self.conn.execute(
-            "SELECT user_id FROM user_refresh_tokens "
+            "SELECT user_id, device_id FROM user_refresh_tokens "
             "WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
             (token_hash, now),
         )
@@ -3228,7 +3288,7 @@ class Database:
             (now, token_hash),
         )
         await self.conn.commit()
-        return row["user_id"]
+        return row["user_id"], row["device_id"]
 
     async def revoke_user_refresh_token(self, raw_token: str) -> bool:
         """Revoke one user-session refresh token, expired or not.
@@ -3256,6 +3316,19 @@ class Database:
             "WHERE user_id = ? AND revoked_at IS NULL",
             (now, user_id),
         )
+        return cursor.rowcount
+
+    async def revoke_user_refresh_tokens_for_device(
+        self, user_id: str, device_id: str
+    ) -> int:
+        """Revoke the user's live sessions bound to one device (device
+        revoke). Unbound sessions are untouched."""
+        cursor = await self.conn.execute(
+            "UPDATE user_refresh_tokens SET revoked_at = ? "
+            "WHERE user_id = ? AND device_id = ? AND revoked_at IS NULL",
+            (_now_iso(), user_id, device_id),
+        )
+        await self.conn.commit()
         return cursor.rowcount
 
     async def revoke_all_user_refresh_tokens(self, user_id: str) -> int:

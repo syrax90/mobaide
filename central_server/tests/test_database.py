@@ -1000,6 +1000,44 @@ class TestMobileDevices:
         devices = await db.list_user_devices(owner)
         assert [d["device_id"] for d in devices] == ["dev-1"]
 
+    async def test_revoke_sets_a_watermark_that_re_registration_keeps(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        await db.upsert_mobile_device(device_id="dev-1", user_id=owner, name="A")
+        assert await db.device_tokens_valid_after("dev-1") is None
+        before = int(datetime.now(timezone.utc).timestamp())
+
+        await db.revoke_mobile_device("dev-1", owner)
+        watermark = await db.device_tokens_valid_after("dev-1")
+        await db.upsert_mobile_device(device_id="dev-1", user_id=owner, name="A")
+
+        assert watermark is not None and watermark >= before
+        # Re-registration revives the device, never the tokens it held before.
+        assert await db.device_tokens_valid_after("dev-1") == watermark
+        assert await db.device_tokens_valid_after("dev-unknown") is None
+
+    async def test_revoke_user_refresh_tokens_for_device_spares_other_sessions(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        other = await db.create_user(email="other@test.local", password_hash="h")
+        await db.store_user_refresh_token("bound", owner, 60, device_id="dev-1")
+        await db.store_user_refresh_token("other-dev", owner, 60, device_id="dev-2")
+        await db.store_user_refresh_token("unbound", owner, 60)
+        await db.store_user_refresh_token("other-user", other, 60, device_id="dev-1")
+
+        count = await db.revoke_user_refresh_tokens_for_device(owner, "dev-1")
+
+        assert count == 1
+        assert await db.validate_and_consume_user_refresh("bound") is None
+        assert await db.validate_and_consume_user_refresh("other-dev") == (owner, "dev-2")
+        assert await db.validate_and_consume_user_refresh("unbound") == (owner, None)
+        assert await db.validate_and_consume_user_refresh("other-user") == (
+            other,
+            "dev-1",
+        )
+
     async def test_revoke_refresh_tokens_for_device(self, db: Database):
         owner = await _create_test_user(db)
         agent_id, _ = await db.register_agent("a", owner)
@@ -1208,7 +1246,7 @@ class TestPushColumnsMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 21
+        assert (await cursor.fetchone())[0] == 22
         cursor = await db.conn.execute("PRAGMA table_info(mobile_devices)")
         columns = {r[1] for r in await cursor.fetchall()}
         assert {"platform", "push_token", "push_environment"} <= columns
@@ -1334,7 +1372,7 @@ class TestAdminOwnedAgentPurgeMigration:
 
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 21
+        assert row[0] == 22
 
         # v4 purges admin-owned agents + their cascade rows.
         assert await db.get_agent(admin_agent_id) is None
@@ -1364,7 +1402,7 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 21
+        assert row[0] == 22
         await db.close()
 
 
@@ -2170,7 +2208,7 @@ class TestCustomAgentTypesMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 21
+        assert (await cursor.fetchone())[0] == 22
 
         # Table is usable and the NOCASE unique index came back with it.
         row = await db.create_custom_agent_type(owner, "Aider", "c1")
@@ -2184,7 +2222,7 @@ class TestCustomAgentTypesMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 21
+        assert (await cursor.fetchone())[0] == 22
         assert await db.get_custom_agent_type(row["id"]) is not None
         await db.close()
 
@@ -2349,7 +2387,7 @@ class TestAgentUninstallMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 21
+        assert (await cursor.fetchone())[0] == 22
         # Pre-existing agents read as not supporting uninstall until their
         # next handshake says otherwise.
         assert (await db.get_agent(agent_id))["supports_uninstall"] == 0
@@ -2361,6 +2399,42 @@ class TestAgentUninstallMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 21
+        assert (await cursor.fetchone())[0] == 22
         assert await db.match_uninstall_request(agent_id, raw_token) is True
+        await db.close()
+
+
+class TestDeviceTokenRevocationMigration:
+    async def test_v22_adds_columns_and_backfills_the_watermark(self, tmp_path):
+        db_path = str(tmp_path / "pre_v22.db")
+        db = Database(db_path)
+        await db.connect()
+        owner = await _create_test_user(db)
+        await db.upsert_mobile_device(device_id="dev-gone", user_id=owner, name="A")
+        await db.upsert_mobile_device(device_id="dev-live", user_id=owner, name="B")
+        await db.revoke_mobile_device("dev-gone", owner)
+        await db.store_user_refresh_token("r-legacy", owner, 60)
+        cursor = await db.conn.execute(
+            "SELECT revoked_at FROM mobile_devices WHERE device_id = 'dev-gone'"
+        )
+        revoked_at = (await cursor.fetchone())[0]
+        # Simulate a v21 on-disk schema: drop the new columns and roll
+        # user_version back so reopening replays the v22 block.
+        await db.conn.execute("ALTER TABLE mobile_devices DROP COLUMN tokens_valid_after")
+        await db.conn.execute("ALTER TABLE user_refresh_tokens DROP COLUMN device_id")
+        await db.conn.execute("PRAGMA user_version = 21")
+        await db.conn.commit()
+        await db.close()
+
+        db = Database(db_path)
+        await db.connect()
+        cursor = await db.conn.execute("PRAGMA user_version")
+        assert (await cursor.fetchone())[0] == 22
+        # A device revoked before the upgrade loses its old tokens with it.
+        assert await db.device_tokens_valid_after("dev-gone") == int(
+            datetime.fromisoformat(revoked_at).timestamp()
+        )
+        assert await db.device_tokens_valid_after("dev-live") is None
+        # Pre-existing user sessions survive, unbound.
+        assert await db.validate_and_consume_user_refresh("r-legacy") == (owner, None)
         await db.close()

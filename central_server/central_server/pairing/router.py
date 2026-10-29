@@ -29,7 +29,7 @@ from fastapi import (
 )
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from ..auth.dependencies import get_non_admin_api_user
+from ..auth.dependencies import get_non_admin_api_user, require_mintable_device
 from ..auth.models import (
     MobileRefreshRequest,
     MobileTokenResponse,
@@ -382,6 +382,8 @@ async def _complete_pairing(
                     "paired to another account."
                 ),
             )
+
+    await require_mintable_device(request, user, mobile_device_id)
 
     # Device registry is last-login-wins: an authenticated claim always
     # takes the device over, revoking the prior account's refresh tokens.

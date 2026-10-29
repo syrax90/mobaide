@@ -60,6 +60,7 @@ const {
 const { AdminLoginNotSupportedError, ADMIN_LOGIN_MESSAGE, ApiError } = await import(
   './errors'
 );
+const { getDeviceId } = await import('../auth/deviceIdentity');
 
 function succeed(data: unknown): void {
   relay.results.push({ data, response: new Response(null, { status: 200 }) });
@@ -129,6 +130,26 @@ describe('session-minting calls', () => {
     ]);
   });
 
+  it("binds every session-minting call to this browser's device id", async () => {
+    for (let i = 0; i < 5; i += 1) succeed(okBody);
+
+    await register('user@example.com', 'hunter22');
+    await login('user@example.com', 'hunter22');
+    await loginWithGoogle('google-id-token');
+    await loginWithApple('apple-id-token', 'nonce-1');
+    await verifyEmail('user@example.com', '123456');
+
+    // The same id the devices screen lists, so revoking it ends the session.
+    const deviceId = getDeviceId();
+    expect(relay.calls.map((call) => call.body.device_id)).toEqual([
+      deviceId,
+      deviceId,
+      deviceId,
+      deviceId,
+      deviceId,
+    ]);
+  });
+
   it('sends the Apple nonce alongside the token it was minted with', async () => {
     succeed(okBody);
 
@@ -140,6 +161,7 @@ describe('session-minting calls', () => {
       {
         path: '/api/auth/apple',
         body: {
+          device_id: getDeviceId(),
           id_token: 'apple-id-token',
           nonce: 'nonce-1',
           refreshable: true,

@@ -166,6 +166,32 @@ class CentralApiTest {
         assertEquals("alice@example.com", resp.email)
     }
 
+    @Test
+    fun signInCalls_carryTheDeviceIdInTheBody() = runTest {
+        val calls: List<suspend (CentralApi) -> Unit> = listOf(
+            { it.register("a@b.com", "pw", deviceId = "dev-uuid-1") },
+            { it.login("a@b.com", "pw", deviceId = "dev-uuid-1") },
+            { it.loginWithGoogle("google-id-token", deviceId = "dev-uuid-1") },
+            { it.verifyEmail("a@b.com", "123456", deviceId = "dev-uuid-1") },
+        )
+        for (call in calls) {
+            val (api, client) = newApi()
+            val captured = stubCall(client) { req ->
+                responseFor(req, 200, bodyJson = userAuthResponseJson)
+            }
+
+            call(api)
+
+            val buffer = okio.Buffer()
+            captured.captured.body!!.writeTo(buffer)
+            val body = buffer.readUtf8()
+            assertTrue(
+                "${captured.captured.url} body must carry the device id -- was: $body",
+                body.contains("\"device_id\":\"dev-uuid-1\""),
+            )
+        }
+    }
+
     // ---- Trailing-slash trimming on centralServerUrl -------------------------
 
     @Test

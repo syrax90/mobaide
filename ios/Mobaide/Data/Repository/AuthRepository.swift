@@ -17,18 +17,23 @@ struct AuthRepository: Sendable {
     let userIdentityStore: UserIdentityStore
     let sessionManager: SessionManager
     let connectionStore: ConnectionStore
+    /// Sent with every sign-in so the server binds the session to this
+    /// install and revoking the device signs it out. `nil` sends none.
+    var deviceIdentityStore: DeviceIdentityStore? = nil
 
     // MARK: - Central-server user auth
 
+    private var deviceId: String? { deviceIdentityStore?.getOrCreateDeviceId() }
+
     func register(email: String, password: String) async throws -> AuthResult {
-        let response = try await centralAPI.register(email: email, password: password)
+        let response = try await centralAPI.register(email: email, password: password, deviceId: deviceId)
         return try await finaliseOrFlagVerification(requestedEmail: email, response: response)
     }
 
     func loginWithPassword(email: String, password: String) async throws -> AuthResult {
         let response: UserAuthResponse
         do {
-            response = try await centralAPI.login(email: email, password: password)
+            response = try await centralAPI.login(email: email, password: password, deviceId: deviceId)
         } catch let error as APIError {
             if let pendingEmail = parseVerificationRequired(error) {
                 return .verificationRequired(email: pendingEmail)
@@ -39,19 +44,19 @@ struct AuthRepository: Sendable {
     }
 
     func loginWithGoogle(idToken: String) async throws -> AuthResult {
-        let response = try await centralAPI.loginWithGoogle(idToken: idToken)
+        let response = try await centralAPI.loginWithGoogle(idToken: idToken, deviceId: deviceId)
         // Google OAuth always returns a verified user server-side; any
         // VerificationRequired here is unexpected and surfaces generically.
         return try await finaliseOrFlagVerification(requestedEmail: response.email, response: response)
     }
 
     func loginWithApple(idToken: String, nonce: String) async throws -> AuthResult {
-        let response = try await centralAPI.loginWithApple(idToken: idToken, nonce: nonce)
+        let response = try await centralAPI.loginWithApple(idToken: idToken, nonce: nonce, deviceId: deviceId)
         return try await finaliseOrFlagVerification(requestedEmail: response.email, response: response)
     }
 
     func verifyEmail(email: String, code: String) async throws -> AuthResult {
-        let response = try await centralAPI.verifyEmail(email: email, code: code)
+        let response = try await centralAPI.verifyEmail(email: email, code: code, deviceId: deviceId)
         if response.role == Self.roleAdmin { throw AdminLoginNotSupported() }
         guard let token = response.access_token else {
             throw APIError(code: -1, errorBody: "verify-email response missing access_token")

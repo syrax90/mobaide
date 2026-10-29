@@ -62,7 +62,7 @@ async def user_events(websocket: WebSocket) -> None:
         return
 
     user_id = payload.sub
-    # The dashboard JWT carries no device_id, so generate a short token
+    # Not every dashboard JWT carries a device_id, so generate a short token
     # for log correlation and as a unique key within the user's connection set.
     device_id = secrets.token_hex(4)
     bound_device_id = await _bind_device(websocket, user_id)
@@ -73,6 +73,7 @@ async def user_events(websocket: WebSocket) -> None:
         device_id=device_id,
         websocket=websocket,
         bound_device_id=bound_device_id,
+        token_device_id=payload.device_id,
     )
     routing.register_user_client(user_id, client)
     logger.info(

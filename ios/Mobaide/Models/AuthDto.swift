@@ -33,15 +33,21 @@ struct RefreshRequest: Codable, Equatable, Sendable {
 struct UserRegisterRequest: Codable, Equatable, Sendable {
     let email: String
     let password: String
+    /// Per-install device id; binds the session so revoking the device signs it out.
+    var device_id: String? = nil
 }
 
 struct UserLoginRequest: Codable, Equatable, Sendable {
     let email: String
     let password: String
+    /// Per-install device id; binds the session so revoking the device signs it out.
+    var device_id: String? = nil
 }
 
 struct GoogleAuthRequest: Codable, Equatable, Sendable {
     let id_token: String
+    /// Per-install device id; binds the session so revoking the device signs it out.
+    var device_id: String? = nil
 }
 
 /// Unlike the Google mobile path, `nonce` is required: the client embeds it
@@ -49,6 +55,8 @@ struct GoogleAuthRequest: Codable, Equatable, Sendable {
 struct AppleAuthRequest: Codable, Equatable, Sendable {
     let id_token: String
     let nonce: String
+    /// Per-install device id; binds the session so revoking the device signs it out.
+    var device_id: String? = nil
 }
 
 /// `status` is "ok" for verified accounts (access_token populated) or
@@ -98,6 +106,8 @@ extension UserAuthResponse {
 struct VerifyEmailRequest: Codable, Equatable, Sendable {
     let email: String
     let code: String
+    /// Per-install device id; binds the session so revoking the device signs it out.
+    var device_id: String? = nil
 }
 
 struct ResendVerificationRequest: Codable, Equatable, Sendable {

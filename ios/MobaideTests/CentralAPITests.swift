@@ -77,6 +77,28 @@ final class CentralAPITests: XCTestCase {
         XCTAssertEqual(body, AppleAuthRequest(id_token: "apple-token", nonce: "nonce-1"))
     }
 
+    func testSignInRoutesCarryTheDeviceId() async throws {
+        for _ in 0..<5 {
+            StubURLProtocol.enqueue(
+                status: 200,
+                body: #"{"access_token":"a","user_id":"u1","email":"e@x.com","role":"user"}"#
+            )
+        }
+        let api = makeAPI()
+
+        _ = try await api.register(email: "e@x.com", password: "pw", deviceId: "dev-1")
+        _ = try await api.login(email: "e@x.com", password: "pw", deviceId: "dev-1")
+        _ = try await api.loginWithGoogle(idToken: "google-token", deviceId: "dev-1")
+        _ = try await api.loginWithApple(idToken: "apple-token", nonce: "nonce-1", deviceId: "dev-1")
+        _ = try await api.verifyEmail(email: "e@x.com", code: "123456", deviceId: "dev-1")
+
+        let sent = try StubURLProtocol.bodies.map { body in
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            return json["device_id"] as? String
+        }
+        XCTAssertEqual(sent, Array(repeating: "dev-1", count: 5))
+    }
+
     func test401OnApplePathDoesNotInvalidate() async {
         StubURLProtocol.enqueue(status: 401, body: "Invalid Apple ID token")
         do {

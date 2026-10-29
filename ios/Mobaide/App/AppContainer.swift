@@ -152,7 +152,8 @@ final class AppContainer {
             tokenStore: tokenStore,
             userIdentityStore: userIdentityStore,
             sessionManager: sessionManager,
-            connectionStore: connectionStore
+            connectionStore: connectionStore,
+            deviceIdentityStore: deviceIdentityStore
         )
 
         self.tokenStore = tokenStore

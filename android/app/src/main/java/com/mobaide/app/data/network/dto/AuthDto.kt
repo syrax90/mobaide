@@ -24,17 +24,23 @@ data class RefreshRequest(
 data class UserRegisterRequest(
     val email: String,
     val password: String,
+    /** Per-install device id; binds the session so revoking the device signs it out. */
+    val device_id: String? = null,
 )
 
 @Serializable
 data class UserLoginRequest(
     val email: String,
     val password: String,
+    /** Per-install device id; binds the session so revoking the device signs it out. */
+    val device_id: String? = null,
 )
 
 @Serializable
 data class GoogleAuthRequest(
     val id_token: String,
+    /** Per-install device id; binds the session so revoking the device signs it out. */
+    val device_id: String? = null,
 )
 
 @Serializable
@@ -62,6 +68,8 @@ data class UserAuthResponse(
 data class VerifyEmailRequest(
     val email: String,
     val code: String,
+    /** Per-install device id; binds the session so revoking the device signs it out. */
+    val device_id: String? = null,
 )
 
 @Serializable

@@ -5,7 +5,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from ..auth.dependencies import get_non_admin_api_user
+from ..auth.dependencies import get_non_admin_api_user, require_mintable_device
 from ..auth.models import (
     AgentSummary,
     CreateAgentRequest,
@@ -108,6 +108,7 @@ async def get_mobile_tokens(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not the owner of this agent",
         )
+    await require_mintable_device(request, user, body.mobile_device_id)
     previous_owner = await db.upsert_mobile_device(
         device_id=body.mobile_device_id,
         user_id=user.sub,

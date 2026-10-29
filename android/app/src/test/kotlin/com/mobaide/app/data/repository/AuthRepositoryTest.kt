@@ -1,6 +1,7 @@
 package com.mobaide.app.data.repository
 
 import com.mobaide.app.data.auth.ConnectionStore
+import com.mobaide.app.data.auth.DeviceIdentityStore
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.auth.UserIdentityStore
@@ -18,6 +19,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import io.mockk.verifyOrder
+import java.io.IOException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -49,7 +51,28 @@ class AuthRepositoryTest {
         userIdentityStore: UserIdentityStore = newUserIdentityStore(),
         sessionManager: SessionManager = mockk(relaxUnitFun = true),
         connectionStore: ConnectionStore = newConnectionStore(),
-    ) = AuthRepository(restApi, centralApi, tokenStore, userIdentityStore, sessionManager, connectionStore)
+        deviceIdentityStore: DeviceIdentityStore = deviceIdentityStore(null),
+    ) = AuthRepository(
+        restApi, centralApi, tokenStore, userIdentityStore, sessionManager, connectionStore,
+        deviceIdentityStore,
+    )
+
+    /** A store yielding [deviceId], or failing to read when it is null. */
+    private fun deviceIdentityStore(deviceId: String?): DeviceIdentityStore =
+        mockk<DeviceIdentityStore>().also { store ->
+            if (deviceId != null) {
+                coEvery { store.getOrCreateDeviceId() } returns deviceId
+            } else {
+                coEvery { store.getOrCreateDeviceId() } throws IOException("datastore unreadable")
+            }
+        }
+
+    private fun signedIn(email: String) = UserAuthResponse(
+        access_token = "user-token",
+        user_id = "u1",
+        email = email,
+        role = "viewer",
+    )
 
     // ---- register -----------------------------------------------------------
 
@@ -661,5 +684,47 @@ class AuthRepositoryTest {
             DeleteAccountResult.Submitted(DeletionMode.Immediate),
             immediateResult,
         )
+    }
+
+    @Test
+    fun everySignIn_sendsThisInstallsDeviceId() = runTest {
+        val centralApi = newCentralApi()
+        val sent = mutableListOf<String?>()
+        coEvery { centralApi.register(any(), any(), captureNullable(sent)) } returns
+            signedIn("a@test.com")
+        coEvery { centralApi.login(any(), any(), captureNullable(sent)) } returns
+            signedIn("a@test.com")
+        coEvery { centralApi.loginWithGoogle(any(), captureNullable(sent)) } returns
+            signedIn("a@test.com")
+        coEvery { centralApi.verifyEmail(any(), any(), captureNullable(sent)) } returns
+            signedIn("a@test.com")
+        val repo = newRepo(
+            centralApi = centralApi,
+            deviceIdentityStore = deviceIdentityStore("dev-uuid-1"),
+        )
+
+        repo.register("a@test.com", "pw")
+        repo.loginWithPassword("a@test.com", "pw")
+        repo.loginWithGoogle("google-id-token")
+        repo.verifyEmail("a@test.com", "123456")
+
+        assertEquals(List(4) { "dev-uuid-1" }, sent)
+    }
+
+    @Test
+    fun signIn_whenDeviceIdentityIsUnreadable_proceedsUnbound() = runTest {
+        val centralApi = newCentralApi()
+        val sent = mutableListOf<String?>()
+        coEvery { centralApi.login(any(), any(), captureNullable(sent)) } returns
+            signedIn("a@test.com")
+        val repo = newRepo(
+            centralApi = centralApi,
+            deviceIdentityStore = deviceIdentityStore(null),
+        )
+
+        val result = repo.loginWithPassword("a@test.com", "pw")
+
+        assertTrue(result is AuthResult.Success)
+        assertEquals(listOf<String?>(null), sent)
     }
 }

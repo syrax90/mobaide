@@ -34,10 +34,18 @@ async def revoke_device(
     """Revoke one of the authenticated user's devices.
 
     Idempotency / safety: returns 404 if the device does not belong to the
-    user (or was already revoked). On success, also invalidates every
-    outstanding refresh token bound to that device across all agents — the
-    revoked device fails on its next ``/api/mobile/refresh`` round-trip
-    and signs out, while the user's other devices stay logged in.
+    user (or was already revoked). On success the device is cut off at
+    once, while the user's other devices stay logged in:
+
+    * every access JWT bound to it — mobile tokens, and user sessions that
+      named it at sign-in — fails auth from now on (the
+      ``tokens_valid_after`` watermark ``revoke_mobile_device`` sets);
+    * its mobile refresh tokens across all agents and its bound user-session
+      refresh tokens are revoked;
+    * its live sockets are closed with 4001.
+
+    A user session signed in without a ``device_id`` is not bound to the
+    device and survives; only fresh sign-ins can re-register the device.
     """
     db = request.app.state.db
     revoked = await db.revoke_mobile_device(device_id, user.sub)
@@ -47,11 +55,20 @@ async def revoke_device(
             detail="Device not found",
         )
     count = await db.revoke_all_refresh_tokens_for_device(device_id)
+    session_count = await db.revoke_user_refresh_tokens_for_device(
+        user.sub, device_id
+    )
+    sockets = await request.app.state.routing.disconnect_device(
+        user.sub, device_id
+    )
     logger.info(
-        "device.revoked user_id=%s device_id=%s tokens_revoked=%d",
+        "device.revoked user_id=%s device_id=%s tokens_revoked=%d "
+        "sessions_revoked=%d sockets_closed=%d",
         user.sub,
         device_id,
         count,
+        session_count,
+        sockets,
     )
 
 

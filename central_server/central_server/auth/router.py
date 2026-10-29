@@ -57,8 +57,13 @@ async def _apply_refreshable_session(
     *,
     refreshable: bool,
     transport: str | None,
+    device_id: str | None,
 ) -> AuthTokenResponse:
     """Upgrade a freshly minted session to a refreshable one when asked.
+
+    A ``device_id`` binds the session to that device, refreshable or not:
+    the token gets a ``device_id`` claim (and the refresh row the column),
+    so revoking the device signs this session out.
 
     A no-op unless the client opted in, and also when the response carries
     no access token at all — the ``verification_required`` branch of
@@ -93,9 +98,17 @@ async def _apply_refreshable_session(
             if superseded is not None:
                 await auth_service.revoke_user_session(superseded)
             clear_session_cookies(http_response, config)
+        if device_id is not None and payload.access_token is not None:
+            return payload.model_copy(
+                update={
+                    "access_token": auth_service.issue_device_session(
+                        payload.user_id, payload.email, payload.role, device_id
+                    )
+                }
+            )
         return payload
     access, refresh, expires_in = await auth_service.issue_refreshable_session(
-        payload.user_id, payload.email, payload.role
+        payload.user_id, payload.email, payload.role, device_id
     )
     # Retire the old credential only once its replacement exists. Revoking
     # first and then failing to mint would leave the browser holding a cookie
@@ -161,6 +174,7 @@ async def register(
         http_response,
         refreshable=body.refreshable,
         transport=body.session_transport,
+        device_id=body.device_id,
     )
 
 
@@ -196,6 +210,7 @@ async def login(
         http_response,
         refreshable=body.refreshable,
         transport=body.session_transport,
+        device_id=body.device_id,
     )
 
 
@@ -230,6 +245,7 @@ async def google_auth(
         http_response,
         refreshable=body.refreshable,
         transport=body.session_transport,
+        device_id=body.device_id,
     )
 
 
@@ -265,6 +281,7 @@ async def apple_auth(
         http_response,
         refreshable=body.refreshable,
         transport=body.session_transport,
+        device_id=body.device_id,
     )
 
 
@@ -415,6 +432,7 @@ async def verify_email(
         http_response,
         refreshable=body.refreshable,
         transport=body.session_transport,
+        device_id=body.device_id,
     )
 
 

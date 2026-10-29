@@ -10,12 +10,17 @@
  * session survive closing the last tab, and it means nothing here ever handles
  * the long-lived credential.
  *
+ * And it sends `device_id`, this browser's device id, so the server binds the
+ * session to that device: revoking the browser on the devices screen then
+ * ends this session instead of leaving it valid.
+ *
  * The three calls that can create an account also forward the landing page's
  * Google Ads click attribution (`ad_attribution`, read from the `mobaide_ads`
  * cookie) so the server can report the first agent pairing to the ad click.
  * Without the cookie the key is omitted and the wire shape is unchanged.
  */
 import { readAdAttribution, type AdAttribution } from '../auth/adAttribution';
+import { getDeviceId } from '../auth/deviceIdentity';
 import { clearSignedInMarker, type UserSession } from '../auth/sessionTransport';
 import { postLogout } from '../auth/userSessionApi';
 import { relayClient } from './clients';
@@ -99,6 +104,7 @@ export async function register(
       password,
       refreshable: true,
       session_transport: 'cookie',
+      device_id: getDeviceId(),
       ...adAttributionField(),
     },
   });
@@ -111,7 +117,13 @@ export async function login(
   password: string,
 ): Promise<AuthOutcome> {
   const { data, error, response } = await relayClient.POST('/api/auth/login', {
-    body: { email, password, refreshable: true, session_transport: 'cookie' },
+    body: {
+      email,
+      password,
+      refreshable: true,
+      session_transport: 'cookie',
+      device_id: getDeviceId(),
+    },
   });
   if (error !== undefined || data === undefined) {
     const apiError = toApiError(response, error);
@@ -133,6 +145,7 @@ export async function loginWithGoogle(idToken: string): Promise<AuthOutcome> {
       id_token: idToken,
       refreshable: true,
       session_transport: 'cookie',
+      device_id: getDeviceId(),
       ...adAttributionField(),
     },
   });
@@ -155,6 +168,7 @@ export async function loginWithApple(
       nonce,
       refreshable: true,
       session_transport: 'cookie',
+      device_id: getDeviceId(),
       ...adAttributionField(),
     },
   });
@@ -168,7 +182,15 @@ export async function verifyEmail(
 ): Promise<AuthOutcome> {
   const { data, error, response } = await relayClient.POST(
     '/api/auth/verify-email',
-    { body: { email, code, refreshable: true, session_transport: 'cookie' } },
+    {
+      body: {
+        email,
+        code,
+        refreshable: true,
+        session_transport: 'cookie',
+        device_id: getDeviceId(),
+      },
+    },
   );
   if (error !== undefined || data === undefined) fail(response, error);
   return toOutcome(data);

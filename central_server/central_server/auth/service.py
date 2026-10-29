@@ -1020,9 +1020,12 @@ class AuthService:
             token_type=payload["type"],
             exp=payload.get("exp"),
             iat=payload["iat"],
+            device_id=payload.get("device_id"),
         )
 
-    def _create_user_token(self, user_id: str, email: str, role: str) -> str:
+    def _create_user_token(
+        self, user_id: str, email: str, role: str, device_id: str | None = None
+    ) -> str:
         """Create a dashboard JWT with user identity claims."""
         return self._create_jwt(
             sub=user_id,
@@ -1031,10 +1034,26 @@ class AuthService:
             user_id=user_id,
             email=email,
             role=role,
+            device_id=device_id,
         )
 
+    def issue_device_session(
+        self, user_id: str, email: str, role: str, device_id: str
+    ) -> str:
+        """Re-mint a non-refreshable session token bound to ``device_id``.
+
+        The same upgrade-after-authentication shape as
+        :meth:`issue_refreshable_session`: the auth paths keep their
+        signatures and the router swaps the token they returned.
+        """
+        return self._create_user_token(user_id, email, role, device_id)
+
     async def issue_refreshable_session(
-        self, user_id: str, email: str, role: str
+        self,
+        user_id: str,
+        email: str,
+        role: str,
+        device_id: str | None = None,
     ) -> tuple[str, str, int]:
         """Mint a short-lived access token plus a rotating refresh token.
 
@@ -1063,12 +1082,14 @@ class AuthService:
             user_id=user_id,
             email=email,
             role=role,
+            device_id=device_id,
         )
         refresh = secrets.token_urlsafe(32)
         await self._db.store_user_refresh_token(
             raw_token=refresh,
             user_id=user_id,
             expire_minutes=self._config.user_session_refresh_expire_minutes,
+            device_id=device_id,
         )
         return access, refresh, expire_minutes * 60
 
@@ -1081,16 +1102,19 @@ class AuthService:
         when the token is unknown, expired, or already consumed. The user row
         is re-read on every rotation so a deleted account cannot keep
         refreshing, and so ``role`` / ``scheduled_deletion_at`` stay current
-        for the client without needing a separate profile endpoint.
+        for the client without needing a separate profile endpoint. The
+        device binding travels with the refresh row, so the rotated session
+        stays bound to the same device.
         """
-        user_id = await self._db.validate_and_consume_user_refresh(refresh_token)
-        if user_id is None:
+        consumed = await self._db.validate_and_consume_user_refresh(refresh_token)
+        if consumed is None:
             return None
+        user_id, device_id = consumed
         user = await self._db.get_user_by_id(user_id)
         if user is None:
             return None
         access, refresh, expires_in = await self.issue_refreshable_session(
-            user["id"], user["email"], user["role"]
+            user["id"], user["email"], user["role"], device_id
         )
         return user, access, refresh, expires_in
 
@@ -1502,6 +1526,7 @@ class AuthService:
         user_id: str | None = None,
         email: str | None = None,
         role: str | None = None,
+        device_id: str | None = None,
     ) -> str:
         now = int(time.time())
         payload: dict = {
@@ -1522,6 +1547,8 @@ class AuthService:
             payload["email"] = email
         if role is not None:
             payload["role"] = role
+        if device_id is not None:
+            payload["device_id"] = device_id
         return jwt.encode(
             payload,
             self._config.jwt_secret_key,

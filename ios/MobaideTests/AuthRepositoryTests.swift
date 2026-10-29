@@ -31,6 +31,21 @@ final class AuthRepositoryTests: XCTestCase {
         XCTAssertEqual(state, .userOnly)
     }
 
+    func testSignInSendsThisInstallsDeviceId() async throws {
+        let deviceIdentityStore = DeviceIdentityStore(keychain: InMemoryKeychainStore())
+        var boundRepository = repository!
+        boundRepository.deviceIdentityStore = deviceIdentityStore
+        StubURLProtocol.enqueue(status: 200, body: """
+        {"access_token":"jwt-1","user_id":"u1","email":"user@example.com","role":"user"}
+        """)
+
+        _ = try await boundRepository.loginWithPassword(email: "user@example.com", password: "pw")
+
+        let body = try XCTUnwrap(StubURLProtocol.bodies.first)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["device_id"] as? String, deviceIdentityStore.getOrCreateDeviceId())
+    }
+
     func testLoginVerificationRequiredStatusFallsBackToRequestedEmail() async throws {
         StubURLProtocol.enqueue(status: 200, body: """
         {"user_id":"u1","email":"","role":"user","status":"verification_required"}

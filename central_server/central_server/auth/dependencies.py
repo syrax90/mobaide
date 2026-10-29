@@ -56,12 +56,29 @@ async def _agent_still_exists(request_or_ws: Request | WebSocket, agent_id: str)
     return await db.get_agent(agent_id) is not None
 
 
+async def _token_predates_device_revoke(
+    request_or_ws: Request | WebSocket, device_id: str | None, iat: int
+) -> bool:
+    """Return ``True`` iff ``device_id`` was revoked at or after ``iat``.
+
+    The device's ``tokens_valid_after`` watermark is the whole revocation
+    record: it outlives a re-registration, so a token issued before the
+    revoke stays dead while a fresh sign-in on the same device works.
+    JWT ``iat`` has one-second resolution, so a token minted in the revoke's own second is rejected too.
+    """
+    if device_id is None:
+        return False
+    valid_after = await _get_db(request_or_ws).device_tokens_valid_after(device_id)
+    return valid_after is not None and iat <= valid_after
+
+
 async def ws_authenticate_mobile(websocket: WebSocket) -> MobileTokenPayload:
     """Authenticate a mobile WebSocket via ``?token=`` query param.
 
     Calls ``websocket.accept()`` on success. Closes with code 4001 on
-    signature/type failure or with code 4010 (``admin_revoked``) when the
-    referenced agent has been cascade-deleted. Splitting the two cases
+    signature/type failure or when the token predates its device's revoke,
+    and with code 4010 (``admin_revoked``) when the referenced agent has
+    been cascade-deleted. Splitting the two cases
     lets the Android client render a user-specific "account removed"
     message in the offline-reconnect path — the same message it would
     have seen had the device been online to receive the synchronous
@@ -92,6 +109,10 @@ async def ws_authenticate_mobile(websocket: WebSocket) -> MobileTokenPayload:
         await websocket.close(code=4010, reason="admin_revoked")
         raise _auth_failed(f"Mobile token references missing agent: {payload.agent_id}")
 
+    if await _token_predates_device_revoke(websocket, payload.sub, payload.iat):
+        await websocket.close(code=4001, reason="Invalid token")
+        raise _auth_failed(f"Mobile token predates device revoke: {payload.sub}")
+
     await websocket.accept()
     return payload
 
@@ -100,7 +121,8 @@ async def ws_authenticate_user(websocket: WebSocket) -> UserTokenPayload:
     """Authenticate a user-scoped WebSocket via ``?token=`` query param.
 
     On success, calls ``websocket.accept()`` and returns the decoded payload.
-    Closes with 4001 on signature/type failure or with 4010
+    Closes with 4001 on signature/type failure or when a device-bound token
+    predates its device's revoke, or with 4010
     (``admin_revoked``) when the underlying user account has been
     cascade-deleted, matching the close code that
     ``routing.disconnect_user`` emits to live sockets — so the Android
@@ -126,6 +148,12 @@ async def ws_authenticate_user(websocket: WebSocket) -> UserTokenPayload:
     if not await _user_still_exists(websocket, payload.sub):
         await websocket.close(code=4010, reason="admin_revoked")
         raise _auth_failed(f"Dashboard token references missing user: {payload.sub}")
+
+    if await _token_predates_device_revoke(websocket, payload.device_id, payload.iat):
+        await websocket.close(code=4001, reason="Invalid token")
+        raise _auth_failed(
+            f"Dashboard token predates device revoke: {payload.device_id}"
+        )
 
     await websocket.accept()
     return payload
@@ -157,7 +185,11 @@ async def _get_session_user(
             status_code=status.HTTP_303_SEE_OTHER,
             headers={"Location": login_url},
         )
-    if not await _user_still_exists(request, user_payload.sub):
+    if not await _user_still_exists(
+        request, user_payload.sub
+    ) or await _token_predates_device_revoke(
+        request, user_payload.device_id, user_payload.iat
+    ):
         raise HTTPException(
             status_code=status.HTTP_303_SEE_OTHER,
             headers={"Location": login_url},
@@ -232,6 +264,19 @@ async def get_api_user(request: Request) -> UserTokenPayload:
             detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    if await _token_predates_device_revoke(
+        request, user_payload.device_id, user_payload.iat
+    ):
+        logger.info(
+            "dashboard_token_rejected reason=device_revoked sub=%s device_id=%s",
+            user_payload.sub,
+            user_payload.device_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user_payload
 
 
@@ -293,4 +338,51 @@ async def get_mobile_user(request: Request) -> MobileTokenPayload:
             detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    if await _token_predates_device_revoke(request, payload.sub, payload.iat):
+        logger.info(
+            "mobile_token_rejected reason=device_revoked device_id=%s",
+            payload.sub,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return payload
+
+
+async def require_mintable_device(
+    request: Request, user: UserTokenPayload, device_id: str
+) -> None:
+    """Refuse to mint device credentials the caller's session cannot vouch for.
+
+    A session bound to one device
+    may not mint for another, or a stolen bound token could register a
+    fresh device id and outlive the revoke of its own. An unbound session
+    issued before the device's revoke may not bring it back; a sign-in
+    made after the revoke may (Bitwarden semantics).
+    """
+    if user.device_id is not None and user.device_id != device_id:
+        logger.info(
+            "device_mint_refused reason=device_mismatch sub=%s session_device=%s "
+            "requested_device=%s",
+            user.sub,
+            user.device_id,
+            device_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This session belongs to a different device. "
+            "Sign in again on this device.",
+        )
+    if await _token_predates_device_revoke(request, device_id, user.iat):
+        logger.info(
+            "device_mint_refused reason=device_revoked sub=%s device_id=%s",
+            user.sub,
+            device_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This device was revoked. "
+            "Sign out and sign in again on this device to reconnect it.",
+        )
