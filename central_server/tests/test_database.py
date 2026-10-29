@@ -1072,12 +1072,33 @@ class TestMobileDevices:
 
         assert count == 1
         assert await db.validate_and_consume_user_refresh("bound") is None
-        assert await db.validate_and_consume_user_refresh("other-dev") == (owner, "dev-2")
-        assert await db.validate_and_consume_user_refresh("unbound") == (owner, None)
-        assert await db.validate_and_consume_user_refresh("other-user") == (
+        assert (await db.validate_and_consume_user_refresh("other-dev"))[:2] == (
+            owner,
+            "dev-2",
+        )
+        assert (await db.validate_and_consume_user_refresh("unbound"))[:2] == (
+            owner,
+            None,
+        )
+        assert (await db.validate_and_consume_user_refresh("other-user"))[:2] == (
             other,
             "dev-1",
         )
+
+    async def test_user_refresh_auth_time_defaults_to_the_rows_second(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        await db.store_user_refresh_token("signed-in", owner, 60)
+        created_second, _ = await _refresh_row_seconds(db)
+        await db.store_user_refresh_token("rotated", owner, 60, auth_time=1_700_000_000)
+
+        _, _, signed_in_at = await db.validate_and_consume_user_refresh("signed-in")
+        _, _, rotated_at = await db.validate_and_consume_user_refresh("rotated")
+
+        assert signed_in_at == created_second
+        # A rotation passes the consumed row's value, which is kept as is.
+        assert rotated_at == 1_700_000_000
 
     async def test_revoke_refresh_tokens_for_device(self, db: Database):
         owner = await _create_test_user(db)
@@ -1108,7 +1129,10 @@ class TestMobileDevices:
         assert refused_mobile is None
         assert refused_user is None
         assert await db.validate_and_consume_refresh("r-mobile") == ("dev-1", agent_id)
-        assert await db.validate_and_consume_user_refresh("r-user") == (owner, "dev-1")
+        assert (await db.validate_and_consume_user_refresh("r-user"))[:2] == (
+            owner,
+            "dev-1",
+        )
 
     async def test_consume_ignores_watermarks_of_other_or_unregistered_devices(
         self, db: Database
@@ -1122,12 +1146,15 @@ class TestMobileDevices:
         _, last = await _refresh_row_seconds(db)
         await _set_watermark(db, "dev-1", last + 60)
 
-        assert await db.validate_and_consume_user_refresh("unbound") == (owner, None)
+        assert (await db.validate_and_consume_user_refresh("unbound"))[:2] == (
+            owner,
+            None,
+        )
         assert await db.validate_and_consume_refresh("ghost-mobile") == (
             "dev-ghost",
             agent_id,
         )
-        assert await db.validate_and_consume_user_refresh("ghost-user") == (
+        assert (await db.validate_and_consume_user_refresh("ghost-user"))[:2] == (
             owner,
             "dev-ghost",
         )
@@ -2528,11 +2555,14 @@ class TestDeviceTokenRevocationMigration:
             "SELECT revoked_at FROM mobile_devices WHERE device_id = 'dev-gone'"
         )
         revoked_at = (await cursor.fetchone())[0]
-        # Simulate a v21 on-disk schema: drop the new table and column and
+        cursor = await db.conn.execute("SELECT created_at FROM user_refresh_tokens")
+        legacy_created_at = (await cursor.fetchone())[0]
+        # Simulate a v21 on-disk schema: drop the new table and columns and
         # roll user_version back so reopening replays the v22 block. The
         # device row keeps its ``revoked_at``.
         await db.conn.execute("DROP TABLE device_revocations")
         await db.conn.execute("ALTER TABLE user_refresh_tokens DROP COLUMN device_id")
+        await db.conn.execute("ALTER TABLE user_refresh_tokens DROP COLUMN auth_time")
         await db.conn.execute("PRAGMA user_version = 21")
         await db.conn.commit()
         await db.close()
@@ -2548,6 +2578,11 @@ class TestDeviceTokenRevocationMigration:
         assert await db.device_tokens_valid_after("dev-live") is None
         cursor = await db.conn.execute("PRAGMA table_info(mobile_devices)")
         assert "tokens_valid_after" not in {row[1] for row in await cursor.fetchall()}
-        # Pre-existing user sessions survive, unbound.
-        assert await db.validate_and_consume_user_refresh("r-legacy") == (owner, None)
+        # Pre-existing user sessions survive, unbound, signed in no later than
+        # their last rotation — so before any revoke made after the upgrade.
+        assert await db.validate_and_consume_user_refresh("r-legacy") == (
+            owner,
+            None,
+            int(datetime.fromisoformat(legacy_created_at).timestamp()),
+        )
         await db.close()

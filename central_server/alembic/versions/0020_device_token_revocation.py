@@ -1,4 +1,5 @@
-"""Device revocation reaches issued JWTs: watermark table + session device binding.
+"""Device revocation reaches issued JWTs: watermark table + session device binding
+and sign-in time.
 
 Mirrors the runtime migration in ``central_server/db/database.py`` (guarded by
 ``PRAGMA user_version < 22``). Alembic is the out-of-band migration path for
@@ -28,6 +29,12 @@ def upgrade() -> None:
     )
     with op.batch_alter_table("user_refresh_tokens") as batch_op:
         batch_op.add_column(sa.Column("device_id", sa.Text(), nullable=True))
+        batch_op.add_column(sa.Column("auth_time", sa.Integer(), nullable=True))
+    op.execute(
+        "UPDATE user_refresh_tokens "
+        "SET auth_time = CAST(strftime('%s', created_at) AS INTEGER) "
+        "WHERE auth_time IS NULL"
+    )
     op.execute(
         "INSERT OR IGNORE INTO device_revocations (device_id, tokens_valid_after) "
         "SELECT device_id, CAST(strftime('%s', revoked_at) AS INTEGER) "
@@ -37,5 +44,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     with op.batch_alter_table("user_refresh_tokens") as batch_op:
+        batch_op.drop_column("auth_time")
         batch_op.drop_column("device_id")
     op.drop_table("device_revocations")

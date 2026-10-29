@@ -365,8 +365,11 @@ async def require_mintable_device(
     A session bound to one device
     may not mint for another, or a stolen bound token could register a
     fresh device id and outlive the revoke of its own. An unbound session
-    issued before the device's revoke may not bring it back; a sign-in
-    made after the revoke may (Bitwarden semantics).
+    signed in before the device's revoke may not bring it back; a sign-in
+    made after the revoke may (Bitwarden semantics). A refreshable session
+    is judged by its ``auth_time``, not its ``iat``: a rotation re-issues
+    ``iat``, and the unbound refresh tokens a revoke leaves live would
+    otherwise pass this check one access-token lifetime later.
 
     The mismatch is a 401, not a 403: the session can never be used on this
     install again, so every client's 401 path signs it out and the next
@@ -389,7 +392,8 @@ async def require_mintable_device(
             "Sign in again on this device.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if await token_predates_device_revoke(request, device_id, user.iat):
+    signed_in_at = user.iat if user.auth_time is None else user.auth_time
+    if await token_predates_device_revoke(request, device_id, signed_in_at):
         logger.info(
             "device_mint_refused reason=device_revoked sub=%s device_id=%s",
             user.sub,

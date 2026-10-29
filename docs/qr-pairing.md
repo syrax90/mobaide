@@ -312,8 +312,14 @@ pairing claim/confirm. A session bound to one device (its user JWT carries
 the `device_id` sent at sign-in) naming a different device gets `401`, so
 the client signs out and the next sign-in binds to the id it now has — an
 iPhone restored from a backup keeps its Keychain tokens but gets a new device
-id. A session issued at or before the device's revoke gets `403`, and so does
-a mint or claim that a revoke overtakes mid-request. Revoking a device records a `tokens_valid_after` watermark in the
+id. A session signed in at or before the device's revoke gets `403`, and so
+does a mint or claim that a revoke overtakes mid-request. For a refreshable
+session the sign-in time is its `auth_time` claim, which every rotation
+carries forward (it is stored on the refresh row), not its `iat` — otherwise
+the unbound refresh tokens a revoke leaves live would pass this check one
+access-token lifetime later.
+
+Revoking a device records a `tokens_valid_after` watermark in the
 `device_revocations(device_id, tokens_valid_after)` table. The row is never
 cleared and has no foreign key, so it survives re-registration, handover of
 the device to another account, and deletion of any account: every JWT bound to that

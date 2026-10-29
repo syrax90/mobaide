@@ -129,7 +129,8 @@ CREATE TABLE IF NOT EXISTS user_refresh_tokens (
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     revoked_at TEXT,
-    device_id  TEXT
+    device_id  TEXT,
+    auth_time  INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS email_verification_tokens (
@@ -790,16 +791,24 @@ class Database:
 
         if version < 22:
             # Revocation of issued JWTs: ``device_revocations`` plus the device
-            # a user-session refresh token is bound to. Devices revoked before
-            # this version get their watermark from ``revoked_at``, so their
-            # old tokens die with the upgrade.
+            # a user-session refresh token is bound to and the second its
+            # session was signed in. Devices revoked before this version get
+            # their watermark from ``revoked_at``, so their old tokens die with
+            # the upgrade. Live sessions take their last rotation as sign-in
+            # time: earlier than any revoke made after the upgrade.
             cursor = await self._conn.execute("PRAGMA table_info(user_refresh_tokens)")
             cols = {r[1] for r in await cursor.fetchall()}
-            if cols and "device_id" not in cols:
-                await self._conn.execute(
-                    "ALTER TABLE user_refresh_tokens ADD COLUMN device_id TEXT"
-                )
+            for column, ddl in (("device_id", "TEXT"), ("auth_time", "INTEGER")):
+                if cols and column not in cols:
+                    await self._conn.execute(
+                        f"ALTER TABLE user_refresh_tokens ADD COLUMN {column} {ddl}"
+                    )
             await self._conn.executescript(_SCHEMA)
+            await self._conn.execute(
+                "UPDATE user_refresh_tokens "
+                "SET auth_time = CAST(strftime('%s', created_at) AS INTEGER) "
+                "WHERE auth_time IS NULL"
+            )
             await self._conn.execute(
                 "INSERT OR IGNORE INTO device_revocations "
                 "(device_id, tokens_valid_after) "
@@ -3259,6 +3268,7 @@ class Database:
         user_id: str,
         expire_minutes: int,
         device_id: str | None = None,
+        auth_time: int | None = None,
     ) -> None:
         """Persist a hashed user-session refresh token.
 
@@ -3266,7 +3276,9 @@ class Database:
         year-9999 sentinel for the never-expires case, so both families
         answer the same ``expires_at > now`` predicate. ``device_id`` binds
         the session to a registered device, so rotation keeps the binding
-        and revoking that device retires the session.
+        and revoking that device retires the session. ``auth_time`` is the
+        epoch second the session was signed in (now when omitted); rotation
+        carries it forward so a refresh never counts as a fresh sign-in.
         """
         now = datetime.now(timezone.utc)
         if expire_minutes == 0:
@@ -3277,23 +3289,24 @@ class Database:
             ).isoformat()
         await self.conn.execute(
             "INSERT INTO user_refresh_tokens "
-            "(token_hash, user_id, created_at, expires_at, device_id) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "(token_hash, user_id, created_at, expires_at, device_id, auth_time) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (
                 _hash_token(raw_token),
                 user_id,
                 now.isoformat(),
                 expires_at_iso,
                 device_id,
+                int(now.timestamp()) if auth_time is None else auth_time,
             ),
         )
         await self.conn.commit()
 
     async def validate_and_consume_user_refresh(
         self, raw_token: str
-    ) -> tuple[str, str | None] | None:
+    ) -> tuple[str, str | None, int] | None:
         """Validate a user-session refresh token, returning
-        ``(user_id, device_id)``.
+        ``(user_id, device_id, auth_time)``.
 
         Rotates: the presented token is revoked on success, so the caller
         must issue a replacement. Replaying a consumed token returns None —
@@ -3304,7 +3317,9 @@ class Database:
         token_hash = _hash_token(raw_token)
         now = _now_iso()
         cursor = await self.conn.execute(
-            "SELECT t.user_id, t.device_id FROM user_refresh_tokens t "
+            "SELECT t.user_id, t.device_id, COALESCE(t.auth_time, "
+            "    CAST(strftime('%s', t.created_at) AS INTEGER)) AS auth_time "
+            "FROM user_refresh_tokens t "
             "LEFT JOIN device_revocations d ON d.device_id = t.device_id "
             "WHERE t.token_hash = ? AND t.revoked_at IS NULL AND t.expires_at > ? "
             f"AND {_ISSUED_AFTER_DEVICE_REVOKE}",
@@ -3318,7 +3333,7 @@ class Database:
             (now, token_hash),
         )
         await self.conn.commit()
-        return row["user_id"], row["device_id"]
+        return row["user_id"], row["device_id"], row["auth_time"]
 
     async def revoke_user_refresh_token(self, raw_token: str) -> bool:
         """Revoke one user-session refresh token, expired or not.

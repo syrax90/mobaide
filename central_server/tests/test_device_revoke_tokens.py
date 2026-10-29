@@ -281,6 +281,9 @@ class TestSignInBindsTheSession:
         assert third.status_code == 200
         assert _claims(second.json()["access_token"])["device_id"] == _DEV
         assert _claims(third.json()["access_token"])["device_id"] == _DEV
+        # The sign-in time rides along too: a rotation is not a new sign-in.
+        signed_in_at = _claims(first["access_token"])["auth_time"]
+        assert _claims(third.json()["access_token"])["auth_time"] == signed_in_at
 
 
 class TestRevokeKillsBoundUserSessions:
@@ -378,6 +381,31 @@ class TestMintingForARevokedDevice:
         assert await _proxy_status(client, agent_id, old_mobile) == 401
         old_user_resp = await client.get("/api/devices", headers=_bearer(old_user))
         assert old_user_resp.status_code == 401
+
+    async def test_rotating_a_session_from_before_the_revoke_does_not_bring_it_back(
+        self, client, app, api_auth_headers, registered_agent
+    ):
+        # An unbound refreshable session (a browser signed in before sessions
+        # named their device) keeps its refresh token through the revoke.
+        # Rotating it re-issues ``iat``; it must still not pass as a sign-in.
+        agent_id, _ = registered_agent
+        with _issued_a_minute_ago():
+            session = await _sign_in(client, refreshable=True)
+        minted = await _mint(client, _bearer(session["access_token"]), agent_id, _DEV)
+        assert minted.status_code == 200
+        await client.delete(f"/api/devices/{_DEV}", headers=api_auth_headers)
+        watermark = await _move_revoke_to_half_a_minute_ago(app.state.db, _DEV)
+
+        rotated = await client.post(
+            "/api/auth/refresh", json={"refresh_token": session["refresh_token"]}
+        )
+        access = rotated.json()["access_token"]
+        resp = await _mint(client, _bearer(access), agent_id, _DEV)
+
+        assert rotated.status_code == 200
+        assert _claims(access)["iat"] > watermark
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == DEVICE_REVOKED_DETAIL
 
     async def test_a_bound_session_cannot_mint_for_another_device(
         self, client, app, viewer_user, registered_agent

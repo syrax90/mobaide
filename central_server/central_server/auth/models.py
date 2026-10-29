@@ -31,6 +31,10 @@ class UserTokenPayload:
     ``device_id`` is set when the client named its per-install device at
     sign-in; revoking that device then rejects the token. Sessions minted
     without it are not bound to any device and survive a device revoke.
+
+    ``auth_time`` is the epoch second a refreshable session was signed in;
+    rotations keep it while ``iat`` moves. ``None`` on non-refreshable
+    tokens, whose ``iat`` already is the sign-in time.
     """
 
     sub: str
@@ -40,6 +44,7 @@ class UserTokenPayload:
     exp: int | None  # None = token has no `exp` claim (never expires)
     iat: int
     device_id: str | None = None
+    auth_time: int | None = None
 
 
 class MobileRefreshRequest(BaseModel):
