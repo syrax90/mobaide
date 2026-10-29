@@ -123,10 +123,10 @@ class MainActivity : ComponentActivity() {
         // show the card is dropped without starting the cooldown.
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                reviewPromptCoordinator.requests.collect {
+                reviewPromptCoordinator.requests.collect { visit ->
                     inAppReviewManager.launchReview(
                         activity = this@MainActivity,
-                        stillWanted = reviewPromptCoordinator::isReviewMoment,
+                        stillWanted = { reviewPromptCoordinator.isReviewMoment(visit) },
                         onLaunch = {
                             reviewLaunchedAtMs = SystemClock.elapsedRealtime()
                             reviewPromptCoordinator.markReviewLaunched()

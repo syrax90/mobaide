@@ -26,14 +26,19 @@ class ReviewPromptCoordinator(
     @Volatile
     private var sessionListOnScreen = false
 
-    private val _requests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    /** Bumped each time the session list leaves the screen; one value per list visit. */
+    @Volatile
+    private var listVisit = 0L
+
+    private val _requests = MutableSharedFlow<Long>(extraBufferCapacity = 1)
 
     /**
-     * One emission per review request, collected by `MainActivity` while it is
-     * resumed. An emission nobody collects, or a card dropped by the
-     * re-check, starts no cooldown: [markReviewLaunched] does that.
+     * One emission per review request, carrying the list visit that asked;
+     * collected by `MainActivity` while it is resumed. An emission nobody
+     * collects, or a card dropped by the re-check, starts no cooldown:
+     * [markReviewLaunched] does that.
      */
-    val requests: SharedFlow<Unit> = _requests.asSharedFlow()
+    val requests: SharedFlow<Long> = _requests.asSharedFlow()
 
     /**
      * Counts one launch: a fresh `MainActivity`, not a process. The session
@@ -67,15 +72,18 @@ class ReviewPromptCoordinator(
 
     fun sessionListHidden() {
         sessionListOnScreen = false
+        listVisit++
     }
 
     /**
-     * The session list is still the screen in front, with no terminal or git
-     * child screen over it. Read again right before the card launches, since
-     * fetching it from Play takes a round trip the user may tap through.
+     * The list visit [visit] is still the screen in front, with no terminal or
+     * git child screen over it. Read again right before the card launches:
+     * fetching it from Play takes a round trip the user may spend in a session
+     * and come back from, and that later visit has not earned the card.
      */
-    fun isReviewMoment(): Boolean =
-        sessionListOnScreen &&
+    fun isReviewMoment(visit: Long): Boolean =
+        visit == listVisit &&
+            sessionListOnScreen &&
             foregroundSessionTracker.visibleSessionId.value == null &&
             foregroundSessionTracker.watchHolds.value.isEmpty()
 
@@ -85,14 +93,15 @@ class ReviewPromptCoordinator(
      */
     suspend fun sessionListShown() {
         sessionListOnScreen = true
+        val visit = listVisit
         delay(ReviewPromptPolicy.SETTLE_MS)
         // Back inside a session (auto-resume, a quick tap, a git child screen):
         // the outing goes on.
-        if (!isReviewMoment()) return
+        if (!isReviewMoment(visit)) return
         val finished = synchronized(lock) { outing.also { outing = Outing() } }
         if (!ReviewPromptPolicy.isGoodOuting(finished.healthyMs, finished.clean)) return
         val state = preferencesStore.incrementReviewGoodSessions()
-        if (ReviewPromptPolicy.isEligible(state, clock())) _requests.tryEmit(Unit)
+        if (ReviewPromptPolicy.isEligible(state, clock())) _requests.tryEmit(visit)
     }
 
     /** The card is about to show: starts the cooldown and the next run of good sessions. */

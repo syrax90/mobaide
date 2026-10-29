@@ -27,7 +27,7 @@ exist only because of how Play shows its card.
 | Cooldown | 120 days after a request is handed to the store (Android: `markReviewLaunched()` right before `launchReview`; iOS: when the coordinator bumps `requestCount` for `RootView`'s `requestReview()`); the good-outing count restarts at 0 | below Apple's 3-per-365-days cap and Play's unpublished quota |
 | Settle wait | 1 s after the list appears; abandoned when a terminal or a git child screen is on screen again | lets the pop finish; auto-resume into a session skips it |
 | Delivery | only while the app can show the card (Android: `MainActivity` resumed; iOS: scene active) | a request nobody can see must not start the cooldown |
-| Android re-check | after Play returns the card's `ReviewInfo`, the list must still be in front with no terminal over it, or the card is dropped; no cooldown starts and the count stays, so the next good outing asks again | the round trip is long enough to tap into a session |
+| Android re-check | after Play returns the card's `ReviewInfo`, the same list visit that asked must still be in front with no terminal over it, or the card is dropped; no cooldown starts and the count stays, so the next good outing asks again | the round trip is long enough to tap into a session |
 | Android update dialog | the flexible-update check skips resumes within 60 s of a card launch | the card's close resumes `MainActivity`, which would stack the update dialog on it |
 
 The agent reports `crashed` for any CLI exit it did not ask for, a normal
@@ -56,7 +56,7 @@ The open outing lives in memory only.
 | Visit report | `TerminalViewModel.markScreenVisible()` / `markScreenHidden()`; `markEndedByUser()` from the sessions-panel stop | `TerminalSessionModel.markVisible()` / `markHidden()`; `markEndedByUser()` from `stopSession` |
 | Settle and close | `SessionListViewModel.onScreenResumed()` (cancelled on pause) | `SessionListScreen` `.task` (cancelled on disappear) |
 | Error signal | `SessionListViewModel` failure paths and `TerminalScreen` `StopFailed` → `noteError()` | `SessionListScreen` `model.error` and the `stopSession` failure → `noteError()` |
-| Store call | `MainActivity` collects `requests` while resumed → `ui/review/InAppReviewManager.kt` (re-checks `isReviewMoment()`, then `markReviewLaunched()`) | `RootView` observes `requestCount` → `requestReview()` |
+| Store call | `MainActivity` collects `requests` while resumed → `ui/review/InAppReviewManager.kt` (re-checks `isReviewMoment(visit)`, then `markReviewLaunched()`) | `RootView` observes `requestCount` → `requestReview()` |
 
 ## Testing
 

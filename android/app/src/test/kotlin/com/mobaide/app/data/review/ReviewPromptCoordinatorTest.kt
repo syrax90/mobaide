@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -54,11 +55,21 @@ class ReviewPromptCoordinatorTest {
     }
 
     /** A collector like `MainActivity`'s while it is resumed; returns what it received. */
-    private fun TestScope.subscribe(f: Fixture): List<Unit> {
-        val delivered = mutableListOf<Unit>()
+    private fun TestScope.subscribe(f: Fixture): List<Long> {
+        val delivered = mutableListOf<Long>()
         backgroundScope.launch { f.coordinator.requests.collect { delivered += it } }
         runCurrent()
         return delivered
+    }
+
+    /** One more good outing settles on the list and asks; returns the list visit the request carried. */
+    private suspend fun TestScope.settleARequest(f: Fixture, delivered: List<Long>): Long {
+        val before = delivered.size
+        f.goodVisit()
+        f.coordinator.sessionListShown()
+        runCurrent()
+        assertEquals(before + 1, delivered.size)
+        return delivered.last()
     }
 
     @Test
@@ -216,35 +227,76 @@ class ReviewPromptCoordinatorTest {
     }
 
     @Test
-    fun isReviewMoment_onTheSettledList_isTrue() = runTest {
+    fun settle_listHiddenAndShownAgainDuringTheWait_onlyTheNewListVisitAsks() = runTest {
         val f = Fixture()
+        f.goodSessions = 2
+        val delivered = subscribe(f)
+        f.goodVisit()
 
-        f.coordinator.sessionListShown()
+        val first = launch { f.coordinator.sessionListShown() }
+        advanceTimeBy(500)
+        f.coordinator.sessionListHidden()
+        val second = launch { f.coordinator.sessionListShown() }
+        first.join()
+        assertEquals(2, f.goodSessions)
+        assertTrue(delivered.isEmpty())
 
-        assertTrue(f.coordinator.isReviewMoment())
+        second.join()
+        runCurrent()
+        assertEquals(3, f.goodSessions)
+        assertEquals(1, delivered.size)
+        assertTrue(f.coordinator.isReviewMoment(delivered.single()))
+    }
+
+    @Test
+    fun isReviewMoment_forTheListVisitThatAsked_onTheSettledList_isTrue() = runTest {
+        val f = Fixture()
+        f.goodSessions = 2
+        val delivered = subscribe(f)
+
+        val asked = settleARequest(f, delivered)
+
+        assertTrue(f.coordinator.isReviewMoment(asked))
     }
 
     @Test
     fun isReviewMoment_afterTheListIsHidden_isFalse() = runTest {
         val f = Fixture()
-        f.coordinator.sessionListShown()
+        f.goodSessions = 2
+        val asked = settleARequest(f, subscribe(f))
 
         f.coordinator.sessionListHidden()
 
-        assertFalse(f.coordinator.isReviewMoment())
+        assertFalse(f.coordinator.isReviewMoment(asked))
     }
 
     @Test
     fun isReviewMoment_withATerminalOrGitChildOverTheList_isFalse() = runTest {
         val f = Fixture()
-        f.coordinator.sessionListShown()
+        f.goodSessions = 2
+        val asked = settleARequest(f, subscribe(f))
 
         f.tracker.setVisible("s1")
-        assertFalse(f.coordinator.isReviewMoment())
+        assertFalse(f.coordinator.isReviewMoment(asked))
 
         f.tracker.clearVisible("s1")
         f.tracker.holdWatch("s1")
-        assertFalse(f.coordinator.isReviewMoment())
+        assertFalse(f.coordinator.isReviewMoment(asked))
+    }
+
+    @Test
+    fun isReviewMoment_forAnEarlierListVisit_isFalse_onceTheListSettlesAgain() = runTest {
+        val f = Fixture()
+        f.goodSessions = 2
+        val delivered = subscribe(f)
+        val asked = settleARequest(f, delivered)
+
+        f.coordinator.sessionListHidden()
+        val current = settleARequest(f, delivered)
+
+        assertNotEquals(asked, current)
+        assertFalse(f.coordinator.isReviewMoment(asked))
+        assertTrue(f.coordinator.isReviewMoment(current))
     }
 
     @Test
