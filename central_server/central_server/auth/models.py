@@ -26,7 +26,16 @@ class MobileTokenPayload:
 
 @dataclass
 class UserTokenPayload:
-    """Decoded JWT payload for user (dashboard) session tokens."""
+    """Decoded JWT payload for user (dashboard) session tokens.
+
+    ``device_id`` is set when the client named its per-install device at
+    sign-in; revoking that device then rejects the token. Sessions minted
+    without it are not bound to any device and survive a device revoke.
+
+    ``auth_time`` is the epoch second a refreshable session was signed in;
+    rotations keep it while ``iat`` moves. ``None`` on non-refreshable
+    tokens, whose ``iat`` already is the sign-in time.
+    """
 
     sub: str
     email: str
@@ -34,6 +43,8 @@ class UserTokenPayload:
     token_type: str  # "dashboard"
     exp: int | None  # None = token has no `exp` claim (never expires)
     iat: int
+    device_id: str | None = None
+    auth_time: int | None = None
 
 
 class MobileRefreshRequest(BaseModel):
@@ -128,10 +139,15 @@ class RefreshableSessionRequest(BaseModel):
     JSON. Nullable rather than defaulted because openapi-typescript emits a
     property carrying a ``default`` as *non-optional* TypeScript, which would
     make the field required on every existing caller of these five endpoints.
+
+    ``device_id`` is the client's per-install device UUID (the same value it
+    sends as ``mobile_device_id`` when minting agent tokens). It binds the
+    session to that device, so revoking the device signs the session out.
     """
 
     refreshable: bool = False
     session_transport: Literal["body", "cookie"] | None = None
+    device_id: str | None = Field(default=None, pattern=MOBILE_DEVICE_ID_PATTERN)
 
 
 AD_CLICK_ID_PATTERN = r"^[A-Za-z0-9_-]{1,200}$"

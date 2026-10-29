@@ -27,6 +27,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 from httpx import ASGITransport, AsyncClient
 
+from central_server.auth.dependencies import DEVICE_REVOKED_DETAIL
 from central_server.auth.rate_limit import ResendRateLimiter
 from central_server.config import CentralServerConfig
 from central_server.pairing.qr_signer import compute_trust_key_fp, hash_pairing_nonce
@@ -748,6 +749,14 @@ class TestClaimDeviceReassignment:
             device_id=_SHARED_DEV_UUID, user_id=prior_id, name="prior phone"
         )
         await qr_app.state.db.revoke_mobile_device(_SHARED_DEV_UUID, prior_id)
+        # The viewer's session was signed in after the prior owner's revoke:
+        # back-date the watermark so it is strictly older than the session.
+        await qr_app.state.db.conn.execute(
+            "UPDATE device_revocations SET tokens_valid_after = tokens_valid_after - 60 "
+            "WHERE device_id = ?",
+            (_SHARED_DEV_UUID,),
+        )
+        await qr_app.state.db.conn.commit()
 
         nonce = await self._initiate_first_pair(client)
         fp = compute_trust_key_fp(qr_app.state._test_pub_b64)
@@ -949,3 +958,87 @@ class TestFirstPairingConversion:
 
         assert resp.status_code == 200, resp.text
         uploader.schedule_first_pairing.assert_called_once()
+
+
+class TestClaimForARevokedOrForeignDevice:
+    """The claim registers ``mobile_device_id`` like the agent-token mint,
+    so it shares the mint guard: a device-bound session cannot claim for
+    another device, and a session from before a device's revoke cannot
+    bring it back. The guard runs before the nonce CAS, so a refused claim
+    leaves the nonce open for a valid retry.
+    """
+
+    async def _claim(self, client, qr_app, headers, device_id: str):
+        init = await client.post(
+            "/api/pairing/initiate", json={"hostname": "alpha"}
+        )
+        nonce = init.json()["nonce"]
+        return nonce, await self._claim_nonce(client, qr_app, headers, nonce, device_id)
+
+    async def _claim_nonce(self, client, qr_app, headers, nonce, device_id: str):
+        return await client.post(
+            "/api/pairing/claim",
+            json={
+                "nonce": nonce,
+                "trust_key_fp": compute_trust_key_fp(qr_app.state._test_pub_b64),
+                "mobile_device_id": device_id,
+            },
+            headers=headers,
+        )
+
+    async def test_bound_session_cannot_claim_for_another_device(
+        self, client, qr_app, viewer_user
+    ):
+        login = await client.post(
+            "/api/auth/login",
+            json={
+                "email": "viewer@test.local",
+                "password": "viewerpass123",
+                "device_id": _CLAIM_DEV_UUID,
+            },
+        )
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+        nonce, refused = await self._claim(client, qr_app, headers, _NEW_DEV_UUID)
+        retry = await self._claim_nonce(client, qr_app, headers, nonce, _CLAIM_DEV_UUID)
+
+        assert refused.status_code == 401
+        assert retry.status_code == 200, retry.text
+        devices = await qr_app.state.db.list_user_devices(viewer_user["id"])
+        assert [d["device_id"] for d in devices] == [_CLAIM_DEV_UUID]
+
+    async def test_session_from_before_the_revoke_cannot_claim_for_the_device(
+        self, client, qr_app, api_auth_headers, viewer_user
+    ):
+        db = qr_app.state.db
+        await db.upsert_mobile_device(
+            device_id=_CLAIM_DEV_UUID, user_id=viewer_user["id"], name="Pixel"
+        )
+        await db.revoke_mobile_device(_CLAIM_DEV_UUID, viewer_user["id"])
+
+        _nonce, resp = await self._claim(client, qr_app, api_auth_headers, _CLAIM_DEV_UUID)
+
+        assert resp.status_code == 403
+        assert await db.list_user_devices(viewer_user["id"]) == []
+
+    async def test_claim_is_refused_when_the_revoke_lands_mid_claim(
+        self, client, qr_app, api_auth_headers, viewer_user, monkeypatch
+    ):
+        db = qr_app.state.db
+        user_id = viewer_user["id"]
+        await db.upsert_mobile_device(device_id=_CLAIM_DEV_UUID, user_id=user_id, name="Pixel")
+        upsert = db.upsert_mobile_device
+
+        async def revoke_then_upsert(**kwargs):
+            await db.revoke_mobile_device(_CLAIM_DEV_UUID, user_id)
+            return await upsert(**kwargs)
+
+        monkeypatch.setattr(db, "upsert_mobile_device", revoke_then_upsert)
+
+        _nonce, resp = await self._claim(client, qr_app, api_auth_headers, _CLAIM_DEV_UUID)
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == DEVICE_REVOKED_DETAIL
+        # The upsert cleared the revoke's revoked_at; the claim restored it.
+        assert await db.list_user_devices(user_id) == []
+        assert await db.list_agents_for_user(user_id) == []

@@ -13,6 +13,7 @@ import com.mobaide.app.data.network.CentralApi
 import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.auth.ConnectionStore
+import com.mobaide.app.data.auth.DeviceIdentityStore
 import com.mobaide.app.data.repository.AgentRepository
 import com.mobaide.app.data.repository.AgentUpdateRepository
 import com.mobaide.app.data.repository.AgentVersionMonitor
@@ -76,8 +77,12 @@ object RepositoryModule {
         userIdentityStore: UserIdentityStore,
         sessionManager: SessionManager,
         connectionStore: ConnectionStore,
+        deviceIdentityStore: DeviceIdentityStore,
     ): AuthRepository {
-        return AuthRepository(restApi, centralApi, tokenStore, userIdentityStore, sessionManager, connectionStore)
+        return AuthRepository(
+            restApi, centralApi, tokenStore, userIdentityStore, sessionManager,
+            connectionStore, deviceIdentityStore,
+        )
     }
 
     @Provides

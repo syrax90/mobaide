@@ -1,3 +1,5 @@
+import { jwtClaims } from './jwtClaims';
+
 const DEVICE_ID_KEY = 'mobaide-device-id';
 
 /**
@@ -70,6 +72,27 @@ export function getDeviceId(): string {
   }
   cached = id;
   return id;
+}
+
+/**
+ * Make the device id the one the session in `accessToken` is bound to.
+ *
+ * The server binds a session to the `device_id` sent at sign-in and refuses
+ * agent tokens for any other id. Safari's ITP clears `localStorage` after
+ * seven days without a visit but keeps the 30-day refresh cookie, so a
+ * restored session can outlive the stored id; adopting its claim keeps the
+ * two equal. A token without the claim (an unbound session) changes nothing.
+ */
+export function adoptSessionDeviceId(accessToken: string): void {
+  const claimed = jwtClaims(accessToken)?.device_id;
+  if (typeof claimed !== 'string' || !UUID_PATTERN.test(claimed)) return;
+  if (claimed === cached) return;
+  cached = claimed;
+  try {
+    localStorage.setItem(DEVICE_ID_KEY, claimed);
+  } catch {
+    // Storage denied: the in-process cache still serves this page.
+  }
 }
 
 /** Test seam — drops the in-process cache so a fresh id is read from storage. */

@@ -541,10 +541,18 @@ export interface paths {
          * @description Revoke one of the authenticated user's devices.
          *
          *     Idempotency / safety: returns 404 if the device does not belong to the
-         *     user (or was already revoked). On success, also invalidates every
-         *     outstanding refresh token bound to that device across all agents — the
-         *     revoked device fails on its next ``/api/mobile/refresh`` round-trip
-         *     and signs out, while the user's other devices stay logged in.
+         *     user (or was already revoked). On success the device is cut off at
+         *     once, while the user's other devices stay logged in:
+         *
+         *     * every access JWT bound to it — mobile tokens, and user sessions that
+         *       named it at sign-in — fails auth from now on (the
+         *       ``tokens_valid_after`` watermark ``revoke_mobile_device`` sets);
+         *     * its mobile refresh tokens across all agents and its bound user-session
+         *       refresh tokens are revoked;
+         *     * its live sockets are closed with 4001.
+         *
+         *     A user session signed in without a ``device_id`` is not bound to the
+         *     device and survives; only fresh sign-ins can re-register the device.
          */
         delete: operations["revoke_device_api_devices__device_id__delete"];
         options?: never;
@@ -1110,6 +1118,8 @@ export interface components {
          */
         AppleAuthRequest: {
             ad_attribution?: components["schemas"]["AdAttribution"] | null;
+            /** Device Id */
+            device_id?: string | null;
             /** Id Token */
             id_token: string;
             /** Nonce */
@@ -1472,6 +1482,8 @@ export interface components {
         /** GoogleAuthRequest */
         GoogleAuthRequest: {
             ad_attribution?: components["schemas"]["AdAttribution"] | null;
+            /** Device Id */
+            device_id?: string | null;
             /** Id Token */
             id_token: string;
             /**
@@ -1815,6 +1827,8 @@ export interface components {
         };
         /** UserLoginRequest */
         UserLoginRequest: {
+            /** Device Id */
+            device_id?: string | null;
             /** Email */
             email: string;
             /** Password */
@@ -1845,6 +1859,8 @@ export interface components {
         /** UserRegisterRequest */
         UserRegisterRequest: {
             ad_attribution?: components["schemas"]["AdAttribution"] | null;
+            /** Device Id */
+            device_id?: string | null;
             /** Email */
             email: string;
             /** Password */
@@ -1874,6 +1890,8 @@ export interface components {
         VerifyEmailRequest: {
             /** Code */
             code: string;
+            /** Device Id */
+            device_id?: string | null;
             /** Email */
             email: string;
             /** Password */

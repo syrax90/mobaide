@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from ..auth.dependencies import get_non_admin_api_user
+from ..auth.dependencies import (
+    DEVICE_REVOKED_DETAIL,
+    get_non_admin_api_user,
+    require_mintable_device,
+)
 from ..auth.models import (
     AgentSummary,
     CreateAgentRequest,
@@ -103,11 +108,14 @@ async def get_mobile_tokens(
     that specific device, not to the user account.
     """
     db = request.app.state.db
+    auth_service = request.app.state.auth_service
+    started = int(time.time())
     if not await db.is_agent_owner(agent_id, user.sub):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not the owner of this agent",
         )
+    await require_mintable_device(request, user, body.mobile_device_id)
     previous_owner = await db.upsert_mobile_device(
         device_id=body.mobile_device_id,
         user_id=user.sub,
@@ -121,10 +129,18 @@ async def get_mobile_tokens(
             previous_owner,
             user.sub,
         )
-    auth_service = request.app.state.auth_service
     access, refresh = await auth_service.create_mobile_tokens(
         mobile_device_id=body.mobile_device_id,
         agent_id=agent_id,
         user_id=user.sub,
     )
+    if await auth_service.device_revoked_since(body.mobile_device_id, started):
+        # A revoke landed mid-mint, and the upsert may have cleared its
+        # revoked_at: revoke again so the fresh tokens die with the device.
+        await db.revoke_mobile_device(body.mobile_device_id, user.sub)
+        await db.revoke_all_refresh_tokens_for_device(body.mobile_device_id)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=DEVICE_REVOKED_DETAIL,
+        )
     return MobileTokenResponse(access_token=access, refresh_token=refresh)

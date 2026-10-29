@@ -1083,16 +1083,32 @@ class AuthService:
     ) -> tuple[str, str] | None:
         """Exchange a refresh token for a new access+refresh pair.
 
-        Returns None if the refresh token is invalid/expired/revoked.
+        Returns None if the refresh token is invalid/expired/revoked, or if
+        the device was revoked while this rotation was in flight.
         Looks up the agent owner to include user_id in the new token.
         """
+        started = int(time.time())
         result = await self._db.validate_and_consume_refresh(refresh_token)
         if result is None:
             return None
         mobile_device_id, agent_id = result
         agent = await self._db.get_agent(agent_id)
         user_id = agent["owner_user_id"] if agent else ""
-        return await self.create_mobile_tokens(mobile_device_id, agent_id, user_id)
+        tokens = await self.create_mobile_tokens(mobile_device_id, agent_id, user_id)
+        if await self.device_revoked_since(mobile_device_id, started):
+            await self._db.revoke_all_refresh_tokens_for_device(mobile_device_id)
+            return None
+        return tokens
+
+    async def device_revoked_since(self, device_id: str, since: int) -> bool:
+        """Whether ``device_id`` was revoked at or after epoch second ``since``.
+
+        A revoke between a rotation's consume and store misses the new row in
+        its bulk revoke. A watermark written before the consume is refused
+        there; a later one is caught by re-reading it after the store.
+        """
+        valid_after = await self._db.device_tokens_valid_after(device_id)
+        return valid_after is not None and valid_after >= since
 
     def decode_mobile_token(self, token: str) -> MobileTokenPayload:
         """Decode and validate a mobile access JWT. Raises jwt.InvalidTokenError."""
@@ -1130,9 +1146,13 @@ class AuthService:
             token_type=payload["type"],
             exp=payload.get("exp"),
             iat=payload["iat"],
+            device_id=payload.get("device_id"),
+            auth_time=payload.get("auth_time"),
         )
 
-    def _create_user_token(self, user_id: str, email: str, role: str) -> str:
+    def _create_user_token(
+        self, user_id: str, email: str, role: str, device_id: str | None = None
+    ) -> str:
         """Create a dashboard JWT with user identity claims."""
         return self._create_jwt(
             sub=user_id,
@@ -1141,10 +1161,27 @@ class AuthService:
             user_id=user_id,
             email=email,
             role=role,
+            device_id=device_id,
         )
 
+    def issue_device_session(
+        self, user_id: str, email: str, role: str, device_id: str
+    ) -> str:
+        """Re-mint a non-refreshable session token bound to ``device_id``.
+
+        The same upgrade-after-authentication shape as
+        :meth:`issue_refreshable_session`: the auth paths keep their
+        signatures and the router swaps the token they returned.
+        """
+        return self._create_user_token(user_id, email, role, device_id)
+
     async def issue_refreshable_session(
-        self, user_id: str, email: str, role: str
+        self,
+        user_id: str,
+        email: str,
+        role: str,
+        device_id: str | None = None,
+        auth_time: int | None = None,
     ) -> tuple[str, str, int]:
         """Mint a short-lived access token plus a rotating refresh token.
 
@@ -1164,7 +1201,14 @@ class AuthService:
         ``decode_dashboard_token`` and every dependency that consumes it are
         unchanged. Only the ``exp`` claim differs, and PyJWT already
         enforces it whenever present.
+
+        ``auth_time`` is when the session was signed in: now for a sign-in,
+        the consumed row's value for a rotation. It rides in the token and
+        on the refresh row, so a rotation never passes for a fresh sign-in
+        where one is required (``require_mintable_device``).
         """
+        if auth_time is None:
+            auth_time = int(time.time())
         expire_minutes = self._config.user_session_access_expire_minutes
         access = self._create_jwt(
             sub=user_id,
@@ -1173,12 +1217,16 @@ class AuthService:
             user_id=user_id,
             email=email,
             role=role,
+            device_id=device_id,
+            auth_time=auth_time,
         )
         refresh = secrets.token_urlsafe(32)
         await self._db.store_user_refresh_token(
             raw_token=refresh,
             user_id=user_id,
             expire_minutes=self._config.user_session_refresh_expire_minutes,
+            device_id=device_id,
+            auth_time=auth_time,
         )
         return access, refresh, expire_minutes * 60
 
@@ -1191,17 +1239,27 @@ class AuthService:
         when the token is unknown, expired, or already consumed. The user row
         is re-read on every rotation so a deleted account cannot keep
         refreshing, and so ``role`` / ``scheduled_deletion_at`` stay current
-        for the client without needing a separate profile endpoint.
+        for the client without needing a separate profile endpoint. The
+        device binding travels with the refresh row, so the rotated session
+        stays bound to the same device; a revoke of that device that lands
+        mid-rotation retires the replacement and returns None.
         """
-        user_id = await self._db.validate_and_consume_user_refresh(refresh_token)
-        if user_id is None:
+        started = int(time.time())
+        consumed = await self._db.validate_and_consume_user_refresh(refresh_token)
+        if consumed is None:
             return None
+        user_id, device_id, auth_time = consumed
         user = await self._db.get_user_by_id(user_id)
         if user is None:
             return None
         access, refresh, expires_in = await self.issue_refreshable_session(
-            user["id"], user["email"], user["role"]
+            user["id"], user["email"], user["role"], device_id, auth_time
         )
+        if device_id is not None and await self.device_revoked_since(
+            device_id, started
+        ):
+            await self._db.revoke_user_refresh_token(refresh)
+            return None
         return user, access, refresh, expires_in
 
     async def revoke_user_session(self, refresh_token: str) -> bool:
@@ -1612,6 +1670,8 @@ class AuthService:
         user_id: str | None = None,
         email: str | None = None,
         role: str | None = None,
+        device_id: str | None = None,
+        auth_time: int | None = None,
     ) -> str:
         now = int(time.time())
         payload: dict = {
@@ -1632,6 +1692,10 @@ class AuthService:
             payload["email"] = email
         if role is not None:
             payload["role"] = role
+        if device_id is not None:
+            payload["device_id"] = device_id
+        if auth_time is not None:
+            payload["auth_time"] = auth_time
         return jwt.encode(
             payload,
             self._config.jwt_secret_key,

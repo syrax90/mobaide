@@ -18,14 +18,19 @@ struct AuthRepository: Sendable {
     let userIdentityStore: UserIdentityStore
     let sessionManager: SessionManager
     let connectionStore: ConnectionStore
+    /// Sent with every sign-in so the server binds the session to this
+    /// install and revoking the device signs it out. `nil` sends none.
+    var deviceIdentityStore: DeviceIdentityStore? = nil
     /// Shared by every copy of this struct, so the screen that verifies sees
     /// what the screen that registered remembered.
     let pendingVerification = PendingVerificationCredential()
 
     // MARK: - Central-server user auth
 
+    private var deviceId: String? { deviceIdentityStore?.getOrCreateDeviceId() }
+
     func register(email: String, password: String) async throws -> AuthResult {
-        let response = try await centralAPI.register(email: email, password: password)
+        let response = try await centralAPI.register(email: email, password: password, deviceId: deviceId)
         let result = try await finaliseOrFlagVerification(requestedEmail: email, response: response)
         pendingVerification.remember(result, password: password)
         return result
@@ -34,7 +39,7 @@ struct AuthRepository: Sendable {
     func loginWithPassword(email: String, password: String) async throws -> AuthResult {
         let response: UserAuthResponse
         do {
-            response = try await centralAPI.login(email: email, password: password)
+            response = try await centralAPI.login(email: email, password: password, deviceId: deviceId)
         } catch let error as APIError {
             if let pendingEmail = parseVerificationRequired(error) {
                 let result = AuthResult.verificationRequired(email: pendingEmail)
@@ -49,14 +54,14 @@ struct AuthRepository: Sendable {
     }
 
     func loginWithGoogle(idToken: String) async throws -> AuthResult {
-        let response = try await centralAPI.loginWithGoogle(idToken: idToken)
+        let response = try await centralAPI.loginWithGoogle(idToken: idToken, deviceId: deviceId)
         // Google OAuth always returns a verified user server-side; any
         // VerificationRequired here is unexpected and surfaces generically.
         return try await finaliseOrFlagVerification(requestedEmail: response.email, response: response)
     }
 
     func loginWithApple(idToken: String, nonce: String) async throws -> AuthResult {
-        let response = try await centralAPI.loginWithApple(idToken: idToken, nonce: nonce)
+        let response = try await centralAPI.loginWithApple(idToken: idToken, nonce: nonce, deviceId: deviceId)
         return try await finaliseOrFlagVerification(requestedEmail: response.email, response: response)
     }
 
@@ -64,7 +69,8 @@ struct AuthRepository: Sendable {
         let response = try await centralAPI.verifyEmail(
             email: email,
             code: code,
-            password: pendingVerification.password(for: email)
+            password: pendingVerification.password(for: email),
+            deviceId: deviceId
         )
         pendingVerification.clear()
         if response.role == Self.roleAdmin { throw AdminLoginNotSupported() }

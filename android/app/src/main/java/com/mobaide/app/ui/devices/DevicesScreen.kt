@@ -98,13 +98,13 @@ fun DevicesScreen(
             text = {
                 Text(
                     if (isCurrent) {
-                        "Revoking this device will sign you out on the next " +
-                            "token refresh. You can sign back in afterwards. " +
+                        "Revoking this device signs you out right away. " +
+                            "You can sign back in afterwards. " +
                             "Every agent paired with it is signed out too."
                     } else {
                         "${target.name ?: target.device_id} will be signed out " +
-                            "on its next token refresh. Every agent paired " +
-                            "with it is signed out too."
+                            "right away. Every agent paired with it is " +
+                            "signed out too."
                     }
                 )
             },

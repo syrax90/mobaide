@@ -162,6 +162,9 @@ the runtime `PRAGMA user_version=11` / `user_version=12` blocks in
   `user_version < 12`). `'portal'` stays in the CHECK constraint permanently:
   the surface that wrote it is gone, but its historical rows are not, and
   dropping the value would invalidate them.
+* `device_revocations(device_id, tokens_valid_after)` — device revoke
+  watermarks, also **no FK**, so they are kept after the final cascade purge
+  (no account link) and revoked devices' old tokens stay invalid.
 
 `Database.delete_user` was also extended (latent-bug fix discovered during
 CLA-61 planning): it now cascades `password_reset_tokens` and

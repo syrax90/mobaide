@@ -48,8 +48,7 @@ export function Devices() {
 
       <p className="page-note">
         Revoking a device signs out every agent paired with it — that device
-        stops working on its next token refresh, while your other devices stay
-        signed in.
+        stops working right away, while your other devices stay signed in.
       </p>
 
       {devices.isPending && <p className="page-note state-loading">Loading devices…</p>}
@@ -119,8 +118,8 @@ export function Devices() {
           <h2 id="revoke-title">Revoke device?</h2>
           <p>
             {target.deviceId === currentDeviceId
-              ? 'Revoking this device will sign you out on the next token refresh. You can sign back in afterwards.'
-              : `${target.name ?? target.deviceId} will be signed out on its next token refresh.`}{' '}
+              ? 'Revoking this device signs you out right away. You can sign back in afterwards.'
+              : `${target.name ?? target.deviceId} will be signed out right away.`}{' '}
             Every agent paired with it is signed out too.
           </p>
           <div className="button-row">

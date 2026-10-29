@@ -525,3 +525,32 @@ class TestUserExistenceCheck:
         )
         payload = await get_mobile_user(request)
         assert payload.agent_id == agent_id
+
+
+class TestDeviceRevokeCheck:
+    """A user JWT bound to a device through its ``device_id`` claim dies
+    with that device's revoke on every user-token dependency."""
+
+    async def test_get_dashboard_user_redirects_a_bound_session_after_revoke(
+        self, auth_service, auth_db
+    ):
+        result = await auth_service.register_user(
+            TEST_USER_EMAIL, TEST_USER_PASSWORD
+        )
+        token = auth_service.issue_device_session(
+            result.user_id, TEST_USER_EMAIL, "viewer", "dev-1"
+        )
+        await auth_db.upsert_mobile_device(
+            device_id="dev-1", user_id=result.user_id, name="Phone"
+        )
+        request = _FakeRequest(
+            cookies={"dashboard_token": token}, app=_FakeApp(auth_service)
+        )
+        assert (await get_dashboard_user(request)).device_id == "dev-1"
+
+        await auth_db.revoke_mobile_device("dev-1", result.user_id)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_dashboard_user(request)
+        assert exc_info.value.status_code == 303
+        assert exc_info.value.headers["Location"] == "/dashboard/login"
