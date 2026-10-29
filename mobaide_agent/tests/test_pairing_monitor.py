@@ -26,10 +26,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from websockets.datastructures import Headers
+from websockets.exceptions import InvalidHandshake, InvalidMessage, InvalidStatus
+from websockets.http11 import Response
 
 import mobaide.agent.pairing_monitor as _pm
 from mobaide.agent.pairing_monitor import (
     PairingMonitorError,
+    _handshake_status,
     _pairing_ws_url,
     initiate_pairing,
     run_pairing_monitor,
@@ -302,6 +306,42 @@ class TestPairingWsUrlHelper:
             _pairing_ws_url("http://localhost:8080", "N1")
             == "ws://localhost:8080/ws/pairing/N1"
         )
+
+
+class _LegacyInvalidStatusCode(InvalidHandshake):
+    """Stand-in for websockets 13 ``InvalidStatusCode`` (``status_code`` attr)."""
+
+    def __init__(self, status_code) -> None:
+        super().__init__(f"status {status_code}")
+        self.status_code = status_code
+
+
+class TestHandshakeStatusHelper:
+    @pytest.mark.parametrize(
+        ("cause", "expected"),
+        [
+            pytest.param(
+                InvalidStatus(Response(403, "Forbidden", Headers(), b"")),
+                403,
+                id="invalid-status-response",
+            ),
+            pytest.param(
+                _LegacyInvalidStatusCode(502), 502, id="legacy-status-code"
+            ),
+            pytest.param(
+                _LegacyInvalidStatusCode("403"), None, id="non-int-status"
+            ),
+            pytest.param(
+                InvalidMessage("did not receive a valid HTTP response"),
+                None,
+                id="handshake-without-status",
+            ),
+            pytest.param(OSError("connection refused"), None, id="not-handshake"),
+            pytest.param(None, None, id="no-cause"),
+        ],
+    )
+    def test_reads_the_rejected_handshake_status(self, cause, expected):
+        assert _handshake_status(cause) == expected
 
 
 class TestWriteCredentialsToEnv:
@@ -1901,6 +1941,166 @@ class TestRunPairingMonitorRetryPacing(_RunPairingMonitorTestBase):
 
         assert recorder["initiate_calls"] == 1
         assert recorder["ws_urls"] == [pending.ws_url] * 4
+        floor = _pm._BACKOFF_FLOOR_S
+        assert sleeps == pytest.approx([floor, floor * 2, floor * 4, floor * 8])
+        assert recorder["saved"] == []
+
+    async def test_rejected_handshake_drops_the_unsaved_nonce_and_backs_off(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Pass 1 is a plain transport failure, so n1 is reused. Pass 2 is
+        # the relay's 403 ``duplicate`` for n1, so pass 3 must mint n2.
+        sleeps = self._capture_sleeps(monkeypatch, stop_after=3)
+        recorder: dict = {"initiate_calls": 0, "saved": [], "ws_urls": []}
+
+        def _initiate() -> PendingPairing:
+            return self._pending(f"n{recorder['initiate_calls']}", 2999999999)
+
+        class _RejectedAfterFirstWsClient:
+            @classmethod
+            @contextlib.asynccontextmanager
+            async def connect(cls, ws_url):
+                recorder["ws_urls"].append(ws_url)
+                if len(recorder["ws_urls"]) == 1:
+                    raise PairingWsError("no ready frame")
+                rejected = InvalidStatus(
+                    Response(403, "Forbidden", Headers(), b"duplicate")
+                )
+                raise PairingWsError(
+                    f"pairing ws transport failure: {rejected}"
+                ) from rejected
+                yield  # pragma: no cover — make this an async generator
+
+        self._wire(
+            monkeypatch, recorder,
+            initiate=_initiate,
+            ws_client_class=_RejectedAfterFirstWsClient,
+        )
+
+        with pytest.raises(_StopLoop):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=self._make_layout(tmp_path),
+                    relay_server_url="wss://relay.test",
+                ),
+                timeout=5.0,
+            )
+
+        assert recorder["initiate_calls"] == 2
+        assert recorder["ws_urls"] == [
+            "wss://relay.test/ws/pairing/n1",
+            "wss://relay.test/ws/pairing/n1",
+            "wss://relay.test/ws/pairing/n2",
+        ]
+        floor = _pm._BACKOFF_FLOOR_S
+        assert sleeps == pytest.approx([floor, floor * 2, floor * 4])
+        assert recorder["saved"] == []
+
+    @pytest.mark.parametrize(
+        "cause",
+        [
+            pytest.param(
+                InvalidStatus(Response(502, "Bad Gateway", Headers(), b"")),
+                id="proxy-502",
+            ),
+            pytest.param(
+                InvalidMessage("did not receive a valid HTTP response"),
+                id="eof-mid-upgrade",
+            ),
+        ],
+    )
+    async def test_non_403_handshake_failure_reuses_the_unsaved_nonce(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        cause: InvalidHandshake,
+    ) -> None:
+        sleeps = self._capture_sleeps(monkeypatch, stop_after=3)
+        recorder: dict = {"initiate_calls": 0, "saved": [], "ws_urls": []}
+
+        def _initiate() -> PendingPairing:
+            return self._pending(f"n{recorder['initiate_calls']}", 2999999999)
+
+        class _HandshakeFailingWsClient:
+            @classmethod
+            @contextlib.asynccontextmanager
+            async def connect(cls, ws_url):
+                recorder["ws_urls"].append(ws_url)
+                raise PairingWsError(
+                    f"pairing ws transport failure: {cause}"
+                ) from cause
+                yield  # pragma: no cover — make this an async generator
+
+        self._wire(
+            monkeypatch, recorder,
+            initiate=_initiate,
+            ws_client_class=_HandshakeFailingWsClient,
+        )
+
+        with pytest.raises(_StopLoop):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=self._make_layout(tmp_path),
+                    relay_server_url="wss://relay.test",
+                ),
+                timeout=5.0,
+            )
+
+        assert recorder["initiate_calls"] == 1
+        assert recorder["ws_urls"] == ["wss://relay.test/ws/pairing/n1"] * 3
+        floor = _pm._BACKOFF_FLOOR_S
+        assert sleeps == pytest.approx([floor, floor * 2, floor * 4])
+
+    async def test_repeated_403_drops_only_one_unsaved_nonce(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A proxy that refuses every upgrade with 403: n1 is dropped once,
+        # then n2 is kept while it is still valid by the local clock.
+        sleeps = self._capture_sleeps(monkeypatch, stop_after=4)
+        recorder: dict = {"initiate_calls": 0, "saved": [], "ws_urls": []}
+
+        def _initiate() -> PendingPairing:
+            return self._pending(f"n{recorder['initiate_calls']}", 2999999999)
+
+        class _AlwaysRejectedWsClient:
+            @classmethod
+            @contextlib.asynccontextmanager
+            async def connect(cls, ws_url):
+                recorder["ws_urls"].append(ws_url)
+                rejected = InvalidStatus(
+                    Response(403, "Forbidden", Headers(), b"")
+                )
+                raise PairingWsError(
+                    f"pairing ws transport failure: {rejected}"
+                ) from rejected
+                yield  # pragma: no cover — make this an async generator
+
+        self._wire(
+            monkeypatch, recorder,
+            initiate=_initiate,
+            ws_client_class=_AlwaysRejectedWsClient,
+        )
+
+        with pytest.raises(_StopLoop):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=self._make_layout(tmp_path),
+                    relay_server_url="wss://relay.test",
+                ),
+                timeout=5.0,
+            )
+
+        assert recorder["initiate_calls"] == 2
+        assert recorder["ws_urls"] == [
+            "wss://relay.test/ws/pairing/n1",
+            "wss://relay.test/ws/pairing/n2",
+            "wss://relay.test/ws/pairing/n2",
+            "wss://relay.test/ws/pairing/n2",
+        ]
         floor = _pm._BACKOFF_FLOOR_S
         assert sleeps == pytest.approx([floor, floor * 2, floor * 4, floor * 8])
         assert recorder["saved"] == []
