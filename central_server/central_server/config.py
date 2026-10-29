@@ -221,6 +221,11 @@ class CentralServerConfig:
     # device, and the nonce is single-use so the wider window adds no
     # replay exposure.
     pairing_qr_token_ttl_seconds: int = 120
+    # Initiate is anonymous and inserts a row per call. One unpaired agent
+    # re-initiates once per TTL (6/h at the production 600 s), so 120/h
+    # still fits ~20 agents behind one NAT while capping an agent stuck in
+    # a retry loop. 0 disables the cap.
+    pairing_initiate_ip_hourly_cap: int = 120
     # Reversed (device-code) pairing. Two windows, because the human step
     # sits between them: the code has to survive the walk from a browser to
     # a terminal, while the confirm prompt is answered by someone already
@@ -452,6 +457,9 @@ class CentralServerConfig:
             log_format=os.getenv("LOG_FORMAT", "json"),
             pairing_qr_token_ttl_seconds=int(
                 os.getenv("PAIRING_QR_TOKEN_TTL_SECONDS", "120"),
+            ),
+            pairing_initiate_ip_hourly_cap=int(
+                os.getenv("PAIRING_INITIATE_IP_HOURLY_CAP", "120"),
             ),
             pairing_device_code_ttl_seconds=int(
                 os.getenv("PAIRING_DEVICE_CODE_TTL_SECONDS", "600"),

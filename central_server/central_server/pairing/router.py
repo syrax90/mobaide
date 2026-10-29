@@ -147,13 +147,36 @@ def _agent_metadata_json(
     return json.dumps(metadata, sort_keys=True) if metadata else None
 
 
+async def _require_pairing_initiate_quota(request: Request) -> None:
+    """Per-IP hourly cap on the anonymous initiate endpoint.
+
+    Bounds an agent stuck in a pairing retry loop, including agents already
+    in the field: the updater does not run while an agent is unpaired, so
+    a fixed client never reaches them.
+
+    Falls open when unwired, matching ``_require_device_code_redeem_quota``.
+    """
+    limiter = getattr(request.app.state, "pairing_initiate_ip_limiter", None)
+    if limiter is None:
+        return
+    ip = request.client.host if request.client else "unknown"
+    wait = await limiter.try_acquire(f"ip:{ip}")
+    if wait is not None:
+        logger.warning(
+            "pairing.initiate_rate_limited ip=%s retry_after=%s", ip, wait
+        )
+        raise _rate_limited(wait, error="pairing_initiate_rate_limited")
+
+
 @router.post(
     "/api/pairing/initiate",
     response_model=PairingInitiateResponse,
     tags=["pairing"],
 )
 async def initiate_pairing(
-    request: Request, body: PairingInitiateRequest
+    request: Request,
+    body: PairingInitiateRequest,
+    _ip_quota: None = Depends(_require_pairing_initiate_quota),
 ) -> PairingInitiateResponse:
     """Allocate a single-use pairing nonce and return its QR payload.
 
@@ -541,12 +564,14 @@ async def _complete_pairing(
     )
 
 
-def _rate_limited(wait: int) -> HTTPException:
-    """The 429 both device-code limiters raise."""
+def _rate_limited(
+    wait: int, *, error: str = "device_code_rate_limited"
+) -> HTTPException:
+    """The 429 the pairing limiters raise."""
     return HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail={
-            "error": "device_code_rate_limited",
+            "error": error,
             "retry_after_seconds": wait,
         },
         headers={"Retry-After": str(wait)},

@@ -322,3 +322,11 @@ def test_google_ads_click_window_days_parses_and_clamps(monkeypatch, raw, expect
     else:
         monkeypatch.setenv("GOOGLE_ADS_CLICK_WINDOW_DAYS", raw)
     assert CentralServerConfig.from_env().google_ads_click_window_days == expected
+
+
+def test_pairing_initiate_ip_hourly_cap_default_and_env(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.delenv("PAIRING_INITIATE_IP_HOURLY_CAP", raising=False)
+    assert CentralServerConfig.from_env().pairing_initiate_ip_hourly_cap == 120
+    monkeypatch.setenv("PAIRING_INITIATE_IP_HOURLY_CAP", "0")
+    assert CentralServerConfig.from_env().pairing_initiate_ip_hourly_cap == 0

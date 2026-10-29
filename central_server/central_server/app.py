@@ -244,6 +244,10 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             cooldown_seconds=0,
             hourly_cap=config.pairing_device_code_redeem_global_hourly_cap,
         )
+        pairing_initiate_ip_limiter = ResendRateLimiter(
+            cooldown_seconds=0,
+            hourly_cap=config.pairing_initiate_ip_hourly_cap,
+        )
         app.state.email_sender = email_sender
         app.state.resend_limiter = resend_limiter
         app.state.reset_email_limiter = reset_email_limiter
@@ -251,6 +255,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         app.state.device_code_mint_limiter = device_code_mint_limiter
         app.state.device_code_ip_limiter = device_code_ip_limiter
         app.state.device_code_global_limiter = device_code_global_limiter
+        app.state.pairing_initiate_ip_limiter = pairing_initiate_ip_limiter
         app.state.auth_service = AuthService(
             config,
             db,
