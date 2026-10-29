@@ -79,6 +79,10 @@ export function useDictation(
     };
   }, [agentId, sessionId, sampleRate, maxSeconds, queryClient]);
 
+  const active =
+    state.kind === 'starting' || state.kind === 'recording' || state.kind === 'transcribing';
+  useKeepScreenAwake(active);
+
   const toggle = useCallback(() => {
     controllerRef.current?.toggle();
   }, []);
@@ -108,6 +112,36 @@ export function useDictation(
   }, []);
 
   return { state, carried, toggle, stop, cancel, retry, dismiss, continueFrom, finish };
+}
+
+/**
+ * Holds a screen wake lock while `active`, so a phone does not dim and lock
+ * mid-dictation. The browser drops the lock when the page is hidden; it is
+ * taken again when the page is visible and still `active`.
+ */
+function useKeepScreenAwake(active: boolean): void {
+  useEffect(() => {
+    if (!active || !('wakeLock' in navigator)) return;
+    let sentinel: WakeLockSentinel | null = null;
+    let released = false;
+    const acquire = () => {
+      if (document.visibilityState !== 'visible') return;
+      navigator.wakeLock.request('screen').then(
+        (lock) => {
+          if (released) void lock.release();
+          else sentinel = lock;
+        },
+        () => {},
+      );
+    };
+    acquire();
+    document.addEventListener('visibilitychange', acquire);
+    return () => {
+      released = true;
+      document.removeEventListener('visibilitychange', acquire);
+      void sentinel?.release();
+    };
+  }, [active]);
 }
 
 /** The agent's display name for copy like "Voice can't run on <agent>". */
