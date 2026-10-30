@@ -1130,13 +1130,15 @@ class AuthService:
             iat=payload["iat"],
         )
 
-    def decode_dashboard_token(self, token: str) -> UserTokenPayload:
+    def decode_dashboard_token(
+        self, token: str, *, ttl_minutes: int | None = None
+    ) -> UserTokenPayload:
         """Decode a dashboard JWT. Returns UserTokenPayload. Raises jwt.InvalidTokenError.
 
         A token without ``exp`` was minted while the TTL was 0. Once the TTL
-        is positive it expires ``dashboard_token_expire_minutes`` after its
-        ``iat``, the same lifetime a token minted now gets; otherwise every
-        session signed in under the old default would never end.
+        is positive it expires that TTL after its ``iat``, the same lifetime
+        a token minted now gets; otherwise every session signed in under the
+        old default would never end.
         """
         payload = jwt.decode(
             token,
@@ -1145,7 +1147,8 @@ class AuthService:
         )
         if payload.get("type") != "dashboard":
             raise jwt.InvalidTokenError("Expected dashboard token")
-        ttl_minutes = self._config.dashboard_token_expire_minutes
+        if ttl_minutes is None:
+            ttl_minutes = self._config.dashboard_token_expire_minutes
         if (
             "exp" not in payload
             and ttl_minutes > 0

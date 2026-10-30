@@ -47,6 +47,25 @@ async def expired_dashboard_headers(app) -> dict[str, str]:
 
 
 @pytest.fixture
+async def legacy_admin_token(app) -> str:
+    """Admin dashboard JWT without ``exp`` (minted while the TTL was 0),
+    issued an hour ago.
+    """
+    admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+    return jwt.encode(
+        {
+            "sub": admin["id"],
+            "type": "dashboard",
+            "email": TEST_ADMIN_EMAIL,
+            "role": "admin",
+            "iat": int(time.time()) - 3600,
+        },
+        TEST_JWT_SECRET,
+        algorithm="HS256",
+    )
+
+
+@pytest.fixture
 async def client_with_dashboard_ttl(tmp_path):
     """Client built with ``admin_dashboard_token_expire_minutes=60`` to
     exercise the positive Max-Age branch of the login cookie path with a
@@ -326,6 +345,66 @@ class TestEndedSessionRedirect:
         assert resp.status_code == 204
         assert resp.headers["HX-Redirect"] == "/dashboard/login"
         assert "location" not in resp.headers
+
+
+class TestLegacyAdminCookieZeroAdminTtl:
+    """With the admin TTL at 0 a cookie without ``exp`` never ages out, even
+    past the shorter user dashboard TTL.
+    """
+
+    @pytest.fixture
+    def config(self, config):
+        return dataclasses.replace(
+            config,
+            dashboard_token_expire_minutes=10,
+            admin_dashboard_token_expire_minutes=0,
+        )
+
+    async def test_cookie_older_than_the_dashboard_ttl_still_authenticates(
+        self, client, legacy_admin_token
+    ):
+        resp = await client.get(
+            "/dashboard",
+            headers={"Cookie": f"dashboard_token={legacy_admin_token}"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        assert "Users" in resp.text
+
+
+class TestLegacyAdminCookieAgeOut:
+    """A cookie without ``exp`` ages out at the admin TTL (30 min); the same
+    token as a Bearer keeps the user dashboard TTL (600 min).
+    """
+
+    @pytest.fixture
+    def config(self, config):
+        return dataclasses.replace(
+            config,
+            dashboard_token_expire_minutes=600,
+            admin_dashboard_token_expire_minutes=30,
+        )
+
+    async def test_cookie_older_than_the_admin_ttl_goes_to_login(
+        self, client, legacy_admin_token
+    ):
+        resp = await client.get(
+            "/dashboard",
+            headers={"Cookie": f"dashboard_token={legacy_admin_token}"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/dashboard/login"
+
+    async def test_same_token_as_a_bearer_is_still_accepted(
+        self, client, legacy_admin_token
+    ):
+        resp = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {legacy_admin_token}"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["email"] == TEST_ADMIN_EMAIL
 
 
 class TestDashboardRoleGate:

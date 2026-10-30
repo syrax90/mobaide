@@ -185,7 +185,7 @@ def _session_login_redirect(request: Request, login_url: str) -> HTTPException:
 
 
 async def _get_session_user(
-    request: Request, *, cookie_name: str, login_url: str
+    request: Request, *, cookie_name: str, login_url: str, ttl_minutes: int
 ) -> UserTokenPayload:
     """Validate a dashboard-style JWT from the given cookie. Redirects to
     ``login_url`` on missing cookie, decode failure (including expiry), or
@@ -193,15 +193,17 @@ async def _get_session_user(
 
     Kept parameterised for :func:`get_dashboard_user`, its only caller since the
     end-user portal's authenticated pages moved to the browser client: the
-    cookie name and the login URL are the whole difference between one
-    cookie-session surface and the next.
+    cookie name, the login URL and the cookie's TTL are the whole difference
+    between one cookie-session surface and the next.
     """
     auth_service = _get_auth_service(request)
     token = request.cookies.get(cookie_name)
     if not token:
         raise _session_login_redirect(request, login_url)
     try:
-        user_payload = auth_service.decode_dashboard_token(token)
+        user_payload = auth_service.decode_dashboard_token(
+            token, ttl_minutes=ttl_minutes
+        )
     except jwt.InvalidTokenError:
         raise _session_login_redirect(request, login_url)
     if not await _user_still_exists(
@@ -220,7 +222,10 @@ async def get_dashboard_user(request: Request) -> UserTokenPayload:
     user no longer exists (cascade-deleted by another admin).
     """
     return await _get_session_user(
-        request, cookie_name="dashboard_token", login_url="/dashboard/login"
+        request,
+        cookie_name="dashboard_token",
+        login_url="/dashboard/login",
+        ttl_minutes=request.app.state.config.admin_dashboard_token_expire_minutes,
     )
 
 

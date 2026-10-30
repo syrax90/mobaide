@@ -453,6 +453,35 @@ class TestLegacyDashboardTokenAgeOut:
         assert auth.decode_dashboard_token(token).exp == now + 3600
 
 
+class TestLegacyDashboardTokenAgeOutWithExplicitTtl:
+    """A caller passes the TTL of the surface presenting the token (the admin
+    dashboard cookie has its own); it replaces `dashboard_token_expire_minutes`.
+    """
+
+    async def test_token_older_than_the_explicit_ttl_is_expired(self, db: Database):
+        auth = _auth_with_ttls(db, dashboard_token_expire_minutes=600)
+        token = _dashboard_token(iat=int(time.time()) - 60 * 60)
+
+        assert auth.decode_dashboard_token(token).sub == "user-1"
+        with pytest.raises(jwt.ExpiredSignatureError):
+            auth.decode_dashboard_token(token, ttl_minutes=30)
+
+    async def test_explicit_zero_ttl_keeps_accepting_it(self, db: Database):
+        auth = _auth_with_ttls(db, dashboard_token_expire_minutes=60)
+        token = _dashboard_token(iat=int(time.time()) - 365 * 24 * 3600)
+
+        assert auth.decode_dashboard_token(token, ttl_minutes=0).sub == "user-1"
+
+    async def test_token_with_exp_ignores_the_explicit_ttl(self, db: Database):
+        auth = _auth_with_ttls(db, dashboard_token_expire_minutes=600)
+        now = int(time.time())
+        token = _dashboard_token(iat=now - 2 * 3600, exp=now + 3600)
+
+        payload = auth.decode_dashboard_token(token, ttl_minutes=30)
+
+        assert payload.exp == now + 3600
+
+
 class TestAdminDashboardSession:
     async def test_admin_session_uses_the_admin_ttl(self, db: Database):
         auth = _auth_with_ttls(

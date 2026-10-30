@@ -73,6 +73,7 @@ class _FakeApp:
         self.state = SimpleNamespace(
             auth_service=auth_service,
             db=db if db is not None else auth_service._db,
+            config=auth_service._config,
         )
 
 
