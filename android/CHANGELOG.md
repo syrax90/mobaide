@@ -1,5 +1,13 @@
 # Android Changelog
 
+## [3.6.14](https://github.com/syrax90/claude_mobile/compare/android-v3.6.13...android-v3.6.14) (2026-10-30)
+
+
+### Bug Fixes
+
+* **android:** unblock the release build broken by the review library ([3ea75b4](https://github.com/syrax90/claude_mobile/commit/3ea75b4d6729eb151a70a1c6d73c1016c1b8ba7c))
+* **android:** unblock the release build broken by the review library ([eb49061](https://github.com/syrax90/claude_mobile/commit/eb490616d617e9e95d0b7152aa3cb3c4aa96c134))
+
 ## [3.6.13](https://github.com/syrax90/claude_mobile/compare/android-v3.6.12...android-v3.6.13) (2026-10-30)
 
 
