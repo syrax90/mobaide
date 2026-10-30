@@ -312,12 +312,24 @@ class TestZeroTtlTokens:
     entirely and decode with `payload.exp is None`.
     """
 
+    @pytest.fixture
+    def zero_ttl_auth(self, db: Database) -> AuthService:
+        # The default TTLs are finite; 0 is the explicit dev-only opt-out.
+        config = CentralServerConfig(
+            jwt_secret_key=TEST_SECRET,
+            email_verification_required=False,
+            mobile_token_expire_minutes=0,
+            mobile_refresh_expire_minutes=0,
+            dashboard_token_expire_minutes=0,
+        )
+        return AuthService(config, db)
+
     async def test_mobile_token_with_zero_ttl_has_no_exp(
-        self, auth: AuthService, db: Database
+        self, zero_ttl_auth: AuthService, db: Database
     ):
+        auth = zero_ttl_auth
         owner = await db.create_user(email="owner@test.local", password_hash="h")
         agent_id, _ = await db.register_agent("test", owner)
-        # Default config has mobile_token_expire_minutes == 0.
         access, _refresh = await auth.create_mobile_tokens(
             "device-1", agent_id, owner
         )
@@ -333,8 +345,9 @@ class TestZeroTtlTokens:
         assert isinstance(payload.iat, int)
 
     async def test_dashboard_token_with_zero_ttl_has_no_exp(
-        self, auth: AuthService
+        self, zero_ttl_auth: AuthService
     ):
+        auth = zero_ttl_auth
         result = await auth.register_user("user@example.com", "pass123")
         token = result.access_token
         assert token is not None
@@ -368,16 +381,114 @@ class TestZeroTtlTokens:
         payload = auth.decode_mobile_token(access)
         assert payload.exp == raw_claims["exp"]
 
-    async def test_mobile_token_type_rejects_non_mobile(self, auth: AuthService):
+    async def test_mobile_token_type_rejects_non_mobile(
+        self, zero_ttl_auth: AuthService
+    ):
         """A dashboard token must not decode as a mobile access token, even
         when it has no `exp` claim (guarding the type check under the new
         missing-exp path).
         """
+        auth = zero_ttl_auth
         result = await auth.register_user("x@example.com", "pass123")
         dashboard_token = result.access_token
         assert dashboard_token is not None
         with pytest.raises(jwt.InvalidTokenError, match="mobile_access"):
             auth.decode_mobile_token(dashboard_token)
+
+
+def _auth_with_ttls(db: Database, **ttls: int) -> AuthService:
+    config = CentralServerConfig(
+        jwt_secret_key=TEST_SECRET, email_verification_required=False, **ttls
+    )
+    return AuthService(config, db)
+
+
+def _dashboard_token(**claims) -> str:
+    return jwt.encode(
+        {
+            "sub": "user-1",
+            "type": "dashboard",
+            "email": "user@example.com",
+            "role": "viewer",
+            **claims,
+        },
+        TEST_SECRET,
+        algorithm="HS256",
+    )
+
+
+class TestLegacyDashboardTokenAgeOut:
+    """A dashboard JWT without `exp` was minted while the TTL was 0. Once the
+    TTL is positive it expires `dashboard_token_expire_minutes` after `iat`.
+    """
+
+    async def test_token_older_than_the_ttl_is_expired(self, db: Database):
+        auth = _auth_with_ttls(db, dashboard_token_expire_minutes=60)
+        token = _dashboard_token(iat=int(time.time()) - 60 * 60 - 10)
+
+        with pytest.raises(jwt.ExpiredSignatureError):
+            auth.decode_dashboard_token(token)
+
+    async def test_token_younger_than_the_ttl_still_decodes(self, db: Database):
+        auth = _auth_with_ttls(db, dashboard_token_expire_minutes=60)
+        token = _dashboard_token(iat=int(time.time()) - 50 * 60)
+
+        payload = auth.decode_dashboard_token(token)
+
+        assert payload.sub == "user-1"
+        assert payload.exp is None
+
+    async def test_zero_ttl_keeps_accepting_it(self, db: Database):
+        auth = _auth_with_ttls(db, dashboard_token_expire_minutes=0)
+        token = _dashboard_token(iat=int(time.time()) - 365 * 24 * 3600)
+
+        assert auth.decode_dashboard_token(token).sub == "user-1"
+
+    async def test_token_with_exp_is_judged_by_exp_alone(self, db: Database):
+        """A token minted under an earlier, longer TTL lives to its own `exp`."""
+        auth = _auth_with_ttls(db, dashboard_token_expire_minutes=60)
+        now = int(time.time())
+        token = _dashboard_token(iat=now - 2 * 3600, exp=now + 3600)
+
+        assert auth.decode_dashboard_token(token).exp == now + 3600
+
+
+class TestAdminDashboardSession:
+    async def test_admin_session_uses_the_admin_ttl(self, db: Database):
+        auth = _auth_with_ttls(
+            db,
+            dashboard_token_expire_minutes=600,
+            admin_dashboard_token_expire_minutes=30,
+        )
+
+        token = auth.issue_admin_dashboard_session(
+            "user-1", "admin@example.com", "admin"
+        )
+
+        raw_claims = jwt.decode(token, options={"verify_signature": False})
+        assert raw_claims["exp"] == raw_claims["iat"] + 30 * 60
+        payload = auth.decode_dashboard_token(token)
+        assert (payload.sub, payload.email, payload.role, payload.token_type) == (
+            "user-1",
+            "admin@example.com",
+            "admin",
+            "dashboard",
+        )
+
+    async def test_other_sessions_keep_the_dashboard_ttl(self, db: Database):
+        auth = _auth_with_ttls(
+            db,
+            dashboard_token_expire_minutes=600,
+            admin_dashboard_token_expire_minutes=30,
+        )
+
+        result = await auth.register_user("user@example.com", "pass123")
+
+        assert result.access_token is not None
+        raw_claims = jwt.decode(
+            result.access_token, options={"verify_signature": False}
+        )
+        assert raw_claims["exp"] == raw_claims["iat"] + 600 * 60
 
 
 class TestArgon2Hardening:

@@ -376,8 +376,8 @@ export class WebSocketChannel {
     if (!openedThisCycle) this.preOpenFailures += 1;
 
     const policy = closePolicyFor(code, this.options.axis, reason);
-    // A per-agent `mobile_access` JWT is minted without an `exp`, so
-    // `ensureAgentToken`'s freshness check never rotates it — and the relay
+    // A per-agent `mobile_access` JWT minted while its TTL was 0 has no `exp`,
+    // so `ensureAgentToken`'s freshness check never rotates it — and the relay
     // rejects a bad one with 4001/4010 *before* accept, which a browser only
     // sees as 1006. Without this the channel would re-present the same dead
     // credential forever. Repeated failures to even open are the closest signal

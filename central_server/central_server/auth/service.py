@@ -1131,7 +1131,13 @@ class AuthService:
         )
 
     def decode_dashboard_token(self, token: str) -> UserTokenPayload:
-        """Decode a dashboard JWT. Returns UserTokenPayload. Raises jwt.InvalidTokenError."""
+        """Decode a dashboard JWT. Returns UserTokenPayload. Raises jwt.InvalidTokenError.
+
+        A token without ``exp`` was minted while the TTL was 0. Once the TTL
+        is positive it expires ``dashboard_token_expire_minutes`` after its
+        ``iat``, the same lifetime a token minted now gets; otherwise every
+        session signed in under the old default would never end.
+        """
         payload = jwt.decode(
             token,
             self._config.jwt_secret_key,
@@ -1139,6 +1145,13 @@ class AuthService:
         )
         if payload.get("type") != "dashboard":
             raise jwt.InvalidTokenError("Expected dashboard token")
+        ttl_minutes = self._config.dashboard_token_expire_minutes
+        if (
+            "exp" not in payload
+            and ttl_minutes > 0
+            and payload["iat"] + ttl_minutes * 60 <= int(time.time())
+        ):
+            raise jwt.ExpiredSignatureError("Signature has expired")
         return UserTokenPayload(
             sub=payload["sub"],
             email=payload.get("email", payload["sub"]),
@@ -1151,17 +1164,40 @@ class AuthService:
         )
 
     def _create_user_token(
-        self, user_id: str, email: str, role: str, device_id: str | None = None
+        self,
+        user_id: str,
+        email: str,
+        role: str,
+        device_id: str | None = None,
+        expire_minutes: int | None = None,
     ) -> str:
         """Create a dashboard JWT with user identity claims."""
+        if expire_minutes is None:
+            expire_minutes = self._config.dashboard_token_expire_minutes
         return self._create_jwt(
             sub=user_id,
             token_type="dashboard",
-            expire_minutes=self._config.dashboard_token_expire_minutes,
+            expire_minutes=expire_minutes,
             user_id=user_id,
             email=email,
             role=role,
             device_id=device_id,
+        )
+
+    def issue_admin_dashboard_session(
+        self, user_id: str, email: str, role: str
+    ) -> str:
+        """Re-mint a session token for the admin dashboard's cookie.
+
+        The admin dashboard gets its own, much shorter lifetime
+        (``admin_dashboard_token_expire_minutes``) than the token the mobile
+        clients hold.
+        """
+        return self._create_user_token(
+            user_id,
+            email,
+            role,
+            expire_minutes=self._config.admin_dashboard_token_expire_minutes,
         )
 
     def issue_device_session(
@@ -1681,7 +1717,8 @@ class AuthService:
         }
         # expire_minutes == 0 means "never expires" — omit the `exp` claim
         # entirely. PyJWT only validates `exp` when the claim is present,
-        # so a missing `exp` decodes as a non-expiring token.
+        # so a missing `exp` decodes as a non-expiring token, except in
+        # `decode_dashboard_token`, which ages it out after `iat` + TTL.
         if expire_minutes > 0:
             payload["exp"] = now + expire_minutes * 60
         if agent_id is not None:

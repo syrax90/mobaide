@@ -62,7 +62,9 @@ async def login_submit(request: Request):
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    ttl_minutes = request.app.state.config.dashboard_token_expire_minutes
+    claims = auth_service.decode_dashboard_token(token)
+    token = auth_service.issue_admin_dashboard_session(user_id, claims.email, role)
+    ttl_minutes = request.app.state.config.admin_dashboard_token_expire_minutes
     response = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
     response.set_cookie(
         key="dashboard_token",

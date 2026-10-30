@@ -106,13 +106,16 @@ Without `RELEASE_AUTH_TOKEN`, the publish endpoint returns HTTP 503 and the work
 
 See [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md) for the full release-secrets table and the trust-key bootstrap flow.
 
-All other settings (DB path, log format, etc.) can be left at their defaults — `config.py` has sane values. **JWT TTL exception:** the default TTL for all token types is now `0` (never-expires — no `exp` claim is issued). This is intentional for pre-production use. If you want tokens to expire, set one or more of the following in `.env` to a positive integer (minutes):
+All other settings (DB path, log format, etc.) can be left at their defaults — `config.py` has sane values. That includes the token TTLs, which are finite by default — leave them unset in production:
 
 ```
-MOBILE_TOKEN_EXPIRE_MINUTES=1440      # mobile access token  (e.g. 24 h)
-MOBILE_REFRESH_EXPIRE_MINUTES=10080   # mobile refresh token (e.g. 7 days)
-DASHBOARD_TOKEN_EXPIRE_MINUTES=480    # dashboard token      (e.g. 8 h)
+MOBILE_TOKEN_EXPIRE_MINUTES=60                 # per-agent mobile access token (1 h)
+MOBILE_REFRESH_EXPIRE_MINUTES=43200            # per-agent mobile refresh token (30 days, rotates)
+DASHBOARD_TOKEN_EXPIRE_MINUTES=129600          # user token of the Android/iOS apps (90 days)
+ADMIN_DASHBOARD_TOKEN_EXPIRE_MINUTES=10080     # admin dashboard cookie (7 days)
 ```
+
+The Android and iOS apps cannot refresh their user token, so `DASHBOARD_TOKEN_EXPIRE_MINUTES` is how often a mobile user has to sign in again — a short value such as `480` signs every phone out every 8 hours. `0` means "never expires" (no `exp` claim). It is a local-development opt-out only, and the server logs a `token_ttl.never_expires` warning at startup when any TTL is `0`.
 
 For account self-deletion (CLA-61), the defaults are sane but you may want to tune:
 

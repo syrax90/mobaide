@@ -55,7 +55,8 @@ let memoryTokens: AgentTokenMap = {};
  * The memory mirror may only *substitute* for storage, never merge with it. A
  * revoked token deleted from storage by one tab would otherwise be resurrected
  * in a peer that still held it in memory — and since a `mobile_access` JWT
- * carries no `exp`, nothing would ever rotate it away again; the peer would
+ * minted while its TTL was 0 has no `exp`, nothing would ever rotate it away
+ * again; the peer would
  * keep presenting the dead credential and write it back to shared storage on
  * its next rotation.
  */
@@ -122,10 +123,10 @@ export function getAgentToken(agentId: string): string | null {
  *
  * The same rule `applyRotatedSession` enforces on the user axis: a credential
  * that was authorised by a session which has since ended must not land. It
- * matters more here, because `mobile_token_expire_minutes` defaults to 0 — the
- * minted access JWT carries no `exp` — so a pair written after `logout` ran
- * `clearAgentTokens()` would sit on disk indefinitely, until some later boot
- * happened to find no session.
+ * matters more here, because the refresh token outlives the user session by
+ * weeks (and a pair minted while the server's TTL is 0 carries no `exp` at
+ * all), so a pair written after `logout` ran `clearAgentTokens()` would sit on
+ * disk until some later boot happened to find no session.
  */
 function store(agentId: string, pair: AgentTokenPair): void {
   if (readSession() === null) return;

@@ -34,9 +34,8 @@ const EXPIRY_LEEWAY_SECONDS = 60;
  * Seconds-until-expiry from a JWT's `exp`, or null when it has none.
  *
  * A token with no `exp` never expires — the server omits the claim entirely
- * when the TTL is 0, which is the default for non-refreshable sessions. An
- * unparseable token is reported as expired so the caller refreshes rather than
- * sending garbage.
+ * when the TTL is 0, a local-development opt-out. An unparseable token is
+ * reported as expired so the caller refreshes rather than sending garbage.
  */
 export function expiresInSeconds(token: string): number | null {
   const claims = jwtClaims(token);

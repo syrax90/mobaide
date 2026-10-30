@@ -35,8 +35,8 @@ describe('expiresInSeconds', () => {
   });
 
   it('reports null when the token carries no exp claim', () => {
-    // The server omits `exp` entirely when the TTL is 0, which is the default
-    // for a non-refreshable session — that token never expires.
+    // The server omits `exp` entirely when the TTL is 0 (a local-development
+    // opt-out) — that token never expires.
     expect(expiresInSeconds(jwt({ sub: 'user-1', role: 'viewer' }))).toBeNull();
   });
 
