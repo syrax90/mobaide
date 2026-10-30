@@ -1,5 +1,26 @@
 # Android Changelog
 
+## [3.6.13](https://github.com/syrax90/claude_mobile/compare/android-v3.6.12...android-v3.6.13) (2026-10-30)
+
+
+### Features
+
+* **android,ios:** ask for a store rating after the 3rd good session ([32d0505](https://github.com/syrax90/claude_mobile/commit/32d050568c9616c455a9503e97780c62f01870da))
+* **android,ios:** ask for a store rating after the 3rd good session ([2a89f07](https://github.com/syrax90/claude_mobile/commit/2a89f076820fc2b7943f3a601e354663e3305f66))
+
+
+### Bug Fixes
+
+* **android,ios:** confirm before stopping a session from the list ([5bc3a88](https://github.com/syrax90/claude_mobile/commit/5bc3a88aaea2fa34a0d8092456ec60c5a180f7d7))
+* **android:** drop a review card fetched during an earlier list visit ([e558ba8](https://github.com/syrax90/claude_mobile/commit/e558ba83142bcb82a2b0d6aef142d5c79b8e87ff))
+* say a device revoke signs the device out right away ([f384175](https://github.com/syrax90/claude_mobile/commit/f384175a8902544fc8b959dd23939193c34c2ddd))
+* **server,android,ios,web:** let abandoned unverified signups register again ([a1f3f94](https://github.com/syrax90/claude_mobile/commit/a1f3f9425134f4e474fb5aa7bc9aa8a7da2762c7))
+* **server,android,ios,web:** let abandoned unverified signups register again ([223ba7f](https://github.com/syrax90/claude_mobile/commit/223ba7f11d276469fa4d88ea45d65d2a51df4432))
+* **server:** make device revoke stop already-issued tokens ([18fa46e](https://github.com/syrax90/claude_mobile/commit/18fa46e108204db7903cea9eecfa3943169acdf1))
+* **server:** make device revoke stop already-issued tokens ([746321a](https://github.com/syrax90/claude_mobile/commit/746321a712439ced89dde62682c61ceff721b1cb))
+* **voice:** keep the screen awake during dictation ([f428bdc](https://github.com/syrax90/claude_mobile/commit/f428bdc8b533c5969f464b46d3fb12d98e8cc34d))
+* **voice:** keep the screen awake during dictation ([e63c548](https://github.com/syrax90/claude_mobile/commit/e63c548d1ed18927ebb77486a65995d1b313b6e5))
+
 ## [3.6.12](https://github.com/syrax90/claude_mobile/compare/android-v3.6.11...android-v3.6.12) (2026-10-26)
 
 
