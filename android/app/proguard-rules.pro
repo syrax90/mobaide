@@ -22,3 +22,6 @@
 -dontwarn org.conscrypt.**
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
+
+# review-ktx references this annotation, which no dependency on the classpath ships
+-dontwarn com.google.android.gms.common.annotation.NoNullnessRewrite
