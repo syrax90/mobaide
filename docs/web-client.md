@@ -221,9 +221,9 @@ socket, and `refreshOnUserEventsConnect` invalidates `['server-info']`, whose
 query is otherwise pinned at `staleTime: Infinity`. Android re-probes on every
 launch for the same reason.
 
-Because the relay only authenticates at handshake and a per-agent JWT is
-minted without an `exp`, a rejected agent credential is otherwise invisible
-and never rotated. Three consecutive failures to open an agent channel
+Because the relay only authenticates at handshake and a per-agent JWT minted
+while its TTL was 0 has no `exp`, a rejected agent credential is otherwise
+invisible and never rotated. Three consecutive failures to open an agent channel
 therefore drop the cached token so the next attempt re-mints. This is also
 why a null URL is treated differently per axis: on the user axis it means
 signed out and the channel stops, while on the agent axis it usually means the

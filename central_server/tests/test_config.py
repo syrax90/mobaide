@@ -72,14 +72,46 @@ def test_heartbeat_flush_interval_default_and_env(monkeypatch):
 
 
 def test_ttl_env_vars_parse_positive_integers(monkeypatch):
-    """Explicit positive TTLs override the 0 default and are parsed as ints."""
+    """Explicit positive TTLs override the finite defaults and are parsed as ints."""
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.setenv("MOBILE_TOKEN_EXPIRE_MINUTES", "60")
+    monkeypatch.setenv("MOBILE_TOKEN_EXPIRE_MINUTES", "45")
     monkeypatch.setenv("MOBILE_REFRESH_EXPIRE_MINUTES", "10080")
     monkeypatch.setenv("DASHBOARD_TOKEN_EXPIRE_MINUTES", "480")
     config = CentralServerConfig.from_env()
-    assert config.mobile_token_expire_minutes == 60
+    assert config.mobile_token_expire_minutes == 45
     assert config.mobile_refresh_expire_minutes == 10080
+    assert config.dashboard_token_expire_minutes == 480
+
+
+def test_token_ttls_are_finite_by_default(monkeypatch):
+    """from_env falls back to the same finite TTLs as the dataclass."""
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    for var in (
+        "MOBILE_TOKEN_EXPIRE_MINUTES",
+        "MOBILE_REFRESH_EXPIRE_MINUTES",
+        "DASHBOARD_TOKEN_EXPIRE_MINUTES",
+        "ADMIN_DASHBOARD_TOKEN_EXPIRE_MINUTES",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    for config in (
+        CentralServerConfig.from_env(),
+        CentralServerConfig(jwt_secret_key="test-secret"),
+    ):
+        assert (
+            config.mobile_token_expire_minutes,
+            config.mobile_refresh_expire_minutes,
+            config.dashboard_token_expire_minutes,
+            config.admin_dashboard_token_expire_minutes,
+        ) == (60, 43200, 129600, 10080)
+
+
+def test_admin_dashboard_ttl_reads_its_own_env_var(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DASHBOARD_TOKEN_EXPIRE_MINUTES", "480")
+    monkeypatch.setenv("ADMIN_DASHBOARD_TOKEN_EXPIRE_MINUTES", "30")
+    config = CentralServerConfig.from_env()
+    assert config.admin_dashboard_token_expire_minutes == 30
     assert config.dashboard_token_expire_minutes == 480
 
 

@@ -109,8 +109,9 @@ without the flag does NOT start it. Production deployments never bring it up.
 * **User can still see content from a paired mobile session** after reset
   — the mobile access JWTs are still valid until they expire on their own,
   but the *refresh* token has been revoked, so as soon as the access token
-  expires the session is dead. Set `MOBILE_TOKEN_EXPIRE_MINUTES` to a finite
-  value if you want a hard cap on the post-reset window.
+  expires the session is dead. `MOBILE_TOKEN_EXPIRE_MINUTES` (default 60)
+  caps the post-reset window. An access token minted while that TTL was 0
+  has no `exp` and is not capped.
 
 ## Security summary
 
@@ -145,11 +146,11 @@ without the flag does NOT start it. Production deployments never bring it up.
 
 * **Dashboard JWTs are stateless.** The codebase has no token-revocation
   table for dashboard sessions, so any active dashboard JWT remains
-  valid until `DASHBOARD_TOKEN_EXPIRE_MINUTES` elapses (default 0 = never
-  expires). Reset kills the mobile attack surface; dashboard sessions
-  require a manual logout. If you want dashboard sessions to die on
-  reset, set `DASHBOARD_TOKEN_EXPIRE_MINUTES` to a finite value so they
-  rotate naturally.
+  valid until it expires: `DASHBOARD_TOKEN_EXPIRE_MINUTES` (default 90
+  days) for the token the Android and iOS apps sign in with, and
+  `ADMIN_DASHBOARD_TOKEN_EXPIRE_MINUTES` (default 7 days) for the admin
+  dashboard cookie. Reset kills the mobile refresh tokens; these sessions
+  require a manual logout or run until that TTL.
 * **Rate limiters are in-memory.** Same caveat as the verification
   resend limiter (`auth/rate_limit.py:1-10`) — they reset on process
   restart and don't share state across instances. Acceptable for the

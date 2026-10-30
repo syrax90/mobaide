@@ -199,9 +199,31 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
                 "development only."
             )
 
+        never_expiring = [
+            env_var
+            for env_var, minutes in (
+                ("MOBILE_TOKEN_EXPIRE_MINUTES", config.mobile_token_expire_minutes),
+                ("MOBILE_REFRESH_EXPIRE_MINUTES", config.mobile_refresh_expire_minutes),
+                ("DASHBOARD_TOKEN_EXPIRE_MINUTES", config.dashboard_token_expire_minutes),
+                (
+                    "ADMIN_DASHBOARD_TOKEN_EXPIRE_MINUTES",
+                    config.admin_dashboard_token_expire_minutes,
+                ),
+            )
+            if minutes == 0
+        ]
+        if never_expiring:
+            logger.warning(
+                "token_ttl.never_expires %s=0: these tokens are issued without "
+                "an expiry, so a leaked one stays valid forever. Local "
+                "development only.",
+                "=0, ".join(never_expiring),
+            )
+
         db = Database(config.db_path)
         await db.connect()
         app.state.db = db
+        await _cap_legacy_refresh_tokens(db, config)
 
         app.state.routing = RoutingTable()
         app.state.manifest_store = ManifestStore(config.manifest_store_path)
@@ -558,6 +580,23 @@ async def _token_cleanup_loop(db: Database) -> None:
             raise
         except Exception as exc:
             logger.exception("token_cleanup.error: %s", exc)
+
+
+async def _cap_legacy_refresh_tokens(
+    db: Database, config: CentralServerConfig
+) -> None:
+    """Give refresh tokens stored under a TTL of 0 the current finite TTL.
+
+    Without this a token minted while the TTL was 0 would keep its year-9999
+    expiry for good, however the setting changes later. Nothing to do while
+    the TTL is still 0.
+    """
+    ttl = config.mobile_refresh_expire_minutes
+    if ttl <= 0:
+        return
+    capped = await db.cap_never_expiring_refresh_tokens(ttl)
+    if capped:
+        logger.info("mobile_refresh_tokens.capped rows=%d ttl_minutes=%d", capped, ttl)
 
 
 async def _purge_stale_ad_attribution(db: Database) -> None:

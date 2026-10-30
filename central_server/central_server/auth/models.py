@@ -41,7 +41,9 @@ class UserTokenPayload:
     email: str
     role: str  # "admin" | "viewer"
     token_type: str  # "dashboard"
-    exp: int | None  # None = token has no `exp` claim (never expires)
+    # None = no `exp` claim (minted under TTL 0); decode_dashboard_token ages
+    # it out by `iat` once the TTL is positive.
+    exp: int | None
     iat: int
     device_id: str | None = None
     auth_time: int | None = None
@@ -125,8 +127,8 @@ class RefreshableSessionRequest(BaseModel):
     (``exp`` from ``user_session_access_expire_minutes``) plus an opaque
     refresh token redeemable at ``POST /api/auth/refresh``. Defaulting to
     ``False`` keeps the field additive: clients that never send it keep
-    receiving the ``dashboard_token_expire_minutes`` token — which, at the
-    default TTL of 0, carries no ``exp`` claim at all.
+    receiving the ``dashboard_token_expire_minutes`` token, a hard session
+    lifetime (90 days by default) with no way to extend it.
 
     Opting in is explicit rather than inferred from the ``Origin`` header:
     browsers send ``Origin`` on same-origin POSTs and native clients do not,

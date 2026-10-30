@@ -1686,6 +1686,137 @@ class TestRefreshTokenNeverExpires:
         )
 
 
+async def _refresh_row(db: Database, raw_token: str) -> dict | None:
+    from central_server.db.database import _hash_token
+
+    cursor = await db.conn.execute(
+        "SELECT created_at, expires_at FROM mobile_refresh_tokens "
+        "WHERE token_hash = ?",
+        (_hash_token(raw_token),),
+    )
+    row = await cursor.fetchone()
+    return dict(row) if row is not None else None
+
+
+class TestCapNeverExpiringRefreshTokens:
+    """Refresh tokens stored while the TTL was 0 get ``created_at + ttl``
+    once the TTL is positive."""
+
+    async def test_live_sentinel_row_expires_ttl_after_creation(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.store_refresh_token("r-forever", "device-1", agent_id, 0)
+
+        capped = await db.cap_never_expiring_refresh_tokens(60)
+
+        assert capped == 1
+        row = await _refresh_row(db, "r-forever")
+        assert datetime.fromisoformat(row["expires_at"]) == (
+            datetime.fromisoformat(row["created_at"]) + timedelta(minutes=60)
+        )
+        assert await db.validate_and_consume_refresh("r-forever") == (
+            "device-1",
+            agent_id,
+        )
+
+    async def test_counts_only_live_sentinel_rows_and_runs_once(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.store_refresh_token("r-forever", "device-1", agent_id, 0)
+        await db.store_refresh_token("r-short", "device-1", agent_id, 60)
+        await db.store_refresh_token("r-used", "device-2", agent_id, 0)
+        assert await db.validate_and_consume_refresh("r-used") is not None
+        short_before = await _refresh_row(db, "r-short")
+
+        assert await db.cap_never_expiring_refresh_tokens(43200) == 1
+        assert await db.cap_never_expiring_refresh_tokens(43200) == 0
+        assert await _refresh_row(db, "r-short") == short_before
+
+    async def test_row_older_than_the_ttl_stops_validating_and_is_swept(
+        self, db: Database
+    ):
+        from central_server.db.database import _hash_token
+
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.store_refresh_token("r-stale", "device-1", agent_id, 0)
+        created = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+        await db.conn.execute(
+            "UPDATE mobile_refresh_tokens SET created_at = ? WHERE token_hash = ?",
+            (created, _hash_token("r-stale")),
+        )
+        await db.conn.commit()
+
+        assert await db.cap_never_expiring_refresh_tokens(43200) == 1
+        assert await db.validate_and_consume_refresh("r-stale") is None
+        assert await db.cleanup_expired_tokens() == 1
+        assert await _refresh_row(db, "r-stale") is None
+
+    async def test_unparseable_created_at_counts_from_now(self, db: Database):
+        from central_server.db.database import _hash_token
+
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.store_refresh_token("r-garbled", "device-1", agent_id, 0)
+        await db.conn.execute(
+            "UPDATE mobile_refresh_tokens SET created_at = 'not-a-date' "
+            "WHERE token_hash = ?",
+            (_hash_token("r-garbled"),),
+        )
+        await db.conn.commit()
+
+        before = datetime.now(timezone.utc)
+        assert await db.cap_never_expiring_refresh_tokens(60) == 1
+        after = datetime.now(timezone.utc)
+
+        expires = datetime.fromisoformat(
+            (await _refresh_row(db, "r-garbled"))["expires_at"]
+        )
+        assert before + timedelta(minutes=60) <= expires
+        assert expires <= after + timedelta(minutes=60)
+
+
+class TestMobileRefreshTokenSweep:
+    async def test_expired_rows_go_live_and_never_expiring_rows_stay(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.store_refresh_token("r-expired", "device-1", agent_id, -1)
+        await db.store_refresh_token("r-live", "device-1", agent_id, 60)
+        await db.store_refresh_token("r-forever", "device-1", agent_id, 0)
+
+        assert await db.cleanup_expired_tokens() == 1
+
+        assert await _refresh_row(db, "r-expired") is None
+        assert await _refresh_row(db, "r-live") is not None
+        assert await _refresh_row(db, "r-forever") is not None
+
+    async def test_a_revoked_row_lingers_only_for_the_retention_window(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.store_refresh_token("r-rotated", "device-1", agent_id, 60)
+        assert await db.validate_and_consume_refresh("r-rotated") is not None
+
+        assert await db.cleanup_expired_tokens() == 0
+        assert await _refresh_row(db, "r-rotated") is not None
+
+        stale = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        await db.conn.execute(
+            "UPDATE mobile_refresh_tokens SET revoked_at = ?", (stale,)
+        )
+        await db.conn.commit()
+
+        assert await db.cleanup_expired_tokens() == 1
+        assert await _refresh_row(db, "r-rotated") is None
+
+
 class TestScheduledDeletionFields:
     """``set_scheduled_deletion`` / ``clear_scheduled_deletion`` /
     ``list_users_due_for_purge`` — the user-row column pair the sweeper

@@ -2465,8 +2465,8 @@ class Database:
 
     async def cleanup_expired_tokens(self) -> int:
         """Delete expired pairing, device-code, email-verification,
-        password-reset and user-session refresh tokens and agent uninstall
-        requests; clear stale claimed pairing-token rows.
+        password-reset, mobile refresh and user-session refresh tokens and
+        agent uninstall requests; clear stale claimed pairing-token rows.
 
         Verification tokens are cleaned in two sweeps:
           - expired but never consumed rows are dropped immediately;
@@ -2521,12 +2521,20 @@ class Database:
             "WHERE consumed_at IS NOT NULL AND consumed_at <= ?",
             (retention_cutoff,),
         )
-        # User-session refresh tokens rotate on every use, so unlike
-        # ``mobile_refresh_tokens`` (whose default TTL is "never expires", one
-        # row per pairing) this table gains a row per refresh — several per
-        # hour per open browser session. Without a sweep it grows without
-        # bound. Deleting a revoked row is not observable: a replay misses the
+        # Both refresh-token tables rotate on every use, so each gains a row
+        # per refresh. Without a sweep they grow without bound. Deleting a
+        # revoked row is not observable: a replay misses the
         # ``revoked_at IS NULL`` predicate either way.
+        mobile_refresh_expired_cursor = await self.conn.execute(
+            "DELETE FROM mobile_refresh_tokens "
+            "WHERE expires_at <= ? AND revoked_at IS NULL",
+            (now,),
+        )
+        mobile_refresh_revoked_cursor = await self.conn.execute(
+            "DELETE FROM mobile_refresh_tokens "
+            "WHERE revoked_at IS NOT NULL AND revoked_at <= ?",
+            (retention_cutoff,),
+        )
         user_refresh_expired_cursor = await self.conn.execute(
             "DELETE FROM user_refresh_tokens "
             "WHERE expires_at <= ? AND revoked_at IS NULL",
@@ -2585,6 +2593,8 @@ class Database:
             + consumed_cursor.rowcount
             + reset_expired_cursor.rowcount
             + reset_consumed_cursor.rowcount
+            + mobile_refresh_expired_cursor.rowcount
+            + mobile_refresh_revoked_cursor.rowcount
             + user_refresh_expired_cursor.rowcount
             + user_refresh_revoked_cursor.rowcount
             + claimed_clear_cursor.rowcount
@@ -2847,9 +2857,9 @@ class Database:
         ``agents.owner_user_id`` (indexed) to find every agent the user owns
         and revoke any of its outstanding sessions. Returns the rowcount.
 
-        Logical revocation (``revoked_at`` set) rather than DELETE preserves
-        the audit trail and matches the existing ``revoke_mobile_tokens``
-        helper.
+        Logical revocation (``revoked_at`` set) rather than DELETE matches the
+        existing ``revoke_mobile_tokens`` helper; ``cleanup_expired_tokens``
+        deletes the revoked rows after its retention window.
         """
         now = _now_iso()
         cursor = await self.conn.execute(
@@ -3306,6 +3316,43 @@ class Database:
             (token_hash, mobile_device_id, agent_id, now.isoformat(), expires_at_iso),
         )
         await self.conn.commit()
+
+    async def cap_never_expiring_refresh_tokens(self, expire_minutes: int) -> int:
+        """Replace the never-expires sentinel on live refresh tokens with
+        ``created_at + expire_minutes``. Returns the number of rows capped.
+
+        A row whose capped expiry is already past stops validating at once
+        and is left to the expired-token sweep. An unparseable ``created_at``
+        counts from now rather than failing startup.
+        """
+        cursor = await self.conn.execute(
+            "SELECT token_hash, created_at FROM mobile_refresh_tokens "
+            "WHERE expires_at = ? AND revoked_at IS NULL",
+            (_NEVER_EXPIRES_AT,),
+        )
+        rows = await cursor.fetchall()
+        if not rows:
+            return 0
+        ttl = timedelta(minutes=expire_minutes)
+        now = datetime.now(timezone.utc)
+        updates = []
+        for row in rows:
+            try:
+                created = datetime.fromisoformat(row["created_at"])
+            except (TypeError, ValueError):
+                created = now
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            updates.append(
+                ((created + ttl).isoformat(), row["token_hash"], _NEVER_EXPIRES_AT)
+            )
+        await self.conn.executemany(
+            "UPDATE mobile_refresh_tokens SET expires_at = ? "
+            "WHERE token_hash = ? AND expires_at = ?",
+            updates,
+        )
+        await self.conn.commit()
+        return len(updates)
 
     async def validate_and_consume_refresh(
         self, raw_token: str

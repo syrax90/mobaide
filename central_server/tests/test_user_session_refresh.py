@@ -74,7 +74,7 @@ def _claims(token: str) -> dict:
 
 class TestRefreshableOptIn:
     async def test_omitting_the_flag_leaves_the_response_unchanged(
-        self, client, viewer_user
+        self, client, config, viewer_user
     ) -> None:
         """Mobile never sends ``refreshable``; its session must not change."""
         del viewer_user
@@ -88,8 +88,12 @@ class TestRefreshableOptIn:
         assert body["access_token"]
         assert body["refresh_token"] is None
         assert body["expires_in"] is None
-        # dashboard_token_expire_minutes is 0 by default, so no expiry claim.
-        assert "exp" not in _claims(body["access_token"])
+        # The token is the hard-lifetime dashboard JWT, not the short-lived
+        # refreshable access token.
+        claims = _claims(body["access_token"])
+        assert claims["exp"] - claims["iat"] == (
+            config.dashboard_token_expire_minutes * 60
+        )
 
     async def test_explicit_false_is_the_same_as_omitting_it(
         self, client, viewer_user

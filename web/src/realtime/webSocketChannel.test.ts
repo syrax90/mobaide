@@ -406,8 +406,8 @@ describe('WebSocketChannel agent credential rotation', () => {
   }
 
   it('drops the cached token after three failures to even open', async () => {
-    // A per-agent JWT is minted without an exp, so nothing else ever rotates
-    // it, and the relay's 4001 arrives as an opaque 1006.
+    // A per-agent JWT minted while its TTL was 0 has no exp, so nothing else
+    // ever rotates it, and the relay's 4001 arrives as an opaque 1006.
     const h = agentHarness(() => Promise.resolve('ws://relay.test/relay/ws/events/A1?token=t'));
 
     h.channel.connect();

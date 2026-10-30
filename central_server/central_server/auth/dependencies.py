@@ -165,41 +165,53 @@ async def ws_authenticate_user(websocket: WebSocket) -> UserTokenPayload:
     return payload
 
 
+def _session_login_redirect(request: Request, login_url: str) -> HTTPException:
+    """Send a cookie session that ended back to ``login_url``.
+
+    An htmx request gets ``204`` + ``HX-Redirect`` instead of a 303: the XHR
+    would follow the 303 silently and swap the whole login page into
+    whatever fragment it targets, so the dashboard just breaks with no sign
+    that the session expired.
+    """
+    if request.headers.get("HX-Request") == "true":
+        return HTTPException(
+            status_code=status.HTTP_204_NO_CONTENT,
+            headers={"HX-Redirect": login_url},
+        )
+    return HTTPException(
+        status_code=status.HTTP_303_SEE_OTHER,
+        headers={"Location": login_url},
+    )
+
+
 async def _get_session_user(
-    request: Request, *, cookie_name: str, login_url: str
+    request: Request, *, cookie_name: str, login_url: str, ttl_minutes: int
 ) -> UserTokenPayload:
-    """Validate a dashboard-style JWT from the given cookie. Redirects
-    via 303 to ``login_url`` on missing cookie, decode failure, or
+    """Validate a dashboard-style JWT from the given cookie. Redirects to
+    ``login_url`` on missing cookie, decode failure (including expiry), or
     cascade-deleted user.
 
     Kept parameterised for :func:`get_dashboard_user`, its only caller since the
     end-user portal's authenticated pages moved to the browser client: the
-    cookie name and the login URL are the whole difference between one
-    cookie-session surface and the next.
+    cookie name, the login URL and the cookie's TTL are the whole difference
+    between one cookie-session surface and the next.
     """
     auth_service = _get_auth_service(request)
     token = request.cookies.get(cookie_name)
     if not token:
-        raise HTTPException(
-            status_code=status.HTTP_303_SEE_OTHER,
-            headers={"Location": login_url},
-        )
+        raise _session_login_redirect(request, login_url)
     try:
-        user_payload = auth_service.decode_dashboard_token(token)
-    except jwt.InvalidTokenError:
-        raise HTTPException(
-            status_code=status.HTTP_303_SEE_OTHER,
-            headers={"Location": login_url},
+        user_payload = auth_service.decode_dashboard_token(
+            token, ttl_minutes=ttl_minutes
         )
+    except jwt.InvalidTokenError:
+        raise _session_login_redirect(request, login_url)
     if not await _user_still_exists(
         request, user_payload.sub
     ) or await token_predates_device_revoke(
         request, user_payload.device_id, user_payload.iat
     ):
-        raise HTTPException(
-            status_code=status.HTTP_303_SEE_OTHER,
-            headers={"Location": login_url},
-        )
+        raise _session_login_redirect(request, login_url)
     return user_payload
 
 
@@ -210,7 +222,10 @@ async def get_dashboard_user(request: Request) -> UserTokenPayload:
     user no longer exists (cascade-deleted by another admin).
     """
     return await _get_session_user(
-        request, cookie_name="dashboard_token", login_url="/dashboard/login"
+        request,
+        cookie_name="dashboard_token",
+        login_url="/dashboard/login",
+        ttl_minutes=request.app.state.config.admin_dashboard_token_expire_minutes,
     )
 
 

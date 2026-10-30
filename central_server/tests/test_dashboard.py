@@ -1,11 +1,16 @@
 """Tests for the web dashboard routes."""
 from __future__ import annotations
 
+import dataclasses
+import time
+
+import jwt
 import pytest
 
 from tests.conftest import (
     TEST_ADMIN_EMAIL,
     TEST_ADMIN_PASSWORD,
+    TEST_JWT_SECRET,
     TEST_VIEWER_EMAIL,
     TEST_VIEWER_PASSWORD,
 )
@@ -23,12 +28,51 @@ async def viewer_dashboard_headers(app, viewer_user) -> dict[str, str]:
 
 
 @pytest.fixture
-async def client_with_dashboard_ttl(tmp_path):
-    """Client built with ``dashboard_token_expire_minutes=60`` to
-    exercise the positive Max-Age branch of the login cookie path.
+async def expired_dashboard_headers(app) -> dict[str, str]:
+    """Admin dashboard cookie whose ``exp`` passed an hour ago."""
+    admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+    token = jwt.encode(
+        {
+            "sub": admin["id"],
+            "type": "dashboard",
+            "email": TEST_ADMIN_EMAIL,
+            "role": "admin",
+            "iat": int(time.time()) - 7200,
+            "exp": int(time.time()) - 3600,
+        },
+        TEST_JWT_SECRET,
+        algorithm="HS256",
+    )
+    return {"Cookie": f"dashboard_token={token}"}
 
-    The default ``client`` fixture uses TTL=0 (session-cookie mode), so
-    we need a separate app with a positive TTL to cover the other branch.
+
+@pytest.fixture
+async def legacy_admin_token(app) -> str:
+    """Admin dashboard JWT without ``exp`` (minted while the TTL was 0),
+    issued an hour ago.
+    """
+    admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+    return jwt.encode(
+        {
+            "sub": admin["id"],
+            "type": "dashboard",
+            "email": TEST_ADMIN_EMAIL,
+            "role": "admin",
+            "iat": int(time.time()) - 3600,
+        },
+        TEST_JWT_SECRET,
+        algorithm="HS256",
+    )
+
+
+@pytest.fixture
+async def client_with_dashboard_ttl(tmp_path):
+    """Client built with ``admin_dashboard_token_expire_minutes=60`` to
+    exercise the positive Max-Age branch of the login cookie path with a
+    round number.
+
+    The login cookie follows the admin dashboard TTL, not
+    ``dashboard_token_expire_minutes``.
     """
     from httpx import ASGITransport, AsyncClient
 
@@ -49,7 +93,7 @@ async def client_with_dashboard_ttl(tmp_path):
         db_path=str(tmp_path / "test_ttl.db"),
         log_level="DEBUG",
         log_format="console",
-        dashboard_token_expire_minutes=60,
+        admin_dashboard_token_expire_minutes=60,
     )
     db = Database(config.db_path)
     await db.connect()
@@ -70,8 +114,85 @@ async def client_with_dashboard_ttl(tmp_path):
         await db.close()
 
 
+class TestDashboardLoginAdminTtl:
+    """The admin dashboard TTL (30 min) differs from the user session TTL
+    (600 min), so the test can tell which one the login follows.
+    """
+
+    @pytest.fixture
+    def config(self, config):
+        return dataclasses.replace(
+            config,
+            dashboard_token_expire_minutes=600,
+            admin_dashboard_token_expire_minutes=30,
+        )
+
+    async def test_cookie_and_token_follow_the_admin_ttl(self, client):
+        resp = await client.post(
+            "/dashboard/login",
+            data={"username": TEST_ADMIN_EMAIL, "password": TEST_ADMIN_PASSWORD},
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 303
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert "Max-Age=1800" in set_cookie or "max-age=1800" in set_cookie
+        raw_claims = jwt.decode(
+            resp.cookies["dashboard_token"], options={"verify_signature": False}
+        )
+        assert raw_claims["exp"] == raw_claims["iat"] + 30 * 60
+        assert raw_claims["email"] == TEST_ADMIN_EMAIL
+        assert raw_claims["role"] == "admin"
+
+
+class TestDashboardLoginZeroAdminTtl:
+    """``admin_dashboard_token_expire_minutes=0`` is the dev-only opt-out:
+    the cookie is a browser-session cookie and the token carries no ``exp``.
+    """
+
+    @pytest.fixture
+    def config(self, config):
+        return dataclasses.replace(config, admin_dashboard_token_expire_minutes=0)
+
+    async def test_login_sets_a_session_cookie(self, client):
+        resp = await client.post(
+            "/dashboard/login",
+            data={"username": TEST_ADMIN_EMAIL, "password": TEST_ADMIN_PASSWORD},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert "dashboard_token=" in set_cookie
+        # No Max-Age attribute: Max-Age=0 would tell the browser to
+        # delete the cookie immediately (RFC 6265 §5.2.2) and silently
+        # break login.
+        assert "Max-Age" not in set_cookie
+        assert "max-age" not in set_cookie
+        raw_claims = jwt.decode(
+            resp.cookies["dashboard_token"], options={"verify_signature": False}
+        )
+        assert "exp" not in raw_claims
+
+    async def test_login_cookie_authenticates_dashboard_request(self, client):
+        """Regression: the cookie set by POST /dashboard/login must
+        authenticate a follow-up GET /dashboard through httpx's cookie
+        jar, which mirrors browser semantics. A Max-Age=0 cookie is
+        discarded by the jar, so the follow-up request would 303 back
+        to the login page.
+        """
+        login = await client.post(
+            "/dashboard/login",
+            data={"username": TEST_ADMIN_EMAIL, "password": TEST_ADMIN_PASSWORD},
+            follow_redirects=False,
+        )
+        assert login.status_code == 303
+        resp = await client.get("/dashboard", follow_redirects=False)
+        assert resp.status_code == 200
+        assert "Users" in resp.text
+
+
 class TestDashboardLogin:
-    async def test_login_success(self, client):
+    async def test_login_success(self, client, config):
         resp = await client.post(
             "/dashboard/login",
             data={"username": TEST_ADMIN_EMAIL, "password": TEST_ADMIN_PASSWORD},
@@ -81,19 +202,16 @@ class TestDashboardLogin:
         assert resp.headers["location"] == "/dashboard"
         set_cookie = resp.headers.get("set-cookie", "")
         assert "dashboard_token=" in set_cookie
-        # With TTL=0 (default), the cookie must be a session cookie —
-        # no Max-Age attribute. Max-Age=0 would tell the browser to
-        # delete the cookie immediately (RFC 6265 §5.2.2) and silently
-        # break login.
-        assert "Max-Age" not in set_cookie
-        assert "max-age" not in set_cookie
+        # The default admin TTL is finite, so the cookie carries a Max-Age
+        # of that many seconds.
+        max_age = config.admin_dashboard_token_expire_minutes * 60
+        assert max_age > 0
+        assert f"Max-Age={max_age}" in set_cookie or f"max-age={max_age}" in set_cookie
 
     async def test_login_cookie_authenticates_dashboard_request(self, client):
         """Regression: the cookie set by POST /dashboard/login must
         authenticate a follow-up GET /dashboard through httpx's cookie
-        jar, which mirrors browser semantics. A Max-Age=0 cookie is
-        discarded by the jar, so the follow-up request would 303 back
-        to the login page.
+        jar, which mirrors browser semantics.
         """
         login = await client.post(
             "/dashboard/login",
@@ -125,9 +243,7 @@ class TestDashboardLogin:
     ):
         """Regression: the positive-TTL branch must also produce a
         cookie the browser/cookie-jar accepts for follow-up requests.
-        The TTL=0 round-trip is already covered by
-        ``test_login_cookie_authenticates_dashboard_request``; this
-        locks in the non-zero Max-Age branch end-to-end so a future
+        This locks in the non-zero Max-Age branch end-to-end so a future
         refactor that accidentally emits a malformed Max-Age (e.g.
         negative value, float) would be caught by a 303 on GET
         /dashboard instead of a silent cookie-jar drop.
@@ -171,6 +287,124 @@ class TestDashboardPages:
             "/dashboard/agents/nonexistent", headers=dashboard_headers
         )
         assert resp.status_code == 404
+
+
+class TestEndedSessionRedirect:
+    """An htmx request on an ended dashboard session gets ``204`` +
+    ``HX-Redirect`` so htmx loads the login page in the whole window; the
+    XHR would follow a 303 and swap the login page into the fragment
+    target. A plain navigation keeps the 303.
+    """
+
+    async def test_expired_cookie_on_the_status_poller_redirects_the_window(
+        self, client, expired_dashboard_headers
+    ):
+        resp = await client.get(
+            "/dashboard/agents-status",
+            headers={**expired_dashboard_headers, "HX-Request": "true"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 204
+        assert resp.headers["HX-Redirect"] == "/dashboard/login"
+        assert "location" not in resp.headers
+        assert resp.content == b""
+
+    async def test_expired_cookie_on_a_plain_navigation_keeps_the_303(
+        self, client, expired_dashboard_headers
+    ):
+        resp = await client.get(
+            "/dashboard", headers=expired_dashboard_headers, follow_redirects=False
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/dashboard/login"
+        assert "HX-Redirect" not in resp.headers
+
+    async def test_missing_cookie_on_a_boosted_page_request_redirects_the_window(
+        self, client
+    ):
+        resp = await client.get(
+            "/dashboard?page=2",
+            headers={"HX-Request": "true"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 204
+        assert resp.headers["HX-Redirect"] == "/dashboard/login"
+        assert "location" not in resp.headers
+
+    async def test_deleted_admin_on_a_fragment_request_redirects_the_window(
+        self, client, app, dashboard_headers, viewer_user
+    ):
+        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+        await app.state.db.delete_user(admin["id"])
+
+        resp = await client.get(
+            f"/dashboard/users/{viewer_user['id']}/agents",
+            headers={**dashboard_headers, "HX-Request": "true"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 204
+        assert resp.headers["HX-Redirect"] == "/dashboard/login"
+        assert "location" not in resp.headers
+
+
+class TestLegacyAdminCookieZeroAdminTtl:
+    """With the admin TTL at 0 a cookie without ``exp`` never ages out, even
+    past the shorter user dashboard TTL.
+    """
+
+    @pytest.fixture
+    def config(self, config):
+        return dataclasses.replace(
+            config,
+            dashboard_token_expire_minutes=10,
+            admin_dashboard_token_expire_minutes=0,
+        )
+
+    async def test_cookie_older_than_the_dashboard_ttl_still_authenticates(
+        self, client, legacy_admin_token
+    ):
+        resp = await client.get(
+            "/dashboard",
+            headers={"Cookie": f"dashboard_token={legacy_admin_token}"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        assert "Users" in resp.text
+
+
+class TestLegacyAdminCookieAgeOut:
+    """A cookie without ``exp`` ages out at the admin TTL (30 min); the same
+    token as a Bearer keeps the user dashboard TTL (600 min).
+    """
+
+    @pytest.fixture
+    def config(self, config):
+        return dataclasses.replace(
+            config,
+            dashboard_token_expire_minutes=600,
+            admin_dashboard_token_expire_minutes=30,
+        )
+
+    async def test_cookie_older_than_the_admin_ttl_goes_to_login(
+        self, client, legacy_admin_token
+    ):
+        resp = await client.get(
+            "/dashboard",
+            headers={"Cookie": f"dashboard_token={legacy_admin_token}"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/dashboard/login"
+
+    async def test_same_token_as_a_bearer_is_still_accepted(
+        self, client, legacy_admin_token
+    ):
+        resp = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {legacy_admin_token}"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["email"] == TEST_ADMIN_EMAIL
 
 
 class TestDashboardRoleGate:

@@ -175,7 +175,14 @@ class CentralServerConfig:
     apple_web_client_id: str | None = None
 
     jwt_algorithm: str = "HS256"
-    # TTLs are in minutes. 0 = never expires. The zero sentinel is
+    # TTLs are in minutes. The mobile pair rotates on every refresh, so an
+    # active device never reaches the refresh TTL; one idle past it taps
+    # the agent once to re-mint. The user ("dashboard") JWT is a hard
+    # session lifetime on Android and iOS, which hold it without a refresh
+    # path — hence 90 days rather than the web session's 15 minutes.
+    #
+    # 0 = never expires, an explicit opt-out for local development only
+    # (the app logs a warning at startup). The zero sentinel is
     # translated in each consumer:
     #   * JWTs omit the `exp` claim (PyJWT only validates `exp` when
     #     present).
@@ -185,11 +192,12 @@ class CentralServerConfig:
     #     attribute, which per RFC 6265 §4.1.2 makes it a browser
     #     session cookie (cleared on browser close). Max-Age=0 would
     #     delete the cookie immediately (RFC 6265 §5.2.2).
-    # Chosen as the default because the mobile app has to be re-paired
-    # by hand whenever tokens expire.
-    mobile_token_expire_minutes: int = 0
-    mobile_refresh_expire_minutes: int = 0
-    dashboard_token_expire_minutes: int = 0
+    # User JWTs and refresh tokens minted while their TTL was 0 are aged
+    # out once it is positive. Mobile access JWTs without `exp` are not.
+    mobile_token_expire_minutes: int = 60
+    mobile_refresh_expire_minutes: int = 43200  # 30 days
+    dashboard_token_expire_minutes: int = 129600  # 90 days
+    admin_dashboard_token_expire_minutes: int = 10080  # 7 days
     # TTLs for a *refreshable* user session — the opt-in a client requests
     # with `refreshable: true` on an auth call (see RefreshableSessionRequest).
     # These deliberately do not honour the 0-means-never sentinel above: a
@@ -429,13 +437,16 @@ class CentralServerConfig:
             apple_web_client_id=os.getenv("APPLE_WEB_CLIENT_ID"),
             jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
             mobile_token_expire_minutes=int(
-                os.getenv("MOBILE_TOKEN_EXPIRE_MINUTES", "0"),
+                os.getenv("MOBILE_TOKEN_EXPIRE_MINUTES", "60"),
             ),
             mobile_refresh_expire_minutes=int(
-                os.getenv("MOBILE_REFRESH_EXPIRE_MINUTES", "0"),
+                os.getenv("MOBILE_REFRESH_EXPIRE_MINUTES", "43200"),
             ),
             dashboard_token_expire_minutes=int(
-                os.getenv("DASHBOARD_TOKEN_EXPIRE_MINUTES", "0"),
+                os.getenv("DASHBOARD_TOKEN_EXPIRE_MINUTES", "129600"),
+            ),
+            admin_dashboard_token_expire_minutes=int(
+                os.getenv("ADMIN_DASHBOARD_TOKEN_EXPIRE_MINUTES", "10080"),
             ),
             user_session_access_expire_minutes=max(
                 1,
