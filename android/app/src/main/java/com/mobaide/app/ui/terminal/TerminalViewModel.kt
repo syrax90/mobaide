@@ -24,6 +24,8 @@ import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
+import com.mobaide.app.data.review.HealthyTimeMeter
+import com.mobaide.app.data.review.ReviewPromptCoordinator
 import com.mobaide.app.notifications.AppForegroundTracker
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.ui.sessions.sessionHeaderLabel
@@ -88,6 +90,7 @@ class TerminalViewModel @Inject constructor(
     private val foregroundSessionTracker: ForegroundSessionTracker,
     private val appForegroundTracker: AppForegroundTracker,
     private val preferencesStore: PreferencesStore,
+    private val reviewPromptCoordinator: ReviewPromptCoordinator,
 ) : ViewModel() {
 
     /**
@@ -103,6 +106,15 @@ class TerminalViewModel @Inject constructor(
 
     /** A session-scoped child screen (git Changes / Diff) is composed on top. */
     private var heldByChild = false
+
+    /** Healthy use of this visit, for the review prompt. */
+    private val reviewMeter = HealthyTimeMeter()
+
+    /** `screenVisible && appForeground` as a flow, so the meter's collector sees both halves. */
+    private val inUse = MutableStateFlow(false)
+
+    /** The user stopped this session, so leaving it is a clean end rather than a failure. */
+    private var endedByUser = false
 
     /** When the session stopped being read, or null while it is being read. */
     private var unwatchedSinceMs: Long? = null
@@ -413,6 +425,16 @@ class TerminalViewModel @Inject constructor(
                         _sessionEnded.trySend(Unit)
                     }
                 }
+        }
+    }
+
+    init {
+        viewModelScope.launch {
+            combine(inUse, _connectionState, _sessionState) { inUse, connection, status ->
+                inUse && connection == ConnectionState.Live && status == "running"
+            }
+                .distinctUntilChanged()
+                .collect { healthy -> reviewMeter.update(healthy) }
         }
     }
 
@@ -1008,15 +1030,39 @@ class TerminalViewModel @Inject constructor(
      *  service suppresses a redundant attention notification for the session
      *  the user is already looking at. Alerts for other sessions still fire. */
     fun markScreenVisible() {
+        reviewPromptCoordinator.terminalVisitStarted()
         foregroundSessionTracker.setVisible(sessionId)
         screenVisible = true
         syncWatched()
     }
 
     fun markScreenHidden() {
+        reportReviewVisit()
         foregroundSessionTracker.clearVisible(sessionId)
         screenVisible = false
         syncWatched()
+    }
+
+    fun markEndedByUser() {
+        endedByUser = true
+    }
+
+    /** An error the terminal screen showed the user, e.g. a failed stop. */
+    fun noteReviewError() {
+        reviewPromptCoordinator.noteError()
+    }
+
+    /**
+     * Ends this visit for the review prompt. Read before the hide takes effect:
+     * a visit ends cleanly when the user stopped the session or it is still
+     * live and running as they leave, and anything else (reconnecting, a
+     * crashed or vanished session) is an error the prompt must not follow.
+     */
+    private fun reportReviewVisit() {
+        val endedCleanly = endedByUser ||
+            (_connectionState.value == ConnectionState.Live && _sessionState.value == "running")
+        reviewPromptCoordinator.recordTerminalVisit(reviewMeter.finish(), endedCleanly)
+        endedByUser = false
     }
 
     /**
@@ -1034,6 +1080,7 @@ class TerminalViewModel @Inject constructor(
      * Backgrounding still counts — the foreground term is unchanged.
      */
     private fun syncWatched() {
+        inUse.value = screenVisible && appForeground
         if ((screenVisible || heldByChild) && appForeground) {
             unwatchedSinceMs = null
             unwatchedBytes = 0

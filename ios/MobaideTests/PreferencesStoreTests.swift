@@ -342,4 +342,31 @@ final class PreferencesStoreTests: XCTestCase {
             "a relaunch is a fresh store over the same defaults — the dismissal is permanent"
         )
     }
+
+    func testReviewPromptCountersCountUpAndARequestStampsTheTimeAndResetsTheGoodSessions() {
+        store.incrementReviewLaunchCount()
+        store.incrementReviewLaunchCount()
+
+        XCTAssertEqual(
+            store.incrementReviewGoodSessions(),
+            ReviewPromptState(launchCount: 2, goodSessions: 1, lastRequestedAt: nil),
+            "absent keys read as zero and no stamp on a fresh install"
+        )
+        XCTAssertEqual(store.incrementReviewGoodSessions().goodSessions, 2)
+
+        let stamp = Date(timeIntervalSince1970: 1_793_275_200)
+        store.markReviewRequested(at: stamp)
+
+        XCTAssertEqual(
+            store.incrementReviewGoodSessions(),
+            ReviewPromptState(launchCount: 2, goodSessions: 1, lastRequestedAt: stamp)
+        )
+        XCTAssertEqual(
+            defaults.integer(forKey: "review_prompt_launch_count"),
+            2,
+            "the keys stay byte-identical to Android's DataStore keys"
+        )
+        XCTAssertEqual(defaults.integer(forKey: "review_prompt_good_sessions"), 1)
+        XCTAssertNotNil(defaults.object(forKey: "review_prompt_last_requested_at"))
+    }
 }

@@ -597,7 +597,8 @@ ios/
 │   ├── Core/Storage/             # KeychainStoring, SecItemKeychainStore
 │   ├── Data/                     # Auth (SessionManager, token/identity stores, SignInService,
 │   │                             # Google/Apple sign-in clients), Events (AgentEventBus,
-│   │                             # UserEventBus), Local, Security, Repository, Voice
+│   │                             # UserEventBus), Local, Review (store-review prompt), Security,
+│   │                             # Repository, Voice
 │   ├── PrivacyInfo.xcprivacy     # App Store privacy manifest (see below)
 │   ├── Models/                   # one Swift file per Android dto/*.kt file (wire DTOs)
 │   ├── Notifications/            # ForegroundSessionTracker, NotificationService,
@@ -827,10 +828,14 @@ an `~ipad` slot, so the bundle carries a stray `CFBundleIcons~ipad`. It is inert
 `Mobaide/PrivacyInfo.xcprivacy` is copied to the bundle root by the synchronized
 folder group and is **required for upload**: App Store Connect rejects binaries
 (ITMS-91053) that touch a Required Reason API without declaring it. The app
-declares one — `NSPrivacyAccessedAPICategoryUserDefaults`, reason `CA92.1`
-(defaults readable only by this app), used by `PreferencesStore` and
+declares two. `NSPrivacyAccessedAPICategoryUserDefaults`, reason `CA92.1`
+(defaults readable only by this app), is used by `PreferencesStore` and
 `TrustKeyPinning`. `CA92.1` is correct only because both use plain custom
 suites; adding an App Group entitlement would make `1C8F.1` the right reason.
+`NSPrivacyAccessedAPICategorySystemBootTime`, reason `35F9.1` (measuring the
+time elapsed between events inside the app), covers `ProcessInfo.systemUptime`,
+read by `TerminalHostView`, `TerminalCursorReveal` and the review prompt's
+`HealthyTimeMeter` (see [docs/in-app-review.md](in-app-review.md)).
 
 When adding an API from any Required Reason category (file timestamps, disk
 space, system boot time, active keyboard), add its declaration here too. The

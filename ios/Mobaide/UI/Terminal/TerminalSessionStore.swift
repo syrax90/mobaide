@@ -14,6 +14,7 @@ final class TerminalSessionStore {
     private let foregroundSessionTracker: ForegroundSessionTracker
     private let preferencesStore: PreferencesStore
     private let shortcutsRepository: ShortcutsRepository
+    private let reviewPrompt: ReviewPromptCoordinator
 
     /// Resolves a session's true kind from the app-scoped session list.
     /// Assigned by `AppContainer` right after `SessionRepository` is built —
@@ -32,7 +33,8 @@ final class TerminalSessionStore {
         userTokenProvider: any UserTokenProviding,
         foregroundSessionTracker: ForegroundSessionTracker,
         preferencesStore: PreferencesStore,
-        shortcutsRepository: ShortcutsRepository
+        shortcutsRepository: ShortcutsRepository,
+        reviewPrompt: ReviewPromptCoordinator
     ) {
         self.webSocketFactory = webSocketFactory
         self.sessionManager = sessionManager
@@ -42,6 +44,7 @@ final class TerminalSessionStore {
         self.foregroundSessionTracker = foregroundSessionTracker
         self.preferencesStore = preferencesStore
         self.shortcutsRepository = shortcutsRepository
+        self.reviewPrompt = reviewPrompt
     }
 
     func model(
@@ -71,6 +74,7 @@ final class TerminalSessionStore {
             foregroundSessionTracker: foregroundSessionTracker,
             preferencesStore: preferencesStore,
             shortcutsRepository: shortcutsRepository,
+            reviewPrompt: reviewPrompt,
             // Indirection instead of passing `sessionKindResolver` directly:
             // the resolver is assigned after this store's init, and models must
             // see the late assignment.

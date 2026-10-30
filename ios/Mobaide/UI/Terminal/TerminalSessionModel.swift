@@ -65,8 +65,12 @@ final class TerminalSessionModel {
     /// wrong kind (Android `resolvedKind` parity).
     private(set) var resolvedKind: SessionKind?
 
-    private(set) var connectionState: ConnectionState = .reconnecting
-    private(set) var sessionStatus: String?
+    private(set) var connectionState: ConnectionState = .reconnecting {
+        didSet { syncReviewMeter() }
+    }
+    private(set) var sessionStatus: String? {
+        didSet { syncReviewMeter() }
+    }
     /// Once the session is known to exist, it is never treated as missing again:
     /// a session ending or being removed while the user is reading it must leave
     /// the output on screen, not eject them.
@@ -136,6 +140,7 @@ final class TerminalSessionModel {
     private let foregroundSessionTracker: ForegroundSessionTracker
     private let preferencesStore: PreferencesStore
     private let shortcutsRepository: ShortcutsRepository
+    private let reviewPrompt: ReviewPromptCoordinator
     private let kindResolver: (String) async -> SessionKind?
 
     private var core: WebSocketCore?
@@ -160,6 +165,10 @@ final class TerminalSessionModel {
     private var screenVisible = false
     /// The app is in the foreground.
     private var appActive = true
+    /// Healthy use of this visit, for the review prompt.
+    @ObservationIgnored private var reviewMeter = HealthyTimeMeter()
+    /// The user stopped this session, so leaving it is a clean end rather than a failure.
+    @ObservationIgnored private var endedByUser = false
     /// When the session stopped being read, or nil while it is being read.
     private var unwatchedSince: Date?
     /// Live output charged since then. Replay spans are not charged.
@@ -192,6 +201,7 @@ final class TerminalSessionModel {
         foregroundSessionTracker: ForegroundSessionTracker,
         preferencesStore: PreferencesStore,
         shortcutsRepository: ShortcutsRepository,
+        reviewPrompt: ReviewPromptCoordinator,
         kindResolver: @escaping (String) async -> SessionKind?
     ) {
         self.sessionId = sessionId
@@ -205,6 +215,7 @@ final class TerminalSessionModel {
         self.foregroundSessionTracker = foregroundSessionTracker
         self.preferencesStore = preferencesStore
         self.shortcutsRepository = shortcutsRepository
+        self.reviewPrompt = reviewPrompt
         self.kindResolver = kindResolver
         self.sessionStatus = initialStatus
         (outboundStream, outboundContinuation) = AsyncStream.makeStream(of: Data.self)
@@ -894,6 +905,7 @@ final class TerminalSessionModel {
     // MARK: - Lifecycle
 
     func markVisible() {
+        reviewPrompt.terminalVisitStarted()
         foregroundSessionTracker.setVisible(sessionId)
         screenVisible = true
         syncWatched()
@@ -912,6 +924,7 @@ final class TerminalSessionModel {
     }
 
     func markHidden() {
+        reportReviewVisit()
         foregroundSessionTracker.clearVisible(sessionId)
         screenVisible = false
         syncWatched()
@@ -925,6 +938,29 @@ final class TerminalSessionModel {
         // dismiss-on-dispose parity) — the retained view would otherwise keep
         // first responder and swallow keys behind whatever screen comes next.
         dismissTerminalKeyboard()
+    }
+
+    func markEndedByUser() {
+        endedByUser = true
+    }
+
+    /// An error the terminal screen showed the user, e.g. a failed stop.
+    func noteReviewError() {
+        reviewPrompt.noteError()
+    }
+
+    /// Ends this visit for the review prompt. Read before the hide takes effect:
+    /// a visit ends cleanly when the user stopped the session or it is still
+    /// live and running as they leave, and anything else (reconnecting, a
+    /// crashed or vanished session) is an error the prompt must not follow.
+    private func reportReviewVisit() {
+        let endedCleanly = endedByUser || canSendTerminalBytes
+        reviewPrompt.recordTerminalVisit(healthySeconds: reviewMeter.finish(), endedCleanly: endedCleanly)
+        endedByUser = false
+    }
+
+    private func syncReviewMeter() {
+        reviewMeter.update(healthy: screenVisible && appActive && canSendTerminalBytes)
     }
 
     /// Scene-phase half of the watch gate, driven by `AppLifecycleController`.
@@ -962,6 +998,7 @@ final class TerminalSessionModel {
     /// `ForegroundSessionTracker.holdWatch`), so the hold cannot outlive it.
     /// Backgrounding still counts — the app-active term is unchanged.
     private func syncWatched() {
+        syncReviewMeter()
         guard !isTornDown else { return }
         if (screenVisible || foregroundSessionTracker.isHeld(sessionId)) && appActive {
             unwatchedSince = nil

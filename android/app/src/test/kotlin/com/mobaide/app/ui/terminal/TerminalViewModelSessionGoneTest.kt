@@ -93,6 +93,7 @@ class TerminalViewModelSessionGoneTest {
             foregroundSessionTracker = ForegroundSessionTracker(),
             appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
+            reviewPromptCoordinator = mockk(relaxed = true),
         )
 
     private fun session(id: String, state: String = "running"): SessionResponse =

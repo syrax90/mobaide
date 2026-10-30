@@ -61,4 +61,9 @@ final class ForegroundSessionTracker: Sendable {
     func isHeld(_ sessionId: String) -> Bool {
         state.withLock { ($0.holds[sessionId] ?? 0) > 0 }
     }
+
+    /// Some session-scoped child screen is on screen.
+    var hasWatchHolds: Bool {
+        state.withLock { !$0.holds.isEmpty }
+    }
 }

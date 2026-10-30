@@ -97,6 +97,7 @@ class TerminalViewModelConnectTest {
             foregroundSessionTracker = ForegroundSessionTracker(),
             appForegroundTracker = AppForegroundTracker(),
             preferencesStore = preferencesStore,
+            reviewPromptCoordinator = mockk(relaxed = true),
         )
 
     // Encoders for the binary frames the server fires on attach.

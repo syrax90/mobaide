@@ -5,10 +5,12 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.mobaide.app.data.network.dto.LinearLabelDto
 import com.mobaide.app.data.network.dto.LinearStateDto
+import com.mobaide.app.data.review.ReviewPromptState
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
@@ -33,6 +35,13 @@ class PreferencesStore(private val context: Context) {
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
     private val keyExternalSessionsNoticeDismissed =
         booleanPreferencesKey("external_sessions_notice_dismissed")
+
+    // Device-local, not account-scoped (device backups carry them): no sign-out
+    // sweep touches them, since the store's quota follows the device's store
+    // account, not the Mobaide one.
+    private val keyReviewLaunchCount = intPreferencesKey("review_prompt_launch_count")
+    private val keyReviewGoodSessions = intPreferencesKey("review_prompt_good_sessions")
+    private val keyReviewLastRequestedAt = longPreferencesKey("review_prompt_last_requested_at")
 
     // Lenient (ignore unknown keys) so adding fields server-side later doesn't
     // crash a stale cached blob.
@@ -190,6 +199,32 @@ class PreferencesStore(private val context: Context) {
     suspend fun setExternalSessionsNoticeDismissed() {
         context.dataStore.edit { prefs ->
             prefs[keyExternalSessionsNoticeDismissed] = true
+        }
+    }
+
+    suspend fun incrementReviewLaunchCount() {
+        context.dataStore.edit { prefs ->
+            prefs[keyReviewLaunchCount] = (prefs[keyReviewLaunchCount] ?: 0) + 1
+        }
+    }
+
+    /** Counts one more good session and returns the counters as written. */
+    suspend fun incrementReviewGoodSessions(): ReviewPromptState {
+        val prefs = context.dataStore.edit { prefs ->
+            prefs[keyReviewGoodSessions] = (prefs[keyReviewGoodSessions] ?: 0) + 1
+        }
+        return ReviewPromptState(
+            launchCount = prefs[keyReviewLaunchCount] ?: 0,
+            goodSessions = prefs[keyReviewGoodSessions] ?: 0,
+            lastRequestedAtMs = prefs[keyReviewLastRequestedAt],
+        )
+    }
+
+    /** Starts the cooldown and the next run of good sessions from zero. */
+    suspend fun markReviewRequested(nowMillis: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[keyReviewLastRequestedAt] = nowMillis
+            prefs[keyReviewGoodSessions] = 0
         }
     }
 

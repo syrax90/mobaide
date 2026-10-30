@@ -33,6 +33,18 @@ final class PrivacyManifestTests: XCTestCase {
         XCTAssertEqual(userDefaults["NSPrivacyAccessedAPITypeReasons"] as? [String], ["CA92.1"])
     }
 
+    /// `HealthyTimeMeter` reads `ProcessInfo.systemUptime` to time healthy
+    /// terminal use for the review prompt.
+    func testDeclaresSystemBootTimeWithAReason() throws {
+        let types = try XCTUnwrap(manifest["NSPrivacyAccessedAPITypes"] as? [[String: Any]])
+        let bootTime = try XCTUnwrap(
+            types.first { $0["NSPrivacyAccessedAPIType"] as? String == "NSPrivacyAccessedAPICategorySystemBootTime" },
+            "ProcessInfo.systemUptime is used by the app but not declared"
+        )
+        // 35F9.1 = measuring the time elapsed between events inside the app.
+        XCTAssertEqual(bootTime["NSPrivacyAccessedAPITypeReasons"] as? [String], ["35F9.1"])
+    }
+
     func testDeclaresNoTracking() {
         XCTAssertEqual(manifest["NSPrivacyTracking"] as? Bool, false)
         XCTAssertEqual((manifest["NSPrivacyTrackingDomains"] as? [String])?.isEmpty, true)

@@ -932,9 +932,11 @@ The Android client has three distinct update paths that work together:
   via the `onIncompatibleServer` callback in case the gate races a server
   upgrade.
 * **Flexible Play in-app update** — `InAppUpdateManager.checkForUpdate()` runs
-  every `Activity.onResume`. When the Play Core API reports an update is
-  available and the build allows the flexible flow, the user gets the
-  non-blocking download/install prompt. Failures are silent: the in-app
+  every `Activity.onResume`, except within 60 s of a Play in-app review card
+  launch (closing the card resumes the activity, and the update dialog would
+  stack on it; see [in-app-review.md](in-app-review.md)). When the Play Core
+  API reports an update is available and the build allows the flexible flow,
+  the user gets the non-blocking download/install prompt. Failures are silent: the in-app
   update is best-effort, and Play's own update banner remains the fallback.
 * **Immediate Play in-app update** — `InAppUpdateManager.requestImmediateUpdate()`
   is reserved for the recovery path from `IncompatibleServerScreen` and is

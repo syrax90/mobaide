@@ -32,8 +32,22 @@ enum TerminalTestSupport {
         ShortcutsRepository(centralAPI: stubbedCentralAPI(), userIdentityStore: harness.userIdentityStore)
     }
 
+    /// A real review-prompt coordinator over the given stores, so a model's
+    /// visit reports have a sink without any test caring about them.
+    static func reviewPrompt(
+        preferencesStore: PreferencesStore,
+        foregroundSessionTracker: ForegroundSessionTracker
+    ) -> ReviewPromptCoordinator {
+        ReviewPromptCoordinator(
+            preferencesStore: preferencesStore,
+            foregroundSessionTracker: foregroundSessionTracker
+        )
+    }
+
     static func store(_ harness: SessionHarness) -> TerminalSessionStore {
-        TerminalSessionStore(
+        let tracker = ForegroundSessionTracker()
+        let preferencesStore = isolatedPreferencesStore()
+        return TerminalSessionStore(
             webSocketFactory: WebSocketCoreFactory.live(
                 transportFactory: FakeWebSocketTransportFactory(),
                 sleeper: RecordingSleeper()
@@ -42,9 +56,10 @@ enum TerminalTestSupport {
             tokenStore: harness.tokenStore,
             centralAPI: CentralAPI(centralServerURL: "https://central.test", sessionInvalidator: StubSessionInvalidator()),
             userTokenProvider: StubUserTokenProvider(),
-            foregroundSessionTracker: ForegroundSessionTracker(),
-            preferencesStore: isolatedPreferencesStore(),
-            shortcutsRepository: shortcutsRepository(harness: harness)
+            foregroundSessionTracker: tracker,
+            preferencesStore: preferencesStore,
+            shortcutsRepository: shortcutsRepository(harness: harness),
+            reviewPrompt: reviewPrompt(preferencesStore: preferencesStore, foregroundSessionTracker: tracker)
         )
     }
 
@@ -58,9 +73,11 @@ enum TerminalTestSupport {
         preferencesStore: PreferencesStore? = nil,
         shortcutsRepository: ShortcutsRepository? = nil,
         foregroundSessionTracker: ForegroundSessionTracker = ForegroundSessionTracker(),
+        reviewPrompt: ReviewPromptCoordinator? = nil,
         kindResolver: ((String) async -> SessionKind?)? = nil
     ) -> TerminalSessionModel {
-        TerminalSessionModel(
+        let preferencesStore = preferencesStore ?? isolatedPreferencesStore()
+        return TerminalSessionModel(
             sessionId: sessionId,
             kind: kind,
             resolvedKind: resolvedKind,
@@ -74,8 +91,12 @@ enum TerminalTestSupport {
             centralAPI: CentralAPI(centralServerURL: "https://central.test", sessionInvalidator: StubSessionInvalidator()),
             userTokenProvider: StubUserTokenProvider(),
             foregroundSessionTracker: foregroundSessionTracker,
-            preferencesStore: preferencesStore ?? isolatedPreferencesStore(),
+            preferencesStore: preferencesStore,
             shortcutsRepository: shortcutsRepository ?? Self.shortcutsRepository(harness: harness),
+            reviewPrompt: reviewPrompt ?? Self.reviewPrompt(
+                preferencesStore: preferencesStore,
+                foregroundSessionTracker: foregroundSessionTracker
+            ),
             kindResolver: kindResolver ?? { _ in nil }
         )
     }

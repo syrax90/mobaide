@@ -375,15 +375,21 @@ final class TerminalSessionSuspendTests: XCTestCase {
         // from `start()`.
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         let factory = FakeWebSocketTransportFactory()
+        let tracker = ForegroundSessionTracker()
+        let preferencesStore = TerminalTestSupport.isolatedPreferencesStore()
         let store = TerminalSessionStore(
             webSocketFactory: WebSocketCoreFactory.live(transportFactory: factory, sleeper: RecordingSleeper()),
             sessionManager: harness.sessionManager,
             tokenStore: harness.tokenStore,
             centralAPI: CentralAPI(centralServerURL: "https://central.test", sessionInvalidator: StubSessionInvalidator()),
             userTokenProvider: StubUserTokenProvider(),
-            foregroundSessionTracker: ForegroundSessionTracker(),
-            preferencesStore: TerminalTestSupport.isolatedPreferencesStore(),
-            shortcutsRepository: TerminalTestSupport.shortcutsRepository(harness: harness)
+            foregroundSessionTracker: tracker,
+            preferencesStore: preferencesStore,
+            shortcutsRepository: TerminalTestSupport.shortcutsRepository(harness: harness),
+            reviewPrompt: TerminalTestSupport.reviewPrompt(
+                preferencesStore: preferencesStore,
+                foregroundSessionTracker: tracker
+            )
         )
         let model = store.model(id: "s1", kind: .claude, resolvedKind: .claude, initialStatus: nil)
         model.suspendPolicy = { _, bytes in bytes >= 4 }

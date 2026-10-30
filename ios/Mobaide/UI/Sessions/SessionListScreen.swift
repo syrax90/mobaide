@@ -20,7 +20,10 @@ private struct SessionListContent: View {
 
     @Environment(Router.self) private var router
 
+    private let reviewPrompt: ReviewPromptCoordinator
+
     init(container: AppContainer) {
+        reviewPrompt = container.reviewPromptCoordinator
         _model = State(initialValue: SessionListModel(
             repository: container.sessionRepository,
             agentEventBus: container.agentEventBus,
@@ -71,6 +74,7 @@ private struct SessionListContent: View {
             .task { await model.observeConnection() }
             .task { await model.observeScans() }
             .task { await model.observeCustomTypes() }
+            .task { await reviewPrompt.sessionListShown() }
             .task {
                 for await id in model.autoResumeEvents() {
                     router.navigate(to: .sessionDetail(sessionId: id))
@@ -79,6 +83,7 @@ private struct SessionListContent: View {
             }
             .onChange(of: model.error) { _, newValue in
                 if let newValue {
+                    reviewPrompt.noteError()
                     toast = ToastMessage(text: newValue)
                     model.clearError()
                 }

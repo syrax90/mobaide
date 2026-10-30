@@ -73,6 +73,7 @@ class TerminalViewModelDisplayConfigTest {
             foregroundSessionTracker = ForegroundSessionTracker(),
             appForegroundTracker = AppForegroundTracker(),
             preferencesStore = prefs,
+            reviewPromptCoordinator = mockk(relaxed = true),
         )
 
     @Test

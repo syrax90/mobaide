@@ -30,6 +30,7 @@ final class AppContainer {
     let versionGate: VersionGateRepository
     let mailComposer: any MailComposing
     let foregroundSessionTracker: ForegroundSessionTracker
+    let reviewPromptCoordinator: ReviewPromptCoordinator
     let sessionRepository: SessionRepository
     let projectsRepository: ProjectsRepository
     let voiceRepository: VoiceRepository
@@ -198,6 +199,11 @@ final class AppContainer {
         self.mailComposer = LiveMailComposer()
         let foregroundSessionTracker = ForegroundSessionTracker()
         self.foregroundSessionTracker = foregroundSessionTracker
+        let reviewPromptCoordinator = ReviewPromptCoordinator(
+            preferencesStore: preferencesStore,
+            foregroundSessionTracker: foregroundSessionTracker
+        )
+        self.reviewPromptCoordinator = reviewPromptCoordinator
         let terminalSessionStore = TerminalSessionStore(
             webSocketFactory: webSocketFactory,
             sessionManager: sessionManager,
@@ -206,7 +212,8 @@ final class AppContainer {
             userTokenProvider: userTokenProvider,
             foregroundSessionTracker: foregroundSessionTracker,
             preferencesStore: preferencesStore,
-            shortcutsRepository: shortcutsRepository
+            shortcutsRepository: shortcutsRepository,
+            reviewPrompt: reviewPromptCoordinator
         )
         self.terminalSessionStore = terminalSessionStore
         let sessionRepository = SessionRepository(
@@ -350,6 +357,7 @@ final class AppContainer {
     func start() async {
         guard !started else { return }
         started = true
+        reviewPromptCoordinator.recordLaunch()
         authStateModel.bind(to: sessionManager)
         // Launch-time version gate (pre-WebSocket, Android `onResume` parity):
         // flips to the upgrade takeover when the server speaks a wire protocol
