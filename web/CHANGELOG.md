@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.15](https://github.com/syrax90/claude_mobile/compare/web-v0.1.14...web-v0.1.15) (2026-10-30)
+
+
+### Bug Fixes
+
+* say a device revoke signs the device out right away ([f384175](https://github.com/syrax90/claude_mobile/commit/f384175a8902544fc8b959dd23939193c34c2ddd))
+* **server,android,ios,web:** let abandoned unverified signups register again ([a1f3f94](https://github.com/syrax90/claude_mobile/commit/a1f3f9425134f4e474fb5aa7bc9aa8a7da2762c7))
+* **server,android,ios,web:** let abandoned unverified signups register again ([223ba7f](https://github.com/syrax90/claude_mobile/commit/223ba7f11d276469fa4d88ea45d65d2a51df4432))
+* **server:** give mobile and dashboard tokens finite default lifetimes ([5d871e6](https://github.com/syrax90/claude_mobile/commit/5d871e6e898c4bcadaa33eda63a89f3da68883b9))
+* **server:** give mobile and dashboard tokens finite default lifetimes ([ed2a141](https://github.com/syrax90/claude_mobile/commit/ed2a1415c068a76261a5e5685a542b022674e220))
+* **server:** make device revoke stop already-issued tokens ([18fa46e](https://github.com/syrax90/claude_mobile/commit/18fa46e108204db7903cea9eecfa3943169acdf1))
+* **server:** make device revoke stop already-issued tokens ([746321a](https://github.com/syrax90/claude_mobile/commit/746321a712439ced89dde62682c61ceff721b1cb))
+* **voice:** keep the screen awake during dictation ([f428bdc](https://github.com/syrax90/claude_mobile/commit/f428bdc8b533c5969f464b46d3fb12d98e8cc34d))
+* **voice:** keep the screen awake during dictation ([e63c548](https://github.com/syrax90/claude_mobile/commit/e63c548d1ed18927ebb77486a65995d1b313b6e5))
+* **web:** keep the device id bound to the restored session ([c3e7c8e](https://github.com/syrax90/claude_mobile/commit/c3e7c8edec104166ab489c0d1d5f3641ec2b241a))
+* **web:** keep the terminal at viewport height with a pinned sessions panel ([c8deecf](https://github.com/syrax90/claude_mobile/commit/c8deecfbdbbaeec047b7f489f90126b1cb944d63))
+* **web:** keep the terminal at viewport height with a pinned sessions panel ([68a7126](https://github.com/syrax90/claude_mobile/commit/68a712673d8582bb5ad1631214e0193fc98e2406))
+
 ## [0.1.14](https://github.com/syrax90/claude_mobile/compare/web-v0.1.13...web-v0.1.14) (2026-10-26)
 
 

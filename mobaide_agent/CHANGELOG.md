@@ -1,5 +1,14 @@
 # mobaide_agent Changelog
 
+## [0.3.20](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.19...agent-v0.3.20) (2026-10-30)
+
+
+### Bug Fixes
+
+* **agent,server:** stop the unpaired-agent pairing loop and cap anonymous initiate per IP ([14bc4de](https://github.com/syrax90/claude_mobile/commit/14bc4de477d2fba1dd9ef9aabf459ed0802bcea9))
+* **agent,server:** stop the unpaired-agent pairing loop and cap anonymous initiate per IP ([6b72528](https://github.com/syrax90/claude_mobile/commit/6b72528939746f3332bfbb01b670663565a2f1d9))
+* **agent:** drop the unsaved pairing nonce after a relay 403 handshake rejection ([415ef56](https://github.com/syrax90/claude_mobile/commit/415ef560683da1f875532a1baa3f8316b06eb521))
+
 ## [0.3.19](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.18...agent-v0.3.19) (2026-10-26)
 
 

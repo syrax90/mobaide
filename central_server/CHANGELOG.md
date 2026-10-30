@@ -1,5 +1,37 @@
 # central_server Changelog
 
+## [0.2.19](https://github.com/syrax90/claude_mobile/compare/server-v0.2.18...server-v0.2.19) (2026-10-30)
+
+
+### Features
+
+* **android,ios:** ask for a store rating after the 3rd good session ([32d0505](https://github.com/syrax90/claude_mobile/commit/32d050568c9616c455a9503e97780c62f01870da))
+* **android,ios:** ask for a store rating after the 3rd good session ([2a89f07](https://github.com/syrax90/claude_mobile/commit/2a89f076820fc2b7943f3a601e354663e3305f66))
+* **server:** add a voice input page to the website ([1ddd5cd](https://github.com/syrax90/claude_mobile/commit/1ddd5cd32aace54d9c8c65ed408dcbe9dfe1b6ee))
+* **server:** add a voice input page to the website ([d5a08e3](https://github.com/syrax90/claude_mobile/commit/d5a08e329edb702e23b502a59e636d72884da1bd))
+* **server:** add feature-card icons and a Git management card to the landing page ([a92511b](https://github.com/syrax90/claude_mobile/commit/a92511bf95f81c454201f5b3b8a4be5cf1a3058b))
+* **server:** feature-card icons and a Git management card on the landing page ([ac7c9f2](https://github.com/syrax90/claude_mobile/commit/ac7c9f2f527b80aeeb51d7a4fda20bac3d286cc8))
+* **server:** let the voice card replace the browser card on the landing page ([237d042](https://github.com/syrax90/claude_mobile/commit/237d042f7b060b1a25ec5c3c6314148184292a1b))
+* **server:** show real voice input screenshots on the voice page ([8e985a2](https://github.com/syrax90/claude_mobile/commit/8e985a297d3022e9eb1ad0b2d3dea1e7ebcfba26))
+
+
+### Bug Fixes
+
+* **agent,server:** stop the unpaired-agent pairing loop and cap anonymous initiate per IP ([14bc4de](https://github.com/syrax90/claude_mobile/commit/14bc4de477d2fba1dd9ef9aabf459ed0802bcea9))
+* **agent,server:** stop the unpaired-agent pairing loop and cap anonymous initiate per IP ([6b72528](https://github.com/syrax90/claude_mobile/commit/6b72528939746f3332bfbb01b670663565a2f1d9))
+* **android,ios:** confirm before stopping a session from the list ([5bc3a88](https://github.com/syrax90/claude_mobile/commit/5bc3a88aaea2fa34a0d8092456ec60c5a180f7d7))
+* **server,android,ios,web:** let abandoned unverified signups register again ([a1f3f94](https://github.com/syrax90/claude_mobile/commit/a1f3f9425134f4e474fb5aa7bc9aa8a7da2762c7))
+* **server,android,ios,web:** let abandoned unverified signups register again ([223ba7f](https://github.com/syrax90/claude_mobile/commit/223ba7f11d276469fa4d88ea45d65d2a51df4432))
+* **server:** age admin cookies by the admin TTL ([557c1b1](https://github.com/syrax90/claude_mobile/commit/557c1b1c0d7973956a86f29d98d9398feeab9082))
+* **server:** close revoke races in refresh and token mint ([70455c5](https://github.com/syrax90/claude_mobile/commit/70455c5dff71d51bd81bdd76b25a83578f4bafb8))
+* **server:** give mobile and dashboard tokens finite default lifetimes ([5d871e6](https://github.com/syrax90/claude_mobile/commit/5d871e6e898c4bcadaa33eda63a89f3da68883b9))
+* **server:** give mobile and dashboard tokens finite default lifetimes ([ed2a141](https://github.com/syrax90/claude_mobile/commit/ed2a1415c068a76261a5e5685a542b022674e220))
+* **server:** judge a refreshed session by its sign-in time ([7202a30](https://github.com/syrax90/claude_mobile/commit/7202a303e3e2b688a2d16a98272c10db57639e37))
+* **server:** keep device revocations through account deletion and socket setup ([13f1164](https://github.com/syrax90/claude_mobile/commit/13f1164483f2bc3d6bbd1ceafab052e885d1433d))
+* **server:** make device revoke stop already-issued tokens ([18fa46e](https://github.com/syrax90/claude_mobile/commit/18fa46e108204db7903cea9eecfa3943169acdf1))
+* **server:** make device revoke stop already-issued tokens ([746321a](https://github.com/syrax90/claude_mobile/commit/746321a712439ced89dde62682c61ceff721b1cb))
+* **server:** sign out a session that names another device ([6775b6e](https://github.com/syrax90/claude_mobile/commit/6775b6e216a79e8ef1e31bd26f94a7ebd1b6b0c2))
+
 ## [0.2.18](https://github.com/syrax90/claude_mobile/compare/server-v0.2.17...server-v0.2.18) (2026-10-23)
 
 
