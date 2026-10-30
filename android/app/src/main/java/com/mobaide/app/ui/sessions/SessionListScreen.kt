@@ -40,7 +40,9 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.mobaide.app.ui.theme.ChromeFontFamily
@@ -50,6 +52,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
+import com.mobaide.app.ui.sessions.panel.StopSessionDialog
 import com.mobaide.app.ui.autoscan.AutoScanCard
 import com.mobaide.app.ui.common.ExternalSessionsNotice
 import com.mobaide.app.ui.update.AgentOutdatedBanner
@@ -67,6 +70,7 @@ fun SessionListScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    var stopTarget by remember { mutableStateOf<SessionResponse?>(null) }
 
     LaunchedEffect(uiState.error) {
         uiState.error?.let {
@@ -195,12 +199,23 @@ fun SessionListScreen(
                         session = session,
                         kindLabel = sessionKindLabel(session, uiState.customTypeNames),
                         onClick = { onSessionClick(session.session_id) },
-                        onStop = { viewModel.deleteSession(session.session_id) },
+                        onStop = { stopTarget = session },
                     )
                 }
                 }
             }
         }
+    }
+
+    stopTarget?.let { target ->
+        StopSessionDialog(
+            label = sessionTitle(target, sessionKindLabel(target, uiState.customTypeNames)),
+            onStop = { force ->
+                viewModel.deleteSession(target.session_id, force)
+                stopTarget = null
+            },
+            onDismiss = { stopTarget = null },
+        )
     }
 }
 

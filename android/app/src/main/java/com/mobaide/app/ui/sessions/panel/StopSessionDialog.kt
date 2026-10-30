@@ -15,11 +15,7 @@ const val STOP_SESSION_DIALOG_STOP_TAG = "stop_session_dialog_stop"
 const val STOP_SESSION_DIALOG_FORCE_TAG = "stop_session_dialog_force"
 const val STOP_SESSION_DIALOG_CANCEL_TAG = "stop_session_dialog_cancel"
 
-/**
- * The panel's stop confirmation, iOS's and web's Stop / Force Stop sheet. The
- * sessions list kills unconfirmed, but in the drawer the stop button sits
- * beside the row's switch target, where a slip is far more likely.
- */
+/** The Stop / Force Stop confirmation of the sessions list and the panel, as on iOS and web. */
 @Composable
 fun StopSessionDialog(
     label: String,

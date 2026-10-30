@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.local.PreferencesStore
+import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.AgentUpdateRepository
@@ -199,10 +200,17 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
-    fun deleteSession(sessionId: String) {
+    fun deleteSession(sessionId: String, force: Boolean = false) {
         viewModelScope.launch {
             try {
-                sessionRepository.deleteSession(sessionId)
+                sessionRepository.deleteSession(sessionId, force)
+            } catch (e: ApiException) {
+                // A 404 means the session is already gone, so the stop the user
+                // asked for has happened (the panel's rule).
+                if (e.code != 404) {
+                    reviewPromptCoordinator.noteError()
+                    _uiState.update { it.copy(error = "Failed to stop session: ${e.message}") }
+                }
             } catch (e: Exception) {
                 reviewPromptCoordinator.noteError()
                 _uiState.update { it.copy(error = "Failed to stop session: ${e.message}") }

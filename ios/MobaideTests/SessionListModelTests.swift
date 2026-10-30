@@ -219,6 +219,31 @@ final class SessionListModelTests: XCTestCase {
         XCTAssertEqual(model.activeScans.map(\.project_name), ["p"])
     }
 
+    // MARK: - Stop
+
+    /// Another client got there first: the session is gone, which is the
+    /// outcome the user asked for.
+    func testStopTreatsA404AsAlreadyStopped() async {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 404, body: #"{"detail":"Session not found"}"#)
+        let model = makeRESTModel()
+
+        await model.deleteSession("s1", force: false)
+
+        XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "DELETE")
+        XCTAssertNil(model.error)
+    }
+
+    func testStopSurfacesOtherHTTPFailures() async {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 503, body: "agent offline")
+        let model = makeRESTModel()
+
+        await model.deleteSession("s1", force: false)
+
+        XCTAssertEqual(model.error, "Failed to stop session: HTTP 503: agent offline")
+    }
+
     // MARK: - Custom-type name map
 
     func testObserveCustomTypesMapsFullWireKindToName() async {

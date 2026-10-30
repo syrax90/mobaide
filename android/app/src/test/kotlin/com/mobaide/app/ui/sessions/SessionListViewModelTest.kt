@@ -3,6 +3,7 @@ package com.mobaide.app.ui.sessions
 import app.cash.turbine.test
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.local.PreferencesStore
+import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
@@ -507,6 +508,73 @@ class SessionListViewModelTest {
         val err = vm.uiState.value.error
         assertNotNull(err)
         assertEquals("Failed to stop session: boom", err)
+    }
+
+    @Test
+    fun deleteSession_404_isAlreadyStopped_noErrorAndTheReviewOutingStaysGood() = runTest {
+        // Another client got there first: the session is gone, which is the
+        // outcome the user asked for.
+        val fx = newFixture()
+        val review = ReviewOuting(fx.prefs)
+        val vm = fx.buildVm(review.coordinator)
+        advanceUntilIdle()
+        coEvery { fx.sessionRepo.deleteSession("s1") } throws
+            ApiException(404, """{"detail":"Session not found"}""")
+
+        vm.deleteSession("s1")
+        advanceUntilIdle()
+        vm.onScreenResumed()
+        advanceUntilIdle()
+
+        assertNull(vm.uiState.value.error)
+        assertEquals(1, review.goodSessions)
+    }
+
+    @Test
+    fun deleteSession_otherHttpFailure_setsErrorAndSpoilsTheReviewOuting() = runTest {
+        val fx = newFixture()
+        val review = ReviewOuting(fx.prefs)
+        val vm = fx.buildVm(review.coordinator)
+        advanceUntilIdle()
+        coEvery { fx.sessionRepo.deleteSession("s1") } throws
+            ApiException(500, "internal server error")
+
+        vm.deleteSession("s1")
+        advanceUntilIdle()
+        vm.onScreenResumed()
+        advanceUntilIdle()
+
+        assertEquals(
+            "Failed to stop session: HTTP 500: internal server error",
+            vm.uiState.value.error,
+        )
+        assertEquals(0, review.goodSessions)
+    }
+
+    @Test
+    fun deleteSession_forceStop_reachesTheRepositoryAsForce() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.deleteSession("s1", force = true)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fx.sessionRepo.deleteSession("s1", true) }
+        coVerify(exactly = 0) { fx.sessionRepo.deleteSession("s1", false) }
+    }
+
+    @Test
+    fun deleteSession_withoutForce_isAPlainStop() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.deleteSession("s1")
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fx.sessionRepo.deleteSession("s1", false) }
+        coVerify(exactly = 0) { fx.sessionRepo.deleteSession("s1", true) }
     }
 
     // ---- stopAutoScan error path -------------------------------------------
