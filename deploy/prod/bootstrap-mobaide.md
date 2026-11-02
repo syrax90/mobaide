@@ -2,9 +2,24 @@
 
 Run these steps **once** before `deploy/prod/deploy_central.py` will work. Repeat only if you rebuild the VPS from scratch.
 
+**On this page**
+
+- [Automated path (recommended)](#automated-path-recommended)
+- [Prerequisites on the VPS](#prerequisites-on-the-vps)
+- [Prerequisites on your workstation (Windows or macOS)](#prerequisites-on-your-workstation-windows-or-macos)
+- [1. Prepare the server layout](#1-prepare-the-server-layout)
+- [2. Create `/opt/mobaide/.env`](#2-create-optmobaideenv)
+- [3. Firewall (if ufw is enabled)](#3-firewall-if-ufw-is-enabled)
+- [4. Pick a TLS mode](#4-pick-a-tls-mode)
+- [5. (Optional) Weekly SQLite backup](#5-optional-weekly-sqlite-backup)
+- [6. First deploy](#6-first-deploy)
+- [Operational notes](#operational-notes)
+
 ## Automated path (recommended)
 
-Steps 1, 3, and the directory setup part of step 2 are automated by `deploy/prod/bootstrap-mobaide.sh`. Root SSH is **not** required — the script only needs to run as root *on* the VPS, which `sudo` inside the SSH session handles. From your workstation:
+Steps 1, 3, and the directory setup part of step 2 are automated by `deploy/prod/bootstrap-mobaide.sh`.
+
+Root SSH is **not** required. The script only needs to run as root *on* the VPS, which `sudo` inside the SSH session handles. From your workstation:
 
 ```bash
 scp deploy/prod/bootstrap-mobaide.sh mobaide:/tmp/
@@ -19,7 +34,10 @@ The script is idempotent (safe to re-run) and:
 - verifies Docker Engine + Compose plugin and adds your user to the `docker` group,
 - configures ufw (default deny-in / allow-out, `limit 22/tcp`, `allow 80/tcp`, `allow 443/tcp`) and enables it,
 - creates `/opt/mobaide/`, `/opt/mobaide/tls/` (0700), `/opt/mobaide/backups/`, and `/opt/mobaide/www/` with a placeholder web release + `current` symlink (so `app.mobaide.com` serves a page before the first `deploy_web.py` run),
-- writes a skeleton `/opt/mobaide/.env` (chmod 600) with a fresh random `JWT_SECRET_KEY` and `PAIRING_QR_TOKEN_TTL_SECONDS=600` (web pairing links must survive a cross-device hop; the nonce is single-use, so the wider window adds no replay exposure — servers bootstrapped before this line existed should add it to `/opt/mobaide/.env` by hand).
+- writes a skeleton `/opt/mobaide/.env` (chmod 600) with a fresh random `JWT_SECRET_KEY` and `PAIRING_QR_TOKEN_TTL_SECONDS=600`.
+  - Web pairing links must survive a cross-device hop.
+  - The nonce is single-use, so the wider window adds no replay exposure.
+  - Servers bootstrapped before this line existed should add it to `/opt/mobaide/.env` by hand.
 
 After the script finishes you still need to:
 
@@ -100,9 +118,13 @@ RELEASE_AUTH_TOKEN=<same string as GitHub secret CENTRAL_SERVER_RELEASE_TOKEN>
 MANIFEST_SIGNING_PUBLIC_KEY=<base64 Ed25519 public half of GitHub secret AGENT_MANIFEST_PRIVATE_KEY>
 ```
 
-Without `RELEASE_AUTH_TOKEN`, the publish endpoint returns HTTP 503 and the workflow's "Publish manifest to central_server" step fails after `curl --retry` exhaustion. The two values **must match across GitHub and the server** — the workflow sends `CENTRAL_SERVER_RELEASE_TOKEN` in the `X-Release-Token` header, and the server compares it against `RELEASE_AUTH_TOKEN` byte-for-byte.
+Without `RELEASE_AUTH_TOKEN`, the publish endpoint returns HTTP 503 and the workflow's "Publish manifest to central_server" step fails after `curl --retry` exhaustion.
 
-`MANIFEST_SIGNING_PUBLIC_KEY` is now also required for **agent-side trust-key bootstrap**. Agent install scripts (`deploy/install.sh`, `deploy/install.ps1`) auto-fetch this key from `GET /api/v1/agent/trust_key` to pin `<prefix>/trust/central_server.pub` without needing operators to set `MOBAIDE_AGENT_TRUST_KEY_B64` on every install host. Without `MANIFEST_SIGNING_PUBLIC_KEY` set on this server, that endpoint returns HTTP 503 and agent installs against this server fail-closed (which is desirable — silently shipping agents whose auto-updater can't verify rollouts is the precise bug this gate prevents).
+The two values **must match across GitHub and the server**. The workflow sends `CENTRAL_SERVER_RELEASE_TOKEN` in the `X-Release-Token` header, and the server compares it against `RELEASE_AUTH_TOKEN` byte-for-byte.
+
+**Trust-key bootstrap.** `MANIFEST_SIGNING_PUBLIC_KEY` is now also required for **agent-side trust-key bootstrap**. Agent install scripts (`deploy/install.sh`, `deploy/install.ps1`) auto-fetch this key from `GET /api/v1/agent/trust_key` to pin `<prefix>/trust/central_server.pub`. This means operators do not need to set `MOBAIDE_AGENT_TRUST_KEY_B64` on every install host.
+
+Without `MANIFEST_SIGNING_PUBLIC_KEY` set on this server, that endpoint returns HTTP 503 and agent installs against this server fail-closed. This is desirable: silently shipping agents whose auto-updater can't verify rollouts is the precise bug this gate prevents.
 
 See [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md) for the full release-secrets table and the trust-key bootstrap flow.
 
@@ -115,7 +137,9 @@ DASHBOARD_TOKEN_EXPIRE_MINUTES=129600          # user token of the Android/iOS a
 ADMIN_DASHBOARD_TOKEN_EXPIRE_MINUTES=10080     # admin dashboard cookie (7 days)
 ```
 
-The Android and iOS apps cannot refresh their user token, so `DASHBOARD_TOKEN_EXPIRE_MINUTES` is how often a mobile user has to sign in again — a short value such as `480` signs every phone out every 8 hours. `0` means "never expires" (no `exp` claim). It is a local-development opt-out only, and the server logs a `token_ttl.never_expires` warning at startup when any TTL is `0`.
+The Android and iOS apps cannot refresh their user token, so `DASHBOARD_TOKEN_EXPIRE_MINUTES` is how often a mobile user has to sign in again. A short value such as `480` signs every phone out every 8 hours.
+
+`0` means "never expires" (no `exp` claim). It is a local-development opt-out only. The server logs a `token_ttl.never_expires` warning at startup when any TTL is `0`.
 
 For account self-deletion (CLA-61), the defaults are sane but you may want to tune:
 
@@ -159,7 +183,15 @@ ENABLE_API_DOCS=1
 
 See the "Public API surface" section of [`docs/deployment.md`](../../docs/deployment.md) for the full policy.
 
-If you run Google Ads and want the once-per-account "Agent paired" conversion reported back to the ad click, add the six `GOOGLE_ADS_*` values (customer id, optional manager id, the Desktop-app OAuth client id/secret plus the refresh token minted with `deploy/prod/google_ads_oauth.py`, and the conversion action id). The upload goes through the Data Manager API, so there is no developer token. The uploader stays off until all five required ones are set — see the "Google Ads conversion upload" section of [`docs/deployment.md`](../../docs/deployment.md), including the consent-screen-must-be-In-production trap.
+If you run Google Ads and want the once-per-account "Agent paired" conversion reported back to the ad click, add the six `GOOGLE_ADS_*` values:
+
+- customer id,
+- optional manager id,
+- the Desktop-app OAuth client id and secret,
+- the refresh token minted with `deploy/prod/google_ads_oauth.py`,
+- the conversion action id.
+
+The upload goes through the Data Manager API, so there is no developer token. The uploader stays off until all five required ones are set. See the "Google Ads conversion upload" section of [`docs/deployment.md`](../../docs/deployment.md), including the consent-screen-must-be-In-production trap.
 
 ```
 GOOGLE_ADS_CUSTOMER_ID=
@@ -194,17 +226,28 @@ sudo ufw enable
 
 ### Option A — `LetsEncrypt` (recommended)
 
-- In Cloudflare DNS, set the `A` record for `mobaide.com` to **DNS only** (gray cloud). The `www` record must be **DNS only** too — Caddy provisions a separate cert for `www.mobaide.com` over ACME HTTP-01, which fails if Cloudflare proxies that host. Same for the `app` record (the browser SPA host): **DNS only**.
+- In Cloudflare DNS, set these records to **DNS only** (gray cloud):
+  - the `A` record for `mobaide.com`;
+  - the `www` record: Caddy provisions a separate cert for `www.mobaide.com` over ACME HTTP-01, which fails if Cloudflare proxies that host;
+  - the `app` record (the browser SPA host).
 - Caddy will provision a real Let's Encrypt cert via ACME HTTP-01 on first start and renew it automatically.
 - No extra files needed on the server.
 
 ### Option B — `CloudflareOrigin`
 
 - In Cloudflare DNS, keep the `A` record **Proxied** (orange cloud). Proxy the `www` record too, and list `www` explicitly among the origin cert's hostnames below.
-- **Exception: the `app` record stays DNS only (gray cloud) even in this mode.** Orange cloud would put Cloudflare's ~100 s proxy idle timeout in the path of every relay WebSocket, and a gray-cloud host cannot serve the Origin cert (browsers do not trust the Origin CA) — so the `app.mobaide.com` site block deliberately has no `tls` directive and Caddy ACME-issues a Let's Encrypt cert for that one host over HTTP-01 (port 80 is already open). **That issuance happens only if the origin cert does not cover `app.mobaide.com` — see the no-wildcard step below.**
+- **Exception: the `app` record stays DNS only (gray cloud) even in this mode.**
+  - Orange cloud would put Cloudflare's ~100 s proxy idle timeout in the path of every relay WebSocket.
+  - A gray-cloud host cannot serve the Origin cert (browsers do not trust the Origin CA).
+  - So the `app.mobaide.com` site block deliberately has no `tls` directive. Caddy ACME-issues a Let's Encrypt cert for that one host over HTTP-01 (port 80 is already open).
+  - **That issuance happens only if the origin cert does not cover `app.mobaide.com` — see the no-wildcard step below.**
 - In the Cloudflare dashboard → **SSL/TLS** → **Overview**, set mode to **Full (strict)**.
 - Create an Origin Certificate: **SSL/TLS** → **Origin Server** → **Create Certificate** (default RSA 2048, 15-year validity).
-- **Scope it to exactly `mobaide.com`, `www.mobaide.com`, `api.mobaide.com` — delete the wildcard.** The dialog pre-fills `mobaide.com, *.mobaide.com`; leaving that wildcard in place breaks the SPA. Caddy's certificate cache is global, so a `*.mobaide.com` SAN matches SNI `app.mobaide.com`, and Caddy then skips ACME for it (logging `skipping automatic certificate management because one or more matching certificates are already loaded`) and serves the Origin CA cert, which no browser trusts. `deploy_central.py --tls-mode CloudflareOrigin` warns when the installed cert has this problem; `deploy_central.py --diagnose-tls --tls-mode CloudflareOrigin` reports it on demand (the `--tls-mode` flag is required — it defaults to `LetsEncrypt`, which skips the origin-cert checks entirely).
+- **Scope it to exactly `mobaide.com`, `www.mobaide.com`, `api.mobaide.com` — delete the wildcard.** The dialog pre-fills `mobaide.com, *.mobaide.com`; leaving that wildcard in place breaks the SPA.
+  - Caddy's certificate cache is global, so a `*.mobaide.com` SAN matches SNI `app.mobaide.com`.
+  - Caddy then skips ACME for it (logging `skipping automatic certificate management because one or more matching certificates are already loaded`) and serves the Origin CA cert, which no browser trusts.
+  - `deploy_central.py --tls-mode CloudflareOrigin` warns when the installed cert has this problem.
+  - `deploy_central.py --diagnose-tls --tls-mode CloudflareOrigin` reports it on demand. The `--tls-mode` flag is required — it defaults to `LetsEncrypt`, which skips the origin-cert checks entirely.
 - Save the two PEMs on the server:
   ```bash
   mkdir -p /opt/mobaide/tls
@@ -213,13 +256,17 @@ sudo ufw enable
   nano /opt/mobaide/tls/origin-key.pem    # paste private key
   chmod 600 /opt/mobaide/tls/origin-*.pem
   ```
-- Verify the pair before restarting anything — the two hashes must be identical. A mismatched pair survives a `caddy reload` (which is atomic, so the old config stays live) but bricks the **next container restart**, taking down the relay for every agent and mobile client, not just the SPA:
+- Verify the pair before restarting anything — the two hashes must be identical.
+  A mismatched pair survives a `caddy reload` (which is atomic, so the old config stays live).
+  But it bricks the **next container restart**, taking down the relay for every agent and mobile client, not just the SPA:
   ```bash
   openssl x509 -in /opt/mobaide/tls/origin-cert.pem -noout -pubkey | openssl sha256
   openssl pkey  -in /opt/mobaide/tls/origin-key.pem  -pubout | openssl sha256
   openssl x509 -in /opt/mobaide/tls/origin-cert.pem -noout -ext subjectAltName   # no wildcard here
   ```
-- **Rotating the cert later:** replacing the PEMs in place and running a plain `caddy reload` does nothing. Caddy diffs the adapted JSON, and certificates are referenced by path, so identical config means the reload logs `config is unchanged` and keeps the old certificate in memory. Use `--force` (`deploy_central.py` does this automatically in `CloudflareOrigin` mode; `LetsEncrypt` deploys reload unforced, since that mode loads no certificate from a path):
+- **Rotating the cert later:** replacing the PEMs in place and running a plain `caddy reload` does nothing.
+  Caddy diffs the adapted JSON, and certificates are referenced by path. Identical config means the reload logs `config is unchanged` and keeps the old certificate in memory.
+  Use `--force`. `deploy_central.py` does this automatically in `CloudflareOrigin` mode; `LetsEncrypt` deploys reload unforced, since that mode loads no certificate from a path:
   ```bash
   cd /opt/mobaide && docker compose -f docker-compose.prod.yml exec -T caddy \
     caddy reload --force --config /etc/caddy/Caddyfile

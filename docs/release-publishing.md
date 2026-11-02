@@ -18,6 +18,16 @@ see [`versioning-and-updates.md`](versioning-and-updates.md). This doc
 covers only the *bootstrap* path — how a brand-new host first downloads
 the agent.
 
+**On this page**
+
+- [Pipeline overview](#pipeline-overview)
+- [When to use the manual fallback](#when-to-use-the-manual-fallback)
+- [What to watch after a release](#what-to-watch-after-a-release)
+- [Manual fallback runbook](#manual-fallback-runbook)
+- [Verifying the publish](#verifying-the-publish)
+- [What lives on `gh-pages`](#what-lives-on-gh-pages)
+- [See also](#see-also)
+
 ## Pipeline overview
 
 ```
@@ -49,10 +59,12 @@ touches `deploy/install.{sh,ps1}` or `deploy/windows_launcher.py`.
 merges trigger it cleanly under the default `GITHUB_TOKEN`, so the
 common path is fully automatic.
 
-Use the runbook below only when the workflow did not fire (transient
-Actions outage, paths filter mismatch from a partial revert), an
-emergency override is needed, or you need to reproduce the publish
-locally for debugging.
+Use the runbook below only when:
+
+- the workflow did not fire (transient Actions outage, paths filter mismatch
+  from a partial revert),
+- an emergency override is needed, or
+- you need to reproduce the publish locally for debugging.
 
 ## What to watch after a release
 

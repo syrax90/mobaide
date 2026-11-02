@@ -1,8 +1,16 @@
 # Voice input (dictation)
 
-Voice input lets a user dictate into a session. The app or browser records the microphone and streams the audio to the user's own agent: through the relay, or directly when a phone uses direct-connection mode. The agent transcribes it on that computer with NVIDIA Parakeet TDT 0.6B v3 and returns text, which lands in the composer (mobile) or a review field (web). **Nothing is ever sent automatically**: the user reviews the text and sends it themselves.
+Voice input lets a user dictate into a session.
 
-It is opt-in per agent. Nothing is downloaded until the user enables voice from the app; enabling shows the real download, disk and memory cost the agent reports, plus a warning on low-spec computers. Removing the agent with **Also uninstall Mobaide from this computer** stops voice and deletes the model and runtime too (docs/deployment.md, *Uninstalling the agent*).
+The app or browser records the microphone and streams the audio to the user's own agent: through the relay, or directly when a phone uses direct-connection mode. The agent transcribes it on that computer with NVIDIA Parakeet TDT 0.6B v3 and returns text. The text lands in the composer (mobile) or a review field (web).
+
+**Nothing is ever sent automatically**: the user reviews the text and sends it themselves.
+
+It is opt-in per agent. Nothing is downloaded until the user enables voice from the app. Enabling shows the real download, disk and memory cost the agent reports, plus a warning on low-spec computers.
+
+Removing the agent with **Also uninstall Mobaide from this computer** stops voice and deletes the model and runtime too (docs/deployment.md, *Uninstalling the agent*).
+
+References:
 
 - Agent half: GH #736 (`mobaide_agent/mobaide/voice/`).
 - Clients: GH #737 (Android, iOS, web).
@@ -36,7 +44,14 @@ Shown only when the agent advertises `capabilities.voice`. The status comes from
 | `ready` | mic | dictate |
 | `unsupported`, unknown, capability absent, or hidden by the user | hidden | — |
 
-While `queued`, clients also poll the status every 4 s, because agents older than the lock watcher publish nothing for another process's install. Voice settings live in mobile **Settings → Voice input** (the connected agent), and on the web on each online agent's card (**Voice input**). Both offer enable, cancel or stop, retry, remove, reinstall, the mic toggle, the model and its license (`model.notice`, CC BY 4.0).
+While `queued`, clients also poll the status every 4 s, because agents older than the lock watcher publish nothing for another process's install.
+
+Voice settings live in two places:
+
+- **Mobile:** **Settings → Voice input** (the connected agent).
+- **Web:** each online agent's card (**Voice input**).
+
+Both offer enable, cancel or stop, retry, remove, reinstall, the mic toggle, the model and its license (`model.notice`, CC BY 4.0).
 
 ## Dictation rules
 
@@ -52,7 +67,11 @@ While `queued`, clients also poll the status every 4 s, because agents older tha
 - **Interruptions.** Backgrounding the app, hiding the tab, a phone call, an audio route change or an unplugged mic all **stop and transcribe** what was captured. Leaving the session or switching agents **cancels**.
 - **Insertion.**
   - **Mobile:** the transcript goes at the composer's cursor, with a space added where needed, and the composer is focused. On iOS 17 it is appended, because SwiftUI exposes the selection only from iOS 18.
-  - **Web:** an editable review field, then **Insert**, which uses the Templates paste path (a sanitized bracketed paste, never Enter). Claude Code may display long text as `[Pasted text]`. The review's mic button records again; the new transcript goes in at the field's cursor (replacing a selection), a space apart from the words around it, and a cancel, an empty result or a failure returns to the review. Its **Insert dictated text directly** checkbox skips the review for that agent from then on (stored per agent in the browser, `skipReviewAgents` in `mobaide-voice-prefs`): the transcript is pasted the same way as soon as it arrives, and only a paste the session refuses still opens the review. The agent's Voice input settings turn the review back on. Once the session has ended, the toolbar mic and **Record again** are disabled, because a transcript can only be pasted into a running session (an unknown status, such as while connecting, keeps them enabled).
+  - **Web:**
+    - An editable review field, then **Insert**, which uses the Templates paste path (a sanitized bracketed paste, never Enter). Claude Code may display long text as `[Pasted text]`.
+    - The review's mic button records again. The new transcript goes in at the field's cursor (replacing a selection), a space apart from the words around it. A cancel, an empty result or a failure returns to the review.
+    - Its **Insert dictated text directly** checkbox skips the review for that agent from then on (stored per agent in the browser, `skipReviewAgents` in `mobaide-voice-prefs`). The transcript is pasted the same way as soon as it arrives, and only a paste the session refuses still opens the review. The agent's Voice input settings turn the review back on.
+    - Once the session has ended, the toolbar mic and **Record again** are disabled, because a transcript can only be pasted into a running session (an unknown status, such as while connecting, keeps them enabled).
 
 ## Permissions, privacy and stores
 
@@ -69,6 +88,13 @@ While `queued`, clients also poll the status every 4 s, because agents older tha
 
 ## Release checklist (manual steps)
 
-1. Deploy **central_server first**. It carries the relay's bodyless-204 fix from PR #740, and older servers drop keep-alive after a relayed 204. Deploying it also ships the privacy policy, and reloads Caddy (`caddy reload --force`) for `microphone=(self)`.
-2. Re-answer **Play Data Safety** (Audio → Voice or sound recordings: collected, processed ephemerally, not shared, optional, app functionality) and publish the **App Store App Privacy** Audio Data entry. Both are recorded in docs/app-conversion-measurement.md. Submit them with the first client release that has the mic.
-3. Run one real-model test on a real Android phone, an iPhone and a desktop browser. Local checks use `tests/e2e/manual_stack.py up --fake-voice`; its fake engine answers `fake transcript <ms> ms` and needs voiced audio (RMS above about -44 dBFS, or about 10 dB above the room's noise floor); silence and steady background noise end as "No speech was recognised".
+1. Deploy **central_server first**.
+   - It carries the relay's bodyless-204 fix from PR #740, and older servers drop keep-alive after a relayed 204.
+   - Deploying it also ships the privacy policy, and reloads Caddy (`caddy reload --force`) for `microphone=(self)`.
+2. Re-answer **Play Data Safety** (Audio → Voice or sound recordings: collected, processed ephemerally, not shared, optional, app functionality) and publish the **App Store App Privacy** Audio Data entry.
+   - Both are recorded in docs/app-conversion-measurement.md.
+   - Submit them with the first client release that has the mic.
+3. Run one real-model test on a real Android phone, an iPhone and a desktop browser.
+   - Local checks use `tests/e2e/manual_stack.py up --fake-voice`.
+   - Its fake engine answers `fake transcript <ms> ms` and needs voiced audio (RMS above about -44 dBFS, or about 10 dB above the room's noise floor).
+   - Silence and steady background noise end as "No speech was recognised".

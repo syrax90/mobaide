@@ -1,20 +1,22 @@
 # Manual E2E testing (real phone / emulator / simulator against a local stack)
 
-`tests/e2e/manual_stack.py` boots the **real** central_server + **real** mobaide
-agent on your PC and wires the **real Android app** — and, on macOS, the **real
-iOS app** on the simulator — to them, so a human tester can exercise the full
-mobile ↔ server ↔ agent path hands-on: registration, login, agent list, SHELL
-terminals and managed claude/codex/antigravity sessions. With `up --web` it also
-serves the **web client** (`web/`) on `http://localhost:5173`, proxied to the
-same stack, and opens it in a browser tab with the throwaway account already
-filled into the login form, so a browser can join the test in one click.
-It is the manual-testing counterpart of the automated pytest harness documented
-in [e2e-harness.md](e2e-harness.md) and reuses the same recipe
-(`tests/e2e/conftest.py` + `tests/e2e/mock_mobile_client.py`) outside pytest.
+`tests/e2e/manual_stack.py` boots the **real** central_server + **real** mobaide agent on your PC and wires the **real Android app** — and, on macOS, the **real iOS app** on the simulator — to them. A human tester can then exercise the full mobile ↔ server ↔ agent path hands-on: registration, login, agent list, SHELL terminals and managed claude/codex/antigravity sessions.
 
-One command, cross-platform (Windows / macOS / Linux), repeatable, and safe:
-**no tracked file is ever modified and release builds are unaffected** (see
-[Production safety](#production-safety)).
+With `up --web` it also serves the **web client** (`web/`) on `http://localhost:5173`, proxied to the same stack. It opens the web client in a browser tab with the throwaway account already filled into the login form, so a browser can join the test in one click.
+
+It is the manual-testing counterpart of the automated pytest harness documented in [e2e-harness.md](e2e-harness.md) and reuses the same recipe (`tests/e2e/conftest.py` + `tests/e2e/mock_mobile_client.py`) outside pytest.
+
+One command, cross-platform (Windows / macOS / Linux), repeatable, and safe: **no tracked file is ever modified and release builds are unaffected** (see [Production safety](#production-safety)).
+
+**On this page**
+
+- [Quickstart](#quickstart)
+- [What the script does](#what-the-script-does)
+- [What the script writes into your checkout](#what-the-script-writes-into-your-checkout)
+- [Connectivity modes](#connectivity-modes)
+- [Day-2 commands](#day-2-commands)
+- [Troubleshooting](#troubleshooting)
+- [Production safety](#production-safety)
 
 ## Quickstart
 
@@ -54,113 +56,73 @@ python tests/e2e/manual_stack.py up --host 127.0.0.1 --android-url emulator --em
 python tests/e2e/manual_stack.py stop
 ```
 
-Then open the app on the phone or simulator, **register or log in** with the
-credentials from the banner (email `dev@test.local`, password `Qwe>123` — both fixed,
-easy dev-testing defaults; override with `--email`/`--password`), pick the
-`manual-e2e-agent`, and start testing.
-`Ctrl+C` stops the stack and **restores `android/local.properties` and
-`ios/Config/Local.xcconfig`** to their previous `CENTRAL_SERVER_URL` (e.g.
-`https://mobaide.com`), so the checkout is left as it was found; state persists,
-so the next `up` reuses the same account, agent, and database — the phone stays
-logged in. Pass `--keep-android` / `--keep-ios` to leave the test URL in place
-across restarts instead.
+Then open the app on the phone or simulator, **register or log in** with the credentials from the banner (email `dev@test.local`, password `Qwe>123` — both fixed, easy dev-testing defaults; override with `--email`/`--password`), pick the `manual-e2e-agent`, and start testing.
+
+`Ctrl+C` stops the stack and **restores `android/local.properties` and `ios/Config/Local.xcconfig`** to their previous `CENTRAL_SERVER_URL` (e.g. `https://mobaide.com`), so the checkout is left as it was found.
+
+State persists, so the next `up` reuses the same account, agent, and database — the phone stays logged in. Pass `--keep-android` / `--keep-ios` to leave the test URL in place across restarts instead.
 
 ## What the script does
 
 1. Ensures both packages are installed editable (Python 3.12+).
-2. Boots `python -m central_server` bound to `0.0.0.0:9000` with
-   `MOBAIDE_ENV=test`: throwaway SQLite DB, in-process email sink (no SMTP),
-   `EMAIL_VERIFICATION_REQUIRED=false`.
-3. Registers (or logs back into) the tester account and creates (or reuses) the
-   agent over the real REST flow, exactly like the Android app would.
-4. Boots `python -m mobaide` in **production mode** — a **real PTY**, so SHELL
-   sessions run a real shell and claude/codex/antigravity sessions run the real
-   CLIs — pointed at the local relay over `ws://127.0.0.1:9000`
-   (`MOBAIDE_AGENT_ALLOW_INSECURE_WS=1`), with all agent state isolated under a
-   throwaway `MOBAIDE_AGENT_PREFIX`.
-5. Gates readiness on `/api/health` → `agents_online >= 1` (the same
-   4012-safe gate the automated harness uses). Those counts are admin-gated,
-   so the server is also booted with an internal, script-only admin account
-   (`ADMIN_SEED_EMAIL`/`ADMIN_SEED_PASSWORD`, distinct from your tester
-   login) whose token the script uses to poll them — `status` (the CLI
-   subcommand) does the same, falling back to bare status if that login
-   fails (e.g. against a server not started by this script).
-6. Syncs the **gitignored** client overrides (next section) and prints the
-   READY banner, then streams `[server]` / `[agent]` logs until `Ctrl+C`
-   (logs are also written under the state dir). iOS is synced only on macOS,
-   where the app can actually be built; `--ios` forces it elsewhere.
-7. With `--web`, boots `npm run dev` in `web/` on port 5173 (`--web-port` to
-   change) with the Vite proxy pointed at the actual `--host`/`--port` via
-   `MOBAIDE_WEB_PROXY_TARGET`, auto-running `npm ci` first when
-   `web/node_modules` is missing or older than the lockfile. Once the stack is
-   READY it opens `http://localhost:5173/login` in a new browser tab
-   (`--no-browser` to skip, e.g. over SSH) with the account pre-filled: the
-   credentials travel to the login form's `defaultValues` as
-   `MOBAIDE_WEB_DEV_LOGIN_EMAIL`/`_PASSWORD`, which `web/vite.config.ts`
-   injects **only** under `vite dev` -- `vite build` always bakes `null`, so no
-   production bundle can carry them. Nothing is submitted; you press Sign In. The web child is
-   supervised, logged (`[web]`, `<state>/logs/web.log`), stopped, and
-   crash-reaped exactly like server and agent, and writes nothing to the
-   checkout except the gitignored `web/node_modules` (kept across runs — it is
-   a dev dependency like the Python venv, not a temp file).
-8. With `--emulator [AVD]` (default AVD `Mobaide-E2E`), reuses that AVD if it
-   is already running, otherwise boots it (detached, log in
-   `<state>/logs/emulator.log`). A missing AVD is created once with
-   `avdmanager` from the best installed phone system image for the host CPU
-   (stable 4 KB-page images first, newest API, Play Store > Google APIs >
-   AOSP) on the `pixel_7` profile with the host keyboard enabled. With
-   `--install-app` the APK is assembled *while* the emulator boots, installed
-   with `ANDROID_SERIAL` pinned to it, and launched once the stack is READY.
-   The SDK is found via `ANDROID_HOME` / `ANDROID_SDK_ROOT`, else Android
-   Studio's per-OS default location.
-9. On stop, restores both `CENTRAL_SERVER_URL` values to what they were,
-   removes the generated Android debug override (skip with `--keep-android` /
-   `--keep-ios`), and shuts down an emulator it booted with `adb emu kill`, so
-   the quick-boot snapshot is saved and the next boot takes seconds
-   (`--keep-emulator` leaves it running; an emulator it only reused is never
-   touched).
+2. Boots `python -m central_server` bound to `0.0.0.0:9000` with `MOBAIDE_ENV=test`: throwaway SQLite DB, in-process email sink (no SMTP), `EMAIL_VERIFICATION_REQUIRED=false`.
+3. Registers (or logs back into) the tester account and creates (or reuses) the agent over the real REST flow, exactly like the Android app would.
+4. Boots `python -m mobaide` in **production mode** — a **real PTY**, so SHELL sessions run a real shell and claude/codex/antigravity sessions run the real CLIs.
+   - It is pointed at the local relay over `ws://127.0.0.1:9000` (`MOBAIDE_AGENT_ALLOW_INSECURE_WS=1`).
+   - All agent state is isolated under a throwaway `MOBAIDE_AGENT_PREFIX`.
+5. Gates readiness on `/api/health` → `agents_online >= 1` (the same 4012-safe gate the automated harness uses).
+   - Those counts are admin-gated, so the server is also booted with an internal, script-only admin account (`ADMIN_SEED_EMAIL`/`ADMIN_SEED_PASSWORD`, distinct from your tester login) whose token the script uses to poll them.
+   - `status` (the CLI subcommand) does the same, falling back to bare status if that login fails (e.g. against a server not started by this script).
+6. Syncs the **gitignored** client overrides (next section) and prints the READY banner, then streams `[server]` / `[agent]` logs until `Ctrl+C` (logs are also written under the state dir).
+   - iOS is synced only on macOS, where the app can actually be built; `--ios` forces it elsewhere.
+7. With `--web`, boots `npm run dev` in `web/` on port 5173 (`--web-port` to change) with the Vite proxy pointed at the actual `--host`/`--port` via `MOBAIDE_WEB_PROXY_TARGET`, auto-running `npm ci` first when `web/node_modules` is missing or older than the lockfile.
+   - Once the stack is READY it opens `http://localhost:5173/login` in a new browser tab (`--no-browser` to skip, e.g. over SSH) with the account pre-filled.
+   - The credentials travel to the login form's `defaultValues` as `MOBAIDE_WEB_DEV_LOGIN_EMAIL`/`_PASSWORD`, which `web/vite.config.ts` injects **only** under `vite dev` -- `vite build` always bakes `null`, so no production bundle can carry them.
+   - Nothing is submitted; you press Sign In.
+   - The web child is supervised, logged (`[web]`, `<state>/logs/web.log`), stopped, and crash-reaped exactly like server and agent.
+   - It writes nothing to the checkout except the gitignored `web/node_modules` (kept across runs — it is a dev dependency like the Python venv, not a temp file).
+8. With `--emulator [AVD]` (default AVD `Mobaide-E2E`), reuses that AVD if it is already running, otherwise boots it (detached, log in `<state>/logs/emulator.log`).
+   - A missing AVD is created once with `avdmanager` from the best installed phone system image for the host CPU (stable 4 KB-page images first, newest API, Play Store > Google APIs > AOSP) on the `pixel_7` profile with the host keyboard enabled.
+   - With `--install-app` the APK is assembled *while* the emulator boots, installed with `ANDROID_SERIAL` pinned to it, and launched once the stack is READY.
+   - The SDK is found via `ANDROID_HOME` / `ANDROID_SDK_ROOT`, else Android Studio's per-OS default location.
+9. On stop, restores both `CENTRAL_SERVER_URL` values to what they were, removes the generated Android debug override (skip with `--keep-android` / `--keep-ios`), and shuts down an emulator it booted with `adb emu kill`.
+   - Shutting it down with `adb emu kill` saves the quick-boot snapshot, so the next boot takes seconds.
+   - `--keep-emulator` leaves it running; an emulator it only reused is never touched.
 
 ### Stopping, and why Windows needs more than Ctrl+C
 
-`Ctrl+C` in the `up` console and `kill -TERM <pid>` on macOS/Linux both run
-the normal teardown. `python tests/e2e/manual_stack.py stop` does the same from
-any other shell on every OS: it drops a `stop.request` file into the state dir,
-which `up` polls once a second, and waits (`--timeout`, default 90 s) for that
-`up` to exit. Windows has no `SIGTERM` a second shell could send, so `stop` is
-the way to end a detached or background run there. If the run does not exit in
-time it is killed; if it was already gone (hard-killed), `stop` reaps what it
-left behind — children, an emulator it booted, the client files — honouring
-the `--keep-*` flags that run was started with.
+`Ctrl+C` in the `up` console and `kill -TERM <pid>` on macOS/Linux both run the normal teardown.
 
-On Windows every child (server, agent, Vite) is also assigned to a
-kill-on-close **job object** owned by `up`. A `TerminateProcess` — Task
-Manager, `Stop-Process`, a closed terminal, a supervising tool stopping the
-task — skips every `finally` block, but the kernel still kills the whole child
-tree, PTY shells included, the moment `up` dies, so no orphan keeps ports
-9000/5173 busy. The client files of such a run are restored by the next
-`stop`, `clean`, or `up`. The Vite child runs in its own process group on
-Windows so `Ctrl+C` never reaches the `.cmd` shims and their
-"Terminate batch job (Y/N)?" prompt; teardown stops it instead.
+`python tests/e2e/manual_stack.py stop` does the same from any other shell on every OS. It drops a `stop.request` file into the state dir, which `up` polls once a second, and waits (`--timeout`, default 90 s) for that `up` to exit.
 
-State lives in `<system-temp>/mobaide-manual-e2e` by default (`--state-dir` to
-move it): `state.json` (JWT secret, account, agent id + token, last-used port),
-`server/` (DB + manifest), `agent/` (isolated agent prefix), `logs/`. An
-explicit `--port` is remembered; bare re-runs reuse it.
+- Windows has no `SIGTERM` a second shell could send, so `stop` is the way to end a detached or background run there.
+- If the run does not exit in time it is killed.
+- If it was already gone (hard-killed), `stop` reaps what it left behind — children, an emulator it booted, the client files — honouring the `--keep-*` flags that run was started with.
+
+**Windows job object.** On Windows every child (server, agent, Vite) is also assigned to a kill-on-close **job object** owned by `up`.
+
+- A `TerminateProcess` — Task Manager, `Stop-Process`, a closed terminal, a supervising tool stopping the task — skips every `finally` block.
+- But the kernel still kills the whole child tree, PTY shells included, the moment `up` dies, so no orphan keeps ports 9000/5173 busy.
+- The client files of such a run are restored by the next `stop`, `clean`, or `up`.
+
+**Vite on Windows.** The Vite child runs in its own process group on Windows so `Ctrl+C` never reaches the `.cmd` shims and their "Terminate batch job (Y/N)?" prompt; teardown stops it instead.
+
+**State directory.** State lives in `<system-temp>/mobaide-manual-e2e` by default (`--state-dir` to move it):
+
+- `state.json` (JWT secret, account, agent id + token, last-used port),
+- `server/` (DB + manifest),
+- `agent/` (isolated agent prefix),
+- `logs/`.
+
+An explicit `--port` is remembered; bare re-runs reuse it.
 
 ### Why the agent runs in production mode
 
-`MOBAIDE_ENV=test` on the **agent** selects the fake echo PTY backend — no real
-shells, no real CLIs — which is right for the automated harness but useless for
-manual testing. The script therefore runs the agent in production mode by
-default. The old copy-paste recipe that exported `MOBAIDE_ENV=test` for the
-agent gave echo-only terminals. If you *want* that dependency-free mode (e.g.
-to verify the infrastructure on a machine with no CLIs), use `--fake-pty`, and
-`--fake-pty --smoke` to also drive one echo session end-to-end automatically.
+`MOBAIDE_ENV=test` on the **agent** selects the fake echo PTY backend — no real shells, no real CLIs. That is right for the automated harness but useless for manual testing. The script therefore runs the agent in production mode by default.
 
-This is safe on a machine with a production agent install: the auto-updater is
-fail-closed (no trust key in the throwaway prefix), and the explicit child
-environment + throwaway `MOBAIDE_AGENT_PREFIX` keep the test agent away from
-any real install's `.env`, stores, and state.
+The old copy-paste recipe that exported `MOBAIDE_ENV=test` for the agent gave echo-only terminals. If you *want* that dependency-free mode (e.g. to verify the infrastructure on a machine with no CLIs), use `--fake-pty`, and `--fake-pty --smoke` to also drive one echo session end-to-end automatically.
+
+This is safe on a machine with a production agent install. The auto-updater is fail-closed (no trust key in the throwaway prefix). The explicit child environment + throwaway `MOBAIDE_AGENT_PREFIX` keep the test agent away from any real install's `.env`, stores, and state.
 
 ## What the script writes into your checkout
 
@@ -173,44 +135,35 @@ nothing to revert before committing:
 | `android/app/src/debug/res/xml/network_security_config.xml` | generated debug-only override permitting cleartext HTTP | gitignored; the **debug source set is never merged into release builds**, and the tracked main config (cleartext disabled) is untouched |
 | `ios/Config/Local.xcconfig` | `CENTRAL_SERVER_URL = http:/$()/127.0.0.1:9000` merged in; your `GOOGLE_*` overrides are preserved | gitignored; `#include?`-d by the tracked `Protocol.xcconfig`, which is never written (`protocol-integrity.yml` parses it) |
 
-The server URL is **baked into the app at build time** on both platforms —
-`android/app/build.gradle.kts` for the APK, and the xcconfig →
-`$(CENTRAL_SERVER_URL)` → `Info.plist` `CentralServerURL` chain that
-`AppConfig.swift` reads on iOS. Android additionally blocks cleartext HTTP
-unless the network security config allows it, which is what the second file is
-for. After any URL change (new Wi-Fi lease, different `--port`), **rebuild +
-reinstall the app**; the banner warns when that is needed.
+The server URL is **baked into the app at build time** on both platforms:
+
+- Android: `android/app/build.gradle.kts` for the APK.
+- iOS: the xcconfig → `$(CENTRAL_SERVER_URL)` → `Info.plist` `CentralServerURL` chain that `AppConfig.swift` reads.
+
+Android additionally blocks cleartext HTTP unless the network security config allows it, which is what the second file is for.
+
+After any URL change (new Wi-Fi lease, different `--port`), **rebuild + reinstall the app**; the banner warns when that is needed.
 
 Two iOS-specific notes:
 
-* The `/$()/` in the xcconfig value is **required**, not a typo. xcconfig treats
-  `//` as a comment even inside a value, so a raw `http://host` would be
-  truncated to `http:`. `$()` is an empty build-setting reference that Xcode
-  expands away before the `Info.plist` substitution, so the app sees a plain
-  URL.
-* iOS persists the relay base URL in the **keychain** at sign-in (`TokenStore`
-  and `ConnectionStore` both do), so an upgrade install keeps opening agent
-  sockets against the old stack even after the rebuild. **`simctl uninstall`
-  does not clear those items** — measured on the simulator: an item written
-  before an uninstall reads back intact after reinstalling. Only
-  `xcrun simctl keychain <udid> reset` clears them, and simctl scopes that per
-  device, never per app. So `--install-app` uninstalls **and** resets that
-  simulator's keychain — which also drops any `simctl keychain add-root-cert`
-  anchors on it. Use `--ios-keep-keychain` to skip the reset and sign out
-  in-app instead. The "what is installed where" record is kept **per simulator
-  UDID**, so booting a different device runs the cleanup again on that one, and
-  a failed reset leaves the device marked stale so the next run retries.
+* The `/$()/` in the xcconfig value is **required**, not a typo.
+  * xcconfig treats `//` as a comment even inside a value, so a raw `http://host` would be truncated to `http:`.
+  * `$()` is an empty build-setting reference that Xcode expands away before the `Info.plist` substitution, so the app sees a plain URL.
+* iOS persists the relay base URL in the **keychain** at sign-in (`TokenStore` and `ConnectionStore` both do), so an upgrade install keeps opening agent sockets against the old stack even after the rebuild.
+  * **`simctl uninstall` does not clear those items** — measured on the simulator: an item written before an uninstall reads back intact after reinstalling.
+  * Only `xcrun simctl keychain <udid> reset` clears them, and simctl scopes that per device, never per app.
+  * So `--install-app` uninstalls **and** resets that simulator's keychain — which also drops any `simctl keychain add-root-cert` anchors on it.
+  * Use `--ios-keep-keychain` to skip the reset and sign out in-app instead.
+  * The "what is installed where" record is kept **per simulator UDID**, so booting a different device runs the cleanup again on that one, and a failed reset leaves the device marked stale so the next run retries.
 
-**All are undone automatically when the stack stops** — the previous
-`CENTRAL_SERVER_URL` values are put back and the debug override removed, so the
-checkout returns to its pre-test state with nothing to revert by hand. A file
-the script *created* is deleted whole; one it merged into keeps every other
-line. A `CENTRAL_SERVER_URL` the script did not write (configuration profile,
-hand edit) is never touched. The rebuild prompt still tracks the URL the app was
-last built with, so restoring on stop does **not** make the next `up` nag for a
-rebuild the installed app does not need. Pass `--keep-android` / `--keep-ios` to
-`up` to leave the test URL in place across restarts. To undo manually at any
-other time (e.g. after `--keep-*` or a hard kill that skipped teardown):
+**All are undone automatically when the stack stops.** The previous `CENTRAL_SERVER_URL` values are put back and the debug override removed, so the checkout returns to its pre-test state with nothing to revert by hand.
+
+- A file the script *created* is deleted whole; one it merged into keeps every other line.
+- A `CENTRAL_SERVER_URL` the script did not write (configuration profile, hand edit) is never touched.
+- The rebuild prompt still tracks the URL the app was last built with, so restoring on stop does **not** make the next `up` nag for a rebuild the installed app does not need.
+- Pass `--keep-android` / `--keep-ios` to `up` to leave the test URL in place across restarts.
+
+To undo manually at any other time (e.g. after `--keep-*` or a hard kill that skipped teardown):
 
 ```
 python tests/e2e/manual_stack.py android --revert
@@ -238,13 +191,12 @@ tracked `ios/Mobaide/Support/Info.plist` carries **no `NSAppTransportSecurity`
 exception in any configuration**, and App Transport Security blocks cleartext
 `http://` to anything but loopback.
 
-The failure is asymmetric and confusing, which is why the script warns loudly
-about it: REST goes through `URLSession` and fails with `-1022`, so sign-in
-breaks — while WebSockets go through Network.framework, which ATS does not
-police, so terminals look perfectly healthy. **Testing against a real iPhone
-over Wi-Fi therefore needs an ATS exception added to that tracked plist by
-hand**; the script deliberately does not add one, because it would ship in
-release builds. Use the simulator over loopback instead.
+The failure is asymmetric and confusing, which is why the script warns loudly about it:
+
+- REST goes through `URLSession` and fails with `-1022`, so sign-in breaks.
+- WebSockets go through Network.framework, which ATS does not police, so terminals look perfectly healthy.
+
+**Testing against a real iPhone over Wi-Fi therefore needs an ATS exception added to that tracked plist by hand**; the script deliberately does not add one, because it would ship in release builds. Use the simulator over loopback instead.
 
 ## Day-2 commands
 
@@ -274,11 +226,11 @@ release builds. Use the simulator over loopback instead.
 | `status` | probe `/api/health`, show persisted identity |
 | `clean` | kill stale processes, revert both clients' files, delete the state dir |
 
-CLI sessions: SHELL sessions need nothing extra. claude / codex / antigravity
-sessions need that CLI installed on the PC (on `PATH`, or via
-`MOBAIDE_CLAUDE_BIN` / `MOBAIDE_CODEX_BIN` / `MOBAIDE_AGY_BIN`, which the
-script deliberately inherits from your shell). A missing CLI fails only at
-session-create time with a `<cli>_cli_missing` marker.
+**CLI sessions.**
+
+- SHELL sessions need nothing extra.
+- claude / codex / antigravity sessions need that CLI installed on the PC (on `PATH`, or via `MOBAIDE_CLAUDE_BIN` / `MOBAIDE_CODEX_BIN` / `MOBAIDE_AGY_BIN`, which the script deliberately inherits from your shell).
+- A missing CLI fails only at session-create time with a `<cli>_cli_missing` marker.
 
 ## Troubleshooting
 
@@ -309,40 +261,19 @@ session-create time with a `<cli>_cli_missing` marker.
 
 ## Production safety
 
-- Rollout writes **no tracked files**: the tracked
-  `android/app/src/main/res/xml/network_security_config.xml` stays byte-for-byte
-  intact (cleartext stays disabled for release), and both generated files are
-  gitignored.
-- Release builds never include the `src/debug` source set, and release CI
-  provides `CENTRAL_SERVER_URL` via environment variable, which outranks
-  `local.properties`. `local.properties` points at the test stack only **while
-  the stack is running** — it is restored on stop — so the earlier footgun is
-  mostly closed; it can still linger with `--keep-android` or after a hard kill
-  that skipped teardown, so if you build a **local release APK** then, unset the
-  line first / run `android --revert`.
-- iOS has **no equivalent of the `src/debug` isolation**: `Protocol.xcconfig` is
-  the base configuration for *both* Debug and Release, so a lingering
-  `Local.xcconfig` would repoint a local Release archive too. Same mitigation —
-  it is restored on stop; after `--keep-ios` or a hard kill, run `ios --revert`
-  before archiving. The script never writes `Protocol.xcconfig` itself (release
-  CI builds with no `Local.xcconfig` at all, and `protocol-integrity.yml` parses
-  the tracked file for the protocol constants).
-- The test server/agent state is fully isolated under the state dir; a
-  co-installed production agent's `.env`, stores, and updater are never touched.
-  Crash recovery kills only processes whose recorded pid **and** create time
-  match a previous run of this script — a recycled pid can never take down
-  another install.
-- The account password is a fixed, trivial dev-testing value (`Qwe>123`),
-  chosen for tester convenience over secrecy. Because the default `up` exposes
-  the server on the LAN and the owner account fronts a real shell on this
-  machine, this well-known password lets anyone on the same Wi-Fi open a
-  terminal here — so keep the stack on a trusted network, bind loopback
-  (`--host 127.0.0.1`, e.g. the emulator flow), or pin your own `--password`
-  when that matters.
-- If a shell still exports variables from the old copy-paste recipe
-  (`MOBAIDE_ENV`, `RELAY_*`, `JWT_SECRET_KEY`, ...), the script sanitizes them
-  out of the child processes and applies its own explicit values.
-- Interaction with [configuration-profiles.md](configuration-profiles.md):
-  while the generated debug override exists, **debug builds ignore the
-  profile-managed main network config** (Android source-set precedence). Run
-  `android --revert` before debug-testing a TLS profile.
+- Rollout writes **no tracked files**: the tracked `android/app/src/main/res/xml/network_security_config.xml` stays byte-for-byte intact (cleartext stays disabled for release), and both generated files are gitignored.
+- Android release builds:
+  - Release builds never include the `src/debug` source set.
+  - Release CI provides `CENTRAL_SERVER_URL` via environment variable, which outranks `local.properties`.
+  - `local.properties` points at the test stack only **while the stack is running** — it is restored on stop — so the earlier footgun is mostly closed.
+  - It can still linger with `--keep-android` or after a hard kill that skipped teardown. If you build a **local release APK** then, unset the line first / run `android --revert`.
+- iOS has **no equivalent of the `src/debug` isolation**:
+  - `Protocol.xcconfig` is the base configuration for *both* Debug and Release, so a lingering `Local.xcconfig` would repoint a local Release archive too.
+  - Same mitigation — it is restored on stop; after `--keep-ios` or a hard kill, run `ios --revert` before archiving.
+  - The script never writes `Protocol.xcconfig` itself (release CI builds with no `Local.xcconfig` at all, and `protocol-integrity.yml` parses the tracked file for the protocol constants).
+- The test server/agent state is fully isolated under the state dir; a co-installed production agent's `.env`, stores, and updater are never touched. Crash recovery kills only processes whose recorded pid **and** create time match a previous run of this script — a recycled pid can never take down another install.
+- The account password is a fixed, trivial dev-testing value (`Qwe>123`), chosen for tester convenience over secrecy.
+  - Because the default `up` exposes the server on the LAN and the owner account fronts a real shell on this machine, this well-known password lets anyone on the same Wi-Fi open a terminal here.
+  - So keep the stack on a trusted network, bind loopback (`--host 127.0.0.1`, e.g. the emulator flow), or pin your own `--password` when that matters.
+- If a shell still exports variables from the old copy-paste recipe (`MOBAIDE_ENV`, `RELAY_*`, `JWT_SECRET_KEY`, ...), the script sanitizes them out of the child processes and applies its own explicit values.
+- Interaction with [configuration-profiles.md](configuration-profiles.md): while the generated debug override exists, **debug builds ignore the profile-managed main network config** (Android source-set precedence). Run `android --revert` before debug-testing a TLS profile.

@@ -15,18 +15,83 @@ Wire-contract details and the `protocol_version` history live in
 [PROTOCOL.md](../PROTOCOL.md). This doc covers the release machinery and the
 update flows that sit on top of it.
 
+**On this page**
+
+- [Tag conventions](#tag-conventions)
+- [Compatibility gating: `protocol_version`](#compatibility-gating-protocol_version)
+- [Agent rollout manifest](#agent-rollout-manifest)
+- [Auto-update on the agent (staged-binary swap)](#auto-update-on-the-agent-staged-binary-swap)
+- [Installing the agent (end users)](#installing-the-agent-end-users)
+- [Android update flows](#android-update-flows)
+- [Protocol-integrity CI gate](#protocol-integrity-ci-gate)
+- [End-to-end auto-update verification](#end-to-end-auto-update-verification)
+- [See also](#see-also)
+
 ## Tag conventions
 
 Releases are driven by git tags pushed to the repo. Each prefix triggers a
 dedicated workflow under `.github/workflows/`:
 
-| Tag prefix | Component | Workflow | What it produces |
-|------------|-----------|----------|------------------|
-| `android-vX.Y.Z` | Android app | `release-android.yml` | Signed `.aab`, uploaded to Play Console internal track. `inAppUpdatePriority` is derived from the `android/CHANGELOG.md` section release-please just generated for this tag (any breaking change → 5, else any `### Bug Fixes` → 3, else → 1). It is **not** read from the tagged commit subject — the tag sits on release-please's `chore: release main` commit, which is never a `feat`/`fix`. |
-| `agent-vX.Y.Z` | `mobaide_agent` | `release-agent.yml` | `uv build` wheel + source tarball, **Ed25519-signed manifest**, GitHub Release **published into the public sibling repo `$RELEASES_REPO`** (the source repo is private, so anonymous installs cannot reach release URLs there), an anonymous reachability gate (1-byte ranged GET, with retries to absorb CDN-propagation lag) over every URL in the manifest, manifest POSTed to `central_server` (with curl `--retry 5`), then a verify-after step asserts the served manifest matches. |
-| `server-vX.Y.Z` | `central_server` | `release-server.yml` | Docker image pushed to `ghcr.io/<owner>/<repo>-server:vX.Y.Z` (and `:latest`). No GitHub Release object is created on this repo — the GHCR image is the only artifact. A second `deploy` job gates the rollout via `environment: production` (manual approval required); host-side rollout is operator-driven (run `deploy/prod/deploy_central.py` or `docker compose pull && up -d` against the prod compose file). |
-| `web-vX.Y.Z` | Web client (`web/`) | _(none yet)_ | Nothing yet — the tag versions the `web/` workspace (release-please bumps `web/package.json` and prepends `web/CHANGELOG.md`; `release-type: node`), but no workflow fires on tag push. The SPA ships with the central-server deploy (same-origin Caddy serving, tracked in WEB-02). |
-| `proto-vN` | Wire contract | _(none)_ | Hand-pushed by a developer alongside the lockstep `PROTOCOL.md` + `envelope.py` bump. Serves as a changelog/anchor tag — no workflow fires on tag push and no Release object is created. Lockstep enforcement that **both** `mobaide_agent/.../envelope.py` AND `central_server/.../envelope.py` move together lives in `protocol-integrity.yml`, which runs on every PR and every push to `main`. |
+| Tag prefix | Component | Workflow |
+|------------|-----------|----------|
+| `android-vX.Y.Z` | Android app | `release-android.yml` |
+| `agent-vX.Y.Z` | `mobaide_agent` | `release-agent.yml` |
+| `server-vX.Y.Z` | `central_server` | `release-server.yml` |
+| `web-vX.Y.Z` | Web client (`web/`) | _(none yet)_ |
+| `proto-vN` | Wire contract | _(none)_ |
+
+### What each tag produces
+
+**`android-vX.Y.Z`**
+
+- Signed `.aab`, uploaded to Play Console internal track.
+- `inAppUpdatePriority` is derived from the `android/CHANGELOG.md` section
+  release-please just generated for this tag:
+  - any breaking change → 5
+  - else any `### Bug Fixes` → 3
+  - else → 1
+- It is **not** read from the tagged commit subject. The tag sits on
+  release-please's `chore: release main` commit, which is never a `feat`/`fix`.
+
+**`agent-vX.Y.Z`**
+
+1. `uv build` wheel + source tarball.
+2. **Ed25519-signed manifest**.
+3. GitHub Release **published into the public sibling repo `$RELEASES_REPO`**.
+   The source repo is private, so anonymous installs cannot reach release URLs
+   there.
+4. An anonymous reachability gate over every URL in the manifest: a 1-byte
+   ranged GET, with retries to absorb CDN-propagation lag.
+5. Manifest POSTed to `central_server` (with curl `--retry 5`).
+6. A verify-after step asserts the served manifest matches.
+
+**`server-vX.Y.Z`**
+
+- Docker image pushed to `ghcr.io/<owner>/<repo>-server:vX.Y.Z` (and `:latest`).
+- No GitHub Release object is created on this repo — the GHCR image is the
+  only artifact.
+- A second `deploy` job gates the rollout via `environment: production`
+  (manual approval required).
+- Host-side rollout is operator-driven: run `deploy/prod/deploy_central.py` or
+  `docker compose pull && up -d` against the prod compose file.
+
+**`web-vX.Y.Z`** — nothing yet
+
+- The tag versions the `web/` workspace: release-please bumps
+  `web/package.json` and prepends `web/CHANGELOG.md`; `release-type: node`.
+- No workflow fires on tag push.
+- The SPA ships with the central-server deploy (same-origin Caddy serving,
+  tracked in WEB-02).
+
+**`proto-vN`**
+
+- Hand-pushed by a developer alongside the lockstep `PROTOCOL.md` +
+  `envelope.py` bump.
+- Serves as a changelog/anchor tag — no workflow fires on tag push and no
+  Release object is created.
+- Lockstep enforcement that **both** `mobaide_agent/.../envelope.py` AND
+  `central_server/.../envelope.py` move together lives in
+  `protocol-integrity.yml`, which runs on every PR and every push to `main`.
 
 ### Cutting a release
 
@@ -46,28 +111,48 @@ reasons, and only one of them is permanent:
 
 | Component | `fix` | `feat` | `feat!` | Why |
 |-----------|-------|--------|---------|-----|
-| Android | patch | patch | patch | `"versioning": "always-bump-patch"` on the `android` package. release-please's `AlwaysBumpPatch` ignores the commit type entirely, breaking changes included. **Permanent** — minor and major are hand-cut, see [Cutting an Android minor or major](#cutting-an-android-minor-or-major). |
-| agent, server, web | patch | patch | minor | Root-level `bump-minor-pre-major` + `bump-patch-for-minor-pre-major`. release-please gates both on `version.isPreMajor`, so this holds **only while the version is below `1.0.0`**. The day one of these ships `1.0.0` those flags go inert and it silently reverts to plain semver — `feat` → minor, `!` → major — with no config change. |
+| Android | patch | patch | patch | `"versioning": "always-bump-patch"` on the `android` package. **Permanent.** |
+| agent, server, web | patch | patch | minor | Root-level `bump-minor-pre-major` + `bump-patch-for-minor-pre-major`. Pre-`1.0.0` only. |
+
+- **Android.** release-please's `AlwaysBumpPatch` ignores the commit type
+  entirely, breaking changes included. **Permanent** — minor and major are
+  hand-cut, see [Cutting an Android minor or major](#cutting-an-android-minor-or-major).
+- **agent, server, web.** release-please gates both flags on
+  `version.isPreMajor`, so this holds **only while the version is below
+  `1.0.0`**. The day one of these ships `1.0.0` those flags go inert and it
+  silently reverts to plain semver — `feat` → minor, `!` → major — with no
+  config change.
+
+#### Squash-only merging and the PR title
 
 The repo enforces **squash-only merging** (merge commits and rebase merges
-are disabled at the GitHub repo level): the squash commit **title is the PR
-title** and the squash commit **body is blank**. So the PR title literally
-becomes the *single* commit on `main` that release-please reads, and the
-feature branch's own commit messages are **discarded at merge time** — they
-never reach `main` and have no effect on the version bump or the changelog.
+are disabled at the GitHub repo level):
+
+- The squash commit **title is the PR title**.
+- The squash commit **body is blank**.
+
+So the PR title literally becomes the *single* commit on `main` that
+release-please reads. The feature branch's own commit messages are **discarded
+at merge time** — they never reach `main` and have no effect on the version
+bump or the changelog.
+
 Breaking changes are signalled with `!` in the PR title (e.g.
 `feat(agent)!: …`). That always earns the commit a `### ⚠ BREAKING CHANGES`
 section in the changelog, but it does **not** force a major here — how far the
 version actually moves is the bump table above.
 
-This is enforced two ways: the repo merge settings (the source of truth is a
-`gh api -X PATCH repos/<owner>/<repo> -f squash_merge_commit_title=PR_TITLE
--f squash_merge_commit_message=BLANK -F allow_merge_commit=false
--F allow_rebase_merge=false`, mirrored as policy-as-code in
-`.github/settings.yml`), plus `pr-title-lint.yml`. There is no longer any
-"but the title was right and nothing happened" failure mode tied to
-merge-commit style, and no "the branch said feat but the merge said fix"
-double-entry: exactly one commit per PR, one source of truth.
+**This is enforced two ways:**
+
+- The repo merge settings. The source of truth is a
+  `gh api -X PATCH repos/<owner>/<repo> -f squash_merge_commit_title=PR_TITLE
+  -f squash_merge_commit_message=BLANK -F allow_merge_commit=false
+  -F allow_rebase_merge=false`, mirrored as policy-as-code in
+  `.github/settings.yml`.
+- `pr-title-lint.yml`.
+
+There is no longer any "but the title was right and nothing happened" failure
+mode tied to merge-commit style, and no "the branch said feat but the merge
+said fix" double-entry: exactly one commit per PR, one source of truth.
 
 `pr-title-lint.yml` runs on every pull request and fails the check if
 the title doesn't match the grammar above (or uses a stale scope like
@@ -80,42 +165,49 @@ What happens after merge:
 2. It opens (or updates) a release-PR for that component — bumps the
    per-component version in lockstep across:
    - `.release-please-manifest.json` (the manifest of record),
-   - `pyproject.toml` for `mobaide_agent` / `central_server`,
-     `android/app/build.gradle.kts` for android (the line annotated
-     with `// x-release-please-version`; `versionCode` is derived from
-     `versionName` at gradle build time so it never drifts), or
-     `web/package.json` for web,
+   - the version file of the component:
+     - `pyproject.toml` for `mobaide_agent` / `central_server`,
+     - `android/app/build.gradle.kts` for android (the line annotated
+       with `// x-release-please-version`; `versionCode` is derived from
+       `versionName` at gradle build time so it never drifts), or
+     - `web/package.json` for web,
    - the component's `CHANGELOG.md` (prepends a new `## [vX.Y.Z]`
      section).
 3. Merging that release-PR pushes the corresponding `agent-vX.Y.Z` /
    `server-vX.Y.Z` / `android-vX.Y.Z` / `web-vX.Y.Z` tag, which fires
    the matching `release-*.yml` workflow (no such workflow exists for
-   `web-v*` yet — see the tag table above). release-please-action v4
-   also creates an empty GitHub Release object on this repo as a
-   side-effect of the tag push (its `manifest.createReleases()`
-   couples tag and Release
-   into one API call, and `skip-github-release: true` would silently
-   skip both — see release-please-action issue #1034). A follow-up
-   step in `release-please.yml` immediately deletes that Release
-   while preserving the tag, so the Releases tab here stays empty for
-   `agent-v*` / `server-v*` / `android-v*` / `web-v*`. The meaningful artifacts
-   live elsewhere: agent in the public `mobaide-agent-releases`
-   sibling repo; server in GHCR; android in Play Console. You may
-   briefly see the Release appear and then vanish while
-   `release-please.yml` runs — that is the cleanup step, not a bug.
+   `web-v*` yet — see the tag table above).
+
+**Release-object side effect of step 3:**
+
+- release-please-action v4 also creates an empty GitHub Release object on this
+  repo as a side-effect of the tag push. Its `manifest.createReleases()`
+  couples tag and Release into one API call, and `skip-github-release: true`
+  would silently skip both — see release-please-action issue #1034.
+- A follow-up step in `release-please.yml` immediately deletes that Release
+  while preserving the tag, so the Releases tab here stays empty for
+  `agent-v*` / `server-v*` / `android-v*` / `web-v*`.
+- The meaningful artifacts live elsewhere: agent in the public
+  `mobaide-agent-releases` sibling repo; server in GHCR; android in Play
+  Console.
+- You may briefly see the Release appear and then vanish while
+  `release-please.yml` runs — that is the cleanup step, not a bug.
 
 ### Manual release path (operator escape hatch)
 
 Use this when the conventional-commits flow is the wrong tool:
-release-please opened no release-PR (the merged PR's title was a
-non-release type such as `chore:` / `docs:` / `refactor:`, so no
-version-bearing commit reached `main`); you want to ship a hotfix
-release-please can't represent; or you've already hand-bumped the
-version files and want to ship those exact bytes. (With squash-only
-merging now enforced, the old "squash was bypassed and the commit on
-`main` is just `Merge pull request #N…`" failure mode can no longer
-occur for normal PRs — every PR lands as a single squash commit
-carrying the linted PR title.)
+
+- release-please opened no release-PR (the merged PR's title was a
+  non-release type such as `chore:` / `docs:` / `refactor:`, so no
+  version-bearing commit reached `main`);
+- you want to ship a hotfix release-please can't represent; or
+- you've already hand-bumped the version files and want to ship those exact
+  bytes.
+
+(With squash-only merging now enforced, the old "squash was bypassed and the
+commit on `main` is just `Merge pull request #N…`" failure mode can no longer
+occur for normal PRs — every PR lands as a single squash commit carrying the
+linted PR title.)
 
 Currently wired for `mobaide_agent` only via
 `.github/workflows/release-agent-manual.yml`. The same shape clones
@@ -150,31 +242,35 @@ locally-pushed tag does fire `release-agent.yml`; the
 `GITHUB_TOKEN`-can't-trigger-downstream caveat below only applies
 to tags GHA itself pushes.
 
+> [!WARNING]
 > **Pick one path and stay on it.** Either let release-please own the
 > bump (the conventional-commits flow above), **or** use the manual
 > release path end-to-end (hand-edit the version files, then trigger
-> the manual workflow / push the tag yourself). The half-and-half
-> mode — hand-edit `pyproject.toml` and the manifest, then expect
-> release-please to tag for you — is the failure mode that shipped
-> `agent-v0.1.1` with a stale `0.1.0` wheel and silently dropped the
-> `agent-v0.1.2` tag entirely (release-please saw no conventional
-> commits to act on, so it didn't tag; nothing else watches the
-> manifest). Mixing paths desyncs `.release-please-manifest.json`
-> from either the tags or the `pyproject.toml` versions. If you need
-> to ship without an upstream change, the manual release path is the
-> supported way; editing the open release-PR before merging is the
-> other supported way.
+> the manual workflow / push the tag yourself).
 
-Android note: the `android` component is `release-type: simple`. Both
+The half-and-half mode — hand-edit `pyproject.toml` and the manifest,
+then expect release-please to tag for you — is the failure mode that shipped
+`agent-v0.1.1` with a stale `0.1.0` wheel and silently dropped the
+`agent-v0.1.2` tag entirely. Cause: release-please saw no conventional
+commits to act on, so it didn't tag; nothing else watches the manifest.
+
+Mixing paths desyncs `.release-please-manifest.json`
+from either the tags or the `pyproject.toml` versions. If you need
+to ship without an upstream change, the manual release path is the
+supported way; editing the open release-PR before merging is the
+other supported way.
+
+**Android note.** The `android` component is `release-type: simple`. Both
 `.release-please-manifest.json` and `android/app/build.gradle.kts` are
-bumped automatically — the `extra-files` entry in
-`release-please-config.json` points the generic updater at
-`build.gradle.kts`, where the `// x-release-please-version` annotation
-identifies the `versionName` line. `versionCode` is computed inside
-`build.gradle.kts` from the new `versionName`
-(`major*10000 + minor*100 + patch`), so Play Store's
-monotonic-versionCode requirement is satisfied without a second
-manual edit.
+bumped automatically.
+
+- The `extra-files` entry in `release-please-config.json` points the generic
+  updater at `build.gradle.kts`, where the `// x-release-please-version`
+  annotation identifies the `versionName` line.
+- `versionCode` is computed inside `build.gradle.kts` from the new
+  `versionName` (`major*10000 + minor*100 + patch`), so Play Store's
+  monotonic-versionCode requirement is satisfied without a second
+  manual edit.
 
 #### Cutting an Android minor or major
 
@@ -212,20 +308,32 @@ that is the half-and-half mode the callout above warns about.
 
 **A breaking change still ships as a patch, and that is fine.**
 `release-android.yml` derives `inAppUpdatePriority` from the changelog section,
-not from the version delta: any `### ⚠ BREAKING CHANGES` heading yields
-priority 5 (immediate in-app update), a `### Bug Fixes` heading yields 3,
-otherwise 1. A breaking `3.6.x` release is therefore still pushed to users at
-full urgency. That grep reads release-please's *default* section headings, so
-never introduce a `changelog-sections` config for this package — it would
-silently drop the urgency to 1.
+not from the version delta:
+
+- any `### ⚠ BREAKING CHANGES` heading yields priority 5 (immediate in-app
+  update)
+- a `### Bug Fixes` heading yields 3
+- otherwise 1
+
+A breaking `3.6.x` release is therefore still pushed to users at
+full urgency.
+
+> [!WARNING]
+> That grep reads release-please's *default* section headings, so
+> never introduce a `changelog-sections` config for this package — it would
+> silently drop the urgency to 1.
+
+#### Tag-trigger chaining and the release token
 
 **Caveat — tag-trigger chaining.** GitHub's default `GITHUB_TOKEN`
-cannot trigger downstream workflows from a tag it pushes. The
-release-please workflow's `token` input falls back to `GITHUB_TOKEN` if
-`RELEASE_PLEASE_TOKEN` is unset; in that mode the auto-tag is created but
-**no `release-*` workflow fires**, leaving the wheel/aab unbuilt. This is
-a hard GitHub Actions limit, not a release-please bug. Set
-`RELEASE_PLEASE_TOKEN` to make tag-trigger chaining work.
+cannot trigger downstream workflows from a tag it pushes.
+
+- The release-please workflow's `token` input falls back to `GITHUB_TOKEN` if
+  `RELEASE_PLEASE_TOKEN` is unset.
+- In that mode the auto-tag is created but **no `release-*` workflow fires**,
+  leaving the wheel/aab unbuilt.
+- This is a hard GitHub Actions limit, not a release-please bug.
+- Set `RELEASE_PLEASE_TOKEN` to make tag-trigger chaining work.
 
 **Recommended PAT shape.** Use a **fine-grained PAT** scoped to **this
 repository only** with these permissions:
@@ -237,11 +345,14 @@ repository only** with these permissions:
 | Workflows | Read and write |
 
 Do **not** use a classic PAT — those grant write access to every repo
-the user owns and are unnecessarily broad. The fine-grained PAT also
-needs `Workflows: write` so that release-please's tag-push triggers the
-downstream `release-agent.yml` / `release-server.yml` /
+the user owns and are unnecessarily broad.
+
+The fine-grained PAT also needs `Workflows: write` so that release-please's
+tag-push triggers the downstream `release-agent.yml` / `release-server.yml` /
 `release-android.yml` workflows; without it, the tag is created but no
 workflow fires.
+
+#### Required CI secrets and variables
 
 Required CI secrets:
 
@@ -252,38 +363,56 @@ Required CI secrets:
 | `AGENT_MANIFEST_PRIVATE_KEY` | `release-agent.yml` | Base64 Ed25519 private key. Signs the manifest body. |
 | `CENTRAL_SERVER_RELEASE_TOKEN` | `release-agent.yml` | Bearer token for `POST /api/internal/agent_manifest`. |
 | `CENTRAL_SERVER_URL` | `release-agent.yml` | Base URL of the production `central_server` that hosts the manifest. |
-| `RELEASES_REPO_TOKEN` | `release-agent.yml` | Fine-grained PAT scoped to the **public releases repo** (e.g. `syrax90/mobaide-agent-releases`) with `Contents: Read and write`. Used by `softprops/action-gh-release@v2` to publish the release into that repo. |
-| `RELEASE_PLEASE_TOKEN` _(optional)_ | `release-please.yml`, `release-agent-manual.yml` | PAT with `contents:write` + `workflow` scopes. Required to chain CI-side tag pushes into the downstream `release-*` workflows (GitHub Actions does not fire downstream workflows from tags pushed by `GITHUB_TOKEN`). Without it, those workflows still push the tag, but the operator must re-push it from a developer machine to fire the downstream build. |
+| `RELEASES_REPO_TOKEN` | `release-agent.yml` | Fine-grained PAT scoped to the **public releases repo** (e.g. `syrax90/mobaide-agent-releases`) with `Contents: Read and write`. |
+| `RELEASE_PLEASE_TOKEN` _(optional)_ | `release-please.yml`, `release-agent-manual.yml` | PAT with `contents:write` + `workflow` scopes. Required to chain CI-side tag pushes into the downstream `release-*` workflows. |
+
+Notes on two secrets:
+
+- `RELEASES_REPO_TOKEN` is used by `softprops/action-gh-release@v2` to publish
+  the release into that repo.
+- `RELEASE_PLEASE_TOKEN` is needed because GitHub Actions does not fire
+  downstream workflows from tags pushed by `GITHUB_TOKEN`. Without it, those
+  workflows still push the tag, but the operator must re-push it from a
+  developer machine to fire the downstream build.
 
 Repo **variables** (not secrets — values appear in workflow logs and are not sensitive):
 
 | Variable | Used by | Purpose |
 |----------|---------|---------|
-| `RELEASES_REPO` | `release-agent.yml` | `<owner>/<repo>` of the public releases repo (e.g. `syrax90/mobaide-agent-releases`). The workflow embeds this in the manifest's `tarball_url`/`wheel_url` and pushes the `softprops/action-gh-release` step into this repo. |
+| `RELEASES_REPO` | `release-agent.yml` | `<owner>/<repo>` of the public releases repo (e.g. `syrax90/mobaide-agent-releases`). |
 
-Failure modes by which prereq is missing:
+The workflow embeds `RELEASES_REPO` in the manifest's `tarball_url`/`wheel_url`
+and pushes the `softprops/action-gh-release` step into this repo.
 
-* `AGENT_MANIFEST_PRIVATE_KEY` missing → `Build signed manifest`,
-  `Create GitHub Release in public releases repo`, and the
-  reachability gate all skip via `if: ${{ env.AGENT_MANIFEST_PRIVATE_KEY != '' }}`,
-  with each step hoisting the secret into its own per-step `env:` so
-  the gate is evaluable (`secrets.*` is not in the allowed-contexts
-  list for step-level `if:`). No state changes anywhere.
-* `RELEASES_REPO_TOKEN` or the `RELEASES_REPO` variable missing →
-  `Create GitHub Release in public releases repo` fails loudly
-  before any URL-bearing manifest can be posted to `central_server`.
-* `CENTRAL_SERVER_*` missing → the upstream signing-dependent steps
-  run (so the public-repo release IS created), but `Publish manifest
-  to central_server` and `Verify manifest is published` skip via
-  their own `if:` guard on the central_server token+URL pair, and
-  the prior manifest on `central_server` keeps serving.
+**Failure modes by which prereq is missing:**
+
+* `AGENT_MANIFEST_PRIVATE_KEY` missing:
+  * `Build signed manifest`, `Create GitHub Release in public releases repo`,
+    and the reachability gate all skip via
+    `if: ${{ env.AGENT_MANIFEST_PRIVATE_KEY != '' }}`.
+  * Each step hoists the secret into its own per-step `env:` so the gate is
+    evaluable (`secrets.*` is not in the allowed-contexts list for step-level
+    `if:`).
+  * No state changes anywhere.
+* `RELEASES_REPO_TOKEN` or the `RELEASES_REPO` variable missing:
+  * `Create GitHub Release in public releases repo` fails loudly before any
+    URL-bearing manifest can be posted to `central_server`.
+* `CENTRAL_SERVER_*` missing:
+  * The upstream signing-dependent steps run (so the public-repo release IS
+    created).
+  * `Publish manifest
+    to central_server` and `Verify manifest is published`
+    skip via their own `if:` guard on the central_server token+URL pair.
+  * The prior manifest on `central_server` keeps serving.
 
 The reachability gate (anonymous 1-byte ranged GET against every URL
 in the manifest, with `--retry 5 --retry-all-errors` to absorb
 GitHub-CDN propagation lag) is the additional safeguard that
 refuses to publish a manifest pointing at unreachable artifacts.
 
-**Server-side counterparts.** Two of the GitHub secrets above must be
+#### Server-side counterparts
+
+Two of the GitHub secrets above must be
 mirrored as env vars on the production `central_server` host (typically
 `/opt/mobaide/.env`). The two halves are matched byte-for-byte at request
 time, so the names in CI and the names on the server intentionally
@@ -294,25 +423,27 @@ differ — keep them in sync as a pair:
 | `CENTRAL_SERVER_RELEASE_TOKEN` | `RELEASE_AUTH_TOKEN` | Identical string. The workflow sends it in the `X-Release-Token` header; the server compares with `hmac.compare_digest`. |
 | `AGENT_MANIFEST_PRIVATE_KEY` | `MANIFEST_SIGNING_PUBLIC_KEY` | Public/private halves of the same Ed25519 key. CI signs; the server verifies. |
 
-If `RELEASE_AUTH_TOKEN` is unset on the server,
-`POST /api/internal/agent_manifest` returns **HTTP 503** ("Manifest
-publishing is disabled") and the release workflow's curl step fails
-after `--retry 5` exhaustion. If `MANIFEST_SIGNING_PUBLIC_KEY` is unset,
-the server stores manifests without verification — agents that have
-pinned a trust key will then reject the manifest at update time, so set
-both vars together.
+- If `RELEASE_AUTH_TOKEN` is unset on the server,
+  `POST /api/internal/agent_manifest` returns **HTTP 503** ("Manifest
+  publishing is disabled") and the release workflow's curl step fails
+  after `--retry 5` exhaustion.
+- If `MANIFEST_SIGNING_PUBLIC_KEY` is unset, the server stores manifests
+  without verification. Agents that have pinned a trust key will then reject
+  the manifest at update time, so set both vars together.
 
 ### Server-side deploy gate
 
 `release-server.yml` builds and pushes the Docker image to GHCR, then a
-second `deploy` job runs in the `production` environment. Configure
-required reviewers under repo Settings → Environments → production so the
-job blocks on a manual click before recording the rollout. The job itself
-does not SSH to the host — host-side rollout is operator-driven via
-`deploy/prod/deploy_central.py` (which preserves the previous image for
-one-step rollback) or, for the polling pattern, a watchtower-style
-container on the prod host that pulls `ghcr.io/<repo>-server:latest` on a
-timer.
+second `deploy` job runs in the `production` environment.
+
+- Configure required reviewers under repo Settings → Environments → production
+  so the job blocks on a manual click before recording the rollout.
+- The job itself does not SSH to the host.
+- Host-side rollout is operator-driven, in one of two ways:
+  - `deploy/prod/deploy_central.py` (which preserves the previous image for
+    one-step rollback);
+  - for the polling pattern, a watchtower-style container on the prod host
+    that pulls `ghcr.io/<repo>-server:latest` on a timer.
 
 ## Compatibility gating: `protocol_version`
 
@@ -349,56 +480,52 @@ range is rejected up front.
 }
 ```
 
-(`capabilities.git.changes` — additive, no bump — advertises the session-scoped
-git status/diff routes behind the in-session Changes viewer; an agent
-without the key answers those routes with 404 and clients render an
-"update your agent" state. `capabilities.git.stage` / `discard` / `commit` —
-also additive — advertise the stage/unstage, discard and commit routes; a
-client shows a mutating control only when its key is `true`, so an older agent
-keeps a read-only viewer. `capabilities.git.fetch` / `pull` / `push` — additive
-too — advertise the background fetch/pull/push jobs and their `git.job.*`
-events; the terminal menu's *Fetch / Pull / Push…* entry and the Changes
-screen's Sync button exist on any of the three, each row on its own key.
-`capabilities.git.branches` — additive too — advertises the project-scoped
-branch create/checkout routes and the `?remote=true` remote-tracking rows;
-clients gate the Git screen's *New branch* and *Check out* actions and the
-terminal menu's *Branches…* entry on it.
-`capabilities.git.rebase` — additive too — advertises the four session-scoped
-`.../git/rebase[/continue|skip|abort]` routes and `repo.rebase` on status;
-clients gate the terminal menu's *Rebase…* entry on it, and the Changes
-screen's Continue / Skip / Abort on it together with a non-null `repo.rebase`
-(a `rebasing` state without one — a `git am` session — gets a banner pointing
-to the terminal instead). `capabilities.git.resolve` certifies that
-`stage` refuses an unmerged path still holding conflict markers, which is
-what makes a conflict row's *Mark resolved* action (gated on `resolve` and
-`stage` together) safe to offer. `capabilities.git.conflicts` — additive
-too — advertises the four session-scoped
-`.../git/conflict[/resolve|take|restore]` routes and the top-level
-`resolved_paths` on status; with it a conflict row opens a full in-app
-resolver instead (read the file, edit and reapply it or save a draft, take
-a whole side, or rebuild the markers), and the Changes screen gains a
-*Resolved* section with a *Restore conflict…* action — without it a
-conflict row still opens the `HEAD` diff and *Mark resolved* is the only
-in-app action.
-`capabilities.cli` carries one `{ "available": <bool> }` entry per managed CLI
-the agent registers — additive, no `protocol_version` bump — and the Android
-mode-select screen disables a per-CLI button when its binary is absent. The
-client parses it tolerantly: an absent / old-agent / malformed value is treated
-as available. Entries for CLIs whose startup model enumeration succeeded also
-carry a `models` array — and, when the CLI's catalog exposes per-model
-reasoning levels, a `model_details` array — which the New-session pickers
-prefer over their hardcoded model/effort fallbacks; both keys are omitted, never
-emitted empty, on failure. A probe answered while the agent's startup
-enumeration is still running instead carries `"models_pending": true` on each
-enumeration-capable entry whose own list has not yet been produced, telling
-clients that entry's absence is provisional. See
-`PROTOCOL.md` (proto-v5 bullet plus the 2026-08-23 proto-v7 additive delta)
-for the full shape.)
+**Capability keys.** Notes on the `capabilities` object in the response above.
+See `PROTOCOL.md` (proto-v5 bullet plus the 2026-08-23 proto-v7 additive delta)
+for the full shape.
 
-(The signed manifest body / signature is NOT echoed back through this REST
+| Key | What it advertises | How clients use it |
+|-----|--------------------|--------------------|
+| `capabilities.git.changes` | Additive, no bump. The session-scoped git status/diff routes behind the in-session Changes viewer. | An agent without the key answers those routes with 404; clients render an "update your agent" state. |
+| `capabilities.git.stage` / `discard` / `commit` | Also additive. The stage/unstage, discard and commit routes. | A client shows a mutating control only when its key is `true`, so an older agent keeps a read-only viewer. |
+| `capabilities.git.fetch` / `pull` / `push` | Additive too. The background fetch/pull/push jobs and their `git.job.*` events. | The terminal menu's *Fetch / Pull / Push…* entry and the Changes screen's Sync button exist on any of the three, each row on its own key. |
+| `capabilities.git.branches` | Additive too. The project-scoped branch create/checkout routes and the `?remote=true` remote-tracking rows. | Clients gate the Git screen's *New branch* and *Check out* actions and the terminal menu's *Branches…* entry on it. |
+| `capabilities.git.rebase` | Additive too. The four session-scoped `.../git/rebase[/continue\|skip\|abort]` routes and `repo.rebase` on status. | Clients gate the terminal menu's *Rebase…* entry on it, and the Changes screen's Continue / Skip / Abort on it together with a non-null `repo.rebase`. |
+| `capabilities.git.resolve` | Certifies that `stage` refuses an unmerged path still holding conflict markers. | Makes a conflict row's *Mark resolved* action (gated on `resolve` and `stage` together) safe to offer. |
+| `capabilities.git.conflicts` | Additive too. The four session-scoped `.../git/conflict[/resolve\|take\|restore]` routes and the top-level `resolved_paths` on status. | See the note below the table. |
+
+Two follow-ups to the table:
+
+- For `rebase`: a `rebasing` state without a non-null `repo.rebase` (a `git am`
+  session) gets a banner pointing to the terminal instead.
+- For `conflicts`: with the key, a conflict row opens a full in-app resolver
+  instead (read the file, edit and reapply it or save a draft, take a whole
+  side, or rebuild the markers), and the Changes screen gains a *Resolved*
+  section with a *Restore conflict…* action. Without it a conflict row still
+  opens the `HEAD` diff and *Mark resolved* is the only in-app action.
+
+**`capabilities.cli`**
+
+- It carries one `{ "available": <bool> }` entry per managed CLI the agent
+  registers — additive, no `protocol_version` bump.
+- The Android mode-select screen disables a per-CLI button when its binary is
+  absent.
+- The client parses it tolerantly: an absent / old-agent / malformed value is
+  treated as available.
+- Entries for CLIs whose startup model enumeration succeeded also carry a
+  `models` array — and, when the CLI's catalog exposes per-model reasoning
+  levels, a `model_details` array. The New-session pickers prefer both over
+  their hardcoded model/effort fallbacks. Both keys are omitted, never emitted
+  empty, on failure.
+- A probe answered while the agent's startup enumeration is still running
+  instead carries `"models_pending": true` on each enumeration-capable entry
+  whose own list has not yet been produced. This tells clients that entry's
+  absence is provisional.
+
+The signed manifest body / signature is NOT echoed back through this REST
 surface — it is delivered to the agent inline over the relay WebSocket as
 of proto-v2. The Android client only needs `latest_agent_version` to drive
-the "agent outdated" banner.)
+the "agent outdated" banner.
 
 The Android client (`VersionGateRepository`) compares
 `BuildConfig.APP_PROTOCOL_VERSION` against the server's
@@ -410,24 +537,28 @@ The Android client (`VersionGateRepository`) compares
   Play Store deep link (`market://details?id=com.mobaide.app`) and a
   "What changed" link to `PROTOCOL.md`. No further WebSocket attempts.
 
-**Agent ↔ central server tunnel** (`/ws/agent-tunnel`): the agent sends
-`{type:"auth", protocol_version, agent_version, capabilities}`. If
-`protocol_version` is not in the server's `SUPPORTED_PROTOCOL_VERSIONS`, the
-server emits `{type:"incompatible", reason, min_client_version,
-server_protocol_versions, manifest_url}` and closes with WebSocket code **4002**
-(`PROTOCOL_INCOMPATIBLE_CLOSE_CODE`). On 4002 the relay's reconnect-backoff
-jumps to `reconnect_max_delay` and the agent's HTTPS-bootstrap path (see below)
-fetches the signed manifest from the `manifest_url` hint (or the env-derived
-URL when the hint is absent), stages the new release, and the supervisor
-respawns into the upgraded binary. The agent self-heals without operator
+**Agent ↔ central server tunnel** (`/ws/agent-tunnel`):
+
+1. The agent sends `{type:"auth", protocol_version, agent_version, capabilities}`.
+2. If `protocol_version` is not in the server's `SUPPORTED_PROTOCOL_VERSIONS`, the
+   server emits `{type:"incompatible", reason, min_client_version,
+   server_protocol_versions, manifest_url}` and closes with WebSocket code **4002**
+   (`PROTOCOL_INCOMPATIBLE_CLOSE_CODE`).
+3. On 4002 the relay's reconnect-backoff jumps to `reconnect_max_delay`.
+4. The agent's HTTPS-bootstrap path (see below) fetches the signed manifest
+   from the `manifest_url` hint (or the env-derived URL when the hint is
+   absent), stages the new release, and the supervisor respawns into the
+   upgraded binary.
+
+The agent self-heals without operator
 intervention; the only "terminal" case is an agent that pre-dates the
 HTTPS-bootstrap release and was stranded before it could pick up the new path.
 
 On a successful auth the
 server persists `agent_version` and `agent_protocol_version` (the
-`protocol_version` the agent declared) into the `agents` DB row; both fields
+`protocol_version` the agent declared) into the `agents` DB row. Both fields
 are exposed via `GET /api/agents` (`AgentSummary`) and rendered on the admin
-dashboard — the users page lists agents in an expandable per-user sub-table
+dashboard. The users page lists agents in an expandable per-user sub-table
 that includes a **Version** column ("Up to date" or "latest: X.Y.Z" when
 behind the manifest).
 
@@ -451,39 +582,48 @@ be running. It is a small JSON document:
 }
 ```
 
-* **Signing** — Ed25519. Canonical JSON encoding is
-  `json.dumps(body, sort_keys=True, separators=(",", ":"))`. The release
-  workflow signs with `AGENT_MANIFEST_PRIVATE_KEY`; the public half is
-  configured on `central_server` as `MANIFEST_SIGNING_PUBLIC_KEY` and pinned
-  on each agent host at `<prefix>/trust/central_server.pub`.
-* **Publishing** — `release-agent.yml` first creates a GitHub Release in
-  the public sibling repo (`$RELEASES_REPO`) with the tarball, wheel, and
-  `manifest.json` attached. It then runs an **anonymous reachability
-  gate** — `curl -fsSL --retry 5 -r 0-0` (a 1-byte ranged GET) against
-  every URL the signed manifest references — and refuses to proceed if
-  any URL is not anonymously reachable (privacy mismatch, asset-name
-  typo, missing upload). Ranged GET rather than HEAD avoids
-  GitHub-CDN-signed-redirect targets that intermittently reject HEAD
-  with 403/405 even when GET succeeds; retries absorb the CDN
-  propagation lag that `softprops/action-gh-release@v2` is known to
-  race with. Only after the gate passes does the workflow POST the
-  record to `POST /api/internal/agent_manifest` on `central_server`
-  with header `X-Release-Token: $CENTRAL_SERVER_RELEASE_TOKEN`. The
-  route validates the signature **before** persisting; an invalid
-  signature returns 400 and the manifest is not stored.
-* **Distribution** — agents receive the signed manifest **body** inline in
-  the `auth_ok` reply on the agent tunnel and in `agent_manifest_update`
-  CH_CONTROL push frames (proto-v2). The fields carried are
-  `manifest_body` (the full signed dict) and `manifest_signature` (the
-  base64 Ed25519 signature); no HTTP fetch is required to apply an update.
-  After a successful `POST /api/internal/agent_manifest`, the router fans
-  out an `agent_manifest_update` frame to every connected agent in the
-  routing table (`broadcast_manifest_update`), so a freshly-published
-  manifest reaches running agents within one heartbeat without a
-  reconnect. `GET /api/v1/agent/manifest.json` continues to serve the same
-  record over HTTP — install scripts and the `mobaide-agent update` CLI
-  consume that endpoint for bootstrap / out-of-band refresh, but the
-  user-triggered "Install now" path no longer touches it.
+* **Signing** — Ed25519.
+  * Canonical JSON encoding is
+    `json.dumps(body, sort_keys=True, separators=(",", ":"))`.
+  * The release workflow signs with `AGENT_MANIFEST_PRIVATE_KEY`.
+  * The public half is configured on `central_server` as
+    `MANIFEST_SIGNING_PUBLIC_KEY` and pinned on each agent host at
+    `<prefix>/trust/central_server.pub`.
+* **Publishing** — `release-agent.yml` works in three steps:
+  1. It first creates a GitHub Release in the public sibling repo
+     (`$RELEASES_REPO`) with the tarball, wheel, and `manifest.json` attached.
+  2. It then runs an **anonymous reachability gate** —
+     `curl -fsSL --retry 5 -r 0-0` (a 1-byte ranged GET) against every URL the
+     signed manifest references — and refuses to proceed if any URL is not
+     anonymously reachable (privacy mismatch, asset-name typo, missing
+     upload).
+  3. Only after the gate passes does the workflow POST the record to
+     `POST /api/internal/agent_manifest` on `central_server` with header
+     `X-Release-Token: $CENTRAL_SERVER_RELEASE_TOKEN`.
+
+  Two details:
+  * Ranged GET rather than HEAD avoids GitHub-CDN-signed-redirect targets that
+    intermittently reject HEAD with 403/405 even when GET succeeds; retries
+    absorb the CDN propagation lag that `softprops/action-gh-release@v2` is
+    known to race with.
+  * The route validates the signature **before** persisting; an invalid
+    signature returns 400 and the manifest is not stored.
+* **Distribution**
+  * Agents receive the signed manifest **body** inline in the `auth_ok` reply
+    on the agent tunnel and in `agent_manifest_update` CH_CONTROL push frames
+    (proto-v2).
+  * The fields carried are `manifest_body` (the full signed dict) and
+    `manifest_signature` (the base64 Ed25519 signature); no HTTP fetch is
+    required to apply an update.
+  * After a successful `POST /api/internal/agent_manifest`, the router fans
+    out an `agent_manifest_update` frame to every connected agent in the
+    routing table (`broadcast_manifest_update`), so a freshly-published
+    manifest reaches running agents within one heartbeat without a
+    reconnect.
+  * `GET /api/v1/agent/manifest.json` continues to serve the same
+    record over HTTP. Install scripts and the `mobaide-agent update` CLI
+    consume that endpoint for bootstrap / out-of-band refresh, but the
+    user-triggered "Install now" path no longer touches it.
 * **Storage** — `ManifestStore` writes atomically via `os.replace`; reads are
   served from an in-memory last-good cache.
 
@@ -522,16 +662,20 @@ pipeline run.
 
 The agent updates itself in place using a **staged-binary** pattern: every
 release lives in its own directory and a single pointer file selects the
-"current" one. There is no in-process patching. All outbound HTTP calls (manifest
-polling, tarball/wheel downloads, trust-key fetch) are made through a centralised
-wrapper (`mobaide._http`) that injects `User-Agent: mobaide-agent/<version>` so
-Cloudflare-fronted relay and artifact hosts do not classify them as generic
-`Python-urllib` bot traffic (Cloudflare error 1010). The wrapper also pins its
-TLS trust to the bundled `certifi` store, so the manifest/tarball/wheel HTTPS
-fetches verify regardless of the host interpreter's OpenSSL CA store and no
-longer depend on a launcher-set `SSL_CERT_FILE` (closes the Windows-exposed TLS
-gap; an operator-set `SSL_CERT_FILE` still takes precedence on the launcher's
-`wss://` path).
+"current" one. There is no in-process patching.
+
+**HTTP wrapper.** All outbound HTTP calls (manifest polling, tarball/wheel
+downloads, trust-key fetch) are made through a centralised wrapper
+(`mobaide._http`):
+
+- It injects `User-Agent: mobaide-agent/<version>` so Cloudflare-fronted relay
+  and artifact hosts do not classify them as generic `Python-urllib` bot
+  traffic (Cloudflare error 1010).
+- It also pins its TLS trust to the bundled `certifi` store, so the
+  manifest/tarball/wheel HTTPS fetches verify regardless of the host
+  interpreter's OpenSSL CA store and no longer depend on a launcher-set
+  `SSL_CERT_FILE` (closes the Windows-exposed TLS gap; an operator-set
+  `SSL_CERT_FILE` still takes precedence on the launcher's `wss://` path).
 
 ### Install layout
 
@@ -557,28 +701,41 @@ The `mobaide-agent` command the installers put on PATH
 Windows) reads `current_version` on every call, so an update or rollback never
 strands it on a pruned release.
 
-A release is **complete/runnable** only once a `.installed` marker file exists
-in `releases/<v>/`, written as the last install step (after pip + the wheel).
-For releases that predate the sentinel, a release is also treated as complete
-if its `mobaide-agent` console script exists (pip writes it only after a
-successful wheel install). This "complete release" definition is canonical in
-`mobaide.agent.install_paths.is_release_complete`; the updater, launcher
-rollback/prune, and the install.sh / Windows supervisor self-heal all share it
-so a half-built release (a venv swapped into place but not yet finalized) is
-never selected or booted.
+**Complete releases.** A release is **complete/runnable** only once a
+`.installed` marker file exists in `releases/<v>/`, written as the last install
+step (after pip + the wheel).
 
-The platform-specific service unit (`systemd`, `launchd`, Windows Scheduled Task) does
-**not** invoke a release directly. On Linux/macOS the unit's entry point is the
-generated `<prefix>/bin/mobaide-agent-launcher.sh` wrapper (shared by both, written
-by `write_launcher_script` in `install.sh`); on Windows the equivalent is the
-stdlib-only `windows_launcher.py` supervisor. The wrapper/supervisor first
-**self-heals** a missing, corrupt, or **incomplete** current-release venv: if
-`<prefix>/releases/<current_version>` has no runnable interpreter or lacks the
-completion sentinel it rolls `current_version` *forward* to the newest sibling
-release that is complete (skipping `.staging-*` / `.old-*` scratch and any
-non-version dir) before exec, converting a permanent crash loop into automatic
-rollback to the last good release. With no complete sibling at all it exits 70
-rather than looping. It then execs
+- For releases that predate the sentinel, a release is also treated as complete
+  if its `mobaide-agent` console script exists (pip writes it only after a
+  successful wheel install).
+- This "complete release" definition is canonical in
+  `mobaide.agent.install_paths.is_release_complete`.
+- The updater, launcher rollback/prune, and the install.sh / Windows supervisor
+  self-heal all share it, so a half-built release (a venv swapped into place
+  but not yet finalized) is never selected or booted.
+
+**Service unit and self-heal.** The platform-specific service unit (`systemd`,
+`launchd`, Windows Scheduled Task) does **not** invoke a release directly.
+
+- On Linux/macOS the unit's entry point is the generated
+  `<prefix>/bin/mobaide-agent-launcher.sh` wrapper (shared by both, written
+  by `write_launcher_script` in `install.sh`).
+- On Windows the equivalent is the stdlib-only `windows_launcher.py`
+  supervisor.
+
+The wrapper/supervisor first **self-heals** a missing, corrupt, or
+**incomplete** current-release venv:
+
+- If `<prefix>/releases/<current_version>` has no runnable interpreter or lacks
+  the completion sentinel, it rolls `current_version` *forward* to the newest
+  sibling release that is complete (skipping `.staging-*` / `.old-*` scratch
+  and any non-version dir) before exec.
+- This converts a permanent crash loop into automatic rollback to the last
+  good release.
+- With no complete sibling at all it exits 70 rather than looping.
+
+It then execs
+`releases/<version>/venv/bin/python -m mobaide.launcher`, which:
 `releases/<version>/venv/bin/python -m mobaide.launcher`, which:
 
 1. Reads `<prefix>/current_version`.
@@ -599,10 +756,14 @@ rather than looping. It then execs
 This means a swap of `current_version` followed by a process restart is the
 only thing required to roll forward (or back). The launcher's rollback
 heuristic gives a deployed install one automatic recovery step before
-operator intervention is needed; matching supervisor settings —
-systemd `StartLimitBurst=10`/`StartLimitIntervalSec=600`, launchd
-`ThrottleInterval=10`, Windows Task Scheduler `-RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1)` — give the
-rolled-back release time to prove stable.
+operator intervention is needed.
+
+Matching supervisor settings give the rolled-back release time to prove
+stable:
+
+- systemd: `StartLimitBurst=10`/`StartLimitIntervalSec=600`
+- launchd: `ThrottleInterval=10`
+- Windows Task Scheduler: `-RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1)`
 
 ### State machine
 
@@ -651,75 +812,89 @@ Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
 * **Tar-extraction safety** — `tarfile.extractall(filter="data")` mitigates
   CVE-2007-4559 path traversal. Required because the tarball arrives over
   the network from a manifest the agent only verified for signature.
-* **Non-destructive staging (shebang-safe)** — the venv is built with
-  `python -m venv --without-pip` in a sibling scratch dir
-  `releases/.staging-<v>-<pid>`, so it carries only move-safe interpreter
-  symlinks and **no** shebang-bearing console scripts. A single `os.replace`
-  swaps it into `releases/<v>`, then pip + the wheel are installed using the
-  **final-path** interpreter so every `pip` / `mobaide-agent` shebang points at
-  the real `releases/<v>` location (the fix for the "bad interpreter: No such
-  file or directory" failure that the old build-then-move ordering left
-  behind). The release is marked complete with the `.installed` sentinel only
-  after that finalize step, and `current_version` is flipped only after the
-  sentinel — so a half-built release is never selected. A failed stage never
-  overwrites or destroys the running release and leaves no empty `releases/<v>`
-  behind; leftover `.staging-*` / `.old-*` scratch and any stale incomplete
-  release are garbage-collected best-effort on the next run (the updater also
-  reclaims stale incomplete releases in its pre-stage sweep).
-* **Forward-only on the auto path** — auto/poll updates only stage a manifest
-  whose version is **strictly newer** than the running one, so a stale or
-  mismatched manifest (e.g. a newer dev build seeing an older published
-  version) can never downgrade an install. The forced paths — operator
-  "Install now" and 4002 protocol-incompatible recovery — bypass this and
-  apply any version.
+* **Non-destructive staging (shebang-safe)**
+  * The venv is built with `python -m venv --without-pip` in a sibling scratch
+    dir `releases/.staging-<v>-<pid>`, so it carries only move-safe
+    interpreter symlinks and **no** shebang-bearing console scripts.
+  * A single `os.replace` swaps it into `releases/<v>`, then pip + the wheel
+    are installed using the **final-path** interpreter so every `pip` /
+    `mobaide-agent` shebang points at the real `releases/<v>` location (the
+    fix for the "bad interpreter: No such file or directory" failure that the
+    old build-then-move ordering left behind).
+  * The release is marked complete with the `.installed` sentinel only after
+    that finalize step, and `current_version` is flipped only after the
+    sentinel — so a half-built release is never selected.
+  * A failed stage never overwrites or destroys the running release and leaves
+    no empty `releases/<v>` behind.
+  * Leftover `.staging-*` / `.old-*` scratch and any stale incomplete release
+    are garbage-collected best-effort on the next run (the updater also
+    reclaims stale incomplete releases in its pre-stage sweep).
+* **Forward-only on the auto path**
+  * Auto/poll updates only stage a manifest whose version is **strictly
+    newer** than the running one, so a stale or mismatched manifest (e.g. a
+    newer dev build seeing an older published version) can never downgrade an
+    install.
+  * The forced paths — operator "Install now" and 4002 protocol-incompatible
+    recovery — bypass this and apply any version.
 * **Path-component validation** — the signed manifest `version` is checked
   against a safe-path allowlist at the manifest→filesystem boundary (in both
   `updater.py` and `install.sh`) before it is used as a `releases/<v>` path
   component.
-* **Manager-release guard** — the in-process auto-updater is disabled when the
-  agent runs from a developer/source checkout (the interpreter is not under
-  `<prefix>/releases`), so a source run that shares the install prefix can no
-  longer drive an update that overwrites the installed release; relay manifests
-  are still recorded but never applied (fail-closed). The explicit
-  `mobaide-agent update` CLI verb is an operator opt-in that deliberately
-  bypasses this guard.
-* **Activity awareness** — defers the swap when any session is running. The
-  updater queries `SessionManager.list_sessions()` and only proceeds when all
-  sessions are stopped/crashed, and when no voice dictation is open or still
-  being transcribed (the agent passes `VoiceService.busy` as the updater's
-  `busy_probe`; a probe that raises is logged and ignored). Deferral retries after 30 minutes; a single
-  pending update that has been deferred for >24h logs a `WARN` for
-  observability.
+* **Manager-release guard**
+  * The in-process auto-updater is disabled when the agent runs from a
+    developer/source checkout (the interpreter is not under
+    `<prefix>/releases`), so a source run that shares the install prefix can
+    no longer drive an update that overwrites the installed release.
+  * Relay manifests are still recorded but never applied (fail-closed).
+  * The explicit `mobaide-agent update` CLI verb is an operator opt-in that
+    deliberately bypasses this guard.
+* **Activity awareness** — defers the swap when any session is running.
+  * The updater queries `SessionManager.list_sessions()` and only proceeds when
+    all sessions are stopped/crashed, and when no voice dictation is open or
+    still being transcribed (the agent passes `VoiceService.busy` as the
+    updater's `busy_probe`; a probe that raises is logged and ignored).
+  * Deferral retries after 30 minutes; a single pending update that has been
+    deferred for >24h logs a `WARN` for observability.
 * **Atomic pointer swap** — `os.replace` of `current_version.tmp` →
   `current_version`.
-* **Supervisor restart** — the updater calls `sys.exit(75)`. `RestartForceExitStatus=75` (systemd), the Windows `mobaide_launcher.py` supervisor's exit-code-75 respawn loop, and Task Scheduler's outer `-RestartCount` / `-RestartInterval` all interpret this as "please bring me back up", and the launcher boots into the freshly-pinned release.
-* **Rollback target** — on every boot, `_prune_old_releases` keeps the current
-  version plus up to `MOBAIDE_AGENT_KEEP_RELEASES - 1` highest-versioned
-  eligible siblings (default: one previous release). Only **complete** releases
-  (`.installed` sentinel, or the legacy console-script fallback) are eligible
-  rollback targets; dirs that are incomplete, lack a usable venv, or whose name
-  is not a parseable version are never selected as a rollback target. Set
-  `MOBAIDE_AGENT_KEEP_RELEASES=<n>` (floor `2`) to retain more rollback targets.
+* **Supervisor restart** — the updater calls `sys.exit(75)`.
+  * `RestartForceExitStatus=75` (systemd), the Windows `mobaide_launcher.py`
+    supervisor's exit-code-75 respawn loop, and Task Scheduler's outer
+    `-RestartCount` / `-RestartInterval` all interpret this as "please bring
+    me back up".
+  * The launcher then boots into the freshly-pinned release.
+* **Rollback target**
+  * On every boot, `_prune_old_releases` keeps the current version plus up to
+    `MOBAIDE_AGENT_KEEP_RELEASES - 1` highest-versioned eligible siblings
+    (default: one previous release).
+  * Only **complete** releases (`.installed` sentinel, or the legacy
+    console-script fallback) are eligible rollback targets; dirs that are
+    incomplete, lack a usable venv, or whose name is not a parseable version
+    are never selected as a rollback target.
+  * Set `MOBAIDE_AGENT_KEEP_RELEASES=<n>` (floor `2`) to retain more rollback
+    targets.
 
 ### HTTPS bootstrap (side-channel update path)
 
 The in-band manifest delivery (`auth_ok` + `agent_manifest_update`) is the
 fast path during steady-state operation. It cannot, however, deliver a
 manifest pointer to an agent whose `protocol_version` is below the server's
-`SUPPORTED_PROTOCOL_VERSIONS` — the relay closes with code 4002 before the
+`SUPPORTED_PROTOCOL_VERSIONS`. The relay closes with code 4002 before the
 pointer is sent, and the in-band update channel becomes circular (the
 binary that would lift the agent into the new protocol is exactly what
 needs to be delivered).
 
 The HTTPS bootstrap breaks that loop. The signed manifest is also served
 unauthenticated over plain HTTPS at `GET /api/v1/agent/manifest.json`
-(`central_server/central_server/manifest/router.py`). The agent reaches it
-via `mobaide.agent.update_check.run_https_update_check`, which fetches and
-verifies the manifest through the **same** `StagedBinaryUpdater` the relay
-path uses — no second crypto stack, no skip-signature branch. The
-manifest URL is derived from `RELAY_SERVER_URL` in the agent's `.env`
-via the shared `endpoint_url_from_relay_server_url` helper (same hardening
-guards as the trust-key fetch: no user-info, no cleartext by default).
+(`central_server/central_server/manifest/router.py`).
+
+- The agent reaches it via `mobaide.agent.update_check.run_https_update_check`,
+  which fetches and verifies the manifest through the **same**
+  `StagedBinaryUpdater` the relay path uses — no second crypto stack, no
+  skip-signature branch.
+- The manifest URL is derived from `RELAY_SERVER_URL` in the agent's `.env`
+  via the shared `endpoint_url_from_relay_server_url` helper (same hardening
+  guards as the trust-key fetch: no user-info, no cleartext by default).
 
 The bootstrap fires on three triggers:
 
@@ -801,43 +976,67 @@ Both scripts are auto-published from `deploy/` to the root of the
    `MOBAIDE_AGENT_MANIFEST_URL`).
 3. Bootstrap the manifest-signing public key and persist it at
    `<prefix>/trust/central_server.pub`. Two paths, in priority order:
-   `MOBAIDE_AGENT_TRUST_KEY_B64` env var if set; otherwise the host derived
-   from `MOBAIDE_AGENT_MANIFEST_URL` is hit at
-   `/api/v1/agent/trust_key` to fetch the key. Verify the manifest signature
-   against the pinned key. The install fails-closed if neither path yields
-   a key — never silently ships an install whose auto-updater can't
-   verify rollouts.
+   - `MOBAIDE_AGENT_TRUST_KEY_B64` env var if set;
+   - otherwise the host derived from `MOBAIDE_AGENT_MANIFEST_URL` is hit at
+     `/api/v1/agent/trust_key` to fetch the key.
+
+   Verify the manifest signature against the pinned key. The install
+   fails-closed if neither path yields a key — never silently ships an install
+   whose auto-updater can't verify rollouts.
 4. **(Linux only, before venv creation)** Verify that `python3 -c 'import ensurepip'`
-   succeeds. If it does not (common on stock Debian/Ubuntu where the base
-   `python3` package omits `ensurepip`), auto-install `python${version}-venv`
-   via the detected package manager (`apt-get`, `dnf`/`yum`, `pacman`, `zypper`,
-   or `apk`). Non-root user-prefix installs print a distro-aware error instead
-   of attempting a privileged package install.
-4a. **(Windows only, before venv creation)** Auto-elevate via UAC if the
-    current PowerShell is not elevated — required for the Scheduled Task
-    registration and `%ProgramFiles%\MobaideAgent` writes. If no Python 3.12+
-    is found on PATH, auto-install at machine scope and refresh the current
-    session's PATH from the Machine + User scopes. Two paths, in priority
-    order: `winget install Python.Python.3.12`; if `winget` is unavailable
-    or fails, fall back to the official python.org installer (downloaded
-    for the host architecture, Authenticode-verified against the Python
-    Software Foundation signer before execution). Fails with a
-    manual-download message only when both paths fail. Set
-    `MOBAIDE_AGENT_SKIP_PYTHON_INSTALL=1` to opt out and require a
-    pre-installed interpreter (CI / locked-down hosts). Under `irm | iex`
-    the elevation re-launch fetches the installer again from
-    `MOBAIDE_AGENT_INSTALL_URL` (parallel to the Linux side); run from a
-    file (`-File .\install.ps1`), it re-runs that same file instead.
+   succeeds.
+   - If it does not (common on stock Debian/Ubuntu where the base
+     `python3` package omits `ensurepip`), auto-install `python${version}-venv`
+     via the detected package manager (`apt-get`, `dnf`/`yum`, `pacman`, `zypper`,
+     or `apk`).
+   - Non-root user-prefix installs print a distro-aware error instead
+     of attempting a privileged package install.
+
+**4a. (Windows only, before venv creation)** Auto-elevate via UAC if the
+current PowerShell is not elevated — required for the Scheduled Task
+registration and `%ProgramFiles%\MobaideAgent` writes.
+
+- If no Python 3.12+ is found on PATH, auto-install at machine scope and
+  refresh the current session's PATH from the Machine + User scopes. Two
+  paths, in priority order:
+  1. `winget install Python.Python.3.12`;
+  2. if `winget` is unavailable or fails, fall back to the official python.org
+     installer (downloaded for the host architecture, Authenticode-verified
+     against the Python Software Foundation signer before execution).
+- Fails with a manual-download message only when both paths fail.
+- Set `MOBAIDE_AGENT_SKIP_PYTHON_INSTALL=1` to opt out and require a
+  pre-installed interpreter (CI / locked-down hosts).
+- Under `irm | iex` the elevation re-launch fetches the installer again from
+  `MOBAIDE_AGENT_INSTALL_URL` (parallel to the Linux side); run from a
+  file (`-File .\install.ps1`), it re-runs that same file instead.
+
 5. Download tarball + wheel, verify sha256s, extract under
    `<prefix>/releases/<version>/`, install the wheel into a fresh venv.
-   On Windows, reinstalling the version already installed first stops the
-   agent and every process still running from the prefix, since Windows
-   cannot move a release dir whose executables are running; the agent is
-   restarted on the previous release if staging then fails. Service
-   registration (step 8) stops leftover prefix processes the same way, so no
-   agent from an earlier install keeps running beside the new one.
+   - On Windows, reinstalling the version already installed first stops the
+     agent and every process still running from the prefix, since Windows
+     cannot move a release dir whose executables are running; the agent is
+     restarted on the previous release if staging then fails.
+   - Service registration (step 8) stops leftover prefix processes the same
+     way, so no agent from an earlier install keeps running beside the new one.
 6. Atomically pin `<prefix>/current_version`.
-7. Generate `<prefix>/mobaide_agent/.env` via `python -m mobaide.agent.config init-env` — writes a random `JWT_SECRET_KEY` and prefills `RELAY_SERVER_URL=wss://mobaide.com`. On Windows, if the pre-elevation `Find-ClaudeBinary` helper located `claude.cmd`, the path is forwarded via `MOBAIDE_AGENT_CLAUDE_BIN_HINT` and written as `MOBAIDE_CLAUDE_BIN` into the agent's `.env`. The optional Codex CLI is auto-detected identically: the parallel `Find-CodexBinary` helper probes the same `%APPDATA%\npm` locations for `codex.cmd`, forwards it via `MOBAIDE_AGENT_CODEX_BIN_HINT`, and writes `MOBAIDE_CODEX_BIN` (a miss is silent — Codex is the optional secondary agent). The optional Antigravity CLI is auto-detected the same way: the parallel `Find-AgyBinary` helper probes the standalone `agy` install locations (`%USERPROFILE%\.local\bin`, the `Antigravity` program folders) for `agy.exe` / `agy.cmd`, forwards it via `MOBAIDE_AGENT_AGY_BIN_HINT`, and writes `MOBAIDE_AGY_BIN` (also a silent miss — Antigravity is an optional managed agent). Re-running never overwrites an already-paired `.env` (pass `--force` to regenerate; paired credentials are preserved regardless).
+7. Generate `<prefix>/mobaide_agent/.env` via `python -m mobaide.agent.config init-env` — writes a random `JWT_SECRET_KEY` and prefills `RELAY_SERVER_URL=wss://mobaide.com`.
+   - **Claude CLI (Windows).** If the pre-elevation `Find-ClaudeBinary` helper
+     located `claude.cmd`, the path is forwarded via
+     `MOBAIDE_AGENT_CLAUDE_BIN_HINT` and written as `MOBAIDE_CLAUDE_BIN` into
+     the agent's `.env`.
+   - **Codex CLI (optional).** Auto-detected identically: the parallel
+     `Find-CodexBinary` helper probes the same `%APPDATA%\npm` locations for
+     `codex.cmd`, forwards it via `MOBAIDE_AGENT_CODEX_BIN_HINT`, and writes
+     `MOBAIDE_CODEX_BIN` (a miss is silent — Codex is the optional secondary
+     agent).
+   - **Antigravity CLI (optional).** Auto-detected the same way: the parallel
+     `Find-AgyBinary` helper probes the standalone `agy` install locations
+     (`%USERPROFILE%\.local\bin`, the `Antigravity` program folders) for
+     `agy.exe` / `agy.cmd`, forwards it via `MOBAIDE_AGENT_AGY_BIN_HINT`, and
+     writes `MOBAIDE_AGY_BIN` (also a silent miss — Antigravity is an optional
+     managed agent).
+   - Re-running never overwrites an already-paired `.env` (pass `--force` to
+     regenerate; paired credentials are preserved regardless).
 8. Register the service:
    * **Linux** — resolve the runtime user from `$SUDO_USER` (or
      `MOBAIDE_RUN_AS_USER`), substitute `__RUN_USER__`/`__RUN_GROUP__`/`__RUN_HOME__`
@@ -887,14 +1086,18 @@ Three resolution paths, in priority order:
    isolation between the install channel and the trust root.
 3. **Repair existing install:** if you have an agent that was set up before
    path #1 existed (or pre-`MOBAIDE_AGENT_TRUST_KEY_B64`), run
-   `mobaide-agent fetch-trust-key` on the agent host. The CLI derives
-   `https://<host>/api/v1/agent/trust_key` from `RELAY_SERVER_URL` in the
-   agent's `.env`, validates the result as base64-Ed25519, writes
-   `<prefix>/trust/central_server.pub`, and best-effort restarts the
-   supervisor so the running agent picks up the new updater. Use
-   `--from-url <full-url>` to override the env-derivation, and
-   `--no-restart` to skip the supervisor restart when you'd rather schedule
-   it yourself.
+   `mobaide-agent fetch-trust-key` on the agent host. The CLI:
+   - derives `https://<host>/api/v1/agent/trust_key` from `RELAY_SERVER_URL` in
+     the agent's `.env`,
+   - validates the result as base64-Ed25519,
+   - writes `<prefix>/trust/central_server.pub`,
+   - and best-effort restarts the supervisor so the running agent picks up the
+     new updater.
+
+   Options:
+   - `--from-url <full-url>` overrides the env-derivation.
+   - `--no-restart` skips the supervisor restart when you'd rather schedule it
+     yourself.
 
 **Fail-closed semantics:** if neither the env var nor the central_server
 fetch yields a key, the install script aborts with an actionable error.
@@ -926,38 +1129,40 @@ install time than discover when the auto-updater never works.
 The Android client has three distinct update paths that work together:
 
 * **Pre-flight version gate** — `MainActivity.onResume` triggers
-  `VersionGateRepository.probe()`. If the result is `Incompatible`, the
-  navigation graph is replaced with `IncompatibleServerScreen` until the user
-  installs a new app build. Tunnel close code `4002` reaches the same screen
-  via the `onIncompatibleServer` callback in case the gate races a server
-  upgrade.
+  `VersionGateRepository.probe()`.
+  * If the result is `Incompatible`, the navigation graph is replaced with
+    `IncompatibleServerScreen` until the user installs a new app build.
+  * Tunnel close code `4002` reaches the same screen via the
+    `onIncompatibleServer` callback in case the gate races a server upgrade.
 * **Flexible Play in-app update** — `InAppUpdateManager.checkForUpdate()` runs
   every `Activity.onResume`, except within 60 s of a Play in-app review card
   launch (closing the card resumes the activity, and the update dialog would
-  stack on it; see [in-app-review.md](in-app-review.md)). When the Play Core
-  API reports an update is available and the build allows the flexible flow,
-  the user gets the non-blocking download/install prompt. Failures are silent: the in-app
-  update is best-effort, and Play's own update banner remains the fallback.
+  stack on it; see [in-app-review.md](in-app-review.md)).
+  * When the Play Core API reports an update is available and the build allows
+    the flexible flow, the user gets the non-blocking download/install prompt.
+  * Failures are silent: the in-app update is best-effort, and Play's own
+    update banner remains the fallback.
 * **Immediate Play in-app update** — `InAppUpdateManager.requestImmediateUpdate()`
   is reserved for the recovery path from `IncompatibleServerScreen` and is
   triggered automatically on screen entry via a `LaunchedEffect` wired
   from `MainActivity` through `AppNavigation`'s `onImmediateUpdate`
-  callback. Sideloaded builds (Play has no update record) silently no-op
-  and the user falls back to the screen's Play Store deep-link button.
-  The server-side gate is still the authoritative signal: if Play reports
-  nothing, the user stays on the upgrade screen so a stale-cache Play
-  response cannot smuggle them back into a broken connection.
+  callback.
+  * Sideloaded builds (Play has no update record) silently no-op
+    and the user falls back to the screen's Play Store deep-link button.
+  * The server-side gate is still the authoritative signal: if Play reports
+    nothing, the user stays on the upgrade screen so a stale-cache Play
+    response cannot smuggle them back into a broken connection.
 * **Agent-outdated banner** — `AgentVersionMonitor` fetches
   `GET /api/version` from the authenticated agent (proxied through
   `central_server`) and compares `server_version` (running agent) with
   `latest_agent_version` (manifest pointer the agent received over its
   relay). Mismatch → `SessionListScreen` renders `AgentOutdatedBanner`.
-  The banner is non-blocking: dismissing it suppresses the visible
-  prompt while the staged-binary updater on the agent host still
-  installs silently the moment the agent goes idle. The
-  banner's "Install now" CTA hits `POST /api/agent/update/force_now`
-  on the agent, which routes through `StagedBinaryUpdater.force_update_now`
-  to skip the idle deferral.
+  * The banner is non-blocking: dismissing it suppresses the visible
+    prompt while the staged-binary updater on the agent host still
+    installs silently the moment the agent goes idle.
+  * The banner's "Install now" CTA hits `POST /api/agent/update/force_now`
+    on the agent, which routes through `StagedBinaryUpdater.force_update_now`
+    to skip the idle deferral.
 
 ## Protocol-integrity CI gate
 
@@ -974,11 +1179,11 @@ The Android client has three distinct update paths that work together:
    `ios/Config/Protocol.xcconfig` and from `web/src/api/bootstrap.ts` and
    asserts both equal the `buildConfigField` value in
    `android/app/build.gradle.kts`, so a proto bump that misses `ios/` or
-   `web/` fails here. `MIN_SERVER_PROTOCOL_VERSION` stays an iOS↔Android
-   comparison: the web version gate is set membership against the server's
-   advertised list (`checkVersionGate`) and carries no client-side floor of
-   its own. Both comparisons are version-agnostic and need no update on
-   bumps.
+   `web/` fails here.
+   - `MIN_SERVER_PROTOCOL_VERSION` stays an iOS↔Android comparison: the web
+     version gate is set membership against the server's advertised list
+     (`checkVersionGate`) and carries no client-side floor of its own.
+   - Both comparisons are version-agnostic and need no update on bumps.
 3. **Diff guard (PR-only):** if a PR modifies one of the two `envelope.py`
    files, it must modify the other. Comparison uses
    `${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}`
@@ -1025,11 +1230,12 @@ single in-process pytest run:
    makes the publish endpoint return 401 without persisting.
 
 The test is run by `.github/workflows/e2e-update.yml` on every PR and on
-push to `main`, with a 5-minute timeout. The implementation purposely
-does NOT spawn a real systemd / launchd / Windows Scheduled Task supervisor — that
-boundary is platform-coupled and is exercised separately by
-`mobaide_agent/tests/test_launcher_rollback.py` and the install scripts'
-own integration tests.
+push to `main`, with a 5-minute timeout.
+
+The implementation purposely does NOT spawn a real systemd / launchd / Windows
+Scheduled Task supervisor — that boundary is platform-coupled. It is exercised
+separately by `mobaide_agent/tests/test_launcher_rollback.py` and the install
+scripts' own integration tests.
 
 ## See also
 

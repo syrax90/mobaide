@@ -5,6 +5,18 @@ Browser SPA for controlling Mobaide agents through the central relay. React
 Query, openapi-fetch, xterm.js 6. See `docs/web-client.md` at the repo root
 for the full architecture write-up.
 
+**On this page**
+
+- [Prerequisites](#prerequisites)
+- [Commands](#commands)
+- [Typed API layer](#typed-api-layer)
+- [Auth](#auth)
+- [Deliberately deferred](#deliberately-deferred)
+- [Realtime (WEB-04)](#realtime-web-04)
+- [Sessions (WEB-07)](#sessions-web-07)
+- [Agents and pairing (WEB-08)](#agents-and-pairing-web-08)
+- [Terminal (WEB-05)](#terminal-web-05)
+
 ## Prerequisites
 
 - Node `^22.22.2 || ^24.15.0 || >=26.0.0` (the intersection the committed
@@ -55,23 +67,28 @@ npm run schema:dump && npm run schema:generate
 and commit the result. Use Python 3.12 if the dump differs from CI.
 
 Auth — the two axes authenticate differently (same split as Android's
-`CentralAuthInterceptor` vs `AuthInterceptor`): `src/api/auth.ts` exposes
-`setUserTokenProvider()` (dashboard/user JWT, attached by `relayClient`) and
-`setAgentTokenProvider()` (per-agent `mobile_access` JWT, attached by each
-`createAgentClient(agentId)` for its own agent). Both are filled in at
-startup by `src/auth/install.ts` (WEB-03).
+`CentralAuthInterceptor` vs `AuthInterceptor`). `src/api/auth.ts` exposes:
+
+- `setUserTokenProvider()`: the dashboard/user JWT, attached by `relayClient`.
+- `setAgentTokenProvider()`: the per-agent `mobile_access` JWT, attached by each
+  `createAgentClient(agentId)` for its own agent.
+
+Both are filled in at startup by `src/auth/install.ts` (WEB-03).
 
 ## Auth
 
-`src/auth/` owns the session: the user JWT in `sessionStorage` (per-tab,
-handed to new tabs over a `BroadcastChannel`), per-agent tokens in
-`localStorage`, and a single-flight refresh against `POST /api/auth/refresh`
-under `navigator.locks`. Routes are guarded by React Router middleware
-(`src/app/guards.tsx`), which preserves the wanted path as `?next=`. The
-Google Sign-In client id arrives from `GET /api/version` at runtime, so
-there is no build-time env var — but the origin you serve from must be
+`src/auth/` owns the session:
+
+- The user JWT lives in `sessionStorage` (per-tab, handed to new tabs over a `BroadcastChannel`).
+- Per-agent tokens live in `localStorage`.
+- A single-flight refresh runs against `POST /api/auth/refresh` under `navigator.locks`.
+- Routes are guarded by React Router middleware (`src/app/guards.tsx`), which preserves the wanted path as `?next=`.
+
+The Google Sign-In client id arrives from `GET /api/version` at runtime, so
+there is no build-time env var. But the origin you serve from must be
 listed under **Authorized JavaScript origins** on the Google OAuth client
 (`http://localhost:5173` for `npm run dev`), or the button fails to render.
+
 See the "App shell" section of `docs/web-client.md` for the full model.
 
 ## Deliberately deferred
@@ -115,19 +132,19 @@ wizard.
   straight into the TanStack cache (`src/realtime/sessionCache.ts`) rather
   than invalidated — each carries a complete object, so there is no delta to
   drift, and invalidating would cost a round trip per title change.
-- Auto-resume returns you to the last session on entry. Its once-per-attempt
-  flag is module-scoped, not component state: a route remount on Back would
-  otherwise re-navigate and trap you.
+- Auto-resume returns you to the last session on entry.
+  Its once-per-attempt flag is module-scoped, not component state:
+  a route remount on Back would otherwise re-navigate and trap you.
 - The wizard keeps a separate option bucket per mode, so switching branches
   cannot leak a field into the request. `skip_permissions` defaults to
   **true** on wire absence, so every boolean is sent explicitly and the
   request is re-parsed through a strict schema before it goes out.
 - The wizard opens on the options each kind was last **successfully** launched
-  with, and pre-selects the last project. Written only after a launch
-  succeeds, from values pinned before the request goes out — the option
-  controls stay live while it is in flight. Worktree/branch, Antigravity
-  `add_dirs` and the Auto Scan prompt are per-session and deliberately not
-  remembered, matching Android and iOS.
+  with, and pre-selects the last project.
+  - These are written only after a launch succeeds, from values pinned before
+    the request goes out — the option controls stay live while it is in flight.
+  - Worktree/branch, Antigravity `add_dirs` and the Auto Scan prompt are
+    per-session and deliberately not remembered, matching Android and iOS.
 - Three new persisted keys: `mobaide-agent` (selected agent),
   `mobaide-sessions` (last-used session per agent) and `mobaide-launch-prefs`
   (last-used launch options per mode — global, not per agent, as on mobile).
@@ -139,10 +156,12 @@ a pasted code.
 
 - `/pair` is **outside both route guards** on purpose. The payload rides in the
   URL fragment, which `requireAuthMiddleware`'s `?next=` (built from
-  `pathname + search`) would drop, so the route captures it itself, stashes it
-  under `sessionStorage` key `mobaide-pairing`, scrubs the URL with
-  `navigate({… hash: ''}, {replace: true})` — assigning `location.hash` would
-  *push* a history entry Back re-exposes — and only then bounces to sign-in.
+  `pathname + search`) would drop. So the route does four things:
+  1. It captures the payload itself.
+  2. It stashes the payload under `sessionStorage` key `mobaide-pairing`.
+  3. It scrubs the URL with `navigate({… hash: ''}, {replace: true})` —
+     assigning `location.hash` would *push* a history entry Back re-exposes.
+  4. Only then does it bounce to sign-in.
 - `src/protocol/pairingPayload.ts` is the TypeScript arm of the four-way
   `MOBA1|…` contract, driven by `tests/protocol_fixtures/pairing/qr_payload.json`.
   The paste box strips all whitespace first, because a terminal soft-wraps the

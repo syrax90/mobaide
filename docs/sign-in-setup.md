@@ -7,8 +7,11 @@ Provider configuration for building the clients and running your own central ser
 The Android "Sign in with Google" button uses the Credential Manager API and requires an OAuth 2.0 **Web** client ID provisioned in Google Cloud Console:
 
 1. In Google Cloud Console → **APIs & Services → Credentials**, create (or reuse) a project and add two OAuth 2.0 client IDs:
-   - **Web application** — copy its client ID (format `NNN-xxxxx.apps.googleusercontent.com`). This is the ID the Android app asks Credential Manager for AND the ID the server verifies ID tokens against. The browser client uses it too — it fetches the id at runtime from `GET /api/version`, so it needs no build-time value, but every origin the SPA is served from (`https://app.mobaide.com`, plus `http://localhost:5173` for `npm run dev`) must be listed under this client's **Authorized JavaScript origins** or the web Sign in with Google button fails to render.
-   - **Android application** — register package `com.mobaide.app` and your debug + release signing-certificate SHA-1 fingerprints. Required by Google Play Services before any credential is returned even though the app only passes the Web client ID.
+   - **Web application** — copy its client ID (format `NNN-xxxxx.apps.googleusercontent.com`).
+     - This is the ID the Android app asks Credential Manager for AND the ID the server verifies ID tokens against.
+     - The browser client uses it too. It fetches the id at runtime from `GET /api/version`, so it needs no build-time value.
+     - Every origin the SPA is served from (`https://app.mobaide.com`, plus `http://localhost:5173` for `npm run dev`) must be listed under this client's **Authorized JavaScript origins**, or the web Sign in with Google button fails to render.
+   - **Android application** — register package `com.mobaide.app` and your debug + release signing-certificate SHA-1 fingerprints. Google Play Services requires this before any credential is returned, even though the app only passes the Web client ID.
 2. Put the Web client ID in your profile's `android.local.properties`:
    ```
    GOOGLE_WEB_CLIENT_ID=NNN-xxxxx.apps.googleusercontent.com
@@ -24,4 +27,11 @@ The iOS app's sign-in setup (a separate **iOS application** OAuth client ID via 
 
 ## Configuring Sign in with Apple on the web
 
-The web client offers Sign in with Apple so accounts created in the iOS app — which often have a private-relay address and no password — can sign in on a browser at all. It needs one extra server value, `APPLE_WEB_CLIENT_ID`, holding an Apple **Services ID**. The client fetches it at runtime from `GET /api/version`, so there is no build-time value, but the Services ID must be created with `com.mobaide.app` as its **primary App ID** — that grouping is what makes Apple issue the same user identifier on web as in the app, and getting it wrong creates duplicate accounts rather than an error. The full setup, including the domain verification each registered origin needs, is in ["Sign in with Apple on the web"](deployment.md#deploying-the-web-spa-appmobaidecom).
+The web client offers Sign in with Apple so accounts created in the iOS app, which often have a private-relay address and no password, can sign in on a browser at all.
+
+It needs one extra server value, `APPLE_WEB_CLIENT_ID`, holding an Apple **Services ID**. The client fetches it at runtime from `GET /api/version`, so there is no build-time value.
+
+> [!WARNING]
+> The Services ID must be created with `com.mobaide.app` as its **primary App ID**. That grouping is what makes Apple issue the same user identifier on web as in the app. Getting it wrong creates duplicate accounts rather than an error.
+
+The full setup, including the domain verification each registered origin needs, is in ["Sign in with Apple on the web"](deployment.md#deploying-the-web-spa-appmobaidecom).

@@ -3,6 +3,21 @@
 This page documents the agent-initiated QR pairing flow that replaces the
 legacy `mobaide-agent pair --id ... --token ...` invocation.
 
+**On this page**
+
+- [Overview](#overview)
+- [Sequence](#sequence)
+- [QR payload schema](#qr-payload-schema)
+- [Trust-On-First-Scan (TOFS) on the mobile](#trust-on-first-scan-tofs-on-the-mobile)
+- [Re-pair semantics](#re-pair-semantics)
+- [Operator runbook](#operator-runbook)
+- [Device-code pairing (the reversed direction)](#device-code-pairing-the-reversed-direction)
+- [Server-side configuration](#server-side-configuration)
+- [Multi-worker deployments](#multi-worker-deployments)
+- [Troubleshooting](#troubleshooting)
+- [Security tests](#security-tests)
+- [Out of scope](#out-of-scope)
+
 ## Overview
 
 A fresh `mobaide_agent` install used to require the operator to (a) read
@@ -71,28 +86,24 @@ MOBA1|{relay_url}|{nonce}|{trust_key_fp}|{exp_unix}
 * `MOBA1` — schema version. Mobile clients reject unknown versions.
 * `relay_url` — public base URL of the central server.
 * `nonce` — 192-bit `secrets.token_urlsafe(24)`. Single-use.
-* `trust_key_fp` — SHA-256 hex of the relay's manifest-signing public
-  key (the same Ed25519 key the agent's auto-updater pins for manifest
-  verification, exposed at `GET /api/v1/agent/trust_key`).
-* `exp_unix` — absolute expiry as Unix seconds. Default TTL: 120s
-  (`PAIRING_QR_TOKEN_TTL_SECONDS`); production sets 600s so a pairing
-  link survives the human hop to a browser on another device (the nonce
-  stays single-use, so the wider window adds no replay exposure).
+* `trust_key_fp` — SHA-256 hex of the relay's manifest-signing public key (the same Ed25519 key the agent's auto-updater pins for manifest verification, exposed at `GET /api/v1/agent/trust_key`).
+* `exp_unix` — absolute expiry as Unix seconds.
+  * Default TTL: 120s (`PAIRING_QR_TOKEN_TTL_SECONDS`).
+  * Production sets 600s so a pairing link survives the human hop to a browser on another device (the nonce stays single-use, so the wider window adds no replay exposure).
 
 The token is never carried in the QR. The server mints it server-side
 and pushes it to the agent over the pairing WebSocket.
 
-The parse contract is pinned across all four implementations by
-`tests/protocol_fixtures/pairing/qr_payload.json`: exactly five fields,
-`MOBA1` case-sensitive, `relay_url` / `nonce` / `trust_key_fp` non-blank
-once trimmed but stored **verbatim**, and `exp_unix` a signed 64-bit
-integer parse that rejects surrounding whitespace, digit separators and
-overflow. Expiry is deliberately **not** range-checked in the parser — a
-negative `exp_unix` parses, and the staleness decision belongs to each
-client's pairing state machine, which needs the value to say "expired N
-minutes ago" rather than "malformed". The Android arm of the golden is
-tracked in CLA-235; the `central_server` builder, still an inline f-string
-rather than a named function, in CLA-236.
+The parse contract is pinned across all four implementations by `tests/protocol_fixtures/pairing/qr_payload.json`:
+
+- exactly five fields;
+- `MOBA1` case-sensitive;
+- `relay_url` / `nonce` / `trust_key_fp` non-blank once trimmed but stored **verbatim**;
+- `exp_unix` a signed 64-bit integer parse that rejects surrounding whitespace, digit separators and overflow.
+
+Expiry is deliberately **not** range-checked in the parser — a negative `exp_unix` parses. The staleness decision belongs to each client's pairing state machine, which needs the value to say "expired N minutes ago" rather than "malformed".
+
+The Android arm of the golden is tracked in CLA-235; the `central_server` builder, still an inline f-string rather than a named function, in CLA-236.
 
 ### Printed pairing link (webcam-less pairing)
 
@@ -111,18 +122,13 @@ Both lines come from `pairing_qr.write_pairing_hints`, which all three
 print sites call (`pair-qr`, `show-qr`, and the pairing monitor — the last
 inside its must-not-raise `try`). Two constraints hold them together:
 
-* **Never wrapped, never prefixed.** A terminal's soft wrap is invisible,
-  but a copied soft-wrapped line carries embedded newlines. The web paste
-  box strips all whitespace before parsing so it survives anyway, but the
-  printer must not manufacture the problem.
-* **Never raises.** The labels are ASCII, but `relay_url` is the operator's
-  `PUBLIC_BASE_URL` and may be an internationalized host, so the payload and
-  the link are probed against the stream's codec first and replaced with an
-  ASCII notice when they do not fit. A Windows service redirects stdout to a
-  `cp437`/`cp1252` log file: a `UnicodeEncodeError` from the monitor's render
-  tears down the pairing WebSocket before `wait_for_claim` — the incident
-  `_stream_supports_block_glyphs` documents — and the same error on the
-  `show-qr` path fails the installer, which treats a non-zero exit as fatal.
+* **Never wrapped, never prefixed.**
+  * A terminal's soft wrap is invisible, but a copied soft-wrapped line carries embedded newlines.
+  * The web paste box strips all whitespace before parsing so it survives anyway, but the printer must not manufacture the problem.
+* **Never raises.**
+  * The labels are ASCII, but `relay_url` is the operator's `PUBLIC_BASE_URL` and may be an internationalized host. So the payload and the link are probed against the stream's codec first and replaced with an ASCII notice when they do not fit.
+  * A Windows service redirects stdout to a `cp437`/`cp1252` log file. A `UnicodeEncodeError` from the monitor's render tears down the pairing WebSocket before `wait_for_claim` — the incident `_stream_supports_block_glyphs` documents.
+  * The same error on the `show-qr` path fails the installer, which treats a non-zero exit as fatal.
 
 The payload is base64url-encoded without padding in the fragment: a raw `|`
 is not a legal URL character and terminal linkifiers stop at it, and a
@@ -161,26 +167,15 @@ hard-rejected (`scheme isn't ws or wss`).
 
 ### `relay_url` is persisted at initiate time
 
-The `relay_url` field in the QR payload **and** in every credential
-push is read from `pairing_tokens.relay_url`, which the
-`/api/pairing/initiate` handler writes once at nonce-creation time.
-Both the claim-handler dispatch path and the WS-recovery branch use
-the persisted column. Without this single source of truth the two
-branches recomputed `relay_url` independently from different request
-contexts (`request.base_url` for HTTP, `websocket.url.scheme` for
-WS), which can disagree behind a reverse proxy that does not forward
-`X-Forwarded-Proto` to uvicorn — the agent then rejected its own
-credentials on the resulting strict-equality mismatch.
+The `relay_url` field in the QR payload **and** in every credential push is read from `pairing_tokens.relay_url`, which the `/api/pairing/initiate` handler writes once at nonce-creation time. Both the claim-handler dispatch path and the WS-recovery branch use the persisted column.
+
+Without this single source of truth the two branches recomputed `relay_url` independently from different request contexts (`request.base_url` for HTTP, `websocket.url.scheme` for WS). These can disagree behind a reverse proxy that does not forward `X-Forwarded-Proto` to uvicorn — the agent then rejected its own credentials on the resulting strict-equality mismatch.
 
 ### `pending_pairing.json` is written AFTER the WS is open
 
-`run_pairing_monitor` enters `async with PairingWsClient.connect(...)`
-*before* saving `pending_pairing.json`. The on-disk file is the signal
-that `install.ps1`'s `Show-PairingQrFromService` polls before rendering
-the QR; pinning that signal to the WS-ready handshake ensures a fast
-mobile claim cannot arrive while the agent's WS waiter is still
-unregistered (which would force the server's recovery branch and
-expose the deployment-skew bug described above).
+`run_pairing_monitor` enters `async with PairingWsClient.connect(...)` *before* saving `pending_pairing.json`. The on-disk file is the signal that `install.ps1`'s `Show-PairingQrFromService` polls before rendering the QR.
+
+Pinning that signal to the WS-ready handshake ensures a fast mobile claim cannot arrive while the agent's WS waiter is still unregistered (which would force the server's recovery branch and expose the deployment-skew bug described above).
 
 ### `ws_delivered` in the claim response
 
@@ -190,13 +185,11 @@ server dispatched the credential push directly to the agent's open pairing
 WebSocket; when `false` the push was staged in the recovery slot for the
 agent's next WS reconnect to consume.
 
-All three clients use this only to refine the copy shown if the 60-second
-wait times out — a "not online yet" state, not an error, since the claim
-already succeeded — it is **not** treated as confirmation that
-pairing succeeded. The authoritative "paired" signal remains the
-`agent.status_changed` event carrying `online=true` delivered via the
-`UserEventBus`. The field is forward-compatible: older mobile clients that
-ignore unknown JSON fields are unaffected.
+All three clients use this only to refine the copy shown if the 60-second wait times out — a "not online yet" state, not an error, since the claim already succeeded. It is **not** treated as confirmation that pairing succeeded.
+
+The authoritative "paired" signal remains the `agent.status_changed` event carrying `online=true` delivered via the `UserEventBus`.
+
+The field is forward-compatible: older mobile clients that ignore unknown JSON fields are unaffected.
 
 ## Trust-On-First-Scan (TOFS) on the mobile
 
@@ -213,15 +206,11 @@ this without a full app-data wipe.)
 
 ### TOFS in a browser is weaker, deliberately
 
-The web client pins the same way, in `localStorage` under
-`mobaide-trust-pins`, with the same key normalization (trim, strip every
-trailing slash, lowercase) and the same hard refusal with no override. The
-difference is durability: Safari caps script-written storage at 7 days of
-no interaction, so an infrequently used relay silently degrades from
-trust-on-first-scan to trust-on-most-recent-scan. The same wipe
-regenerates the browser's device UUID, which under the
-last-login-wins registry above orphans a `mobile_devices` row. Recovery
-is clearing the site's data rather than the app's.
+The web client pins the same way, in `localStorage` under `mobaide-trust-pins`, with the same key normalization (trim, strip every trailing slash, lowercase) and the same hard refusal with no override.
+
+The difference is durability: Safari caps script-written storage at 7 days of no interaction, so an infrequently used relay silently degrades from trust-on-first-scan to trust-on-most-recent-scan.
+
+The same wipe regenerates the browser's device UUID, which under the last-login-wins registry above orphans a `mobile_devices` row. Recovery is clearing the site's data rather than the app's.
 
 ### The account-level pin, and what it does not do
 
@@ -231,33 +220,22 @@ that fingerprint no longer matches the relay's current key. A browser whose
 `localStorage` was wiped therefore cannot silently re-trust a rotated key: the
 server still remembers, and the refusal happens server-side.
 
-Be precise about what that buys. A claim whose `trust_key_fp` disagrees with
-the relay's current key is *already* a 400, so the account pin only ever fires
-when the relay's own signing key changed. It is a **rotation tripwire, not an
-MITM detector** — the relay both stores the pin and serves the value it is
-compared against, so a compromised relay simply returns a matching pair. The
-local pin remains the only thing that records what the user personally
-vouched for, which is why `GET /api/pairing/trust-pin` is read-only and no
-client writes its response into a local trust store: an unattended write is a
-permanent lockout waiting for a bad value.
+Be precise about what that buys. A claim whose `trust_key_fp` disagrees with the relay's current key is *already* a 400, so the account pin only ever fires when the relay's own signing key changed.
+
+It is a **rotation tripwire, not an MITM detector** — the relay both stores the pin and serves the value it is compared against, so a compromised relay simply returns a matching pair.
+
+The local pin remains the only thing that records what the user personally vouched for. That is why `GET /api/pairing/trust-pin` is read-only and no client writes its response into a local trust store: an unattended write is a permanent lockout waiting for a bad value.
 
 ### The first-pairing marker
 
-`_complete_pairing` also stamps `users.first_paired_at` on the account's
-first-ever successful claim, through its own compare-and-set right after the
-trust pin is taken. Unlike `trust_key_fp` it is never cleared — the pin resets
-when an account drops to zero agents, and this marker must not — which is
-what makes it safe as the trigger for the once-per-account Google Ads "Agent
-paired" conversion upload (see *Google Ads conversion upload* in
-docs/deployment.md): when the CAS wins, the user id is handed to
-`app.state.ads_uploader` after the credential push, so a scheduling fault can
-never fail a delivered pairing. Accounts that already owned an agent or
-carried a pin when the column arrived were backfilled by the v20 migration.
-The same winning CAS also broadcasts the `account.first_agent_paired` user
-event (`{"agent_id"}`) to the account's user-events sockets, under the same
-never-raise rule, and the stamp is readable afterwards from
-`GET /api/auth/me` — the two signals the mobile apps' in-app conversion
-(docs/app-conversion-measurement.md) is built on.
+`_complete_pairing` also stamps `users.first_paired_at` on the account's first-ever successful claim, through its own compare-and-set right after the trust pin is taken.
+
+Unlike `trust_key_fp` it is never cleared — the pin resets when an account drops to zero agents, and this marker must not. That is what makes it safe as the trigger for the once-per-account Google Ads "Agent paired" conversion upload (see *Google Ads conversion upload* in docs/deployment.md):
+
+- When the CAS wins, the user id is handed to `app.state.ads_uploader` after the credential push, so a scheduling fault can never fail a delivered pairing.
+- Accounts that already owned an agent or carried a pin when the column arrived were backfilled by the v20 migration.
+
+The same winning CAS also broadcasts the `account.first_agent_paired` user event (`{"agent_id"}`) to the account's user-events sockets, under the same never-raise rule. The stamp is readable afterwards from `GET /api/auth/me`. These are the two signals the mobile apps' in-app conversion (docs/app-conversion-measurement.md) is built on.
 
 The refusal is HTTP 409 with `detail.error = "trust_key_pin_mismatch"` — a
 structured detail rather than prose, because 409 already carries the "agent
@@ -269,23 +247,14 @@ The agent's CLI captures its current `RELAY_AGENT_ID` (if any) into the
 initiate request's `agent_metadata.current_agent_id` field. The claim
 handler then chooses one of three paths:
 
-* **No current agent id** (`current_agent_id` absent) — the server calls
-  `db.register_agent()` to create a new agent row (first-pair).
-* **Unknown / deleted agent id** (`current_agent_id` present but no
-  matching row) — the claim returns **HTTP 404**. The agent host must
-  first-pair instead: run `mobaide-agent re-pair --fresh` to drop the dead
-  id, then rescan. This happens when the agent was removed from the account
-  or the relay database was redeployed — plain `re-pair` keeps the id and
-  would 404 on every cycle.
-* **Same owner** — `db.is_agent_owner(current_agent_id, claimer)`
-  returns true. The server calls `db.reregister_agent(current_agent_id)`
-  to rotate the token. The mobile UI sees the same agent row reappear
-  with a fresh credential.
+* **No current agent id** (`current_agent_id` absent) — the server calls `db.register_agent()` to create a new agent row (first-pair).
+* **Unknown / deleted agent id** (`current_agent_id` present but no matching row) — the claim returns **HTTP 404**.
+  * The agent host must first-pair instead: run `mobaide-agent re-pair --fresh` to drop the dead id, then rescan.
+  * This happens when the agent was removed from the account or the relay database was redeployed — plain `re-pair` keeps the id and would 404 on every cycle.
+* **Same owner** — `db.is_agent_owner(current_agent_id, claimer)` returns true. The server calls `db.reregister_agent(current_agent_id)` to rotate the token. The mobile UI sees the same agent row reappear with a fresh credential.
 * **Different owner** — `POST /api/pairing/claim` returns **HTTP 409**.
-  Cross-account agent transfer is not permitted via QR re-pair. To move
-  a host to a different account, the current owner must remove the agent
-  through the app first; the agent host then first-pairs as a new agent
-  under the new account.
+  * Cross-account agent transfer is not permitted via QR re-pair.
+  * To move a host to a different account, the current owner must remove the agent through the app first; the agent host then first-pairs as a new agent under the new account.
 
 Authorization model: possession of shell access on the agent host alone
 is no longer sufficient to claim ownership from another account. The
@@ -294,52 +263,37 @@ different account can acquire it.
 
 ### Mobile device registry
 
-The `mobile_device_id` registry (the `mobile_devices` table) is
-**last-login-wins**, unlike agent ownership above. A claim or token mint
-from an authenticated account always moves the device row to the caller:
-the caller proves account access (user JWT) plus device possession (the
-per-install random UUID is never exposed to other users). The handover
-revokes every live refresh token previously issued for that device and
-clears its push registration, so the prior account can neither refresh
-its mobile sessions nor keep receiving notifications on hardware it no
-longer uses. This is what lets one phone switch between accounts (or a
-factory-reset/hand-me-down device re-register) without any manual
-release step — agents themselves still require the explicit release
-described above.
+The `mobile_device_id` registry (the `mobile_devices` table) is **last-login-wins**, unlike agent ownership above.
 
-Two cases refuse to move the row, on `POST /api/agents/{id}/token` and on
-pairing claim/confirm. A session bound to one device (its user JWT carries
-the `device_id` sent at sign-in) naming a different device gets `401`, so
-the client signs out and the next sign-in binds to the id it now has — an
-iPhone restored from a backup keeps its Keychain tokens but gets a new device
-id. A session signed in at or before the device's revoke gets `403`, and so
-does a mint or claim that a revoke overtakes mid-request. For a refreshable
-session the sign-in time is its `auth_time` claim, which every rotation
-carries forward (it is stored on the refresh row), not its `iat` — otherwise
-the unbound refresh tokens a revoke leaves live would pass this check one
-access-token lifetime later.
+A claim or token mint from an authenticated account always moves the device row to the caller: the caller proves account access (user JWT) plus device possession (the per-install random UUID is never exposed to other users).
 
-Revoking a device records a `tokens_valid_after` watermark in the
-`device_revocations(device_id, tokens_valid_after)` table. The row is never
-cleared and has no foreign key, so it survives re-registration, handover of
-the device to another account, and deletion of any account: every JWT bound to that
-device (mobile access token, or user JWT with a `device_id` claim) with `iat` at or
-before the watermark is rejected, while a fresh sign-in on the device after
-the revoke may register it again. User sessions signed in without a
-`device_id` are not bound and survive a revoke.
+The handover revokes every live refresh token previously issued for that device and clears its push registration. The prior account can then neither refresh its mobile sessions nor keep receiving notifications on hardware it no longer uses.
+
+This is what lets one phone switch between accounts (or a factory-reset/hand-me-down device re-register) without any manual release step — agents themselves still require the explicit release described above.
+
+Two cases refuse to move the row, on `POST /api/agents/{id}/token` and on pairing claim/confirm:
+
+- **Device mismatch (`401`).** A session bound to one device (its user JWT carries the `device_id` sent at sign-in) naming a different device gets `401`. The client signs out and the next sign-in binds to the id it now has — an iPhone restored from a backup keeps its Keychain tokens but gets a new device id.
+- **Signed in before the revoke (`403`).** A session signed in at or before the device's revoke gets `403`, and so does a mint or claim that a revoke overtakes mid-request.
+
+For a refreshable session the sign-in time is its `auth_time` claim, which every rotation carries forward (it is stored on the refresh row), not its `iat`. Otherwise the unbound refresh tokens a revoke leaves live would pass this check one access-token lifetime later.
+
+Revoking a device records a `tokens_valid_after` watermark in the `device_revocations(device_id, tokens_valid_after)` table.
+
+- The row is never cleared and has no foreign key, so it survives re-registration, handover of the device to another account, and deletion of any account.
+- Every JWT bound to that device (mobile access token, or user JWT with a `device_id` claim) with `iat` at or before the watermark is rejected.
+- A fresh sign-in on the device after the revoke may register it again.
+- User sessions signed in without a `device_id` are not bound and survive a revoke.
 
 ## Operator runbook
 
 ### First install
 
-The install scripts (`deploy/install.sh`, `deploy/install.ps1`) start
-the supervisor, wait for the agent to report healthy and for the service
-to write the pairing nonce file, then render the pairing QR. This
-ordering guarantees the service is ready to accept the incoming pairing
-claim before the operator scans — eliminating the boot-gap race that
-left `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` empty. SSH-attached
-operators see the QR once the service is up and can scan it from the
-Mobaide mobile app to complete pairing.
+The install scripts (`deploy/install.sh`, `deploy/install.ps1`) start the supervisor, wait for the agent to report healthy and for the service to write the pairing nonce file, then render the pairing QR.
+
+This ordering guarantees the service is ready to accept the incoming pairing claim before the operator scans — eliminating the boot-gap race that left `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` empty.
+
+SSH-attached operators see the QR once the service is up and can scan it from the Mobaide mobile app to complete pairing.
 
 If the operator misses the QR (e.g., SSH disconnected before scanning),
 the agent's boot-time autorun re-renders it. Run on the agent host:
@@ -352,23 +306,16 @@ This re-renders the most-recent pending QR; if the cached nonce has
 expired, it initiates a fresh one. It first asks the agent answering on
 `127.0.0.1:<PORT>` for `/api/health`:
 
-* `pairing_pending: true` with no pending file yet (the service is still
-  booting, e.g. right after `re-pair`): it waits up to 60 s for the
-  service's own QR rather than initiating a nonce the service would then
-  replace, and exits 7 if none appears.
-* `pairing_pending: false` while `.env` holds no credentials: the running
-  agent started before they were blanked and still serves them, so it
-  would never answer a QR. `show-qr` renders nothing and exits 9; restart
-  the agent by running `mobaide-agent re-pair` again.
+* `pairing_pending: true` with no pending file yet (the service is still booting, e.g. right after `re-pair`): it waits up to 60 s for the service's own QR rather than initiating a nonce the service would then replace, and exits 7 if none appears.
+* `pairing_pending: false` while `.env` holds no credentials: the running agent started before they were blanked and still serves them, so it would never answer a QR. `show-qr` renders nothing and exits 9; restart the agent by running `mobaide-agent re-pair` again.
 * nothing answering: unchanged — render the pending file, or initiate.
 
 `mobaide-agent` is a shim the installer puts on PATH:
-`/usr/local/bin/mobaide-agent` on Linux and macOS (or `<prefix>/bin/mobaide-agent`,
-which the installer prints by its full path, when it cannot use that location),
-and `<prefix>\bin` on the installing user's PATH on Windows (open a new
-terminal after installing).
-Installs made before the shim existed need the installer re-run; see
-[The `mobaide-agent` command](deployment.md#linux-systemd-and-macos-launchd--automated).
+
+- Linux and macOS: `/usr/local/bin/mobaide-agent` (or `<prefix>/bin/mobaide-agent`, which the installer prints by its full path, when it cannot use that location).
+- Windows: `<prefix>\bin` on the installing user's PATH (open a new terminal after installing).
+
+Installs made before the shim existed need the installer re-run; see [The `mobaide-agent` command](deployment.md#linux-systemd-and-macos-launchd--automated).
 
 The installers pass `--require-pending` to `show-qr` so that the
 installer itself never initiates a fresh nonce — the running service
@@ -395,14 +342,11 @@ To move a host to a different account:
    mobaide-agent re-pair --fresh
    ```
 
-   `--fresh` blanks BOTH `RELAY_AGENT_ID` and `RELAY_AGENT_TOKEN` in `.env`
-   (plain `re-pair` keeps the id) and restarts the supervisor, surfacing a
-   fresh QR via the boot autorun. The id **must** be cleared here: after
-   step 1 the relay no longer has this agent, so carrying the old id would
-   make the claim fail with HTTP 404 "Re-pair target agent does not exist".
-3. Scan the QR from the new account's mobile app. Because no agent ID is
-   carried in the initiate request, the server registers a fresh agent
-   row under the new owner.
+   `--fresh` blanks BOTH `RELAY_AGENT_ID` and `RELAY_AGENT_TOKEN` in `.env` (plain `re-pair` keeps the id) and restarts the supervisor, surfacing a fresh QR via the boot autorun.
+
+   The id **must** be cleared here: after step 1 the relay no longer has this agent, so carrying the old id would make the claim fail with HTTP 404 "Re-pair target agent does not exist".
+
+3. Scan the QR from the new account's mobile app. Because no agent ID is carried in the initiate request, the server registers a fresh agent row under the new owner.
 
 ### Re-pair after the agent was removed or the relay was redeployed
 
@@ -511,14 +455,16 @@ relay's JWT secret is folded in the way `AuthService._hash_code` does for the
 6-digit OTP. Unlike the OTP there is no `user_id` in the HMAC input — the
 redeeming agent is anonymous and looks the row up by code alone.
 
-There is deliberately **no per-code attempt counter**: a wrong guess HMACs to a
-row that does not exist, so there is nothing to increment. The guessing defence
-is the code's entropy plus at most one live code per account, a short TTL,
-single use, a per-IP limiter on the redeem endpoint, and a global
-constant-keyed circuit breaker for the distributed case the per-IP bucket
-cannot see (it collapses to one shared bucket behind a proxy that does not
-forward the client address — see `FORWARDED_ALLOW_IPS` in
-`docs/deployment.md`).
+There is deliberately **no per-code attempt counter**: a wrong guess HMACs to a row that does not exist, so there is nothing to increment.
+
+The guessing defence is:
+
+- the code's entropy;
+- at most one live code per account;
+- a short TTL;
+- single use;
+- a per-IP limiter on the redeem endpoint;
+- a global constant-keyed circuit breaker for the distributed case the per-IP bucket cannot see (it collapses to one shared bucket behind a proxy that does not forward the client address — see `FORWARDED_ALLOW_IPS` in `docs/deployment.md`).
 
 The global breaker is charged on **failed** redeems only, and checked with
 `ResendRateLimiter.peek` so the check itself costs nothing. Charging every
@@ -528,15 +474,11 @@ enough to deny pairing to everyone.
 
 ### Why the agent asks too
 
-Reversing the mint direction reverses the phishing attack, and the browser's
-"Is this your machine?" screen does not cover the new one. In the QR flow the
-code proves presence at the machine being paired. Here an attacker can mint a
-code on *their* account and talk someone into running
-`mobaide-agent pair <code>` — at which point the victim's machine becomes an
-agent the **attacker** owns, and the attacker is the one clicking the browser
-confirmation. The `current_agent_id` ownership guard does not help: it only
-protects hosts that are already paired, which is not the install-time case
-this feature targets.
+Reversing the mint direction reverses the phishing attack, and the browser's "Is this your machine?" screen does not cover the new one.
+
+In the QR flow the code proves presence at the machine being paired. Here an attacker can mint a code on *their* account and talk someone into running `mobaide-agent pair <code>` — at which point the victim's machine becomes an agent the **attacker** owns, and the attacker is the one clicking the browser confirmation.
+
+The `current_agent_id` ownership guard does not help: it only protects hosts that are already paired, which is not the install-time case this feature targets.
 
 So the redeem response carries a masked `account_hint`, and the CLI requires an
 interactive `y/N` naming that account and this hostname before it writes
@@ -563,14 +505,9 @@ Conversely, the browser-side confirmation is real but limited. `hostname` and
 `current_agent_id` is in the QR flow. They let a user recognise their own
 machine; they authenticate nothing.
 
-One case the confirm screen must not get wrong: the redeem body also carries
-`current_agent_id`, and when it names an agent the confirming account *already
-owns*, approving does not add a machine — it **moves** that agent, rotating its
-token onto the redeeming host and knocking the real one offline. The status
-response therefore returns `repair_agent_name` for that case, and all three
-clients swap the heading from "Is this your machine?" to "Move ‘<name>’ to this
-machine?" with an explicit warning. Asking the first-pair question there would
-be asking about the wrong thing entirely.
+One case the confirm screen must not get wrong: the redeem body also carries `current_agent_id`, and when it names an agent the confirming account *already owns*, approving does not add a machine. It **moves** that agent, rotating its token onto the redeeming host and knocking the real one offline.
+
+The status response therefore returns `repair_agent_name` for that case. All three clients swap the heading from "Is this your machine?" to "Move ‘<name>’ to this machine?" with an explicit warning. Asking the first-pair question there would be asking about the wrong thing entirely.
 
 ### Retries, and what `redeemer_id` does and does not buy
 
@@ -579,21 +516,18 @@ The CLI generates a `redeemer_id`, persists it to
 on a retry. The relay recognises a matching retry from the existing row instead
 of rejecting it as a second machine racing the code.
 
-Be precise about the limit: **the raw nonce is never stored server-side**, so a
-replayed redeem comes back with `nonce: null`. The retry therefore only
-continues if the agent still holds its own copy — which the pending file gives
-it, rewritten with the nonce as soon as the response lands, so a Ctrl-C during
-the wait resumes rather than restarts. A redeem whose *response* was lost in
-transit is not recoverable: the CLI exits 8 and the operator mints a new code.
+Be precise about the limit: **the raw nonce is never stored server-side**, so a replayed redeem comes back with `nonce: null`.
 
-A failed pairing WebSocket is the one failure that keeps the file rather than
-clearing it. The relay parks the claimed credentials in
-`pairing_tokens.claimed_token_raw` for a reconnect on the same nonce, and that
-nonce exists nowhere else — so a dropped connection exits 6 and prints the
-command to re-run, which reconnects and takes delivery through the recovery
-branch. Clearing it there would redeem under a fresh `redeemer_id` on the next
-attempt and burn the code. A record whose nonce has since expired is dropped by
-`load_pending_device_code`, so a stale file cannot strand the next run.
+The retry therefore only continues if the agent still holds its own copy. The pending file gives it one, rewritten with the nonce as soon as the response lands, so a Ctrl-C during the wait resumes rather than restarts.
+
+A redeem whose *response* was lost in transit is not recoverable: the CLI exits 8 and the operator mints a new code.
+
+A failed pairing WebSocket is the one failure that keeps the file rather than clearing it.
+
+- The relay parks the claimed credentials in `pairing_tokens.claimed_token_raw` for a reconnect on the same nonce, and that nonce exists nowhere else.
+- So a dropped connection exits 6 and prints the command to re-run, which reconnects and takes delivery through the recovery branch.
+- Clearing the file there would redeem under a fresh `redeemer_id` on the next attempt and burn the code.
+- A record whose nonce has since expired is dropped by `load_pending_device_code`, so a stale file cannot strand the next run.
 
 The record is keyed by a digest of the code, so typing a *different* code
 starts a fresh redemption rather than silently waiting out the earlier one. It
@@ -606,23 +540,19 @@ shared file would overwrite the nonce that cycle is waiting on.
 `DELETE /api/pairing/device-code/{request_id}` marks the code canceled and
 expires its nonce in the same transaction.
 
-A cancel racing the *redeem* is settled the same way. Minting the nonce is a
-separate statement from the redeem CAS, so a DELETE can land between them, read
-a still-NULL `pairing_nonce_hash`, and expire nothing; the update that links the
-nonce is therefore guarded on `canceled_at IS NULL` and rolls the nonce back
-when it loses. Otherwise a canceled request came away holding a live nonce, and
-the agent waited out the whole confirm TTL for a confirm that could only 410.
+A cancel racing the *redeem* is settled the same way.
 
-Confirm and cancel are mutually exclusive, and the code row — not the nonce —
-is what decides. `confirm` reserves the request (`confirmed_at`, CAS'd on
-`confirmed_at IS NULL AND canceled_at IS NULL`) *before* it issues any
-credentials, and cancel's update carries the same guard; both are single
-statements over the one shared connection, so exactly one wins. A confirm the
-ownership guard or the trust pin then refuses calls `reopen_device_code`, which
-hands the reservation back so the request stays confirmable. Reserving
-afterwards instead — as this endpoint originally did — left a window where a
-DELETE arriving mid-pairing answered 204 while the confirm went on to hand the
-machine an agent, telling both clients they had won.
+- Minting the nonce is a separate statement from the redeem CAS, so a DELETE can land between them, read a still-NULL `pairing_nonce_hash`, and expire nothing.
+- The update that links the nonce is therefore guarded on `canceled_at IS NULL` and rolls the nonce back when it loses.
+- Otherwise a canceled request came away holding a live nonce, and the agent waited out the whole confirm TTL for a confirm that could only 410.
+
+**Confirm and cancel are mutually exclusive**, and the code row — not the nonce — is what decides.
+
+- `confirm` reserves the request (`confirmed_at`, CAS'd on `confirmed_at IS NULL AND canceled_at IS NULL`) *before* it issues any credentials, and cancel's update carries the same guard.
+- Both are single statements over the one shared connection, so exactly one wins.
+- A confirm the ownership guard or the trust pin then refuses calls `reopen_device_code`, which hands the reservation back so the request stays confirmable.
+
+Reserving afterwards instead — as this endpoint originally did — left a window where a DELETE arriving mid-pairing answered 204 while the confirm went on to hand the machine an agent, telling both clients they had won.
 
 It does **not** promptly stop an agent that has already connected. The WS
 handler reads `expires_at` once and then blocks in a single
@@ -700,12 +630,10 @@ it, so the user sees "waiting for the agent" until the timeout. Mitigations:
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| `pair-qr` or `fetch-trust-key` returns HTTP 403 (Cloudflare error 1010) | Cloudflare Bot Fight Mode blocked the default `Python-urllib` User-Agent | Agent v0.1.3+ sends `User-Agent: mobaide-agent/<version>`, which passes default Bot Fight Mode. If using Super Bot Fight Mode with JA3/JA4 "Block", add a Cloudflare WAF Skip rule: `(http.user_agent wildcard "mobaide-agent/*") and (http.request.uri.path starts_with "/api/")`. Older agents must be upgraded. |
 | `pair-qr` returns 503 | Server lacks `MANIFEST_SIGNING_PRIVATE_KEY` | Set the env var on the relay; restart |
 | `pair-qr` returns 4 ("trust key not pinned") | Agent never ran `fetch-trust-key` | Run `mobaide-agent fetch-trust-key` |
 | `pair-qr` returns 5 ("fingerprint mismatch") | Server's trust key was rotated since the agent pinned it | Re-fetch the trust key (re-run `fetch-trust-key`); confirm rotation was intentional |
 | Mobile shows "Pairing code consumed or expired" (HTTP 410) | QR scanned twice, or after TTL | Render a fresh QR via `show-qr` |
-| `show-qr` exits 9 ("still paired with the credentials it started with") | The agent running on the host booted before `re-pair` blanked `.env`, so it is still paired and no pairing monitor is waiting on any QR. On Windows this was the normal outcome of `re-pair` before the supervisor's kill-on-close Job Object: `schtasks /End` killed only the supervisor, the orphaned agent kept the port, and the restarted one exited (Task Scheduler last result 3) | Run `mobaide-agent re-pair` again from a terminal outside Mobaide: its restart now also stops any agent process left running from the install before starting the task. Re-run the installer once to get the supervisor that ends its whole process tree |
 | `show-qr` exits 7 without `--require-pending` | The agent is in pairing mode but did not publish a QR within 60 s — most likely it cannot reach the relay | Check the agent logs; it retries on its own, so run `show-qr` again later |
 | Mobile shows "Trust key changed — possible MITM" | TOFS pin diverges from scanned fingerprint | If you intentionally rotated the relay key, clear the app's data; otherwise treat as a security incident |
 | `pair-qr --wait` exits 6 | Pairing WS transport, TTL, or signature failure | Re-run; check relay logs |
@@ -717,9 +645,71 @@ it, so the user sees "waiting for the agent" until the timeout. Mitigations:
 | Agent log shows `pairing_monitor.clock_skew` | The agent host's clock is ahead of the relay by more than the nonce TTL, so every fresh nonce looks expired | Enable NTP time sync on the agent host. Pairing cannot complete until the clock is correct (claims are also rejected beyond 5 min skew) |
 | `pair <code>` returns 429 | Redeem rate limit tripped (per-IP or the global circuit breaker) | Wait for the `Retry-After` interval. Behind a proxy, check `FORWARDED_ALLOW_IPS` — without it every redeem is attributed to the proxy and shares one bucket |
 | Client shows "This relay's signing key is not the one this account first paired with" (409 `trust_key_pin_mismatch`) | The relay's `MANIFEST_SIGNING_*` keypair was rotated after this account pinned it | Compare fingerprints with `mobaide-agent show-trust-fp` on an already-paired host. If the rotation was intentional, follow the trust-key rotation runbook above; otherwise treat as a security incident |
-| Browser sits on "waiting for a machine to enter the code" until the code expires | Nothing redeemed the code, the operator has not answered the agent's `y/N` prompt yet (an expected intermediate state — the request stays `pending` until it is answered), or the relay runs multiple workers and the confirm landed on a worker without the agent's WS | Check the command actually ran on the agent host; confirm the relay is single-worker (see "Multi-worker deployments"). All three clients now bound this screen with the deadline the relay reported, so it ends in an expiry message rather than waiting forever even if the poll that would have reported it fails |
-| QR scan succeeded but the client shows "Waiting for agent…" then, after 60 s, "Agent not online yet" (not an error — the claim already succeeded; "Keep waiting" restarts the wait) | Agent relay client did not come online within the timeout. Possible causes: agent process crashed after writing `.env`, Windows service stdout silenced (pre-v0.1.9), Windows service log file encoded as cp1252/cp437 causing `UnicodeEncodeError` in QR render and aborting the WS before `wait_for_claim` (pre-v0.1.11), or `relay_url` scheme mismatch caused the agent to discard its own credentials. | Check that the agent service is running on that host, or run `mobaide-agent show-qr` there to restart pairing (the same platform-neutral copy all three clients show). Upgrade to v0.1.11+ if on Windows service builds below that version. |
-| QR scan succeeded (mobile shows "Paired") but agent stays offline / `pairing_pending: true` persists | Pre-v0.1.5 agent: post-pairing restart used `sudo -n systemctl restart`, which silently no-op'd when the install user lacked NOPASSWD. v0.1.5–v0.1.6 used `sys.exit(75)` + supervisor restart, which failed when credentials were not flushed before the process exited. v0.1.7–v0.1.8 on Windows service builds: the service host redirected stdout to DEVNULL, silently dropping every structlog line (the issue is visible only after checking `<prefix>\logs\agent.out.log`, which v0.1.9+ captures); a fast mobile scan could also hit the WS-recovery path and receive a push with a `relay_url` scheme that mismatched the initiate-time value (https vs http behind a proxy) — agent strict-equality check discarded its own credentials. | Upgrade to v0.1.9+. The agent now (a) captures stdout to `<prefix>\logs\agent.out.log`, (b) writes `pending_pairing.json` only after the WS is open, and (c) uses `pairing_tokens.relay_url` as the single source of truth for both the dispatch and recovery paths. On older installs: for Linux/macOS, manually run `sudo systemctl restart mobaide-agent` or `launchctl unload … && launchctl load …` once after the initial pairing scan. |
+
+### Troubleshooting entries with longer explanations
+
+These entries have the same Symptom / Likely cause / Action shape as the table above, but their text is too long for a table cell.
+
+#### Cloudflare error 1010 on `pair-qr` or `fetch-trust-key`
+
+**Symptom:** `pair-qr` or `fetch-trust-key` returns HTTP 403 (Cloudflare error 1010).
+
+- **Likely cause:** Cloudflare Bot Fight Mode blocked the default `Python-urllib` User-Agent.
+- **Action:**
+  - Agent v0.1.3+ sends `User-Agent: mobaide-agent/<version>`, which passes default Bot Fight Mode.
+  - If using Super Bot Fight Mode with JA3/JA4 "Block", add a Cloudflare WAF Skip rule: `(http.user_agent wildcard "mobaide-agent/*") and (http.request.uri.path starts_with "/api/")`.
+  - Older agents must be upgraded.
+
+#### `show-qr` exits 9 (still paired with the credentials it started with)
+
+**Symptom:** `show-qr` exits 9 ("still paired with the credentials it started with").
+
+- **Likely cause:**
+  - The agent running on the host booted before `re-pair` blanked `.env`, so it is still paired and no pairing monitor is waiting on any QR.
+  - On Windows this was the normal outcome of `re-pair` before the supervisor's kill-on-close Job Object: `schtasks /End` killed only the supervisor, the orphaned agent kept the port, and the restarted one exited (Task Scheduler last result 3).
+- **Action:**
+  - Run `mobaide-agent re-pair` again from a terminal outside Mobaide: its restart now also stops any agent process left running from the install before starting the task.
+  - Re-run the installer once to get the supervisor that ends its whole process tree.
+
+#### Browser sits on "waiting for a machine to enter the code"
+
+**Symptom:** The browser sits on "waiting for a machine to enter the code" until the code expires.
+
+- **Likely cause:** one of three.
+  - Nothing redeemed the code.
+  - The operator has not answered the agent's `y/N` prompt yet (an expected intermediate state — the request stays `pending` until it is answered).
+  - The relay runs multiple workers and the confirm landed on a worker without the agent's WS.
+- **Action:**
+  - Check the command actually ran on the agent host.
+  - Confirm the relay is single-worker (see "Multi-worker deployments").
+  - All three clients now bound this screen with the deadline the relay reported, so it ends in an expiry message rather than waiting forever even if the poll that would have reported it fails.
+
+#### QR scan succeeded but the client shows "Agent not online yet"
+
+**Symptom:** QR scan succeeded but the client shows "Waiting for agent…" then, after 60 s, "Agent not online yet" (not an error — the claim already succeeded; "Keep waiting" restarts the wait).
+
+- **Likely cause:** the agent relay client did not come online within the timeout. Possible causes:
+  - agent process crashed after writing `.env`;
+  - Windows service stdout silenced (pre-v0.1.9);
+  - Windows service log file encoded as cp1252/cp437 causing `UnicodeEncodeError` in QR render and aborting the WS before `wait_for_claim` (pre-v0.1.11);
+  - `relay_url` scheme mismatch caused the agent to discard its own credentials.
+- **Action:**
+  - Check that the agent service is running on that host, or run `mobaide-agent show-qr` there to restart pairing (the same platform-neutral copy all three clients show).
+  - Upgrade to v0.1.11+ if on Windows service builds below that version.
+
+#### QR scan succeeded (mobile shows "Paired") but the agent stays offline
+
+**Symptom:** QR scan succeeded (mobile shows "Paired") but agent stays offline / `pairing_pending: true` persists.
+
+- **Likely cause:**
+  - Pre-v0.1.5 agent: post-pairing restart used `sudo -n systemctl restart`, which silently no-op'd when the install user lacked NOPASSWD.
+  - v0.1.5–v0.1.6 used `sys.exit(75)` + supervisor restart, which failed when credentials were not flushed before the process exited.
+  - v0.1.7–v0.1.8 on Windows service builds: the service host redirected stdout to DEVNULL, silently dropping every structlog line (the issue is visible only after checking `<prefix>\logs\agent.out.log`, which v0.1.9+ captures).
+  - A fast mobile scan could also hit the WS-recovery path and receive a push with a `relay_url` scheme that mismatched the initiate-time value (https vs http behind a proxy) — agent strict-equality check discarded its own credentials.
+- **Action:**
+  - Upgrade to v0.1.9+.
+  - The agent now (a) captures stdout to `<prefix>\logs\agent.out.log`, (b) writes `pending_pairing.json` only after the WS is open, and (c) uses `pairing_tokens.relay_url` as the single source of truth for both the dispatch and recovery paths.
+  - On older installs: for Linux/macOS, manually run `sudo systemctl restart mobaide-agent` or `launchctl unload … && launchctl load …` once after the initial pairing scan.
 
 ## Security tests
 

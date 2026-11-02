@@ -21,6 +21,18 @@ are not repeated here:
 | In-app lane: Firebase Analytics, consent defaults, config files, store disclosures | [app-conversion-measurement.md](app-conversion-measurement.md) |
 | User-facing statement of all of the above | `central_server/legal/privacy.md` §3.1, 3.5, 3.8, 4, 5, 6, 8, 10 |
 
+**On this page**
+
+- [1. The idea](#1-the-idea)
+- [2. Stages and status](#2-stages-and-status)
+- [3. Architecture at a glance](#3-architecture-at-a-glance)
+- [4. History — what happened and why it changed](#4-history--what-happened-and-why-it-changed)
+- [5. What we learned — keep these](#5-what-we-learned--keep-these)
+- [6. Configuration inventory](#6-configuration-inventory)
+- [7. Monitoring](#7-monitoring)
+- [8. How to pause, change or remove it](#8-how-to-pause-change-or-remove-it)
+- [9. Open items](#9-open-items)
+
 ## 1. The idea
 
 Google Ads campaigns were optimising for cheap events (a landing-page view, an
@@ -50,12 +62,15 @@ Google Ads as one custom goal, **"Agent paired"**, that every campaign bids on:
 **The conversion, precisely.** The single race-safe moment meaning "this
 account paired its first agent ever" is the compare-and-set
 `db.mark_user_first_paired()` inside `_complete_pairing()`
-(`central_server/central_server/pairing/router.py`). It wins exactly once per
-account, for QR and device-code pairing, from any client, and is never
-cleared. On the win the relay logs `pairing.first_agent_paired`, hands the user
-id to the uploader (Lane A) and broadcasts the `account.first_agent_paired`
-user event (Lane B). Every account that already owned an agent when the column
-arrived (2026-09-02) was backfilled as paired and will never convert.
+(`central_server/central_server/pairing/router.py`).
+
+- It wins exactly once per account, for QR and device-code pairing, from any client,
+  and is never cleared.
+- On the win the relay logs `pairing.first_agent_paired`, hands the user id to the
+  uploader (Lane A) and broadcasts the `account.first_agent_paired` user event
+  (Lane B).
+- Every account that already owned an agent when the column arrived (2026-09-02) was
+  backfilled as paired and will never convert.
 
 ## 2. Stages and status
 
@@ -122,120 +137,153 @@ pin, uploaded through the Google Ads API (`uploadClickConversions`, developer
 token with Basic access, seven env vars) and put the developer-token
 application first as the longest-lead item.
 
-**2026-09-02 — consoles (Stages 0.4, 0.2, 1).** Firebase project created with
-Google Analytics enabled (mandatory for the Ads link), Android + iOS apps
-registered (`com.mobaide.app`), linked to the *campaign* Ads account, not the
-manager. No Firebase web app: Lane A already reports web pairings server-side,
-and a GA4 web stream would double-count into the same goal and need consent
-plumbing the SPA lacks. The Customer Data Terms turned out to be already
-accepted. The "Agent paired" action was created through the 2026 wizard
-(*Conversions offline* tile → category *Sign-up* → data source *Offline →
-Connect data source later* → name, Count One, 90-day click window). The
-category is a label only; the action *type* is immutable, so a wrong pick
-means a new action. Both Firebase config files were gitignored (PR #705).
+**2026-09-02 — consoles (Stages 0.4, 0.2, 1).**
+
+- Firebase project created with Google Analytics enabled (mandatory for the Ads
+  link), Android + iOS apps registered (`com.mobaide.app`), linked to the
+  *campaign* Ads account, not the manager.
+- No Firebase web app: Lane A already reports web pairings server-side, and a GA4
+  web stream would double-count into the same goal and need consent plumbing the SPA
+  lacks.
+- The Customer Data Terms turned out to be already accepted.
+- The "Agent paired" action was created through the 2026 wizard (*Conversions
+  offline* tile → category *Sign-up* → data source *Offline → Connect data source
+  later* → name, Count One, 90-day click window). The category is a label only; the
+  action *type* is immutable, so a wrong pick means a new action.
+- Both Firebase config files were gitignored (PR #705).
 
 **2026-09-02 — Stage 2, PR #706.** First discovery: the trust pin is **not**
 once-per-account — it is cleared when an account drops to zero agents — so the
 trigger became the new, never-cleared `users.first_paired_at` CAS, with a
-backfill for existing accounts. Four Codex review rounds reshaped the consent
-path: a cookie written by page script proves nothing (any sibling host such as
-`get.mobaide.com` can plant one), so the relay now mints and HMAC-signs it,
-same-origin only; a signature alone still does not bind consent to a visitor,
-so the payload carries a network fingerprint that sign-up must match; Decline
-now withdraws stored attribution server-side; retention is bounded by the
-server-stamped sign-up time, purged before anything resumes; and, the finding
-with the widest blast radius, **Caddy in `CloudflareOrigin` mode was replacing
-Cloudflare's forwarded client address with the edge address**, which would have
-broken the fingerprint and had already been breaking per-IP rate limits — fixed
-with a `trusted_proxies` block. Deployed 2026-09-02 evening with the uploader
-still unconfigured (`ads.disabled`).
+backfill for existing accounts.
 
-**2026-09-03 — Stage 3 and the API blocker.** While preparing credentials the
-developer token showed *Explorer Access*, which does reach production accounts
-(the "Basic access required" assumption was stale). Then the real blocker:
-**Google closed `uploadClickConversions` on 2026-06-15 to developer tokens
-without prior upload history, with no exception process**, and named the Data
-Manager API as the replacement. The Stage 2 uploader could never succeed, and
-because every terminal failure clears attribution, enabling it would have
-burned every stored conversion. PR #707 rewrote the uploader for the Data
-Manager API the same morning: no developer token, no API-version knob, same
-click ids and hashed emails, validate-only smoke test in the OAuth helper.
-Its review rounds added the `transactionId` digest (re-sends become duplicates
-Google drops), the rule that refused credentials **defer** instead of clearing,
-a 200 without a request id as a failure, and a transport lock that survives
-task cancellation. Merged 11:36 UTC.
+Four Codex review rounds reshaped the consent path:
+
+- A cookie written by page script proves nothing (any sibling host such as
+  `get.mobaide.com` can plant one), so the relay now mints and HMAC-signs it,
+  same-origin only.
+- A signature alone still does not bind consent to a visitor, so the payload carries
+  a network fingerprint that sign-up must match.
+- Decline now withdraws stored attribution server-side.
+- Retention is bounded by the server-stamped sign-up time, purged before anything
+  resumes.
+- The finding with the widest blast radius: **Caddy in `CloudflareOrigin` mode was
+  replacing Cloudflare's forwarded client address with the edge address**. That would
+  have broken the fingerprint and had already been breaking per-IP rate limits. It
+  was fixed with a `trusted_proxies` block.
+
+Deployed 2026-09-02 evening with the uploader still unconfigured (`ads.disabled`).
+
+**2026-09-03 — Stage 3 and the API blocker.**
+
+- While preparing credentials the developer token showed *Explorer Access*, which
+  does reach production accounts (the "Basic access required" assumption was
+  stale).
+- Then the real blocker: **Google closed `uploadClickConversions` on 2026-06-15 to
+  developer tokens without prior upload history, with no exception process**, and
+  named the Data Manager API as the replacement. The Stage 2 uploader could never
+  succeed, and because every terminal failure clears attribution, enabling it would
+  have burned every stored conversion.
+- PR #707 rewrote the uploader for the Data Manager API the same morning: no
+  developer token, no API-version knob, same click ids and hashed emails,
+  validate-only smoke test in the OAuth helper.
+- Its review rounds added:
+  - the `transactionId` digest (re-sends become duplicates Google drops);
+  - the rule that refused credentials **defer** instead of clearing;
+  - a 200 without a request id as a failure;
+  - a transport lock that survives task cancellation.
+- Merged 11:36 UTC.
 
 The cutover then hit three traps in sequence, all diagnosed from prod logs and
-validate-only probes: the helper's output had been saved to a side file and
-never merged, so prod shipped the older `adwords`-scope token
-(`ads.credentials_rejected reason=oauth_refresh_failed`; uploads deferred, not
-lost); a pairing from an already-signed-in browser logged only
-`pairing.claim_completed` because nothing new registered; and the hashed-email
-path failed with a bare `400 INVALID_ARGUMENT` whose hidden reason was
-`DESTINATION_ACCOUNT_NOT_ENABLED_ENHANCED_CONVERSIONS_FOR_LEADS` — the
-separate *Enhanced conversions for leads* row was off, the unified switch had
-not flipped it, and two test accounts were burned finding out. With the row on,
-a consented web sign-up that paired the Mac agent produced an upload Google
-accepted at 15:07 UTC and reported as `SUCCESS`, one record, no errors, at
-15:57 UTC. An account created in the iOS app paired the same day and logged
-`pairing.conversion_skipped reason=no_consent` — correct, and the reason
+validate-only probes:
+
+1. The helper's output had been saved to a side file and never merged, so prod
+   shipped the older `adwords`-scope token
+   (`ads.credentials_rejected reason=oauth_refresh_failed`; uploads deferred, not
+   lost).
+2. A pairing from an already-signed-in browser logged only
+   `pairing.claim_completed` because nothing new registered.
+3. The hashed-email path failed with a bare `400 INVALID_ARGUMENT` whose hidden
+   reason was `DESTINATION_ACCOUNT_NOT_ENABLED_ENHANCED_CONVERSIONS_FOR_LEADS`. The
+   separate *Enhanced conversions for leads* row was off, the unified switch had not
+   flipped it, and two test accounts were burned finding out.
+
+With the row on, a consented web sign-up that paired the Mac agent produced an
+upload Google accepted at 15:07 UTC and reported as `SUCCESS`, one record, no
+errors, at 15:57 UTC. An account created in the iOS app paired the same day and
+logged `pairing.conversion_skipped reason=no_consent` — correct, and the reason
 Phase 2 exists.
 
-**2026-09-04 — Stage 4.** The web campaign (Performance Max) was switched to
-campaign-specific goals with only the "Agent paired" custom goal, and its
-bidding from a page-view-calibrated Target CPA to *Maximize conversions*
-without a target (a starved tCPA strangles delivery; revisit at roughly 15–30
-conversions in 30 days). The Android install campaign was left alone: App
-campaigns cannot use a website action at all.
+**2026-09-04 — Stage 4.**
+
+- The web campaign (Performance Max) was switched to campaign-specific goals with
+  only the "Agent paired" custom goal.
+- Its bidding went from a page-view-calibrated Target CPA to *Maximize conversions*
+  without a target (a starved tCPA strangles delivery; revisit at roughly 15–30
+  conversions in 30 days).
+- The Android install campaign was left alone: App campaigns cannot use a website
+  action at all.
 
 **2026-09-04 — Stage 5, PR #708.** Server event + `GET /api/auth/me`, Firebase
 Analytics in both apps, web parity mirror, privacy policy §3.8 and the
 "no analytics SDK" claims rewritten, `docs/app-conversion-measurement.md`
-with the console drafts. Consent posture chosen by the operator:
-`ad_user_data = eu_consent_policy` (denied only under Google's EU consent
-policy), personalisation denied everywhere, no in-app consent UI, no ATT, no
-IDFA. Review rounds moved the arming to app launch (an account that pairs
-elsewhere between install and first sign-in must still count), added a
-Release-only iOS guard mirroring Android's, and moved the conversion state
-into per-install stores excluded from backups (a restored arming time would
-turn an old pairing into a fresh install conversion). GA4 was configured
-(retention 2 months, Google Signals off, key event `agent_paired` created
-"with code", no default value). The relay was redeployed from `main`, so the
-policy's Firebase text is live ahead of the store builds. A debug build on a
-real Android phone against production logged and uploaded `agent_paired` on
-both the live and the reconcile path (`ga_conversion=1`, HTTP 204); the only
-obstacle was a DNS-level ad blocker on the phone that null-routed
-`app-measurement.com`. GA4's Realtime and DebugView did not show the event
-within the session — see §9.
+with the console drafts.
 
-**2026-09-04 — Stage 6, stores.** The `android-v3.6.4` release run failed at
-the Play upload: the manifest now carries `AD_ID` while the Play Console
-Advertising ID declaration still said "does not use". Declaration set to Yes
-(Analytics + Advertising or marketing), Data safety answers entered, both
-**sent for review** — the upload check clears only after that click — and the
-failed job re-run successfully the same evening. The release page then warned
-that older active artifacts lack `AD_ID`; *Release without permission* is the
-right button (*Update declaration* would flip it back to "No"). iOS 1.0.3 (6)
-was archived and uploaded; its four "Upload Symbols Failed" warnings for the
-Firebase frameworks are harmless (§5). Inspecting that archive showed that the
-`FirebaseAnalytics` product bundles IDFA-capable code and on-device conversion
-measurement — the docs had the product mapping backwards — but the shipped
-posture (no AdSupport link, no ATT, on-device measurement active) is exactly
-what privacy §3.8 states, so neither code nor policy changed (§5).
+- **Consent posture chosen by the operator:** `ad_user_data = eu_consent_policy`
+  (denied only under Google's EU consent policy), personalisation denied
+  everywhere, no in-app consent UI, no ATT, no IDFA.
+- **Review rounds:**
+  - moved the arming to app launch (an account that pairs elsewhere between install
+    and first sign-in must still count);
+  - added a Release-only iOS guard mirroring Android's;
+  - moved the conversion state into per-install stores excluded from backups (a
+    restored arming time would turn an old pairing into a fresh install
+    conversion).
+- **GA4 configured:** retention 2 months, Google Signals off, key event
+  `agent_paired` created "with code", no default value.
+- **Deploy:** the relay was redeployed from `main`, so the policy's Firebase text is
+  live ahead of the store builds.
+- **Android test:** a debug build on a real Android phone against production logged
+  and uploaded `agent_paired` on both the live and the reconcile path
+  (`ga_conversion=1`, HTTP 204). The only obstacle was a DNS-level ad blocker on the
+  phone that null-routed `app-measurement.com`.
+- GA4's Realtime and DebugView did not show the event within the session — see §9.
 
-**2026-09-05 — Stage 6, consoles.** App Privacy published in App Store Connect
-with the privacy manifest's six data types verbatim (Product Interaction, not
-Advertising Data; tracking none). In Google Ads the linked GA4 property's key
-events were imported in one pass: `agent_paired` for the Android and the iOS
-stream (Sign-up, the offline action's value, Count One, Primary) plus
-`first_open` for iOS only (Download, no value, Count One, Primary) as the iOS
-campaign's install action — Android installs are already the Play action. The
-two app `agent_paired` actions joined the "Agent paired" custom goal, which
-now holds three actions. Both App campaigns stay on *Install volume / All
-users*: the in-app-action focus has nothing to learn from until attributed
-pairings exist, and a guessed target CPA would only throttle delivery (the
-switch rule is in §6.1). The iOS install campaign was created; 3.6.4 is in
-production on Play.
+**2026-09-04 — Stage 6, stores.**
+
+- **Play upload failure.** The `android-v3.6.4` release run failed at the Play
+  upload: the manifest now carries `AD_ID` while the Play Console Advertising ID
+  declaration still said "does not use".
+  - Declaration set to Yes (Analytics + Advertising or marketing), Data safety
+    answers entered, both **sent for review** — the upload check clears only after
+    that click.
+  - The failed job was re-run successfully the same evening.
+  - The release page then warned that older active artifacts lack `AD_ID`;
+    *Release without permission* is the right button (*Update declaration* would
+    flip it back to "No").
+- **iOS 1.0.3 (6)** was archived and uploaded; its four "Upload Symbols Failed"
+  warnings for the Firebase frameworks are harmless (§5).
+- **Archive inspection.** Inspecting that archive showed that the
+  `FirebaseAnalytics` product bundles IDFA-capable code and on-device conversion
+  measurement — the docs had the product mapping backwards. But the shipped
+  posture (no AdSupport link, no ATT, on-device measurement active) is exactly what
+  privacy §3.8 states, so neither code nor policy changed (§5).
+
+**2026-09-05 — Stage 6, consoles.**
+
+- App Privacy published in App Store Connect with the privacy manifest's six data
+  types verbatim (Product Interaction, not Advertising Data; tracking none).
+- In Google Ads the linked GA4 property's key events were imported in one pass:
+  - `agent_paired` for the Android and the iOS stream (Sign-up, the offline action's
+    value, Count One, Primary);
+  - `first_open` for iOS only (Download, no value, Count One, Primary) as the iOS
+    campaign's install action — Android installs are already the Play action.
+- The two app `agent_paired` actions joined the "Agent paired" custom goal, which
+  now holds three actions.
+- Both App campaigns stay on *Install volume / All users*: the in-app-action focus
+  has nothing to learn from until attributed pairings exist, and a guessed target
+  CPA would only throttle delivery (the switch rule is in §6.1).
+- The iOS install campaign was created; 3.6.4 is in production on Play.
 
 ## 5. What we learned — keep these
 
@@ -270,46 +318,53 @@ production on Play.
 - The 2026 conversion wizard: + New conversion action → sources page (keep
   *Conversions on an app*, untick *phone calls*) → *Create multiple conversion
   actions from a linked account* → the GA4 property → one row per key event
-  per app stream. Importing before events exist is fine; "Awaiting
-  conversions" / "Unverified" is the normal state, and the *Conversion action*
-  segment lists only actions with at least one conversion.
+  per app stream.
+  - Importing before events exist is fine; "Awaiting conversions" / "Unverified" is
+    the normal state.
+  - The *Conversion action* segment lists only actions with at least one
+    conversion.
 - `first_open` is imported for iOS only: Android installs are the Play action
   Google created with the campaign, and a Firebase `first_open` for Android
   would count every install twice.
-- In-app-action bidding needs observed pairings. Google's bar is an action
-  completed by ≥10 different users a day; below it, stay on installs. A target
-  CPA comes from the observed cost per action × 1.2, never from a guess, with
-  a daily budget ≥10–15× the target and no edits for 14 days. The existing
-  campaign's Bidding card does offer the focus dropdown, so the switch can be
-  made in place (Google prefers a new campaign only to run both side by side);
-  *Users likely to perform an in-app action* is not offered in this account.
+- In-app-action bidding needs observed pairings.
+  - Google's bar is an action completed by ≥10 different users a day; below it, stay
+    on installs.
+  - A target CPA comes from the observed cost per action × 1.2, never from a guess,
+    with a daily budget ≥10–15× the target and no edits for 14 days.
+  - The existing campaign's Bidding card does offer the focus dropdown, so the
+    switch can be made in place (Google prefers a new campaign only to run both side
+    by side); *Users likely to perform an in-app action* is not offered in this
+    account.
 - iOS App-campaign figures are Google's modeled conversions: up to 5 days
-  late, click-through and engaged-view only. The SKAdNetwork conversions
-  report is Apple's separate attribution and never reconciles with them. Keep
-  ≤8 iOS install campaigns per app. The SKAdNetwork conversion value schema is
-  left unset: Google reads only the fine value of postback window 1 (0–2 days
-  after install), wants ~50 installs and >10 mapped events a day, and a
-  pairing days after the install never reaches it; if ever set, set it in GA4
-  only.
+  late, click-through and engaged-view only.
+  - The SKAdNetwork conversions report is Apple's separate attribution and never
+    reconciles with them.
+  - Keep ≤8 iOS install campaigns per app.
+  - The SKAdNetwork conversion value schema is left unset: Google reads only the
+    fine value of postback window 1 (0–2 days after install), wants ~50 installs and
+    >10 mapped events a day, and a pairing days after the install never reaches it.
+    If ever set, set it in GA4 only.
 
 **Store consoles**
 
 - Play rejects the bundle at commit time when the manifest carries `AD_ID` but
-  the Advertising ID declaration says "No". The fix is the declaration (Yes;
-  Analytics + Advertising or marketing) **and** *Send changes for review* on
-  Publishing overview — saving alone does not clear the check. Leave *Turn off
-  release errors* unticked. The later "an active artifact doesn't include
-  AD_ID" warning is about older bundles: *Release without permission*, never
-  *Update declaration*.
+  the Advertising ID declaration says "No".
+  - The fix is the declaration (Yes; Analytics + Advertising or marketing) **and**
+    *Send changes for review* on Publishing overview — saving alone does not clear
+    the check.
+  - Leave *Turn off release errors* unticked.
+  - The later "an active artifact doesn't include AD_ID" warning is about older
+    bundles: *Release without permission*, never *Update declaration*.
 - App Store Connect → App Privacy is edited and **published** independently of
-  a version, with no review. The answers are the privacy manifest's six data
-  types verbatim (Apple cross-reads the manifest). Product Interaction, not
-  Advertising Data: the app receives nothing about ads (no
-  `NSAdvertisingAttributionReportEndpoint`, so SKAdNetwork postbacks go Apple →
-  Google; the SDK's ad events fire only with the Mobile Ads SDK). Purpose
-  *Developer's Advertising or Marketing*, not *Third-Party Advertising*.
-  Tracking stays "none": no IDFA or ATT, SKAdNetwork is Apple's own channel,
-  and on-device measurement leaves the phone only in de-identified form.
+  a version, with no review.
+  - The answers are the privacy manifest's six data types verbatim (Apple
+    cross-reads the manifest).
+  - Product Interaction, not Advertising Data: the app receives nothing about ads
+    (no `NSAdvertisingAttributionReportEndpoint`, so SKAdNetwork postbacks go Apple
+    → Google; the SDK's ad events fire only with the Mobile Ads SDK).
+  - Purpose *Developer's Advertising or Marketing*, not *Third-Party Advertising*.
+  - Tracking stays "none": no IDFA or ATT, SKAdNetwork is Apple's own channel, and
+    on-device measurement leaves the phone only in de-identified form.
 
 **Data Manager API**
 
@@ -365,14 +420,15 @@ production on Play.
 - Firebase iOS 12.18: the plain `FirebaseAnalytics` product **does** bundle
   IDFA-capable code (`GoogleAppMeasurementIdentitySupport`) and on-device
   conversion measurement; the IDFA-free product is `FirebaseAnalyticsCore`.
-  The IDFA code is inert as long as the app never links `AdSupport` and never
-  asks for tracking permission — Firebase's documented guard — and `otool -L`
-  on each release archive is the check (`strings -a Mobaide | grep -c
-  ASIdentifierManager` finds the dormant code; expected, not a leak). Do not
-  switch to `FirebaseAnalyticsCore` casually: it silently drops the event-data
-  on-device conversion measurement that privacy §3.8 describes. The Analytics
-  xcframeworks ship no privacy manifest, so the app's is the sole declaration.
-  Requires `-ObjC`.
+  - The IDFA code is inert as long as the app never links `AdSupport` and never
+    asks for tracking permission — Firebase's documented guard.
+  - `otool -L` on each release archive is the check (`strings -a Mobaide | grep -c
+    ASIdentifierManager` finds the dormant code; expected, not a leak).
+  - Do not switch to `FirebaseAnalyticsCore` casually: it silently drops the
+    event-data on-device conversion measurement that privacy §3.8 describes.
+  - The Analytics xcframeworks ship no privacy manifest, so the app's is the sole
+    declaration.
+  - Requires `-ObjC`.
 - Xcode embeds the static Firebase xcframeworks as ~51 KB code-less stub
   dylibs, so the App Store upload prints "Upload Symbols Failed … no dSYM" for
   FirebaseAnalytics, GoogleAppMeasurement, GoogleAppMeasurementIdentitySupport
@@ -385,10 +441,10 @@ production on Play.
 - Injecting into the `Application` class pulls the whole Hilt graph into every
   Robolectric test; arm from `MainActivity` instead.
 - GA4's "Create an event" dialog: use *Create with code* (registers a name);
-  *Create without code* derives a synthetic event from a rule. Decline the
-  default key-event value; the value belongs on the Ads action. Realtime and
-  DebugView are best-effort and drop backgrounded devices; the Events / Key
-  events reports lag 24–48 h.
+  *Create without code* derives a synthetic event from a rule.
+  - Decline the default key-event value; the value belongs on the Ads action.
+  - Realtime and DebugView are best-effort and drop backgrounded devices; the
+    Events / Key events reports lag 24–48 h.
 - The downloaded `google-services.json` may carry a legacy
   `IS_ANALYTICS_ENABLED=false`; it does not mean GA4 is off.
 
@@ -408,12 +464,23 @@ lives.
 | Android install action (Play) | Primary; demote to Secondary (observe only) only once the Android campaign bids on in-app actions, so its Conversions column reports pairings only |
 | Custom goal **"Agent paired"** | Three actions: the offline action plus the two app `agent_paired` actions. Used by the web campaign only — App campaigns pick actions in their Bidding card |
 | Web campaign (Performance Max) | Campaign-specific goals: only the "Agent paired" custom goal; bidding *Maximize conversions* with no target until ~15–30 conversions / 30 days |
-| Android App campaign | Focus *Install volume*, *All users*, install tracking = the Play action, a target cost per install. **Switch rule:** at ~30 pairings attributed to the campaign in 30 days (Google's bar: ≥10 users/day), Settings → Bidding → focus *In-app actions*, only `agent_paired` (Android) ticked, target unticked (*Maximize conversions for in-app actions*) or the observed cost per pairing × 1.2 with a daily budget ≥10–15× it; then no edits for 14 days, judge over 30 |
+| Android App campaign | Focus *Install volume*, *All users*, install tracking = the Play action, a target cost per install. **Switch rule:** see below the table |
 | iOS App campaign (created 2026-09-05) | App promotion / App installs / iOS, same shape as Android: focus *Install volume*, *All users*, install tracking = the imported iOS `first_open`; same switch rule with `agent_paired` (iOS); iOS bids run ~1.5× Android; keep ≤8 iOS install campaigns; no SKAdNetwork conversion value schema |
 | Settings → Customer data terms | Accepted |
 | Settings → Enhanced conversions (unified) | On, method label "Google Ads API" |
 | Settings → **Enhanced conversions for leads** | **On**, method label "Google tag" (label only) — required for the hashed-email path |
 | Google Ads API developer token | Exists (Explorer Access), **unused** since PR #707 |
+
+**Switch rule (App campaigns, from installs to in-app actions).** Trigger: ~30
+pairings attributed to the campaign in 30 days (Google's bar: ≥10 users/day). Then:
+
+1. Go to Settings → Bidding → focus *In-app actions*.
+2. Tick only `agent_paired` (Android).
+3. Either leave the target unticked (*Maximize conversions for in-app actions*), or
+   set it to the observed cost per pairing × 1.2 with a daily budget ≥10–15× it.
+4. Make no edits for 14 days, then judge over 30.
+
+The iOS campaign uses the same rule with `agent_paired` (iOS).
 
 ### 6.2 Google Cloud
 
@@ -437,15 +504,19 @@ lives.
 | `GOOGLE_ADS_CLICK_WINDOW_DAYS` | Unset (default 90 = the action's window) |
 | `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_API_VERSION` | Retired; a leftover only logs `ads.obsolete_setting` |
 
-Also load-bearing: `JWT_SECRET_KEY` (derives the cookie HMAC key),
-`USER_SESSION_COOKIE_SECURE` (the cookie's `Secure` flag), the
-`trusted_proxies` block in `deploy/prod/Caddyfile.CloudflareOrigin`, schema
-`user_version = 20` with the six `users` columns (`ad_click_id`, `ad_click_kind`,
-`ad_click_at`, `ads_consent`, `ad_attribution_sig`, `first_paired_at`), and
-Alembic `0018_ads_attribution`. Deploy: `deploy_central.py --tls-mode
-CloudflareOrigin --skip-build` after an env change; a healthy start logs
-`ads.enabled api=data_manager …` and nothing else from `ads.`. Currently
-deployed: `main` at the PR #708 merge.
+Also load-bearing:
+
+- `JWT_SECRET_KEY` (derives the cookie HMAC key);
+- `USER_SESSION_COOKIE_SECURE` (the cookie's `Secure` flag);
+- the `trusted_proxies` block in `deploy/prod/Caddyfile.CloudflareOrigin`;
+- schema `user_version = 20` with the six `users` columns (`ad_click_id`,
+  `ad_click_kind`, `ad_click_at`, `ads_consent`, `ad_attribution_sig`,
+  `first_paired_at`);
+- Alembic `0018_ads_attribution`.
+
+Deploy: `deploy_central.py --tls-mode CloudflareOrigin --skip-build` after an env
+change. A healthy start logs `ads.enabled api=data_manager …` and nothing else from
+`ads.`. Currently deployed: `main` at the PR #708 merge.
 
 ### 6.4 Firebase and GA4
 
@@ -483,14 +554,16 @@ deployed: `main` at the PR #708 merge.
   lane, legitimate interest for the app lane), §6 Google as recipient, §8
   retention (90 days / 2 months), §10 withdrawal and objection. Pinned at
   exactly 14 H2 sections and 7 tables by `test_privacy.py`.
-- Play Data Safety (Device or other IDs collected and shared; App interactions
-  and Approximate location added — collected and shared, not ephemeral,
-  required), the Advertising ID declaration (Yes; Analytics + Advertising or
-  marketing) and the App Store App Privacy answers (the privacy manifest's six
-  types, tracking none) were **submitted** with Android 3.6.4 and iOS 1.0.3 (6)
-  on 2026-09-04/05. The tables in
-  [app-conversion-measurement.md](app-conversion-measurement.md) are the record
-  of what was declared and must keep matching the shipped build.
+- Store disclosures, submitted with Android 3.6.4 and iOS 1.0.3 (6) on 2026-09-04/05:
+  - Play Data Safety: Device or other IDs collected and shared; App interactions
+    and Approximate location added — collected and shared, not ephemeral,
+    required.
+  - The Advertising ID declaration: Yes; Analytics + Advertising or marketing.
+  - The App Store App Privacy answers: the privacy manifest's six types, tracking
+    none.
+  - All three were **submitted**. The tables in
+    [app-conversion-measurement.md](app-conversion-measurement.md) are the record
+    of what was declared and must keep matching the shipped build.
 
 ### 6.7 Where the identifiers and secrets live
 
@@ -506,9 +579,12 @@ deployed: `main` at the PR #708 merge.
 
 ## 7. Monitoring
 
-No polling is needed; the relay logs every outcome once. Run this after a
-deploy or env change, when Google Ads shows nothing a day after a campaign
-click, and otherwise glance at the action's Diagnostics tab weekly:
+No polling is needed; the relay logs every outcome once. Run this check:
+
+- after a deploy or env change;
+- when Google Ads shows nothing a day after a campaign click.
+
+Otherwise glance at the action's Diagnostics tab weekly. The check:
 
 ```bash
 ssh mobaide "cd /opt/mobaide && docker compose -f docker-compose.prod.yml logs --since 24h --no-log-prefix central-server \
@@ -525,17 +601,21 @@ ssh mobaide "cd /opt/mobaide && docker compose -f docker-compose.prod.yml logs -
 | `pairing.conversion_upload_failed … reason=http_4xx` | Google rejected the event; the account's attribution is cleared | Probe with a validate-only upload from the Mac to read the hidden reason; fix the account setting |
 | `ads.credentials_rejected` then `pairing.conversion_upload_deferred` | Token, scope, API enablement or account access refused; nothing lost | Re-mint or fix the env, recreate the container; `ads.resume_pending` sends the backlog |
 
-For Lane B: Firebase console → Analytics → Events / Key events (`agent_paired`,
-24–48 h lag) and DebugView with a debug-flagged device. In Google Ads: Goals →
-Conversions → Summary — each imported action moves from "Awaiting conversions"
-to "Recording conversions" about a day after GA4 sees the event; the Campaigns
-table segmented by *Conversion action* shows pairings attributed per campaign
-(a row appears only once an action has a conversion). Expect the campaign
-figure well below GA4's: GA4 counts every user who pairs, updaters and organic
-installs included. iOS figures are modeled and up to 5 days late — judge
-ranges that end ≥5 days ago, over 30 days. On-device: Android
-`adb logcat -s FA FA-SVC` after `setprop debug.firebase.analytics.app
-com.mobaide.app`; iOS `-FIRDebugEnabled`.
+**Lane B checks:**
+
+- Firebase console → Analytics → Events / Key events (`agent_paired`, 24–48 h lag)
+  and DebugView with a debug-flagged device.
+- In Google Ads: Goals → Conversions → Summary. Each imported action moves from
+  "Awaiting conversions" to "Recording conversions" about a day after GA4 sees the
+  event.
+- The Campaigns table segmented by *Conversion action* shows pairings attributed per
+  campaign (a row appears only once an action has a conversion).
+- Expect the campaign figure well below GA4's: GA4 counts every user who pairs,
+  updaters and organic installs included.
+- iOS figures are modeled and up to 5 days late — judge ranges that end ≥5 days ago,
+  over 30 days.
+- On-device: Android `adb logcat -s FA FA-SVC` after `setprop debug.firebase.analytics.app
+  com.mobaide.app`; iOS `-FIRDebugEnabled`.
 
 ## 8. How to pause, change or remove it
 
@@ -545,18 +625,20 @@ com.mobaide.app`; iOS `-FIRDebugEnabled`.
   Goals → *Use account default goals*. Nothing else needs to change.
 - **Stop web-lane uploads:** remove (or comment out) any one required
   `GOOGLE_ADS_*` line in `/opt/mobaide/.env` and run
-  `deploy_central.py --tls-mode CloudflareOrigin --skip-build`. Startup logs
-  `ads.disabled reason=not_configured` (or `ads.misconfigured missing=…`).
-  The cookie, the sign-up forwarding, the columns, the CAS and the 90-day purge
-  keep running inertly. Re-enabling within 90 days re-uploads every account
-  still pending (`ads.resume_pending`); accounts with a terminal outcome are
-  gone.
-- **Stop app-lane spend or counting:** pause the iOS campaign; in the Android
-  campaign keep (or revert to) *Install volume* in the Bidding card — nothing
-  else there references the app actions. To keep app pairings out of the web
-  campaign's goal, open the "Agent paired" custom goal and untick the two app
-  actions. In GA4, Admin → Key events lets `agent_paired` be un-marked. A
-  shipped app keeps sending until a new build changes it (§8.4).
+  `deploy_central.py --tls-mode CloudflareOrigin --skip-build`.
+  - Startup logs `ads.disabled reason=not_configured` (or
+    `ads.misconfigured missing=…`).
+  - The cookie, the sign-up forwarding, the columns, the CAS and the 90-day purge
+    keep running inertly.
+  - Re-enabling within 90 days re-uploads every account still pending
+    (`ads.resume_pending`); accounts with a terminal outcome are gone.
+- **Stop app-lane spend or counting:**
+  - Pause the iOS campaign; in the Android campaign keep (or revert to) *Install
+    volume* in the Bidding card — nothing else there references the app actions.
+  - To keep app pairings out of the web campaign's goal, open the "Agent paired"
+    custom goal and untick the two app actions.
+  - In GA4, Admin → Key events lets `agent_paired` be un-marked.
+  - A shipped app keeps sending until a new build changes it (§8.4).
 
 ### 8.2 Change something
 
@@ -581,11 +663,13 @@ com.mobaide.app`; iOS `-FIRDebugEnabled`.
   Terms — with them off, every hashed-email upload 400s and burns the
   account.
 - **Change the in-app consent posture:** the four consent keys in
-  `AndroidManifest.xml` / `Info.plist` are build-time constants; edit them in
-  lockstep with privacy §3.8 and ship a release. Opting iOS out of on-device
-  conversion measurement is `GOOGLE_ADS_ON_DEVICE_CONVERSION_EVENT_DATA_ENABLED = NO`
-  plus the same policy edit. Enabling ad personalisation anywhere reopens the
-  `www.google.<tld>` CSP trap on the landing page and the policy's promise.
+  `AndroidManifest.xml` / `Info.plist` are build-time constants.
+  - Edit them in lockstep with privacy §3.8 and ship a release.
+  - Opting iOS out of on-device conversion measurement is
+    `GOOGLE_ADS_ON_DEVICE_CONVERSION_EVENT_DATA_ENABLED = NO` plus the same policy
+    edit.
+  - Enabling ad personalisation anywhere reopens the `www.google.<tld>` CSP trap on
+    the landing page and the policy's promise.
 - **Move to a target (web) or to in-app-action bidding (apps):** only after
   ~15–30 conversions in 30 days, from the observed cost per pairing (× 1.2 for
   a target), never from a guess or the old page-view target. App campaigns
@@ -595,35 +679,53 @@ com.mobaide.app`; iOS `-FIRDebugEnabled`.
 ### 8.3 Remove the web lane entirely
 
 These pieces are load-bearing for each other and go together (the list in
-[website.md](website.md) is authoritative): the landing banner and the
-`site.js` consent module, the `_LANDING_CSP` bucket, the `mobaide_ads`
-issuance (`ads/router.py`, `ads/consent.py`), `web/src/auth/adAttribution.ts`
-and the `ad_attribution` request field (regenerate the OpenAPI snapshot), the
-`ads/` uploader package, the `app.py` wiring and purge loop, and the privacy
-passages in §3.1, 3.5, 5, 6, 8 and 10. The `users` columns can stay (they are
-nullable and ignored) or be dropped with Alembic `0018`'s `downgrade()` on a
-one-off basis — the runtime ladder only ever adds. `first_paired_at` should
-stay: Lane B reads it. Google side: demote or remove the action, delete the
-custom goal, re-point campaigns; delete the Desktop OAuth client if nothing
-else uses it.
+[website.md](website.md) is authoritative):
+
+- the landing banner and the `site.js` consent module;
+- the `_LANDING_CSP` bucket;
+- the `mobaide_ads` issuance (`ads/router.py`, `ads/consent.py`);
+- `web/src/auth/adAttribution.ts` and the `ad_attribution` request field
+  (regenerate the OpenAPI snapshot);
+- the `ads/` uploader package;
+- the `app.py` wiring and purge loop;
+- the privacy passages in §3.1, 3.5, 5, 6, 8 and 10.
+
+Database and Google side:
+
+- The `users` columns can stay (they are nullable and ignored) or be dropped with
+  Alembic `0018`'s `downgrade()` on a one-off basis — the runtime ladder only ever
+  adds.
+- `first_paired_at` should stay: Lane B reads it.
+- Google side: demote or remove the action, delete the custom goal, re-point
+  campaigns; delete the Desktop OAuth client if nothing else uses it.
 
 ### 8.4 Remove the in-app lane entirely
 
 Revert the `feat(android)` / `feat(ios)` commits of PR #708 and their four
-review fixes, or at minimum: drop the Firebase dependency and the
-`google-services` plugin block (with its release guard) on Android, the
-`FirebaseAnalytics` package and the Release run-script phase on iOS, the
-`AD_ID` declaration and consent `<meta-data>` / plist keys, the
-`data/analytics` / `Data/Analytics` components and their bus hooks, and the
-`GOOGLE_SERVICES_JSON_BASE64` step in `release-android.yml`. Then: rewrite
-privacy §3.8, §4 (the SDK-merged permissions disappear), §5, §6, §8, §10 and
-§12; roll back the Play Data Safety answers, the Advertising ID declaration and
-the App Store App Privacy answers with the next submissions; un-mark the GA4
-key event, take the two app `agent_paired` actions out of the custom goal,
-pause or delete the iOS campaign (its install action is the imported
-`first_open`) and delete the three imported actions; unlink Firebase from
-Google Ads (Project settings → Integrations) if nothing else needs it. The server's broadcast and
-`GET /api/auth/me` are additive and may stay.
+review fixes, or at minimum do the following.
+
+**Code and build:**
+
+- Drop the Firebase dependency and the `google-services` plugin block (with its
+  release guard) on Android.
+- Drop the `FirebaseAnalytics` package and the Release run-script phase on iOS.
+- Drop the `AD_ID` declaration and consent `<meta-data>` / plist keys.
+- Drop the `data/analytics` / `Data/Analytics` components and their bus hooks.
+- Drop the `GOOGLE_SERVICES_JSON_BASE64` step in `release-android.yml`.
+
+**Then:**
+
+- Rewrite privacy §3.8, §4 (the SDK-merged permissions disappear), §5, §6, §8, §10
+  and §12.
+- Roll back the Play Data Safety answers, the Advertising ID declaration and the
+  App Store App Privacy answers with the next submissions.
+- Un-mark the GA4 key event, take the two app `agent_paired` actions out of the
+  custom goal, pause or delete the iOS campaign (its install action is the imported
+  `first_open`) and delete the three imported actions.
+- Unlink Firebase from Google Ads (Project settings → Integrations) if nothing else
+  needs it.
+
+The server's broadcast and `GET /api/auth/me` are additive and may stay.
 
 ### 8.5 What persists and what is irreversible
 
@@ -653,17 +755,20 @@ Google Ads (Project settings → Integrations) if nothing else needs it. The ser
    Play install action to Secondary.
 5. Privacy §13: record the decision taken (release notes + updated policy, or
    an email to accounts).
-6. Clean up: delete the test accounts from 2026-09-03/04; move the Mac agent
-   back to the main account if it is not; undo the test phone's debug
-   property, verbose logging and DNS whitelist entry; once every pre-3.6.4
-   bundle is retired from all Play tracks, confirm *Turn off release errors*
-   is still unticked on the Advertising ID declaration.
-7. Hardening candidates, offered and not started: log
-   `fieldViolations[].reason` enums on a 400 (never the description); treat
-   the three `DESTINATION_ACCOUNT_*` reasons as deferrable instead of clearing
-   attribution; log a short line per pending status poll; persist the status
-   follow-up across restarts; use the `/me` `Date` header for device clock
-   skew; register `source` as an event-scoped GA4 custom dimension if
-   per-source breakdowns are wanted.
+6. Clean up:
+   - delete the test accounts from 2026-09-03/04;
+   - move the Mac agent back to the main account if it is not;
+   - undo the test phone's debug property, verbose logging and DNS whitelist entry;
+   - once every pre-3.6.4 bundle is retired from all Play tracks, confirm *Turn off
+     release errors* is still unticked on the Advertising ID declaration.
+7. Hardening candidates, offered and not started:
+   - log `fieldViolations[].reason` enums on a 400 (never the description);
+   - treat the three `DESTINATION_ACCOUNT_*` reasons as deferrable instead of
+     clearing attribution;
+   - log a short line per pending status poll;
+   - persist the status follow-up across restarts;
+   - use the `/me` `Date` header for device clock skew;
+   - register `source` as an event-scoped GA4 custom dimension if per-source
+     breakdowns are wanted.
 8. Outcome of the Cloud project's brand verification (Search Console domain
    property) was never confirmed; it blocks nothing.
