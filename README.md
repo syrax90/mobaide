@@ -21,6 +21,7 @@
 <p align="center">
   <a href="https://mobaide.com"><b>Website</b></a> &nbsp;·&nbsp;
   <a href="https://app.mobaide.com"><b>Open the web app</b></a> &nbsp;·&nbsp;
+  <a href="https://mobaide.com/voice-input"><b>Voice input</b></a> &nbsp;·&nbsp;
   <a href="https://mobaide.com/#faq"><b>FAQ</b></a> &nbsp;·&nbsp;
   <a href="https://github.com/syrax90/mobaide-community/discussions"><b>Community</b></a>
 </p>
@@ -45,7 +46,7 @@
 - **A real terminal, not a log tail.** Full two-way PTY, so TUIs behave: arrow keys, Ctrl-C, plan mode, approval prompts. A rolling buffer of recent output replays after a dropped connection.
 - **Your agents, your options.** Launch Claude Code, Codex CLI or Antigravity CLI with their own model, effort, sandbox and approval settings. Open a raw shell, or define an agent from any command your shell can run.
 - **Several sessions at once.** Keep a Claude Code run, a Codex review and a shell side by side, each with its own state.
-- **[Voice input](https://mobaide.com/voice-input).** Dictate prompts instead of thumb-typing them. Your own computer does the transcription, in 25 languages. Opt-in, and the audio is never stored.
+- **[Voice input](#voice-input).** Dictate prompts instead of thumb-typing them. Your own computer does the transcription, in 25 languages. Opt-in, and the audio is never stored.
 - **Git from your phone.** Read diffs, stage, commit, fetch, pull, push, rebase, resolve conflicts and manage branches. Git runs on your machine, with the credentials it already has.
 - **Optional Git worktrees.** Start any session in its own worktree so parallel runs do not collide. Opt-in per launch, Git projects only.
 - **Auto Scan.** Watch [Linear](https://linear.app) for matching issues and launch a Claude Code session in a new worktree for each one.
@@ -54,6 +55,29 @@
 - **Set up once.** The agent installs as an OS service, restarts itself if it dies, and updates itself from signed releases.
 
 See the [feature reference](docs/features.md) for the details.
+
+## Voice input
+
+Say your prompt instead of thumb-typing it. Your own computer turns the speech into text, and the text waits in the command field until you send it. Voice input works in the Android and iOS apps and in the browser, for every session kind.
+
+<table align="center">
+  <tr>
+    <td align="center"><img src="central_server/static/site/img/shot-android-voice.webp" width="150" alt="Mobaide for Android recording a dictation: a cancel button, the elapsed time, a level meter and a stop button under the command field."></td>
+    <td align="center"><img src="central_server/static/site/img/shot-web-voice.webp" width="563" alt="The Mobaide web app recording a dictation: a Recording dialog with the elapsed time, a level meter, Cancel and Stop."></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Android</sub></td>
+    <td align="center"><sub>Browser</sub></td>
+  </tr>
+</table>
+
+- **Transcribed on your computer.** The agent runs NVIDIA's open Parakeet speech model on your CPU. It needs no GPU and no cloud speech service.
+- **25 languages.** The model detects the language as you speak, so there is nothing to switch.
+- **Never sent on its own.** You read the transcript, edit it and send it yourself, so a misheard word cannot become a command.
+- **Nothing stored.** Audio streams over TLS through the relay, which routes it in memory. The relay and the agent never store or log the audio or the text.
+- **Opt-in per computer.** Nothing downloads until you enable it. The download is about 0.7 GB, once. Transcription uses about 700 MB of memory, released after three idle minutes. You can remove voice input at any time.
+
+Read more on the [voice input page](https://mobaide.com/voice-input): [how it works](https://mobaide.com/voice-input#how), [setup](https://mobaide.com/voice-input#setup), [requirements](https://mobaide.com/voice-input#requirements), [languages](https://mobaide.com/voice-input#languages), [privacy](https://mobaide.com/voice-input#privacy) and [FAQ](https://mobaide.com/voice-input#faq).
 
 ## Get started
 

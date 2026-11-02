@@ -51,7 +51,7 @@ ships its own copy of the Departure Mono woff2 + OFL under `web/public/fonts/`
 | `central_server/tests/test_marketing.py` | Route, header, and copy-accuracy tests. |
 | `central_server/tests/test_portal_assets.py` | Static-page asset stamping + the `portal.css` invariants. |
 | `central_server/central_server/static_files.py` | `CachedStaticFiles` + static-dir resolution, shared with the dashboard mount. |
-| `README.md` (repo root) | Embeds `og.png`, both store badges and four `shot-android-*.webp` by relative path. Rename or remove one of those images and the README breaks. |
+| `README.md` (repo root) | Embeds `og.png`, both store badges, five `shot-android-*.webp` and `shot-web-voice.webp` by relative path. Rename or remove one of those images and the README breaks. Its voice input numbers and section links mirror `/voice-input`, so change them together. |
 
 The page is **pre-rendered once in `create_app()`** into `app.state.marketing_html`
 (alongside the privacy policy), so **a template or copy change needs a server

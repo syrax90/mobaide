@@ -1,6 +1,6 @@
 # Documentation Registry
 
-- README.md — Public landing page of the repository: what Mobaide is, store and website links, main features, install steps, a short how-it-works and data summary, repository map and support channels. Its claims follow the accuracy gate in docs/website.md.
+- README.md — Public landing page of the repository: what Mobaide is, store and website links, main features, a voice input section linking to the `/voice-input` page, install steps, a short how-it-works and data summary, repository map and support channels. Its claims follow the accuracy gate in docs/website.md.
 - docs/architecture.md — Why Mobaide exists and how the parts fit: the agent, Android, iOS, web and central-server components, the client → relay → agent → CLI data flow, the agent stack, and the project-structure table.
 - docs/features.md — Detailed feature reference, one section per feature: limits, per-platform differences, and the REST routes, push events and capability keys behind managed CLI agents and custom agent types, terminal display modes, keyboard rules, terminal and custom-path sessions, Auto Scan, reconnection buffers, security, Git management and in-session Git Changes, prompt templates, account deletion, device management, notifications and Help & Support.
 - docs/sign-in-setup.md — Social sign-in setup for people who build the clients or run their own central server: Google OAuth client IDs for Android, web and server, and the Apple Services ID (`APPLE_WEB_CLIENT_ID`) the browser flow needs.
