@@ -51,6 +51,7 @@ ships its own copy of the Departure Mono woff2 + OFL under `web/public/fonts/`
 | `central_server/tests/test_marketing.py` | Route, header, and copy-accuracy tests. |
 | `central_server/tests/test_portal_assets.py` | Static-page asset stamping + the `portal.css` invariants. |
 | `central_server/central_server/static_files.py` | `CachedStaticFiles` + static-dir resolution, shared with the dashboard mount. |
+| `README.md` (repo root) | Embeds `og.png`, both store badges and four `shot-android-*.webp` by relative path. Rename or remove one of those images and the README breaks. |
 
 The page is **pre-rendered once in `create_app()`** into `app.state.marketing_html`
 (alongside the privacy policy), so **a template or copy change needs a server
@@ -68,7 +69,8 @@ either would be silently blocked. Icons go in as inline `<svg>` markup rather
 than `data:` URIs for the same reason. A `<script type="application/ld+json">`
 block is fine — CSP does not treat a data block as executable script.
 
-**2. Accuracy gate.** Several claims in the Play Store listing are contradicted
+**2. Accuracy gate.** It also applies to the repository's `README.md`, which no
+test checks. Several claims in the Play Store listing are contradicted
 by the code. The store copy is deliberately left as-is (out of scope for
 CLA-170), but the website must not repeat them:
 
