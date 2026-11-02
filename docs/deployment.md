@@ -55,9 +55,7 @@ Follow [`deploy/prod/bootstrap-mobaide.md`](../deploy/prod/bootstrap-mobaide.md)
      - A gray-cloud host cannot serve the Cloudflare Origin cert (browsers do not trust the Origin CA), so Caddy ACME-issues a Let's Encrypt cert for `app.mobaide.com` in both modes.
 3. `CloudflareOrigin` only: **issue the Origin Certificate for exactly `mobaide.com, www.mobaide.com, api.mobaide.com` — no wildcard.**
    - The Cloudflare dialog pre-fills `mobaide.com, *.mobaide.com`; the wildcard must be deleted.
-   - Why: Step 2's ACME issuance for `app.mobaide.com` happens *only if no loaded certificate matches that host*, and Caddy's certificate cache is global rather than per-site.
-   - So a `*.mobaide.com` SAN matches SNI `app.mobaide.com`, Caddy skips ACME for it entirely, and the SPA serves an Origin CA certificate that every browser rejects.
-   - See [TLS certificates](#tls-certificates).
+   - Why: a `*.mobaide.com` SAN matches SNI `app.mobaide.com`, Caddy skips ACME for it, and the SPA serves an Origin CA certificate that every browser rejects. See [TLS certificates](#tls-certificates).
 4. On your workstation: add an `~/.ssh/config` entry so `ssh mobaide` works with key-based auth.
 
 ### Deploy
@@ -109,7 +107,7 @@ The named volume `central-server-data` is never touched, so the SQLite database 
 - the per-service `mem_limit` / `cpus` / `ulimits.nofile` caps (central-server `4g`/`3.0`, caddy `1g`/`1.0`, both `nofile` 65536 soft/hard)
 - the json-file log rotation (`max-size: 20m`, `max-file: 5` per service)
 
-The 65536 file-descriptor ceiling is what lets the relay and Caddy hold WebSocket fan-out well past the dockerd default 1024 soft limit. The sizing rationale lives inline in the compose file and in [Capacity & revisit triggers](#capacity--revisit-triggers) below.
+The 65536 file-descriptor ceiling lets the relay and Caddy hold WebSocket fan-out well past the dockerd default 1024 soft limit. For sizing, see [Capacity & revisit triggers](#capacity--revisit-triggers).
 
 #### Caddyfile validation and reload
 
@@ -119,13 +117,11 @@ It then runs `caddy reload` inside the caddy container after `compose up`. Compo
 
 #### Reloads and open WebSockets
 
-`stream_close_delay` on both proxied site blocks (apex/api and app.mobaide.com) does **not** spare established WebSockets from a reload. Caddy's documentation is explicit that it "delays streaming requests such as WebSockets from being forcibly closed when the config is unloaded".
-
-It buys a 5-minute grace and then closes every stream registered against the unloaded config, all on one timer. So a reload that actually swaps config is a *deferred* mass disconnect, not a free one. A reload that changes nothing (`config is unchanged`) costs nothing.
+`stream_close_delay` on both proxied site blocks (apex/api and app.mobaide.com) does **not** spare established WebSockets from a reload. It buys a 5-minute grace and then closes every stream registered against the unloaded config, all on one timer. So a reload that actually swaps config is a *deferred* mass disconnect, not a free one. A reload that changes nothing (`config is unchanged`) costs nothing.
 
 That is why `--force` is used **only in `CloudflareOrigin` mode**.
 
-- **`CloudflareOrigin`:** forcing is unavoidable. Caddy diffs the *adapted JSON* and certificates are referenced by path. Swapping `tls/origin-*.pem` in place leaves the config byte-identical, so a plain reload would keep serving the old certificate from memory while logging `config is unchanged` — see [TLS certificates](#tls-certificates).
+- **`CloudflareOrigin`:** forcing is unavoidable, because swapping `tls/origin-*.pem` in place leaves the config byte-identical and a plain reload keeps serving the old certificate — see [TLS certificates](#tls-certificates).
 - **`LetsEncrypt`:** this mode loads no certificate from a path at all (that Caddyfile has zero `tls` directives). Forcing there would buy nothing and would turn every no-op deploy into a disconnect of every agent tunnel and client socket.
 
 ### TLS certificates
@@ -149,20 +145,11 @@ A Cloudflare Origin cert with SANs `*.mobaide.com, mobaide.com` therefore matche
  certificates are already loaded","domain":"app.mobaide.com"
 ```
 
-The SPA then serves the Origin CA certificate, which no browser trusts, and `/data/caddy/certificates` stays empty.
-
-The documented override (`auto_https ignore_loaded_certs`) is **server-scoped**, so it would also force ACME for the orange-clouded apex and api — not a usable fix. Issue the origin cert for exactly `mobaide.com, www.mobaide.com, api.mobaide.com` instead.
+The SPA then serves the Origin CA certificate, which no browser trusts, and `/data/caddy/certificates` stays empty. The documented override (`auto_https ignore_loaded_certs`) is **server-scoped**, so it would also force ACME for the orange-clouded apex and api — not a usable fix. Issue the origin cert for exactly `mobaide.com, www.mobaide.com, api.mobaide.com` instead.
 
 #### Preflight check of the installed certificate
 
-`deploy_central.py --tls-mode CloudflareOrigin` inspects the installed cert during its preflight. It warns (loudly, and again at the end of the run whatever its outcome) in two cases:
-
-- its SANs shadow `app.mobaide.com`
-- cert and key are not a pair
-
-It does not block the deploy: a wildcard breaks the SPA, not the relay.
-
-When `openssl` cannot read the PEMs on the server, it says the check **did not run** rather than reporting a clean result. An unreadable certificate must never be mistaken for a good one.
+`deploy_central.py --tls-mode CloudflareOrigin` inspects the installed cert during its preflight. It warns (again at the end of the run) if its SANs shadow `app.mobaide.com` or if cert and key are not a pair. It does not block the deploy: a wildcard breaks the SPA, not the relay. When `openssl` cannot read the PEMs on the server, it says the check **did not run**.
 
 #### Rotating the origin certificate
 
@@ -183,20 +170,13 @@ cd /opt/mobaide && docker compose -f docker-compose.prod.yml exec -T caddy \
 
 Creating a new Origin Certificate in Cloudflare does not revoke the old one, so keeping the previous PEMs preserves rollback.
 
-`caddy validate` is a useful dry run: it prints the same `skipping automatic certificate management` list, so a host's ACME status can be confirmed before touching the live config.
+`caddy validate` is a useful dry run: it prints the same `skipping automatic certificate management` list.
 
 #### Diagnosing a TLS failure
 
-Both deploy scripts take `--diagnose-tls`. It probes without deploying and names which of {DNS, connect, local CA store, served certificate} is at fault — printing the served issuer and SANs when it is the server.
+Both deploy scripts take `--diagnose-tls` (see the command lists above). It probes without deploying and names which of {DNS, connect, local CA store, served certificate} is at fault — printing the served issuer and SANs when it is the server.
 
-It separates a broken *workstation* trust store from a broken *server* certificate with a control probe against a known-good public host, because both raise an identical `CERTIFICATE_VERIFY_FAILED`.
-
-If the workstation has no CA bundle at all (python.org macOS builds ship without one until `Install Certificates.command` runs), the scripts fall back to `certifi` automatically and say so.
-
-```bash
-python deploy/prod/deploy_central.py --diagnose-tls --tls-mode CloudflareOrigin
-python deploy/prod/deploy_web.py --diagnose-tls
-```
+It separates a broken *workstation* trust store from a broken *server* certificate with a control probe against a known-good public host, because both raise an identical `CERTIFICATE_VERIFY_FAILED`. If the workstation has no CA bundle at all (python.org macOS builds ship without one until `Install Certificates.command` runs), the scripts fall back to `certifi` automatically and say so.
 
 ### Deploying the web SPA (app.mobaide.com)
 
@@ -208,7 +188,7 @@ The browser client (`web/`) is served by **Caddy from disk** at `app.mobaide.com
 - Everything else falls through to `try_files {path} /index.html` (client-side routing).
 - Cache headers: `Cache-Control: no-cache, must-revalidate` on `index.html` and unhashed public files, and `public, max-age=31536000, immutable` on Vite's content-hashed `/assets/*`.
 
-Because that fallback gives every path the same document, `web/index.html` declares `<link rel="canonical" href="https://app.mobaide.com/">`. This keeps Search Console from reporting `/login` and the other SPA routes as "Duplicate without user-selected canonical".
+Because that fallback gives every path the same document, `web/index.html` declares `<link rel="canonical" href="https://app.mobaide.com/">`, so Search Console does not report the SPA routes as "Duplicate without user-selected canonical".
 
 #### Web deploy commands
 
@@ -219,17 +199,17 @@ python deploy/prod/deploy_web.py --rollback     # repoint at previous release
 python deploy/prod/deploy_web.py --diagnose-tls # classify a TLS failure, deploy nothing
 ```
 
-`web/node_modules` is not in the repo and the deploy never installs it, so run `npm ci` in `web/` on a fresh clone first. The preflight checks for it and says so, rather than letting the build die inside vite as `tsc: command not found`.
+`web/node_modules` is not in the repo and the deploy never installs it, so run `npm ci` in `web/` on a fresh clone first. The preflight checks for it.
 
 #### What a web deploy does
 
-Each deploy tars `web/dist`, extracts it to `/opt/mobaide/www/releases/<UTC-timestamp>-<sha>/`, and swaps the `current` symlink atomically. The swap is `ln -s` to a temp name, then `mv -T`. The symlink target stays **relative** so it resolves inside the caddy container's `/srv/www` bind mount.
+Each deploy tars `web/dist`, extracts it to `/opt/mobaide/www/releases/<UTC-timestamp>-<sha>/`, and swaps the `current` symlink atomically (`ln -s` to a temp name, then `mv -T`). The symlink target stays **relative** so it resolves inside the caddy container's `/srv/www` bind mount.
 
 **No container restarts**; in-flight requests and live WebSockets are untouched.
 
 #### Release pruning and rollback
 
-- The newest 5 releases are kept, except that the release recorded in `www/.previous` is never pruned. Repeated deploy/rollback cycles could otherwise push the rollback target out of the newest-5 window and silently degrade `--rollback` to the sorted-predecessor fallback (a newer, just-rejected build).
+- The newest 5 releases are kept, except that the release recorded in `www/.previous` is never pruned, so repeated deploy/rollback cycles cannot push the rollback target out of the window.
 - `--rollback` repoints at the release that was live before the last swap (each deploy records it in `www/.previous`). A second `--rollback` toggles back, and hosts without the marker fall back to the sorted predecessor of `current`.
 - There is no auto-rollback on a failed health probe. The swap is atomic, so a failure almost always means DNS/Caddy, not release content.
 
@@ -247,7 +227,7 @@ First-time prerequisites, in order:
    - Afterwards, Caddyfile-only changes ship via the deploy command's `caddy reload` step. A reload that actually changes config gives established WebSockets the 5-minute `stream_close_delay` grace and then closes them (see [How upgrades work](#how-upgrades-work)). A reload that changes nothing costs nothing.
 4. Wait ~30 s (the server's ufw limits SSH to 6 connections per 30 s), then run `deploy_web.py`.
 
-Hosts bootstrapped by the current `bootstrap-mobaide.sh` serve a placeholder page until the first web deploy; older hosts serve 404 on `/` of the app host between steps 2 and 3.
+Hosts bootstrapped by the current `bootstrap-mobaide.sh` serve a placeholder page until the first web deploy; older hosts serve 404 on `/` of the app host in the meantime.
 
 #### Google Sign-In on the SPA origin
 
@@ -255,7 +235,7 @@ The browser client reads its Google client id from `GET /api/version` (no build-
 
 But `https://app.mobaide.com` must also be added to **Authorized JavaScript origins** on that OAuth client in Google Cloud Console. Otherwise the Sign in with Google button fails at runtime on the SPA, while the Android and iOS flows keep working.
 
-The apex (`mobaide.com`) no longer needs to be listed at all — it used to carry the portal's own button. An entry left over from that deployment is harmless and can be removed. See ["Configuring Google Sign-In"](sign-in-setup.md#configuring-google-sign-in).
+The apex (`mobaide.com`) does not need to be listed; a leftover entry is harmless. See ["Configuring Google Sign-In"](sign-in-setup.md#configuring-google-sign-in).
 
 #### Sign in with Apple on the web
 
@@ -263,11 +243,10 @@ The SPA reads the Apple **Services ID** from `GET /api/version`, so `APPLE_WEB_C
 
 1. **Create a Services ID and set its primary App ID to `com.mobaide.app`** (the value of `APPLE_CLIENT_ID`).
    - Apple derives the identity token's `sub` from the *group* a Services ID belongs to, so this is what makes a browser sign-in resolve to the account the iOS app already created.
-   - A standalone Services ID validates, signs in, and silently creates a **second account** for every existing Apple user.
-   - No server-side check can detect it, because from the relay's side the `sub` is simply new.
+   - A standalone Services ID validates, signs in, and silently creates a **second account** for every existing Apple user. No server-side check can detect it.
 2. Register the web domain and its Return URL on that Services ID: `app.mobaide.com` → `https://app.mobaide.com/login`.
    - Popup mode never navigates to a Return URL — Apple only validates that the one sent matches a registered entry — but `AppleID.auth.init` refuses to run without it.
-   - A deployment set up before the portal was retired also carries `mobaide.com` → `https://mobaide.com/portal/login`. That Return URL is now unused and can be de-registered along with the `mobaide.com` domain entry.
+   - An older deployment may also carry `mobaide.com` → `https://mobaide.com/portal/login`. That Return URL is unused and can be de-registered along with the `mobaide.com` domain entry.
 3. Verify the domain by serving the `apple-developer-domain-association.txt` Apple issues at `/.well-known/`.
    - For `app.mobaide.com`, drop the file into `web/public/.well-known/` and deploy. Vite copies `public/` into `dist/`, `try_files {path} /index.html` finds it, and `file_server` serves it (Caddy does not hide dotfiles).
    - If you are keeping the legacy `mobaide.com` domain entry registered, the apex is reverse-proxied to central-server, which has no such route. Verifying it then needs a `handle` block ahead of the proxy in the apex site block:
@@ -280,7 +259,7 @@ The SPA reads the Apple **Services ID** from `GET /api/version`, so `APPLE_WEB_C
    ```
 4. `APPLE_CLIENT_ID` stays set: the native audience is what the iOS app's own tokens carry, and `POST /api/auth/apple` accepts either identifier. Setting only the web one would break iOS sign-in.
 
-Apple rejects `http://` and `localhost` Return URLs, so Apple sign-in cannot be exercised from `npm run dev`. That is the intended local behaviour — with `APPLE_WEB_CLIENT_ID` unset, `GET /api/version` reports null and neither button mounts.
+Apple rejects `http://` and `localhost` Return URLs, so Apple sign-in cannot be exercised from `npm run dev`. With `APPLE_WEB_CLIENT_ID` unset, `GET /api/version` reports null and neither button mounts.
 
 #### CSP hash for the theme-boot script
 
@@ -296,25 +275,17 @@ Editing that script requires these steps:
 
 ### Capacity & revisit triggers
 
-Sizing targets the **Tier B (stress)** load model from the 2026-08 web-client research: ~10,000 registered users, ~2,500 DAU, ~750 peak concurrent clients ≈ **~10,000 live WebSockets** (~6 per client + 1 per agent tunnel).
+Sizing targets the **Tier B (stress)** load model: ~10,000 registered users, ~2,500 DAU, ~750 peak concurrent clients ≈ **~10,000 live WebSockets** (~6 per client + 1 per agent tunnel).
 
 - **File descriptors:** ~10k sockets ≈ 15% of the 65,536 `nofile` ceiling — never the bottleneck at this tier.
 - **Memory:** <300 MiB baseline + ~450 MiB of WS state + argon2 bursts (app-bounded at 2 workers). The 4 GB cap holds the tier with headroom.
-  - This assumes permessage-deflate **off** (`ws_per_message_deflate=False`, pinned in `central_server/__main__.py`).
-  - Deflate-on would roughly double the WS state to ~950 MiB, which is what made the old 1 GB cap the first bottleneck.
+  - This assumes permessage-deflate **off** (`ws_per_message_deflate=False`, pinned in `central_server/__main__.py`); deflate-on would roughly double the WS state to ~950 MiB.
 - **CPU:** peak relay fan-out (~21k frame ops/s) is 40-70% of **one** core.
-  - The relay is a single asyncio event loop. It saturates one core long before the 3.0-cpu cap matters; the spare capacity covers argon2 threads.
-  - Vertical rescaling stops helping at that point.
-- **`ws_max_queue`** (uvicorn, 32 frames per socket) stays at its default — the app-level send queues (10k/5k) are the real backpressure boundary, counted by the drop counters below.
-- **`user_refresh_tokens` rows:**
-  - One INSERT per rotation, so ≈ DAU × 4/hour (a 15-minute access TTL with a 60 s leeway), plus one per browser restart now that a session survives closing the last tab.
-  - Revoked rows are reaped after a 24 h retention window, which lands Tier B around 40-90k rows / ~10 MB. That is trivial for SQLite, and *smaller* than before, since signing in again now revokes the row the presented cookie carried instead of leaving it live for its full 30 days.
-  - The axis that does scale is the 60 s sweeper. The table has only a `token_hash` primary key and a partial `(user_id) WHERE revoked_at IS NULL` index, so both `DELETE`s are full scans.
+  - The relay is a single asyncio event loop. It saturates one core long before the 3.0-cpu cap matters, so vertical rescaling stops helping at that point.
+- **Refresh-token tables:** `user_refresh_tokens` gets one INSERT per rotation, so ≈ DAU × 4/hour (a 15-minute access TTL with a 60 s leeway), plus one per browser restart. `mobile_refresh_tokens` gains about one row per hour per active phone × agent pair (60-minute `MOBILE_TOKEN_EXPIRE_MINUTES` default).
+  - Revoked rows are reaped after a 24 h retention window, which lands Tier B around 40-90k rows / ~10 MB — trivial for SQLite.
+  - The axis that does scale is the 60 s sweeper: both tables' `DELETE`s are full scans. `user_refresh_tokens` has only a `token_hash` primary key and a partial `(user_id) WHERE revoked_at IS NULL` index. `mobile_refresh_tokens` has partial indexes on `(agent_id, mobile_device_id)` and `(mobile_device_id)`.
   - Revisit with an index on `revoked_at` past roughly 500k rows.
-- **`mobile_refresh_tokens` rows:**
-  - The same sweeper reaps this table with the same two `DELETE`s (expired-unrevoked at once, revoked after the 24 h window).
-  - It rotates now too: with the 60-minute `MOBILE_TOKEN_EXPIRE_MINUTES` default it gains about one row per hour per active phone × agent pair, where it used to gain one row per pairing.
-  - Its partial indexes are on `(agent_id, mobile_device_id)` and `(mobile_device_id)`, so those `DELETE`s are full scans as well and the same 500k-row revisit point applies.
 
 #### Observability
 
@@ -339,9 +310,7 @@ The relay emits a `monitoring.sample` structured log line every 60 s (`MONITORIN
 
 The relay never publishes its OpenAPI schema. `create_app` passes `docs_url=None, redoc_url=None, openapi_url=None`, so `/docs`, `/redoc` and `/openapi.json` are unregistered and return 404 on both `mobaide.com` and `api.mobaide.com`. The schema is a complete map of every route, parameter and model — including the admin dashboard and the release-publishing endpoint — and is treated as internal.
 
-Set `ENABLE_API_DOCS=1` in `/opt/mobaide/.env` to get the docs back. They are then **admin-gated**: a request must carry either the `dashboard_token` cookie from `/dashboard/login` or an admin `Authorization: Bearer` token. Everything else — anonymous callers and non-admin users alike — still gets a 404, so the flag cannot re-expose the schema publicly. Browsers work as expected: sign in at `/dashboard/login` first, then open `/docs`.
-
-Routers that serve HTML rather than an API (`/dashboard/*`, `/portal/*`, `/privacy.html`, and the marketing site's `/`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico`) and the release-pipeline endpoint `POST /api/internal/agent_manifest` are registered with `include_in_schema=False`, so even an enabled docs page describes only the real JSON surface.
+Set `ENABLE_API_DOCS=1` in `/opt/mobaide/.env` to get the docs back. They are then **admin-gated**: a request must carry either the `dashboard_token` cookie from `/dashboard/login` or an admin `Authorization: Bearer` token. Everything else — anonymous callers and non-admin users alike — still gets a 404, so the flag cannot re-expose the schema publicly. Browsers work as expected: sign in at `/dashboard/login` first, then open `/docs`. The dashboard, portal, marketing routes and `POST /api/internal/agent_manifest` are excluded from the schema (`include_in_schema=False`).
 
 The agent has the same knob with the same name and the same default. It matters more there than it looks: the agent binds `0.0.0.0` so DIRECT mode works over the LAN, so stock FastAPI docs would hand its whole session/project/git surface to anything on the same network. Leave it off outside local development.
 
@@ -349,7 +318,7 @@ The agent has the same knob with the same name and the same default. It matters 
 
 #### Headers on every response
 
-Four headers go on **every** response, from `central_server/central_server/security_headers.py`. It is a pure-ASGI middleware, registered last in `create_app` so it is the outermost of the three and stamps what the inner two produce:
+Four headers go on **every** response, from `central_server/central_server/security_headers.py` (a pure-ASGI middleware, the outermost of the three):
 
 | Header | Value |
 | --- | --- |
@@ -361,33 +330,23 @@ Four headers go on **every** response, from `central_server/central_server/secur
 - `X-Frame-Options` duplicates every policy's `frame-ancestors 'none'` and exists only for browsers that predate CSP framing control.
 - `/portal/cancel-deletion` overrides the referrer policy to `no-referrer` with a document `<meta>`, which wins over the header — that page carries a cancellation token in its URL.
 
-`Content-Security-Policy` and `Permissions-Policy` are set on every response too — `/docs` and `/redoc` aside, which are CSP-exempt for the reason given below — but their value depends on the path. Both have their own section.
+`Content-Security-Policy` and `Permissions-Policy` are set on every response too (`/docs` and `/redoc` are CSP-exempt), but their value depends on the path. Both have their own section.
 
 #### Known gap in header coverage
 
-One gap, deliberate and worth knowing: an **unhandled** exception is turned into a 500 by Starlette's `ServerErrorMiddleware`, which wraps the entire user middleware stack, so that one response carries none of these.
-
-Everything else does carry them, including every `HTTPException` (404 / 403 / 405) and every static file.
+One deliberate gap: an **unhandled** exception is turned into a 500 by Starlette's `ServerErrorMiddleware`, which wraps the entire user middleware stack, so that one response carries none of these. Everything else does, including every `HTTPException` (404 / 403 / 405) and every static file.
 
 #### Cross-Origin-Opener-Policy
 
 > **`Cross-Origin-Opener-Policy: same-origin` breaks Google Sign-In.** Do not "harden" this value. It severs the `window.opener` relationship the Google Identity Services popup posts the credential back through, and the symptom is a blank popup or a flow that stalls with nothing logged server-side.
 
-Both plausible values isolate our window from a **cross-origin opener** — a page that opened us keeps no scriptable handle either way. They differ only in the other direction: `same-origin` additionally drops the handle on popups **we** open, and that handle is exactly what the sign-in popup uses.
+Both plausible values isolate our window from a cross-origin opener. They differ only in the other direction: `same-origin` additionally drops the handle on popups **we** open, and that handle is exactly what the sign-in popup uses.
 
-**Why every surface uses the same value.** The **SPA origin** requires `same-origin-allow-popups`, and every surface `central_server` renders takes the same value rather than the stricter one. That is a decision, not an oversight.
-
-- No server-rendered surface opens a popup any more — the sign-in flows that did moved to the browser client.
-- `/dashboard/*` opens none either (no `window.open`, no `target="_blank"`, no Google button in `static/dashboard.js` or any dashboard template).
-- So `same-origin` would protect against nothing that exists, while a popup added to either later would break under it silently.
-- One value across every surface also keeps navigation between the same-origin `/`, `/portal/*` and `/dashboard/*` inside a single browsing context group.
+**Why every surface uses the same value.** The **SPA origin** requires `same-origin-allow-popups`, and every surface `central_server` renders takes the same value rather than the stricter one. No server-rendered surface opens a popup (the sign-in flows moved to the browser client, and `/dashboard/*` has no `window.open`, no `target="_blank"` and no Google button), so `same-origin` would protect against nothing that exists, while a popup added later would break under it silently.
 
 **Verifying it.** The header is not verifiable in one browser. When FedCM is active Chrome renders the sign-in popup itself and COOP never comes into play. It matters on the non-FedCM path and in browsers without FedCM, which is why the check below asks for both.
 
-**COEP and CORP.** `Cross-Origin-Embedder-Policy` and `Cross-Origin-Resource-Policy` are deliberately **not** set, and the issue that added COOP scoped both out.
-
-- The reason is only strictly true of COEP: `require-corp` would block the `accounts.google.com/gsi/` frame and script, neither of which sends CORP.
-- CORP is a different question — it governs who may embed *our* responses, not the Google frame — and has simply not been evaluated on its merits yet.
+`Cross-Origin-Embedder-Policy` and `Cross-Origin-Resource-Policy` are deliberately **not** set. For COEP the reason is that `require-corp` would block the `accounts.google.com/gsi/` frame and script, neither of which sends CORP. CORP has not been evaluated on its merits yet.
 
 #### Permissions-Policy
 
@@ -400,20 +359,16 @@ Chosen by path, like the CSP:
 
 The SPA's `microphone=(self)` is voice input: the browser records while the user dictates and streams the audio to their own agent (docs/voice-input.md). Only that origin gets it; every central_server surface keeps `microphone=()`.
 
-Like any header in the Caddy site block, a change ships with `deploy_central.py` and needs a Caddy reload (`caddy reload --force`) before browsers see it.
+A change to a header in the Caddy site block ships with `deploy_central.py` and needs a Caddy reload (`caddy reload --force`) before browsers see it.
 
 > **`identity-credentials-get=(self)` on the SPA origin breaks Google Sign-In**, the same way `COOP: same-origin` does, and for the same reason it looks like the tighter choice. The Google button frame is created with `allow="identity-credentials-get"`, and a frame's `allow` only delegates a feature the embedding document's own policy grants to *that origin*. Naming the feature at all therefore obliges you to name Google's origin alongside `self`.
 
-`identity-credentials-get` is spelled out rather than left off the list on purpose. Its default allowlist is `self`, so the empty allowlist in the baseline is what denies FedCM to our own same-origin documents as well — containment for an injected script on a surface that has no use for the API.
-
-`central_server` now serves that baseline everywhere. The FedCM allowance lives only in the Caddy site block, because the only Google button left is on the SPA.
+`identity-credentials-get` is spelled out rather than left off the list on purpose. Its default allowlist is `self`, so the empty allowlist in the baseline is what denies FedCM to our own same-origin documents as well. The FedCM allowance lives only in the Caddy site block, because the only Google button is on the SPA.
 
 Two things worth knowing before editing the feature list:
 
 * **This header is Chromium-only.** Firefox and Safari ignore it entirely, so it hardens Chrome users and nobody else. It is not a substitute for any server-side control.
-* **An unknown feature name is a console error on every page load** — `Error with Permissions-Policy header: Unrecognized feature: 'x'` — which is the same console the soak below asks you to read clean.
-  * Only names current Chrome still recognises belong here.
-  * `interest-cohort` (FLoC, dropped from Chrome in 2022) and its successor `browsing-topics` (removed in Chrome 150, July 2026) are both retired and deliberately absent.
+* **An unknown feature name is a console error on every page load** — `Error with Permissions-Policy header: Unrecognized feature: 'x'` — which is the same console the soak below asks you to read clean. Only names current Chrome still recognises belong here (`interest-cohort` and `browsing-topics` are retired and deliberately absent).
 
 #### Content-Security-Policy per surface
 
@@ -430,48 +385,37 @@ Headers are applied with `setdefault`, so a route that sets its own value still 
 
 **Notes on the table**
 
-1. The `/` row is the strict site policy below, widened with the origins [Google's CSP guide](https://developers.google.com/tag-platform/security/guides/csp) lists for Ads conversion tracking. The gtag.js loader is injected by `site.js` only after the visitor accepts the cookie banner. The served HTML itself is same-origin-only — see "The consent-gated Google Ads tag" in [`docs/website.md`](website.md).
-2. The `/portal/*` and `/dashboard/*` row is one policy, with **no** third-party origin and **no** `'unsafe-inline'`. The two surviving `/portal/*` pages load no script at all and would satisfy `_SITE_CSP` too. They take this one because `form-action 'self'` is what the cancel-deletion POST needs.
+1. The `/` row is the strict site policy below, widened with the origins [Google's CSP guide](https://developers.google.com/tag-platform/security/guides/csp) lists for Ads conversion tracking. The gtag.js loader is injected by `site.js` only after the visitor accepts the cookie banner — see "The consent-gated Google Ads tag" in [`docs/website.md`](website.md).
+2. The `/portal/*` and `/dashboard/*` row is one policy, with **no** third-party origin and **no** `'unsafe-inline'`. The `/portal/*` pages take it because `form-action 'self'` is what the cancel-deletion POST needs.
 
 #### How the SPA policy is enforced
 
 The SPA row is enforced by the `(app_mobaide)` snippet in both `deploy/prod/Caddyfile.*` files, because static files never pass through `security_headers.py`. The Caddy site block therefore also duplicates the four universal headers plus `Permissions-Policy`.
 
-The SPA is now the **only** Google Sign-In popup surface (`web/src/auth/googleSignIn.ts` mounts GIS with `ux_mode: 'popup'` on `/login`, `/register` and `/account`). That is why it is the only place an `identity-credentials-get` allowance appears.
-
-Third-party origins appear in exactly two policies: this SPA row (sign-in) and the landing page's (the consent-gated Google Ads tag).
-
-#### Sign in with Apple and the SPA policy
+The SPA is the **only** Google Sign-In popup surface (`web/src/auth/googleSignIn.ts` mounts GIS with `ux_mode: 'popup'`), so it is the only place an `identity-credentials-get` allowance appears. Third-party origins appear in exactly two policies: this SPA row (sign-in) and the landing page's (the consent-gated Google Ads tag).
 
 **Sign in with Apple costs exactly one `script-src` entry**, on the SPA.
 
-- Under `usePopup` the SDK calls `window.open` — which no CSP directive governs — and reads the answer off a `postMessage` listener.
-- The shipped bundle contains no `iframe`, no `fetch` and no `XMLHttpRequest`, and injects no style. So `appleid.apple.com` itself appears in no policy, and only `appleid.cdn-apple.com` does.
-- It does mean COOP `same-origin-allow-popups` protects two flows rather than one: tightening it to `same-origin` severs the opener both providers reply through.
+- Under `usePopup` the SDK calls `window.open` — which no CSP directive governs — and reads the answer off a `postMessage` listener. The bundle has no `iframe`, `fetch` or `XMLHttpRequest`, and injects no style, so `appleid.apple.com` appears in no policy; only `appleid.cdn-apple.com` does.
+- COOP `same-origin-allow-popups` therefore protects two flows rather than one: tightening it to `same-origin` severs the opener both providers reply through.
 - Apple's SDK uses no FedCM, so it adds nothing to `Permissions-Policy`.
 - The locale segment in the script path (`…/1/en_US/…`) is load-bearing — it must match `web/src/auth/appleSignIn.ts` and the pinned URL in both Caddyfiles.
-- Proxied requests on the app host (`/api`, `/ws`, `/relay`, `/proxy`) still get the app's own path-routed policies from the table above.
-- `connect-src 'self'` covers same-origin WebSockets (CSP3 treats `ws(s)://same-host` as `'self'`).
+- Proxied requests on the app host (`/api`, `/ws`, `/relay`, `/proxy`) still get the app's own path-routed policies from the table above. `connect-src 'self'` covers same-origin WebSockets.
 
 #### No inline script, limited inline style
 
-`script-src` grants no `'unsafe-inline'` and no `'unsafe-eval'` on any surface. That is why no template contains an inline `<script>`, an `onclick=` attribute or an `hx-on:` attribute any more.
+`script-src` grants no `'unsafe-inline'` and no `'unsafe-eval'` on any surface. No template may contain an inline `<script>`, an `onclick=` attribute or an `hx-on:` attribute: adding one back does not degrade a page, it silently breaks it. The dashboard's behaviour lives in `static/dashboard.js`, and per-request values reach it through `data-` attributes.
 
-The dashboard's behaviour lives in `static/dashboard.js` and per-request values reach it through `data-` attributes, while the `/portal/*` pages carry no behaviour to place anywhere. Adding any of those three forms back does not degrade a page, it silently breaks it.
+`'unsafe-inline'` appears in `style-src` only, and only on the `app.mobaide.com` SPA, for two independent reasons:
 
-`'unsafe-inline'` appears in `style-src` only, and only on the one surface that hosts a Google Sign-In button: the `app.mobaide.com` SPA.
+- The Google Identity Services client appends an inline `<style>` to the parent document and `renderButton({width})` emits an inline `style=` attribute. The SPA's policy is static (Caddy cannot see the server config), so it carries the Google origins unconditionally; the button never mounts when `GET /api/version` reports no client id.
+- xterm.js injects a `<style>` element at runtime for the terminal screen, so tightening `style-src` on the app host would break the terminal.
 
-- The Google Identity Services client appends an inline `<style>` to the parent document the moment it loads, on top of the `accounts.google.com/gsi/style` sheet Google documents. `renderButton({width})` emits an inline `style=` attribute.
-- The SPA's policy is static — Caddy cannot see the server config — so it carries the Google origins unconditionally. The button simply never mounts when `GET /api/version` reports no client id.
-- `img-src` stays `'self'`: the button and its Google logo render inside a cross-origin iframe, governed by Google's policy rather than ours.
-- Since WEB-05 the SPA row has a **second, independent** reason to keep it: xterm.js injects a `<style>` element at runtime for the terminal screen. Tightening `style-src` on the app host would break the terminal even if the Google button ever left that origin.
-- No other WEB-05 change touches the SPA policy — the terminal's WebSocket is same-origin (`connect-src 'self'`) and its assets are Vite-hashed local files.
+`img-src` stays `'self'`: the button and its Google logo render inside a cross-origin iframe, governed by Google's policy rather than ours.
 
 #### CSP exemption for /docs and /redoc
 
-`/docs` and `/redoc` are exempt on purpose. FastAPI renders both from a `cdn.jsdelivr.net` bundle with an inline bootstrap script. Any policy strict enough to be worth setting would break them, and one loose enough to fit is a list of third-party origins we do not control.
-
-Both stay unregistered unless `ENABLE_API_DOCS` is set, and admin-gated when it is. They still get the four universal headers and the baseline `Permissions-Policy`.
+`/docs` and `/redoc` are exempt on purpose: FastAPI renders both from a `cdn.jsdelivr.net` bundle with an inline bootstrap script, so any policy strict enough to be worth setting would break them. Both stay unregistered unless `ENABLE_API_DOCS` is set, and admin-gated when it is. They still get the four universal headers and the baseline `Permissions-Policy`.
 
 #### Rolling out a CSP change — the report-only soak
 
@@ -479,36 +423,29 @@ Deployment is manual and a bad CSP does not fail the `/api/health` check, so it 
 
 1. Set `CSP_REPORT_ONLY=1` in `/opt/mobaide/.env` and deploy. The middleware emits `Content-Security-Policy-Report-Only` instead — violations are reported and nothing is blocked.
    - **Four paths are the exception and stay enforced through a soak:** `/`, `/robots.txt`, `/sitemap.xml` and `/favicon.ico`.
-   - A soak is for a policy nobody has run yet. The three crawler files already served this exact policy enforced from `marketing/router.py`, and the landing page's widened policy is a strict superset of one that did — enforcing a widening can only unblock. So de-enforcing any of them buys nothing and costs a live protection.
-   - Everything else soaks, `/privacy.html` included — `legal/router.py` set no security header before this middleware, so that page's policy is exactly as new as the dashboard's.
+   - These already served an enforced policy (the landing page's is a strict superset of one that did), so de-enforcing them buys nothing and costs a live protection.
+   - Everything else soaks, `/privacy.html` included.
 2. Walk the surfaces in a browser with devtools open and confirm a clean console. Cover at minimum:
-   - `/portal/delete-account-info` and `/portal/cancel-deletion?token=x` (stylesheets, wordmark, webfont, and — on the second — the confirm form's POST, which is what `form-action 'self'` is there for)
-   - `/dashboard/users` (row expand, search swap, sort-header click, pager, delete-user modal)
+   - `/portal/delete-account-info` and `/portal/cancel-deletion?token=x` (stylesheets, webfont, and — on the second — the confirm form's POST)
+   - `/dashboard/users` (row expand, search, sort, pager, delete-user modal)
    - `/privacy.html`
    - `/`
 
-   The two `/portal/*` pages load no script, so a `script-src` mistake cannot show up there. The sign-in surfaces that would have caught one now live on the SPA origin, whose policy is in the Caddyfile and does not soak.
+   The two `/portal/*` pages load no script, so a `script-src` mistake cannot show up there. The SPA origin's policy is in the Caddyfile and does not soak.
 
    **Report-only violations do not say "Refused to …"** — that is the enforcing wording.
-   - Chrome logs them as `Loading the script '…' violates the following Content Security Policy directive: "…"`. This is the part that catches people: it logs at **info** level, so a console filtered to Errors shows nothing and the page looks clean.
+   - Chrome logs them as `Loading the script '…' violates the following Content Security Policy directive: "…"` at **info** level, so a console filtered to Errors shows nothing and the page looks clean.
    - Firefox uses `(Report-Only policy) The page's settings would block …`.
    - Each violation also fires a `securitypolicyviolation` event on `document`, with `disposition === "report"`, which is the reliable way to script the check.
 
-   Chrome additionally emits a one-off *"Content-Security-Policy-Report-Only … will have no effect"* warning when the policy carries no `report-uri`/`report-to`. **Ignore it.**
-   - It is about report *delivery* to a collection endpoint, not about violation visibility.
-   - Per-violation console logging and the DOM event both fire regardless, which is what makes this console-based soak work.
-   - Verified empirically against this build. Server-side collection is tracked in CLA-174.
+   Chrome also emits a one-off *"Content-Security-Policy-Report-Only … will have no effect"* warning when the policy carries no `report-uri`/`report-to`. **Ignore it:** it is about report *delivery*, and console logging and the DOM event fire regardless. Server-side collection is tracked in CLA-174.
 3. Remove `CSP_REPORT_ONLY` and deploy again.
 
-The default is **enforce** (`csp_report_only: bool = False`). A report-only default would mean the policy silently protects nobody if the flag is never flipped. There is no violation-collection endpoint — the soak is browser-console-based; server-side collection is tracked in CLA-174.
+The default is **enforce** (`csp_report_only: bool = False`), so the policy cannot silently protect nobody if the flag is never flipped. There is no violation-collection endpoint; the soak is browser-console-based.
 
 ##### `CSP_REPORT_ONLY` does not cover COOP or Permissions-Policy
 
-Both headers do have report-only counterparts — `Cross-Origin-Opener-Policy-Report-Only` and `Permissions-Policy-Report-Only`. Unlike CSP, they report **only** through the Reporting API (`Reporting-Endpoints` plus a collector), never to the console.
-
-With no collection endpoint on this deployment (tracked in CLA-174) there is nothing to read. So `CSP_REPORT_ONLY` leaves both alone, and their only rehearsal is a staged deploy plus a manual sign-in.
-
-Once CLA-174 lands, `Cross-Origin-Opener-Policy-Report-Only: same-origin` served alongside the enforcing `same-origin-allow-popups` is the way to answer the question below without a two-browser sweep.
+Both headers have report-only counterparts (`Cross-Origin-Opener-Policy-Report-Only`, `Permissions-Policy-Report-Only`), but unlike CSP they report **only** through the Reporting API (`Reporting-Endpoints` plus a collector), never to the console. With no collection endpoint on this deployment (CLA-174) there is nothing to read, so `CSP_REPORT_ONLY` leaves both alone and their only rehearsal is a staged deploy plus a manual sign-in.
 
 After changing either value, sign in end to end on `https://app.mobaide.com/login` and run the `/account` delete-account panel's Google re-auth, twice:
 
@@ -538,40 +475,32 @@ On `CloudflareOrigin`, leave Cloudflare's own HSTS setting **off**: two sources 
 
 `CORSMiddleware` is not installed, and its absence is a decision rather than an oversight. The Android and iOS clients use OkHttp and `URLSession`, which are not browsers and do not preflight.
 
-The browser client exists now — and is served **same-origin** on `app.mobaide.com` (the Caddy site block proxies `/api`, `/ws`, `/relay`, `/proxy` to central-server) precisely so no CORS policy is ever needed. Keep it that way: a cross-origin API host would reopen this decision for zero benefit.
+The browser client is served **same-origin** on `app.mobaide.com` precisely so no CORS policy is ever needed. Keep it that way: a cross-origin API host would reopen this decision for zero benefit.
 
-Its absence is now also load-bearing rather than merely convenient. The two cookie-authenticated API routes (below) require a custom `X-Mobaide-Session` header, which works as a CSRF control *because* a custom header makes the request non-simple:
-
-- the browser preflights
-- the `OPTIONS` gets a bare 405 with no CORS middleware to answer it
-- the real request is never sent
-
-Installing `CORSMiddleware` — especially with `allow_credentials=True` — would dismantle that.
+Its absence is also load-bearing. The two cookie-authenticated API routes (below) require a custom `X-Mobaide-Session` header, which works as a CSRF control *because* a custom header makes the request non-simple: the browser preflights, the `OPTIONS` gets a bare 405 with no CORS middleware to answer it, and the real request is never sent. Installing `CORSMiddleware` — especially with `allow_credentials=True` — would dismantle that.
 
 #### Browser session cookies
 
-The SPA's refreshable session keeps its **refresh token in an HttpOnly cookie** so a session survives closing the last tab; the 15-minute access token stays in the tab's `sessionStorage` and still travels as an `Authorization` bearer. All cookie mechanics live in `central_server/auth/session_cookie.py`.
+The SPA's refreshable session keeps its **refresh token in an HttpOnly cookie** so a session survives closing the last tab; the 15-minute access token stays in the tab's `sessionStorage` and travels as an `Authorization` bearer.
 
 ##### The two session cookies
 
-Two cookies are always written — and always deleted — in the same response:
+Two cookies are always written — and always deleted — in the same response, which keeps the marker from outliving or under-living the credential:
 
 - `__Host-mobaide_refresh` (HttpOnly, the credential)
 - `__Host-mobaide_signed_in` (readable, a single bit that lets a booting tab skip a pointless restore request)
 
-Both are `Secure`, `SameSite=Strict`, `Path=/`, no `Domain`. Pairing them in one response is what keeps the marker from outliving or under-living the credential.
+Both are `Secure`, `SameSite=Strict`, `Path=/`, no `Domain`.
 
 ##### Secure flag and name prefix
 
 `USER_SESSION_COOKIE_SECURE` (default `true`) controls `Secure` **and the name prefix together**, because RFC 6265bis makes `__Host-` conditional on `Secure` — a browser silently drops the whole cookie if they disagree.
 
-At `false` the same cookies are set unprefixed, and the server logs a `session_cookie.insecure` warning at startup. Set it false only for local development over plain http, and only for Safari: Chrome and Firefox already accept `Secure` cookies on `http://localhost`.
+At `false` the same cookies are set unprefixed, and the server logs a `session_cookie.insecure` warning at startup. Set it false only for local development over plain http, and only for Safari (Chrome and Firefox accept `Secure` cookies on `http://localhost`).
 
 ##### Credential versus marker
 
-The **credential** is read under exactly one name, chosen by that flag. Accepting the unprefixed name as a fallback would cancel the only thing the prefix buys: `__Host-` forbids a `Domain` attribute, which is what stops a sibling host writing a cookie this origin will send. Without that, `get.mobaide.com` could set `mobaide_refresh=<its own token>; Domain=mobaide.com` and fixate an attacker-chosen session on a victim.
-
-The **marker** is deliberately read under both names. It is one bit, not a credential, and the client cannot know at build time which name the server chose. But only the prefixed form is trusted enough to trigger a destructive purge.
+The **credential** is read under exactly one name, chosen by that flag. Accepting the unprefixed name as a fallback would cancel the only thing the prefix buys: `__Host-` forbids a `Domain` attribute, which stops a sibling host such as `get.mobaide.com` from setting `mobaide_refresh=<its own token>; Domain=mobaide.com` and fixating an attacker-chosen session on a victim. The **marker** is one bit, not a credential, so it is read under both names; only the prefixed form triggers a destructive purge.
 
 ##### CSRF and the header gate
 
@@ -590,11 +519,10 @@ One more cookie lives on the registrable domain by design: `mobaide_ads`. It is 
 - The value is HMAC-signed with a key derived from `JWT_SECRET_KEY`.
 - The endpoint accepts same-origin requests only (`Sec-Fetch-Site` / `Origin` are browser-controlled).
 - The arrival timestamp inside it is capped at the server clock.
-- A signature alone still proves only that *this server* minted the value — an attacker's own HTTP client can spoof those headers and have sibling-host script plant the result. So the payload also carries a keyed fingerprint of the network the Accept came from (exact IPv4, /64 for IPv6).
-- Sign-up honours the *consent* (the licence for the hashed-email fallback) only when it arrives from that same network.
-- A click id holds no personal data and is kept whichever network the sign-up comes from, so a changed address costs at most the fallback.
+- A signature alone proves only that *this server* minted the value — an attacker's own HTTP client can spoof those headers. So the payload also carries a keyed fingerprint of the network the Accept came from (exact IPv4, /64 for IPv6).
+- Sign-up honours the *consent* (the licence for the hashed-email fallback) only when it arrives from that same network. A click id holds no personal data and is kept regardless, so a changed address costs at most the fallback.
 
-**How the cookie reaches the server.** It is not a credential and **no server route reads the cookie itself**. Its fields reach the server only inside the optional `ad_attribution` field of the register / Google / Apple request bodies, where the signature is verified before anything is stored. An unsigned or tampered value is ignored, never a 422 — see [Google Ads conversion upload](#google-ads-conversion-upload-agent-paired).
+**How the cookie reaches the server.** It is not a credential and **no server route reads the cookie itself**. Its fields reach the server only inside the optional `ad_attribution` field of the register / Google / Apple request bodies, where the signature is verified before anything is stored. An unsigned or tampered value is ignored, never a 422.
 
 **Withdrawing consent.** Decline posts the value back to `POST /api/ads/consent/withdraw`. That clears the attribution from every account created with that cookie (the account row keeps the cookie's signature for exactly this lookup) and expires the cookie.
 
@@ -604,7 +532,7 @@ One more cookie lives on the registrable domain by design: `mobaide_ads`. It is 
 
 **Deploy `deploy_central.py` before `deploy_web.py`, and roll back in the reverse order.** The two ship independently, and `RefreshableSessionRequest` does not set `extra="forbid"`. A pre-cookie server therefore silently *ignores* `session_transport` and returns the refresh token in the body — which a cookie-era SPA discards.
 
-The symptom is not a loud failure: browser sessions simply end every `USER_SESSION_ACCESS_EXPIRE_MINUTES` with no diagnostic. The window is the gap between the two deploys, so the ordering is the whole mitigation. A body-token fallback would reintroduce the JS-readable 30-day credential this design exists to remove.
+The symptom is not a loud failure: browser sessions simply end every `USER_SESSION_ACCESS_EXPIRE_MINUTES` with no diagnostic. The ordering is the whole mitigation, because a body-token fallback would reintroduce the JS-readable 30-day credential this design exists to remove.
 
 #### WebSocket Origin allow-list
 
@@ -616,7 +544,7 @@ Every WS endpoint checks the `Origin` header **before** accepting the handshake 
 
 Rejected handshakes close pre-accept, which uvicorn surfaces as HTTP 403, and log `ws_origin.rejected`.
 
-Relay auth rides `?token=` bearers rather than cookies, so this is anti-CSWSH defense in depth, not the primary control — and it must stay that way. A session cookie now exists on the SPA origin and a WS handshake carries it like any other same-site request. A WS endpoint that authenticated off `websocket.cookies` would therefore promote this gate to the primary control, which it is not built for: it structurally allows any loopback origin on any port.
+Relay auth rides `?token=` bearers rather than cookies, so this is anti-CSWSH defense in depth, not the primary control — and it must stay that way. A WS endpoint that authenticated off `websocket.cookies` would promote this gate to the primary control, which it is not built for: it structurally allows any loopback origin on any port.
 
 ### Client IP behind Caddy
 
@@ -633,7 +561,7 @@ The wildcard is safe here only because `central-server` is `expose`-only and nev
 
 In `CloudflareOrigin` mode there is a second hop: the proxied hosts (`mobaide.com`, `www`, `api`) reach Caddy from a Cloudflare edge. Caddy trusts no incoming `X-Forwarded-For` by default — it replaces it with the peer address, so uvicorn would attribute every apex request to Cloudflare.
 
-`Caddyfile.CloudflareOrigin` therefore opens with a global `servers { trusted_proxies static … }` block listing Cloudflare's published ranges (`https://www.cloudflare.com/ips-v4` and `/ips-v6`; pinned by `tests/test_caddy_trusted_proxies.py`, refresh both when Cloudflare changes them). With the edge trusted, Caddy forwards `X-Forwarded-For: <visitor>, <edge>` and uvicorn reads the leftmost entry.
+`Caddyfile.CloudflareOrigin` therefore opens with a global `servers { trusted_proxies static … }` block listing Cloudflare's published ranges (`https://www.cloudflare.com/ips-v4` and `/ips-v6`; refresh both when Cloudflare changes them). With the edge trusted, Caddy forwards `X-Forwarded-For: <visitor>, <edge>` and uvicorn reads the leftmost entry.
 
 `app.mobaide.com` is gray-cloud in both modes and unaffected. `Caddyfile.LetsEncrypt` has no proxy in front and trusts nothing.
 
@@ -643,50 +571,25 @@ The rollout as a whole — the two-lane design, stage history, the Google Ads / 
 
 #### What the relay uploads
 
-The relay can report **one offline click conversion per account** to Google Ads. The first time an account pairs an agent — either pairing direction, both finish in `_complete_pairing` — a compare-and-set on `users.first_paired_at` fires exactly once. It hands the user id to `central_server/ads/` for a fire-and-forget upload through the **Data Manager API** (`POST https://datamanager.googleapis.com/v1/events:ingest`).
+The relay can report **one offline click conversion per account** to Google Ads. The first time an account pairs an agent (either direction, both finish in `_complete_pairing`), a compare-and-set on `users.first_paired_at` fires exactly once. It hands the user id to `central_server/ads/` for a fire-and-forget upload through the **Data Manager API** (`POST https://datamanager.googleapis.com/v1/events:ingest`).
 
-**Identifier.** The identifier is one of these, never both:
-
-- the `gclid` / `wbraid` / `gbraid` the landing page captured at sign-up (see *The consent-gated Google Ads tag* in [docs/website.md](website.md)), when the click is at most 90 days old
-- otherwise, the SHA-256 of the normalised account email (enhanced conversions for leads)
-
-**Consent and attribution.**
-
-- The upload carries the consent state the banner actually collected (`adUserData: CONSENT_GRANTED`, `adPersonalization: CONSENT_DENIED`).
-- It uses the email fallback only for accounts whose sign-up request carried the consent marker.
-- It clears the account's attribution columns afterwards whatever the outcome — except when Google refused the *credentials* rather than the event (see the log vocabulary below), in which case the attribution stays pending for the next process.
-
-**Restarts and duplicates.**
-
-- An upload interrupted by a restart is re-scheduled at the next startup (`ads.resume_pending`).
-- Every event carries a `transactionId` — a SHA-256 digest of the identifier and the event time, i.e. of fields the report carries anyway, so it discloses nothing further. This makes a re-send after a lost response or a restart a duplicate Google drops rather than a second conversion.
-
-**Purge.** A purge job — hourly, and once at startup before anything is resumed — drops attribution older than 90 days, measured from the click or from sign-up, whichever is earlier. The click stamp comes from the visitor's clock, so the server-stamped sign-up time caps retention.
+- **Identifier** (one, never both): the `gclid` / `wbraid` / `gbraid` the landing page captured at sign-up (see *The consent-gated Google Ads tag* in [docs/website.md](website.md)) when the click is at most 90 days old, otherwise the SHA-256 of the normalised account email (enhanced conversions for leads).
+- **Consent:** the upload carries the consent state the banner collected (`adUserData: CONSENT_GRANTED`, `adPersonalization: CONSENT_DENIED`). The email fallback is used only for accounts whose sign-up request carried the consent marker.
+- **Attribution:** the account's attribution columns are cleared afterwards whatever the outcome, except when Google refused the *credentials* rather than the event (see below); then they stay pending for the next process.
+- **Restarts and duplicates:** an upload interrupted by a restart is re-scheduled at the next startup (`ads.resume_pending`). Every event carries a `transactionId` (a SHA-256 digest of the identifier and the event time), so a re-send after a lost response or a restart is a duplicate Google drops, not a second conversion.
+- **Purge:** a job (hourly, and once at startup before anything is resumed) drops attribution older than 90 days, measured from the click or from sign-up, whichever is earlier.
 
 #### The in-app lane
 
-This upload is the *website* lane: it can only ever see accounts whose sign-up carried the landing page's click id or consent. Accounts created inside the mobile apps are measured by the apps themselves through Google Analytics for Firebase, which fires off the same compare-and-set. `_complete_pairing` also broadcasts the `account.first_agent_paired` user event and exposes the stamp on `GET /api/auth/me`.
-
-That lane, its consent defaults, the untracked Firebase config files and the `GOOGLE_SERVICES_JSON_BASE64` release secret are documented in [docs/app-conversion-measurement.md](app-conversion-measurement.md).
+This upload is the *website* lane. Accounts created inside the mobile apps are measured by the apps through Google Analytics for Firebase, which fires off the same compare-and-set (`_complete_pairing` also broadcasts the `account.first_agent_paired` user event and exposes the stamp on `GET /api/auth/me`). That lane is documented in [docs/app-conversion-measurement.md](app-conversion-measurement.md).
 
 #### Why Data Manager API
 
-**Why not the Google Ads API.** Its `uploadClickConversions` method has been closed since 2026-06-15 to developer tokens without prior conversion-upload history (`CUSTOMER_NOT_ALLOWLISTED_FOR_THIS_FEATURE`), and Google names the Data Manager API as the replacement.
-
-That API needs no developer token and no API-version knob and takes the same click ids and hashed emails. But it is:
-
-- *fast-fail* — a bad row rejects the whole request; there is no partial-failure envelope
-- *asynchronous* — a 200 carries only a `requestId`, and whether the click matched is published through `requestStatus:retrieve` between roughly 30 minutes and 24 hours later
+The Google Ads API's `uploadClickConversions` method has been closed since 2026-06-15 to developer tokens without prior conversion-upload history (`CUSTOMER_NOT_ALLOWLISTED_FOR_THIS_FEATURE`), and Google names the Data Manager API as the replacement. It needs no developer token and no API-version knob, but it is *fast-fail* (a bad row rejects the whole request) and *asynchronous*: a 200 carries only a `requestId`, and whether the click matched is published through `requestStatus:retrieve` between roughly 30 minutes and 24 hours later.
 
 #### Startup states and configuration
 
-**Fully inert unless configured.** Startup logs exactly one of these:
-
-- `ads.disabled reason=not_configured`
-- `ads.misconfigured missing=<names>` (some variables set, some not — stays disabled)
-- `ads.enabled api=data_manager customer_id=…`
-
-A leftover `GOOGLE_ADS_DEVELOPER_TOKEN` or `GOOGLE_ADS_API_VERSION` from the Google Ads API era is ignored, with one `ads.obsolete_setting` warning.
+**Fully inert unless configured.** Startup logs exactly one of `ads.disabled reason=not_configured`, `ads.misconfigured missing=<names>` (some variables set, some not — stays disabled) or `ads.enabled api=data_manager customer_id=…`. A leftover `GOOGLE_ADS_DEVELOPER_TOKEN` or `GOOGLE_ADS_API_VERSION` is ignored, with one `ads.obsolete_setting` warning.
 
 | Variable | Required | Value |
 |---|---|---|
@@ -695,25 +598,23 @@ A leftover `GOOGLE_ADS_DEVELOPER_TOKEN` or `GOOGLE_ADS_API_VERSION` from the Goo
 | `GOOGLE_ADS_OAUTH_CLIENT_ID`, `GOOGLE_ADS_OAUTH_CLIENT_SECRET` | yes | A **Desktop app** OAuth client from the Google Cloud Console, on a project with the **Data Manager API** enabled. |
 | `GOOGLE_ADS_OAUTH_REFRESH_TOKEN` | yes | Minted with `deploy/prod/google_ads_oauth.py` (below) for the `https://www.googleapis.com/auth/datamanager` scope. |
 | `GOOGLE_ADS_CONVERSION_ACTION_ID` | yes | Numeric id of the `Agent paired` action (Goals → Conversions → Summary → the action; the number after `ctId=` in the URL). It must be an *Import → track conversions from clicks* action. |
-| `GOOGLE_ADS_CLICK_WINDOW_DAYS` | no | The action's click-through window (default 90, the value the rollout plan configures; Google's own default is 30). A click older than this is a guaranteed no-match, so the uploader tries the hashed-email fallback instead. Clamped to 1..90 — the 90-day retention the policy promises. |
+| `GOOGLE_ADS_CLICK_WINDOW_DAYS` | no | The action's click-through window (default 90; Google's own default is 30). A click older than this is a guaranteed no-match, so the uploader tries the hashed-email fallback instead. Clamped to 1..90. |
 
 #### Setup runbook
 
 1. Google Cloud Console:
    - Enable the *Data Manager API*.
-   - Set the OAuth consent screen to **In production**. A consent screen left in *Testing* issues refresh tokens that expire after 7 days. The symptom is `ads.credentials_rejected reason=oauth_refresh_failed` about a week after deploy (uploads are deferred, not lost: re-mint the token and recreate the container).
-   - Create an OAuth client of type **Desktop app**.
-   - The `datamanager` scope is classed *sensitive*, so an unverified app shows Google's "hasn't been verified" interstitial once, to the operator minting the token. Brand or scope verification is not needed for that.
+   - Set the OAuth consent screen to **In production**. A consent screen left in *Testing* issues refresh tokens that expire after 7 days; the symptom is `ads.credentials_rejected reason=oauth_refresh_failed` about a week after deploy (uploads are deferred, not lost: re-mint the token and recreate the container).
+   - Create an OAuth client of type **Desktop app**. The `datamanager` scope is *sensitive*, so the operator minting the token sees Google's "hasn't been verified" interstitial once; verification is not needed.
 2. Google Ads: the action must be *Import → Other data sources → Track conversions from clicks*, counting **One** per click.
    - The hashed-email fallback additionally needs, under Goals → Conversions → Settings, the Customer Data Terms accepted **and the separate "Enhanced conversions for leads" row turned on**.
-   - The unified "Enhanced conversions" switch above it does *not* flip that row (verified on this account on 2026-09-03). The row's method dropdown (Google tag / Google Tag Manager) is a diagnostics label, not a gate.
+   - The unified "Enhanced conversions" switch above it does *not* flip that row.
    - With the row off, Google rejects every hashed-email upload up front with a bare `400 INVALID_ARGUMENT` whose hidden field violation is `DESTINATION_ACCOUNT_NOT_ENABLED_ENHANCED_CONVERSIONS_FOR_LEADS`, and the account's attribution is cleared. Turn the uploader off before touching that page.
    - Set `GOOGLE_ADS_CLICK_WINDOW_DAYS` to the action's click-through window if it is not 90.
 3. Workstation: `python deploy/prod/google_ads_oauth.py --client-id <id> --verify --customer-id <ads account> --conversion-action-id <ctId> [--login-customer-id <manager>]`.
    - It opens the browser (sign in with the Google account that administers the Ads account) and prints the three `GOOGLE_ADS_OAUTH_*=` lines to stdout.
    - With `--verify` it sends a **validate-only** upload to the real destination. Google checks the token, the enabled API, the account path and the action id without recording anything.
    - `PERMISSION_DENIED` there means the signed-in account does not reach the Ads account: add the manager id, or sign in as a user of the account.
-   - On a macOS python.org build that has never run *Install Certificates.command* the script verifies against certifi (with a warning) instead of dying on `CERTIFICATE_VERIFY_FAILED`.
 4. Paste the values into `/opt/mobaide/.env` and run `deploy_central.py` (`--skip-build` is enough when the source is already deployed: compose recreates the container on an `env_file` change).
 
 #### Verifying and reading the logs
@@ -725,47 +626,23 @@ docker compose logs central-server | grep -E 'ads\.|pairing\.(first_agent_paired
 Log lines to expect:
 
 - **`pairing.conversion_uploaded user_id=… identifier=<gclid|gbraid|wbraid|hashed_email> request_id=…`** means Google **accepted** the request — not yet that the click matched.
-- **`pairing.conversion_status user_id=… request_id=… status=<SUCCESS|FAILED|PARTIAL_SUCCESS> records=… errors=<REASON:count,…> warnings=…`** is written **once**, when the verdict is terminal (at the deadline it logs whatever status it last saw).
-- **`pairing.conversion_upload_failed … reason=<r> status=<s> message=<STATUS: google message>`** is terminal and clears the account's attribution.
-- **`pairing.conversion_upload_deferred user_id=… identifier=… reason=…`** is written for every affected upload after refused credentials, with its attribution kept (see below).
+- **`pairing.conversion_status user_id=… request_id=… status=<SUCCESS|FAILED|PARTIAL_SUCCESS> records=… errors=<REASON:count,…> warnings=…`** is written **once**, when the verdict is terminal (at the deadline it logs whatever status it last saw). A best-effort follow-up polls 45 minutes after the upload and every two hours while the status is `PROCESSING`, for up to a day; a poll that still sees `PROCESSING` writes nothing, so an empty grep in the first hours is expected. A restart drops the follow-up; the action's *Diagnostics* tab in Google Ads stays the source of truth.
+- **`pairing.conversion_upload_failed … reason=<r> status=<s> message=<STATUS: google message>`** is terminal and clears the account's attribution. Reasons: `http_4xx` (permanent — `INVALID_ARGUMENT` a malformed row, `NOT_FOUND` a wrong customer or action id), `retries_exhausted` (three attempts over network errors / 429 / 5xx, 1 s then 4 s apart), `bad_response` (a 200 whose body is not JSON or carries no `requestId`, or an unexpected status).
+- **`pairing.conversion_upload_deferred user_id=… identifier=… reason=…`** is written for every affected upload after refused credentials, with its attribution kept.
 - **`pairing.conversion_skipped … reason=no_consent`** is the normal outcome for every account that did not sign up through the consented web path.
-
-#### Upload verdict follow-up
-
-A best-effort follow-up polls Google's verdict 45 minutes after the upload and every two hours while it is still `PROCESSING`, for up to a day. A poll that still sees `PROCESSING` writes nothing, so an empty grep in the first hours is expected.
-
-A restart drops the follow-up. The action's *Diagnostics* tab in Google Ads stays the source of truth, with attributed conversions showing there within about a day.
-
-#### Failure reasons
-
-The `reason` vocabulary of `pairing.conversion_upload_failed`:
-
-- `http_4xx` — permanent. `INVALID_ARGUMENT` is a malformed row, `NOT_FOUND` a wrong customer or action id.
-- `retries_exhausted` — three attempts over network errors / 429 / 5xx, 1 s then 4 s apart.
-- `bad_response` — a 200 whose body is not JSON or carries no `requestId`, or an unexpected status.
 
 #### Refused credentials
 
-Refused **credentials** are the one non-terminal failure:
+Refused **credentials** are the one non-terminal failure: a rejected refresh token (`oauth_refresh_failed`), a 401 (`http_401`) or a 403 (`http_403` — `PERMISSION_DENIED` usually means a token minted for the wrong scope, a signed-in account that does not reach the Ads account or a missing manager id, or a Data Manager API that is not enabled).
 
-- a rejected refresh token (`oauth_refresh_failed`)
-- a 401 (`http_401`)
-- a 403 (`http_403` — `PERMISSION_DENIED` usually means a token minted for the wrong scope, a signed-in account that does not reach the Ads account or a missing manager id, or a Data Manager API that is not enabled)
+Any of these logs one `ads.credentials_rejected reason=… status=… message=…` warning. After that, this process sends nothing more, and every affected upload is deferred. Fix the setting, recreate the container, and `ads.resume_pending` picks the backlog up (the 90-day purge still bounds it).
 
-Any of these logs one `ads.credentials_rejected reason=… status=… message=…` warning. After that, this process sends nothing more, and every affected upload logs `pairing.conversion_upload_deferred user_id=… identifier=… reason=…` with its attribution kept. Fix the setting, recreate the container, and `ads.resume_pending` picks the backlog up (the 90-day purge still bounds it).
-
-#### Rejections that do not fail the upload
-
-- Rejections that only happen during processing — an expired click (`EVENT_TOO_OLD`) — never fail the upload. They surface in the status line's `errors=` and in Diagnostics.
-- A hash that simply matches no click is not an error at all.
-- A missing account-side flag (enhanced conversions for leads, the data terms) is different: it fails the upload up front as `http_4xx` and clears the attribution.
-
-Click ids, emails and hashes never appear in the logs; the `request_id` is what Google support asks for. The helper's `--verify` is the smoke test; the first real pairing after deploy is the end-to-end test.
+Rejections that only happen during processing (such as an expired click, `EVENT_TOO_OLD`) never fail the upload; they surface in the status line's `errors=` and in Diagnostics. A missing account-side flag (enhanced conversions for leads, the data terms) fails the upload up front as `http_4xx` and clears the attribution. Click ids, emails and hashes never appear in the logs; the `request_id` is what Google support asks for. The first real pairing after deploy is the end-to-end test.
 
 ### Rollback
 
-- **Automatic**: only if `docker compose up` itself fails (and only on a full deploy, not `--skip-build`) — the script swaps `central_server.prev` back in and rebuilds. Nothing was serving the new source at that point, so there is no evidence to lose.
-- **A failed `/api/health` check never rolls back.** Compose already came up, so the containers running were built from the deployed source: an automatic swap-and-rebuild would destroy the state the logs describe, and it fires just as readily for failures no source rollback can fix (DNS, Caddy, the Cloudflare edge, or this workstation's own trust store). The script prints the logs command and the rollback command instead.
+- **Automatic**: only if `docker compose up` itself fails (and only on a full deploy, not `--skip-build`) — the script swaps `central_server.prev` back in and rebuilds.
+- **A failed `/api/health` check never rolls back.** The containers running were built from the deployed source, so an automatic swap-and-rebuild would destroy the state the logs describe, and it would also fire for failures no source rollback can fix (DNS, Caddy, the Cloudflare edge, this workstation's own trust store). The script prints the logs command and the rollback command instead.
 - **Manual**: `deploy_central.py --rollback` swaps `central_server.prev` back in on demand — the deliberate response to a failed health check, and to a regression that only surfaces later.
 
 ### Verify
@@ -794,15 +671,11 @@ The Android app never talks to the agent directly; it always goes through `centr
 - Python 3.12+ (the production `install.ps1` flow on Windows auto-installs Python 3.12 via `winget`, with a python.org-installer fallback when `winget` is unavailable; the conda dev path still needs it pre-installed)
 - `git`, `curl`
 - Claude CLI installed on the same machine (the agent spawns `claude` via PTY — see https://claude.ai/code).
-  - **v2.1.108 or newer is recommended.** The agent presets `ENABLE_PROMPT_CACHING_1H=1` on every spawn to enable the 1-hour prompt-cache TTL introduced in that release ([release notes](https://github.com/anthropics/claude-code/releases/tag/v2.1.108)). Older CLIs will simply ignore the variable.
+  - **v2.1.108 or newer is recommended.** The agent presets `ENABLE_PROMPT_CACHING_1H=1` on every spawn to enable the 1-hour prompt-cache TTL introduced in that release ([release notes](https://github.com/anthropics/claude-code/releases/tag/v2.1.108)); older CLIs ignore the variable.
   - The CLI must be on the agent's `PATH`. Windows installs auto-detect `claude.cmd` from the installing user's `%APPDATA%\npm` and pin it as `MOBAIDE_CLAUDE_BIN` in `<prefix>\mobaide_agent\.env`. The Linux/macOS unit files ship with `%h/.npm-global/bin` and `%h/.local/bin` already appended.
-  - To use a non-standard install location set `MOBAIDE_CLAUDE_BIN=/absolute/path/to/claude` in `<prefix>/agent.env`.
-- Codex CLI (optional — the second managed agent; install with `npm install -g @openai/codex`).
-  - When present, Windows installs auto-detect `codex` from the installing user's `%APPDATA%\npm` and pin its absolute path as `MOBAIDE_CODEX_BIN` in `<prefix>\mobaide_agent\.env`, exactly mirroring the `MOBAIDE_CLAUDE_BIN` auto-detection above. Otherwise the agent probes the same npm-global locations on `PATH`.
-  - To use a non-standard install location set `MOBAIDE_CODEX_BIN=/absolute/path/to/codex` in `<prefix>/agent.env`.
-- Antigravity CLI (optional — the third managed agent; binary `agy`, a standalone install — **not** an npm package).
-  - When present, Windows installs auto-detect `agy` from the installing user's `%USERPROFILE%\.local\bin` or the `Antigravity` program folders and pin its absolute path as `MOBAIDE_AGY_BIN` in `<prefix>\mobaide_agent\.env`, exactly mirroring the `MOBAIDE_CODEX_BIN` auto-detection above. Otherwise the agent probes `~/.local/bin` and the standard install locations on `PATH`.
-  - To use a non-standard install location set `MOBAIDE_AGY_BIN=/absolute/path/to/agy` in `<prefix>/agent.env`.
+  - For a non-standard location set `MOBAIDE_CLAUDE_BIN=/absolute/path/to/claude` in `<prefix>/agent.env`.
+- Codex CLI (optional — the second managed agent; install with `npm install -g @openai/codex`). Windows installs auto-detect `codex` the same way and pin `MOBAIDE_CODEX_BIN`; otherwise the agent probes the same npm-global locations on `PATH`. For a non-standard location set `MOBAIDE_CODEX_BIN=/absolute/path/to/codex` in `<prefix>/agent.env`.
+- Antigravity CLI (optional — the third managed agent; binary `agy`, a standalone install — **not** an npm package). Windows installs auto-detect `agy` from the installing user's `%USERPROFILE%\.local\bin` or the `Antigravity` program folders and pin `MOBAIDE_AGY_BIN`; otherwise the agent probes `~/.local/bin` and the standard install locations on `PATH`. For a non-standard location set `MOBAIDE_AGY_BIN=/absolute/path/to/agy` in `<prefix>/agent.env`.
   - Antigravity auth is host-side — pre-authenticate `agy` on the host via Google Sign-In; there is no API-key env var and no in-app login.
 - A paired agent: `RELAY_AGENT_ID` + `RELAY_AGENT_TOKEN` issued by `central-server`. Pair from the Android app: **Settings → Agents → Pair new**, or via the admin REST API.
 
@@ -846,19 +719,18 @@ The script does the following:
 4. Writes `<prefix>\current_version`.
 5. Registers a **per-user Scheduled Task** named `MobaideAgent`.
 
-The task is pinned to the installing user (`$env:USERNAME`) with `-LogonType Interactive` and triggered `-AtLogOn`. The agent process tree therefore runs in that user's session: `%USERPROFILE%` resolves to `C:\Users\<u>`, and the Claude CLI in the agent's PTY sees the user's `~/.claude` credentials and skills, just like a desktop terminal session does.
+The task is pinned to the installing user (`$env:USERNAME`) with `-LogonType Interactive` and triggered `-AtLogOn`. The agent process tree therefore runs in that user's session, and the Claude CLI in the agent's PTY sees the user's `~/.claude` credentials and skills, just like a desktop terminal session does.
 
-After the task starts, the script waits for the agent to report healthy and for the supervisor to write the pairing nonce file. It then renders the pairing QR code in the console window for the operator to scan from the Mobaide mobile app. This ordering ensures the QR is shown only once the agent is ready to accept a pairing claim, eliminating the race where scans during boot left `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` empty.
+After the task starts, the script waits for the agent to report healthy and for the supervisor to write the pairing nonce file. It then renders the pairing QR code in the console window for the operator to scan from the Mobaide mobile app, so a scan during boot cannot leave `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` empty.
 
 **CLI shim.** The installer also writes `<prefix>\bin\mobaide-agent.cmd` and appends `<prefix>\bin` to the installing user's PATH (`HKCU\Environment`, the same account the task and the `.env` ACL belong to).
 
 - `mobaide-agent show-qr`, `mobaide-agent re-pair` and the other maintenance verbs then work from any **new** terminal window. The elevated install window can use them right away.
 - The shim reads `<prefix>\current_version` on every call, so auto-updates and rollbacks never break it.
 - Verbs that change files under `%ProgramFiles%` (such as `re-pair`) need an elevated terminal, and the command says so when it hits that.
-- Installs made before the shim existed get it by re-running the one-liner (re-runs keep the pairing).
 
 > [!WARNING]
-> **Requires an interactive logon.** The task only runs while the installing user has an interactive session (the lock screen is fine; a full logoff stops the task). Headless / unattended Windows hosts (build agents, CI runners, Windows servers without a logged-in user) are out of scope for this installer — there is no service-account mode. Multi-user machines: each user re-runs the installer in their own session and gets their own task pinned to themselves (no shared agent state across local accounts), mirroring Linux's `$SUDO_USER` semantics.
+> **Requires an interactive logon.** The task only runs while the installing user has an interactive session (the lock screen is fine; a full logoff stops the task). Headless / unattended Windows hosts (build agents, CI runners, Windows servers without a logged-in user) are out of scope for this installer — there is no service-account mode. Multi-user machines: each user re-runs the installer in their own session and gets their own task pinned to themselves (no shared agent state across local accounts).
 
 #### Architecture
 
@@ -883,28 +755,25 @@ Execute  : <pythonw.exe resolved by Resolve-Pythonw at install time>
 Argument : -u "<prefix>\svc\mobaide_launcher.py" --prefix "<prefix>"
 ```
 
-`mobaide_launcher.py` is fetched from `https://get.mobaide.com/windows_launcher.py` during install. It is co-versioned with `install.ps1` itself — the `publish-gh-pages` workflow ships both files in the same push — so installer changes that depend on a new supervisor API can never desync. For self-hosted distributions, override the URL via `MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL`.
+`mobaide_launcher.py` is fetched from `https://get.mobaide.com/windows_launcher.py` during install and is co-versioned with `install.ps1`. For self-hosted distributions, override the URL via `MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL`.
 
 ##### What happens on every task start
 
-On every task start, the supervisor (`mobaide_launcher.py`) is launched by `pythonw.exe` — the GUI-subsystem variant of CPython, which does not allocate a console window. This is what prevents the transient py.exe window from appearing at logon or during `irm install.ps1 | iex`.
+On every task start, the supervisor (`mobaide_launcher.py`) is launched by `pythonw.exe` — the GUI-subsystem variant of CPython, which allocates no console window.
 
-1. **Stderr redirect.** Because `pythonw.exe` binds its stdio to no-op handles, the supervisor redirects its own `sys.stderr` to `<prefix>\logs\launcher.err.log` at startup, so diagnostics (config errors, Python tracebacks) survive.
-2. **Job Object.** It then joins a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so everything it starts dies with it. `Stop-ScheduledTask` / `schtasks /End` terminate only the supervisor. Before the job, an orphaned agent kept the port and the relay credentials it booted with, so the next task start exited on the port clash (Task Scheduler last result 3) and `re-pair` never completed.
-3. **Launcher spawn.** The supervisor then reads `<prefix>\current_version`, resolves the active release's `python.exe`, and spawns `python.exe -m mobaide.launcher` as a subprocess.
+1. It redirects its own `sys.stderr` to `<prefix>\logs\launcher.err.log`, because `pythonw.exe` binds its stdio to no-op handles.
+2. It joins a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so everything it starts dies with it. `Stop-ScheduledTask` / `schtasks /End` terminate only the supervisor.
+3. It reads `<prefix>\current_version`, resolves the active release's `python.exe`, and spawns `python.exe -m mobaide.launcher` as a subprocess.
 
-##### Crash-loop rollback and process handling
+The launcher does crash-loop detection + rollback exactly as on Linux/macOS: it rewrites `<prefix>\current_version` to a stable **complete** sibling release (one carrying the `.installed` sentinel, or the legacy `mobaide-agent.exe` console script) if the active one crashes 3 times within 60 s. An incomplete release is never selected or booted.
 
-- The launcher does crash-loop detection + rollback exactly as on Linux/macOS. It rewrites `<prefix>\current_version` to a stable **complete** sibling release (one carrying the `.installed` sentinel, or the legacy `mobaide-agent.exe` console script) if the active one crashes 3 times within 60 s. An incomplete release swapped into place but not yet finalized is never selected or booted.
-- On Windows, `mobaide.launcher` uses `subprocess.Popen` + a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` instead of `os.execv`. `os.execv` creates a new PID on Windows, breaking the supervisor's `poll()` supervision — Python issue #9148.
-- Every `subprocess.Popen` / `subprocess.run` call in the Windows agent code path also passes `creationflags=CREATE_NO_WINDOW` as defense-in-depth, so child processes inherit the no-window behaviour.
-- The agent's stderr is captured to `<prefix>\logs\agent.err.log` and its stdout (structlog records, uvicorn access logs, every `pairing_monitor.*` and `relay_client.*` event) to `<prefix>\logs\agent.out.log`. Each is rotated at 5 MB, one backup kept.
+The agent's stderr is captured to `<prefix>\logs\agent.err.log` and its stdout (structlog records, uvicorn access logs, every `pairing_monitor.*` and `relay_client.*` event) to `<prefix>\logs\agent.out.log`. Each is rotated at 5 MB, one backup kept.
 
-> **CPython 3.13.0 caveat:** on CPython 3.13.0, `pythonw.exe` inside a venv still allocates a transient console due to [CPython issue #126084](https://github.com/python/cpython/issues/126084). This was fixed in 3.13.1. The installer's `winget` fast path targets Python 3.12, which is unaffected; if you are using a self-managed 3.13.0 environment and observe a brief window flash, upgrade to 3.13.1+.
+> **CPython 3.13.0 caveat:** on CPython 3.13.0, `pythonw.exe` inside a venv still allocates a transient console due to [CPython issue #126084](https://github.com/python/cpython/issues/126084). This was fixed in 3.13.1; the installer's `winget` fast path targets Python 3.12, which is unaffected. On a self-managed 3.13.0 environment, upgrade to 3.13.1+.
 
 ##### Restart behaviour
 
-When the launcher subprocess exits with code 75 (`_EXIT_RESTART_REQUESTED` — emitted on successful pair or staged update), the supervisor re-resolves `current_version` and respawns immediately. This in-process loop gives the user a sub-second post-pair restart. Task Scheduler's outer `-RestartCount` / `-RestartInterval` (1-minute floor) catches the supervisor-level failure case.
+When the launcher subprocess exits with code 75 (`_EXIT_RESTART_REQUESTED` — emitted on successful pair or staged update), the supervisor re-resolves `current_version` and respawns immediately. Task Scheduler's outer `-RestartCount` / `-RestartInterval` (1-minute floor) catches the supervisor-level failure case.
 
 Task Scheduler settings:
 
@@ -912,10 +781,7 @@ Task Scheduler settings:
 - `-ExecutionTimeLimit (New-TimeSpan -Seconds 0)` disables the default 72-hour task TTL.
 - `-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries` keep the agent running on laptops regardless of power state.
 
-> [!NOTE]
-> **Breaking change vs. older builds.** Prior builds registered the agent as a LocalSystem SCM service. That model gave the agent process tree `%USERPROFILE%=C:\Windows\system32\config\systemprofile`, which hid the user's `~/.claude` credentials and skills from the Claude CLI in the agent's PTY.
-
-Re-running `install.ps1` on a host with the SCM-service design `sc.exe delete`s the legacy `MobaideAgent` service, removes the legacy `<prefix>\svc\venv\` (the pywin32 host venv from that era), and registers the new Scheduled Task. An even-older `cmd.exe /c launcher.cmd` registration is also cleaned up by the same path.
+Re-running `install.ps1` on a host that still has the legacy LocalSystem SCM service `sc.exe delete`s the `MobaideAgent` service, removes the legacy `<prefix>\svc\venv\`, and registers the Scheduled Task. An older `cmd.exe /c launcher.cmd` registration is also cleaned up.
 
 #### Task management
 
@@ -938,11 +804,9 @@ Get-Content "$Prefix\logs\agent.err.log" -Tail 50
 Get-Content "$Prefix\logs\agent.out.log" -Tail 100
 ```
 
-A supervisor installed before the kill-on-close job leaves the launcher and agent running after `Stop-ScheduledTask`. Re-run the installer to replace it; it stops every process running from the prefix first.
+A supervisor installed before the kill-on-close job leaves the launcher and agent running after `Stop-ScheduledTask`. Re-run the installer to replace it; it stops every process running from the prefix first. The `mobaide-agent` verbs that restart the agent (`re-pair`, `pair`, `pair-qr --wait`, `fetch-trust-key`) also stop such leftovers, but skip the restart when run from inside one of the agent's own terminal sessions.
 
-The `mobaide-agent` verbs that restart the agent (`re-pair`, `pair`, `pair-qr --wait`, `fetch-trust-key`) also stop such leftovers before they start the task again. They skip the restart when run from inside one of the agent's own terminal sessions, which the stop would end first.
-
-The task runs as the installing user (one task per user); no Group Managed Service Account / virtual account configuration is needed or supported. To pair a second user on the same machine, that user re-runs `install.ps1` in their own session — they get their own Scheduled Task pinned to themselves.
+The task runs as the installing user (one task per user); no Group Managed Service Account / virtual account configuration is needed or supported.
 
 ### Linux (systemd) and macOS (launchd) — automated
 
@@ -964,15 +828,14 @@ The script does the following:
 4. Writes `<prefix>/current_version`.
 5. Registers the supervisor.
 
-The sentinel is the same "complete release" contract the auto-updater uses — see [versioning-and-updates.md](versioning-and-updates.md#install-layout). A release is therefore only ever selected once it is fully installed and runnable.
+The sentinel is the same "complete release" contract the auto-updater uses — see [versioning-and-updates.md](versioning-and-updates.md#install-layout).
 
 #### Linux unit and macOS LaunchAgent
 
 * **Linux** — installs `mobaide-agent.service` (systemd).
-  * `ExecStart` is the generated `<prefix>/bin/mobaide-agent-launcher.sh` wrapper (the same wrapper macOS launchd already uses), not the older inline `bash -c '... python -m mobaide.launcher'`.
-  * The wrapper self-heals a missing, corrupt, or incomplete current-release venv by rolling `current_version` forward to the newest sibling release that is complete (`.installed` sentinel, or the legacy console-script fallback) before exec. The in-venv launcher then does the 3-strike crash-loop rollback.
-  * The unit is configured with `StartLimitBurst=10 / StartLimitIntervalSec=600` so those recovery paths have room to retry a stable sibling release before systemd stops the unit.
-  * It also sets `RestartForceExitStatus=75` so the updater's restart trigger is honoured.
+  * `ExecStart` is the generated `<prefix>/bin/mobaide-agent-launcher.sh` wrapper (the same wrapper macOS launchd uses).
+  * The wrapper self-heals a missing, corrupt, or incomplete current-release venv by rolling `current_version` forward to the newest complete sibling release before exec. The in-venv launcher then does the 3-strike crash-loop rollback.
+  * The unit sets `StartLimitBurst=10 / StartLimitIntervalSec=600` so those recovery paths can retry before systemd stops the unit, and `RestartForceExitStatus=75` so the updater's restart trigger is honoured.
   * The agent runs as the user who invoked `sudo` (resolved from `$SUDO_USER`) so it can read/write the developer's `/home/<user>/<repo>` source trees. Override with `MOBAIDE_RUN_AS_USER=<user>` for CI / non-interactive provisioning.
 * **macOS** — installs `~/Library/LaunchAgents/com.mobaide.agent.plist` (launchd).
   * `ThrottleInterval=10` gives the boot journal the same rollback window on macOS.
@@ -997,7 +860,7 @@ If the operator misses the QR, run `mobaide-agent show-qr` on the agent host to 
 - A `re-pair` started that way may not be able to restart the service itself; it then prints the `sudo systemctl restart mobaide-agent` to run.
 - On RHEL-family distros sudo's `secure_path` leaves out `/usr/local/bin`; there, write `sudo /usr/local/bin/mobaide-agent …`.
 - When `/usr/local/bin/mobaide-agent` already exists and was not written by the installer, or the install ran without root, the shim goes to `<prefix>/bin/mobaide-agent` instead and the installer prints that full path.
-- Installs made before the shim existed get it by re-running the install one-liner (re-runs keep the pairing); until then, run `<prefix>/releases/$(cat <prefix>/current_version)/venv/bin/mobaide-agent`.
+- Installs made before the shim existed get it by re-running the install one-liner (re-runs keep the pairing).
 
 #### Pairing-pending state and re-runs
 
@@ -1021,15 +884,15 @@ The agent runs as a per-user LaunchAgent, so that dialog targets the logged-in M
 
 #### How the agent handles it
 
-The agent does **not** try to suppress these prompts. macOS only grants Full Disk Access to `.app` bundles, not to bare interpreters like the agent's venv `python`. There is no supported way to pre-authorize file access on an unmanaged Mac without an MDM-pushed PPPC profile.
+The agent does **not** try to suppress these prompts: macOS only grants Full Disk Access to `.app` bundles, not to bare interpreters like the agent's venv `python`, and there is no supported way to pre-authorize file access on an unmanaged Mac without an MDM-pushed PPPC profile.
 
-Instead the agent makes the wait **visible**. A per-session startup watchdog that sees essentially no output flags the likely block and raises an `awaiting_os_permission` attention. The mobile app surfaces it as **"Action needed on your Mac"** (notification + badge) rather than a blank terminal. `/api/health` also reports `macos_full_disk_access` (`true`/`false` on macOS, `null` elsewhere) for support.
+Instead the agent makes the wait **visible**. A per-session startup watchdog that sees essentially no output raises an `awaiting_os_permission` attention. The mobile app surfaces it as **"Action needed on your Mac"** (notification + badge). `/api/health` also reports `macos_full_disk_access` (`true`/`false` on macOS, `null` elsewhere) for support.
 
 #### Resolving it
 
 **To resolve:** approve the dialog on the Mac. macOS remembers each grant per folder category, so it is a one-time approval per category, not a recurring prompt.
 
-To eliminate the prompts entirely (power users), wrap the launchd-launched binary in a code-signed `.app` bundle and grant *that* Full Disk Access — Apple's only supported path for a background tool. It is intentionally **not** automated here, because child-process TCC inheritance to the `claude` subprocess tree is not guaranteed across macOS versions.
+To eliminate the prompts entirely (power users), wrap the launchd-launched binary in a code-signed `.app` bundle and grant *that* Full Disk Access. This is intentionally **not** automated, because child-process TCC inheritance to the `claude` subprocess tree is not guaranteed across macOS versions.
 
 ### Voice input (speech-to-text)
 
@@ -1051,9 +914,7 @@ The model is NVIDIA Parakeet TDT 0.6B v3 (int8 ONNX, 25 European languages inclu
 
 A helper process (`python -P -m mobaide.voice.worker`, same interpreter as the agent) starts on the first dictation, at below-normal priority with 2 inference threads and no console window.
 
-- It exits after 3 idle minutes, which returns all of its memory to the OS. It is also recycled after an hour or 500 requests.
-- The agent process itself never loads the model.
-- The helper reads stdin from the agent and exits when the agent goes away, so it is never left behind.
+- It exits after 3 idle minutes, which returns all of its memory to the OS, and is recycled after an hour or 500 requests. The agent process itself never loads the model.
 - While a dictation is open, the auto-updater defers its restart (a forced update, and the `mobaide-agent update` CLI, do not wait).
 
 #### Where voice files live
@@ -1062,9 +923,7 @@ A helper process (`python -P -m mobaide.voice.worker`, same interpreter as the a
 
 - `settings.json` holds the on/off choice and the last install outcome.
 - `models/<model-id>/` holds the model plus its `NOTICE` (CC BY 4.0 attribution: created by NVIDIA, int8 ONNX export by k2-fsa/sherpa-onnx).
-- `runtime/<sherpa-onnx-version>-<python tag>-<platform>/` holds the sherpa-onnx runtime, unpacked from hash-pinned PyPI wheels without pip. It is not a dependency of the agent wheel, so a platform without a wheel can never break an agent install.
-
-A Python upgrade fetches a new runtime; the model stays.
+- `runtime/<sherpa-onnx-version>-<python tag>-<platform>/` holds the sherpa-onnx runtime, unpacked from hash-pinned PyPI wheels. A Python upgrade fetches a new runtime; the model stays.
 
 `MOBAIDE_VOICE_DIR` overrides the location. A relative path is anchored under the state prefix. The CLI reads it from the agent's environment or `.env`, and `--voice-dir` overrides both.
 
@@ -1074,9 +933,8 @@ Removing the agent with **Also uninstall Mobaide from this computer** deletes th
 
 Model files come from the `voice-model-parakeet-tdt-0.6b-v3-int8` release in the public releases repo (`github.com`), falling back to the pinned upstream Hugging Face revision (`huggingface.co`). The two runtime wheels come from PyPI (`files.pythonhosted.org`). Allow those hosts on a filtering proxy.
 
-- Every file's size and SHA-256 are pinned in the agent's catalog (`mobaide/voice/catalog.py`), so a captive-portal page or a truncated mirror is rejected (`hash_mismatch`) and the next source is tried.
-- Downloads honour `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`, use certifi, retry with backoff and resume from `*.part` files with HTTP Range — after a network drop, a sleeping laptop, or an agent restart (which resumes the install by itself).
-- A `failed` install waits for the user to retry.
+- Every file's size and SHA-256 are pinned, so a captive-portal page or a truncated mirror is rejected (`hash_mismatch`) and the next source is tried.
+- Downloads honour `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` and resume from `*.part` files after a network drop, a sleeping laptop, or an agent restart. A `failed` install waits for the user to retry.
 - Offline, enabling fails with `network`; once installed, dictation needs no internet.
 
 #### Voice CLI
@@ -1096,16 +954,16 @@ The CLI works on the same files and lock as the running agent; the apps see the 
 
 **Privacy.** Audio is held in memory only, transcribed, and dropped; neither audio nor transcript text is logged or written to disk — logs carry only sizes, durations, timings and error codes.
 
-**Testing without the model.** `MOBAIDE_VOICE_FAKE=1` swaps in a tiny generated model and a deterministic engine (transcripts read `fake transcript <n> ms`) under `<state prefix>/voice-fake/`; the install state machine and helper process are real. `tests/e2e/manual_stack.py up --fake-voice` sets it.
+**Testing without the model.** `MOBAIDE_VOICE_FAKE=1` swaps in a tiny generated model and a deterministic engine under `<state prefix>/voice-fake/`. `tests/e2e/manual_stack.py up --fake-voice` sets it.
 
 **Troubleshooting.** `hash_mismatch` behind a proxy usually means TLS interception or a captive portal; `disk_full` needs the space shown in `voice status`; `selftest_failed` means the runtime or model could not load (the message names the cause, e.g. a missing glibc symbol) — `voice remove` then `voice install` reinstalls both.
 
 ### Threat model
 
-The agent now runs with the developer's full UID privileges and has read/write access to `$HOME`. A compromise of the relay channel — i.e. a stolen `RELAY_AGENT_TOKEN` or a compromised central server — gains the same access the developer has interactively:
+The agent runs with the developer's full UID privileges and has read/write access to `$HOME`. A compromise of the relay channel — i.e. a stolen `RELAY_AGENT_TOKEN` or a compromised central server — gains the same access the developer has interactively:
 
 - their source trees, SSH keys, GPG keys, browser cookies, `~/.aws/credentials`, `~/.netrc`, `~/.gitconfig` (which may reference signing keys / tokens);
-- any process the user can spawn (the relay can request arbitrary `command` in `create_session`, and since proto-v7 it also injects `resolved_command` for custom agent types — same trust class);
+- any process the user can spawn (the relay can request arbitrary `command` in `create_session` and injects `resolved_command` for custom agent types — same trust class);
 - any host the user can reach over SSH.
 
 #### Token handling and residual hardening
@@ -1140,7 +998,7 @@ Multiple paths can be listed whitespace-separated. Re-running the install script
 
 ### Migrating from the legacy `mobaide` system user
 
-Pre-`/home`-fix installs created a dedicated `mobaide` system account and ran the agent as that account with `ProtectHome=yes` — which silently broke any project pointing at `/home/<user>/...` (PermissionError on the `.git` probe). Re-running either install script on an existing host:
+Older installs ran the agent as a dedicated `mobaide` system account with `ProtectHome=yes`, which broke any project under `/home/<user>/...`. Re-running either install script on an existing host:
 
 * re-renders the systemd unit with `User=$SUDO_USER` (or `MOBAIDE_RUN_AS_USER`),
 * `chown -R`s `/opt/mobaide` to the new user,
@@ -1152,9 +1010,7 @@ No data migration is needed — `projects.json`, releases, and `agent.env` survi
 
 The service unit at `deploy/mobaide-agent.service` is a **template** with `__RUN_USER__`, `__RUN_GROUP__`, `__RUN_HOME__` placeholders that the install scripts substitute. If you wire it up by hand, fill those in yourself.
 
-`mobaide-agent.service` is otherwise configured for the versioned `releases/` layout (`/opt/mobaide/releases/<version>/venv/` with a `current_version` pointer).
-
-Its `ExecStart` is `<prefix>/bin/mobaide-agent-launcher.sh` (the self-healing launcher wrapper the install scripts generate via `write_launcher_script`). A by-hand wireup must therefore also create that wrapper — the install scripts are the source of truth for its contents.
+`mobaide-agent.service` is otherwise configured for the versioned `releases/` layout (`/opt/mobaide/releases/<version>/venv/` with a `current_version` pointer). Its `ExecStart` is `<prefix>/bin/mobaide-agent-launcher.sh`, which the install scripts generate, so a by-hand wireup must also create that wrapper — the install scripts are the source of truth for its contents.
 
 ```bash
 VERSION="0.1.0"      # replace with the actual agent version being installed
@@ -1203,13 +1059,11 @@ The option appears only when the agent's build reported that it can uninstall it
 3. The agent removes itself.
    - It deletes only the known install entries (`releases/`, `trust/`, `mobaide_agent/`, `run/`, `state/`, `logs/`, `svc/`, `bin/`, `current_version`, logs, `users.json`, `projects.json`, `voice/`, …) and then the prefix itself if that left it empty.
    - It never runs a blanket `rm -rf` of a prefix that `MOBAIDE_AGENT_PREFIX` may have pointed somewhere shared.
-   - First it stops voice input and deletes the voice model and runtime itself, on every OS, so they go even when an older `install.sh` wrote the Linux helper below.
-   - A voice dir moved by `MOBAIDE_VOICE_DIR` (or reached through a symlinked `voice/`) loses only what `mobaide-agent voice remove` deletes plus `settings.json` and `.lock`, and is then removed if it is left empty.
+   - First it stops voice input and deletes the voice model and runtime itself, on every OS. A voice dir moved by `MOBAIDE_VOICE_DIR` (or reached through a symlinked `voice/`) loses only what `mobaide-agent voice remove` deletes plus `settings.json` and `.lock`, and is then removed if it is left empty.
    - **Linux:** the agent runs unprivileged, so it only drops `<prefix>/run/uninstall-requested`.
      - `install.sh` installs a root-owned `mobaide-agent-uninstall.path` unit that watches for that marker. It starts `mobaide-agent-uninstall.service`, which runs `/usr/local/libexec/mobaide-agent-uninstall`.
      - That script disables and stops `mobaide-agent`, deletes the install and the `/usr/local/bin/mobaide-agent` command, removes all three units and finally itself.
-     - Installs made before this helper existed get a partial uninstall: everything is deleted except an `exit 0` stub at `bin/mobaide-agent-launcher.sh`, so the leftover unit stays quiet.
-     - Finish by hand with `sudo systemctl disable mobaide-agent && sudo rm -f /etc/systemd/system/mobaide-agent.service && sudo rm -rf /opt/mobaide`, or re-run the installer first so a later remote uninstall is complete.
+     - Installs made before this helper existed get a partial uninstall (everything is deleted except an `exit 0` stub at `bin/mobaide-agent-launcher.sh`). Finish by hand with `sudo systemctl disable mobaide-agent && sudo rm -f /etc/systemd/system/mobaide-agent.service && sudo rm -rf /opt/mobaide`, or re-run the installer first so a later remote uninstall is complete.
    - **macOS:** the agent deletes the install, `~/Library/LaunchAgents/com.mobaide.agent.plist` and the `/usr/local/bin/mobaide-agent` command, then runs `launchctl bootout gui/<uid>/com.mobaide.agent`, which stops it.
      - `/usr/local/mobaide` itself stays behind (empty) when `/usr/local` is root-owned, and so does the command when `/usr/local/bin` is.
      - Run, it says the agent is gone and to `sudo rm` it.
@@ -1277,7 +1131,7 @@ Common causes:
 - Python version < 3.12
 - Claude CLI not on the service's `PATH`.
   - The agent returns HTTP 503 with `claude_cli_missing: true` and a `searched_paths` list (each entry tagged with its source: `override:`, `env:`, `PATH:`, `fallback:`).
-  - The Windows installer auto-detects `claude.cmd` in the installing user's `%APPDATA%\npm` and writes its absolute path as `MOBAIDE_CLAUDE_BIN` into the agent's `.env`. A clean install on a host where the user already ran `npm install -g @anthropic-ai/claude-code` therefore works without manual edits.
+  - The Windows installer auto-detects `claude.cmd` in the installing user's `%APPDATA%\npm` and writes it as `MOBAIDE_CLAUDE_BIN` into the agent's `.env`, so a clean install on a host where the user already ran `npm install -g @anthropic-ai/claude-code` needs no manual edits.
   - Manual fix paths:
     - Linux/macOS: install the CLI under `~/.npm-global/bin`, `~/.local/bin`, `/usr/local/bin`, or `/opt/homebrew/bin` (all in the resolver's POSIX fallback list); or add `MOBAIDE_CLAUDE_BIN=/absolute/path/to/claude` to `<prefix>/agent.env`.
     - Windows: edit `<prefix>\mobaide_agent\.env`, set `MOBAIDE_CLAUDE_BIN=C:\Users\<you>\AppData\Roaming\npm\claude.cmd`, then restart the task: `Stop-ScheduledTask MobaideAgent; Start-ScheduledTask MobaideAgent`.
@@ -1289,28 +1143,11 @@ Common causes:
         Stop-ScheduledTask -TaskName MobaideAgent
         Start-ScheduledTask -TaskName MobaideAgent
         ```
-- Codex CLI not on the service's `PATH` (only relevant if you use the optional Codex agent).
-  - The Windows installer auto-detects `codex` in the installing user's `%APPDATA%\npm` and writes its absolute path as `MOBAIDE_CODEX_BIN` into the agent's `.env`, mirroring the Claude detection above. A clean install on a host where the user already ran `npm install -g @openai/codex` therefore resolves Codex without manual edits.
-  - If `codex` was installed after the agent, or lives outside the npm-global / PATH locations: re-run `irm https://get.mobaide.com/install.ps1 | iex` (the install script surgically backfills `MOBAIDE_CODEX_BIN` without touching pairing credentials), or run the `set-env` verb directly:
-    ```powershell
-    & "$env:ProgramFiles\MobaideAgent\releases\<version>\venv\Scripts\python.exe" `
-      -m mobaide.agent.config set-env --key MOBAIDE_CODEX_BIN `
-      --value "C:\Users\<you>\AppData\Roaming\npm\codex.cmd"
-    Stop-ScheduledTask -TaskName MobaideAgent
-    Start-ScheduledTask -TaskName MobaideAgent
-    ```
+- Codex CLI not on the service's `PATH` (only relevant if you use the optional Codex agent). The Windows installer auto-detects `codex` in `%APPDATA%\npm` and writes `MOBAIDE_CODEX_BIN`, mirroring the Claude detection above. If `codex` was installed after the agent, or lives outside the npm-global / PATH locations, re-run `irm https://get.mobaide.com/install.ps1 | iex` (it backfills `MOBAIDE_CODEX_BIN` without touching pairing credentials), or run the `set-env` verb exactly as above with `--key MOBAIDE_CODEX_BIN --value "C:\Users\<you>\AppData\Roaming\npm\codex.cmd"`.
 - Antigravity CLI not on the service's `PATH` (only relevant if you use the optional Antigravity agent).
   - The agent returns HTTP 503 with an `antigravity_cli_missing` marker and a `searched_paths` list.
-  - There is no pre-spawn auth probe: `agy` has no sign-in check, so an unauthenticated `agy` simply shows its Google Sign-In prompt in the PTY. Pre-authenticate `agy` on the host before launching a session (there is no in-app login route).
-  - The Windows installer auto-detects `agy` in the installing user's `%USERPROFILE%\.local\bin` or the `Antigravity` program folders and writes its absolute path as `MOBAIDE_AGY_BIN` into the agent's `.env`, mirroring the Claude and Codex detection above. A clean install on a host where the user already installed `agy` therefore resolves Antigravity without manual edits.
-  - If `agy` was installed after the agent, or lives outside those / `PATH` locations: re-run `irm https://get.mobaide.com/install.ps1 | iex` (the install script surgically backfills `MOBAIDE_AGY_BIN` without touching pairing credentials), edit `<prefix>\mobaide_agent\.env` directly, or run the `set-env` verb:
-    ```powershell
-    & "$env:ProgramFiles\MobaideAgent\releases\<version>\venv\Scripts\python.exe" `
-      -m mobaide.agent.config set-env --key MOBAIDE_AGY_BIN `
-      --value "C:\Users\<you>\.local\bin\agy.exe"
-    Stop-ScheduledTask -TaskName MobaideAgent
-    Start-ScheduledTask -TaskName MobaideAgent
-    ```
+  - There is no pre-spawn auth probe: an unauthenticated `agy` simply shows its Google Sign-In prompt in the PTY. Pre-authenticate `agy` on the host before launching a session (there is no in-app login route).
+  - The Windows installer auto-detects `agy` in `%USERPROFILE%\.local\bin` or the `Antigravity` program folders and writes `MOBAIDE_AGY_BIN`. If `agy` was installed after the agent, or lives elsewhere, re-run `irm https://get.mobaide.com/install.ps1 | iex` (it backfills `MOBAIDE_AGY_BIN` without touching pairing credentials), edit `<prefix>\mobaide_agent\.env` directly, or run the `set-env` verb as above with `--key MOBAIDE_AGY_BIN --value "C:\Users\<you>\.local\bin\agy.exe"`.
 
 #### Agent not showing as online in the Android app
 
@@ -1323,12 +1160,10 @@ Check the agent's logs for `relay.connection_failed` entries. Common causes:
 - Central-server unreachable — verify with `curl https://mobaide.com/api/health`
 - For a local dev stack: the workstation's OS trust store must include Caddy's root CA (see `start-all.ps1`, which auto-installs it)
 - **macOS `CERTIFICATE_VERIFY_FAILED` / `unable to get local issuer certificate`:** a python.org framework Python ships an empty OpenSSL CA store until its bundled *Install Certificates.command* runs.
-  - The relay now verifies `wss://` against the bundled `certifi` store regardless of the host interpreter.
-  - On macOS the launchd launcher (`<prefix>/bin/mobaide-agent-launcher.sh`) additionally exports `SSL_CERT_FILE` from the venv's `certifi` bundle, so the auto-update/pairing HTTPS paths verify too.
+  - The relay verifies `wss://` against the bundled `certifi` store regardless of the host interpreter, and the launchd launcher (`<prefix>/bin/mobaide-agent-launcher.sh`) exports `SSL_CERT_FILE` from the venv's `certifi` bundle so the auto-update/pairing HTTPS paths verify too.
   - Behind a TLS-intercepting proxy, pin your corporate root CA by adding `SSL_CERT_FILE` to the launchd plist's `EnvironmentVariables` (the launcher leaves a pre-set value untouched). Then reload it from your own login session: `launchctl bootout gui/$(id -u)/com.mobaide.agent 2>/dev/null; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mobaide.agent.plist`.
 - A flapping link logs `relay.reconnecting` with a growing `delay` and `uptime`.
-  - The reconnect backoff now only resets to base after a connection survives `RELAY_RECONNECT_STABILITY_THRESHOLD` seconds (default `60.0`) and adds decorrelated jitter. A connection that keeps dropping young therefore keeps its escalated, jittered delay.
-  - Raise the threshold on a host with a known-unstable uplink to suppress reconnect-log churn.
+  - The reconnect backoff only resets to base after a connection survives `RELAY_RECONNECT_STABILITY_THRESHOLD` seconds (default `60.0`). Raise the threshold on a host with a known-unstable uplink to suppress reconnect-log churn.
 - **Cloudflare Bot Fight Mode (HTTP 403 error 1010):** if the relay is behind Cloudflare, agent v0.1.3+ sends `User-Agent: mobaide-agent/<version>` on all outbound calls (manifest polling, trust-key fetch, pairing initiate), which passes Cloudflare's default Bot Fight Mode.
   - Operators running Super Bot Fight Mode with JA3/JA4 fingerprinting set to "Block" must add a WAF Skip rule: `(http.user_agent wildcard "mobaide-agent/*") and (http.request.uri.path starts_with "/api/")`.
   - Older agents should be upgraded to v0.1.3+.

@@ -8,7 +8,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 |---|---|
 | [README.md](../README.md) | Public landing page: what Mobaide is, store and website links, main features, voice input, install steps, data summary, repository map, support. Its claims follow the accuracy gate in [website.md](website.md). |
 | [architecture.md](architecture.md) | Why Mobaide exists and how the parts fit: components, the client → relay → agent → CLI data flow, agent stack, project structure. |
-| [features.md](features.md) | Detailed behaviour of each feature: limits, per-platform differences, and the routes, events and capability keys behind it. |
+| [features.md](features.md) | Detailed behaviour of each feature: limits, per-platform differences, main settings. Wire details are in PROTOCOL.md. |
 
 ## Wire contract
 

@@ -47,7 +47,7 @@ https://get.mobaide.com/    public CDN. The CNAME at the gh-pages root
                             provisions the custom domain.
 ```
 
-Three places hold copies of these files: `deploy/` on `main` and
+Two places hold copies of these files: `deploy/` on `main` and
 the root of the `gh-pages` branch. The second is auto-published from
 `deploy/` by `publish-gh-pages.yml` on every push to `main` that
 touches `deploy/install.{sh,ps1}` or `deploy/windows_launcher.py`.

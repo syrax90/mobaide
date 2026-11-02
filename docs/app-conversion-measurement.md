@@ -16,9 +16,8 @@ This document is that second lane. It covers:
 - how the untracked Firebase config files reach a build;
 - what the two store consoles must be told.
 
-The rollout as a whole — both lanes, the stage history, the account
-configuration and how to pause, change or remove it — is
-[agent-paired-conversion.md](agent-paired-conversion.md). The privacy policy's
+The rollout as a whole (both lanes, stage history, account configuration, how to
+pause or remove it) is [agent-paired-conversion.md](agent-paired-conversion.md). The privacy policy's
 Section 3.8 (`central_server/legal/privacy.md`) is the user-facing statement of the
 same facts and must stay in sync with it.
 
@@ -53,9 +52,7 @@ see *The first-pairing marker* in [qr-pairing.md](qr-pairing.md)):
   pin, none of which is exposed.
 
 Shared fixtures: `tests/protocol_fixtures/dto/central/FirstAgentPairedPayload.json`
-and `MeResponse.json` (registered on iOS in `FixtureRegistry.swift`; on web the
-payload is `firstAgentPairedSchema` and `MeResponse` is deferred to the
-generated OpenAPI types). No unknown-key cases — Swift's re-encode drops them.
+and `MeResponse.json`. No unknown-key cases — Swift's re-encode drops them.
 
 ## Once per account, on a device
 
@@ -69,11 +66,11 @@ Each app owns one component (`AgentPairedConversion`, Android
    `GET /api/auth/me` and logs iff `first_paired_at` is set and not older than
    `armedAt − 1 h`.
 
-The report's "pairing Success watcher" trigger was dropped on purpose: the
-claim runs while the user-events socket is up, the Success verdict is the
-agent-online moment 0–60 s later (or never), and `first_paired_at` is stamped
-at claim time — the two triggers above cover every case, including an app
-that was closed while the pairing happened on the web.
+There is deliberately no "pairing Success watcher" trigger: the claim runs while
+the user-events socket is up, the Success verdict is the agent-online moment 0–60 s
+later (or never), and `first_paired_at` is stamped at claim time. The two triggers
+above cover every case, including an app that was closed while the pairing happened
+on the web.
 
 Rules the component enforces, identical on both platforms (each rule is followed by
 why):
@@ -95,24 +92,21 @@ why):
 - Log first, persist second, inside one lock (Android `Mutex`; iOS one actor turn
   with no `await` between the check and the write, re-checked after the `/me`
   await).
-  - Why: the SDK's `logEvent` is a local enqueue that never throws; a duplicate is
-    cheaper than a lost conversion, and the live event and the connect reconcile can
-    race by milliseconds.
+  - Why: `logEvent` is a local enqueue that never throws; a duplicate is cheaper than
+    a lost conversion, and the live event and the connect reconcile can race.
 - Outcomes (keyed `agent_paired_logged::<userId>`) and the arming time live in a
   **per-install** store that platform backups and device transfers never carry, and
   are **not** purged by the sign-out sweeps.
   - Android: the `ads_conversion` DataStore, excluded in both backup-rule files like
     the device identity.
   - iOS: a JSON file under Application Support flagged `isExcludedFromBackup`.
-  - Why: sign-out then sign-in on the same account must not re-log. An arming time
-    restored from an older install would let a pairing made in between pass the gate
-    on the new install and count as a fresh install conversion; per-install state
-    makes the gate mean what it says, and a reinstall arms afresh so an earlier
-    pairing is skipped rather than re-logged.
+  - Why: sign-out then sign-in on the same account must not re-log. A restored
+    arming time would let a pairing made in between count as a fresh install
+    conversion; a reinstall arms afresh, so an earlier pairing is skipped rather than
+    re-logged.
 - 1 h tolerance, only on the reconcile path.
   - Why: covers device-clock skew against the server stamp; widening it would mostly
-    admit web pairings that preceded the install, which are the website lane's
-    conversions.
+    admit web pairings that preceded the install (the website lane's conversions).
   - The server stamp may omit fractional seconds when the microsecond is zero, so
     iOS parses with two `ISO8601DateFormatter`s.
 - Never `setUserId` / user properties; automatic screen reporting off; SSAID
@@ -151,7 +145,7 @@ attributes nothing.
 ## The two untracked config files
 
 `android/app/google-services.json` and `ios/Mobaide/GoogleService-Info.plist`
-are gitignored (PR #705) and live only in the developer's main checkout —
+are gitignored and live only in the developer's main checkout —
 never in a worktree, never in CI. Everything is built to tolerate their
 absence and to refuse to *release* without them:
 
@@ -168,13 +162,11 @@ absence and to refuse to *release* without them:
     when the secret is absent — a release without analytics is a silent
     measurement outage, not a degraded build.
 - **iOS**
-  - `ios/Mobaide` is a synchronized folder group, so the plist joins the bundle
-    automatically when present and no project edit references it.
+  - The plist joins the bundle automatically when present (`ios/Mobaide` is a
+    synchronized folder group); no project edit references it.
   - `MobaideApp.init()` configures Firebase only when
-    `FirebaseOptions(contentsOfFile:)` finds the plist.
-  - `ios-build.yml` (push to `main`, iPhone 16 simulator,
-    `-onlyUsePackageVersionsFromResolvedFile`) runs the whole test bundle with no
-    plist.
+    `FirebaseOptions(contentsOfFile:)` finds the plist, so `ios-build.yml` runs the
+    whole test bundle with no plist.
   - A Release-only run-script phase ("Require Firebase config for Release", first in
     the app target's build phases) fails the build when the plist is missing, so an
     App Store archive made from a worktree cannot ship with analytics inert; Debug
@@ -197,21 +189,16 @@ absence and to refuse to *release* without them:
     (`ACCESS_NETWORK_STATE` was already merged before Firebase).
   - The privacy policy's Section 4 lists the whole merged set, so re-check the
     merged manifest under `app/build/intermediates/` whenever the BoM moves.
-- Code:
-  - `data/analytics/AnalyticsSink.kt` (interface, `FirebaseAnalyticsSink`
-    with `isEnabled` computed from `FirebaseApp.getApps(context)`,
-    `NoOpAnalyticsSink`);
-  - `data/analytics/AgentPairedConversion.kt`;
-  - `data/analytics/ConversionStateStore.kt` (own `ads_conversion` DataStore,
-    excluded from backup and transfer);
-  - `di/AnalyticsModule.kt`;
-  - `CentralApi.getMe`;
-  - the `UserEventBus` branch and connect reconcile;
-  - `MainActivity.onCreate` arms at launch (`armIfNeeded()`), before any sign-in,
-    so an account that pairs elsewhere between the install and its first connect
-    still counts. The `Application` class is deliberately not the arming site:
-    injecting the conversion there pulled the whole Hilt graph (down to the
-    Keystore-backed `TokenStore`) into every Robolectric test.
+- Code lives in `data/analytics/` (the sink, `AgentPairedConversion.kt`, and
+  `ConversionStateStore.kt` — its own `ads_conversion` DataStore, excluded from backup
+  and transfer), wired through `di/AnalyticsModule.kt` and the `UserEventBus` branch
+  and connect reconcile.
+  - `MainActivity.onCreate` arms at launch (`armIfNeeded()`), before any sign-in, so
+    an account that pairs elsewhere between the install and its first connect still
+    counts.
+  - Do not arm from the `Application` class: injecting the conversion there pulls the
+    whole Hilt graph (down to the Keystore-backed `TokenStore`) into every Robolectric
+    test.
 - Debugging: `adb shell setprop debug.firebase.analytics.app com.mobaide.app`
   then watch Firebase console → Analytics → DebugView; `logcat -s FA FA-SVC`
   shows the SDK's own decisions (consent, missing config).
@@ -237,13 +224,9 @@ absence and to refuse to *release* without them:
     changes — and update privacy policy §3.8 with it).
   - Firebase's Analytics xcframeworks ship no privacy manifest of their own (only
     `FirebaseCore` does), so the app manifest is the sole declaration.
-  - `Package.resolved` is committed — CI resolves from it only.
-- App Store upload: Xcode embeds the static Firebase xcframeworks as ~51 KB
-  code-less stub dylibs, so the Organizer prints four "Upload Symbols Failed …
-  no dSYM" warnings (FirebaseAnalytics, GoogleAppMeasurement,
-  GoogleAppMeasurementIdentitySupport, GoogleAdsOnDeviceConversion). Harmless;
-  keep "Upload your app's symbols" on — the app's own dSYM is the one that
-  matters.
+- App Store upload: the four "Upload Symbols Failed … no dSYM" warnings for the
+  Firebase frameworks (static xcframeworks embedded as code-less stub dylibs) are
+  harmless; keep "Upload your app's symbols" on.
 - `Support/Info.plist`: `SKAdNetworkItems` with Google's
   `cstr6suwn9.skadnetwork` (iOS App campaigns attribute through SKAdNetwork;
   there is no per-advertiser id), the consent keys above,
@@ -256,20 +239,14 @@ absence and to refuse to *release* without them:
   - Coarse Location (not linked; Analytics — Google derives it from the IP address);
   - for voice input, Audio Data (linked; App Functionality).
 
-  `MobaideTests/PrivacyManifestTests.swift` pins it;
-  `FirebaseConfigurationTests.swift` pins the Info.plist keys. Firebase's own
-  xcframeworks ship their manifests and Apple aggregates them into the privacy
-  report, so the app manifest must not contradict them.
-- Code:
-  - `Data/Analytics/AnalyticsSink.swift`;
-  - `Data/Analytics/AgentPairedConversion.swift` (an actor);
-  - the `FirstAgentPairedApplying` hook in `EventBusHooks.swift`;
-  - `UserEventBus` demux/route/connect-reconcile;
-  - `CentralAPI.me(userToken:)`;
-  - `Data/Analytics/ConversionStateStore.swift` (backup-excluded JSON file under
-    Application Support);
-  - `AppContainer` wiring (`start()` arms before the user-events bus starts);
-  - guarded configure in `MobaideApp.init()`.
+  Firebase's own xcframeworks ship their manifests and Apple aggregates them into
+  the privacy report, so the app manifest must not contradict them.
+- Code lives in `Data/Analytics/` (the sink, `AgentPairedConversion.swift` — an
+  actor — and `ConversionStateStore.swift`, a backup-excluded JSON file under
+  Application Support), wired through the `FirstAgentPairedApplying` hook in
+  `EventBusHooks.swift` and `UserEventBus` connect-reconcile. `AppContainer.start()`
+  arms before the user-events bus starts; Firebase is configured behind a guard in
+  `MobaideApp.init()`.
 - Debugging: launch with the `-FIRDebugEnabled` argument (Xcode scheme or
   `xcrun simctl launch … -FIRDebugEnabled`) and watch DebugView;
   `-FIRAnalyticsDebugEnabled` adds the SDK's verbose log.
@@ -307,44 +284,38 @@ account-level inventory is §6 of
     Count **One**, the same value as the offline "Agent paired" action,
     **Primary**).
   - `first_open` for **iOS only** (category Download, no value, Count One, Primary in
-    the Download goal).
-  - Android installs are already the Play action Google created with the Android
-    campaign; a Firebase `first_open` for Android would count each install twice.
+    the Download goal). Android installs are already the Play action Google created
+    with the Android campaign; a Firebase `first_open` for Android would count each
+    install twice.
+  - Importing before events exist is fine; "Awaiting conversions" is the normal
+    state.
 - **Custom goal "Agent paired"**: the offline action plus the two app
   `agent_paired` actions. Only the web (Performance Max) campaign uses it. App
-  campaigns never use conversion goals — they pick actions in Settings →
-  Bidding — so the goal edit changed nothing about them.
+  campaigns never use conversion goals — they pick actions in Settings → Bidding.
 - **App campaigns** (Android; iOS created 2026-09-05): focus *Install volume*,
   *All users*; install tracking = the Play action (Android) / the imported iOS
   `first_open` (iOS). The `agent_paired` actions report on their own (Campaigns
   table → Segment → Conversions → Conversion action; the row appears with the
   first attributed pairing).
-  - **Switch to the pairing focus only with data:** at roughly 30 pairings
-    attributed to the campaign in 30 days (Google's bar is ≥10 different users a
-    day), Settings → Bidding → focus *In-app actions*, tick only that platform's
-    `agent_paired`, untick the target (*Maximize conversions for in-app actions*) or
-    set the observed cost per pairing × 1.2 with a daily budget ≥10–15× it; then
-    leave it 14 days and judge over 30.
-  - Never a guessed target: with no observed pairings the focus has nothing to
-    optimise toward and a target only throttles delivery.
-  - Demote the Play install action to Secondary (observe only) only once the
-    Android campaign bids on in-app actions.
-  - *Users likely to perform an in-app action* is in Google's docs but not offered in
-    this account; skip it.
+  - **Switch to the pairing focus only with data**, per the switch rule in
+    [agent-paired-conversion.md](agent-paired-conversion.md) §6.1. Never a guessed
+    target: with no observed pairings the focus has nothing to optimise toward and a
+    target only throttles delivery.
+  - *Users likely to perform an in-app action* is in Google's docs but not offered
+    in this account; skip it.
 - **iOS specifics:**
-  - The campaign's Conversions column shows Google's modeled conversions — up to 5
-    days late, click-through and engaged-view only — so judge ranges that end ≥5 days
-    ago.
-  - The SKAdNetwork conversions report (Campaigns → Reports → Goals and
-    conversions) is Apple's separate attribution and never reconciles with it.
+  - The Conversions column shows Google's modeled conversions — up to 5 days late,
+    click-through and engaged-view only — so judge ranges that end ≥5 days ago.
+  - The SKAdNetwork conversions report (Campaigns → Reports → Goals and conversions)
+    is Apple's separate attribution and never reconciles with it.
   - Keep ≤8 iOS install campaigns per app.
   - The SKAdNetwork conversion value schema (GA4 → Admin → Data streams → iOS →
     *Configure SKAdNetwork conversion values*) stays unset: Google reads only the
     fine value of postback window 1 (0–2 days after install), wants ~50 installs and
     >10 occurrences of each mapped event a day, and a pairing days after the install
-    never reaches it.
-  - If it is ever set: `agent_paired` → a fine value in window 1, in GA4 only, never
-    a second schema through the Ads API or an attribution partner.
+    never reaches it. If it is ever set: `agent_paired` → a fine value in window 1,
+    in GA4 only, never a second schema through the Ads API or an attribution
+    partner.
 - **Expect** the campaign figures well below GA4's: GA4 counts every user who
   pairs, updaters and organic installs included; Ads counts attributed
   pairings inside the conversion window.
@@ -370,15 +341,12 @@ The separate **Advertising ID** declaration (App content): uses advertising ID
 **Yes**, purposes **Analytics** and **Advertising or marketing**; leave *Turn off
 release errors* unticked.
 
-Traps met on 2026-09-04:
-
-- With `AD_ID` in the manifest and the declaration still at "No",
-  `release-android.yml` fails at the Play commit. Fix the declaration **and** click
-  *Send changes for review* on Publishing overview before re-running — saving alone
-  does not clear the check.
-- The release page then warns that older active artifacts lack `AD_ID`: *Release
-  without permission* is the right button. *Update declaration* would flip it back
-  to "No" and block the next upload.
+Traps met on 2026-09-04: with `AD_ID` in the manifest and the declaration still at
+"No", `release-android.yml` fails at the Play commit. Fix the declaration **and**
+click *Send changes for review* on Publishing overview before re-running — saving
+alone does not clear the check. The release page then warns that older active
+artifacts lack `AD_ID`: *Release without permission* is the right button; *Update
+declaration* would flip it back to "No" and block the next upload.
 
 | Category → type | Collected | Shared | Required / optional | Purposes | Notes |
 |---|---|---|---|---|---|
@@ -435,8 +403,8 @@ correct purpose: the data measures our own ads; no ads are shown in the app.
 ### Release notes
 
 Both stores get their notes at release time from the repo's
-`google-play-release-notes` and `app-store-connect-release-notes` skills,
-which analyse the whole version range. What this change contributes:
+`google-play-release-notes` and `app-store-connect-release-notes` skills. What this
+change contributes:
 
 - **Google Play** (a permission change users can see, so the Play skill keeps
   it; ≤ 500 characters for the whole note, plain text; the skill translates
@@ -447,5 +415,5 @@ which analyse the whole version range. What this change contributes:
   resetting your Advertising ID in Android settings.`
 - **App Store**: nothing. The App Store skill excludes analytics from "What's
   New", and this change alters no screen or behaviour; the App Privacy update
-  above is the disclosure. If the release contains nothing else, "Bug fixes
-  and improvements" is acceptable under Guideline 2.3.12.
+  above is the disclosure. If the release contains nothing else, "Bug fixes and
+  improvements" is acceptable under Guideline 2.3.12.

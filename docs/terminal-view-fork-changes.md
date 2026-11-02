@@ -17,7 +17,7 @@ Entries are listed oldest first.
 
 **What changed.** Guarded `mTopRow = 0; scrollTo(0, 0);` with `if (mEmulator == null || !mEmulator.isAutoScrollDisabled())`. `invalidate()` still always runs.
 
-**Why.** CLA-41: preserve scroll position through grid resizes when the user has paused follow-mode. Unpaused users still snap to bottom. Originally motivated by soft-keyboard show/hide resizes; since the keyboard-UX pan-don't-resize fix the IME pans the Compose host instead of resizing the grid (see [`ImeFloatingPan`](../android/app/src/main/java/com/mobaide/app/ui/terminal/ImeFloatingPan.kt)), so `updateSize` now fires only on rotation, composer show/hide, and display-mode changes.
+**Why.** CLA-41: preserve scroll position through grid resizes when the user has paused follow-mode. Unpaused users still snap to bottom. The IME pans the Compose host instead of resizing the grid (see [`ImeFloatingPan`](../android/app/src/main/java/com/mobaide/app/ui/terminal/ImeFloatingPan.kt)), so `updateSize` now fires only on rotation, composer show/hide, and display-mode changes.
 
 ### 2026-04-25: `TerminalView.java::attachSession`
 
@@ -251,7 +251,7 @@ It `blockCopy`s within the margin columns and `blockSet`s the bottom row — no 
 
 The `mTopMargin`/DECSTBM case deliberately keeps counting: `TerminalBuffer.scrollDownOneLine` rotates `mScreenFirstRow` and grows `mActiveTranscriptRows`, and `blockCopyLinesDown` parks the scrolled-out region row as the newest transcript row — so those rows really are reachable.
 
-iOS mirrors the same rule over SwiftTerm, whose `scrollTop != 0` arm shifts in place instead (`TerminalFollowScroll.pushesRowIntoScrollback`), which is why the two clients agree on the rule but not on the DECSTBM count — and where this gate sits inside the emulator and so sees which branch ran, iOS can only re-derive it from public buffer state, which is enough for DECSTBM but not for the horizontal-margin arm.
+iOS mirrors the same rule over SwiftTerm, whose `scrollTop != 0` arm shifts in place instead (`TerminalFollowScroll.pushesRowIntoScrollback`), so the two clients agree on the rule but not on the DECSTBM count.
 
 ### 2026-08-01: `TerminalSession.java` (`isScreenUpdateDeferred`)
 

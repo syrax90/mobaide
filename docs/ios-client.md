@@ -2,10 +2,10 @@
 
 Native iOS client (SwiftUI, iOS 17+) with feature parity to the Android app as
 the goal of the iOS series (CLA-97…CLA-106). The backend (`central_server/`
-relay + `mobaide_agent/`) and the wire protocol (v6 during the series, v7
-since CLA-155 — see `PROTOCOL.md`) are frozen. iOS conforms to them byte
-for byte, with one additive exception: CLA-99 added `POST /api/auth/apple` to
-the server, mirroring the Google verification path.
+relay + `mobaide_agent/`) and the wire protocol (v7 since CLA-155 — see
+`PROTOCOL.md`) are frozen. iOS conforms to them byte for byte, with one additive
+exception: CLA-99 added `POST /api/auth/apple` to the server, mirroring the
+Google verification path.
 
 On this page:
 
@@ -26,76 +26,43 @@ On this page:
 
 ## Foundation and screens from CLA-97 to CLA-104
 
-The iOS series landed in these steps, one issue at a time.
-
-- **CLA-97** bootstrapped the project and ported the networking spine.
-- **CLA-98** added the auth/session core (Keychain stores, SessionManager,
-  the two WebSocket event buses) and a navigable placeholder UI shell.
-- **CLA-99** replaced the six onboarding placeholders with the real screens
-  (login, register, verify-email, forgot/reset password, connection switcher)
-  and the shared `SignInService` (Google Sign-In ≥ 9.0 with a custom nonce +
-  Sign in with Apple).
-- **CLA-100** replaced the three main placeholders with their real bodies: the
-  SwiftTerm-backed terminal, the sessions list, and the create-session wizard.
-- **CLA-101** replaced the Projects and Git placeholders. Both screens are
-  backed by an app-scoped `ProjectsRepository` and a reusable `UndoSnackbar`.
-  - The Projects management screen is bus-driven (create/edit form sheet,
-    swipe-delete Undo, drag-reorder).
-  - The Git branches/worktrees screen has long-press multi-select and deferred
-    batch delete with force/busy handling. #677 added the remote-branches
-    section, the New branch sheet and Check out.
-- **CLA-102** replaced the Agents, Devices, and Templates placeholders. The
-  three screens are backed by app-scoped `AgentRepository`/`TemplatesRepository`
-  stores wired to the `UserEventBus`.
-  - The QR-pairing Agents screen has an in-app VisionKit/AVFoundation scanner
-    gated by a new `NSCameraUsageDescription`, and Trust-On-First-Use trust-key
-    confirmation. It also has add/re-register/delete, one-time-credentials and
-    install-commands sheets.
-  - The Devices list uses optimistic revoke.
-  - The favorites/all Templates screen has create/edit/delete with live sync.
-- **CLA-103** replaced the Auto Scan placeholder with the live autoscan monitor.
-  - It has an "Active Auto Scans" card section atop the sessions list.
-  - It has a per-project detail screen (phase timeline, auto-following ANSI
-    log, 1 Hz countdown).
-  - It is backed by an app-scoped `AutoScanRepository` (`ws/events`-bus list
-    state plus REST seed, optimistic start/stop/run-now with typed 409/429
-    errors).
-  - A dedicated `AutoScanWsClient` has a live per-project resume cursor and
-    two-layer seq dedupe. These fix the Android duplicate-log replay bug.
-  - A 256-color `AnsiParser` is a deliberate superset of Android's minimal SGR
-    parser.
-- **CLA-104** replaced the Settings and Support placeholders with their real
-  bodies:
-  - A `Form`-based Settings screen with an account header, My Agents /
-    Templates / Devices nav rows, Help & Support, Privacy policy, Logout, and a
-    Danger-zone delete-account entry.
-  - The multi-step delete-account flow (`DeleteAccountModel`). It runs
-    Explain + scheduled/immediate mode, then password / Google / **Apple**
-    re-auth, then typed-email confirmation. It clears the local session
-    immediately, without waiting for the WS-4010 close.
-  - The Support mail fallback chain (`MFMailComposeViewController` → `mailto:`
-    → copy-address, via a `MailComposing` seam) plus an
-    `SFSafariViewController` web wrapper.
-  - The launch-time version gate. `VersionGateRepository.probe()` runs on
-    `AppContainer.start()` and on scene-foreground. It drives the enhanced
+- **CLA-97 / CLA-98:** project bootstrap, networking spine, and the auth/session
+  core (Keychain stores, SessionManager, the two WebSocket event buses).
+- **CLA-99:** onboarding screens and the shared `SignInService` (Google Sign-In
+  ≥ 9.0 with a custom nonce + Sign in with Apple).
+- **CLA-100:** the SwiftTerm-backed terminal, the sessions list, and the
+  create-session wizard.
+- **CLA-101:** Projects management and Git branches/worktrees screens (deferred
+  batch delete with force/busy handling), on an app-scoped `ProjectsRepository`
+  and a reusable `UndoSnackbar`.
+- **CLA-102:** Agents (QR pairing with an in-app scanner gated by
+  `NSCameraUsageDescription` and Trust-On-First-Use trust-key confirmation),
+  Devices (optimistic revoke) and Templates screens, on app-scoped
+  `AgentRepository`/`TemplatesRepository` stores wired to the `UserEventBus`.
+- **CLA-103:** live autoscan monitor (an "Active Auto Scans" section atop the
+  sessions list, plus a per-project detail screen). `AutoScanRepository` takes
+  list state from the `ws/events` bus plus a REST seed, with optimistic
+  start/stop/run-now and typed 409/429 errors. `AutoScanWsClient` keeps a live
+  per-project resume cursor with two-layer seq dedupe. `AnsiParser` is 256-color.
+- **CLA-104:** Settings and Support.
+  - Delete-account flow (`DeleteAccountModel`): Explain + scheduled/immediate
+    mode, then password / Google / **Apple** re-auth, then typed-email
+    confirmation. It clears the local session immediately, without waiting for
+    the WS-4010 close. The grace banner mounts on the authenticated agents list.
+  - Support mail fallback chain: `MFMailComposeViewController` → `mailto:` →
+    copy-address (`MailComposing` seam), plus an `SFSafariViewController` wrapper.
+  - Launch-time version gate: `VersionGateRepository.probe()` runs on
+    `AppContainer.start()` and on scene-foreground, driving the
     `IncompatibleServerScreen` takeover with App Store + "What changed" links.
-  - The account-deletion grace banner mounts on the authenticated agents list.
 
 ### Terminal display mode
 
-This reverses the iOS-04/iOS-08 decision. The Android `terminal_display_mode` /
-`terminal_static_columns` preferences are re-added, which restores
-cross-platform parity.
-
-- A global Settings → Terminal display toggle chooses between **Full Screen**
-  and **Static**.
-- **Full Screen**: columns auto-fit the viewport and reflow.
-- **Static**: a fixed column count (default 120, adjustable 60–240 in steps of
-  10), rendered wider than the viewport and panned horizontally.
-- The choice persists locally in `UserDefaults` (default Static/120) and applies
-  live to the SwiftTerm surface.
-- SwiftTerm has no forced-columns API. So Static wraps the terminal in a
-  horizontal-pan `TerminalPanScrollView`.
+Settings → Terminal display chooses between **Full Screen** (columns auto-fit
+the viewport and reflow) and **Static** (a fixed column count, default 120,
+adjustable 60–240 in steps of 10, panned horizontally via
+`TerminalPanScrollView`, since SwiftTerm has no forced-columns API). The choice
+persists in `UserDefaults` (default Static/120) and applies live. It mirrors
+Android's `terminal_display_mode` / `terminal_static_columns`.
 
 The remote-agent-outdated banner and the optional iTunes-lookup app-update nudge
 are deferred (CLA-120).
@@ -104,587 +71,368 @@ are deferred (CLA-120).
 
 ### Local attention alerts (CLA-105, iOS-09)
 
-CLA-105 adds local notifications for session attention (iOS-09).
+- `AttentionCoordinator` subscribes to the `AgentEventBus` and posts a
+  `UNUserNotificationCenter` alert per `session.attention`, keyed by
+  `session_id` so a re-post replaces in place. A `session.updated` that drops the
+  attention clears it.
+- `ForegroundSessionTracker` suppresses foreground alerts for the on-screen
+  session.
+- A tapped alert deep-links to the session's terminal once `.fullyConnected`
+  (`DeepLinkCoordinator` stashes a `pendingRoute` on a cold start).
 
-- An `AttentionCoordinator` subscribes to the `AgentEventBus`.
-- It posts a `UNUserNotificationCenter` alert per `session.attention`. The
-  content mirrors Android's `AttentionNotifier`. It is keyed by `session_id`, so
-  a re-post replaces in place.
-- It clears the alert when a `session.updated` drops the attention.
-- Foreground alerts for the on-screen session are suppressed via
-  `ForegroundSessionTracker`.
-- A tapped alert deep-links to the session's terminal once `.fullyConnected`.
-  `DeepLinkCoordinator` stashes a `pendingRoute` on a cold start and replays it.
-
-iOS has no foreground-service equivalent, so delivery is honest to the platform.
-The events socket lives while the app runs, plus a ~30 s `beginBackgroundTask`
-grace (`AppLifecycleController`). Events missed while suspended are re-derived
-from a `GET /api/sessions` snapshot on foregrounding.
-
-The `attention` field is stamped on every snapshot for exactly this recovery.
-The reconcile posts the instances this device has not shown. It removes alerts
-whose attention is gone.
+iOS has no foreground-service equivalent. The events socket lives while the app
+runs, plus a ~30 s `beginBackgroundTask` grace (`AppLifecycleController`). Events
+missed while suspended are re-derived on foregrounding from a
+`GET /api/sessions` snapshot, whose `attention` field is stamped for this
+recovery. The reconcile posts instances this device has not shown and removes
+alerts whose attention is gone.
 
 ### Which attention instance was already shown
 
-The snapshot field is *latched* level state. The agent clears it only on a
-client PTY write or a `UserPromptSubmit`. So "not shown yet" cannot be answered
-from Notification Center. Tapping or swiping an alert empties it, and reading
-only that re-posted the same stale alert on every app open.
+The snapshot's `attention` is *latched*: the agent clears it only on a client PTY
+write or a `UserPromptSubmit`. Notification Center cannot say what was already
+shown, because tapping or swiping an alert empties it. `AttentionSeenStore`
+answers it:
 
-`AttentionSeenStore` answers it instead:
+- A per-agent `UserDefaults` record of the last attention instance surfaced per
+  session, keyed by reason plus `exit_reason`, written by the live event path and
+  the reconcile.
+- Dropped for a session whose attention is observed clear (re-arming it), and
+  cleared wholesale at sign-out.
+- A first reconcile for an agent adopts the current state as a baseline without
+  posting.
 
-- It is a per-agent `UserDefaults` record of the last attention instance
-  surfaced per session, keyed by reason plus `exit_reason`.
-- The live event path and the reconcile both write it.
-- It is dropped for a session whose attention is observed clear, which re-arms
-  it.
-- It is cleared wholesale at sign-out.
-- Its first reconcile for an agent adopts the current state as a baseline
-  without posting. A device with no record has missed nothing it can act on, and
-  everything latched is already in the session list of the app just opened.
-
-The one deliberate gap: no attention identity rides the wire. A clear plus a
-re-latch of the *same* reason, occurring entirely between two of this device's
-observations, reads as the instance already surfaced. Any device that was
-connected still got the live edge event.
+Deliberate gap: no attention identity rides the wire. A clear plus a re-latch of
+the *same* reason between two of this device's observations reads as already
+surfaced.
 
 ### Notification authorization
 
 Authorization is requested as the full `[.alert, .sound, .badge]` on first
-`.fullyConnected`. This matches Android's loud runtime prompt, so alerts arrive
-as heads-up banners with sound.
+`.fullyConnected`, matching Android's loud runtime prompt. The request is
+fire-and-forget and is never awaited on either serial loop. The system prompt
+blocks on the user and cannot display while backgrounded. Awaiting it in
+`handleAuth` would hold a logout or agent-switch teardown behind the dialog, and
+awaiting it in `post` would hold the whole event loop.
 
-The request is fire-and-forget and is never awaited on either serial loop. The
-system prompt blocks on the user and cannot display at all while backgrounded.
+- `post` drops alerts while authorization is undecided, starting its own request
+  when it finds `.notDetermined`. A grant reconciles from a fresh snapshot to
+  recover them.
+- `AppContainer` late-binds `NotificationService`'s grant hook to
+  `AttentionCoordinator.authorizationGranted()`, which ignores a grant once the
+  agent connection is gone.
 
-- Awaiting it in `handleAuth` would hold a logout or agent-switch teardown
-  behind the dialog.
-- Awaiting it in `post` would hold the whole event loop. That includes a
-  `session.updated` clearing that very attention, which would then be applied
-  only after the alert had already fired.
-
-So `post` drops alerts outright while authorization is undecided. It starts its
-own request whenever it finds `.notDetermined`. A grant reconciles from a fresh
-snapshot to recover them. Attention resolved while the prompt was up is simply
-absent from that snapshot, rather than posted late.
-
-The grant hook hangs off the request itself in `NotificationService`, rather
-than off any one caller. `post`'s retries are requests nobody would otherwise be
-waiting on. `AppContainer` late-binds the hook to
-`AttentionCoordinator.authorizationGranted()`, which ignores a grant once the
-agent connection is gone.
-
-Earlier builds requested `.provisional`. That grants quiet-only delivery and,
-the non-obvious part, also caps whatever `willPresent` returns down to `.list`.
-So foreground alerts were silent for the same reason. An install still in that
-state is promoted by re-requesting without `.provisional` the first time an
-alert would post.
+> [!WARNING]
+> Do not request `.provisional`. It grants quiet-only delivery and also caps
+> whatever `willPresent` returns down to `.list`, so foreground alerts are
+> silent. An install still in that state is promoted by re-requesting without
+> `.provisional` the first time an alert would post.
 
 ### APNs alert pushes (CLA-106, iOS-10)
 
-CLA-106 (iOS-10) closes the suspended-app gap with APNs alert pushes.
-
-- The agent mirrors each `session.attention` as a `user_event` control frame.
-- The central server broadcasts it on `/relay/ws/user-events`.
-- It pushes via APNs to every registered device **except** those holding a live
-  user-events socket. So a foregrounded app never double-alerts, while a
-  sleeping second device is still reached.
-- See PROTOCOL.md's proto-v6 entry for the full contract.
+The agent mirrors each `session.attention` as a `user_event` control frame. The
+central server broadcasts it on `/relay/ws/user-events` and pushes via APNs to
+every registered device **except** those holding a live user-events socket. So a
+foregrounded app never double-alerts, and a sleeping second device is still
+reached. See PROTOCOL.md's proto-v6 entry for the full contract.
 
 The socket identifies itself by appending its registered `device_id` to the
 `ws/user-events` URL (`UserEventBus.urlProvider`). The relay verifies it against
-the caller's own device rows before honouring it. Android sends no such hint and
-needs none: it registers no push token, so it is never a push target.
-
-Gating on the *account* instead, as CLA-106 originally did, meant Android's
-always-on foreground service silenced every push to the iPhone. The foreground
-reconcile was then its only delivery path.
+the caller's own device rows. Android sends no hint and needs none: it registers
+no push token, so it is never a push target. Gating on the *account* instead
+would let Android's always-on foreground service silence every push to the
+iPhone.
 
 ### Push registration and routing on the client
 
 - `PushAppDelegate` (a `@UIApplicationDelegateAdaptor`) receives the device
   token.
-- `PushRegistrationCoordinator` registers for remote notifications once signed
-  in (`.userOnly`+). It POSTs the hex token to
-  `POST /api/devices/{device_id}/push-token`. It re-POSTs per launch and on
-  rotation, and best-effort DELETEs it on explicit sign-out.
+- `PushRegistrationCoordinator` registers once signed in (`.userOnly`+) and POSTs
+  the hex token to `POST /api/devices/{device_id}/push-token`. It re-POSTs per
+  launch and on rotation, and best-effort DELETEs it on explicit sign-out.
 - `PushEnvironment` picks `sandbox` vs `production` from the embedded
-  provisioning profile.
-- A remote alert carries `session_id` in its custom data. Its `apns-collapse-id`
-  equals the session id. So tap deep-links, foreground suppression,
-  replace-in-place, and the reconcile loop all reuse the iOS-09 pipeline
-  unchanged.
-- The entitlements file gains `aps-environment` (`development`; signing rewrites
-  it for distribution builds).
-
-A remote alert also carries the `agent_id` the relay stamped from the
-authenticated tunnel. `DeepLinkCoordinator` gates the replay on it. Tapping an
-alert raised by an agent other than the connected one connects to that agent
-first (the same `connectAgentViaRelay` a manual agent-card tap makes). The
-resulting `fullyConnected` transition then drives the navigation. This avoids
-opening a session the connected agent cannot resolve.
-
-It makes one attempt per tap, since the switch cycles the auth state through
-`userOnly` itself. A root-level toast shows when it fails. A locally-posted alert
-names no agent and is by construction the connected one's.
+  provisioning profile. The entitlements file has `aps-environment`
+  (`development`; signing rewrites it for distribution builds).
+- A remote alert carries `session_id` (its `apns-collapse-id` equals it), so
+  deep-links, foreground suppression, replace-in-place and the reconcile loop
+  reuse the iOS-09 pipeline.
+- It also carries the `agent_id` the relay stamped. Tapping an alert from a
+  different agent first connects to that agent (`connectAgentViaRelay`), then
+  navigates on the `fullyConnected` transition. One attempt per tap; a
+  root-level toast on failure. A locally-posted alert names no agent and is the
+  connected one's.
 
 ### Delegate actor isolation
 
-Both `UNUserNotificationCenterDelegate` witnesses must stay `@MainActor`. They
-are carried by an isolated conformance (`NSObject, @MainActor
-UNUserNotificationCenterDelegate`), since the SDK requirements are nonisolated
-over non-`Sendable` parameters. `QrScannerView` and `TerminalHostView` already
-use the same shape for their delegates.
+Both `UNUserNotificationCenterDelegate` witnesses must stay `@MainActor`, via an
+isolated conformance (`NSObject, @MainActor UNUserNotificationCenterDelegate`).
+`QrScannerView` and `TerminalHostView` use the same shape.
 
 > [!WARNING]
-> An off-main handler looks harmless in the foreground and crashes on every tap
-> from a closed app.
-
-The reason, step by step:
-
-1. Swift bridges an `async` delegate method to its ObjC completion-handler
-   selector through an `@isolated(any)` task that adopts the *callee's*
-   isolation.
-2. So a nonisolated witness calls UIKit's completion handler from the
-   cooperative pool.
-3. UIKit answers that handler by running
-   `_updateSnapshotAndStateRestorationWithAction:`. This is the app-switcher
-   snapshot and state-restoration write it performs when a response *launched or
-   resumed* the app.
-4. That call asserts main-thread affinity and aborts the process.
-5. The path is skipped while the app is already active. So the crash never shows
-   in the foreground.
+> A nonisolated witness calls UIKit's completion handler from the cooperative
+> pool. For a response that launched or resumed the app, UIKit then runs
+> `_updateSnapshotAndStateRestorationWithAction:`, which asserts main-thread
+> affinity and aborts the process. That path is skipped while the app is active.
+> So an off-main handler looks harmless in the foreground and crashes on every
+> tap from a closed app.
 
 ## Terminal interaction
 
 ### Explicit-only keyboard (CLA-124)
 
-CLA-124 (revised scope) ports Android's explicit-only keyboard model to the
-terminal. The soft keyboard raises solely from explicit user action:
+The soft keyboard raises only from explicit user action: the composer field, or a
+show-keyboard toggle in the `InputBar`. The toggle makes the SwiftTerm view first
+responder, so typed keys stream to the PTY as `i` frames (gated on connection
+live + session running, which keeps replay-era auto-replies off the wire).
 
-- the composer field, or
-- a show-keyboard toggle in the `InputBar`. It makes the SwiftTerm view itself
-  first responder, so typed keys stream to the PTY as `i` frames. This is gated
-  on connection live + session running, which keeps replay-era auto-replies off
-  the wire.
+Tapping the terminal never raises it. A `keyboardGate` on
+`canBecomeFirstResponder` enforces this and keeps SwiftTerm's sticky-Ctrl
+accessory suppressed. Auto-activation was reverted on Android as a UX regression
+and is deliberately not ported.
 
-Tapping the terminal never raises the keyboard. A `keyboardGate` on
-`canBecomeFirstResponder` enforces this, and it also keeps SwiftTerm's
-sticky-Ctrl accessory suppressed. The originally specced auto-activation was
-reverted on Android as a UX regression and is deliberately not ported.
-
-Other changes in the same port:
-
-- The composer collapses behind a "Command field" reveal chip.
-- The control-key bar gains a Backspace key (DEL `0x7f`).
-- Leaving the session dismisses the keyboard.
-
-**Dismiss on touch.** Touching the terminal surface while a keyboard covers it
-dismisses the keyboard. This holds for a composer-raised keyboard and a
-terminal-first-responder keyboard alike, and for a scroll drag equally. The
-touch is spent, so it cannot also resend a prompt row, send a mouse click, or
-copy to the composer. A live selection keeps the touch without losing it to the
-dismiss.
-
-Some surfaces are excluded, since none of them cover the terminal: the
-InputBar's own controls, a hardware keyboard's assistant bar, and iPad's
-undocked/floating/split keyboards. Android and web mirrors are not yet
-implemented (CLA-253 / CLA-254).
-
-**Keyboard avoidance** is pan-don't-resize (Android `ImeFloatingPan` parity).
-
-- The screen opts out of SwiftUI keyboard avoidance.
-- It lifts the UI column by the keyboard overlap (`TerminalKeyboardObserver`).
-- `TerminalPanScrollView` counter-pans the terminal so the cursor row plus two
-  slack rows stays visible (`TerminalKeyboardPan` math).
-- The grid never resizes on keyboard show/hide. So keyboard transitions send no
-  PTY resize frames and no SIGWINCH.
+- The composer collapses behind a "Command field" reveal chip. The control-key
+  bar has a Backspace key (DEL `0x7f`). Leaving the session dismisses the
+  keyboard.
+- **Dismiss on touch.** Touching the terminal (or a scroll drag) while a keyboard
+  covers it dismisses the keyboard. The touch is spent, so it cannot also resend
+  a prompt row, send a mouse click, or copy to the composer. A live selection
+  keeps the touch. The InputBar's own controls, a hardware keyboard's assistant
+  bar, and iPad's undocked/floating/split keyboards are excluded, since none of
+  them cover the terminal. Android and web mirrors are not yet implemented
+  (CLA-253 / CLA-254).
+- **Keyboard avoidance** is pan-don't-resize (Android `ImeFloatingPan` parity).
+  The screen lifts the UI column by the keyboard overlap
+  (`TerminalKeyboardObserver`), and `TerminalPanScrollView` counter-pans the
+  terminal so the cursor row plus two slack rows stays visible. The grid never
+  resizes, so keyboard transitions send no PTY resize frames and no SIGWINCH.
 
 ### Sessions panel drawer
 
 A left-edge swipe on the terminal (or the top-bar `terminal-sessions-button`)
-opens the sessions panel. It is a `SideDrawer` overlay listing the connected
-agent's sessions.
+opens a `SideDrawer` listing the connected agent's sessions, a New session
+shortcut and the account's other agents.
 
-- Running/starting rows carry a Stop button. It opens a Stop / Force Stop /
-  Cancel confirmation.
-- Stopping the on-screen session moves to the nearest open session by panel
-  position, below first then above. It returns to the sessions list only when
+- Running/starting rows have a Stop button (Stop / Force Stop / Cancel).
+  Stopping the on-screen session moves to the nearest open session by panel
+  position (below first, then above), and returns to the sessions list only when
   none remains.
-- Stopping another session keeps the terminal.
-- The list also has a New session shortcut and the account's other agents.
-
-On a switch the drawer stays open. The selection frame moves to the next row,
-and the stopped row dims while the terminal fades out. Then `SessionDetailScreen`
-(whose identity survives `replaceLast`) opens the next terminal with the drawer
-up and fades it in.
-
-The swipe is a `UIScreenEdgePanGestureRecognizer` (`mobaide.sessionsDrawer`) on
-`MobaideTerminalView`. The scroll, vertical and selection pans
-`require(toFail:)` it. The navigation controller's interactive-pop swipe is
-disabled while the terminal is on top (`InteractivePopGestureDisabler`; the Back
-button stays).
-
-Picking a session swaps the route in place (`Router.replaceLast(with:)`).
-Picking an online agent connects to it and lands on its sessions list via
-`DeepLinkCoordinator.openSessions(ofAgent:)`.
+- Picking a session swaps the route in place (`Router.replaceLast(with:)`).
+  Picking an online agent connects to it and lands on its sessions list via
+  `DeepLinkCoordinator.openSessions(ofAgent:)`.
+- The swipe is a `UIScreenEdgePanGestureRecognizer` (`mobaide.sessionsDrawer`)
+  that the terminal's other pans `require(toFail:)`. The interactive-pop swipe is
+  disabled while the terminal is on top (`InteractivePopGestureDisabler`; the
+  Back button stays).
 
 ### Vertical-drag scroll ladder
 
-A vertical-drag scroll ladder (`TerminalWheelScroll` plus a
-`mobaide.verticalScroll` pan on `MobaideTerminalView`) ports Android
-`TerminalView.doScroll`.
+`TerminalWheelScroll` plus a `mobaide.verticalScroll` pan on
+`MobaideTerminalView` port Android `TerminalView.doScroll`. Full-screen TUIs
+(Claude Code, Codex, Gemini, vim, less, htop) run on the alternate screen, which
+SwiftTerm creates with no scrollback, so the terminal's own scroll view has
+nothing to move.
 
-Why it exists: full-screen TUIs (Claude Code, Codex, Gemini, vim, less, htop)
-run on the alternate screen, which SwiftTerm creates with no scrollback. The
-terminal's own scroll view had nothing to move, so vertical drags did nothing in
-either display mode.
+A drag takes the first matching arm:
 
-A drag now takes the first matching arm:
+1. While the program has mouse reporting on: xterm wheel buttons 64/65, with
+   coordinates pinned to the cell the drag started on.
+2. On a bare alternate screen (`less`, `man`, `vim`): arrow keys, honoring
+   application-cursor mode.
+3. Otherwise: SwiftTerm's own scrollback (plain shells).
 
-1. It sends xterm wheel buttons 64/65 while the program has mouse reporting on.
-   The coordinates are pinned to the cell the drag started on.
-2. Otherwise, on a bare alternate screen (`less`, `man`, `vim`), it sends arrow
-   keys, honoring application-cursor mode.
-3. Otherwise it scrolls SwiftTerm's own scrollback exactly as before. Plain
-   shells are unchanged.
+A `gestureRecognizerShouldBegin` override refuses SwiftTerm's scrollback pan
+whenever a program owns the vertical axis, and in Static mode on the horizontal
+drags the outer `TerminalPanScrollView` claims, so exactly one of the two nested
+pans owns any touch.
 
-A `gestureRecognizerShouldBegin` override refuses SwiftTerm's scrollback pan in
-two cases:
-
-- whenever a program owns the vertical axis;
-- in Static mode, on exactly the horizontal drags the outer
-  `TerminalPanScrollView` claims.
-
-So precisely one of the two nested pans owns any touch. This is the child half
-of Android's `requestDisallowInterceptTouchEvent` arbitration. It replaces an
-inner `isDirectionalLockEnabled` that latched onto whichever axis started
-dominant, including one with no overflow to scroll.
-
-Two consequences match Android and are deliberate:
+Consequences, deliberate and matching Android:
 
 - Local scrollback is unreachable on the normal buffer while a program has mouse
   reporting on.
 - A program that exits without restoring terminal modes leaves the emulator in
-  alt/mouse mode. A scroll gesture then writes arrow keys or a mouse report to
-  the shell prompt underneath.
+  alt/mouse mode, so a scroll gesture writes arrow keys or a mouse report to the
+  shell prompt underneath.
 
 ### Fling momentum
 
-Lifting the finger starts a momentum tail (Android `TerminalView.onFling`).
+Lifting the finger starts a momentum tail (Android `TerminalView.onFling`):
+`TerminalWheelScroll.flingRows` turns the lift-off velocity into rows and
+`flingSteps` spreads them over at most twelve 40ms frames. Nothing coasts below
+250pt/s.
 
-- `TerminalWheelScroll.flingRows` turns the lift-off velocity into rows. It uses
-  Android's `0.25` scale, but divided by the cell height and clamped to
-  `±rows/2`.
-- `flingSteps` spreads the rows over at most twelve 40ms frames on a
-  decelerating curve.
-- A cancellable `Task` walks that schedule. It aborts if the ladder arm changes
-  underneath it (Android's `mouseTrackingAtStartOfFling` check, widened to the
-  whole ladder so leaving the alternate screen aborts too). It also aborts if
-  the view leaves its window, or on the next touch.
-- Tap-to-stop is a deliberate divergence from Android, which has none.
-- The threshold below which nothing coasts is restated in this formula's units
-  (250pt/s). It is not borrowed from Android's 50dp/s, which only means anything
-  without the cell-height division.
-
-Each frame's rows leave as a single write. `MobaideTerminalView` overrides
-SwiftTerm's `send(source:data:)` to coalesce the mouse reports one `sendEvent`
-burst produces. So a fling costs one WebSocket frame per step instead of one per
-row. It flushes through that same override rather than `send(data:)`. The
-`ensureCaretIsVisible()` in `send(data:)` would yank a paused viewport back to
-the tail on every step of a wheel-arm scroll over the normal buffer.
+- A cancellable `Task` walks the schedule. It aborts if the ladder arm changes,
+  if the view leaves its window, or on the next touch (tap-to-stop, a deliberate
+  divergence from Android).
+- `MobaideTerminalView` overrides SwiftTerm's `send(source:data:)` to coalesce
+  the mouse reports of one burst into one WebSocket frame. It must flush through
+  that override rather than `send(data:)`, whose `ensureCaretIsVisible()` would
+  yank a paused viewport back to the tail.
 
 ### Tap ladder
 
 A single tap ladders on the same three states.
 
-**Mouse-tracking arm.** While the program tracks the mouse,
-`MobaideTerminalView.sendMouseClick(at:)` reports a left-button press and
-release on the tapped cell. This is how Claude Code, vim and htop move their own
-cursor.
-
-- It reuses `TerminalWheelScroll.cell`, so the X10 coordinate clamp applies.
-- It uses the same batching override, so the pair costs one write.
-- SwiftTerm's equivalent cannot serve here. `neutralizeSwiftTermGestures()`
-  disables its taps, and it reports only while first responder, which the
-  explicit-only keyboard forbids.
-
-**Recognizer behaviour.** The `mobaide.mouseTap` recognizer deliberately does
-not wait on the double-tap timeout. This matches the promptness of Android's
-`onUp` fast path. It carries a delegate granting simultaneous recognition, so it
-cannot block the delayed row tap or the double tap.
-
-**Row-tap submit** is confined to the plain-shell arm. On the alternate screen
-and under mouse reporting the rows are the program's own chrome. Submitting one
-would Ctrl+C it and retype the text.
-
-The click leaves at touch-up, but the row tap only arrives after the double-tap
-timeout. The program that just learned of the tap is the one writing the state
-the ladder reads. So the arm is latched at lift, and both evaluations must agree
-before anything is submitted.
-
-**Other cases:**
-
-- Two taps are still reported as two clicks (Android parity).
-- Double-tap copy-to-composer stays available in every mode, as the way to
-  re-run an earlier message.
-- An `.x10`-only program gets neither a click (SwiftTerm suppresses presses in
-  that mode) nor a submit.
-- A touch that put a covering keyboard away is refused before any arm evaluates
-  it. `gestureRecognizerShouldBegin` declines every single-tap recognizer
-  outright for that touch. So neither a click nor a row submit reaches the
-  program, regardless of which arm would otherwise have owned it. A second touch
-  ladders normally.
+- **Mouse-tracking arm.** `MobaideTerminalView.sendMouseClick(at:)` reports a
+  left-button press and release on the tapped cell, in one write. This is how
+  Claude Code, vim and htop move their own cursor. SwiftTerm's equivalent cannot
+  serve: `neutralizeSwiftTermGestures()` disables its taps, and it reports only
+  while first responder, which the explicit-only keyboard forbids.
+- The `mobaide.mouseTap` recognizer does not wait on the double-tap timeout, and
+  grants simultaneous recognition so it cannot block the row tap or double tap.
+- **Row-tap submit** is confined to the plain-shell arm. On the alternate screen
+  and under mouse reporting the rows are the program's own chrome, and
+  submitting one would Ctrl+C it and retype the text.
+- The row tap arrives only after the double-tap timeout, by which time the
+  program may have changed the state the ladder reads. So the arm is latched at
+  lift, and both evaluations must agree before anything is submitted.
+- Double-tap copy-to-composer works in every mode. An `.x10`-only program gets
+  neither a click (SwiftTerm suppresses presses in that mode) nor a submit.
+- A touch that put a covering keyboard away is refused by every single-tap
+  recognizer; a second touch ladders normally.
 
 ### Follow mode and the unread badge
 
-Follow mode is driven from the terminal's own scroll view rather than from
-SwiftTerm (`TerminalFollowScroll` plus a `UIScrollViewDelegate` on
-`MobaideTerminalView`).
+Follow mode is driven from the terminal's own scroll view
+(`TerminalFollowScroll` plus a `UIScrollViewDelegate` on `MobaideTerminalView`),
+not from SwiftTerm. SwiftTerm's iOS renderer draws from `contentOffset`, while
+its `scrollPosition` and `getLine(row:)` read `buffer.yDisp`, which as of 1.15
+parks at the row the finger lifted on. So the scroll view is the only honest
+source for how far up the reader is.
 
-**Why SwiftTerm cannot drive it.** SwiftTerm's iOS renderer draws from
-`contentOffset`. Its `scrollPosition` and `getLine(row:)` read `buffer.yDisp`,
-which nothing in the package mapped a drag onto before 1.15. So
-`TerminalViewDelegate.scrolled` never fired for a touch, the jump-to-bottom
-button was unreachable and `jumpToBottom()` was a no-op. 1.15 moves `yDisp`
-while a drag is tracking but parks it at the row the finger lifted on. The
-scroll view therefore remains the only honest source for how far up the reader
-is.
+- The app claims the scroll-view `delegate` slot and reports a position only
+  while `isDragging`/`isDecelerating` (a feedback-loop guard).
+- The emulator-driven `scrolled` callback feeds the unread-row tally (badge
+  capped at "999+"). It counts only scrolls that pushed a row into the
+  scrollback (`TerminalFollowScroll.pushesRowIntoScrollback`, entry condition
+  `scrollTop == 0`), so a DECSTBM region shift does not inflate it (CLA-183).
+  Android also catches DECLRMM and still counts DECSTBM: the rule is in parity;
+  the count is not.
+- While follow mode is paused, an override of `open var contentOffset` refuses
+  SwiftTerm's snap-to-tail writes (`updateScroller()`, `ensureCaretIsVisible()`).
+  A flag raised around the `feed` call tells them apart from a drag, because
+  SwiftTerm snaps synchronously inside `feed`. The same flag keeps SwiftTerm's
+  automatic replies (DA, DECRQM, the `ESC[6n` cursor-position report) from
+  counting as the user typing; they still reach the PTY (Android: CLA-184).
 
-**Position reporting.** The app claims the scroll-view `delegate` slot. SwiftTerm
-declares the conformance but implements no method of it and never assigns it.
-The app reports a position only while `isDragging`/`isDecelerating`. This is the
-same feedback-loop guard as the Android fork's rule that `setTopRow` must not
-report.
-
-**Unread-row tally.** The emulator-driven `scrolled` callback is now the
-unread-row tally (Android `unreadRows`, badge capped at "999+").
-
-- It counts only the scrolls that pushed a row into the scrollback
-  (`TerminalFollowScroll.pushesRowIntoScrollback`, entry condition
-  `scrollTop == 0`).
-- A DECSTBM region shifts in place, overwriting its own top row. So it no longer
-  inflates the badge (CLA-183).
-- Android applies the same rule from inside its emulator, where the arms are
-  unambiguous. It also catches the DECLRMM narrow-margin arm, which is illegible
-  from outside SwiftTerm. It still counts DECSTBM, whose scrolled-out row Termux
-  parks in the transcript.
-- The rule is in parity; the count is not.
-
-**Pausing follow mode.** While follow mode is paused, an override of the
-`open var contentOffset` refuses SwiftTerm's snap-to-tail writes. These are
-`updateScroller()` on every scrolled line and `ensureCaretIsVisible()` on every
-byte sent. Both are `internal`, so they are unreachable otherwise. This matches
-Android's `TerminalEmulator.isAutoScrollDisabled`.
-
-Those writes are told apart from a drag by a flag raised around the `feed` call,
-rather than by the gesture state alone. SwiftTerm snaps synchronously inside
-`feed`, and UIKit reports the result as an ordinary scroll. So a line landing
-mid-drag would otherwise read as the user returning to the tail.
-
-That same flag keeps SwiftTerm's automatic replies off the resume path. These are
-DA/DECRQM, and the cursor-position report answering `ESC[6n`, which prompt
-frameworks emit routinely. They still reach the PTY, but sending them no longer
-counts as the user typing. Otherwise a program's own query would un-pause the
-viewport. Android now does the same (CLA-184), raising the equivalent flag
-around `TerminalEmulator.append` inside `TerminalSession`.
-
-**Accepted limitation.** Once the scrollback ring is full, SwiftTerm trims from
-the top without growing `contentSize`. A held viewport then drifts up a row per
-trimmed line. Android compensates via `mTopRow`. Its iOS counterpart
-(`Buffer.totalLinesTrimmed`) became readable in SwiftTerm 1.15 but has not been
-adopted for viewport drift yet.
+Accepted limitation: once the scrollback ring is full, SwiftTerm trims from the
+top without growing `contentSize`, so a held viewport drifts up a row per
+trimmed line. `Buffer.totalLinesTrimmed` (readable since SwiftTerm 1.15) is not
+yet adopted for this.
 
 ### Row hit-testing and synchronized output
 
-**Row hit-testing.** Hit-testing re-points `buffer.yDisp` at the rows actually on
-screen for the duration of the synchronous `getLine` read. So tapping a prompt
-still resolves the rendered line while scrolled into history. A tap below the
-last line (the blank overscroll band) resolves nothing, rather than folding onto
-that line, since on the plain-shell arm a tap is what executes it.
+Hit-testing re-points `buffer.yDisp` at the rows actually on screen for the
+synchronous `getLine` read, so tapping a prompt resolves the rendered line while
+scrolled into history. A tap below the last line (the blank overscroll band)
+resolves nothing, since on the plain-shell arm a tap executes the line.
 
-**Synchronized output (DEC mode 2026).** The drawn-equals-resolved guarantee is
-enforced rather than assumed. While a program holds synchronized output,
-SwiftTerm suppresses paints while continuing to parse. So the row `getLine`
-returns is not the row on the glass. `resolveRow` therefore resolves nothing at
-all for the duration. It refuses both the single-tap execute and the double-tap
-copy-to-composer.
+While a program holds synchronized output (DEC mode 2026), SwiftTerm suppresses
+paints while still parsing, so the row `getLine` returns is not the row on the
+glass. `resolveRow` then resolves nothing, refusing both the single-tap execute
+and the double-tap copy-to-composer.
 
-**Detecting the mode.** That state was unreadable from outside the package until
-SwiftTerm 1.15 made `Terminal.synchronizedOutputActive` public.
-`TerminalSynchronizedOutput` still recognizes the mode from the output bytes the
-app already holds. It mirrors the subset of SwiftTerm's parser that can reach
-DECSET/DECRST 2026, and is a deliberate superset of it. A false positive costs
-one ignored tap, while a false negative reopens the hole.
-
-**When the window closes:**
-
-- On `ESC[?2026l` at once. Ink brackets every frame, so anything slower would
-  deaden the affordance for whole sessions.
-- Otherwise on SwiftTerm's own one-second snapshot timeout, plus slack for
-  main-queue delivery order.
-
-**Latching at lift.** The row tap only arrives a double-tap timeout after the
-finger lifts. That is long enough for a program to drop the mode and leave the
-row it swapped in both drawn and resolvable. So the frozen state is also latched
-at lift (`lastTapDuringFrozenDisplay`, beside `lastTapOwnedByProgram`), and both
-evaluations must agree. The pointer-ownership ladder already follows the same
-rule.
-
-**Android comparison (CLA-182).** Android has no second buffer: its renderer and
-row lookup share one screen. But it defers the *paint* for up to 150 ms. So it
-refuses the same way while `TerminalSession.isScreenUpdateDeferred()` holds. It
-latches at touch-up for the same reason: its 150 ms safety flush lands inside
-the ~300 ms confirm gap.
+- `TerminalSynchronizedOutput` recognizes the mode from the output bytes, as a
+  deliberate superset of SwiftTerm's parser: a false positive costs one ignored
+  tap, a false negative reopens the hole.
+- The window closes at once on `ESC[?2026l` (Ink brackets every frame), and
+  otherwise on SwiftTerm's own one-second snapshot timeout plus slack.
+- The frozen state is latched at lift (`lastTapDuringFrozenDisplay`) and both
+  evaluations must agree, as for the pointer-ownership arm.
+- Android refuses the same way while `TerminalSession.isScreenUpdateDeferred()`
+  holds (CLA-182).
 
 ## Shortcuts, custom agents, selection and paste
 
 ### Custom keyboard shortcuts (CLA-136/CLA-138)
 
-CLA-136/CLA-138 port Android's terminal custom keyboard shortcuts.
-
-- The control-key row (now gated on `canSendTerminalBytes`, matching the wire)
-  gains a trailing "Custom shortcut" ellipsis trigger.
-- The trigger opens a chord-picker sheet. It has Ctrl/Alt/Shift modifiers (max
-  two) over an A–Z / 0–9 / F1–F12 / Tab / Enter / Space / Backspace key grid.
-- A live byte preview flags CSI-u encodings as "may not work in every CLI" and
-  discloses same-byte chords.
+- The control-key row (gated on `canSendTerminalBytes`) ends with a "Custom
+  shortcut" ellipsis trigger opening a chord-picker sheet: Ctrl/Alt/Shift
+  modifiers (max two) over an A–Z / 0–9 / F1–F12 / Tab / Enter / Space /
+  Backspace key grid. A live byte preview flags CSI-u encodings as "may not work
+  in every CLI" and discloses same-byte chords.
 - Recents are device-local MRU per session kind (cap 10).
-- Saved shortcuts render as buttons after the trigger. Tap sends. The context
-  menu offers Rename/Remove. The picker has a Save/Saved toggle.
-- Saved shortcuts sync live across devices through `/api/shortcuts` and the
-  `shortcut.*` user events (the CLA-137 server contract in PROTOCOL.md).
-
-Under the hood:
-
-- a byte-exact `KeyChordEncoder` port;
-- a `ShortcutsRepository` cloned from the templates stack and wired to the
-  `UserEventBus` (refresh-on-connect, clear-on-logout);
-- `TerminalSessionModel`'s `resolvedKind`, so shortcut lists key off the
-  session's true kind;
-- golden fixtures for the four shortcut DTOs.
+- Saved shortcuts render as buttons after the trigger (tap sends; context menu
+  Rename/Remove). They sync live across devices through `/api/shortcuts` and the
+  `shortcut.*` user events (the CLA-137 server contract in PROTOCOL.md), via a
+  `ShortcutsRepository` on the `UserEventBus` (refresh-on-connect,
+  clear-on-logout).
+- `KeyChordEncoder` is a byte-exact port. `TerminalSessionModel.resolvedKind`
+  keys shortcut lists off the session's true kind.
 
 ### Custom agent types (CLA-155)
 
-CLA-155 ports the custom AI agent types client half (proto-v7; server contract
-CLA-153, Android reference CLA-154).
+Client half of custom AI agent types (proto-v7; server contract CLA-153, Android
+reference CLA-154).
 
-**Wire and data layer**
-
-- `SessionKind` becomes an open enum. It preserves unknown wire values verbatim
-  as `.custom(String)`. The old coerce-to-`.claude` fallback is gone.
-- `SessionResponse` gains the nullable `kind_label` name snapshot.
-- The `CustomAgentTypeDto` family plus `/api/custom-agent-types` CRUD in
-  `CentralAPI` back an account-generation-guarded `CustomAgentTypesRepository`.
-- The repository is wired to the `UserEventBus` (`custom_type.created/updated/deleted`
-  demux). A deletion also purges that kind's saved shortcuts locally, mirroring
-  the server-side cascade.
-- `APP_PROTOCOL_VERSION` bumps 6 → 7, with four new central DTO fixtures
-  registered in the golden-fixture registry.
-
-**UI**
-
-- The create-session mode step renders one card per custom type, plus an
-  "Add custom agent…" card opening `CustomAgentTypeEditorSheet`.
-- Create/edit is via long-press context menu. Delete has a confirmation that
-  spells out the shortcut cascade.
+- `SessionKind` is an open enum: unknown wire values are preserved verbatim as
+  `.custom(String)`. `SessionResponse` has the nullable `kind_label` name
+  snapshot.
+- `/api/custom-agent-types` CRUD in `CentralAPI` backs an
+  account-generation-guarded `CustomAgentTypesRepository`, wired to the
+  `UserEventBus` (`custom_type.created/updated/deleted`). A deletion also purges
+  that kind's saved shortcuts locally, mirroring the server-side cascade.
+- `APP_PROTOCOL_VERSION` is 7, with four central DTO fixtures in the
+  golden-fixture registry.
+- The create-session mode step has one card per custom type plus an "Add custom
+  agent…" card opening `CustomAgentTypeEditorSheet` (edit via long-press;
+  delete confirmation spells out the shortcut cascade).
 - Custom launches keep the worktree toggle and run as plain terminal sessions.
-- Session cards label custom kinds via `kind_label` → live registry name →
-  `Custom`.
-- The control-key bar falls back to a kind-neutral 9-key set for custom (and
-  not-yet-resolved) kinds.
+  Session cards label custom kinds via `kind_label` → live registry name →
+  `Custom`. The control-key bar falls back to a kind-neutral 9-key set.
 
 ### Text selection (CLA-133 and CLA-63)
 
-CLA-133 (plus the CLA-63 half that had no iOS issue) brings terminal text
-selection, copy and paste, which the client had lacked entirely. A long press
-did nothing before.
-
 **Sticky selection mode.** Long-pressing selects the word under the finger and
-latches a sticky selection mode. While it holds, drags move the two handles. The
-`gestureRecognizerShouldBegin` gate refuses:
-
-- the scrollback pan;
-- the wheel/fling ladder;
-- both row taps;
-- the mouse-click tap;
-- the outer Static-mode horizontal pan.
-
-The mode latch is a deliberate deviation from Android, which has none. On iOS the
-drag is already owned by `TerminalWheelScroll` whenever a TUI enables mouse
-reporting. Without the latch, selection would be dead in exactly the Claude Code
-and Codex sessions the feature exists for.
+latches a sticky selection mode. While it holds, drags move the two handles, and
+the `gestureRecognizerShouldBegin` gate refuses the scrollback pan, the
+wheel/fling ladder, both row taps, the mouse-click tap and the outer Static-mode
+horizontal pan. The latch is a deliberate deviation from Android: on iOS the drag
+is owned by `TerminalWheelScroll` whenever a TUI enables mouse reporting, so
+without it selection would be dead in Claude Code and Codex sessions.
 
 **Toolbar.** A floating SwiftUI toolbar offers **Send to Input · Copy · Paste**
-(Android's item set and order), plus a Cancel the latch needs. It is app-drawn
-rather than a `UIEditMenuInteraction` or `UIMenuController`. Both source their
-items from the responder chain, which `keyboardGate` deliberately closes. A
-system menu would come up empty or raise the keyboard.
+(Android's items and order) plus a Cancel the latch needs. It is app-drawn
+because system edit menus source items from the responder chain, which
+`keyboardGate` closes: they would come up empty or raise the keyboard.
 
-**Selection is app-owned end to end**, for the same class of reason the rest of
-the terminal is. SwiftTerm's `SelectionService` is an `internal` *class*, so
-none of its model is nameable here. Its only public entry (`select(_:)`) needs
-internal state set by that same deprecated menu flow.
+**Selection is app-owned**, because SwiftTerm's `SelectionService` is an
+`internal` class.
 
-- `TerminalSelection` holds the pure geometry: word expansion, handle pinning,
-  highlight rects, edge autoscroll, trim shift. It works over
-  **content-absolute** rows, the space `resolveRow` and `Terminal.getText`
-  already share.
-- `TerminalSelectionController` owns the gestures plus a non-interactive overlay
-  subview that draws the highlight and handles.
-- The overlay exists because `TerminalView.draw` is `public`, not `open`, so it
-  cannot be overridden cross-module, and it early-returns under the Metal
-  renderer. The overlay tracks the visible content window so it never rasterizes
-  more than a screen.
-
-**Magnifier.** While a handle is dragged (iOS 17+), a system `UITextLoupeSession`
-magnifier follows the snapped endpoint (`TerminalSelection.caretRect`) rather
-than the raw touch. So the cell under the finger stays readable. Android uses
-`android.widget.Magnifier` on API 28+.
-
-**Copied text.** Text comes from `Terminal.getText`. It joins soft-wrapped rows
-without a newline and adds one on hard breaks (Android's `joinBackLines = true`).
-So a wrapped path copies back intact.
+- `TerminalSelection` holds the pure geometry over **content-absolute** rows (the
+  space `resolveRow` and `Terminal.getText` share). `TerminalSelectionController`
+  owns the gestures plus a non-interactive overlay that draws the highlight and
+  handles (`TerminalView.draw` is `public`, not `open`, and early-returns under
+  the Metal renderer).
+- A `UITextLoupeSession` magnifier (iOS 17+) follows the snapped endpoint while a
+  handle is dragged.
+- Text comes from `Terminal.getText`, which joins soft-wrapped rows without a
+  newline and adds one on hard breaks (Android's `joinBackLines = true`).
 
 ### Selection tracking while output streams
 
-A live selection also pins the viewport through `holdsAutoScroll`, a second
-self-restoring term beside the model-owned `isAutoScrollSuppressed`. It follows
-its text as the emulator scrolls.
+A live selection pins the viewport through `holdsAutoScroll` and follows its text
+as the emulator scrolls. Rows renumber only once a line is recycled, counted from
+`Buffer.totalLinesTrimmed` (public since SwiftTerm 1.15), not from `yDisp`, which
+1.15 freezes for a whole tracked drag.
 
-- Rows renumber only once a line is recycled, counted from
-  `Buffer.totalLinesTrimmed` (public since SwiftTerm 1.15).
-- The count is not inferred from `yDisp` no longer advancing. 1.15 freezes
-  `yDisp` for the whole of a tracked drag too. A reader scrolled into history
-  would otherwise be told a line was trimmed on every streamed row.
-- The alternate buffer is the one case that counter cannot answer. It has no
-  scrollback, so SwiftTerm never counts a trim there, but its ring is full from
-  the first line.
-- It is handled as its own arm. A Claude Code or Codex selection shifts up one
-  row per streamed line rather than being cancelled.
-- Cancelling there instead would kill the selection on the first line of output,
-  in exactly the sessions the feature exists for.
+The alternate buffer has no scrollback, so SwiftTerm never counts a trim there,
+yet its ring is full from the first line. It is its own arm: a Claude Code or
+Codex selection shifts up one row per streamed line instead of being cancelled.
 
-**When a selection is dropped.** A selection is dropped outright whenever its
-content-absolute rows stop naming the text they were taken from:
+A selection is dropped whenever its content-absolute rows stop naming the text
+they were taken from:
 
-- A region (DECSTBM) scroll that overlaps it, because those rows are overwritten
-  in place rather than moved.
-- Scrolling out of the transcript.
-- The onset of synchronized output, whose frozen snapshot `getText` cannot read.
-- A screen-buffer swap (`bufferActivated`, the only hook; no scroll callback
-  fires for it). Otherwise Copy would lift unrelated text after a TUI exits.
-- A grid resize, which reflows the buffer.
-- A replay wipe on reconnect.
-- Resuming follow mode. It leaves the history the selection was taken in. It
-  would also otherwise make jump-to-bottom a silent no-op against
-  `holdsAutoScroll`.
+- a region (DECSTBM) scroll that overlaps it;
+- scrolling out of the transcript;
+- the onset of synchronized output, whose frozen snapshot `getText` cannot read;
+- a screen-buffer swap (`bufferActivated`, the only hook), which would otherwise
+  let Copy lift unrelated text after a TUI exits;
+- a grid resize, a replay wipe on reconnect, or resuming follow mode.
 
 ### Paste
 
 Paste routes through one canonical encoder, `TerminalPaste`, byte-exact with
-Android's `TerminalEmulator.paste()`. The steps are:
+Android's `TerminalEmulator.paste()`:
 
 1. Strip ESC and C1 **first**. A clipboard carrying a live `ESC[201~` then
    degrades to literal text. It cannot close the bracket early and execute its
@@ -693,234 +441,137 @@ Android's `TerminalEmulator.paste()`. The steps are:
 3. Then wrap in `ESC[200~`/`ESC[201~`, only when the program enabled DECSET 2004.
 4. Send the result as exactly **one** `i` frame.
 
-Steps 1 and 2 are two ordered sanitizer passes, exactly as Android runs them. A
-fused walk would turn `CR ESC LF` into two carriage returns instead of one.
+Steps 1 and 2 are two ordered passes, as on Android: a fused walk would turn
+`CR ESC LF` into two carriage returns.
 
-**Single frame.** The single frame is a deliberate divergence and a
-disconnect-safety invariant, not an incidental detail.
+**Single frame.** This is a deliberate divergence and a disconnect-safety
+invariant. Android's writes reach a local PTY fd and are effectively atomic.
+Here they cross a WebSocket and a relay whose send result the drain loop
+discards. Losing only the closing `ESC[201~` would strand the program's line
+editor in paste-collect mode and swallow every later keystroke as paste content.
+`TerminalPaste.writes(for:bracketed:)` still returns three parts as the byte
+oracle for the ported Android cases; the model joins them. Paste never routes
+through `sendInput`, which would double-wrap the markers into literal
+`200~`/`201~`.
 
-- Android's three writes reach a local PTY fd, where they are effectively atomic.
-- Here they cross a WebSocket and a relay whose send result the drain loop
-  discards.
-- Losing only the closing `ESC[201~` would strand the program's line editor in
-  paste-collect mode. It would swallow every later keystroke as paste content.
+**Size cap.** Pastes above 1 MiB are refused with a toast (Android has no cap).
+The agent opens its relay tunnel with `max_size=4 MB`, and one oversized frame
+trips `PayloadTooBig`. That closes the tunnel with 1009 and disrupts **every**
+session on the agent.
 
-`TerminalPaste.writes(for:bracketed:)` keeps returning the three parts as the
-byte oracle the ported Android cases assert against. The model joins them before
-sending. A test pins the frame count, so a partial bracketed paste is not
-representable on the wire.
-
-It deliberately never routes through `sendInput`. The `m`-submit encoder in
-`sendInput` wraps multi-line bodies unconditionally and would double-wrap the
-markers into literal `200~`/`201~`.
-
-**Size cap.** This is one deliberate divergence from Android, which has no cap.
-Pastes are refused above 1 MiB with a toast. The agent opens its relay tunnel
-with `max_size=4 MB`, and a single oversized frame trips `PayloadTooBig`. That
-closes the tunnel with 1009 and disrupts **every** session on the agent.
-
-**Entry points.** Paste has **two** entry points on iOS:
-
-- the selection toolbar (Android parity);
-- a new Paste key in the control-key row that needs no selection at all. This is
-  an iOS-first affordance, with the Android mirror tracked separately.
-
-`Clipboard` gains two members:
-
-- `hasText` (`UIPasteboard.hasStrings`), a description-level probe that never
-  raises the paste banner, so toolbar gating is free;
-- `readText()`, which reads contents and is therefore only ever called from an
-  explicit tap.
+**Entry points.** The selection toolbar and a Paste key in the control-key row
+that needs no selection (iOS-first; the Android mirror is tracked separately).
+`Clipboard.readText()` is called only from an explicit tap.
 
 ### OSC 52 clipboard access
 
-OSC 52 is write-direction and live-only, matching Android's documented posture.
+OSC 52 is write-direction and live-only, matching Android.
 
-- A program may put text on the pasteboard. It is marked sensitive, so it is
-  device-local and expires.
-- This works only from live output. `clipboardCopy` refuses bytes fed inside
-  `applyingEmulatorOutput(replayed:)`. The agent replays its ring verbatim on
-  every attach, and one yank sitting in that history would otherwise re-copy on
-  every session open.
-- The gate costs nothing here. The user's own Copy never reaches this delegate,
-  because the model calls `Clipboard.copy` directly. So the gate affects the
-  PTY's channel alone.
-- A sequence still straddling the replay→live boundary is attributed to the span
-  its terminator lands in, and therefore honoured. This is the known gap tracked
-  in GitHub issue #634.
-
-The read/query form `ESC]52;c;?ST` is newly implemented in SwiftTerm 1.15. It is
-refused by `TerminalHostView.Coordinator.clipboardRead` returning `nil`. So
-nothing on the agent host can lift the pasteboard across the relay.
-
-1.15 also widened the accepted selection characters from a literal `c;` to any
-of `c`/`p`/`q`/`s`/`0-7`. So the write sink now fires for sequences 1.13
-dropped.
+- A program may put text on the pasteboard (marked sensitive: device-local, with
+  an expiry), but only from live output. `clipboardCopy` refuses bytes fed inside
+  `applyingEmulatorOutput(replayed:)`, because the agent replays its ring on every
+  attach and one yank in that history would re-copy on every session open. Known
+  gap (GitHub issue #634): a sequence straddling the replay→live boundary is
+  attributed to the span its terminator lands in, and so is honoured.
+- The read/query form `ESC]52;c;?ST` (implemented by SwiftTerm 1.15) is refused:
+  `TerminalHostView.Coordinator.clipboardRead` returns `nil`. So nothing on the
+  agent host can lift the pasteboard across the relay.
 
 > [!WARNING]
-> Knowingly inherited from Android rather than fixed here: when the program has
-> *not* enabled DECSET 2004, `\n` becomes `\r`. A multi-line clipboard then
-> executes as a sequence of commands the moment Paste is tapped, with no
-> confirmation. Desktop terminals (iTerm2, GNOME Terminal, Windows Terminal)
-> prompt in that case. Adding a prompt would be a parity decision to take on all
-> three clients at once.
+> Inherited from Android: when the program has *not* enabled DECSET 2004, `\n`
+> becomes `\r`. A multi-line clipboard then executes as a sequence of commands
+> the moment Paste is tapped, with no confirmation. Desktop terminals (iTerm2,
+> GNOME Terminal, Windows Terminal) prompt in that case. Adding a prompt would be
+> a parity decision for all three clients at once.
 
 ## Later wizard, pairing and composer features
 
 ### Auto Scan launch (CLA-176)
 
-CLA-176 adds the launch half of Auto Scan, which CLA-103 left unbuilt.
-`AutoScanRepository.startScan` had no production caller. So the "Active Auto
-Scans" section, gated on a non-empty scan list, could never render for an
-iOS-only user.
-
-**The mode card.** A fifth **Auto Scan** mode card sits between Antigravity and
-Terminal.
+The create-session wizard has a fifth **Auto Scan** mode card, between
+Antigravity and Terminal.
 
 - It is enabled only when the selected stored project carries a Linear API key
-  and the Claude CLI is installed. Otherwise it is greyed out with the reason.
-- This is Android's `autoScanEnabled` gate. A custom path has no stored project,
-  so it can never satisfy it.
-
-**The config step** drives:
-
-- the Claude model / effort pickers (shared with the Claude Code step, mirroring
-  Android's `ClaudeOptionControls`);
-- Plan mode;
-- a Focus view toggle (default ON; sets `claude_options.focus_mode`);
-- Skip permissions (default ON for unattended scans, with an always-visible
-  caption explaining the off-state);
-- a collapsible Advanced section (`claudeAdvancedOptions`: No memory, fast mode,
-  ultracode, debug logging, append-system-prompt, shared with the Claude Code
-  step);
-- an Initial prompt seeded from the project's saved `auto_scan_prompt` and then
-  the agent-wide default.
-
-**Submitting.** Submit POSTs the pre-existing `/api/autoscan/start` with
-`worktree` forced true. The scanner branches a worktree per Linear issue, so the
-shared Worktree section would be a lie. It routes to the CLA-103 live monitor.
-
-Last-used choices persist to their own `last_used_auto_scan_options` bucket (a
-new `ClaudeLaunchPrefs.planMode` field). It is kept separate from the Claude Code
-bucket, so the two wizard modes never pre-fill each other.
-
-**Three iOS-first conveniences**, with the Android mirrors tracked in CLA-223:
-
-1. A scan is one-per-project. So a scan already running for the selection makes
-   the card read "Already running…". Tapping it opens the live monitor, rather
-   than a config step that could only 409.
-2. A start that loses that race is still handled as typed `alreadyRunning` /
-   `capacity` (409 / 429) failures.
-3. Linear-keyed rows on the Projects screen gain a "Start Auto Scan…" long-press
-   action, reachable through a new `Route.createAutoScan(projectName:)`.
-
-No wire field, endpoint, protocol version or dependency changes.
-`ClaudeOptionsModel` already carried `plan_mode` / `initial_prompt` / `worktree`.
-`ProjectInfo.has_linear_key` / `auto_scan_prompt` were decoded but unread.
+  and the Claude CLI is installed; otherwise it is greyed out with the reason. A
+  custom path has no stored project, so it can never satisfy it.
+- The config step has the Claude model / effort pickers (shared with the Claude
+  Code step), Plan mode, a Focus view toggle (default ON; sets
+  `claude_options.focus_mode`), Skip permissions (default ON for unattended
+  scans, with an always-visible caption explaining the off-state), a collapsible
+  Advanced section (`claudeAdvancedOptions`), and an Initial prompt seeded from
+  the project's saved `auto_scan_prompt` and then the agent-wide default.
+- Submit POSTs `/api/autoscan/start` with `worktree` forced true, because the
+  scanner branches a worktree per Linear issue, then routes to the CLA-103 live
+  monitor. Last-used choices persist to their own `last_used_auto_scan_options`
+  bucket, separate from the Claude Code bucket.
+- iOS-first (Android mirrors tracked in CLA-223): a scan is one-per-project, so a
+  card for a project with a running scan reads "Already running…" and opens the
+  live monitor. A start that loses that race is handled as typed `alreadyRunning`
+  / `capacity` (409 / 429) failures. Linear-keyed rows on the Projects screen have
+  a "Start Auto Scan…" long-press action, via
+  `Route.createAutoScan(projectName:)`.
 
 ### Device-code pairing (CLA-199)
 
-CLA-199 adds the reversed device-code pairing direction. A new "Pair with a code"
-action in the Agents screen's overflow menu opens a guarded mint → wait → confirm
-flow (`DeviceCodePairingState`), beside the CLA-102 QR scanner. The
-account-level `trust_key_fp` pin behind it is documented in
+A "Pair with a code" action in the Agents screen's overflow menu opens a guarded
+mint → wait → confirm flow (`DeviceCodePairingState`), beside the CLA-102 QR
+scanner. The account-level `trust_key_fp` pin behind it is documented in
 [docs/qr-pairing.md](qr-pairing.md).
-
-Remaining feature screens land in later issues.
 
 ### Recent custom paths
 
-The create-session wizard's custom-path step now calls `PreferencesStore`'s
-recent-launch-directories persistence (`getRecentCustomPaths`/
-`addRecentCustomPath`, key `recent_custom_paths::<agentKey>`, MRU, cap 5). It was
-ported alongside the rest of `PreferencesStore` in CLA-98 but never wired into
-production.
-
-- Selecting "Custom path…" now loads a "Recent paths" section of up to 5
-  previously launched per-agent directories.
-- Rows are monospaced and head-truncated, so the trailing folder stays visible.
-- Tapping a row fills the field. Swipe or long-press removes it.
-- Android reached parity in CLA-255 with a ✕ on the chip.
-- Both clients trim the path (and one trailing separator, never a root) before
-  storing it.
-- A path is recorded only after the session is actually created. It never
-  becomes the last-used project.
+The wizard's "Custom path…" step loads a "Recent paths" section from
+`PreferencesStore` (`getRecentCustomPaths`/`addRecentCustomPath`, key
+`recent_custom_paths::<agentKey>`, MRU, cap 5 per agent). Tapping a row fills the
+field; swipe or long-press removes it. Both clients trim the path (and one
+trailing separator, never a root) before storing it. A path is recorded only
+after the session is actually created, and never becomes the last-used project.
 
 #### Sign-out purge (CLA-258)
 
-Signing out drops every agent's bucket (CLA-258).
-`SessionManager.invalidateUserSession` calls
-`PreferencesStore.removeAllRecentCustomPaths()`. That call sweeps the
-`recent_custom_paths::` prefix through the same `removeAll(withPrefix:)` helper
-`removeAllAttentionSeen()` uses.
-
-- The hook is the session teardown itself, rather than an observer. So the purge
-  does not depend on the notifications subsystem being alive.
-- It covers account deletion too (WS 4010 routes to the same method).
-- `agentDisconnect()` must not purge. Per-agent recents are meant to survive an
-  agent switch.
-- That is also why the token store is the wrong hook: it is cleared on both
-  paths.
+Signing out drops every agent's bucket: `SessionManager.invalidateUserSession`
+calls `PreferencesStore.removeAllRecentCustomPaths()`, which sweeps the
+`recent_custom_paths::` prefix through `removeAll(withPrefix:)` (also used by
+`removeAllAttentionSeen()`). The hook is the session teardown itself, so the
+purge does not depend on the notifications subsystem and covers account deletion
+(WS 4010 routes to the same method). `agentDisconnect()` must not purge, since
+per-agent recents survive an agent switch. For the same reason the token store is
+the wrong hook: it is cleared on both paths.
 
 #### Plaintext scope key (CLA-258 item 6)
 
-The scope key stays plaintext in the key name, deliberately (CLA-258 item 6). In
-DIRECT mode there is no `agent_id`. So `TokenStore.getAgentScopeKey()` falls back
-to the agent URL, and an internal hostname becomes part of a preference key
-(`recent_custom_paths::https://build-box.example.internal:8765`).
-
-Hashing it would not help:
-
-- It would protect nothing. The *values* in the same unencrypted bucket are
-  absolute workstation paths, at least as revealing as the host.
-- It would break the key format all three clients share.
-- It would orphan every existing bucket, with no migration.
-
-The sign-out purge removes the key outright, name included.
+The scope key stays plaintext in the key name, deliberately. In DIRECT mode there
+is no `agent_id`, so `TokenStore.getAgentScopeKey()` falls back to the agent URL,
+and an internal hostname becomes part of a preference key
+(`recent_custom_paths::https://build-box.example.internal:8765`). Hashing it
+would protect nothing, because the *values* in the same unencrypted bucket are
+absolute workstation paths. It would also break the key format all three clients
+share and orphan every existing bucket. The sign-out purge removes the key
+outright, name included.
 
 ### Full-screen composer
 
-The composer gains an Android-parity **Expand editor** button (Android
-`FullScreenInputSheet.kt`; no iOS parity issue existed before this closed the
-gap). It is gated on `TerminalSessionModel.isComposerActive`, not the send gate,
-since an empty buffer is still legitimate to expand into.
+An **Expand editor** button (Android `FullScreenInputSheet.kt` parity) is gated
+on `TerminalSessionModel.isComposerActive`, not the send gate, since an empty
+buffer is legitimate to expand into.
 
-**Presentation.** The button presents `FullScreenInputSheet` as a `.sheet` (not
-`fullScreenCover`, used nowhere else in the app). The sheet binds the very same
-`inputText` the inline composer binds to. So expanding and collapsing move no
-text. Any dismissal route preserves the draft: its own Collapse button,
-swipe-down, or the scrim.
-
-**Submitting.** The `TextEditor` inserts a newline on Return and offers no
-`onSubmit`. The only submit path is `submitComposer()`. It is now the single
-definition of "send" shared by both composers. It reads the same trimmed
-`composerPayload` the submit itself consumes. So `canSubmitComposer` can never
-offer a Send that the tap would then refuse. Android's untrimmed
-`text.isNotEmpty()` gate, by contrast, can present a Send button that a
-whitespace-only buffer refuses.
-
-**Keyboard observer.** `TerminalScreen` suspends `TerminalKeyboardObserver` for
-as long as the sheet is presented. It calls `keyboard.stop()`/`start()` on
-`showFullScreenInput`, gated on a new `screenVisible` flag so the observer never
-restarts onto an unmounted screen. Presenting a `.sheet` does not refire the
-presenting view's `.onAppear`. So the sheet's own keyboard would otherwise
-visibly drive the terminal's pan-don't-resize lift.
-
-**Two deliberate divergences from Android:**
-
-- Cursor/selection position is not preserved across expand/collapse. SwiftUI
-  exposes no `TextEditor` selection binding before iOS 18's `TextSelection`, and
-  the deployment target is 17.0. Android carries the exact `TextRange`.
-- The presentation is a `.sheet` at the large detent rather than a
-  `ModalBottomSheet`, matching the app's uniform modal convention.
-
-**Trimming fix folded into the same change.** `sendInput` and the new
-`composerPayload` now trim over `unicodeScalars` rather than `Character`s. Swift
-folds `CR LF` into one grapheme cluster equal to neither `"\n"` nor `"\r"`. A
-CRLF-line-ending prompt previously read as single-line, skipped the
-bracketed-paste wrap, and reached the PTY with a bare CR mid-payload. It
-submitted at the first line break. Kotlin's UTF-16 scan has no such fold, so this
-restores Android parity rather than diverging from it.
+- `FullScreenInputSheet` is a `.sheet` over the same `inputText` the inline
+  composer binds to, so expanding and collapsing move no text and any dismissal
+  route preserves the draft. The cursor/selection position is not preserved
+  (no `TextEditor` selection binding before iOS 18; the deployment target is
+  17.0).
+- The only submit path is `submitComposer()`, shared by both composers. It reads
+  the trimmed `composerPayload`, so `canSubmitComposer` never offers a Send that
+  the tap would refuse.
+- `TerminalScreen` suspends `TerminalKeyboardObserver` while the sheet is
+  presented (`keyboard.stop()`/`start()` on `showFullScreenInput`, gated on
+  `screenVisible`). Presenting a `.sheet` does not refire the presenting view's
+  `.onAppear`, so the sheet's keyboard would otherwise drive the terminal's
+  pan-don't-resize lift.
+- `sendInput` and `composerPayload` trim over `unicodeScalars`, not
+  `Character`s, because Swift folds `CR LF` into one grapheme equal to neither
+  `"\n"` nor `"\r"`. Otherwise a CRLF-line-ending prompt would read as
+  single-line, skip the bracketed-paste wrap and submit at the first line break.
 
 ## Layout
 
@@ -938,30 +589,16 @@ ios/
 ├── Mobaide/
 │   ├── App/                      # entry point, AppConfig, AppContainer (manual DI), AuthStateModel
 │   ├── Assets.xcassets/          # AppIcon — single 1024×1024 opaque icon (iOS 17 needs no smaller
-│   │                             # sizes); wired via ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon.
-│   │                             # Wordmark — the pixel mark, 1x only (see Theme below)
-│   ├── Core/Concurrency/         # Broadcaster (StateFlow/SharedFlow replay parity)
-│   ├── Core/Protocol/            # TerminalFrame, JSONValue, WireJSON, ProtocolVersion
-│   ├── Core/Networking/          # WebSocketCore, NWWebSocketTransport, RelayRouting,
-│   │                             # AgentAPI, CentralAPI, HTTPClient, TokenProviding
-│   ├── Core/Storage/             # KeychainStoring, SecItemKeychainStore
-│   ├── Data/                     # Auth (SessionManager, token/identity stores, SignInService,
-│   │                             # Google/Apple sign-in clients), Events (AgentEventBus,
-│   │                             # UserEventBus), Local, Review (store-review prompt), Security,
-│   │                             # Repository, Voice
+│   │                             # sizes); Wordmark — the pixel mark, 1x only (see Theme below)
+│   ├── Core/                     # Concurrency, Protocol (TerminalFrame, JSONValue, WireJSON,
+│   │                             # ProtocolVersion), Networking, Storage (Keychain)
+│   ├── Data/                     # Auth, Events (AgentEventBus, UserEventBus), Local, Review,
+│   │                             # Security, Repository, Voice
 │   ├── PrivacyInfo.xcprivacy     # App Store privacy manifest (see below)
 │   ├── Models/                   # one Swift file per Android dto/*.kt file (wire DTOs)
-│   ├── Notifications/            # ForegroundSessionTracker, NotificationService,
-│   │                             # AttentionCoordinator/Content/Suppression (iOS-09),
-│   │                             # PushAppDelegate/PushRegistrationCoordinator/
-│   │                             # PushEnvironment (iOS-10 APNs)
-│   ├── UI/                       # Theme (modern-pixel tokens, Departure Mono, pixel controls —
-│   │                             # see below), Navigation (Router, RootView), Common, Onboarding,
-│   │                             # Connections, Sessions (list + create wizard), Terminal
-│   │                             # (SwiftTerm host, InputBar, keyboard pan, wheel scroll,
-│   │                             # shortcut picker, session model/store), and the feature
-│   │                             # screens (Agents, Projects, Devices, Templates, AutoScan,
-│   │                             # Settings, Support, Update, Voice)
+│   ├── Notifications/            # attention (iOS-09) and APNs push (iOS-10) classes
+│   ├── UI/                       # Theme, Navigation, Common, Onboarding, Connections, Sessions,
+│   │                             # Terminal, and the feature screens
 │   └── Support/                  # Info.plist (protocol keys, CentralServerURL, Google client ids,
 │                                 # reversed-client-id URL scheme, UIAppFonts) + Mobaide.entitlements (SIWA)
 └── MobaideTests/                 # unit tests + fixture round-trip suites
@@ -987,81 +624,49 @@ Color rules:
 
 - The brand purples (`brand` `#6008AC`, `brand2` `#6650A4`) are `static`
   fill/ring colours only, never text on dark. Text takes `accent`.
-- Interactive control boundaries ring in `gray`.
-- Decorative frames ring in `rule`.
-- Plates use `surface2`.
+- Interactive control boundaries ring in `gray`, decorative frames in `rule`,
+  plates in `surface2`.
 
 ### Theme source files
 
 | File | What |
 |---|---|
-| `Theme.swift` | `MobaideColorScheme` (both palettes), `PixelTone` (the semantic tone a display helper returns; views resolve it with `colors.color(_:)` / `colors.ring(_:)`). |
-| `Theme.swift` (environment and preference) | `MobaideColorScheme.dynamic(_:)` for UIKit appearance proxies, the `\.mobaideColors` environment key, `mobaideTheme()` (also installs the checkbox `ToggleStyle` app-wide), `ThemePreference.colorScheme` + `ThemePreferenceModifier`. |
-| `Type.swift` | `MobaideTypography`: Departure Mono is the **chrome** face (nav titles, section headings, field labels, chips, small buttons, page titles at 11 / 13 / 18 / 22 / 33 pt on its 11px grid); body copy stays the system face — the web's `--font-chrome` / `--font-body` split. |
-| `Type.swift` (Dynamic Type) | `chrome(_:relativeTo:)` uses `Font.custom(_:size:relativeTo:)` so Dynamic Type still scales, and degrades to the platform monospace when the font is not registered (`chromeAvailable`). |
-| `PixelMetrics.swift` | `px` (4pt: hard-shadow offset and pressed travel), `ring` (2pt), the 8pt status square, 18/16pt checkbox/radio, the 24pt dot-grid tile, control insets. |
-| `PixelModifiers.swift` | The grammar as modifiers: `pixelRing` (a 2pt **inset** `strokeBorder`, never `stroke`), `pixelShadow` (an offset `Rectangle`, no blur, reserving its 4pt so siblings never overlap it). |
-| `PixelModifiers.swift` (plates) | The plates: `pixelCard` / `pixelPanel` / `pixelSelectedCard` / `pixelDangerPanel` / `pixelInfoBanner` / `pixelCodePlate`. |
-| `PixelModifiers.swift` (text) | `chromeText` (font + `.textCase(.uppercase)` + 0.08em kerning — visual only, VoiceOver reads the source string), `sectionHeading`, `pageTitle`. |
-| `PixelModifiers.swift` (containers) | `pixelScreenBackground`, `pixelSheet`, `pixelList` / `pixelListRow`, `pixelForm` / `pixelFormSection`, `PixelSectionHeader`, `PixelDivider`, `PixelLinkBullet`. |
-| `PixelButtonStyle.swift` | `.pixel` (ghost), `.pixelPrimary`, `.pixelDanger`, the `Small` and `Block` variants. |
-| `PixelButtonStyle.swift` (pressed state) | Pressed = `offset(4, 4)` with the shadow hidden, under `.transaction { $0.animation = nil }` so no ambient animation tweens it (the web's `steps(2)`). |
-| `PixelButtonStyle.swift` (scope) | Applied per site, never globally — toolbar items and `Menu` labels must not pick it up. |
-| `PixelToggleStyle.swift` | `PixelCheckboxToggleStyle` (18pt square, `brand` fill when on; exposes a real `Toggle` to VoiceOver) and `PixelRadio` (the cored 16pt square). |
-| `PixelField.swift` | `pixelField(isInvalid:isFocused:)` — a modifier because a `TextFieldStyle` cannot observe focus — and `PixelLabeledField` (chrome label above, hint / error below). |
-| `PixelSegmented.swift` | The web `ThemePicker` segment: neighbours overlap 2pt to share one divider, the selected one sits on `surface` in a `brand2` ring at `zIndex(1)`. Replaces every `.pickerStyle(.segmented)`; menu-style `Picker`s stay system. |
-| `PixelChip.swift` | `PixelChip` (`.status(tone)`, `.verbatim(checked:)`, `.filled`) and `PixelStatusSquare` — status is an 8pt square, never a circle. |
-| `PixelLoadingBlock.swift` | The only progress indicator: a block cursor blinking at 900 ms with a stepped 50% duty cycle (`TimelineView`, not a repeating animation, so it never interpolates); lit steady under Reduce Motion. |
-| `PixelLoadingBlock.swift` (modal form) | `PixelBusyOverlay` is the modal form. |
-| `DotGridBackground.swift` | The page texture: one `surface2` dot per 24pt tile on `bg`, a bitmap cached per (scheme, display scale) and GPU-tiled, so scrolling redraws nothing. Never put it inside list rows. |
-| `NavigationBarAppearance.swift` | `PixelNavigationBarAppearance.install()`, called from `MobaideApp.init()` before the first `NavigationStack` exists: opaque `headBg`, a 2pt `surface2` bottom rule (a template `shadowImage` tinted by `shadowColor`), titles in the chrome face in `accent`. |
-| `NavigationBarAppearance.swift` (themes) | Trait-resolving `UIColor`s so one appearance serves both themes. `DEBUG` asserts if the font is missing. |
-| `Fonts/` | `DepartureMono-Regular.otf` (v1.500, PostScript name `DepartureMono-Regular`, from the [upstream release](https://github.com/rektdeckard/departure-mono) — the web ships only the woff2, which iOS cannot register) and its OFL, both copied into the bundle. |
-| `Fonts/` (registration) | Registered through `UIAppFonts` in `Support/Info.plist`. `ChromeFontTests` fails if either half is missing. |
+| `Theme.swift` | `MobaideColorScheme` (both palettes), `PixelTone` (views resolve it with `colors.color(_:)` / `colors.ring(_:)`), the `\.mobaideColors` environment key, `mobaideTheme()`. |
+| `Type.swift` | Departure Mono is the **chrome** face (nav titles, section headings, field labels, chips, small buttons, page titles at 11 / 13 / 18 / 22 / 33 pt); body copy stays the system face — the web's `--font-chrome` / `--font-body` split. Dynamic Type still scales; it degrades to the platform monospace when the font is not registered. |
+| `PixelModifiers.swift` | The grammar: `pixelRing` (a 2pt **inset** `strokeBorder`, never `stroke`), `pixelShadow` (an offset `Rectangle`, no blur), `chromeText` (uppercase + 0.08em kerning — visual only, VoiceOver reads the source string), the plates (`pixelCard`, `pixelPanel`, …), list and form modifiers. |
+| `PixelButtonStyle.swift` | `.pixel` (ghost), `.pixelPrimary`, `.pixelDanger`, `Small` and `Block` variants. Pressed = `offset(4, 4)` with the shadow hidden and no animation. Applied per site, never globally — toolbar items and `Menu` labels must not pick it up. |
+| Other components | `PixelSegmented` replaces every `.pickerStyle(.segmented)` (menu-style `Picker`s stay system). `PixelChip` status is an 8pt square, never a circle. `PixelLoadingBlock` is the only progress indicator (blinking block cursor, 900 ms; lit steady under Reduce Motion). `DotGridBackground` is the page texture; never put it inside list rows. |
+| `NavigationBarAppearance.swift` | Installed from `MobaideApp.init()` before the first `NavigationStack` exists. `DEBUG` asserts if the font is missing. |
+| `Fonts/` | `DepartureMono-Regular.otf` (v1.500, from the [upstream release](https://github.com/rektdeckard/departure-mono) — the web ships only the woff2, which iOS cannot register) and its OFL, registered through `UIAppFonts` in `Support/Info.plist`. `ChromeFontTests` fails if either half is missing. |
 
 ### Brand mark
 
 `Assets.xcassets/Wordmark.imageset` is a byte copy of `web/public/wordmark.png`
-at **1x only**. It is pixel art, and `PixelWordmark` scales it nearest-neighbour
-(`.interpolation(.none)`) on the `plate` (`#F4F4F4`) chip in both themes, because
-the ink is drawn for a light background.
-
-The authenticated root (`AgentListScreen`) carries it as the navigation bar's
-principal item. The auth screens carry it above their card.
+at **1x only**. It is pixel art, scaled nearest-neighbour on the `plate`
+(`#F4F4F4`) chip in both themes, because the ink is drawn for a light
+background.
 
 ### Appearance preference
 
-`ThemeStore` (`Data/Local/`, an `@Observable` over `PreferencesStore` like
-`TerminalDisplayStore`) holds the web `ThemePicker`'s three-way preference under
-the same key, `mobaide-theme`.
-
-- `MobaideApp` applies it as `preferredColorScheme` above `mobaideTheme()`.
-- Settings › Appearance is a `PixelSegmented` (Auto / Light / Dark).
-- Unknown stored values coerce to `system`.
+`ThemeStore` (`Data/Local/`) holds the web `ThemePicker`'s three-way preference
+under the same key, `mobaide-theme`. Settings › Appearance is a `PixelSegmented`
+(Auto / Light / Dark). Unknown stored values coerce to `system`.
 
 ### Always-dark surfaces
 
-Always dark, in both themes:
-
-- the SwiftTerm grid (`MobaideColors.terminal*`, now the web's `#12141A` /
-  `#E6E8EE` / cursor `#4DA3FF`; the 16-colour ANSI table is fixture-locked and
-  shared with Android and the web);
-- the auto-scan log pane (`MobaideColors.log*`).
-
-An ANSI palette is a matched set with its background.
+Always dark, in both themes: the SwiftTerm grid (`MobaideColors.terminal*`:
+`#12141A` / `#E6E8EE` / cursor `#4DA3FF`; the 16-colour ANSI table is
+fixture-locked and shared with Android and the web) and the auto-scan log pane
+(`MobaideColors.log*`).
 
 ### Deliberate deviations
 
-Deliberate deviations, all platform conventions:
-
-- `NavigationStack` push navigation instead of the web header's links.
-- System `.alert` / `confirmationDialog`.
-- Menu-style `Picker`s and `Stepper`.
-- The vendor Google / Apple sign-in buttons (the app's only rounded corners).
-
-`Form` sections cannot carry a ring, so `pixelForm()` renders them as square
-`bg2` rows on the dot grid. `List`s keep their pull-to-refresh and swipe actions
-with `pixelList()` + per-row `pixelCard()`.
+All are platform conventions: `NavigationStack` push navigation instead of the
+web header's links; system `.alert` / `confirmationDialog`, menu-style `Picker`s
+and `Stepper`; vendor Google / Apple sign-in buttons (the app's only rounded
+corners). `Form` sections cannot carry a ring, so `pixelForm()` renders them as
+square `bg2` rows on the dot grid. `List`s keep their pull-to-refresh and swipe
+actions with `pixelList()` + per-row `pixelCard()`.
 
 ### Session git Changes and Diff screens
 
@@ -1071,197 +676,127 @@ The session-scoped git Changes / Diff screens (terminal `⋯` → Git → Change
 
 #### Diff layout
 
-The Diff itself follows Android's layout.
-
-- A fixed header card (change chip, counts, and the *Changes* / *Full file*
-  switch) sits over a `LazyVStack` inside a two-axis `ScrollView`.
-- Every line's text is pinned to the widest measured line
-  (`GitDiffDisplay.metrics`). So rows scroll sideways together, up to the
-  2 000-column cut.
-- The line-number gutters and the hunk-header and notice rows stay at the visible
-  leading edge through a render-time `visualEffect` offset.
-- SwiftUI has no directional lock, so a diagonal drag moves both axes.
+The Diff follows Android's layout: a fixed header card over a `LazyVStack` inside
+a two-axis `ScrollView`. Every line's text is pinned to the widest measured line
+(`GitDiffDisplay.metrics`), so rows scroll sideways together, up to the
+2 000-column cut. Gutters and hunk-header rows stay at the leading edge. SwiftUI
+has no directional lock, so a diagonal drag moves both axes.
 
 #### Stage, Unstage and Discard
 
-Stage / Unstage / Discard (Discard always behind a confirmation) appear in these
-places:
-
-- per row, as swipe actions and a context menu;
-- per section, as Stage all / Unstage all;
-- on the Diff screen's own toolbar.
-
-A top-bar Select switches the list into `EditMode` with a bottom-bar multi-select
-toolbar. Every action is gated on the matching `capabilities.git` key
-(`GitChangesModel.capabilities`).
+Stage / Unstage / Discard (Discard always behind a confirmation) are per row
+(swipe actions and context menu), per section (Stage all / Unstage all), and on
+the Diff screen's toolbar. A top-bar Select switches the list into `EditMode`
+with a bottom-bar multi-select toolbar. Every action is gated on the matching
+`capabilities.git` key (`GitChangesModel.capabilities`).
 
 #### Commit sheet
 
-The terminal menu's `⋯ → Git → Commit…` opens the Changes screen with
-`GitCommitSheet` presented over it (`Route.sessionGitChanges(sessionId:commit:)`).
-The sheet mirrors Android's Summary + Description, author line, Amend prefill
-from `commit/context`, and Skip hooks (`--no-verify`).
+`⋯ → Git → Commit…` opens the Changes screen with `GitCommitSheet` over it
+(`Route.sessionGitChanges(sessionId:commit:)`). It mirrors Android's Summary +
+Description, author line, Amend prefill from `commit/context`, and Skip hooks
+(`--no-verify`).
 
 #### Fetch, Pull and Push (#676)
 
-#676 adds the network operations as agent-side jobs.
+Network operations run as agent-side jobs. The menu's `⋯ → Git → Fetch / Pull /
+Push…` (`Route.sessionGitChanges(sessionId:commit:sync:)`), the Changes toolbar's
+Sync button and the header's tappable `↑n ↓m` line all present `GitSyncSheet`.
 
-Entry points:
-
-- the menu's `⋯ → Git → Fetch / Pull / Push…`
-  (`Route.sessionGitChanges(sessionId:commit:sync:)`);
-- the Changes toolbar's Sync button;
-- the header's tappable `↑n ↓m` line.
-
-All three present `GitSyncSheet`. It has three rows, each with the disabled
-reason under it:
-
-- Fetch, always;
-- Pull, when behind;
-- Push, when ahead, or *Publish branch* without an upstream.
-
-Then the sheet shows the running job's `phase` / `percent` on a
-`PixelProgressBar` (two rectangles, no width animation, because git's percentage
-restarts per phase) with Cancel. Or it shows the outcome with its confirmed
-follow-ups:
-
-- Pull with rebase / merge after `not_fast_forward`, when the branch still has a
-  live upstream.
-- Force push (with lease) after `rejected` or a non-fast-forward push.
-
-The `confirmationDialog` is attached to the sheet, not the screen, so it can
-present over it. Its `isPresented` setter clears only `syncPrompt` while
-`pendingFollowUp` survives, the same split as Discard.
-
-The list shows the job as a banner until its result is dismissed (a success
-clears itself after 6 s).
+- Three rows, each with the disabled reason under it: Fetch (always), Pull (when
+  behind), Push (when ahead, or *Publish branch* without an upstream).
+- Then the running job's `phase` / `percent` with Cancel, or the outcome with its
+  confirmed follow-ups: Pull with rebase / merge after `not_fast_forward` (when
+  the branch still has a live upstream), and Force push (with lease) after
+  `rejected` or a non-fast-forward push.
+- The `confirmationDialog` is attached to the sheet, not the screen, so it can
+  present over it. Its `isPresented` setter clears only `syncPrompt` while
+  `pendingFollowUp` survives. The Discard, Check out and Rebase dialogs use the
+  same split.
+- The list shows the job as a banner until its result is dismissed (a success
+  clears itself after 6 s).
 
 #### Job tracking
 
-`GitChangesModel.job` is fed by two sources:
-
-- `observeGitJobFrames()`, adopting any job the socket reports for the session,
-  another client's included;
-- `runJobReconcile()`, a 3 s `GET …/git/jobs/{id}` loop keyed by `.task(id:)` on
-  the job and the scene phase. A `running` snapshot never overwrites a `done`
-  one.
-
-`isBusy` (a mutation or a running job) gates every staged-set write, because the
-agent answers `job_running` meanwhile.
-
-`SessionGitError.map` reads a coded `detail` before the 404 branches. So
-`job_not_found` is a lost job rather than an outdated agent.
+`GitChangesModel.job` is fed by `observeGitJobFrames()` (adopting any job the
+socket reports for the session, another client's included) and by
+`runJobReconcile()`, a 3 s `GET …/git/jobs/{id}` loop. A `running` snapshot never
+overwrites a `done` one. `isBusy` (a mutation or a running job) gates every
+staged-set write, because the agent answers `job_running` meanwhile. A coded
+`detail` is read before the 404 branches, so `job_not_found` is a lost job rather
+than an outdated agent.
 
 #### Watching the session
 
 Both child screens hold a ref-counted watch on `ForegroundSessionTracker`
-(`View.holdsSessionWatch`) for exactly as long as they are on the stack. So the
-terminal underneath stays attached, and returning never costs a ring replay.
+(`View.holdsSessionWatch`) while on the stack, so the terminal underneath stays
+attached and returning never costs a ring replay.
 
 ### Project Git screen branch management (#677)
 
-The project Git screen (`UI/Projects/git`) grew #677's branch management on top
-of the delete flow.
+The project Git screen (`UI/Projects/git`) has branch management on top of the
+delete flow.
 
-- `GitScreenModel.loadCapabilities()` runs from the screen's own `.task`. The
-  model tests pin the request sequence by index. So `load()` stays exactly the
-  items read, which always ask for `?remote=true`.
-- Local and remote rows alike render as an A→Z folder tree. A branch name is
-  split on `/`, and a remote row is nested under a folder named by its `remote`.
-- Local folders start collapsed and remote-name folders expanded. A non-empty
-  filter forces every matching folder open.
-
-**Remote-tracking section.** The remote-tracking rows sit in a `Section` whose
-header button toggles `remoteExpanded`. A non-empty `.searchable` filter, shown
-at eight rows, forces it open.
-
-**New branch.** "+" presents `GitNewBranchSheet`. It has a `Picker` start point
-defaulting to the checked-out branch (`nil` for the agent's `HEAD`), and a
-checkout `Toggle`.
-
-**Check out.** Check out is a leading swipe plus a context-menu entry on
-`branch_only` / `remote_branch` rows. It sits behind a `confirmationDialog`
-whose `isPresented` setter clears only the prompt. The row lives in
-`pendingCheckout` until Check out or Cancel runs. The force-delete and discard
-dialogs use the same split.
-
-**Delete.**
-
-- `canDelete(item)` now also allows a `remote_branch` row once
-  `capabilities.git.delete_remote` is advertised.
-- A batch that holds one is confirmed ("Delete on the remote?") before it leaves
-  edit mode.
+- `load()` always asks for `?remote=true`. `GitScreenModel.loadCapabilities()`
+  runs from the screen's own `.task`.
+- Local and remote rows render as an A→Z folder tree (a branch name split on `/`;
+  a remote row nested under a folder named by its `remote`). Local folders start
+  collapsed, remote-name folders expanded. A non-empty filter forces every
+  matching folder open.
+- The remote-tracking `Section` toggles `remoteExpanded`; a non-empty
+  `.searchable` filter, shown at eight rows, forces it open.
+- "+" presents `GitNewBranchSheet`: a `Picker` start point defaulting to the
+  checked-out branch (`nil` for the agent's `HEAD`), and a checkout `Toggle`.
+- Check out is a leading swipe plus a context-menu entry on `branch_only` /
+  `remote_branch` rows, behind a `confirmationDialog`.
+- `canDelete(item)` allows a `remote_branch` row once
+  `capabilities.git.delete_remote` is advertised. A batch that holds one is
+  confirmed ("Delete on the remote?") before it leaves edit mode.
 - A `branch_with_worktree` row's context menu also offers Remove worktree, which
-  drops only the worktree and keeps the branch. Delete on that row is relabelled
-  "Delete branch and worktree".
+  drops only the worktree and keeps the branch. Delete on that row reads "Delete
+  branch and worktree".
 
-Errors reuse `SessionGitError.map` after `ConflictDetail.busyHolders`. The copy
-lives in `GitItemDisplay`. The terminal menu's *Branches…* entry routes to
-`.gitManagement(projectName:)` for a project-backed session.
+The terminal menu's *Branches…* entry routes to `.gitManagement(projectName:)` for
+a project-backed session.
 
 ### Rebase in the Changes screen (#678)
 
-#678 adds an in-progress **rebase** to the Changes screen.
+The terminal menu's `⋯ → Git → Rebase…` (gated on `capabilities.git.rebase`,
+`Route.sessionGitChanges(sessionId:rebase:)`) presents `GitRebaseSheet`.
 
-**Starting a rebase.** The terminal menu's `⋯ → Git → Rebase…` (gated on
-`capabilities.git.rebase`, `Route.sessionGitChanges(sessionId:rebase:)`)
-presents `GitRebaseSheet`.
-
-- A project-backed session picks the target from a `Picker` fed by `getGitItems`
-  (its local and remote-tracking branches). The refs are sent fully qualified,
-  `refs/heads/…` / `refs/remotes/…`, so a same-named tag cannot shadow them.
-  There is deliberately no preselection.
-- Any other session, or a list that fails to load, types the ref in a
-  `TextField`.
-
-**While rebasing.** While `GET …/git/status` reports `state: rebasing`, the list
-shows a banner above the repo header. The banner has a branch/onto title, an
-optional stopped-on / step line, and a hint.
-
-- With a non-null `repo.rebase` (not a `git am` session, not an older agent) it
-  carries Continue (disabled while any conflict remains), Skip… and Abort….
-- Otherwise it points to the terminal.
-- Skip… and Abort… sit behind a `confirmationDialog` whose `isPresented` setter
-  clears only `rebasePrompt` while `pendingRebaseStep` survives. This is the same
-  split `syncPrompt` uses.
-
-**Mark resolved.** A conflict row gets a leading swipe action and a context-menu
-entry, both *Mark resolved*.
-
-- It calls `GitChangesModel.resolve(_:)`, which simply stages the row.
-- It is gated on `capabilities.git.{stage,resolve}` together.
-- The reason: only `resolve` certifies that the agent refuses to stage a file
-  still holding `<<<<<<<`/`>>>>>>>` markers.
+- A project-backed session picks the target from a `Picker` fed by `getGitItems`.
+  Refs are sent fully qualified (`refs/heads/…` / `refs/remotes/…`) so a
+  same-named tag cannot shadow them, with deliberately no preselection. Any other
+  session, or a list that fails to load, types the ref in a `TextField`.
+- While `GET …/git/status` reports `state: rebasing`, the list shows a banner
+  above the repo header. With a non-null `repo.rebase` (not a `git am` session,
+  not an older agent) it carries Continue (disabled while any conflict remains),
+  Skip… and Abort… (the last two behind a `confirmationDialog`). Otherwise it
+  points to the terminal.
+- A conflict row has a leading swipe action and a context-menu entry, both *Mark
+  resolved*: `GitChangesModel.resolve(_:)`, which stages the row. It is gated on
+  `capabilities.git.{stage,resolve}` together, because only `resolve` certifies
+  that the agent refuses to stage a file still holding `<<<<<<<`/`>>>>>>>`
+  markers.
 
 ### Conflict resolver screen
 
 With `capabilities.git.conflicts`, tapping a conflict row
 (`GitChangesDisplay.opensResolver`) opens `GitConflictScreen` instead of the
 `HEAD` diff. It is a `.fullScreenCover(item: $model.conflictTarget)` with its own
-`NavigationStack`. A push cannot intercept the swipe-back gesture, and
+`NavigationStack`: a push cannot intercept the swipe-back gesture, and
 `.interactiveDismissDisabled(model.isDirty)` needs a cover to enforce.
 
-**Editor.** `GitConflictModel` (+ pure `GitConflictDisplay`) drives an editor
-built on the new `UI/Common/CodeTextView.swift`. It is a `UIViewRepresentable`
-over `UITextView`. iOS 17's `TextEditor` cannot disable smart quotes/dashes,
-which would corrupt source code, and exposes no selection/scroll API.
-
-**Screen contents:**
-
-- The two sides are named by label and role behind a "Which side?" toggle.
-- It counts conflicts left, with a Next action.
-- It offers Apply & mark resolved / Save draft.
-- A `Menu` (`.menuOrder(.fixed)`) holds the whole-file picks, Start over… and
-  View diff.
-- Its confirmations are `.alert`, not `.confirmationDialog`. They cover a
-  whole-file pick, Start over, and discarding unsaved edits on Close.
-
-Closing the cover hands the Changes screen a result message
-(`GitChangesModel.resolverClosed(message:)`) shown as a toast.
-
-The Changes screen also gains a *Resolved* section from
-`GitStatusResponse.resolved_paths` (optional on iOS). It has a *Restore
-conflict…* action behind its own `.alert`.
+- The editor is built on `UI/Common/CodeTextView.swift`, a `UIViewRepresentable`
+  over `UITextView`, because iOS 17's `TextEditor` cannot disable smart
+  quotes/dashes, which would corrupt source code.
+- The screen offers a "Which side?" toggle, a conflicts-left count with Next,
+  Apply & mark resolved / Save draft, and a `Menu` for whole-file picks, Start
+  over… and View diff. Its confirmations are `.alert`, not
+  `.confirmationDialog`.
+- Closing the cover shows a result toast on the Changes screen. The Changes
+  screen also has a *Resolved* section from `GitStatusResponse.resolved_paths`
+  (optional on iOS), with a *Restore conflict…* action behind its own `.alert`.
 
 ## Device support
 
@@ -1274,15 +809,13 @@ conflict…* action behind its own `.alert`.
   app that genuinely works on iPad. Otherwise the submission takes a Guideline
   2.1 rejection.
 - There is no iPad layout here: no `NavigationSplitView`, and no size-class or
-  `UIUserInterfaceIdiom` branches anywhere.
-- So iPhone-only is the accurate declaration, not a shortcut. The default `"1,2"`
-  was never a decision.
+  `UIUserInterfaceIdiom` branches anywhere. So iPhone-only is the accurate
+  declaration.
 
-This narrows the obligation, not the reach. iPad users can still install the app
-and run it in iPhone-compatibility mode. `TerminalKeyboardPan` and
-`TerminalKeyboardObserver` keep their undocked-keyboard and Split View / Stage
-Manager geometry handling for exactly that reason. Both are idiom-agnostic math,
-not iPad support.
+iPad users can still install the app and run it in iPhone-compatibility mode.
+`TerminalKeyboardPan` and `TerminalKeyboardObserver` keep their undocked-keyboard
+and Split View / Stage Manager geometry handling for that reason. It is
+idiom-agnostic math, not iPad support.
 
 **Mac and Vision Pro.** `SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD` and
 `SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD` are `NO` (they default to **YES**). So the
@@ -1297,9 +830,9 @@ restates a default for the same reason.
 > `UIDeviceFamily` and the absence of the iPad orientation key against the built
 > bundle.
 
-One cosmetic leak survives: `actool` still expands the universal 1024×1024 icon
-into an `~ipad` slot, so the bundle carries a stray `CFBundleIcons~ipad`. It is
-inert. App Store Connect reads `UIDeviceFamily` for device support.
+The bundle carries a stray, inert `CFBundleIcons~ipad` (`actool` expands the
+universal 1024×1024 icon into an `~ipad` slot). App Store Connect reads
+`UIDeviceFamily` for device support.
 
 ## Privacy manifest
 
@@ -1350,8 +883,7 @@ Terminal I/O is relayed in real time and not retained server-side, so it is not
 conservative choice.
 
 `MobaideTests/PrivacyManifestTests.swift` asserts all of the above against the
-built bundle. So a dropped or edited manifest fails at test time rather than at
-upload time.
+built bundle.
 
 ### Firebase Analytics (ad-conversion measurement)
 
@@ -1359,36 +891,23 @@ The app links exactly one Firebase product, `FirebaseAnalytics`, for the
 once-per-account `agent_paired` conversion described in
 docs/app-conversion-measurement.md.
 
-**Tracking and attribution**
-
-- `FirebaseAnalyticsIdentitySupport` (IDFA) is never added.
-- `AdSupport` is not linked.
-- There is no `NSUserTrackingUsageDescription`, so no App Tracking Transparency
-  prompt exists.
-- iOS App campaigns attribute through SKAdNetwork (`SKAdNetworkItems` carries
-  Google's `cstr6suwn9.skadnetwork`).
+- `FirebaseAnalyticsIdentitySupport` (IDFA) is never added, `AdSupport` is not
+  linked, and there is no `NSUserTrackingUsageDescription`, so no App Tracking
+  Transparency prompt exists. iOS App campaigns attribute through SKAdNetwork
+  (`SKAdNetworkItems` carries Google's `cstr6suwn9.skadnetwork`).
 - `OTHER_LDFLAGS` carries `-ObjC` for the Analytics binary.
-
-**Configuration file**
-
 - `MobaideApp.init()` calls `FirebaseApp.configure(options:)` only when
-  `GoogleService-Info.plist` is in the bundle.
-- The file is gitignored and absent in worktrees and CI. There the
-  `FirebaseAnalyticsSink` reports itself disabled and the conversion component
-  performs no I/O.
+  `GoogleService-Info.plist` is in the bundle. The file is gitignored and absent
+  in worktrees and CI, where the `FirebaseAnalyticsSink` reports itself disabled
+  and the conversion component performs no I/O.
 - A Release-only run-script phase ("Require Firebase config for Release", first
-  in the app target's build phases) fails the build when the plist is missing.
-  So an App Store archive cannot ship with analytics inert, while Debug and CI
-  builds stay config-free.
-
-**Info.plist settings**
-
-- It fixes the consent-mode defaults (`GOOGLE_ANALYTICS_DEFAULT_ALLOW_*`):
+  in the app target's build phases) fails the build when the plist is missing, so
+  an App Store archive cannot ship with analytics inert.
+- `Info.plist` fixes the consent-mode defaults (`GOOGLE_ANALYTICS_DEFAULT_ALLOW_*`:
   analytics and ad storage granted, ad user data `eu_consent_policy`, ad
-  personalisation denied.
-- It switches automatic screen reporting, IDFV collection and the app-delegate
-  proxy off (the app owns its APNs delegate).
-- `MobaideTests/FirebaseConfigurationTests.swift` pins all of them.
+  personalisation denied) and switches automatic screen reporting, IDFV
+  collection and the app-delegate proxy off (the app owns its APNs delegate).
+  `MobaideTests/FirebaseConfigurationTests.swift` pins all of them.
 
 ## Export compliance
 
@@ -1417,8 +936,7 @@ hashing covers all of it, so no annual self-classification report is owed.
 > or self-classification report) before the next upload.
 
 `MobaideTests/ExportComplianceTests.swift` asserts the key against the built
-bundle. So dropping it fails at test time rather than silently stalling a
-release.
+bundle.
 
 ## Build / test
 
@@ -1475,13 +993,12 @@ End-to-end delivery needs a real device plus a server configured with
 
 `.github/workflows/ios-build.yml` runs the same command on `macos-latest`.
 
-- It selects the newest installed Xcode 26.x at runtime. The runner pool
-  currently mixes macos-15 and macos-26 image snapshots whose 26.x minors differ.
-  The major is pinned, and the job fails loudly if 26.x disappears.
-- It creates the iPhone 16 simulator device when the image doesn't pre-create it.
-- SPM dependencies resolve over the network on the runner. The job passes
-  `-onlyUsePackageVersionsFromResolvedFile`, so the committed `Package.resolved`
-  pins the versions and drift fails loudly.
+- It selects the newest installed Xcode 26.x at runtime (the runner pool mixes
+  macos-15 and macos-26 image snapshots whose 26.x minors differ; the major is
+  pinned and the job fails loudly if 26.x disappears), and creates the iPhone 16
+  simulator device when the image doesn't pre-create it.
+- The job passes `-onlyUsePackageVersionsFromResolvedFile`, so the committed
+  `Package.resolved` pins the SPM versions and drift fails loudly.
 - The pbxproj stays at `objectVersion = 70` (the minimum for synchronized folder
   groups), so any Xcode ≥ 16 can still open the project.
 - `protocol-integrity.yml` additionally asserts the xcconfig protocol constants
@@ -1509,28 +1026,22 @@ client-side config beyond the entitlement.
   - `tests/e2e/manual_stack.py ios` merges `CENTRAL_SERVER_URL` in and out of
     this file without disturbing the Google ids.
 - **Apple, server side**: set `APPLE_CLIENT_ID` (the iOS bundle id,
-  `com.mobaide.app`) on `central_server` to enable `POST /api/auth/apple`.
-  - The endpoint verifies the identity token against Apple's JWKS (PyJWT, cached
-    keys).
-  - It checks the client nonce embedded verbatim in the token.
-  - It provisions users through the same find-or-create/link-by-verified-email
-    path as Google (`users.apple_sub`, migration `0012` / user_version 14).
-  - Account-deletion re-auth accepts `method="apple"` (consumed by iOS-08).
+  `com.mobaide.app`) on `central_server` to enable `POST /api/auth/apple`. The
+  endpoint verifies the identity token against Apple's JWKS, checks the client
+  nonce embedded verbatim in the token, and provisions users through the same
+  find-or-create/link-by-verified-email path as Google (`users.apple_sub`,
+  migration `0012` / user_version 14). Account-deletion re-auth accepts
+  `method="apple"`.
   - Since CLA-198 the audience check accepts a **list**: `APPLE_CLIENT_ID`
-    alongside `APPLE_WEB_CLIENT_ID`, the Services ID browser tokens carry.
-  - Both identifiers resolve to the same account because the Services ID is
-    grouped under the bundle id as its primary App ID, which is what fixes
-    Apple's `sub`.
+    alongside `APPLE_WEB_CLIENT_ID`, the Services ID browser tokens carry. Both
+    resolve to the same account because the Services ID is grouped under the
+    bundle id as its primary App ID, which fixes Apple's `sub`.
   - Setting only the web one breaks iOS sign-in; see
     [docs/deployment.md](deployment.md).
 - **Nonce scheme (all three clients)**: `AuthNonce.generateNonce()` (SHA-256 hex
-  of 32 CSPRNG bytes, Android and web parity) is embedded verbatim in the
-  provider ID token.
-  - For Apple the client also POSTs it, so the server can verify the match plus
-    `iat` freshness.
-  - This holds in the browser too. Sign in with Apple JS forwards the nonce to
-    the authorize endpoint untouched, and Apple echoes the claim back unchanged.
-    So there is no second hash anywhere in the scheme.
+  of 32 CSPRNG bytes) is embedded verbatim in the provider ID token. For Apple
+  the client also POSTs it, so the server can verify the match plus `iat`
+  freshness. There is no second hash anywhere in the scheme, in the browser too.
 
 ## Protocol-parity approach
 
@@ -1569,35 +1080,26 @@ Known deliberate deviations from Android's bytes (server-verified safe):
 
 - **Defaulted request fields.** Swift always encodes non-optional defaulted
   request fields (e.g. `rows: 24`) where kotlinx omits values equal to their
-  defaults. The server defaults are identical, so semantics match.
-- **Integral floats.** `JSONValue` canonicalizes integral floats: `1.0` on the
-  wire re-encodes as `1`. Avoid `x.0` literals in fixtures; use fractional values
-  to exercise doubles.
+  defaults. The server defaults are identical.
+- **Integral floats.** `JSONValue` re-encodes `1.0` as `1`. Avoid `x.0` literals
+  in fixtures; use fractional values to exercise doubles.
 - **Rejected WS upgrades.** Network.framework cannot surface the HTTP status of a
-  rejected WS upgrade. So upgrade-time rejections surface as generic transport
-  failures (reconnect path) rather than `tokenRejected`.
-  - This matches Android in practice. The backend closes unauthenticated
-    handshakes before accepting, the ASGI server collapses that into a non-401
-    HTTP rejection, and OkHttp's 401-only check falls through to reconnect too.
-  - Terminal auth handling lives in the token-refreshing URL provider on both
-    platforms.
-  - The 401≡tokenRejected mapping stays in `WebSocketCore` (fake-tested) for
-    transports and intermediaries that do surface a real 401.
-- **Auth skip-list matching.** `AgentAPI`'s auth skip-list matches the
-  percent-decoded URL path where Android matches the encoded path.
-  - The divergence is reachable only via a project name embedding an encoded auth
-    suffix (e.g. `x%2Fapi%2Fauth%2Flogin`).
-  - It fails closed (Bearer withheld → 401).
-  - Known, deliberately left as-is; fix if it ever matters:
-    `url.path(percentEncoded: true)`.
+  rejected WS upgrade, so upgrade-time rejections surface as generic transport
+  failures (reconnect path) rather than `tokenRejected`. This matches Android in
+  practice (OkHttp's 401-only check falls through to reconnect too); terminal
+  auth handling lives in the token-refreshing URL provider on both platforms. The
+  401≡tokenRejected mapping stays in `WebSocketCore` for transports that do
+  surface a real 401.
+- **Auth skip-list matching.** `AgentAPI` matches the percent-decoded URL path
+  where Android matches the encoded one. It is reachable only via a project name
+  embedding an encoded auth suffix (e.g. `x%2Fapi%2Fauth%2Flogin`) and fails
+  closed (Bearer withheld → 401). Fix if it ever matters:
+  `url.path(percentEncoded: true)`.
 - **Unbounded events stream.** `WebSocketCore.events` is an unbounded
   `AsyncStream` where Android bounds its flow at 101 events with drop-newest.
-  Attach exactly one prompt consumer to `events` before `connect()`.
-  - CLA-98 resolved the backpressure decision: `events` stays unbounded. Each
-    event bus is the sole, promptly-draining consumer of a fresh core per
-    connection cycle.
-  - CLA-100 extended the same rule to the terminal channel. `TerminalSessionModel`
-    is its sole prompt-draining consumer, so `events` stays unbounded there too.
+  Attach exactly one prompt consumer to `events` before `connect()`. Each event
+  bus (CLA-98) and `TerminalSessionModel` (CLA-100) is the sole,
+  promptly-draining consumer of a fresh core per connection cycle.
 
 ## Golden fixtures (`tests/protocol_fixtures/`)
 
@@ -1609,11 +1111,9 @@ to satisfy every arm that reads it.
 - **The web client is a second consumer since WEB-04.** `web/src/protocol/` reads
   the same JSON off disk under Vitest, and `protocol-integrity` runs that suite
   on every PR.
-- **Android is a third since WEB-06.**
-  - It reads `keys/` via `KeyChordFixtureTest`.
-  - It reads the `dto/` tree too, since `GitChangesDtoFixtureTest` (its first
-    `dto/` consumer; a bidirectional registry gate like iOS's is still CLA-235).
-- Both Android reads load through
+- **Android is a third since WEB-06.** It reads `keys/` via
+  `KeyChordFixtureTest` and the `dto/` tree via `GitChangesDtoFixtureTest` (a
+  bidirectional registry gate like iOS's is still CLA-235). Both load through
   `android/app/src/test/kotlin/…/testing/ProtocolFixtures.kt`, which walks up from
   the Gradle working directory to find the repo root.
 

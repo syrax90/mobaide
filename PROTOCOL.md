@@ -36,7 +36,7 @@ Old mobile builds remain accepted meanwhile.
 
 Change vs proto-v6: account-scoped **custom AI agent types** — a name + launch command registry on the central server, launched as plain terminal sessions with an **open session kind**.
 
-The version is bumped (rather than riding the additive no-bump precedent) because the kind vocabulary stops being a closed enum: clients must **preserve unknown ``kind`` strings verbatim** instead of coercing them to ``claude``, and a detectable version boundary is needed so the relay can refuse custom launches against old agents that would silently ignore the new fields and open a bare shell.
+The version is bumped because the kind vocabulary stops being a closed enum: clients must **preserve unknown ``kind`` strings verbatim** instead of coercing them to ``claude``, and a detectable version boundary is needed so the relay can refuse custom launches against old agents that would silently ignore the new fields and open a bare shell.
 
 ### Open session kind
 
@@ -60,7 +60,7 @@ Built-in kinds are unchanged. The session wire dict also gains nullable ``kind_l
 
 * Spawn contract: POSIX ``[login_shell, "-l", "-c", command]`` with the stored command as **one argv element** (no interpolation, no quoting layer); Windows ``["cmd.exe", "/c", command]``. The login shell resolves ``$SHELL`` → ``pw_shell`` → ``/bin/sh``, falling back to ``/bin/sh`` when the basename isn't a known POSIX shell (bash / zsh / sh / dash / ksh).
 
-  Plain Terminal sessions now use the same resolver (previously hardcoded ``/bin/bash``). Custom sessions are plain-terminal semantics end to end: the ``worktree`` / ``branch_name`` toggle works unchanged, and there is no managed-CLI machinery (no options block, no attention hooks, no autoscan).
+  Plain Terminal sessions use the same resolver. Custom sessions are plain-terminal semantics end to end: the ``worktree`` / ``branch_name`` toggle works unchanged, and there is no managed-CLI machinery (no options block, no attention hooks, no autoscan).
 
 ### Custom-type REST registry
 
@@ -94,11 +94,11 @@ Connect-time reconcile is the usual REST refresh (``GET /api/custom-agent-types`
 
 ### First-pairing account event
 
-**First-pairing account event** (additive, **no version bump** — the CLA-106 precedent; neither ``envelope.py`` copy changes).
+**First-pairing account event** (additive, **no version bump**; neither ``envelope.py`` copy changes).
 
 New user-event kind ``account.first_agent_paired`` ``{"agent_id"}``, broadcast once per account from ``_complete_pairing`` when the ``users.first_paired_at`` compare-and-set wins, and a new REST route ``GET /api/auth/me`` → ``{"user_id", "email", "role", "created_at", "scheduled_deletion_at"?, "first_paired_at"?}`` (dashboard/user JWT, any role).
 
-Together they let the mobile apps log their Firebase ``agent_paired`` conversion exactly once per account — live off the event, or on the next user-events connect off the ``/me`` stamp when the app was closed at pairing time (see docs/app-conversion-measurement.md).
+The mobile apps log their Firebase ``agent_paired`` conversion exactly once per account — live off the event, or on the next user-events connect off the ``/me`` stamp (see docs/app-conversion-measurement.md).
 
 Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 'ignored'}``); the web client mirrors both shapes and invalidates its agent list on the event.
 
@@ -118,8 +118,6 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 * The agent side (disarm credentials, unregister the supervisor, delete the install, exit 0) is described in docs/deployment.md *Uninstalling the agent*.
 
 ### Protocol fixtures and the web client
-
-Protocol-fixture updates under ``tests/protocol_fixtures/`` (dropping the ``unknown_coerces_to_claude`` cases, adding ``custom_*`` round-trip cases and the ``CustomAgentTypeDto`` fixtures) rode with the iOS client half (CLA-155), which was the fixtures' only consumer at the time; its registry gate would have broken the iOS build had they changed before the ``.custom`` kind existed there.
 
 **Since CLA-191 (WEB-04) the web client is a second consumer**: ``web/src/protocol/`` reads the same JSON off disk under Vitest, and ``protocol-integrity`` runs that suite on every PR.
 
@@ -141,7 +139,7 @@ The agent merges it into the session's single ``--settings`` source as Claude Co
 * All three clients surface it as a **Focus view** toggle (default on, remembered per Claude / Auto Scan bucket) and always send a concrete bool.
 * Old client + new agent therefore keeps the pre-change behaviour; new client + old agent is a no-op (the old agent ignores the unknown key).
 * The relay forwards ``claude_options`` opaquely, so ``central_server`` is untouched.
-* Fixtures ``tests/protocol_fixtures/dto/agent/{ClaudeOptionsModel,CreateSessionRequest,StartScanRequest}.json`` carry it (``true`` in the ``full`` / scan cases, ``false`` in the create case).
+* Fixtures ``tests/protocol_fixtures/dto/agent/{ClaudeOptionsModel,CreateSessionRequest,StartScanRequest}.json`` carry it.
 
 ### Delta 2026-10-17: host path suggestions
 
@@ -170,7 +168,7 @@ Clients treat every error as "no suggestions".
 
 * ``capabilities.fs.windows_paths`` is ``true`` on a Windows host, where the echoed ``path`` also has every ``/`` rewritten to ``\``: clients word the browse hint for drive letters and show picked folders with a ``\`` separator. Absent (an older agent) reads as ``false``.
 
-* Clients fetch each directory once, filter locally while the user types within it, and cache listings per agent for 30 s, so typing a whole path costs a few requests rather than one per keystroke.
+* Clients fetch each directory once, filter locally while the user types within it, and cache listings per agent for 30 s.
 
 ### Delta 2026-10-14: on-PC voice input
 
@@ -181,19 +179,6 @@ Speech-to-text runs on the agent's PC (NVIDIA Parakeet TDT 0.6B v3 int8 through 
 It is opt-in: nothing is downloaded or started until a client (or ``mobaide-agent voice install``) enables it, and agent updates never fetch the model.
 
 Both transports answer byte-identically. The relay runs ``/api/voice/*`` requests off the tunnel reader, so a waiting ``finish`` never stalls other sessions.
-
-#### Voice routes at a glance
-
-| Route | Purpose |
-|-------|---------|
-| ``GET /api/voice/status`` | Current state, as ``VoiceStatusResponse``. |
-| ``POST /api/voice/install`` | Enable voice, or retry a ``failed`` install. |
-| ``POST /api/voice/install/cancel`` | Cancel an install. |
-| ``DELETE /api/voice/model`` | Turn voice off and delete the model and runtime. |
-| ``POST /api/voice/dictations`` | Open a dictation. |
-| ``POST /api/voice/dictations/{id}/audio`` | Upload one audio chunk. |
-| ``POST /api/voice/dictations/{id}/finish`` | End the dictation and get the transcript. |
-| ``DELETE /api/voice/dictations/{id}`` | Abort a dictation (204, idempotent). |
 
 #### Voice capability key
 
@@ -293,7 +278,6 @@ Clients put the transcript in the composer for review and never send it automati
 #### Voice golden fixtures
 
 * Golden fixtures under ``tests/protocol_fixtures/dto/agent/``: ``VoiceStatusResponse``, ``VoiceInstallRequest``, ``VoiceDictationCreateRequest``, ``VoiceDictationResponse``, ``VoiceDictationAudioRequest``, ``VoiceDictationAudioResponse``, ``VoiceDictationFinishRequest``, ``VoiceDictationResultResponse``, plus a ``voice_capability`` case in ``VersionInfoResponse.json``.
-* Python asserts them against the agent's models, and the iOS registry, the Android DTO tests and the web arm parse them (#737).
 * ``voice/pcm16_chunks.json`` pins the client side of the audio format — chunk size, little-endian PCM16, padded base64 without line breaks, and the Float32→PCM16 rule — for all three clients and the agent's decoder.
 
 ### Delta 2026-09-21: in-session conflict resolver
@@ -390,7 +374,7 @@ Also: ``validate_repo_path`` now rejects ``\`` and ``:`` on Windows agents (``40
 
 #### Conflict golden fixtures
 
-Golden fixtures: new ``tests/protocol_fixtures/dto/agent/{GitConflictResponse,GitConflictResolveRequest,GitConflictTakeRequest,GitConflictRestoreRequest}.json``; ``GitStatusResponse.json`` gains ``resolved_paths`` on every case and a ``rebasing_with_resolved_paths`` case — on the four registries.
+Golden fixtures: new ``tests/protocol_fixtures/dto/agent/{GitConflictResponse,GitConflictResolveRequest,GitConflictTakeRequest,GitConflictRestoreRequest}.json``; ``GitStatusResponse.json`` gains ``resolved_paths`` on every case and a ``rebasing_with_resolved_paths`` case.
 
 ### Delta 2026-09-21: project Git remote delete
 
@@ -417,11 +401,11 @@ Result mapping:
 * A ``!`` line is ``rejected``, or ``hook_failed`` for a declining remote hook, with git's summary as ``error_detail``.
 * A ref git never reported on takes the jobs' classifier, narrowed to ``auth_required`` / ``network`` / ``remote_not_found`` / ``rejected`` / ``hook_failed`` (else ``error``), and a timeout is ``git_timeout``.
 
-These codes never fail the batch: ``results`` stays one entry per request item, in request order, as before. No busy guard (no worktree is touched). Each success is audited (``audit.git.delete``, ``kind=remote_branch``) and any success publishes ``git.changed``.
+These codes never fail the batch: ``results`` stays one entry per request item, in request order. No busy guard (no worktree is touched). Each success is audited (``audit.git.delete``, ``kind=remote_branch``) and any success publishes ``git.changed``.
 
 #### Remove worktree and keep branch
 
-An ``orphan_worktree`` item removes only the worktree at ``worktree_path`` whatever row it came from — every agent already behaved this way — so clients send it for a ``branch_with_worktree`` row's *Remove worktree* action and the branch survives as a ``branch_only`` row. *Delete* on that row keeps removing both.
+An ``orphan_worktree`` item removes only the worktree at ``worktree_path`` whatever row it came from, so clients send it for a ``branch_with_worktree`` row's *Remove worktree* action and the branch survives as a ``branch_only`` row. *Delete* on that row keeps removing both.
 
 #### Delete-remote capability key
 
@@ -435,7 +419,7 @@ Presentation only — the wire order of ``GET /items`` is unchanged.
 
 ### Delta 2026-09-17: in-session git rebase
 
-Additive delta within proto-v7 (2026-09-17, in-session git rebase — start, continue, skip, abort, and Mark resolved): **four additive REST routes, one additive status field, one additive stage refusal, two additive capability keys, no version bump.** A rebase is a working-tree operation — git can only rebase the branch checked out in the directory it runs in, and a linked worktree's branch only from inside that worktree — so it lives on the session-scoped prefix next to the mutations, both transports byte-identical.
+Additive delta within proto-v7 (2026-09-17, in-session git rebase — start, continue, skip, abort, and Mark resolved): **four additive REST routes, one additive status field, one additive stage refusal, two additive capability keys, no version bump.** A rebase is a working-tree operation, so it lives on the session-scoped prefix next to the mutations, both transports byte-identical.
 
 #### Rebase start route
 
@@ -469,13 +453,13 @@ All four answer ``GitRebaseResponse {"outcome", "rebase", "message"}``. ``outcom
 
 ``stopped`` is decided from the repository, never from git's wording (which quotes commit subjects and paths): the rebase is still in progress when git exits and the call moved it — a start always does; a continue, skip or abort did when it changed HEAD or ``REBASE_HEAD`` (the commit git stopped at), or left unmerged paths where there were none (a rescheduled pick — one an untracked file blocked — retried into a conflict).
 
-Not the todo step, which git bumps on every retry of a rescheduled pick, and never git's ``hint:`` lines, which quote the rescheduled pick's subject. ``message`` is ``null`` while unmerged paths explain the stop, else git's own reason (an untracked file in the way of a later pick, say). ``rebase`` is the ``GitRebaseInfo`` below, set only when ``stopped``.
+``message`` is ``null`` while unmerged paths explain the stop, else git's own reason (an untracked file in the way of a later pick, say). ``rebase`` is the ``GitRebaseInfo`` below, set only when ``stopped``.
 
 A call that fails without moving the rebase is a ``409`` with the fetch/pull/push jobs' classifier codes and git's explanation as ``message``: ``dirty_worktree`` (``--continue`` with unstaged changes is reported this way too, although git words it like unmerged paths), ``hook_failed`` (the ``pre-rebase`` hook refused), ``operation_in_progress``, ``index_locked``, ``git_error``.
 
 #### Rebase editors, locking and hooks
 
-Editors are disabled with ``GIT_EDITOR=:`` and ``GIT_SEQUENCE_EDITOR=:`` — ``:`` is git's own "no editor", so nothing is spawned on any OS and ``--continue`` keeps the original commit message. Each call runs under the per-toplevel lock with a 25 s budget (the relay gives a proxied request 30 s); a rebase the timeout cuts off is left in progress (``504 git_timeout``) for Abort to undo.
+Editors are disabled with ``GIT_EDITOR=:`` and ``GIT_SEQUENCE_EDITOR=:``, so ``--continue`` keeps the original commit message. Each call runs under the per-toplevel lock with a 25 s budget (the relay gives a proxied request 30 s); a rebase the timeout cuts off is left in progress (``504 git_timeout``) for Abort to undo.
 
 ``git.changed {project_name, toplevel, common_dir}`` is published whenever git ran, whatever it answered. Repository hooks (``pre-rebase``, ``post-checkout``, ``post-rewrite``) run under the agent's account, the same trust boundary as commit.
 
@@ -485,7 +469,7 @@ Editors are disabled with ``GIT_EDITOR=:`` and ``GIT_SEQUENCE_EDITOR=:`` — ``:
 
 ``branch`` is null for a detached HEAD, ``onto_ref`` is a branch pointing at the base (a local branch first, then a remote-tracking one) or null, and every key is nullable because a rebase git was killed in need not have written every file. It stays ``null`` during a ``git am`` session, which shares ``rebase-apply``.
 
-The etag covers it, so skipping one conflicted commit to stop on another in the same file still reads as a change.
+The etag covers it.
 
 #### Stage refusal for conflict markers
 
@@ -499,11 +483,11 @@ Clients gate the terminal menu's *Rebase…* entry on ``rebase``, the Changes sc
 
 #### Rebase golden fixtures
 
-Golden fixtures: new ``tests/protocol_fixtures/dto/agent/{GitRebaseRequest,GitRebaseResponse}.json``; ``GitStatusResponse.json`` gains ``rebase`` on every repo and a ``rebasing_stopped_on_conflict`` case — on the four registries.
+Golden fixtures: new ``tests/protocol_fixtures/dto/agent/{GitRebaseRequest,GitRebaseResponse}.json``; ``GitStatusResponse.json`` gains ``rebase`` on every repo and a ``rebasing_stopped_on_conflict`` case.
 
 ### Delta 2026-09-16: project Git branches
 
-Additive delta within proto-v7 (2026-09-16, project Git management — remote branches, create and check out): **one additive query flag, two additive REST routes, three additive row fields, one additive row kind, one additive capability key, no version bump.** Branches are objects of the repository, not of a session, so ref management lives on the project-scoped prefix ``/api/projects/{name}/git`` the delete-only Git screen already used, both transports byte-identical (the relay dispatcher hand-routes the new paths like the two existing ones).
+Additive delta within proto-v7 (2026-09-16, project Git management — remote branches, create and check out): **one additive query flag, two additive REST routes, three additive row fields, one additive row kind, one additive capability key, no version bump.** Branches are objects of the repository, not of a session, so ref management lives on the project-scoped prefix ``/api/projects/{name}/git`` the delete-only Git screen already used, both transports byte-identical.
 
 #### Branch items route
 
@@ -553,11 +537,11 @@ Both routes serialise under the worktree manager's per-project lock *and* the se
 
 #### Branch golden fixtures
 
-Golden fixtures: ``GitItem.json`` gains ``subject`` / ``committed_at`` and a ``remote_branch`` case; new ``tests/protocol_fixtures/dto/agent/{GitBranchCreateRequest,GitCheckoutRequest,GitBranchResponse}.json`` on the four registries. The project-git shapes follow the "defaults materialise" convention, so the Python arm compares the dump minus nulls with ``decoded_canonical`` for them (``test_git_fixtures.py``).
+Golden fixtures: ``GitItem.json`` gains ``subject`` / ``committed_at`` and a ``remote_branch`` case; new ``tests/protocol_fixtures/dto/agent/{GitBranchCreateRequest,GitCheckoutRequest,GitBranchResponse}.json``.
 
 ### Delta 2026-09-15: in-session git fetch/pull/push jobs
 
-Additive delta within proto-v7 (2026-09-15, in-session git fetch/pull/push jobs): **five additive REST routes + two additive event types + three additive capability keys, no version bump.** Network git operations can outlast the relay's 30 s proxied-request budget and need progress, so — unlike the 2026-09-14 mutations — they run as agent-side **jobs**: the route answers at once with a snapshot and the work continues in a background task that reports over the agent events channel.
+Additive delta within proto-v7 (2026-09-15, in-session git fetch/pull/push jobs): **five additive REST routes + two additive event types + three additive capability keys, no version bump.** Network git operations can outlast the relay's 30 s proxied-request budget and need progress, so they run as agent-side **jobs**: the route answers at once with a snapshot and the work continues in a background task that reports over the agent events channel.
 
 Same session-scoped prefix, both transports byte-identical.
 
@@ -634,17 +618,17 @@ The other start-time refusals are the mutation ones — ``404`` session / ``503 
 
 #### Job bounds
 
-Bounds: the network command has 120 s and a 1 MiB stdout cap (``--no-stat`` keeps a pull's output small; progress is on stderr and is streamed, not retained — the runner keeps the first 64 KiB of stderr and the classifier reads the job's own tail of the last 50 ordinary lines, because the lines that explain a failure come last).
+Bounds: the network command has 120 s and a 1 MiB stdout cap (progress is on stderr and is streamed, not retained — the runner keeps the first 64 KiB of stderr and the classifier reads the job's own tail of the last 50 ordinary lines).
 
 The pre-steps (``symbolic-ref``, ``rev-parse``, ``remote``, ``for-each-ref``) have 5 s each. The agent's shutdown cancels running jobs.
 
 #### Job golden fixtures
 
-Golden fixtures ``tests/protocol_fixtures/dto/agent/{GitPullRequest,GitPushRequest,GitJobResponse}.json`` pin the three shapes on the same registries as the mutation fixtures; ``GitJobResponse`` carries ``decoded_canonical`` cases because its wire always includes nulls.
+Golden fixtures ``tests/protocol_fixtures/dto/agent/{GitPullRequest,GitPushRequest,GitJobResponse}.json`` pin the three shapes.
 
 ### Delta 2026-09-14: in-session git mutations
 
-Additive delta within proto-v7 (2026-09-14, in-session git mutations): **four additive REST routes + one additive read route + three additive capability keys, no version bump.** Building on the 2026-08-27 Changes API, the agent now also mutates the staged set of the directory a session was spawned in (same session-scoped prefix, both transports byte-identical).
+Additive delta within proto-v7 (2026-09-14, in-session git mutations): **four additive REST routes + one additive read route + three additive capability keys, no version bump.** The agent mutates the staged set of the directory a session was spawned in (same session-scoped prefix, both transports byte-identical).
 
 #### Stage route
 
@@ -707,15 +691,15 @@ Old agents answer ``404`` for the new routes; clients never show a mutating cont
 
 #### Mutation capability keys
 
-``GET /api/version`` ``capabilities.git`` becomes ``{"changes": true, "stage": true, "discard": true, "commit": true}`` (both transports). Clients gate row/section/selection Stage–Unstage on ``stage``, Discard on ``discard``, and the Commit sheet plus the terminal menu's *Commit…* entry on ``commit``; an agent without a key stays read-only.
+``GET /api/version`` ``capabilities.git`` becomes ``{"changes": true, "stage": true, "discard": true, "commit": true}`` (both transports). Clients gate row/section/selection Stage–Unstage on ``stage``, Discard on ``discard``, and the Commit sheet plus the terminal menu's *Commit…* entry on ``commit``.
 
 #### Mutation timeouts
 
-Timeouts: stage / unstage / discard 15 s, commit 25 s (hooks run inside it and the relay gives a proxied request 30 s), context 5 s. Stdin is fed by a third runner thread so a 5 000-path list or a long message cannot deadlock against the output readers.
+Timeouts: stage / unstage / discard 15 s, commit 25 s (hooks run inside it and the relay gives a proxied request 30 s), context 5 s.
 
 #### Mutation golden fixtures
 
-Golden fixtures ``tests/protocol_fixtures/dto/agent/{GitPathsRequest,GitDiscardRequest,GitMutationResponse,GitCommitRequest,GitCommitResponse,GitCommitContextResponse}.json`` pin the six shapes on the same three registries as the read fixtures (iOS ``FixtureRegistry``, web coverage manifest, ``mobaide_agent/tests/test_git_fixtures.py``).
+Golden fixtures ``tests/protocol_fixtures/dto/agent/{GitPathsRequest,GitDiscardRequest,GitMutationResponse,GitCommitRequest,GitCommitResponse,GitCommitContextResponse}.json`` pin the six shapes.
 
 ### Delta 2026-08-27: in-session git Changes API
 
@@ -764,8 +748,8 @@ Repo *conditions* are ``200`` with ``unavailable_reason`` and ``repo: null``, ne
 | ``byte_limit`` | 1 MiB. |
 
 * Past the line cap the agent keeps counting but returns no further hunks, so a sparse diff never ships header-only hunks after the preview (clients still skip a header-only hunk of a truncated diff).
-* The **agent parses** the unified diff so the three clients are dumb renderers with one tested parser; ``\r`` is preserved verbatim in ``text``.
-* ``path`` and the optional ``orig_path`` are repo-relative as returned by ``status``. Pass the entry's ``orig_path`` for a rename, because a pathspec-limited ``git diff -M`` cannot see the rename's source otherwise.
+* The agent parses the unified diff; ``\r`` is preserved verbatim in ``text``.
+* Pass the entry's ``orig_path`` for a rename, because a pathspec-limited ``git diff -M`` cannot see the rename's source otherwise.
 * Conflicted files (group ``conflicts``) are requested with ``scope=unstaged`` and are diffed against ``HEAD``. Conflict markers appear as ``+`` lines; a modify/delete conflict whose working-tree file equals ``HEAD`` answers ``kind: text`` with no hunks. ``scope=staged`` on an unmerged path is ``kind: missing``.
 * Untracked diffs are synthesised by the agent (no ``/dev/null`` — broken on Git for Windows) and only for paths git itself lists as untracked and not ignored (``ls-files --others --exclude-standard``; ``.git/`` and gitignored files answer ``kind: missing``). A symlink diffs as its target text with mode ``120000``.
 * ``context`` is clamped to 0–5 000 (the line cap). At the cap an untruncated diff is the whole file as one hunk, which is how clients request their *Full file* view.
@@ -796,9 +780,8 @@ Payload: ``{"project_name", "toplevel", "common_dir"}``. All three clients read 
 
 #### Changes bounds and safety
 
-Every git call goes through a dedicated runner (``mobaide/core/git_exec.py``):
+Every git call goes through a dedicated runner:
 
-* Bytes mode, two reader threads.
 * ``timeout`` + ``max_bytes`` enforced by killing the whole process tree (``taskkill /T`` on Windows, where PATH usually resolves to the ``cmd\git.exe`` wrapper).
 * A scrubbed environment: every inherited ``GIT_*`` variable removed — repository redirection, config injection, external programs and trace files alike — and ``LC_ALL=C``, ``GIT_TERMINAL_PROMPT=0``, ``GIT_OPTIONAL_LOCKS=0`` set.
 * ``--no-optional-locks --literal-pathspecs -c core.quotePath=false``.
@@ -806,11 +789,11 @@ Every git call goes through a dedicated runner (``mobaide/core/git_exec.py``):
 
 Git ≥ 2.15 is required (older → ``git_too_old``). The relay's 4 MB tunnel frame is why the caps are server-side (5 000 entries; 1 MiB / 5 000 lines per diff).
 
-For very large trees the user-side accelerators are ``git update-index --untracked-cache`` (run ``--test-untracked-cache`` first) and ``core.fsmonitor``; the agent never watches files.
+User-side accelerators for very large trees are ``git update-index --untracked-cache`` and ``core.fsmonitor``; the agent never watches files.
 
 #### Changes golden fixtures
 
-Golden fixtures ``tests/protocol_fixtures/dto/agent/{GitStatusResponse,GitDiffResponse}.json`` pin both shapes on the iOS registry, the web coverage manifest and a new Python arm (``mobaide_agent/tests/test_git_fixtures.py``) that validates every case against the pydantic models and checks that each ``decoded_canonical`` equals its ``wire`` with null-valued keys removed — the Swift ``Codable`` nil-dropping rule the other arms rely on.
+Golden fixtures ``tests/protocol_fixtures/dto/agent/{GitStatusResponse,GitDiffResponse}.json`` pin both shapes; each ``decoded_canonical`` equals its ``wire`` with null-valued keys removed (the Swift ``Codable`` nil-dropping rule).
 
 ### Delta 2026-08-23: Codex model catalog
 
@@ -824,24 +807,24 @@ Each ``capabilities.cli.<cli>`` entry on ``GET /api/version`` (see the proto-v5 
 | ``model_details`` | An array of ``{"id": <str>, "efforts": [<str>, …], "default_effort"?: <str>}`` for CLIs whose catalog exposes per-model reasoning levels (today: Codex, via ``codex debug models``). |
 
 * Both keys are omitted — never emitted empty or null — when enumeration is unsupported or produced nothing; clients then fall back to their hardcoded model/effort lists, so old and new agents degrade identically.
-* An entry may also carry ``"models_pending": true`` (omitted, never false): the agent's startup enumeration was still running when this response was built (the handler waits a short bound, but a single probe attempt may legitimately take longer) and *this CLI's own* enumeration had not yet produced a result — a CLI that already memoized its list is never marked merely because a sibling's probe still runs.
+* An entry may also carry ``"models_pending": true`` (omitted, never false): the agent's startup enumeration was still running when this response was built and *this CLI's own* enumeration had not yet produced a result.
 * The absence of ``models``/``model_details`` in a marked entry is provisional, not authoritative: clients keep persisted catalog selections instead of reconciling them away, and re-probe until an unmarked answer arrives.
 * The presence of ``models_pending`` also proves a catalog-era agent (pre-catalog agents never emit it).
-* Emitted by the shared ``build_cli_capabilities`` builder on both the direct and relay transports. (``models`` itself had shipped earlier without a PROTOCOL.md entry; this bullet is its documentation of record.)
+* Emitted by the shared ``build_cli_capabilities`` builder on both the direct and relay transports.
 
 #### Free-form reasoning effort
 
-``codex_options.reasoning_effort`` is relaxed from the proto-v5 enum (``minimal`` | ``low`` | ``medium`` | ``high``) to a free-form string on the agent, mirroring the ``model`` field's "free-form on the server; the client curates the list" posture: the effort vocabulary is now enumerated per-model at runtime, and a closed set would reject values the agent itself just advertised (e.g. ``xhigh``/``max``/``ultra`` on the gpt-5.6 catalog).
+``codex_options.reasoning_effort`` is relaxed from the proto-v5 enum (``minimal`` | ``low`` | ``medium`` | ``high``) to a free-form string on the agent: the effort vocabulary is now enumerated per-model at runtime, and a closed set would reject values the agent itself just advertised (e.g. ``xhigh``/``max``/``ultra`` on the gpt-5.6 catalog).
 
-The value is embedded after ``=`` inside the single exec'd argv element ``-c model_reasoning_effort=<v>``, so no flag-smuggling path opens up. The proto-v5 section below remains historically accurate for agents of that era.
+The value is embedded after ``=`` inside the single exec'd argv element ``-c model_reasoning_effort=<v>``, so no flag-smuggling path opens up.
 
 ### Delta 2026-08-11: Claude debug toggle
 
 Additive delta within proto-v7 (2026-08-11, Claude debug toggle): **additive optional field, no version bump.** ``claude_options`` gains ``debug`` — bool, default ``false`` — emitted by the agent as ``--debug``.
 
-Previously ``ClaudeLauncher._build_argv`` passed ``--debug`` unconditionally on every Claude session (interactive, Auto Scan and worktree alike), so every user saw Claude Code's verbose diagnostics; it is now a per-session choice surfaced as a **Debug logging** toggle in all three clients' create-session wizards, default off.
+It is a per-session choice, surfaced as a **Debug logging** toggle in all three clients' create-session wizards, default off.
 
-No other managed CLI ever carried the flag, and the relay forwards ``claude_options`` opaquely, so ``central_server`` is untouched.
+The relay forwards ``claude_options`` opaquely, so ``central_server`` is untouched.
 
 #### Debug default and compatibility
 
@@ -849,21 +832,13 @@ The wire-absence default (``false``) **matches** the clients' UI default, which 
 
 New client + old agent is a harmless no-op: the old agent ignores the unknown key and keeps hardcoding ``--debug`` until it updates.
 
-#### Debug fixture consumers
-
-Shared-fixture consumers (iOS ``ClaudeOptionsModel``, the web ``claudeOptionsSchema``) both carry the field, so all three fixtures that embed a ``claude_options`` object were updated: ``tests/protocol_fixtures/dto/agent/{ClaudeOptionsModel,CreateSessionRequest,StartScanRequest}.json``.
-
-Only ``ClaudeOptionsModel.json`` exercises both values — ``debug: true`` in its ``full`` case and ``debug: false`` materialized in ``empty_defaults_materialize_skip_permissions_true``; the ``CreateSessionRequest`` / ``StartScanRequest`` cases carry it explicitly as ``false`` (their own defaults cases have no ``claude_options`` block at all).
-
-Both consumers emit every boolean on re-encode, so an omitted key there fails the round-trip.
-
 ### Delta 2026-08-05: stale-attach fix
 
 Additive delta within proto-v7 (2026-08-05, stale-attach fix): **agent-side only — no wire change, no version bump.** ``RelayClient._handle_session_input`` no longer auto-creates a session for a ``CH_SESSION_IO`` frame naming an unknown ``session_id``; it drops the frame and answers with the same ``stopped`` state frame ``_handle_mobile_attach`` already sends for a stale attach (both now share ``_send_stopped_frame``).
 
-Auto-create used to fire off a bare resize frame — which Android, iOS and the web client all send unconditionally on every socket connect to re-assert their cached PTY size — so merely attaching to a stale id (agent restarted, session swept, a resumed id from preferences, a stale notification, a restored navigation stack) silently spawned a real login shell.
+Auto-create used to fire off the bare resize frame that all three clients send on every socket connect, so merely attaching to a stale id silently spawned a real login shell.
 
-The empty-payload guard, which previously sat *after* the auto-create, now runs first. An unpatched client paired with a fixed agent needs no changes: it receives exactly the ``stopped`` frame the attach path has always sent for a stale id and renders a stopped session instead of a phantom shell — old client + new agent is the supported combination.
+The empty-payload guard now runs first. An unpatched client paired with a fixed agent needs no changes: it receives exactly the ``stopped`` frame the attach path has always sent for a stale id and renders a stopped session instead of a phantom shell — old client + new agent is the supported combination.
 
 Deciding that a session is *gone* (rather than merely stopped) stays a client-side judgement from the ``sessions.changed`` snapshot, not a wire signal.
 
@@ -950,7 +925,7 @@ The server validates the kind against an allowlist (only ``session.attention``),
 
 **Presence gating is per device, not per account.** A client may pass its registered ``device_id`` as a query param on ``/ws/user-events``; the server accepts it only when it matches one of that user's own non-revoked device rows, and treats it purely as a delivery hint (an absent or unrecognised value is logged and the socket serves events as before — it simply cannot suppress anything).
 
-The dispatcher then pushes to every registered device **except** those holding such a socket, so WebSocket delivery still wins for a connected device while a second, sleeping device is not muted by it. Gating on the account instead — the original CLA-106 rule — meant one always-on client (Android's foreground service) silenced pushes to every other device the user owned.
+The dispatcher then pushes to every registered device **except** those holding such a socket, so WebSocket delivery still wins for a connected device while a second, sleeping device is not muted by it.
 
 #### Push dispatch
 
@@ -994,7 +969,7 @@ Dashboard/user JWT, non-admin.
 
 ### Codex CLI foundation (CLA-68)
 
-Change vs proto-v4: **additive** (no frame-layout or existing-shape break). Foundation for managing the **Codex CLI** as a second coding agent alongside Claude (CLA-68). The version is bumped so the three artifacts stay in lockstep and ``protocol-integrity`` has a single authoritative integer to assert against.
+Change vs proto-v4: **additive** (no frame-layout or existing-shape break). Foundation for managing the **Codex CLI** as a second coding agent alongside Claude (CLA-68).
 
 ### Codex wire shape
 
@@ -1061,7 +1036,7 @@ Further Codex-auth work is tracked downstream: device-code login (CLA-79), mid-s
 
 ### Session-attention notifications (CLA-64)
 
-Change vs proto-v3: **additive** (no frame-layout or existing-shape break). Adds hook-driven session-attention notifications (CLA-64). The version is bumped so the three artifacts stay in lockstep and ``protocol-integrity`` has a single authoritative integer to assert against.
+Change vs proto-v3: **additive** (no frame-layout or existing-shape break). Adds hook-driven session-attention notifications (CLA-64).
 
 ### Attention wire shape
 
@@ -1137,7 +1112,7 @@ Changed ``0x78`` / ``'x'`` (**execute**) semantics: the agent now ends the seque
 
 Breaking change vs proto-v2: the reconnect replay handshake is now **chunked** and explicitly terminated. Before v3 the handshake was ``state → 'b' → 'o'(entire-ring)`` and the client treated the first ``'o'`` after the ``'b'`` marker as both the only replay frame and the trigger to flip back to *Live*.
 
-That made it impossible to replay more than one frame worth of history without the client dropping the *ReplayingBuffer* overlay prematurely, which in turn forced the server ring buffer to stay tiny (``256 KB``) and caused visible truncation of long sessions on reconnect. proto-v3 introduces a new frame type ``FRAME_REPLAY_END`` (byte ``0x65`` / ``'e'``) and changes the handshake to ``state → 'b' → 'o'(chunk_0) → 'o'(chunk_1) → … → 'e'``.
+That made it impossible to replay more than one frame worth of history without the client dropping the *ReplayingBuffer* overlay prematurely, which kept the server ring buffer tiny (``256 KB``). proto-v3 introduces a new frame type ``FRAME_REPLAY_END`` (byte ``0x65`` / ``'e'``) and changes the handshake to ``state → 'b' → 'o'(chunk_0) → 'o'(chunk_1) → … → 'e'``.
 
 The server ring buffer default is also bumped to ``4 MB`` (configurable per session via ``SessionConfig.ring_buffer_bytes``); chunk size is ``64 KB``.
 
@@ -1180,7 +1155,7 @@ The HTTPS bootstrap is the floor below the relay-driven path. As long as a deplo
 
 Breaking change vs proto-v1: the signed manifest **body** is now delivered inline over the relay WebSocket (in ``auth_ok`` and ``agent_manifest_update`` control frames).
 
-The previous design carried only a relative URL pointer (``/api/v1/agent/manifest.json``) and required the agent to fetch the manifest over HTTP — but the agent treated any ``/``-prefixed value as a local filesystem path, so the user-facing "Install now" path always failed with ``signature_failed`` (FileNotFoundError → fail-closed → wrong error message). proto-v2 hands the body directly to ``verify_signature``.
+The previous design carried only a relative URL pointer (``/api/v1/agent/manifest.json``) and required the agent to fetch the manifest over HTTP — but the agent treated any ``/``-prefixed value as a local filesystem path, so the user-facing "Install now" path always failed with ``signature_failed``. proto-v2 hands the body directly to ``verify_signature``.
 
 ### proto-v2 wire shape
 
@@ -1248,7 +1223,7 @@ The following codes are used in the application-private range (4000–4999). The
 
 * Introduced: 2026-04-26; retired: 2026-05-13.
 
-* Carried ``manifest_url`` + ``manifest_signature`` in ``auth_ok`` and ``agent_manifest_update``. The agent treated the relative URL as a local file path on the apply-now path, producing a fail-closed ``signature_failed`` whenever a user tapped "Install now" on a real deployment. See proto-v2 above for the fix and the new shape.
+* Carried ``manifest_url`` + ``manifest_signature`` in ``auth_ok`` and ``agent_manifest_update``. The agent treated the relative URL as a local file path, producing a fail-closed ``signature_failed`` on "Install now". See proto-v2 above for the fix and the new shape.
 
 ## How to bump
 
