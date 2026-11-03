@@ -1,10 +1,16 @@
-"""Shared plumbing for release_agent.py and release_android.py.
+r"""Shared plumbing for release_agent.py and release_android.py.
 
 Both scripts sign and publish from the operator's machine, so every key they
 need lives in one local folder outside the repo (the release dir) and no
-release secret is stored on GitHub. Layout:
+release secret is stored on GitHub. Default location:
 
-    <release dir>/                      chmod 700
+    macOS / Linux   ~/.config/mobaide-release/      (chmod 700, files 600)
+    Windows         %LOCALAPPDATA%\mobaide-release\ (local, not roaming; only
+                                                     your account may have access)
+
+Layout:
+
+    <release dir>/
         agent/manifest-signing-key      base64 Ed25519 private key (32 raw bytes) or PEM
         agent/release-token             same string as the relay's RELEASE_AUTH_TOKEN
         android/upload.keystore
@@ -33,8 +39,32 @@ from pathlib import Path
 
 from deploy_central import PROJECT_ROOT, DeployError, dim, http_ssl_context, ok, warn
 
-DEFAULT_RELEASE_DIR = Path.home() / ".config" / "mobaide-release"
 RELEASE_DIR_ENV = "MOBAIDE_RELEASE_DIR"
+
+# Windows SIDs whose access makes a key readable by other local users, the
+# equivalent of the POSIX group/other bits. Checked by SID, not by name,
+# because Windows localises group names.
+_BROAD_SIDS = {
+    "S-1-1-0": "Everyone",
+    "S-1-5-7": "ANONYMOUS LOGON",
+    "S-1-5-11": "Authenticated Users",
+    "S-1-5-32-545": "Users",
+    "S-1-5-32-546": "Guests",
+}
+_ACL_SIDS_PS = (
+    "(Get-Acl -LiteralPath $env:MOBAIDE_ACL_PATH).Access"
+    " | Where-Object { $_.AccessControlType -eq 'Allow' }"
+    " | ForEach-Object { $_.IdentityReference.Translate("
+    "[System.Security.Principal.SecurityIdentifier]).Value }"
+)
+
+
+def default_release_dir() -> Path:
+    # LOCALAPPDATA, not APPDATA: a roaming profile would copy the keys to
+    # every machine the account signs in to.
+    if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"]) / "mobaide-release"
+    return Path.home() / ".config" / "mobaide-release"
 
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -45,11 +75,12 @@ class ReleaseError(DeployError):
 
 # ------------------------------------------------------------ release dir
 def resolve_release_dir(cli_value: str | None) -> Path:
-    raw = cli_value or os.environ.get(RELEASE_DIR_ENV) or str(DEFAULT_RELEASE_DIR)
+    raw = cli_value or os.environ.get(RELEASE_DIR_ENV) or str(default_release_dir())
     path = Path(raw).expanduser().resolve()
     if not path.is_dir():
+        how = "only your account may have access" if os.name == "nt" else "chmod 700"
         raise ReleaseError(
-            f"release dir {path} does not exist. Create it (chmod 700) and put the "
+            f"release dir {path} does not exist. Create it ({how}) and put the "
             "release keys in it; see docs/versioning-and-updates.md."
         )
     try:
@@ -64,6 +95,9 @@ def resolve_release_dir(cli_value: str | None) -> Path:
 
 def _require_private(path: Path) -> None:
     """Refuse a key file or folder that other local users can read."""
+    if os.name == "nt":
+        _require_private_windows(path)
+        return
     if os.name != "posix":
         return
     mode = path.stat().st_mode
@@ -73,6 +107,24 @@ def _require_private(path: Path) -> None:
             f"{path} is accessible to other users (mode {stat.S_IMODE(mode):o}). "
             f"Run: chmod {wanted} '{path}'"
         )
+
+
+def _require_private_windows(path: Path) -> None:
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", _ACL_SIDS_PS],
+        capture_output=True, text=True, env=dict(os.environ, MOBAIDE_ACL_PATH=str(path)),
+    )
+    if r.returncode != 0:
+        raise ReleaseError(f"cannot read the access list of {path}:\n{r.stderr.strip()}")
+    broad = sorted({_BROAD_SIDS[sid] for sid in r.stdout.split() if sid in _BROAD_SIDS})
+    if broad:
+        user = os.environ.get("USERNAME", "<your user>")
+        fix = (
+            f'icacls "{path}" /inheritance:r /grant:r "{user}:(OI)(CI)F"'
+            if path.is_dir()
+            else f'icacls "{path}" /reset'
+        )
+        raise ReleaseError(f"{path} is accessible to {', '.join(broad)}. Run: {fix}")
 
 
 def secret_file(release_dir: Path, rel: str) -> Path:
@@ -169,7 +221,11 @@ def temporary_worktree(commit: str) -> Generator[Path]:
     """A detached worktree at `commit`, removed on exit."""
     parent = Path(tempfile.mkdtemp(prefix="mobaide-release-"))
     path = parent / "src"
-    git("worktree", "add", "--quiet", "--detach", str(path), commit)
+    # LF checkout on every OS: with core.autocrlf=true (the Windows default)
+    # the shipped .py files would get CRLF and the build would differ from
+    # the one made on macOS / Linux.
+    git("-c", "core.autocrlf=false", "-c", "core.eol=lf",
+        "worktree", "add", "--quiet", "--detach", str(path), commit)
     dim(f"worktree: {path}")
     try:
         yield path

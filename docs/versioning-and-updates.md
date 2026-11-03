@@ -57,12 +57,17 @@ Both scripts work the same way:
   `origin`.
 - They refuse a dirty working tree unless you pass `--force`.
 - They build in a temporary detached `git worktree` at the tag, then remove it.
+  The worktree always has LF line endings, also on Windows, so every OS builds
+  the same files.
 - They read keys from the [local key folder](#local-key-folder).
+- They run on macOS, Linux and Windows (Python 3.12+).
 
 ```bash
 python deploy/prod/release_agent.py [VERSION] [--skip-publish] [--clobber] [--force] [--release-dir DIR]
 python deploy/prod/release_android.py [VERSION] [--skip-upload] [--force] [--release-dir DIR]
 ```
+
+On Windows, use `py deploy\prod\release_agent.py` and `py deploy\prod\release_android.py`.
 
 Shared helpers live in `deploy/prod/release_common.py`.
 
@@ -70,9 +75,15 @@ Shared helpers live in `deploy/prod/release_common.py`.
 
 **`android-vX.Y.Z`** — `release_android.py`
 
-1. Finds a JDK 17 or newer (`JAVA_HOME`, else the Android Studio JBR on macOS)
-   and the Android SDK (`ANDROID_HOME`, default `~/Library/Android/sdk` on
-   macOS).
+1. Finds a JDK 17 or newer and the Android SDK:
+
+   | | JDK | Android SDK |
+   |---|---|---|
+   | All | `JAVA_HOME` | `ANDROID_HOME` or `ANDROID_SDK_ROOT` |
+   | macOS default | Android Studio JBR in `/Applications` | `~/Library/Android/sdk` |
+   | Windows default | Android Studio JBR in `%ProgramFiles%\Android\Android Studio` or `%LOCALAPPDATA%\Programs\Android Studio` | `%LOCALAPPDATA%\Android\Sdk` |
+   | Linux default | `java` on `PATH` | `~/Android/Sdk` |
+
 2. Checks that `versionName` in `android/app/build.gradle.kts` equals the tag.
 3. Computes `inAppUpdatePriority` from the `android/CHANGELOG.md` section
    release-please generated for this tag (rules under
@@ -80,8 +91,9 @@ Shared helpers live in `deploy/prod/release_common.py`.
    It does **not** read the tagged commit subject: the tag sits on
    release-please's `chore: release main` commit, which is never a
    `feat`/`fix`.
-4. Copies `google-services.json` into the worktree and runs
-   `./gradlew bundleRelease` with the upload-key signing values. It removes
+4. Copies `google-services.json` into the worktree and runs the Gradle wrapper
+   (`gradle-wrapper.jar` directly, so the same call works on Windows)
+   with `bundleRelease` and the upload-key signing values. It removes
    `CENTRAL_SERVER_URL`, `PRIVACY_POLICY_URL`, `SUPPORT_GITHUB_URL` and
    `SUPPORT_EMAIL` from the environment, so the production defaults apply.
 5. Checks that the bundle certificate SHA-256 equals the keystore certificate.
@@ -339,11 +351,17 @@ The scripts read every key from one folder outside the repo:
 
 1. `--release-dir DIR`, else
 2. the `MOBAIDE_RELEASE_DIR` environment variable, else
-3. `~/.config/mobaide-release/`.
+3. the default folder:
 
-The folder must be `chmod 700` and each file `chmod 600`. The scripts refuse
-a folder or file that group or others can read. Keep a backup of the folder in
-a password manager.
+| OS | Default folder | Access rule the scripts check |
+|----|----------------|-------------------------------|
+| macOS, Linux | `~/.config/mobaide-release/` | Folder `chmod 700`, each file `chmod 600`. Group and others must have no access. |
+| Windows | `%LOCALAPPDATA%\mobaide-release\` | No access for Everyone, Users, Authenticated Users, Guests or Anonymous. The default ACL of `%LOCALAPPDATA%` already meets this. |
+
+The scripts refuse a folder or file that breaks the rule and print the command
+that fixes it (`chmod` or `icacls`). On Windows the folder is in `LOCALAPPDATA`,
+not `APPDATA`, so a roaming profile does not copy the keys to other machines.
+Keep a backup of the folder in a password manager.
 
 | File | Used by | Content |
 |------|---------|---------|

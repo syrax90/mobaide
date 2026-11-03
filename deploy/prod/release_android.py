@@ -92,9 +92,19 @@ def find_java_home() -> Path | None:
     env = os.environ.get("JAVA_HOME")
     if env and (Path(env) / "bin").is_dir():
         return Path(env)
-    if platform.system() == "Darwin":
-        jbr = Path("/Applications/Android Studio.app/Contents/jbr/Contents/Home")
-        if jbr.is_dir():
+    candidates = {
+        "Darwin": [Path("/Applications/Android Studio.app/Contents/jbr/Contents/Home")],
+        "Windows": [
+            Path(os.environ[var]) / sub / "jbr"
+            for var, sub in (
+                ("ProgramFiles", Path("Android") / "Android Studio"),  # all-users install
+                ("LOCALAPPDATA", Path("Programs") / "Android Studio"),  # per-user install
+            )
+            if os.environ.get(var)
+        ],
+    }.get(platform.system(), [])
+    for jbr in candidates:
+        if (jbr / "bin").is_dir():
             return jbr
     return None
 
@@ -195,11 +205,20 @@ def gradle_env(
     return env
 
 
-def build_bundle(src: Path, env: dict[str, str]) -> Path:
+def build_bundle(src: Path, java_home: Path | None, env: dict[str, str]) -> Path:
+    # Runs the wrapper jar directly, as gradlew / gradlew.bat do, so one code
+    # path works on every OS. gradlew.bat is stored with LF endings and the
+    # worktree is checked out without CRLF conversion, and cmd.exe misreads
+    # batch labels in an LF-only file.
     android_dir = src / "android"
-    gradlew = android_dir / ("gradlew.bat" if os.name == "nt" else "gradlew")
     r = subprocess.run(
-        [str(gradlew), "bundleRelease", "--no-daemon", "--console=plain"],
+        [
+            java_tool(java_home, "java"), "-Dfile.encoding=UTF-8", "-Xmx64m", "-Xms64m",
+            "-Dorg.gradle.appname=gradlew",
+            "-classpath", str(android_dir / "gradle" / "wrapper" / "gradle-wrapper.jar"),
+            "org.gradle.wrapper.GradleWrapperMain",
+            "bundleRelease", "--no-daemon", "--console=plain",
+        ],
         cwd=android_dir, env=env,
     )
     if r.returncode != 0:
@@ -377,7 +396,7 @@ def run(args: argparse.Namespace) -> int:
         )
         ok(f"versionName {version}, in-app update priority {priority}")
         shutil.copyfile(google_services, src / "android" / "app" / "google-services.json")
-        aab = build_bundle(src, gradle_env(java_home, sdk, keystore, props, web_client_id))
+        aab = build_bundle(src, java_home, gradle_env(java_home, sdk, keystore, props, web_client_id))
         check_bundle_certificate(java_home, aab, keystore, props)
         shutil.copyfile(aab, out)
     aab_sha = sha256_file(out)
@@ -403,7 +422,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("version", nargs="?", help="X.Y.Z (default: the newest android-v tag)")
     p.add_argument("--skip-upload", action="store_true", help="build and sign only")
     p.add_argument("--force", action="store_true", help="allow a dirty working tree")
-    p.add_argument("--release-dir", help="folder with the release keys (default: $MOBAIDE_RELEASE_DIR or ~/.config/mobaide-release)")
+    p.add_argument("--release-dir", help="folder with the release keys (default: $MOBAIDE_RELEASE_DIR, else ~/.config/mobaide-release, on Windows %%LOCALAPPDATA%%\\mobaide-release)")
     return p
 
 

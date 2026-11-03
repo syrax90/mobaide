@@ -148,6 +148,9 @@ def build_artifacts(src: Path, version: str, out_dir: Path) -> tuple[Path, Path]
             return None
         ti.uid = ti.gid = 0
         ti.uname = ti.gname = ""
+        # Windows reports 0o666/0o777 for every entry; fix the modes so the
+        # tarball is the same on every OS.
+        ti.mode = 0o755 if ti.isdir() else 0o644
         return ti
 
     with tarfile.open(tarball, "w:gz") as tar:
@@ -296,7 +299,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip-publish", action="store_true", help="build and sign only")
     p.add_argument("--clobber", action="store_true", help="replace the assets of an existing release")
     p.add_argument("--force", action="store_true", help="allow a dirty working tree")
-    p.add_argument("--release-dir", help="folder with the release keys (default: $MOBAIDE_RELEASE_DIR or ~/.config/mobaide-release)")
+    p.add_argument("--release-dir", help="folder with the release keys (default: $MOBAIDE_RELEASE_DIR, else ~/.config/mobaide-release, on Windows %%LOCALAPPDATA%%\\mobaide-release)")
     p.add_argument("--server-url", default=CENTRAL_SERVER_URL, help=f"relay base URL (default: {CENTRAL_SERVER_URL})")
     return p
 
