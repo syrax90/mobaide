@@ -157,6 +157,48 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-11-03, voice transcript cleanup —
+  web first; Android #803 and iOS #804 mirror it): **one additive REST route,
+  one additive capability key, no version bump.** An opt-in, per-agent client
+  setting, offered in Claude Code sessions only, tidies a dictated transcript
+  before the review: fillers, stutters and false starts go, self-corrections
+  keep the final version, and punctuation and technical terms are fixed.
+  * ``capabilities.voice`` gains ``"cleanup": true`` (the route exists;
+    whether Claude Code is installed is only known when it runs). Clients
+    offer the setting only when the key is present.
+  * ``POST /api/voice/cleanup`` ``{"text"}`` (1–6000 characters) →
+    ``VoiceCleanupResponse {"text"}``: the cleaned text, or the input when
+    there was nothing to clean. It is independent of the speech model's
+    install state. The agent runs one hidden ``claude -p --model haiku
+    --effort low --safe-mode --no-session-persistence --tools=
+    --system-prompt-file cleanup-prompt.md --output-format json`` per call, with
+    the transcript on stdin (never argv) in an agent-owned directory that
+    holds only the prompt file, under the user's own Claude Code login. No
+    session is created, persisted or listed. It answers within 20 s (under
+    the relay's 30 s proxy timeout), runs at most two at once, and never
+    logs the text. A running cleanup, like an open dictation, makes the
+    auto-updater defer its restart. Both transports answer
+    byte-identically, and the relay runs the call off the tunnel reader
+    like the other voice routes.
+  * Refusals (``{"detail": {"code", "message"}}``):
+    * ``503 cleanup_unavailable``: no Claude CLI, or an agent built without a
+      cleaner.
+    * ``503 cleanup_outdated``: the CLI predates ``--safe-mode`` (2.1.169).
+    * ``409 cleanup_busy``.
+    * ``503 cleanup_timeout``.
+    * ``503 cleanup_failed``: ``message`` carries the CLI's own error text,
+      such as "Not logged in". It also covers an answer longer than twice
+      the input plus 200 characters, which means the model replied to the
+      text instead of cleaning it.
+    * ``422`` validation.
+  * Clients fall back to the raw transcript on any failure, let the user
+    skip a cleanup in progress, and keep the original one tap away in the
+    review.
+  * No golden fixtures yet for ``VoiceCleanupRequest`` /
+    ``VoiceCleanupResponse``: the iOS registry fails on fixture types it
+    does not decode, so they land with the mobile mirrors. The
+    ``voice_capability`` case in ``VersionInfoResponse.json`` carries the
+    new key.
 * Additive delta within proto-v7 (2026-10-19, Claude focus view toggle):
   **additive optional field, no version bump.** ``claude_options`` gains
   ``focus_mode`` — bool or null, default ``null``. The agent merges it into the

@@ -114,7 +114,7 @@ export class FakeVoiceApi implements VoiceApi {
   }
 }
 
-function answer<T>(reply: Reply<T>, signal: AbortSignal): Promise<T> {
+export function answer<T>(reply: Reply<T>, signal: AbortSignal): Promise<T> {
   if ('ok' in reply) return Promise.resolve(reply.ok);
   if ('fail' in reply) return Promise.reject(reply.fail);
   const held = reply.hold;

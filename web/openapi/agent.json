@@ -2903,6 +2903,35 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "VoiceCleanupRequest": {
+        "properties": {
+          "text": {
+            "maxLength": 6000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "VoiceCleanupRequest",
+        "type": "object"
+      },
+      "VoiceCleanupResponse": {
+        "description": "The cleaned transcript; the original when there was nothing to clean.",
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "VoiceCleanupResponse",
+        "type": "object"
+      },
       "VoiceDictationAudioRequest": {
         "properties": {
           "pcm16_b64": {
@@ -5457,6 +5486,47 @@
         "summary": "Version Info",
         "tags": [
           "version"
+        ]
+      }
+    },
+    "/api/voice/cleanup": {
+      "post": {
+        "operationId": "voice_cleanup_api_voice_cleanup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceCleanupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceCleanupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Voice Cleanup",
+        "tags": [
+          "voice"
         ]
       }
     },

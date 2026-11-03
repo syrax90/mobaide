@@ -1,9 +1,9 @@
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { VOICE_RECOMMENDATION_LOW, VOICE_STATE, type VoiceStatus } from '../protocol/dto/voice';
-import { useVoiceActions, type VoiceAction } from './useVoiceStatus';
+import { useVoiceActions, useVoiceCleanupCapability, type VoiceAction } from './useVoiceStatus';
 import { isVoiceApiError } from './voiceApi';
 import { installErrorCopy, voiceActionErrorCopy } from './voiceErrorCopy';
-import { useMicHidden, useSkipReview, useVoicePrefsStore } from './voicePrefsStore';
+import { useCleanup, useMicHidden, useSkipReview, useVoicePrefsStore } from './voicePrefsStore';
 import {
   formatBytes,
   languageNames,
@@ -44,8 +44,12 @@ export function VoicePanel({
   const setMicHidden = useVoicePrefsStore((state) => state.setMicHidden);
   const skipReview = useSkipReview(agentId);
   const setSkipReview = useVoicePrefsStore((state) => state.setSkipReview);
-  const [confirmRemove, setConfirmRemove] = useState(false);
   const settings = variant === 'settings';
+  const cleanupSupported = useVoiceCleanupCapability(agentId, settings).data === true;
+  const cleanUp = useCleanup(agentId);
+  const setCleanUp = useVoicePrefsStore((state) => state.setCleanup);
+  const cleanupNoteId = useId();
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   if (status === undefined) {
     return (
@@ -304,6 +308,26 @@ export function VoicePanel({
           />
           Review dictated text before it is inserted
         </label>
+      )}
+      {settings && cleanupSupported && status.state !== VOICE_STATE.unsupported && (
+        <>
+          <label className="voice-toggle">
+            <input
+              type="checkbox"
+              checked={cleanUp}
+              aria-describedby={cleanupNoteId}
+              onChange={(event) => {
+                setCleanUp(agentId, event.target.checked);
+              }}
+            />
+            Clean up dictated text with Claude Haiku in Claude Code sessions
+          </label>
+          <p className="page-note" id={cleanupNoteId}>
+            Removes filler words and false starts and fixes punctuation and technical terms before
+            the text is inserted. Each transcript is sent to Anthropic through Claude Code on{' '}
+            {agentName} and counts toward that Claude account&rsquo;s usage.
+          </p>
+        </>
       )}
       {settings && status.model.notice !== undefined && status.model.notice !== '' && (
         <details className="voice-details">

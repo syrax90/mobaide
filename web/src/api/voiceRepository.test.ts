@@ -21,7 +21,7 @@ vi.mock('./clients', () => ({
   },
 }));
 
-const { createVoiceApi, toVoiceApiError } = await import('./voiceRepository');
+const { cleanupTranscript, createVoiceApi, toVoiceApiError } = await import('./voiceRepository');
 const { toApiError } = await import('./errors');
 const { VoiceApiError } = await import('../voice/voiceApi');
 
@@ -118,5 +118,41 @@ describe('createVoiceApi', () => {
     agent.results.push({ response: new Response(null, { status: 500 }) });
 
     await expect(createVoiceApi('a1', null).remove('d1')).rejects.toMatchObject({ status: 500 });
+  });
+});
+
+describe('cleanupTranscript', () => {
+  it('posts the transcript with the signal given and reads back the cleaned text', async () => {
+    agent.results.push({
+      data: { text: 'Fix the login bug.' },
+      response: new Response(null, { status: 200 }),
+    });
+    const signal = new AbortController().signal;
+
+    const cleaned = await cleanupTranscript('a1', 'um fix the uh login bug', signal);
+
+    expect(cleaned).toBe('Fix the login bug.');
+    expect(agent.requests[0]).toMatchObject({
+      agentId: 'a1',
+      method: 'POST',
+      path: '/api/voice/cleanup',
+      init: { body: { text: 'um fix the uh login bug' }, signal },
+    });
+  });
+
+  it('raises the coded refusal as a VoiceApiError', async () => {
+    agent.results.push({
+      error: { detail: { code: 'cleanup_busy', message: 'Another cleanup is still running.' } },
+      response: new Response(null, { status: 409 }),
+    });
+
+    const cleaning = cleanupTranscript('a1', 'hello', new AbortController().signal);
+
+    await expect(cleaning).rejects.toBeInstanceOf(VoiceApiError);
+    await expect(cleaning).rejects.toMatchObject({
+      status: 409,
+      code: 'cleanup_busy',
+      detailMessage: 'Another cleanup is still running.',
+    });
   });
 });

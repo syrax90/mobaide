@@ -221,6 +221,17 @@ export function voiceCapability(info: AgentVersionInfo | undefined): VoiceCapabi
   return { sampleRate, maxSeconds, maxChunkBytes };
 }
 
+/**
+ * `capabilities.voice.cleanup`: the agent can tidy a transcript with Claude
+ * Code (`POST /api/voice/cleanup`). Explicit `true` only.
+ */
+export function voiceCleanupCapability(info: AgentVersionInfo | undefined): boolean {
+  if (info === undefined) return false;
+  const voice = info.capabilities.voice;
+  if (typeof voice !== 'object' || voice === null) return false;
+  return Object.hasOwn(voice, 'cleanup') && (voice as Record<string, unknown>).cleanup === true;
+}
+
 /** `capabilities.fs.<key>`, with `gitCapability`'s explicit-`true` rule. */
 export function fsCapability(info: AgentVersionInfo | undefined, key: string): boolean {
   if (info === undefined) return false;

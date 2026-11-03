@@ -79,6 +79,8 @@ PREFIX_ENTRIES: tuple[str, ...] = (
     "users.json",
     "projects.json",
     *VOICE_PREFIX_ENTRIES,
+    # The transcript-cleanup work dir: only its prompt file.
+    "voice-cleanup",
 )
 
 # The `mobaide-agent` command a root install.sh puts on PATH, and the marker

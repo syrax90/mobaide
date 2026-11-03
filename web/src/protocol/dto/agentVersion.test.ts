@@ -11,6 +11,7 @@ import {
   gitCapability,
   hasGitSync,
   voiceCapability,
+  voiceCleanupCapability,
   type AgentVersionInfo,
 } from './agentVersion';
 
@@ -295,5 +296,29 @@ describe('voiceCapability', () => {
     const probe = capabilities === undefined ? undefined : info(capabilities);
 
     expect(voiceCapability(probe)).toBeNull();
+  });
+});
+
+describe('voiceCleanupCapability', () => {
+  const VOICE = { dictation: true, sample_rate: 16000, max_seconds: 120, max_chunk_bytes: 65536 };
+
+  it('offers transcript cleanup only on an explicit cleanup: true', () => {
+    // An agent predating `POST /api/voice/cleanup` would 404 every dictation.
+    expect(voiceCleanupCapability(info({ voice: { ...VOICE, cleanup: true } }))).toBe(true);
+  });
+
+  const NO_CLEANUP: [string, unknown][] = [
+    ['no probe at all', undefined],
+    ['an agent too old for voice', {}],
+    ['a voice block of the wrong shape', { voice: true }],
+    ['an agent too old for cleanup', { voice: VOICE }],
+    ['cleanup off', { voice: { ...VOICE, cleanup: false } }],
+    ['cleanup as a string', { voice: { ...VOICE, cleanup: 'true' } }],
+  ];
+
+  it.each(NO_CLEANUP)('answers false for %s, which hides the cleanup option', (_label, capabilities) => {
+    const probe = capabilities === undefined ? undefined : info(capabilities);
+
+    expect(voiceCleanupCapability(probe)).toBe(false);
   });
 });

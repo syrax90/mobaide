@@ -18,11 +18,14 @@ from starlette.testclient import TestClient
 
 from mobaide.agent.app import create_app
 from mobaide.agent.config import AgentConfig
+from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError
+from mobaide.core.git_exec import CmdResult
 from mobaide.relay import client as relay_module
 from mobaide.relay.client import RelayClient
 from mobaide.relay.envelope import CH_CONTROL, CH_SESSIONS_LIST, decode
 from mobaide.voice import host
 from mobaide.voice import service as service_module
+from mobaide.voice.cleanup import MAX_CLEANUP_CHARS, TranscriptCleaner
 from mobaide.voice.models import VOICE_CAPABILITIES, VoiceDictationResultResponse
 from mobaide.voice.service import VoiceService
 
@@ -32,6 +35,7 @@ STATUS = "/api/voice/status"
 INSTALL = "/api/voice/install"
 MODEL = "/api/voice/model"
 DICTATIONS = "/api/voice/dictations"
+CLEANUP = "/api/voice/cleanup"
 ONE_SECOND_B64 = base64.b64encode(b"\x10\x27" * 16000).decode()
 
 
@@ -180,6 +184,7 @@ class TestRouting:
             ("PUT", STATUS),
             ("GET", f"{DICTATIONS}/d/finish"),
             ("POST", f"{DICTATIONS}/d/rewind"),
+            ("GET", CLEANUP),
             ("GET", "/api/voice"),
             ("GET", "/api/sessions"),
         ],
@@ -249,6 +254,70 @@ class TestFullFlow:
         assert removed.status_code == 200
         assert removed.json()["state"] == "not_installed"
         await _assert_parity(http, headers, relay, "GET", STATUS)
+
+
+class _Claude:
+    """``claude -p`` as the cleaner runs it, answering ``text``; with
+    ``installed`` off the binary does not resolve."""
+
+    def __init__(self) -> None:
+        self.text = "Fix the login bug."
+        self.installed = True
+
+    def resolve(self) -> str:
+        if not self.installed:
+            raise ClaudeBinaryNotFoundError([])
+        return "claude"
+
+    def __call__(self, argv, **_kwargs) -> CmdResult:
+        payload = {"type": "result", "subtype": "success", "is_error": False, "result": self.text}
+        return CmdResult(rc=0, stdout=json.dumps(payload).encode(), stderr=b"")
+
+
+class TestCleanup:
+    @pytest.fixture
+    async def claude(self, voice_app, relay, tmp_path):
+        """Both transports get a voice service whose cleaner runs the fake."""
+        claude = _Claude()
+        service = VoiceService(
+            voice_dir=tmp_path / "voice",
+            fake=True,
+            cleaner=TranscriptCleaner(
+                resolve_binary=claude.resolve, work_dir=tmp_path / "voice-cleanup", run=claude
+            ),
+        )
+        original = voice_app.state.voice
+        voice_app.state.voice = service
+        relay._app_state.voice = service
+        yield claude
+        voice_app.state.voice = original
+        await service.shutdown()
+
+    @pytest.mark.parametrize("text", ["um fix the uh login bug", "x" * MAX_CLEANUP_CHARS])
+    async def test_cleaned_text_on_both_transports(self, http, headers, relay, claude, text):
+        resp = await _assert_parity(http, headers, relay, "POST", CLEANUP, {"text": text})
+
+        assert resp.status_code == 200
+        assert resp.json() == {"text": "Fix the login bug."}
+
+    async def test_missing_claude_code_is_503_on_both_transports(self, http, headers, relay, claude):
+        claude.installed = False
+
+        resp = await _assert_parity(http, headers, relay, "POST", CLEANUP, {"text": "hello"})
+
+        assert resp.status_code == 503
+        assert resp.json()["detail"]["code"] == "cleanup_unavailable"
+
+    @pytest.mark.parametrize(
+        "body",
+        [{}, {"text": ""}, {"text": "x" * (MAX_CLEANUP_CHARS + 1)}, {"text": 42}],
+        ids=["missing", "empty", "too_long", "not_text"],
+    )
+    async def test_invalid_bodies_are_422_on_both_transports(self, http, headers, relay, claude, body):
+        resp = await http.post(CLEANUP, headers=headers, json=body)
+        dispatched = await relay._dispatch_voice("POST", CLEANUP, body)
+
+        assert resp.status_code == dispatched["status"] == 422
 
 
 class TestVersionCapability:
