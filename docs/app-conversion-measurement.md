@@ -156,11 +156,11 @@ absence and to refuse to *release* without them:
     before compilation when it is missing.
   - Without the file the Firebase SDK initialises nothing (a logged warning, no
     crash) and `FirebaseAnalyticsSink.isEnabled` is false.
-  - The release workflow (`.github/workflows/release-android.yml`) materialises the
-    file from the **`GOOGLE_SERVICES_JSON_BASE64`** repository secret (`base64 <
-    android/app/google-services.json`) and fails the job with a clear message
-    when the secret is absent — a release without analytics is a silent
-    measurement outage, not a degraded build.
+  - The release script (`deploy/prod/release_android.py`) copies the file from
+    `android/google-services.json` in the local key folder (see
+    [versioning-and-updates.md](versioning-and-updates.md#local-key-folder)) and
+    stops with a clear message when it is absent — a release without analytics
+    is a silent measurement outage, not a degraded build.
 - **iOS**
   - The plist joins the bundle automatically when present (`ios/Mobaide` is a
     synchronized folder group); no project edit references it.
@@ -342,7 +342,8 @@ The separate **Advertising ID** declaration (App content): uses advertising ID
 release errors* unticked.
 
 Traps met on 2026-09-04: with `AD_ID` in the manifest and the declaration still at
-"No", `release-android.yml` fails at the Play commit. Fix the declaration **and**
+"No", the Play commit fails (today in `release_android.py`; on 2026-09-04 it was
+`release-android.yml`). Fix the declaration **and**
 click *Send changes for review* on Publishing overview before re-running — saving
 alone does not clear the check. The release page then warns that older active
 artifacts lack `AD_ID`: *Release without permission* is the right button; *Update

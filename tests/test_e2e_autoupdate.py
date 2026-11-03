@@ -287,12 +287,12 @@ async def test_e2e_invalid_release_token_rejected(
 
 
 async def test_reachability_gate_rejects_unreachable_url(server_client):
-    """Pin the server-side invariant the release-agent.yml gate depends on:
+    """Pin the server-side invariant the release_agent.py gate depends on:
     anonymous requests to unknown release-asset paths return non-2xx.
 
-    The workflow gate itself (`curl -fsSL ... -r 0-0 <URL>` against
-    GitHub Release URLs, with `--retry-all-errors` to absorb CDN
-    propagation lag) lives in CI and isn't unit-testable from here.
+    The gate itself (a 1-byte ranged GET against GitHub Release URLs,
+    with retries to absorb CDN propagation lag) lives in
+    deploy/prod/release_agent.py and isn't unit-testable from here.
     What we can pin in-process is the *floor* assumption: an
     anonymous request against an unknown path returns 4xx, not 200.
     A future change that added a catch-all returning 200 to unknown

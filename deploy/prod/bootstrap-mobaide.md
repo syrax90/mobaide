@@ -108,18 +108,18 @@ SMTP_FROM_NAME=Mobaide
 
 Without SMTP, registrations silently fail to deliver the OTP. Set `EMAIL_VERIFICATION_REQUIRED=false` only for non-production environments. See [`docs/email-verification-workflow.md`](../../docs/email-verification-workflow.md) for all knobs.
 
-If you publish agent releases via `.github/workflows/release-agent.yml`, also set:
+If you publish agent releases with `deploy/prod/release_agent.py`, also set:
 
 ```
-RELEASE_AUTH_TOKEN=<same string as GitHub secret CENTRAL_SERVER_RELEASE_TOKEN>
-MANIFEST_SIGNING_PUBLIC_KEY=<base64 Ed25519 public half of GitHub secret AGENT_MANIFEST_PRIVATE_KEY>
+RELEASE_AUTH_TOKEN=<same string as agent/release-token in the local release key folder>
+MANIFEST_SIGNING_PUBLIC_KEY=<base64 Ed25519 public half of agent/manifest-signing-key in that folder>
 ```
 
-Without `RELEASE_AUTH_TOKEN`, the publish endpoint returns HTTP 503 and the workflow's "Publish manifest to central_server" step fails. The values **must match across GitHub and the server**: the workflow sends `CENTRAL_SERVER_RELEASE_TOKEN` in the `X-Release-Token` header, and the server compares it against `RELEASE_AUTH_TOKEN` byte-for-byte.
+Without `RELEASE_AUTH_TOKEN`, the publish endpoint returns HTTP 503 and the script's publish step fails. The values **must match between your machine and the server**: the script sends `agent/release-token` in the `X-Release-Token` header, and the server compares it against `RELEASE_AUTH_TOKEN` byte-for-byte. The local key folder is described in [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md#local-key-folder).
 
 **Trust-key bootstrap.** `MANIFEST_SIGNING_PUBLIC_KEY` is also required for **agent-side trust-key bootstrap**: agent install scripts (`deploy/install.sh`, `deploy/install.ps1`) auto-fetch it from `GET /api/v1/agent/trust_key` to pin `<prefix>/trust/central_server.pub`, so operators need not set `MOBAIDE_AGENT_TRUST_KEY_B64` on every host. Without it, that endpoint returns HTTP 503 and agent installs fail closed (deliberately: agents whose auto-updater cannot verify rollouts must not ship).
 
-See [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md) for the full release-secrets table and the trust-key bootstrap flow.
+See [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md) for the local key folder and the trust-key bootstrap flow.
 
 All other settings can be left at their `config.py` defaults. That includes the token TTLs, which are finite by default — leave them unset in production:
 

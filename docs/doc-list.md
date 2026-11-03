@@ -59,7 +59,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [versioning-and-updates.md](versioning-and-updates.md) | Tag conventions, cutting a release, signed manifests, the staged-binary auto-updater, install scripts and trust-key bootstrap, Android update flows, the protocol-integrity CI gate. |
+| [versioning-and-updates.md](versioning-and-updates.md) | Tag conventions, cutting a release, the local release scripts and key folder, signed manifests, the staged-binary auto-updater, install scripts and trust-key bootstrap, Android update flows, the protocol-integrity CI gate. |
 | [release-publishing.md](release-publishing.md) | Publishing the install scripts: `deploy/` on `main` → `gh-pages` → `get.mobaide.com`, with the manual sync runbook. |
 | [mobaide_agent/CHANGELOG.md](../mobaide_agent/CHANGELOG.md) | `mobaide_agent` release notes, per `agent-vX.Y.Z` tag. |
 

@@ -57,7 +57,8 @@ touches `deploy/install.{sh,ps1}` or `deploy/windows_launcher.py`.
 `publish-gh-pages.yml` listens for `push: main` events that touch
 `deploy/install.{sh,ps1}` or `deploy/windows_launcher.py`. Direct PR
 merges trigger it cleanly under the default `GITHUB_TOKEN`, so the
-common path is fully automatic.
+common path is fully automatic. The "Owner-only protected branches" ruleset
+must let GitHub Actions update `gh-pages`, or the push step fails.
 
 Use the runbook below only when:
 

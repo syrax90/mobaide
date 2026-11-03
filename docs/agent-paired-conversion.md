@@ -459,7 +459,7 @@ change. A healthy start logs `ads.enabled api=data_manager …` and nothing else
 | Integrations → Google Ads | Linked to the campaign account (this is what makes the app streams appear in Ads' conversion picker) |
 | GA4 property | Event-level data retention **2 months** (stated in the privacy policy); Google Signals **off**; key event `agent_paired` (created "with code", no default value, once per event) |
 | Config files | `android/app/google-services.json`, `ios/Mobaide/GoogleService-Info.plist` — gitignored, only in the main checkout, re-downloadable from Project settings → Your apps |
-| GitHub repository secret | `GOOGLE_SERVICES_JSON_BASE64` (base64 of the Android JSON) — required by `release-android.yml`; confirm it exists (§9) |
+| Release key folder | `android/google-services.json` in the local key folder — required by `deploy/prod/release_android.py` (see [versioning-and-updates.md](versioning-and-updates.md#local-key-folder)) |
 
 ### 6.5 Apps
 
@@ -500,7 +500,7 @@ Mechanics, versions and the consent-defaults table live in
 | OAuth client id / secret | Google Cloud Console → Clients; prod env; local env file | Yes (secret can be reset in the console) |
 | OAuth refresh token | Prod env; local env file | Re-mint with the helper; never committed |
 | Firebase config files | Main checkout only (gitignored); Firebase console | Re-download any time |
-| `GOOGLE_SERVICES_JSON_BASE64` | GitHub repository secrets | Re-create from the JSON |
+| Release copy of the Android JSON | Local key folder `android/google-services.json` (mode 600) | Copy again from the main checkout or the Firebase console |
 | GA4 property id, Firebase project id | Firebase / GA4 console | Yes |
 | Google Ads developer token | Google Ads → API Center; local env file | Unused |
 
@@ -636,7 +636,7 @@ review fixes, or at minimum do the following.
 - Drop the `FirebaseAnalytics` package and the Release run-script phase on iOS.
 - Drop the `AD_ID` declaration and consent `<meta-data>` / plist keys.
 - Drop the `data/analytics` / `Data/Analytics` components and their bus hooks.
-- Drop the `GOOGLE_SERVICES_JSON_BASE64` step in `release-android.yml`.
+- Drop the `google-services.json` copy step in `deploy/prod/release_android.py`.
 
 **Then:**
 

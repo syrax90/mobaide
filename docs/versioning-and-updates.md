@@ -29,57 +29,102 @@ update flows that sit on top of it.
 
 ## Tag conventions
 
-Releases are driven by git tags pushed to the repo. Each prefix triggers a
-dedicated workflow under `.github/workflows/`:
+Each component version gets a git tag. release-please pushes the tag when you
+merge its release-PR. **A tag ships nothing by itself.** You ship each release
+from your own machine with a local script. No release key is stored on GitHub.
 
-| Tag prefix | Component | Workflow |
-|------------|-----------|----------|
-| `android-vX.Y.Z` | Android app | `release-android.yml` |
-| `agent-vX.Y.Z` | `mobaide_agent` | `release-agent.yml` |
-| `server-vX.Y.Z` | `central_server` | `release-server.yml` |
-| `web-vX.Y.Z` | Web client (`web/`) | _(none yet)_ |
-| `proto-vN` | Wire contract | _(none)_ |
+| Tag prefix | Component | How it ships |
+|------------|-----------|--------------|
+| `android-vX.Y.Z` | Android app | `python deploy/prod/release_android.py` |
+| `agent-vX.Y.Z` | `mobaide_agent` | `python deploy/prod/release_agent.py` |
+| `server-vX.Y.Z` | `central_server` | `python deploy/prod/deploy_central.py` (the tag only marks the version) |
+| `web-vX.Y.Z` | Web client (`web/`) | `python deploy/prod/deploy_web.py` (the tag only marks the version) |
+| `proto-vN` | Wire contract | _(nothing ships)_ |
+
+> [!NOTE]
+> **Temporary fallback.** `release-agent.yml` and `release-android.yml` still
+> exist and still use their Actions secrets. They fire only on a tag that a
+> person pushes, not on a release-please tag. They and all remaining Actions
+> secrets are deleted after each local script has shipped one real release.
+
+### The local release scripts
+
+Both scripts work the same way:
+
+- Run them from the main checkout. Without a version argument, they release the
+  newest `agent-v*` / `android-v*` tag.
+- They fetch tags and check that the local tag points at the same commit as on
+  `origin`.
+- They refuse a dirty working tree unless you pass `--force`.
+- They build in a temporary detached `git worktree` at the tag, then remove it.
+- They read keys from the [local key folder](#local-key-folder).
+
+```bash
+python deploy/prod/release_agent.py [VERSION] [--skip-publish] [--clobber] [--force] [--release-dir DIR]
+python deploy/prod/release_android.py [VERSION] [--skip-upload] [--force] [--release-dir DIR]
+```
+
+Shared helpers live in `deploy/prod/release_common.py`.
 
 ### What each tag produces
 
-**`android-vX.Y.Z`**
+**`android-vX.Y.Z`** — `release_android.py`
 
-- Signed `.aab`, uploaded to Play Console internal track.
-- `inAppUpdatePriority` is derived from the `android/CHANGELOG.md` section
-  release-please just generated for this tag (rules under
-  [Cutting an Android minor or major](#cutting-an-android-minor-or-major)),
-  **not** from the tagged commit subject: the tag sits on release-please's
-  `chore: release main` commit, which is never a `feat`/`fix`.
+1. Finds a JDK 17 or newer (`JAVA_HOME`, else the Android Studio JBR on macOS)
+   and the Android SDK (`ANDROID_HOME`, default `~/Library/Android/sdk` on
+   macOS).
+2. Checks that `versionName` in `android/app/build.gradle.kts` equals the tag.
+3. Computes `inAppUpdatePriority` from the `android/CHANGELOG.md` section
+   release-please generated for this tag (rules under
+   [Cutting an Android minor or major](#cutting-an-android-minor-or-major)).
+   It does **not** read the tagged commit subject: the tag sits on
+   release-please's `chore: release main` commit, which is never a
+   `feat`/`fix`.
+4. Copies `google-services.json` into the worktree and runs
+   `./gradlew bundleRelease` with the upload-key signing values. It removes
+   `CENTRAL_SERVER_URL`, `PRIVACY_POLICY_URL`, `SUPPORT_GITHUB_URL` and
+   `SUPPORT_EMAIL` from the environment, so the production defaults apply.
+5. Checks that the bundle certificate SHA-256 equals the keystore certificate.
+   This catches the silent fallback to debug signing.
+6. Copies the bundle to `android/app/release/mobaide-X.Y.Z.aab` (git-ignored)
+   and prints its SHA-256.
+7. Uploads it to the Play Console internal track through the Play Developer API
+   as the service account: `edits.insert` → `bundles.upload` →
+   `tracks.update` (status `completed`, with `inAppUpdatePriority`) →
+   `edits.commit`.
 
-**`agent-vX.Y.Z`**
+`--skip-upload` stops after step 6.
 
-Builds a `uv build` wheel + source tarball and an **Ed25519-signed manifest**,
-then:
+**`agent-vX.Y.Z`** — `release_agent.py`
 
-1. Publishes a GitHub Release **into the public sibling repo `$RELEASES_REPO`**
-   (the source repo is private, so anonymous installs cannot reach release URLs
-   there).
-2. Runs an anonymous reachability gate over every manifest URL (details under
+1. Checks that the public half of the local signing key equals
+   `GET https://api.mobaide.com/api/v1/agent/trust_key`.
+2. Checks that `mobaide_agent/pyproject.toml` has the tag version.
+3. Builds the wheel and sdist with `uv build --wheel --sdist`. Builds the source
+   tarball with Python `tarfile` (no `__pycache__`, no `*.pyc`, owner
+   normalised). Computes SHA-256 values.
+4. Signs the **Ed25519 manifest** (same canonical body as before).
+5. Runs `gh release create agent-vX.Y.Z --repo syrax90/mobaide-agent-releases`
+   with your `gh` login. The SHA-256 values go in the release notes. It refuses
+   an existing release unless you pass `--clobber`.
+6. Runs an anonymous reachability gate over every manifest URL (details under
    [Agent rollout manifest](#agent-rollout-manifest)).
-3. POSTs the manifest to `central_server` (with curl `--retry 5`).
-4. Verifies that the served manifest matches.
+7. POSTs the manifest to `central_server` with retries.
+8. Reads `/api/v1/agent/manifest.json` back and compares the version.
+
+`--skip-publish` stops after step 4. The script needs `uv`, `gh`, and the
+`cryptography` package (`pip install cryptography`).
 
 **`server-vX.Y.Z`**
 
-- Docker image pushed to `ghcr.io/<owner>/<repo>-server:vX.Y.Z` (and `:latest`).
-  No GitHub Release object is created on this repo — the GHCR image is the
-  only artifact.
-- A second `deploy` job gates the rollout via `environment: production`
-  (manual approval required).
-- Host-side rollout is operator-driven: run `deploy/prod/deploy_central.py` or
-  `docker compose pull && up -d` against the prod compose file.
+- The tag only marks the version. No image is built and no workflow runs.
+- `deploy/prod/deploy_central.py` is the only server deploy path.
 
-**`web-vX.Y.Z`** — nothing yet
+**`web-vX.Y.Z`**
 
 - The tag only versions the `web/` workspace (`release-type: node`); no workflow
   fires on tag push.
-- The SPA ships with the central-server deploy (same-origin Caddy serving,
-  tracked in WEB-02).
+- The SPA ships with `deploy/prod/deploy_web.py`.
 
 **`proto-vN`**
 
@@ -158,18 +203,22 @@ What happens after merge:
    - the component's `CHANGELOG.md` (prepends a new `## [vX.Y.Z]`
      section).
 3. Merging that release-PR pushes the corresponding `agent-vX.Y.Z` /
-   `server-vX.Y.Z` / `android-vX.Y.Z` / `web-vX.Y.Z` tag, which fires
-   the matching `release-*.yml` workflow (no such workflow exists for
-   `web-v*` yet — see the tag table above).
+   `server-vX.Y.Z` / `android-vX.Y.Z` / `web-vX.Y.Z` tag. Nothing ships yet.
+4. You run the matching local script from the tag table above. This is a
+   deliberate pause: a bad merge does not ship until you start the release.
+
+release-please runs with `GITHUB_TOKEN` only. A tag that `GITHUB_TOKEN` pushes
+does not start other workflows (a GitHub Actions rule), so no release workflow
+fires after a merge.
 
 **Release-object side effect of step 3:** release-please-action v4 also
 creates an empty GitHub Release on this repo with the tag (see
 release-please-action issue #1034). A follow-up step in `release-please.yml`
 deletes it and keeps the tag, so the Releases tab here stays empty for
 `agent-v*` / `server-v*` / `android-v*` / `web-v*`. Artifacts live elsewhere:
-agent in the public `mobaide-agent-releases` sibling repo; server in GHCR;
-android in Play Console. A Release that appears briefly and vanishes is that
-cleanup step, not a bug.
+agent in the public `mobaide-agent-releases` sibling repo; android in Play
+Console; server and web on the production host. A Release that appears briefly
+and vanishes is that cleanup step, not a bug.
 
 ### Manual release path (operator escape hatch)
 
@@ -182,9 +231,8 @@ Use this when the conventional-commits flow is the wrong tool:
 - you've already hand-bumped the version files and want to ship those exact
   bytes.
 
-Currently wired for `mobaide_agent` only via
-`.github/workflows/release-agent-manual.yml`. The same shape clones
-to `central_server` / `android` when needed.
+The steps below are for `mobaide_agent`. The same shape works for `android`
+(`android/app/build.gradle.kts`, `android/CHANGELOG.md`, `release_android.py`).
 
 1. **On a branch**, edit the version files in lockstep:
    - `mobaide_agent/pyproject.toml` — bump `[project] version`.
@@ -193,28 +241,25 @@ to `central_server` / `android` when needed.
    - `mobaide_agent/CHANGELOG.md` — replace `## [Unreleased]` with
      `## [X.Y.Z] - YYYY-MM-DD` and fill in the entries.
 2. **Open and merge a PR** to `main`. Commit grammar does not matter for *this*
-   path: the manual workflow trigger replaces release-please.
-3. **Run the manual workflow:** Actions → **Release agent (manual)**
-   → Run workflow → enter the version (e.g. `0.1.2`). The workflow
-   validates that `pyproject.toml`, the manifest, and the tag state
-   all agree, then creates and pushes `agent-vX.Y.Z`. The downstream
-   `release-agent.yml` fires on the tag push exactly as on the release-please
-   path.
+   path: your own tag replaces release-please.
+3. **Tag the merge commit** from your machine:
+   `git fetch origin && git tag -a agent-vX.Y.Z origin/main -m "Release agent-vX.Y.Z" && git push origin agent-vX.Y.Z`.
+   Check first that the tag does not exist and that `pyproject.toml` and the
+   manifest agree.
+4. **Run** `python deploy/prod/release_agent.py X.Y.Z`. The script refuses to
+   build if `pyproject.toml` does not match the tag.
 
-The validation hard-fails if `pyproject.toml` and the manifest don't already
-agree at the requested version, or if the tag already exists, so a half-and-half
-state (manifest at one version, tag at another) is not reachable from this path.
-
-**Local fallback.** If you'd rather not grant the workflow PAT scope or CI is
-down, run `git tag agent-vX.Y.Z origin/main && git push origin agent-vX.Y.Z`
-from a developer machine. A locally-pushed tag does fire `release-agent.yml`;
-the `GITHUB_TOKEN` caveat below only applies to tags GHA itself pushes.
+> [!WARNING]
+> A tag that a person pushes still starts the temporary fallback workflow
+> (`release-agent.yml` / `release-android.yml`). Until those are deleted,
+> disable the workflow first (`gh workflow disable release-agent.yml`), or the
+> workflow and the script race to publish the same version.
 
 > [!WARNING]
 > **Pick one path and stay on it.** Either let release-please own the
 > bump (the conventional-commits flow above), **or** use the manual
-> release path end-to-end (hand-edit the version files, then trigger
-> the manual workflow / push the tag yourself).
+> release path end-to-end (hand-edit the version files, then push the tag
+> yourself).
 
 The half-and-half mode (hand-edit `pyproject.toml` and the manifest, then
 expect release-please to tag) shipped `agent-v0.1.1` with a stale `0.1.0` wheel
@@ -250,7 +295,7 @@ it consults the versioning strategy, so it overrides `always-bump-patch`:
 
 2. release-please opens the android release-PR at exactly `3.7.0`, with the
    normal changelog section and `build.gradle.kts` / manifest rewrite. Merging
-   it tags `android-v3.7.0` and `release-android.yml` ships the bundle as usual.
+   it tags `android-v3.7.0`, and `release_android.py` ships the bundle as usual.
 
 The footer is scoped by path like every other commit: it only reaches the
 `android` package if the commit touches `android/**`. If you have nothing to
@@ -259,7 +304,7 @@ and put the footer on that. Editing the open release-PR by hand before merging
 is the other supported path.
 
 **A breaking change still ships as a patch, and that is fine.**
-`release-android.yml` derives `inAppUpdatePriority` from the changelog section,
+`release_android.py` derives `inAppUpdatePriority` from the changelog section,
 not from the version delta:
 
 - any `### ⚠ BREAKING CHANGES` heading yields priority 5 (immediate in-app
@@ -275,101 +320,76 @@ full urgency.
 > never introduce a `changelog-sections` config for this package — it would
 > silently drop the urgency to 1.
 
-#### Tag-trigger chaining and the release token
+#### release-please and `GITHUB_TOKEN`
 
-**Caveat — tag-trigger chaining.** GitHub's default `GITHUB_TOKEN` cannot
-trigger downstream workflows from a tag it pushes (a hard GitHub Actions limit,
-not a release-please bug). The release-please workflow's `token` input falls
-back to `GITHUB_TOKEN` if `RELEASE_PLEASE_TOKEN` is unset. In that mode the
-auto-tag is created but **no `release-*` workflow fires**, leaving the wheel/aab
-unbuilt. Set `RELEASE_PLEASE_TOKEN` to make tag-trigger chaining work.
+`release-please.yml` uses only the short-lived `GITHUB_TOKEN`. No PAT is
+stored. Two repo settings must allow it:
 
-**Recommended PAT shape.** Use a **fine-grained PAT** scoped to **this
-repository only** with these permissions:
+| Setting | Required value |
+|---------|----------------|
+| Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" | On. Without it, release-please cannot open its release-PR. |
+| Ruleset "Owner-only protected branches" | GitHub Actions may update `release-please--branches--main` and `gh-pages` (`publish-gh-pages.yml` pushes `gh-pages` with `GITHUB_TOKEN`). |
 
-| Permission | Access |
-|-----------|--------|
-| Contents | Read and write |
-| Pull requests | Read and write |
-| Workflows | Read and write |
+A release-PR that `GITHUB_TOKEN` opens starts no CI checks. It changes only
+versions and changelogs, and no check is required, so this is acceptable.
 
-Do **not** use a classic PAT — those grant write access to every repo
-the user owns and are unnecessarily broad. `Workflows: write` is what lets
-release-please's tag push trigger the downstream `release-agent.yml` /
-`release-server.yml` / `release-android.yml` workflows; without it, the tag is
-created but no workflow fires.
+#### Local key folder
 
-#### Required CI secrets and variables
+The scripts read every key from one folder outside the repo:
 
-Required CI secrets:
+1. `--release-dir DIR`, else
+2. the `MOBAIDE_RELEASE_DIR` environment variable, else
+3. `~/.config/mobaide-release/`.
 
-| Secret | Used by | Purpose |
-|--------|---------|---------|
-| `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | `release-android.yml` | Signs the `.aab` with the upload key. |
-| `PLAY_SERVICE_ACCOUNT_JSON` | `release-android.yml` | Service account used to upload the signed bundle to the Play Console internal track. |
-| `AGENT_MANIFEST_PRIVATE_KEY` | `release-agent.yml` | Base64 Ed25519 private key. Signs the manifest body. |
-| `CENTRAL_SERVER_RELEASE_TOKEN` | `release-agent.yml` | Bearer token for `POST /api/internal/agent_manifest`. |
-| `CENTRAL_SERVER_URL` | `release-agent.yml` | Base URL of the production `central_server` that hosts the manifest. |
-| `RELEASES_REPO_TOKEN` | `release-agent.yml` | Fine-grained PAT scoped to the **public releases repo** (e.g. `syrax90/mobaide-agent-releases`) with `Contents: Read and write`. Used by `softprops/action-gh-release@v2` to publish the release there. |
-| `RELEASE_PLEASE_TOKEN` _(optional)_ | `release-please.yml`, `release-agent-manual.yml` | PAT with `contents:write` + `workflow` scopes. Required to chain CI-side tag pushes into the downstream `release-*` workflows; without it the operator must re-push the tag from a developer machine. |
+The folder must be `chmod 700` and each file `chmod 600`. The scripts refuse
+a folder or file that group or others can read. Keep a backup of the folder in
+a password manager.
 
-Repo **variables** (not secrets — values appear in workflow logs and are not sensitive):
+| File | Used by | Content |
+|------|---------|---------|
+| `agent/manifest-signing-key` | `release_agent.py` | Ed25519 private key that signs the manifest: base64 of the 32 raw bytes (the old `AGENT_MANIFEST_PRIVATE_KEY` format), or a PEM file. |
+| `agent/release-token` | `release_agent.py` | Token for `POST /api/internal/agent_manifest`. |
+| `android/upload.keystore` | `release_android.py` | Play upload key. |
+| `android/signing.properties` | `release_android.py` | `storePassword`, `keyPassword`, `keyAlias`. |
+| `android/google-web-client-id` | `release_android.py` | Google OAuth web client ID, one line. |
+| `android/google-services.json` | `release_android.py` | Firebase config of the release app. |
+| `android/play-service-account.json` | `release_android.py` | Service account that uploads to the Play Console internal track. |
 
-| Variable | Used by | Purpose |
-|----------|---------|---------|
-| `RELEASES_REPO` | `release-agent.yml` | `<owner>/<repo>` of the public releases repo (e.g. `syrax90/mobaide-agent-releases`). |
+`release_agent.py` also needs a `gh` login with write access to
+`syrax90/mobaide-agent-releases`. No releases-repo PAT and no repo variable
+exist.
 
-The workflow embeds `RELEASES_REPO` in the manifest's `tarball_url`/`wheel_url`
-and pushes the `softprops/action-gh-release` step into this repo.
+**Failure modes:**
 
-**Failure modes by which prereq is missing:**
-
-* `AGENT_MANIFEST_PRIVATE_KEY` missing: `Build signed manifest`,
-  `Create GitHub Release in public releases repo`, and the reachability gate all
-  skip via `if: ${{ env.AGENT_MANIFEST_PRIVATE_KEY != '' }}`. No state changes
-  anywhere.
-* `RELEASES_REPO_TOKEN` or the `RELEASES_REPO` variable missing:
-  `Create GitHub Release in public releases repo` fails loudly before any
-  URL-bearing manifest can be posted to `central_server`.
-* `CENTRAL_SERVER_*` missing: the public-repo release IS created, but
-  `Publish manifest
-  to central_server` and `Verify manifest is published` skip, and the prior
-  manifest on `central_server` keeps serving.
+* Signing key missing, or its public half differs from
+  `/api/v1/agent/trust_key`: the script stops before it creates a release.
+  Nothing changes anywhere.
+* Release `agent-vX.Y.Z` already exists in the releases repo: the script stops,
+  unless you pass `--clobber`.
+* An asset is not anonymously reachable: the script stops before it posts the
+  manifest, and the previous manifest keeps serving.
+* `agent/release-token` missing or wrong: the release in the releases repo
+  exists, but the POST fails, and the previous manifest keeps serving. Fix the
+  token and re-run with `--clobber`.
+* The bundle is not signed with the upload key: `release_android.py` stops
+  before the upload.
 
 #### Server-side counterparts
 
-Two of the GitHub secrets above must be
-mirrored as env vars on the production `central_server` host (typically
-`/opt/mobaide/.env`). The two halves are matched byte-for-byte at request
-time, so the names in CI and the names on the server intentionally
-differ — keep them in sync as a pair:
+Two local keys have a matching env var on the production `central_server`
+host (typically `/opt/mobaide/.env`). Keep each pair in sync:
 
-| GitHub Actions secret | Server `.env` variable | Relationship |
+| Local key folder | Server `.env` variable | Relationship |
 |--|--|--|
-| `CENTRAL_SERVER_RELEASE_TOKEN` | `RELEASE_AUTH_TOKEN` | Identical string. The workflow sends it in the `X-Release-Token` header; the server compares with `hmac.compare_digest`. |
-| `AGENT_MANIFEST_PRIVATE_KEY` | `MANIFEST_SIGNING_PUBLIC_KEY` | Public/private halves of the same Ed25519 key. CI signs; the server verifies. |
+| `agent/release-token` | `RELEASE_AUTH_TOKEN` | Identical string. The script sends it in the `X-Release-Token` header; the server compares with `hmac.compare_digest`. |
+| `agent/manifest-signing-key` | `MANIFEST_SIGNING_PUBLIC_KEY` | Private and public halves of the same Ed25519 key. The script signs; the server verifies. |
 
 - If `RELEASE_AUTH_TOKEN` is unset on the server,
   `POST /api/internal/agent_manifest` returns **HTTP 503** ("Manifest
-  publishing is disabled") and the release workflow's curl step fails
-  after `--retry 5` exhaustion.
+  publishing is disabled") and the script's publish step fails.
 - If `MANIFEST_SIGNING_PUBLIC_KEY` is unset, the server stores manifests
   without verification. Agents that have pinned a trust key will then reject
   the manifest at update time, so set both vars together.
-
-### Server-side deploy gate
-
-`release-server.yml` builds and pushes the Docker image to GHCR, then a
-second `deploy` job runs in the `production` environment.
-
-- Configure required reviewers under repo Settings → Environments → production
-  so the job blocks on a manual click before recording the rollout.
-- The job itself does not SSH to the host.
-- Host-side rollout is operator-driven, in one of two ways:
-  - `deploy/prod/deploy_central.py` (which preserves the previous image for
-    one-step rollback);
-  - for the polling pattern, a watchtower-style container on the prod host
-    that pulls `ghcr.io/<repo>-server:latest` on a timer.
 
 ## Compatibility gating: `protocol_version`
 
@@ -494,20 +514,20 @@ be running. It is a small JSON document:
 * **Signing** — Ed25519.
   * Canonical JSON encoding is
     `json.dumps(body, sort_keys=True, separators=(",", ":"))`.
-  * The release workflow signs with `AGENT_MANIFEST_PRIVATE_KEY`.
+  * `release_agent.py` signs with the local `agent/manifest-signing-key`.
   * The public half is configured on `central_server` as
     `MANIFEST_SIGNING_PUBLIC_KEY` and pinned on each agent host at
     `<prefix>/trust/central_server.pub`.
-* **Publishing** — `release-agent.yml`:
-  1. creates a GitHub Release in the public sibling repo (`$RELEASES_REPO`)
-     with the tarball, wheel, and `manifest.json` attached;
-  2. runs the **anonymous reachability gate** — `curl -fsSL --retry 5 -r 0-0`
-     (a 1-byte ranged GET) against every URL the signed manifest references —
-     and refuses to proceed if any URL is not anonymously reachable (privacy
-     mismatch, asset-name typo, missing upload);
+* **Publishing** — `release_agent.py`:
+  1. creates a GitHub Release in the public sibling repo
+     (`syrax90/mobaide-agent-releases`) with the tarball, wheel, and
+     `manifest.json` attached;
+  2. runs the **anonymous reachability gate** — a 1-byte ranged GET, with
+     retries, against every URL the signed manifest references — and refuses
+     to proceed if any URL is not anonymously reachable (privacy mismatch,
+     asset-name typo, missing upload);
   3. only then POSTs the record to `POST /api/internal/agent_manifest` on
-     `central_server` with header
-     `X-Release-Token: $CENTRAL_SERVER_RELEASE_TOKEN`.
+     `central_server` with header `X-Release-Token: <agent/release-token>`.
 
   The route validates the signature **before** persisting; an invalid
   signature returns 400 and the manifest is not stored. The gate uses a ranged
@@ -533,22 +553,19 @@ therefore live in a dedicated **public** sibling repo. One-time bootstrap:
 1. **Create the public repo** (e.g. `syrax90/mobaide-agent-releases`),
    Visibility = Public. A one-line README is enough; only release artifacts
    live here.
-2. **Mint a fine-grained PAT scoped to that repo only**, with
-   `Contents: Read and write`. Save it on `syrax90/claude_mobile` as a
-   secret named `RELEASES_REPO_TOKEN`.
-3. **Add a repo variable** on `syrax90/claude_mobile` named
-   `RELEASES_REPO` with value `<owner>/<public-releases-repo>` (a Variable,
-   not a secret).
-4. **Cut a release** as usual (push an `agent-v*` tag). The workflow signs the
-   manifest with URLs that point at the public repo, pushes the GitHub Release
-   there, runs the reachability gate against the public URLs, then publishes
-   the manifest to `central_server`.
+2. **Check your `gh` login** has write access to that repo. `release_agent.py`
+   publishes with it. No PAT and no repo variable are needed; the repo name is
+   a constant in the script.
+3. **Cut a release** as usual, then run `release_agent.py`. The script signs
+   the manifest with URLs that point at the public repo, creates the GitHub
+   Release there, runs the reachability gate against the public URLs, then
+   publishes the manifest to `central_server`.
 
 If a previous release left a stale manifest record on `central_server`
 that points at unreachable URLs (e.g. the pre-bootstrap state), clear it by
 deleting the file at the configured `MANIFEST_STORE_PATH` on the central_server
 host (default `data/agent_manifest.json`). The endpoint then returns 404 ("no
-manifest published yet") until the next successful release pipeline run.
+manifest published yet") until the next successful `release_agent.py` run.
 
 ## Auto-update on the agent (staged-binary swap)
 

@@ -655,8 +655,8 @@ what may not be done to either.
 ## Deployment
 
 Manual, like the rest of the relay: an operator runs
-`deploy/prod/deploy_central.py`. `.github/workflows/release-server.yml` only
-records approval. **The apex 404 disappears only once that deploy runs.**
+`deploy/prod/deploy_central.py`. No workflow deploys the server.
+**The apex 404 disappears only once that deploy runs.**
 
 ### The `www` redirect
 

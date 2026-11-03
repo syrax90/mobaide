@@ -22,13 +22,13 @@ gradle.taskGraph.whenReady {
     if (allTasks.any { it.path in releaseTaskPaths } && !googleServicesJson.exists()) {
         throw GradleException(
             "android/app/google-services.json is missing: release builds must ship Firebase " +
-                "Analytics. Materialise it from the GOOGLE_SERVICES_JSON_BASE64 secret."
+                "Analytics. Put it in android/app (deploy/prod/release_android.py copies it from the local key folder)."
         )
     }
 }
 
 // Google OAuth 2.0 Web Client ID is resolved at build time from (in priority order):
-//   1. GOOGLE_WEB_CLIENT_ID environment variable (CI / release builds)
+//   1. GOOGLE_WEB_CLIENT_ID environment variable (release script / CI)
 //   2. android/local.properties key `GOOGLE_WEB_CLIENT_ID` (developer machines)
 //   3. Empty string (runtime code detects this and surfaces a clear config error)
 // It is intentionally never committed to VCS.
@@ -45,7 +45,7 @@ val googleWebClientId: String = run {
 }
 
 // Central Server base URL is resolved at build time from (in priority order):
-//   1. CENTRAL_SERVER_URL environment variable (CI / release builds)
+//   1. CENTRAL_SERVER_URL environment variable (release script / CI)
 //   2. android/local.properties key `CENTRAL_SERVER_URL` (developer machines)
 //   3. Production default.
 val centralServerUrl: String = run {
@@ -106,7 +106,7 @@ val supportEmail: String = run {
 }
 
 // Release signing config is resolved at build time from (in priority order):
-//   1. Environment variables (CI / release builds)
+//   1. Environment variables (release script / CI)
 //   2. android/signing.properties (developer machines; git-ignored)
 //   3. null — release variant falls back to debug signing for local-only builds
 val releaseSigningProps: Properties? = run {
@@ -182,8 +182,8 @@ android {
             )
             // Use the release config when fully configured; otherwise fall back
             // to debug so `assembleRelease` keeps working for local-only smoke
-            // tests. CI builds always export the env vars and get a real
-            // upload-key signature.
+            // tests. deploy/prod/release_android.py always exports the env vars
+            // and checks that the bundle carries the upload-key signature.
             val releaseConfig = signingConfigs.getByName("release")
             signingConfig = if (releaseConfig.storeFile != null) {
                 releaseConfig

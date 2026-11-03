@@ -88,7 +88,7 @@ If a test also fails on `main`, say so in the pull request.
 
 The title becomes the commit message on `main`. The release tooling reads it to write the changelogs and choose the next version.
 
-Changes to `.github/workflows/`, build scripts, install scripts or lockfiles get a stricter review, because they run with release access after the merge.
+Changes to `.github/workflows/`, build scripts, install scripts or lockfiles get a stricter review. After the merge, they run on the maintainer's machine with the release keys, or go live to users at once.
 
 ## License
 
