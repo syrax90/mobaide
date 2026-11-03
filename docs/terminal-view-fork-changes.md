@@ -6,7 +6,7 @@ local edit to that Java is recorded here so that an upstream rebase can re-apply
 change accurately. Keep this file as the single source of truth for fork drift —
 do not rely on git blame alone.
 
-These two libraries are licensed under Apache-2.0. The `LICENSE.md` files in their directories are copied from termux-app, and the GPLv3 they name covers the rest of termux-app only. See [NOTICE](../NOTICE).
+These two libraries are licensed under Apache-2.0. The `LICENSE.md` files in their directories are copied from termux-app, and the GPLv3 they name covers the rest of termux-app only.
 
 ## Edits
 

@@ -8,7 +8,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 |---|---|
 | [README.md](../README.md) | Public landing page: what Mobaide is, store and website links, main features, voice input, install steps, data summary, repository map, contributing, support, license. Its claims follow the accuracy gate in [website.md](website.md). |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | How to contribute: local setup per component, test commands, change rules (platform parity, protocol, docs), PR title format, license terms for contributions. |
-| [NOTICE](../NOTICE) | Copyright, trademark note and third-party code (the vendored Termux libraries) under the Apache-2.0 [LICENSE](../LICENSE). |
+| [NOTICE](../NOTICE) | Copyright and trademark note for the Apache-2.0 [LICENSE](../LICENSE). |
 | [architecture.md](architecture.md) | Why Mobaide exists and how the parts fit: components, the client → relay → agent → CLI data flow, agent stack, project structure. |
 | [features.md](features.md) | Detailed behaviour of each feature: limits, per-platform differences, main settings. Wire details are in PROTOCOL.md. |
 

@@ -142,7 +142,7 @@ Ask questions in the [community discussions](https://github.com/syrax90/mobaide-
 
 ## License
 
-Mobaide is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for the copyright and the third-party code.
+Mobaide is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for the copyright.
 
 ---
 
