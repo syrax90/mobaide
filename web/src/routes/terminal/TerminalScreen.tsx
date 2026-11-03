@@ -43,8 +43,17 @@ import { VoiceButton } from './voice/VoiceButton';
 import { VoiceSetupDialog } from './voice/VoiceSetupDialog';
 import { spliceTranscript, useAgentName, useDictation } from '../../voice/useDictation';
 import type { DictationState } from '../../voice/dictationController';
-import { useVoiceCapability, useVoiceStatus } from '../../voice/useVoiceStatus';
-import { useMicHidden, useSkipReview, useVoicePrefsStore } from '../../voice/voicePrefsStore';
+import {
+  useVoiceCapability,
+  useVoiceCleanupCapability,
+  useVoiceStatus,
+} from '../../voice/useVoiceStatus';
+import {
+  useCleanup,
+  useMicHidden,
+  useSkipReview,
+  useVoicePrefsStore,
+} from '../../voice/voicePrefsStore';
 import { voiceMicMode } from '../../voice/voiceStatusView';
 import { useWideViewport } from './useWideViewport';
 
@@ -209,12 +218,19 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   const voiceStatus = useVoiceStatus(model.agentId, voiceCapability !== null);
   const micHidden = useMicHidden(model.agentId);
   const micMode = voiceMicMode(voiceCapability, voiceStatus.data, micHidden);
+  // Transcript cleanup runs Claude Code on the agent, so it is offered in
+  // Claude Code sessions only, where the CLI is known to be there.
+  const cleanupAvailable =
+    useVoiceCleanupCapability(model.agentId).data === true && session?.kind === 'claude';
+  const cleanUp = useCleanup(model.agentId);
+  const setCleanUp = useVoicePrefsStore((state) => state.setCleanup);
   // A capability only while voice is ready: any other state disposes the
   // controller, which cancels a recording the agent can no longer take.
   const dictation = useDictation(
     model.agentId,
     model.sessionId,
     micMode === 'ready' ? voiceCapability : null,
+    cleanupAvailable && cleanUp,
   );
   const [voiceSetupOpen, setVoiceSetupOpen] = useState(false);
   const agentName = useAgentName(model.agentId);
@@ -251,19 +267,21 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // With the review turned off a result goes straight to the prompt; only a
   // paste the session refuses falls back to showing it for review. Decided
   // once per result: turning the review off from the review itself must not
-  // paste the text under the user's edits.
+  // paste the text under the user's edits. A failed cleanup is always shown,
+  // so the user learns why the text was not cleaned up.
   const skipReview = useSkipReview(model.agentId);
   const setSkipReview = useVoicePrefsStore((state) => state.setSkipReview);
   const result = dictation.state.kind === 'result' ? dictation.state : null;
+  const insertDirectly = skipReview && result?.cleanupError === undefined;
   const [reviewed, setReviewed] = useState<DictationState | null>(null);
-  const autoInserting = skipReview && result !== null && result !== reviewed;
+  const autoInserting = insertDirectly && result !== null && result !== reviewed;
   // A layout effect, so a result never paints as a dialog before it lands.
   useLayoutEffect(() => {
     if (result === null || result === reviewed) return;
     const text = carried === null ? result.text : spliceTranscript(carried, result.text).text;
-    if (skipReview && insertTranscript(text)) return;
+    if (insertDirectly && insertTranscript(text)) return;
     setReviewed(result);
-  }, [result, reviewed, skipReview, carried, insertTranscript]);
+  }, [result, reviewed, insertDirectly, carried, insertTranscript]);
   const dictationShown = (dictation.state.kind !== 'idle' || carried !== null) && !autoInserting;
 
   // Ctrl+R is a chord people press in a terminal on purpose, and a reload costs
@@ -669,6 +687,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
             onStop={dictation.stop}
             onCancel={dictation.cancel}
             onRetry={dictation.retry}
+            onSkipCleanup={dictation.skipCleanup}
             onRecordAgain={dictation.toggle}
             onDismiss={dictation.dismiss}
             onContinue={dictation.continueFrom}
@@ -677,6 +696,11 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
             skipReview={skipReview}
             onSkipReviewChange={(skip) => {
               setSkipReview(model.agentId, skip);
+            }}
+            cleanupAvailable={cleanupAvailable}
+            cleanUp={cleanUp}
+            onCleanUpChange={(on) => {
+              setCleanUp(model.agentId, on);
             }}
           />
         )}

@@ -2,7 +2,8 @@
  * User-facing copy keyed by `error.code`. The agent's own `message` can carry
  * host details (a worker traceback tail), so it is only ever shown behind
  * "Details". Unknown codes get the generic line. Android and iOS
- * `VoiceErrorCopy` hold the same table.
+ * `VoiceErrorCopy` hold the same table, except `cleanupErrorCopy`, which is
+ * web-only for now.
  */
 import { VOICE_CODE } from './voiceApi';
 
@@ -35,6 +36,24 @@ export function dictationErrorCopy(code: string, agent: string): string {
       return `${agent} couldn't read the recording.`;
     default:
       return 'Voice input failed.';
+  }
+}
+
+/** Why a cleanup failed; the transcript is shown as heard. */
+export function cleanupErrorCopy(code: string, agent: string): string {
+  switch (code) {
+    case VOICE_CODE.cleanupUnavailable:
+      return `Claude Code isn't installed on ${agent}.`;
+    case VOICE_CODE.cleanupOutdated:
+      return `Claude Code on ${agent} is too old. Run "claude update" there.`;
+    case VOICE_CODE.cleanupBusy:
+      return 'Another cleanup was still running.';
+    case VOICE_CODE.cleanupTimeout:
+      return 'Claude Code took too long.';
+    case VOICE_CODE.network:
+      return 'The connection dropped.';
+    default:
+      return 'Claude Code reported an error.';
   }
 }
 

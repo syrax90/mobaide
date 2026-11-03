@@ -686,7 +686,7 @@ Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
 * **Activity awareness** — defers the swap when any session is running. The
   updater queries `SessionManager.list_sessions()` and only proceeds when all
   sessions are stopped/crashed, and when no voice dictation is open or still
-  being transcribed (the agent passes `VoiceService.busy` as the updater's
+  being transcribed and no transcript cleanup is running (the agent passes `VoiceService.busy` as the updater's
   `busy_probe`; a probe that raises is logged and ignored). Deferral retries after 30 minutes; a single
   pending update that has been deferred for >24h logs a `WARN` for
   observability.

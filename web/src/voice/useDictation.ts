@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listAgents } from '../api/agentRepository';
-import { createVoiceApi } from '../api/voiceRepository';
+import { cleanupTranscript, createVoiceApi } from '../api/voiceRepository';
 import { queryKeys, wsBackedQueryOptions } from '../lib/queryKeys';
 import type { VoiceCapability } from '../protocol/dto/agentVersion';
 import { DictationController, type DictationState } from './dictationController';
@@ -38,11 +38,15 @@ export function spliceTranscript(
  *
  * The actions call into the controller synchronously, which keeps the
  * click's user activation alive for the AudioContext.
+ *
+ * `cleanUp` sends each transcript through Claude Code on the agent before it
+ * is shown; it is read when the transcript arrives.
  */
 export function useDictation(
   agentId: string,
   sessionId: string,
   capability: VoiceCapability | null,
+  cleanUp = false,
 ) {
   const [state, setState] = useState<DictationState>(IDLE);
   // The review's text around its cursor while the user dictates more: the
@@ -53,6 +57,10 @@ export function useDictation(
   const controllerRef = useRef<DictationController | null>(null);
   const sampleRate = capability?.sampleRate ?? null;
   const maxSeconds = capability?.maxSeconds ?? null;
+  const cleanUpRef = useRef(cleanUp);
+  useEffect(() => {
+    cleanUpRef.current = cleanUp;
+  }, [cleanUp]);
 
   useEffect(() => {
     if (sampleRate === null || maxSeconds === null) return;
@@ -61,6 +69,8 @@ export function useDictation(
       createRecorder: () => new WebAudioRecorder(),
       sampleRate,
       maxSeconds,
+      cleaner: () =>
+        cleanUpRef.current ? (text, signal) => cleanupTranscript(agentId, text, signal) : null,
       onChange: (next) => {
         setState(next);
         // The agent says voice is not ready while the cached status says it
@@ -80,7 +90,10 @@ export function useDictation(
   }, [agentId, sessionId, sampleRate, maxSeconds, queryClient]);
 
   const active =
-    state.kind === 'starting' || state.kind === 'recording' || state.kind === 'transcribing';
+    state.kind === 'starting' ||
+    state.kind === 'recording' ||
+    state.kind === 'transcribing' ||
+    state.kind === 'cleaning';
   useKeepScreenAwake(active);
 
   const toggle = useCallback(() => {
@@ -94,6 +107,9 @@ export function useDictation(
   }, []);
   const retry = useCallback(() => {
     controllerRef.current?.retry();
+  }, []);
+  const skipCleanup = useCallback(() => {
+    controllerRef.current?.skipCleanup();
   }, []);
   const dismiss = useCallback(() => {
     controllerRef.current?.dismiss();
@@ -111,7 +127,18 @@ export function useDictation(
     controllerRef.current?.dismiss();
   }, []);
 
-  return { state, carried, toggle, stop, cancel, retry, dismiss, continueFrom, finish };
+  return {
+    state,
+    carried,
+    toggle,
+    stop,
+    cancel,
+    retry,
+    skipCleanup,
+    dismiss,
+    continueFrom,
+    finish,
+  };
 }
 
 /**

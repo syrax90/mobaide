@@ -3,15 +3,16 @@ verifying → ready | failed), cancel and remove, the restart rules of
 ``start()`` (resume an interrupted install, repair a ready one, never retry a
 failed one), the cross-process lock, the throttled ``voice.changed``
 publisher, a runtime repair (cancelling it keeps the model), the watcher that
-publishes an install running in another process, and dictations through the
-facade.
+publishes an install running in another process, and dictations and
+transcript cleanups through the facade.
 
-Fake mode throughout (the generated model, no runtime, the fake engine);
-nothing touches the network or the real voice root."""
+Fake mode throughout (the generated model, no runtime, the fake engine, a
+fake Claude Code run); nothing touches the network or the real voice root."""
 from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import sys
 import threading
@@ -21,6 +22,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from mobaide.core.git_exec import CmdResult, ProcessHandle
 from mobaide.voice import host as host_module
 from mobaide.voice import service as service_module
 from mobaide.voice.catalog import (
@@ -31,12 +33,14 @@ from mobaide.voice.catalog import (
     CatalogFile,
     RuntimeTarget,
 )
+from mobaide.voice.cleanup import TranscriptCleaner
 from mobaide.voice.download import DownloadError, FakeFetcher
 from mobaide.voice.errors import VoiceError
 from mobaide.voice.helper import TranscribeResult
 from mobaide.voice.host import DISK_MARGIN_BYTES
 from mobaide.voice.locking import FileLock
 from mobaide.voice.models import (
+    VoiceCleanupResponse,
     VoiceDictationAudioRequest,
     VoiceDictationFinishRequest,
     VoiceStatusResponse,
@@ -143,13 +147,14 @@ def voice_dir(tmp_path) -> Path:
 async def make_service(voice_dir):
     services: list[VoiceService] = []
 
-    def make(*, fetcher=None, helper=None, publish=None, fake=True) -> VoiceService:
+    def make(*, fetcher=None, helper=None, publish=None, fake=True, cleaner=None) -> VoiceService:
         service = VoiceService(
             voice_dir=voice_dir,
             fake=fake,
             publish=publish,
             fetcher=fetcher if fetcher is not None else _Fetcher(),
             helper=helper if helper is not None else _Helper(),
+            cleaner=cleaner,
         )
         services.append(service)
         return service
@@ -1125,6 +1130,81 @@ class TestDictationGate:
         assert (excinfo.value.status, excinfo.value.code) == (409, "voice_not_ready")
         helper.stop_gate.set()
         assert (await removing).state == "not_installed"
+
+
+class _Claude:
+    """Stands in for ``run_capped`` running ``claude -p``: answers ``text``
+    and keeps each run's handle; with a ``gate`` it first waits on it."""
+
+    def __init__(self, text: str = "Cleaned up.") -> None:
+        self.text = text
+        self.gate: threading.Event | None = None
+        self.handles: list[ProcessHandle] = []
+
+    def __call__(self, argv, *, handle: ProcessHandle, **_kwargs) -> CmdResult:
+        self.handles.append(handle)
+        if self.gate is not None:
+            self.gate.wait(INSTALL_TIMEOUT)
+        payload = {"type": "result", "subtype": "success", "is_error": False, "result": self.text}
+        return CmdResult(rc=0, stdout=json.dumps(payload).encode(), stderr=b"")
+
+
+class TestCleanup:
+    @pytest.fixture
+    def make_cleaner(self, tmp_path):
+        def make(claude: _Claude) -> TranscriptCleaner:
+            return TranscriptCleaner(
+                resolve_binary=lambda: str(tmp_path / "bin" / "claude"),
+                work_dir=tmp_path / "voice-cleanup",
+                run=claude,
+            )
+
+        return make
+
+    async def test_without_a_cleaner_is_cleanup_unavailable(self, make_service):
+        with pytest.raises(VoiceError) as excinfo:
+            await make_service().cleanup_transcript("hello")
+
+        assert (excinfo.value.status, excinfo.value.code) == (503, "cleanup_unavailable")
+
+    async def test_cleans_up_without_the_speech_model_installed(self, make_service, make_cleaner):
+        service = make_service(cleaner=make_cleaner(_Claude("Hello there.")))
+
+        response = await service.cleanup_transcript("um hello there")
+
+        assert response == VoiceCleanupResponse(text="Hello there.")
+        assert service.status().state == "not_installed"
+
+    async def test_busy_while_a_cleanup_runs(self, make_service, make_cleaner):
+        claude = _Claude()
+        claude.gate = threading.Event()
+        service = make_service(cleaner=make_cleaner(claude))
+        assert not service.busy()
+
+        running = asyncio.ensure_future(service.cleanup_transcript("hello"))
+        try:
+            await _wait_for(lambda: claude.handles)
+            assert service.busy()
+        finally:
+            claude.gate.set()
+            await running
+
+        assert not service.busy()
+
+    async def test_shutdown_aborts_a_running_cleanup(self, make_service, make_cleaner):
+        claude = _Claude()
+        claude.gate = threading.Event()
+        service = make_service(cleaner=make_cleaner(claude))
+        running = asyncio.ensure_future(service.cleanup_transcript("hello"))
+        try:
+            await _wait_for(lambda: claude.handles)
+
+            await service.shutdown()
+
+            assert claude.handles[0].cancelled is True
+        finally:
+            claude.gate.set()
+            await running
 
 
 class TestUnsupportedHost:

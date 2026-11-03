@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from .cleanup import MAX_CLEANUP_CHARS
 from .dictation import MAX_CHUNK_BYTES, MAX_SECONDS, SAMPLE_RATE
 
 # Advertised as ``capabilities.voice`` on ``GET /api/version`` (both
@@ -18,6 +19,9 @@ VOICE_CAPABILITIES: dict[str, object] = {
     "sample_rate": SAMPLE_RATE,
     "max_seconds": MAX_SECONDS,
     "max_chunk_bytes": MAX_CHUNK_BYTES,
+    # ``POST /api/voice/cleanup`` exists; whether Claude Code is installed is
+    # only known when it runs.
+    "cleanup": True,
 }
 
 
@@ -117,3 +121,13 @@ class VoiceDictationResultResponse(BaseModel):
     state: str
     text: str | None
     duration_ms: int
+
+
+class VoiceCleanupRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_CLEANUP_CHARS)
+
+
+class VoiceCleanupResponse(BaseModel):
+    """The cleaned transcript; the original when there was nothing to clean."""
+
+    text: str

@@ -16,6 +16,7 @@ import { VoiceApiError, type VoiceApi } from '../voice/voiceApi';
 
 type DictationResponse = components['schemas']['VoiceDictationResponse'];
 type DictationResult = components['schemas']['VoiceDictationResultResponse'];
+type CleanupResult = components['schemas']['VoiceCleanupResponse'];
 
 /** Turn any failure of a voice request into a `VoiceApiError`. */
 export function toVoiceApiError(error: unknown): VoiceApiError {
@@ -99,6 +100,21 @@ export async function cancelVoiceInstall(agentId: string): Promise<VoiceStatus> 
 export async function removeVoice(agentId: string): Promise<VoiceStatus> {
   const body = await call(() => createAgentClient(agentId).DELETE('/api/voice/model'));
   return decodeStatus(body);
+}
+
+/**
+ * Tidies a transcript with Claude Code on the agent (fillers, self-corrections,
+ * punctuation, technical terms). The agent answers within 20 s.
+ */
+export async function cleanupTranscript(
+  agentId: string,
+  text: string,
+  signal: AbortSignal,
+): Promise<string> {
+  const body: CleanupResult = await call(() =>
+    createAgentClient(agentId).POST('/api/voice/cleanup', { body: { text }, signal }),
+  );
+  return body.text;
 }
 
 /** The dictation routes of one agent, for the uploader. */

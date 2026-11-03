@@ -1,6 +1,6 @@
 import { DictationUploader, systemClock, type UploadFailure, type UploaderClock } from './dictationUploader';
 import { PcmBuffer } from './pcmBuffer';
-import { VOICE_CODE, type VoiceApi } from './voiceApi';
+import { VOICE_CODE, isVoiceApiError, type VoiceApi } from './voiceApi';
 
 /** Why recording stopped on its own; the audio so far is still transcribed. */
 export type InterruptReason = 'background' | 'device' | 'limit';
@@ -19,7 +19,16 @@ export type DictationState =
       lagging: boolean;
     }
   | { kind: 'transcribing'; interruptedBy: InterruptReason | null; lagging: boolean }
-  | { kind: 'result'; text: string }
+  /** Claude Code is tidying `text`, the transcript as heard. */
+  | { kind: 'cleaning'; text: string }
+  | {
+      kind: 'result';
+      text: string;
+      /** The transcript as heard, when a cleanup changed it. */
+      original?: string;
+      /** Why the cleanup failed; `text` is then the transcript as heard. */
+      cleanupError?: CleanupError;
+    }
   | { kind: 'empty' }
   | {
       kind: 'failed';
@@ -29,6 +38,14 @@ export type DictationState =
       /** Audio is still buffered, so Retry needs no new recording. */
       hasAudio: boolean;
     };
+
+export interface CleanupError {
+  code: string;
+  message: string | null;
+}
+
+/** Tidies a transcript; rejects with a `VoiceApiError`. */
+export type TranscriptCleaner = (text: string, signal: AbortSignal) => Promise<string>;
 
 export interface RecorderSink {
   samples(samples: Int16Array): void;
@@ -67,14 +84,22 @@ export interface DictationControllerOptions {
   maxSeconds: number;
   onChange: (state: DictationState) => void;
   clock?: UploaderClock;
+  /**
+   * Read when a transcript arrives, so a setting changed mid-dictation applies
+   * to the next one: how to clean it up, or null to show it as heard.
+   */
+  cleaner?: () => TranscriptCleaner | null;
 }
 
 const COUNTDOWN_SECONDS = 15;
+/** Above the agent's 20 s budget and the relay's 30 s wait. */
+const CLEANUP_TIMEOUT_MS = 35_000;
 
 /**
  * One dictation at a time, as the UI sees it: microphone → buffer →
  * uploader → transcript. Android `DictationController.kt` and iOS
- * `DictationController.swift` have the same states and transitions.
+ * `DictationController.swift` have the same states and transitions, except
+ * `cleaning`, which is web-only for now.
  *
  * The transcript is handed to the UI as `result`; nothing here ever sends it.
  * Elapsed time is counted in samples, so the countdown and the agent's
@@ -87,6 +112,7 @@ export class DictationController {
   private recorder: Recorder | null = null;
   private buffer: PcmBuffer | null = null;
   private uploader: DictationUploader | null = null;
+  private cleanupAbort: AbortController | null = null;
   private level = 0;
   private lagging = false;
   private disposed = false;
@@ -110,6 +136,7 @@ export class DictationController {
         this.cancel();
         return;
       case 'transcribing':
+      case 'cleaning':
         return;
       default:
         void this.start();
@@ -143,7 +170,13 @@ export class DictationController {
         },
         done: (text) => {
           if (generation !== this.generation) return;
-          this.finishWith(text === '' ? { kind: 'empty' } : { kind: 'result', text });
+          const cleaner = text === '' ? null : (this.options.cleaner?.() ?? null);
+          if (cleaner === null) {
+            this.finishWith(text === '' ? { kind: 'empty' } : { kind: 'result', text });
+            return;
+          }
+          this.finishWith({ kind: 'cleaning', text });
+          void this.cleanUp(generation, text, cleaner);
         },
         failed: (failure) => {
           if (generation !== this.generation) return;
@@ -247,6 +280,15 @@ export class DictationController {
     }
   }
 
+  /** Stop a cleanup in progress and show the transcript as heard. */
+  skipCleanup(): void {
+    const state = this.state;
+    if (state.kind !== 'cleaning') return;
+    this.cleanupAbort?.abort();
+    this.cleanupAbort = null;
+    this.set({ kind: 'result', text: state.text });
+  }
+
   /** Leave a result, an empty result or a failure. */
   dismiss(): void {
     const kind = this.state.kind;
@@ -267,7 +309,33 @@ export class DictationController {
 
   private isActive(): boolean {
     const kind = this.kindNow();
-    return kind === 'starting' || kind === 'recording' || kind === 'transcribing';
+    return kind === 'starting' || kind === 'recording' || kind === 'transcribing' || kind === 'cleaning';
+  }
+
+  /** A cleanup that fails in any way leaves the transcript as heard. */
+  private async cleanUp(generation: number, text: string, cleaner: TranscriptCleaner): Promise<void> {
+    const controller = new AbortController();
+    this.cleanupAbort = controller;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, CLEANUP_TIMEOUT_MS);
+    let next: DictationState;
+    try {
+      const cleaned = (await cleaner(text, controller.signal)).trim();
+      next =
+        cleaned === '' || cleaned === text
+          ? { kind: 'result', text }
+          : { kind: 'result', text: cleaned, original: text };
+    } catch (error) {
+      next = { kind: 'result', text, cleanupError: cleanupError(error, timedOut) };
+    } finally {
+      clearTimeout(timer);
+      if (this.cleanupAbort === controller) this.cleanupAbort = null;
+    }
+    if (generation !== this.generation || this.kindNow() !== 'cleaning') return;
+    this.set(next);
   }
 
   private async fail(failure: UploadFailure): Promise<void> {
@@ -300,6 +368,8 @@ export class DictationController {
   }
 
   private discard(): void {
+    this.cleanupAbort?.abort();
+    this.cleanupAbort = null;
     const recorder = this.recorder;
     this.recorder = null;
     void recorder?.stop().catch(() => undefined);
@@ -338,4 +408,15 @@ export class DictationController {
     this.state = state;
     this.options.onChange(state);
   }
+}
+
+function cleanupError(error: unknown, timedOut: boolean): CleanupError {
+  if (timedOut) return { code: VOICE_CODE.cleanupTimeout, message: null };
+  if (isVoiceApiError(error)) {
+    return {
+      code: error.network ? VOICE_CODE.network : (error.code ?? VOICE_CODE.generic),
+      message: error.detailMessage ?? error.message,
+    };
+  }
+  return { code: VOICE_CODE.generic, message: error instanceof Error ? error.message : null };
 }

@@ -1,12 +1,21 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FakeClock,
   FakeRecorder,
   FakeVoiceApi,
+  Held,
+  answer,
+  networkError,
   refusal,
   settle,
+  type Reply,
 } from './__testing__/fakeVoiceApi';
-import { DictationController, RecorderError, type DictationState } from './dictationController';
+import {
+  DictationController,
+  RecorderError,
+  type DictationState,
+  type TranscriptCleaner,
+} from './dictationController';
 
 const RATE = 16_000;
 
@@ -21,7 +30,10 @@ beforeEach(() => {
   states = [];
 });
 
-function controller(maxSeconds = 120): DictationController {
+function controller(
+  maxSeconds = 120,
+  cleaner?: () => TranscriptCleaner | null,
+): DictationController {
   return new DictationController({
     api,
     createRecorder: () => recorder,
@@ -29,6 +41,7 @@ function controller(maxSeconds = 120): DictationController {
     maxSeconds,
     onChange: (state) => states.push(state),
     clock: new FakeClock(),
+    cleaner,
   });
 }
 
@@ -38,8 +51,11 @@ function speak(seconds: number): void {
 
 const kinds = (): string[] => states.map((state) => state.kind).filter((k, i, all) => k !== all[i - 1]);
 
-async function recording(maxSeconds?: number): Promise<DictationController> {
-  const dictation = controller(maxSeconds);
+async function recording(
+  maxSeconds?: number,
+  cleaner?: () => TranscriptCleaner | null,
+): Promise<DictationController> {
+  const dictation = controller(maxSeconds, cleaner);
   await dictation.start();
   await settle();
   return dictation;
@@ -225,5 +241,186 @@ describe('DictationController', () => {
     expect(dictation.current).toEqual({ kind: 'idle' });
     expect(api.log.filter((entry) => entry === 'create')).toHaveLength(1);
     expect(api.log.at(-1)).toBe('remove d1');
+  });
+});
+
+/** Claude Code on the agent, answering `reply`; every request is kept. */
+class FakeCleaner {
+  readonly calls: { text: string; signal: AbortSignal }[] = [];
+  reply: Reply<string> = { ok: 'Hello, world.' };
+
+  readonly clean: TranscriptCleaner = (text, signal) => {
+    this.calls.push({ text, signal });
+    return answer(this.reply, signal);
+  };
+}
+
+describe('DictationController cleanup', () => {
+  let cleaner: FakeCleaner;
+
+  beforeEach(() => {
+    cleaner = new FakeCleaner();
+  });
+
+  async function cleaning(): Promise<DictationController> {
+    const dictation = await recording(120, () => cleaner.clean);
+    speak(1);
+    await dictation.stop();
+    await settle();
+    return dictation;
+  }
+
+  it('cleans the transcript up before handing it back, keeping the transcript as heard', async () => {
+    const dictation = await cleaning();
+
+    expect(kinds()).toEqual(['starting', 'recording', 'transcribing', 'cleaning', 'result']);
+    expect(states.find((state) => state.kind === 'cleaning')).toEqual({
+      kind: 'cleaning',
+      text: 'hello world',
+    });
+    expect(dictation.current).toEqual({
+      kind: 'result',
+      text: 'Hello, world.',
+      original: 'hello world',
+    });
+    expect(cleaner.calls.map((call) => call.text)).toEqual(['hello world']);
+  });
+
+  it.each([
+    ['unchanged', 'hello world'],
+    ['unchanged but padded', '  hello world\n'],
+    ['empty', '  '],
+  ])('hands back a plain result when the cleanup comes back %s', async (_label, cleaned) => {
+    cleaner.reply = { ok: cleaned };
+
+    const dictation = await cleaning();
+
+    expect(dictation.current).toStrictEqual({ kind: 'result', text: 'hello world' });
+  });
+
+  it.each([
+    [
+      'a coded refusal',
+      refusal(503, 'cleanup_outdated', { detailMessage: 'Run claude update.' }),
+      { code: 'cleanup_outdated', message: 'Run claude update.' },
+    ],
+    ['an uncoded refusal', refusal(502, null), { code: 'generic', message: 'HTTP 502' }],
+    ['a dropped connection', networkError(), { code: 'network', message: 'offline' }],
+    ['an unexpected error', new Error('boom'), { code: 'generic', message: 'boom' }],
+  ])('shows the transcript as heard after %s, saying why', async (_label, error, cleanupError) => {
+    cleaner.reply = { fail: error };
+
+    const dictation = await cleaning();
+
+    expect(dictation.current).toEqual({ kind: 'result', text: 'hello world', cleanupError });
+  });
+
+  it('waits past the relay timeout, then gives up at 35 s with the transcript as heard', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      cleaner.reply = { hold: new Held<string>() };
+      const dictation = await cleaning();
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(dictation.current.kind).toBe('cleaning');
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await settle();
+
+      expect(cleaner.calls[0]?.signal.aborted).toBe(true);
+      expect(dictation.current).toEqual({
+        kind: 'result',
+        text: 'hello world',
+        cleanupError: { code: 'cleanup_timeout', message: null },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('skips a cleanup: the transcript as heard at once, the request aborted', async () => {
+    cleaner.reply = { hold: new Held<string>() };
+    const dictation = await cleaning();
+
+    dictation.skipCleanup();
+    await settle();
+
+    expect(cleaner.calls[0]?.signal.aborted).toBe(true);
+    expect(dictation.current).toStrictEqual({ kind: 'result', text: 'hello world' });
+  });
+
+  it('cancels a cleanup: back to idle, the request aborted', async () => {
+    cleaner.reply = { hold: new Held<string>() };
+    const dictation = await cleaning();
+
+    dictation.cancel();
+    await settle();
+
+    expect(cleaner.calls[0]?.signal.aborted).toBe(true);
+    expect(dictation.current).toEqual({ kind: 'idle' });
+  });
+
+  it('ignores the mic while cleaning up', async () => {
+    cleaner.reply = { hold: new Held<string>() };
+    const dictation = await cleaning();
+
+    dictation.toggle();
+    await dictation.start();
+    await settle();
+
+    expect(dictation.current).toEqual({ kind: 'cleaning', text: 'hello world' });
+    expect(api.log.filter((entry) => entry === 'create')).toHaveLength(1);
+  });
+
+  it('never lets an abandoned cleanup answer into the next dictation', async () => {
+    // A reply already on its way when the user cancels ignores the abort.
+    const answers: ((text: string) => void)[] = [];
+    const deaf: TranscriptCleaner = () =>
+      new Promise<string>((resolve) => {
+        answers.push(resolve);
+      });
+    const dictation = await recording(120, () => deaf);
+    speak(1);
+    await dictation.stop();
+    await settle();
+    dictation.cancel();
+    await dictation.start();
+    await settle();
+    speak(1);
+    await dictation.stop();
+    await settle();
+
+    answers[0]?.('Stale.');
+    await settle();
+    expect(dictation.current).toEqual({ kind: 'cleaning', text: 'hello world' });
+
+    answers[1]?.('Fresh.');
+    await settle();
+    expect(dictation.current).toEqual({ kind: 'result', text: 'Fresh.', original: 'hello world' });
+  });
+
+  it('reads the cleanup setting when the transcript arrives, not when recording starts', async () => {
+    let cleanUp = false;
+    const dictation = await recording(120, () => (cleanUp ? cleaner.clean : null));
+    speak(1);
+
+    cleanUp = true;
+    await dictation.stop();
+    await settle();
+
+    expect(dictation.current).toEqual({
+      kind: 'result',
+      text: 'Hello, world.',
+      original: 'hello world',
+    });
+  });
+
+  it('sends nothing to clean up when nothing was heard', async () => {
+    api.text = '';
+
+    const dictation = await cleaning();
+
+    expect(dictation.current).toEqual({ kind: 'empty' });
+    expect(cleaner.calls).toEqual([]);
   });
 });

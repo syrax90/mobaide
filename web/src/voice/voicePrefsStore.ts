@@ -15,8 +15,15 @@ interface VoicePrefsState {
    * text in the composer, which is the review.
    */
   skipReviewAgents: Record<string, true>;
+  /**
+   * Agents whose transcripts Claude Code tidies before the review, in Claude
+   * Code sessions ("Clean up dictated text with Claude Haiku"). Off by
+   * default: the text then leaves the computer for Anthropic.
+   */
+  cleanupAgents: Record<string, true>;
   setMicHidden: (agentId: string, hidden: boolean) => void;
   setSkipReview: (agentId: string, skip: boolean) => void;
+  setCleanup: (agentId: string, on: boolean) => void;
   forgetAgent: (agentId: string) => void;
 }
 
@@ -65,6 +72,7 @@ export const useVoicePrefsStore = create<VoicePrefsState>()(
     (set) => ({
       hiddenAgents: {},
       skipReviewAgents: {},
+      cleanupAgents: {},
       setMicHidden: (agentId, hidden) => {
         safely(() => {
           set((state) => ({ hiddenAgents: withAgent(state.hiddenAgents, agentId, hidden) }));
@@ -75,13 +83,21 @@ export const useVoicePrefsStore = create<VoicePrefsState>()(
           set((state) => ({ skipReviewAgents: withAgent(state.skipReviewAgents, agentId, skip) }));
         });
       },
+      setCleanup: (agentId, on) => {
+        safely(() => {
+          set((state) => ({ cleanupAgents: withAgent(state.cleanupAgents, agentId, on) }));
+        });
+      },
       forgetAgent: (agentId) => {
         safely(() => {
           set((state) =>
-            Object.hasOwn(state.hiddenAgents, agentId) || Object.hasOwn(state.skipReviewAgents, agentId)
+            Object.hasOwn(state.hiddenAgents, agentId) ||
+            Object.hasOwn(state.skipReviewAgents, agentId) ||
+            Object.hasOwn(state.cleanupAgents, agentId)
               ? {
                   hiddenAgents: withoutAgent(state.hiddenAgents, agentId),
                   skipReviewAgents: withoutAgent(state.skipReviewAgents, agentId),
+                  cleanupAgents: withoutAgent(state.cleanupAgents, agentId),
                 }
               : state,
           );
@@ -96,11 +112,13 @@ export const useVoicePrefsStore = create<VoicePrefsState>()(
           ...current,
           hiddenAgents: cleanAgentMap(stored?.hiddenAgents),
           skipReviewAgents: cleanAgentMap(stored?.skipReviewAgents),
+          cleanupAgents: cleanAgentMap(stored?.cleanupAgents),
         };
       },
       partialize: (state) => ({
         hiddenAgents: state.hiddenAgents,
         skipReviewAgents: state.skipReviewAgents,
+        cleanupAgents: state.cleanupAgents,
       }),
     },
   ),
@@ -112,4 +130,8 @@ export function useMicHidden(agentId: string): boolean {
 
 export function useSkipReview(agentId: string): boolean {
   return useVoicePrefsStore((state) => Object.hasOwn(state.skipReviewAgents, agentId));
+}
+
+export function useCleanup(agentId: string): boolean {
+  return useVoicePrefsStore((state) => Object.hasOwn(state.cleanupAgents, agentId));
 }

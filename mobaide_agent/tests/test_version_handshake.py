@@ -53,6 +53,7 @@ async def test_get_version(client) -> None:
             "sample_rate": 16000,
             "max_seconds": 120,
             "max_chunk_bytes": 65536,
+            "cleanup": True,
         },
         "fs": {"dirs": True, "windows_paths": sys.platform == "win32"},
     }
