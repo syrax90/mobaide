@@ -132,9 +132,17 @@ The agent carries no analytics SDK. The mobile apps carry Google's Firebase Anal
 
 Start with [architecture](docs/architecture.md), the [wire protocol](PROTOCOL.md), [deployment](docs/deployment.md), and [versioning and releases](docs/versioning-and-updates.md).
 
+## Contributing
+
+Bug fixes and improvements are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) tells you how to set up the code, run the tests and open a pull request.
+
 ## Support
 
 Ask questions in the [community discussions](https://github.com/syrax90/mobaide-community/discussions), or email [support@mobaide.com](mailto:support@mobaide.com).
+
+## License
+
+Mobaide is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for the copyright and the third-party code.
 
 ---
 

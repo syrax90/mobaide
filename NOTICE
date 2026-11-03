@@ -1,0 +1,16 @@
+Mobaide
+Copyright 2026 Pavel Timonin
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The license does not grant permission to use the name "Mobaide" or the
+Mobaide logo and icons, except as needed to describe the origin of the work.
+
+This product includes a modified copy of the Termux "terminal-emulator" and
+"terminal-view" libraries (https://github.com/termux/termux-app), in
+android/terminal-emulator and android/terminal-view. These two libraries are
+licensed under the Apache License, Version 2.0, and derive from Android
+Terminal Emulator by Jack Palevich. The LICENSE.md files in those directories
+are copied from termux-app; the GPLv3 they name applies to the rest of
+termux-app, not to these two libraries. The local changes are recorded in
+docs/terminal-view-fork-changes.md.
