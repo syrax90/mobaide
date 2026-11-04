@@ -371,11 +371,18 @@ reference CLA-154).
   account-generation-guarded `CustomAgentTypesRepository`, wired to the
   `UserEventBus` (`custom_type.created/updated/deleted`). A deletion also purges
   that kind's saved shortcuts locally, mirroring the server-side cascade.
+- The same repository holds the per-account mode order
+  (`GET/PUT /api/session-mode-order`). It keeps the higher `version` and
+  reconciles on user-events connect and on `session_mode_order.updated`.
 - `APP_PROTOCOL_VERSION` is 7, with four central DTO fixtures in the
   golden-fixture registry.
 - The create-session mode step has one card per custom type plus an "Add custom
   agent…" card opening `CustomAgentTypeEditorSheet` (edit via long-press;
   delete confirmation spells out the shortcut cascade).
+- The project and mode steps have a **Reorder** / **Done** toolbar toggle
+  (`EditMode` + `.onMove`). One save per drop. The project step also mirrors
+  `projects.changed` live. See "Reorderable New-Session Lists" in
+  [features.md](features.md).
 - Custom launches keep the worktree toggle and run as plain terminal sessions.
   Session cards label custom kinds via `kind_label` → live registry name →
   `Custom`. The control-key bar falls back to a kind-neutral 9-key set.

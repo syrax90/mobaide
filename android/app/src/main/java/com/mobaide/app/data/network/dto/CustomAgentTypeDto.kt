@@ -38,3 +38,23 @@ data class UpdateCustomAgentTypeRequest(
 data class CustomTypeDeletedPayload(
     val id: String,
 )
+
+/**
+ * The account's order of the create-session mode picker's cards — the body of
+ * `GET`/`PUT /api/session-mode-order` and of the `session_mode_order.updated`
+ * push. [order] lists mode ids top to bottom (`claude`, `codex`,
+ * `antigravity`, `auto_scan`, `shell`, `custom_<id>`); empty means the default
+ * order. [version] grows on every change, so an older snapshot is dropped.
+ */
+@Serializable
+data class SessionModeOrderDto(
+    val order: List<String> = emptyList(),
+    val version: Int = 0,
+    val updated_at: String? = null,
+)
+
+/** PUT body: replaces the whole order. */
+@Serializable
+data class UpdateSessionModeOrderRequest(
+    val order: List<String>,
+)

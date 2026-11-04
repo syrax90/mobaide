@@ -1383,7 +1383,7 @@ class TestPushColumnsMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 22
+        assert (await cursor.fetchone())[0] == 23
         cursor = await db.conn.execute("PRAGMA table_info(mobile_devices)")
         columns = {r[1] for r in await cursor.fetchall()}
         assert {"platform", "push_token", "push_environment"} <= columns
@@ -1577,7 +1577,7 @@ class TestAdminOwnedAgentPurgeMigration:
 
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 22
+        assert row[0] == 23
 
         # v4 purges admin-owned agents + their cascade rows.
         assert await db.get_agent(admin_agent_id) is None
@@ -1607,7 +1607,7 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 22
+        assert row[0] == 23
         await db.close()
 
 
@@ -2544,7 +2544,7 @@ class TestCustomAgentTypesMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 22
+        assert (await cursor.fetchone())[0] == 23
 
         # Table is usable and the NOCASE unique index came back with it.
         row = await db.create_custom_agent_type(owner, "Aider", "c1")
@@ -2558,7 +2558,7 @@ class TestCustomAgentTypesMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 22
+        assert (await cursor.fetchone())[0] == 23
         assert await db.get_custom_agent_type(row["id"]) is not None
         await db.close()
 
@@ -2723,7 +2723,7 @@ class TestAgentUninstallMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 22
+        assert (await cursor.fetchone())[0] == 23
         # Pre-existing agents read as not supporting uninstall until their
         # next handshake says otherwise.
         assert (await db.get_agent(agent_id))["supports_uninstall"] == 0
@@ -2735,7 +2735,7 @@ class TestAgentUninstallMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 22
+        assert (await cursor.fetchone())[0] == 23
         assert await db.match_uninstall_request(agent_id, raw_token) is True
         await db.close()
 
@@ -2769,7 +2769,7 @@ class TestDeviceTokenRevocationMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 22
+        assert (await cursor.fetchone())[0] == 23
         # A device revoked before the upgrade loses its old tokens with it.
         assert await db.device_tokens_valid_after("dev-gone") == int(
             datetime.fromisoformat(revoked_at).timestamp()

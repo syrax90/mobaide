@@ -47,6 +47,10 @@ protocol CustomTypeSyncApplying: Sendable {
     func applyDeleted(typeId: String) async
     /// Full REST reconcile after (re)connect.
     func refreshCustomTypes() async throws
+    /// `session_mode_order.updated`: the account's new mode-picker order.
+    func applyModeOrder(_ order: SessionModeOrderDto) async
+    /// REST reconcile of the mode-picker order after (re)connect.
+    func refreshModeOrder() async throws
     /// Drop the cached snapshot on sign-out (cross-account isolation).
     func clear() async
 }
@@ -85,6 +89,8 @@ struct NoOpCustomTypeSyncApplier: CustomTypeSyncApplying {
     func applyUpserted(_ type: CustomAgentTypeDto) async {}
     func applyDeleted(typeId: String) async {}
     func refreshCustomTypes() async throws {}
+    func applyModeOrder(_ order: SessionModeOrderDto) async {}
+    func refreshModeOrder() async throws {}
     func clear() async {}
 }
 

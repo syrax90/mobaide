@@ -123,6 +123,28 @@ Older clients ignore the kind (``else -> Unit`` / ``default: .none`` / ``{kind: 
 
 A fixture edit must therefore satisfy both arms — and note that Swift's ``Codable`` drops unknown keys on re-encode while the web client's ``z.looseObject`` preserves them, so an unknown-extra-key case added to a shared fixture would fail iOS. Web coverage is deliberately partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``, which fails if a new fixture file is neither asserted nor assigned an owner.
 
+### Delta 2026-11-04: reorderable new-session lists
+
+Additive delta within proto-v7 (2026-11-04, drag-to-reorder in the new-session wizard): **one additive ``central_server`` REST resource, one additive user-event kind, no version bump.** The agent is untouched.
+
+**Projects** reuse the agent's existing ``PATCH /api/projects/order`` (full name list; the ``200`` body is the re-sorted list, and ``projects.changed`` follows). The order lives in the agent's ``projects.json``, so every client shows it.
+
+**Mode-picker cards** (the "agents" step) are ordered per account on the central server:
+
+| Route | Body | Result and notes |
+|-------|------|------------------|
+| ``GET /api/session-mode-order`` | none | ``{"order": [str], "version": int, "updated_at": str \| null}``. ``order: []``, ``version: 0`` and ``updated_at: null`` until the first save. |
+| ``PUT /api/session-mode-order`` | ``{"order": [str]}`` | Full replace; same body as ``GET``. ``[]`` restores the default order. |
+
+* Dashboard/user JWT, non-admin.
+* Each id matches the shortcuts ``KIND_PATTERN`` (``^[a-z0-9_]{1,32}$``): ``claude``, ``codex``, ``antigravity``, ``auto_scan``, ``shell``, ``custom_<12hex>``. At most 64 ids, no duplicates → else ``422``. The server stores the ids opaquely and does not check them against the live custom types.
+* ``version`` grows by one on every change. A ``PUT`` of the stored order changes nothing and pushes nothing.
+* A change pushes the user event ``session_mode_order.updated`` with the same body to every user-events socket of the account. Clients keep the higher ``version`` of the cached and incoming snapshot, and reconcile with ``GET`` on every user-events connect.
+* Clients apply the list the same way: a card the list names is ranked by its place there; a card it does not name (a custom type created after the last save, a mode a newer client added) keeps its default place among the other unnamed cards, after the named ones; an id that names no card is skipped.
+* Stored in ``user_session_mode_orders`` (``PRAGMA user_version`` 23, Alembic ``0021``) and purged with the account.
+
+Older clients ignore the event kind and never call the route, so they keep the default order.
+
 ### Delta 2026-10-19: Claude focus view toggle
 
 Additive delta within proto-v7 (2026-10-19, Claude focus view toggle): **additive optional field, no version bump.** ``claude_options`` gains ``focus_mode`` — bool or null, default ``null``.

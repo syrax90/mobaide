@@ -14,6 +14,7 @@ from central_server.manifest.store import ManifestStore
 from central_server.pairing.service import PairingService
 from central_server.push import PushDispatcher
 from central_server.relay.routing import RoutingTable
+from central_server.session_mode_order.service import SessionModeOrderService
 from central_server.shortcuts.service import ShortcutService
 from central_server.templates.service import TemplateService
 
@@ -81,6 +82,9 @@ async def app(config, db):
         db, application.state.routing
     )
     application.state.custom_agent_type_service = CustomAgentTypeService(
+        db, application.state.routing
+    )
+    application.state.session_mode_order_service = SessionModeOrderService(
         db, application.state.routing
     )
     # Disabled dispatcher (no APNs config in tests); push tests swap in a

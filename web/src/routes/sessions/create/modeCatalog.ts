@@ -105,3 +105,24 @@ export function buildModeCards(input: {
 
   return [...builtIns, ...custom];
 }
+
+/**
+ * Put the cards in the account's saved order (`/api/session-mode-order`).
+ *
+ * A card the order names is ranked by its position there. A card it does not
+ * name — a custom type created after the last reorder, or a mode a newer
+ * client added — keeps its default place relative to the other unnamed cards,
+ * after the named ones. Ids that match no card (a deleted type) are skipped.
+ * Same rule on Android and iOS.
+ */
+export function applyModeOrder<T extends { mode: string }>(
+  cards: readonly T[],
+  order: readonly string[],
+): T[] {
+  if (order.length === 0) return [...cards];
+  const rank = new Map(order.map((mode, index) => [mode, index]));
+  return cards
+    .map((card, index) => ({ card, key: rank.get(card.mode) ?? order.length + index }))
+    .sort((a, b) => a.key - b.key)
+    .map(({ card }) => card);
+}

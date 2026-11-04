@@ -1,0 +1,7 @@
+{
+  "type": "UpdateSessionModeOrderRequest",
+  "cases": [
+    { "name": "full", "wire": { "order": ["codex", "claude", "custom_ab12cd34ef56"] } },
+    { "name": "reset_to_default", "wire": { "order": [] } }
+  ]
+}

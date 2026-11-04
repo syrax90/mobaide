@@ -108,6 +108,7 @@ export const COVERED_FIXTURES: readonly string[] = [
   'dto/central/CustomAgentTypeDto.json',
   'dto/central/CustomTypeDeletedPayload.json',
   'dto/central/FirstAgentPairedPayload.json',
+  'dto/central/SessionModeOrderDto.json',
   'dto/central/TemplateDeletedPayload.json',
   'dto/central/TemplateDto.json',
 ];
@@ -201,6 +202,7 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/central/ShortcutDto.json': OWNER.shortcutsRemoved,
   'dto/central/TrustPinResponse.json': OWNER.generated,
   'dto/central/UpdateCustomAgentTypeRequest.json': OWNER.customTypes,
+  'dto/central/UpdateSessionModeOrderRequest.json': OWNER.generated,
   'dto/central/UpdateShortcutRequest.json': OWNER.shortcutsRemoved,
   'dto/central/UpdateTemplateRequest.json': OWNER.generated,
   'dto/central/UserAuthResponse.json': OWNER.generated,

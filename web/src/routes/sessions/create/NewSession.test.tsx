@@ -92,6 +92,13 @@ vi.mock('../../../api/customAgentTypeRepository', async (importOriginal) => {
   return { ...actual, listCustomAgentTypes: () => Promise.resolve([]) };
 });
 
+vi.mock('../../../api/sessionModeOrderRepository', () => ({
+  getSessionModeOrder: () =>
+    Promise.resolve({ order: [], version: 0, updated_at: '1970-01-01T00:00:00Z' }),
+  saveSessionModeOrder: (order: readonly string[]) =>
+    Promise.resolve({ order: [...order], version: 1, updated_at: '1970-01-01T00:00:00Z' }),
+}));
+
 // Before any persisted store is imported.
 stubLocalStorage();
 
@@ -321,7 +328,7 @@ describe('NewSession launch prefs', () => {
     await renderWizard();
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /beta/ })).toHaveAttribute(
+      expect(screen.getByRole('button', { name: /^beta/ })).toHaveAttribute(
         'aria-pressed',
         'true',
       );
@@ -341,7 +348,7 @@ describe('NewSession launch prefs', () => {
     await renderWizard();
 
     expect(screen.getByRole('heading', { name: 'Where should it run?' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /beta/ })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /^beta/ })).toHaveAttribute(
       'aria-pressed',
       'false',
     );
@@ -356,7 +363,7 @@ describe('NewSession project step', () => {
   it('advances to the agent step on the project row itself', async () => {
     await renderWizard();
 
-    fireEvent.click(screen.getByRole('button', { name: /alpha/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^alpha/ }));
 
     expect(await screen.findByRole('heading', { name: 'What should it run?' })).toBeInTheDocument();
     expect(currentPath()).toBe('/agents/agent-1/new-session?step=mode&project=alpha');
@@ -368,28 +375,28 @@ describe('NewSession project step', () => {
 
   it('brings the picked row back highlighted on the wizard own Back', async () => {
     await renderWizard();
-    fireEvent.click(screen.getByRole('button', { name: /alpha/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^alpha/ }));
     await screen.findByRole('heading', { name: 'What should it run?' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
 
     expect(await screen.findByRole('heading', { name: 'Where should it run?' })).toBeInTheDocument();
     expect(currentPath()).toBe('/agents/agent-1/new-session?step=project&project=alpha');
-    expect(screen.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /^alpha/ })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('returns to the project step it came from on browser Back', async () => {
     // The stated cost of the single push: Back undoes the pick rather than
     // preserving it, because the entry it returns to predates the click.
     await renderWizard();
-    fireEvent.click(screen.getByRole('button', { name: /alpha/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^alpha/ }));
     await screen.findByRole('heading', { name: 'What should it run?' });
 
     fireEvent.click(screen.getByTestId('history-back'));
 
     expect(await screen.findByRole('heading', { name: 'Where should it run?' })).toBeInTheDocument();
     expect(currentPath()).toBe('/agents/agent-1/new-session');
-    expect(screen.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: /^alpha/ })).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('advances on a recent directory, carrying it in the URL', async () => {
@@ -439,7 +446,7 @@ describe('NewSession project step', () => {
   it('leaves Continue disabled on a deep link that already names a project', async () => {
     await renderWizard('?step=project&project=alpha');
 
-    expect(screen.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /^alpha/ })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
   });
 });
@@ -488,7 +495,7 @@ describe('NewSession create project', () => {
     // left behind, it would outrank the created row and be what Continue sends.
     expect(await screen.findByRole('heading', { name: 'Where should it run?' })).toBeInTheDocument();
     expect(screen.getByLabelText('Absolute path')).toHaveValue('');
-    expect(screen.getByRole('button', { name: /gamma/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /^gamma/ })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('closes on Cancel and leaves the wizard on the project step', async () => {

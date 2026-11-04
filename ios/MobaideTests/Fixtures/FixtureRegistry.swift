@@ -99,6 +99,8 @@ enum FixtureRegistry {
         "CreateCustomAgentTypeRequest": runner(CreateCustomAgentTypeRequest.self),
         "UpdateCustomAgentTypeRequest": runner(UpdateCustomAgentTypeRequest.self),
         "CustomTypeDeletedPayload": runner(CustomTypeDeletedPayload.self),
+        "SessionModeOrderDto": runner(SessionModeOrderDto.self),
+        "UpdateSessionModeOrderRequest": runner(UpdateSessionModeOrderRequest.self),
         // DeviceDto.swift
         "DeviceResponse": runner(DeviceResponse.self),
         "RegisterPushTokenRequest": runner(RegisterPushTokenRequest.self),
