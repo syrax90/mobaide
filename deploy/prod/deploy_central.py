@@ -20,6 +20,8 @@ What it does:
   6) On compose-up failure: auto-rollback by swapping central_server.prev back in.
      A failed health check never rolls back — the containers are already up, so
      the deployed source is what the logs describe; roll back with --rollback.
+     It exits 3 (EXIT_HEALTH_UNCONFIRMED), not 1, so a caller such as
+     deploy_all.py can tell "deployed, health not confirmed" from a failed deploy.
 
 Server-side artifacts (survive across runs):
     /opt/mobaide/central_server/         current source
@@ -59,6 +61,7 @@ SSH_HOST = "mobaide"
 REMOTE_BASE = "/opt/mobaide"
 DOMAIN = "mobaide.com"
 HEALTH_URL = f"https://{DOMAIN}/api/health"
+EXIT_HEALTH_UNCONFIRMED = 3
 # Same Caddy site block as the apex, but a separate DNS record and separate
 # per-hostname Cloudflare edge config — so it fails independently, and it is
 # the hostname every agent tunnel and mobile client actually connects to.
@@ -935,12 +938,12 @@ def _run_deploy(
         fail(f"Health check inconclusive: {e}")
         warn(f"NOT rolling back — the server may be healthy. Verify manually: curl {HEALTH_URL}")
         report_health_hints()
-        return 1
+        return EXIT_HEALTH_UNCONFIRMED
     except DeployError as e:
         fail(f"Health check failed: {e}")
         warn("NOT rolling back — the deployed source stays live so the failure stays diagnosable.")
         report_health_hints()
-        return 1
+        return EXIT_HEALTH_UNCONFIRMED
 
     print_summary(tag, args.tls_mode)
     return 0

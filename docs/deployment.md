@@ -9,6 +9,7 @@ The **"Production (central server on a VPS)"** section below is the recommended 
 
 **On this page**
 
+- [Shipping several components at once](#shipping-several-components-at-once)
 - [Production (central server on a VPS)](#production-central-server-on-a-vps)
   - [One-time setup](#one-time-setup)
   - [Deploy](#deploy)
@@ -37,6 +38,37 @@ The **"Production (central server on a VPS)"** section below is the recommended 
   - [Uninstalling the agent](#uninstalling-the-agent)
   - [Android client configuration](#android-client-configuration)
   - [Troubleshooting](#troubleshooting)
+
+## Shipping several components at once
+
+`deploy/prod/deploy_all.py` ships the components you choose, in a safe order. iOS is not included: it ships from Xcode.
+
+```bash
+python deploy/prod/deploy_all.py                     # checkbox menu
+python deploy/prod/deploy_all.py --only server,web   # no menu
+python deploy/prod/deploy_all.py --dry-run           # show the plan only
+```
+
+| Order | Component | Command it runs |
+|---|---|---|
+| 1 | `server` | `deploy_central.py --tls-mode CloudflareOrigin --force` |
+| 2 | `agent` | `release_agent.py <manifest version>` |
+| 3 | `web` | `deploy_web.py` |
+| 4 | `android` | `release_android.py <manifest version>` |
+
+- **Pre-ticked boxes.** A box is ticked when production runs an older version than `.release-please-manifest.json` on HEAD.
+
+  | Component | Live version source |
+  |---|---|
+  | server | `GET /api/version` → `server_version` |
+  | agent | `GET /api/v1/agent/manifest.json` → `body.version` |
+  | android | Play internal track (read-only edit; needs the release keys) |
+  | web | No public version. Uses the last version this script shipped. |
+
+  The script records each shipped version in `deploy-state.json` in the release-key folder. A box with no known live version shows `?` and stays empty. Git history is not used: it cannot tell what is deployed.
+- **SSH cooldown.** The VPS firewall rate-limits ssh. When you choose server and web, the web step starts at least 300 s after the server step ends (`--ssh-cooldown`). The agent step runs during that wait.
+- **Server health.** `deploy_central.py` exits `3` when compose is up but its health poll failed. `deploy_all.py` then polls `/api/version` for up to 300 s. It continues when the expected `server_version` answers. Otherwise it asks you.
+- **Failures.** A failed step stops the run. The later steps depend on the earlier ones.
 
 ## Production (central server on a VPS)
 
