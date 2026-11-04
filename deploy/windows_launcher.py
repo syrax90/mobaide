@@ -11,10 +11,9 @@ as a subprocess; its stdout / stderr are redirected to rotated log files
 under ``<prefix>/logs/``. If the launcher subprocess exits with code
 ``75`` (``_EXIT_RESTART_REQUESTED`` — emitted on successful pair or staged
 update) the supervisor re-resolves ``current_version`` and respawns
-in-place. This in-process loop is what gives the user the immediate
-post-pair restart; Task Scheduler's own ``-RestartCount`` /
-``-RestartInterval`` (1-minute floor) is the outer fallback for the
-crash-loop case.
+in-place. This in-process loop is the only restart path: Task Scheduler's
+``-RestartCount`` / ``-RestartInterval`` apply only when the task fails to
+start, never to a supervisor that exited by itself, whatever the code.
 
 Pure stdlib — never imports ``mobaide`` and never imports ``pywin32``. The
 Scheduled Task action invokes it with whichever Python ``install.ps1``
@@ -339,9 +338,9 @@ def _supervise(prefix: Path) -> int:
         successful pair (so the next boot reads the just-written
         ``RELAY_AGENT_ID``/``RELAY_AGENT_TOKEN``) and after a staged
         auto-update.
-      * Any other exit code: return it to Task Scheduler, which decides
-        whether to restart based on its ``-RestartCount`` /
-        ``-RestartInterval`` settings.
+      * Any other exit code: return it. Task Scheduler does not restart a
+        task that exited by itself, so the agent stays down until the next
+        logon — the agent must request every restart with exactly 75.
 
     ``KeyboardInterrupt`` (CTRL_C / CTRL_BREAK from Task Scheduler's
     ``Stop-ScheduledTask``) terminates the subprocess and exits 0.

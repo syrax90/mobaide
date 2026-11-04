@@ -256,6 +256,36 @@ async def test_staged_swap_succeeds(layout, monkeypatch) -> None:
     assert exits == [75]
 
 
+async def test_already_staged_version_is_not_staged_again(layout) -> None:
+    """The running agent keeps going for its graceful shutdown after it asks
+    for the restart. A manifest for the same release in that window (a relay
+    push, a forced "Install now") must not rebuild it or ask again."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    builds: list[Path] = []
+    exits: list[int] = []
+
+    def counting_builder(venv_dir: Path) -> None:
+        builds.append(venv_dir)
+        _fake_venv_builder(venv_dir)
+
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        venv_builder=counting_builder,
+        finalizer=_fake_finalizer,
+        exit_func=exits.append,
+    )
+    first = await updater.consider_manifest(body, signature_b64, body["version"])
+    again = await updater.consider_manifest(body, signature_b64, body["version"])
+    forced = await updater.force_update_now(body, signature_b64, body["version"])
+
+    assert (first, again, forced) == ("staged", "staged", "staged")
+    assert len(builds) == 1
+    assert exits == [75]
+
+
 async def test_forward_only_skips_older_version_without_force(layout) -> None:
     """Auto/poll updates are forward-only: a manifest OLDER than the running
     version is a no_change, never a (destructive) re-stage. This is the guard

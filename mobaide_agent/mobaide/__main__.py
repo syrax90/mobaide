@@ -417,6 +417,7 @@ def _current_user() -> str:
 
 def _run_agent() -> None:
     from mobaide.agent.app import create_app
+    from mobaide.agent.restart import bind_server, requested_exit_code
 
     app = create_app()
     config = uvicorn.Config(
@@ -431,6 +432,26 @@ def _run_agent() -> None:
         access_log=False,
     )
     server = uvicorn.Server(config)
+    # A staged update stops this server through ``request_restart`` and the
+    # process then exits with the requested code. uvicorn turns a raw
+    # ``sys.exit(75)`` during startup into its own exit code 3, which the
+    # Windows supervisor does not respawn.
+    bind_server(server)
+    try:
+        _serve(server)
+    except SystemExit:
+        if requested_exit_code() is None:
+            raise
+    finally:
+        bind_server(None)
+    code = requested_exit_code()
+    if code is not None:
+        sys.exit(code)
+    if not server.started:
+        sys.exit(uvicorn.config.STARTUP_FAILURE)
+
+
+def _serve(server: uvicorn.Server) -> None:
     if sys.platform == "win32":
         # uvicorn 0.36+ bypasses ``asyncio.get_event_loop_policy()`` in
         # single-process mode by calling
@@ -449,17 +470,13 @@ def _run_agent() -> None:
         # ``run_pairing_monitor`` → ``PairingWsClient.wait_for_claim``.
         with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
             runner.run(server.serve())
-    else:
-        # POSIX: native ``asyncio.SelectorEventLoop`` is the default;
-        # ``uvicorn.run`` handles signals + loop creation correctly without
-        # extra plumbing.
-        uvicorn.run(
-            app,
-            host=app.state.config.host,
-            port=app.state.config.port,
-            # Keep the /internal/hook token query param out of access logs.
-            access_log=False,
-        )
+        return
+    # POSIX: ``Server.run`` builds uvicorn's default loop and handles signals,
+    # like ``uvicorn.run``; Ctrl+C ends the run quietly, as it does there.
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        pass
 
 
 def _run_update() -> int:

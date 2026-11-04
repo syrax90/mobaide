@@ -70,9 +70,10 @@ logger = logging.getLogger(__name__)
 
 
 # Exit code requested by the updater when a swap has happened. Linux
-# ``RestartForceExitStatus=75`` and Windows SC_ACTION_RESTART both
-# interpret this as "please bring me back up", so the launcher boots into
-# the freshly-staged release on the next start.
+# ``RestartForceExitStatus=75`` and the Windows supervisor
+# (``deploy/windows_launcher.py``) both interpret this as "please bring me
+# back up", so the launcher boots into the freshly-staged release on the next
+# start. The running agent requests it through ``mobaide.agent.restart``.
 EXIT_RESTART_REQUESTED = 75
 
 # Minimum interval between "deferred because busy" retry attempts.
@@ -268,6 +269,10 @@ class StagedBinaryUpdater:
         self._finalizer = finalizer or _finalize_wheel_install
         self._exit_func = exit_func or sys.exit
         self._first_deferred_at: float | None = None
+        # Set once a release is staged. The agent keeps running for its
+        # graceful shutdown after asking for the restart, and a manifest that
+        # arrives in that window must not stage the same release again.
+        self._staged_version: str | None = None
         self._lock = asyncio.Lock()
 
     @property
@@ -297,11 +302,15 @@ class StagedBinaryUpdater:
             callback and the standalone CLI) ``self._exit_func`` is invoked
             with ``EXIT_RESTART_REQUESTED`` before the function returns. HTTP
             wrappers pass ``False`` so they can flush the response and then
-            schedule the exit on the event loop.
+            schedule the exit on the event loop. A manifest for the version
+            this updater already staged returns ``"staged"`` with no new work
+            and no second exit call (the restart is still pending).
             ``"signature_failed"`` — fail-closed; agent stays on current.
         """
         if not latest_version:
             return "no_change"
+        if latest_version == self._staged_version:
+            return "staged"
         if not force and latest_version == self._current_version:
             self._first_deferred_at = None
             return "no_change"
@@ -365,6 +374,7 @@ class StagedBinaryUpdater:
                 "updater.staged from=%s to=%s release_dir=%s",
                 self._current_version, target_version, release_dir,
             )
+            self._staged_version = target_version
             if exit_after_stage:
                 self._exit_func(EXIT_RESTART_REQUESTED)
             return "staged"

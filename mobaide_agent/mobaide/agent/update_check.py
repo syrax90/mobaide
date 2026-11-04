@@ -99,9 +99,10 @@ async def run_https_update_check(
 
     * ``"no_change"`` — agent already on the published version.
     * ``"deferred"`` — busy sessions; updater will retry later.
-    * ``"staged"`` — release staged; the updater has already invoked
-      ``sys.exit(EXIT_RESTART_REQUESTED)`` and the supervisor is about
-      to respawn (under test injection the call returns instead).
+    * ``"staged"`` — release staged; the updater has already called its
+      exit function (``request_restart`` in the running agent), so the
+      process exits with ``EXIT_RESTART_REQUESTED`` and the supervisor
+      respawns it.
     * ``"signature_failed"`` — fail-closed; stays on current version.
     * ``"unreachable"`` — transport or parse failure; the caller logs
       and moves on. The periodic poll specifically depends on this
