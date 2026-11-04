@@ -2,9 +2,11 @@
 
 Intentionally duplicated from ``central_server.manifest.store`` — the two
 packages cannot share code (same constraint that drives the duplicated
-``relay/envelope.py`` files). The signing key pair lives on the central
-server; the public half is baked into install scripts at script-publish
-time and persisted at ``<prefix>/trust/central_server.pub``.
+``relay/envelope.py`` files). The private key stays in the operator's local
+release folder and signs each manifest in ``deploy/prod/release_agent.py``.
+The central server holds only the public half, which is baked into install
+scripts at script-publish time and persisted at
+``<prefix>/trust/central_server.pub``.
 """
 from __future__ import annotations
 
