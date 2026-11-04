@@ -585,8 +585,9 @@ buffer is legitimate to expand into.
 ```
 ios/
 ├── Config/Protocol.xcconfig      # APP_PROTOCOL_VERSION / MIN_SERVER_PROTOCOL_VERSION
-│                                 # + optional #include of Local.xcconfig (gitignored dev overrides;
-│                                 #   see Config/Local.xcconfig.example)
+│                                 # + #include of Version.xcconfig and optional Local.xcconfig
+│                                 #   (gitignored dev overrides; see Config/Local.xcconfig.example)
+├── Config/Version.xcconfig       # MARKETING_VERSION / CURRENT_PROJECT_VERSION, bumped by release-please
 ├── Mobaide.xcodeproj             # hand-authored; objectVersion 70, Xcode 16 synchronized folder groups;
 │                                 # SPM: GoogleSignIn-iOS ≥ 9.0, SwiftTerm 1.15.0,
 │                                 #   firebase-ios-sdk ≥ 12.18 (product FirebaseAnalytics only)

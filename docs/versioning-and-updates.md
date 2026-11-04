@@ -8,7 +8,7 @@ them:
 
 | Concept | Type | Purpose |
 |--------|------|---------|
-| Component semver (`android-vX.Y.Z`, `agent-vX.Y.Z`, `server-vX.Y.Z`, `web-vX.Y.Z`) | Independent semver per component | Human-facing release identity. Ships on its own cadence. **Does not** gate compatibility. |
+| Component semver (`android-vX.Y.Z`, `ios-vX.Y.Z`, `agent-vX.Y.Z`, `server-vX.Y.Z`, `web-vX.Y.Z`) | Independent semver per component | Human-facing release identity. Ships on its own cadence. **Does not** gate compatibility. |
 | `protocol_version` | Single shared integer | The only compatibility signal between Android, `mobaide_agent`, and `central_server`. Bumped when the wire contract changes. |
 
 Wire-contract details and the `protocol_version` history live in
@@ -39,6 +39,7 @@ from your own machine with a local script. No release key is stored on GitHub.
 | `agent-vX.Y.Z` | `mobaide_agent` | `python deploy/prod/release_agent.py` |
 | `server-vX.Y.Z` | `central_server` | `python deploy/prod/deploy_central.py` (the tag only marks the version) |
 | `web-vX.Y.Z` | Web client (`web/`) | `python deploy/prod/deploy_web.py` (the tag only marks the version) |
+| `ios-vX.Y.Z` | iOS app | Archive and upload from Xcode (the tag only marks the version) |
 | `proto-vN` | Wire contract | _(nothing ships)_ |
 
 > [!NOTE]
@@ -157,6 +158,7 @@ The rule is one line: **the PR title is the release trigger.**
 | `central_server` | `feat(server): …` or `fix(server): …` |
 | Android app | `feat(android): …` or `fix(android): …` |
 | Web client | `feat(web): …` or `fix(web): …` |
+| iOS app | `feat(ios): …` or `fix(ios): …` |
 | Anything else (CI, docs, refactor) | `chore: …`, `docs: …`, `refactor: …` — no release fires |
 
 **How far the version moves is not the same for every component.** Every
@@ -165,10 +167,10 @@ reasons, and only one of them is permanent:
 
 | Component | `fix` | `feat` | `feat!` | Why |
 |-----------|-------|--------|---------|-----|
-| Android | patch | patch | patch | `"versioning": "always-bump-patch"` on the `android` package. **Permanent.** |
+| Android, iOS | patch | patch | patch | `"versioning": "always-bump-patch"` on the `android` and `ios` packages. **Permanent.** |
 | agent, server, web | patch | patch | minor | Root-level `bump-minor-pre-major` + `bump-patch-for-minor-pre-major`. Pre-`1.0.0` only. |
 
-- **Android.** release-please's `AlwaysBumpPatch` ignores the commit type
+- **Android, iOS.** release-please's `AlwaysBumpPatch` ignores the commit type
   entirely, breaking changes included. **Permanent** — minor and major are
   hand-cut, see [Cutting an Android minor or major](#cutting-an-android-minor-or-major).
 - **agent, server, web.** release-please gates both flags on
@@ -210,12 +212,12 @@ What happens after merge:
    - `.release-please-manifest.json` (the manifest of record),
    - the version file of the component: `pyproject.toml` for `mobaide_agent` /
      `central_server`, `android/app/build.gradle.kts` for android (the line
-     annotated with `// x-release-please-version`), or `web/package.json` for
-     web,
+     annotated with `// x-release-please-version`), `ios/Config/Version.xcconfig`
+     for ios, or `web/package.json` for web,
    - the component's `CHANGELOG.md` (prepends a new `## [vX.Y.Z]`
      section).
 3. Merging that release-PR pushes the corresponding `agent-vX.Y.Z` /
-   `server-vX.Y.Z` / `android-vX.Y.Z` / `web-vX.Y.Z` tag. Nothing ships yet.
+   `server-vX.Y.Z` / `android-vX.Y.Z` / `ios-vX.Y.Z` / `web-vX.Y.Z` tag. Nothing ships yet.
 4. You run the matching local script from the tag table above. This is a
    deliberate pause: a bad merge does not ship until you start the release.
 
@@ -227,7 +229,7 @@ fires after a merge.
 creates an empty GitHub Release on this repo with the tag (see
 release-please-action issue #1034). A follow-up step in `release-please.yml`
 deletes it and keeps the tag, so the Releases tab here stays empty for
-`agent-v*` / `server-v*` / `android-v*` / `web-v*`. Artifacts live elsewhere:
+`agent-v*` / `server-v*` / `android-v*` / `ios-v*` / `web-v*`. Artifacts live elsewhere:
 agent in the public `mobaide-agent-releases` sibling repo; android in Play
 Console; server and web on the production host. A Release that appears briefly
 and vanishes is that cleanup step, not a bug.
@@ -286,6 +288,24 @@ marks the `versionName` line), so that file and `.release-please-manifest.json`
 are bumped automatically. `versionCode` is computed in `build.gradle.kts` from
 `versionName` (`major*10000 + minor*100 + patch`), so Play's
 monotonic-versionCode requirement needs no manual edit.
+
+**iOS note.** The `ios` component is also `release-type: simple` with
+`always-bump-patch`. The version lives in `ios/Config/Version.xcconfig`, which
+`ios/Config/Protocol.xcconfig` includes. The `Mobaide` target does not set it
+in `project.pbxproj`, so do not edit the version in Xcode's target settings.
+
+- `MARKETING_VERSION` carries the `// x-release-please-version` annotation.
+  The generic updater bumps it by one patch.
+- `CURRENT_PROJECT_VERSION` (the build number) is a plain counter that
+  release-please cannot bump. A step in `release-please.yml` sets it to main's
+  value + 1 on the release-PR branch, with a
+  `chore(ios): bump build number to N` commit. The step is idempotent and adds
+  the commit again when release-please regenerates the branch.
+- The top-level `bootstrap-sha` in `release-please-config.json` limits the
+  first iOS changelog to commits after it. release-please uses it only for a
+  package with no release yet, so it is inert after the first `ios-v*` tag.
+- A minor or major works as for Android: a `Release-As:` footer on a commit
+  that touches `ios/**`.
 
 #### Cutting an Android minor or major
 
