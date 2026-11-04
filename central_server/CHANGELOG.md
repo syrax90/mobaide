@@ -1,5 +1,18 @@
 # central_server Changelog
 
+## [0.2.20](https://github.com/syrax90/claude_mobile/compare/server-v0.2.19...server-v0.2.20) (2026-11-04)
+
+
+### Features
+
+* drag-to-reorder projects and agents in the new-session wizard ([5ef2a0f](https://github.com/syrax90/claude_mobile/commit/5ef2a0ffa5d135fe81819bf53c04186aaab6118f))
+* drag-to-reorder projects and agents in the new-session wizard ([2182e09](https://github.com/syrax90/claude_mobile/commit/2182e0917636f9d520a33fe3d84b2c41fc8f0b03))
+
+
+### Documentation
+
+* rewrite the README for public visitors ([9ea850d](https://github.com/syrax90/claude_mobile/commit/9ea850dbdb4d9e8eec7e197becaf2591f23e6c13))
+
 ## [0.2.19](https://github.com/syrax90/claude_mobile/compare/server-v0.2.18...server-v0.2.19) (2026-10-30)
 
 

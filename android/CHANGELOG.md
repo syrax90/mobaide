@@ -1,5 +1,18 @@
 # Android Changelog
 
+## [3.6.15](https://github.com/syrax90/claude_mobile/compare/android-v3.6.14...android-v3.6.15) (2026-11-04)
+
+
+### Features
+
+* drag-to-reorder projects and agents in the new-session wizard ([5ef2a0f](https://github.com/syrax90/claude_mobile/commit/5ef2a0ffa5d135fe81819bf53c04186aaab6118f))
+* drag-to-reorder projects and agents in the new-session wizard ([2182e09](https://github.com/syrax90/claude_mobile/commit/2182e0917636f9d520a33fe3d84b2c41fc8f0b03))
+
+
+### Bug Fixes
+
+* keep reorder saves on their own agent and account, in drop order ([3ac1b31](https://github.com/syrax90/claude_mobile/commit/3ac1b316dfb1d9c17a664c189a087086ebe71cf5))
+
 ## [3.6.14](https://github.com/syrax90/claude_mobile/compare/android-v3.6.13...android-v3.6.14) (2026-10-30)
 
 
