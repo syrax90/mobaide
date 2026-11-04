@@ -47,6 +47,14 @@ jobs:
             echo "No release PR branch; nothing to do."
             exit 0
           fi
+          # A release PR branch that release-please has not regenerated
+          # since the version moved to Version.xcconfig has no such file.
+          for ref in origin/main "origin/${BRANCH}"; do
+            if ! git cat-file -e "${ref}:${VERSION_FILE}" 2>/dev/null; then
+              echo "${VERSION_FILE} is not on ${ref}; nothing to do."
+              exit 0
+            fi
+          done
           read_setting() { git show "$1:${VERSION_FILE}" | sed -nE "s/^$2 = ([0-9.]+).*/\1/p"; }
           main_version=$(read_setting origin/main MARKETING_VERSION)
           pr_version=$(read_setting "origin/${BRANCH}" MARKETING_VERSION)
