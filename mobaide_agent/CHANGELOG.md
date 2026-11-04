@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.3.21](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.20...agent-v0.3.21) (2026-11-04)
+
+
+### Bug Fixes
+
+* **agent:** say where the manifest signing key lives ([230888b](https://github.com/syrax90/claude_mobile/commit/230888be46abcc4f7d56ec39996751eec87f2ffe))
+* **agent:** say where the manifest signing key lives ([0bcdcb6](https://github.com/syrax90/claude_mobile/commit/0bcdcb62cfb66c8398985776adda6da095a7ae59))
+
 ## [0.3.20](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.19...agent-v0.3.20) (2026-10-30)
 
 
