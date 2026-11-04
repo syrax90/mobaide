@@ -43,10 +43,8 @@ from your own machine with a local script. No release key is stored on GitHub.
 | `proto-vN` | Wire contract | _(nothing ships)_ |
 
 > [!NOTE]
-> **Temporary fallback.** `release-agent.yml` and `release-android.yml` still
-> exist and still use their Actions secrets. They fire only on a tag that a
-> person pushes, not on a release-please tag. They and all remaining Actions
-> secrets are deleted after each local script has shipped one real release.
+> No GitHub workflow builds or ships a release, and the repo holds no release
+> secrets. Every key lives in the local release folder that the scripts read.
 
 ### The local release scripts
 
@@ -262,12 +260,6 @@ The steps below are for `mobaide_agent`. The same shape works for `android`
    manifest agree.
 4. **Run** `python deploy/prod/release_agent.py X.Y.Z`. The script refuses to
    build if `pyproject.toml` does not match the tag.
-
-> [!WARNING]
-> A tag that a person pushes still starts the temporary fallback workflow
-> (`release-agent.yml` / `release-android.yml`). Until those are deleted,
-> disable the workflow first (`gh workflow disable release-agent.yml`), or the
-> workflow and the script race to publish the same version.
 
 > [!WARNING]
 > **Pick one path and stay on it.** Either let release-please own the
