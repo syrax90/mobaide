@@ -26,6 +26,49 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      # release-please bumps MARKETING_VERSION (the `x-release-please-version`
+      # line) but has no updater for a plain counter, so this step bumps the
+      # iOS build number (CURRENT_PROJECT_VERSION) to main's value + 1 on the
+      # release PR branch. It runs on every push and is idempotent: it does
+      # nothing when the release PR carries no iOS release or already has the
+      # right build number. When release-please regenerates the branch from
+      # main, the commit is lost and this step adds it again.
+      - name: Bump the iOS build number on the release PR
+        env:
+          BRANCH: release-please--branches--main
+          VERSION_FILE: ios/Config/Version.xcconfig
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git init -q bump && cd bump
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          if ! git fetch -q --depth=1 origin main "${BRANCH}"; then
+            echo "No release PR branch; nothing to do."
+            exit 0
+          fi
+          read_setting() { git show "$1:${VERSION_FILE}" | sed -nE "s/^$2 = ([0-9.]+).*/\1/p"; }
+          main_version=$(read_setting origin/main MARKETING_VERSION)
+          pr_version=$(read_setting "origin/${BRANCH}" MARKETING_VERSION)
+          if [ "${main_version}" = "${pr_version}" ]; then
+            echo "Release PR has no iOS release (${main_version}); nothing to do."
+            exit 0
+          fi
+          main_build=$(read_setting origin/main CURRENT_PROJECT_VERSION)
+          pr_build=$(read_setting "origin/${BRANCH}" CURRENT_PROJECT_VERSION)
+          want_build=$((main_build + 1))
+          if [ "${pr_build}" = "${want_build}" ]; then
+            echo "iOS build number is already ${want_build}."
+            exit 0
+          fi
+          git checkout -q -b release "origin/${BRANCH}"
+          sed -i -E "s/^CURRENT_PROJECT_VERSION = [0-9]+/CURRENT_PROJECT_VERSION = ${want_build}/" "${VERSION_FILE}"
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -am "chore(ios): bump build number to ${want_build}"
+          git push -q origin "HEAD:${BRANCH}"
+          echo "iOS ${pr_version} build number: ${main_build} -> ${want_build}"
+
       - name: Delete empty source-repo Releases (keep tags)
         if: ${{ steps.release.outputs.releases_created == 'true' }}
         env:
