@@ -1,5 +1,7 @@
 import type { ProjectSummary } from '../../../api/projectRepository';
 import { PathField } from '../../../components/form/PathField';
+import { useDragReorder } from '../../../lib/useDragReorder';
+import { DragHandle, REORDER_HINT } from './DragHandle';
 import type { ProjectSelection, WizardAction } from './wizardState';
 
 interface ProjectStepProps {
@@ -18,6 +20,8 @@ interface ProjectStepProps {
   onSelectRecentPath: (path: string) => void;
   /** Opens the project form; the container selects the saved project and advances. */
   onCreateProject: () => void;
+  /** Move a project row; the container saves the agent's new project order. */
+  onMoveProject: (from: number, to: number) => void;
   /** The one-off path field only — typing must not reach the URL (see `NewSession`). */
   dispatch: (action: WizardAction) => void;
   onContinue: () => void;
@@ -28,14 +32,17 @@ interface ProjectStepProps {
  * choice and advances, as `ModeStep` does. Continue survives for the single case
  * with no row to click: a path typed into the field.
  *
- * A deliberate divergence from Android's dropdown + Continue and iOS's list +
- * Continue, which keep theirs; on web the URL already records the selection, so
+ * A deliberate divergence from the list + Continue that Android and iOS
+ * keep; on web the URL already records the selection, so
  * the confirm click adds a history entry carrying nothing the row click has not
  * decided. Mirrors tracked as #650 (Android) and #651 (iOS).
  *
  * "Create new project…" is the last row even when there are no projects, as in
  * both mobile pickers. Saving a new project counts as picking it, so it
  * advances too.
+ *
+ * Each project row has a drag handle. The order it saves is the agent's own
+ * project order (`PATCH /api/projects/order`), so every client shows it.
  */
 export function ProjectStep({
   agentId,
@@ -48,9 +55,16 @@ export function ProjectStep({
   onSelectProject,
   onSelectRecentPath,
   onCreateProject,
+  onMoveProject,
   dispatch,
   onContinue,
 }: ProjectStepProps) {
+  const sortable = useDragReorder({
+    keys: projects.map((project) => project.name),
+    onMove: onMoveProject,
+  });
+  const reorderable = projects.length > 1;
+
   // The button exists for the one choice with no row to click. Both terms are
   // load-bearing: `customPathError` is `null` on a step nobody has typed into
   // (`INITIAL_WIZARD_STATE`, and the `syncCustomPathFromUrl` clear), so the
@@ -61,6 +75,7 @@ export function ProjectStep({
   return (
     <div className="wizard-body">
       <h2>Where should it run?</h2>
+      {reorderable && <p className="field-hint">{REORDER_HINT}</p>}
 
       {projects.length === 0 && (
         <p className="empty-state">
@@ -68,8 +83,8 @@ export function ProjectStep({
         </p>
       )}
 
-      <ul className="project-list">
-        {projects.map((project) => {
+      <ul className="project-list" {...sortable.listProps}>
+        {projects.map((project, index) => {
           // Only ever seen on a step that was arrived at — the last-launch
           // pre-fill, the wizard's own Back, a deep link — since a click
           // leaves. `draft === ''` still earns its place: while a path is
@@ -77,7 +92,10 @@ export function ProjectStep({
           const active =
             draft === '' && selection.kind === 'stored' && selection.name === project.name;
           return (
-            <li key={project.name}>
+            <li key={project.name} className="sortable-item" {...sortable.itemProps(index)}>
+              {reorderable && (
+                <DragHandle label={project.name} {...sortable.handleProps(index)} />
+              )}
               <button
                 type="button"
                 className={`project-row${active ? ' project-row-selected' : ''}`}
@@ -100,7 +118,8 @@ export function ProjectStep({
           );
         })}
 
-        <li>
+        <li className="sortable-item">
+          {reorderable && <span className="drag-handle-spacer" aria-hidden="true" />}
           <button type="button" className="project-row" onClick={onCreateProject}>
             <span className="project-name">Create new project…</span>
             <span className="project-path">Name + path, saved on this agent for next time</span>

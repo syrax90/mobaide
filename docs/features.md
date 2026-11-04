@@ -8,7 +8,7 @@ For the short overview, see the [README](../README.md). The wire contract itself
 
 | Area | Features |
 |---|---|
-| Sessions | [Remote Terminal](#remote-terminal) · [Multi-Session](#multi-session) · [Managed CLI agents](#managed-cli-agents) · [Terminal Sessions](#terminal-sessions) · [Custom Path Sessions](#custom-path-sessions) · [External Sessions Notice](#external-sessions-notice) · [Auto Scan Mode](#auto-scan-mode) · [1-hour Prompt Cache](#1-hour-prompt-cache) |
+| Sessions | [Remote Terminal](#remote-terminal) · [Multi-Session](#multi-session) · [Managed CLI agents](#managed-cli-agents) · [Terminal Sessions](#terminal-sessions) · [Custom Path Sessions](#custom-path-sessions) · [Reorderable New-Session Lists](#reorderable-new-session-lists) · [External Sessions Notice](#external-sessions-notice) · [Auto Scan Mode](#auto-scan-mode) · [1-hour Prompt Cache](#1-hour-prompt-cache) |
 | Terminal input and display | [Terminal Display Modes](#terminal-display-modes) · [Explicit Keyboard & Direct TUI Input](#explicit-keyboard--direct-tui-input) · [Prompt Templates](#prompt-templates) · [Reconnection](#reconnection) |
 | Git | [Git Management](#git-management) · [In-session Git Changes](#in-session-git-changes) |
 | Account and platform | [Secure Access](#secure-access) · [Cross-Platform](#cross-platform) · [Account Self-Deletion](#account-self-deletion) · [Device Management](#device-management) · [Session Notifications](#session-notifications) · [Help & Support](#help--support) |
@@ -133,6 +133,29 @@ For stored git projects, tapping the tile first shows a "Terminal session" confi
 A "Custom path…" entry in the project picker launches a one-off Claude or Terminal session in any folder on the agent machine, without adding it to `projects.json`. The agent validates the path (absolute, exists, is-directory) and returns a clean 400 on bad input.
 
 The last 5 per-agent paths are offered again, and each can be forgotten. A path is recorded only after the session is actually created. The list is device-local, and it is cleared on sign-out and account deletion, since the paths name the user's own workstation.
+
+## Reorderable New-Session Lists
+
+In the new-session wizard, users can drag projects and agent modes into the order they want. For example, the most-used project or agent goes to the top.
+
+| List | Where the order is saved | Scope |
+|---|---|---|
+| Projects | The agent's `projects.json`, through `PATCH /api/projects/order` | Per agent. It is the same order as on the Projects screen. |
+| Agent modes (built-in and custom) | The central server, through `PUT /api/session-mode-order` | Per account. |
+
+- **Sync.** Every client shows the saved order, also in later sessions. A change reaches the other open clients live: `projects.changed` for projects, `session_mode_order.updated` for modes.
+- **Cost.** One request per drop, never per drag step. Saves of one list run one at a time, in drop order. A drop that changes nothing sends nothing.
+- **Fixed rows.** "Custom path…", "Create new project…" and "Add custom agent…" stay at the bottom.
+- **New items.** A custom agent created after the last reorder goes below the ordered ones.
+- **Failure.** If a save fails, the list goes back to the saved order and a "Reorder failed — reverted." message shows.
+
+| Platform | How to reorder |
+|---|---|
+| Android | Drag the handle left of a card. The list scrolls near its edges. TalkBack offers "Move up" / "Move down" actions on each card. |
+| iOS | Tap **Reorder**, drag the ≡ handles, then tap **Done**. |
+| Web | Drag the ⠿ handle with a mouse, finger or pen. Or focus the handle and press ArrowUp / ArrowDown. |
+
+The wire details are in [PROTOCOL.md](../PROTOCOL.md).
 
 ## External Sessions Notice
 

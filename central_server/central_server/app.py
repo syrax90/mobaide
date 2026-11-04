@@ -32,6 +32,7 @@ from .marketing.loader import (
     render_sitemap,
     render_voice_input,
 )
+from .session_mode_order.service import SessionModeOrderService
 from .shortcuts.service import ShortcutService
 from .static_files import CachedStaticFiles, resolve_static_dir
 from .templates.service import TemplateService
@@ -295,6 +296,9 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         app.state.custom_agent_type_service = CustomAgentTypeService(
             db, app.state.routing
         )
+        app.state.session_mode_order_service = SessionModeOrderService(
+            db, app.state.routing
+        )
 
         from .relay.mobile_proxy import MobileProxy
 
@@ -503,6 +507,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     from .relay.mobile_proxy import router as mobile_proxy_router
     from .relay.mobile_ws import router as mobile_ws_router
     from .relay.user_ws import router as user_ws_router
+    from .session_mode_order.router import router as session_mode_order_router
     from .shortcuts.router import router as shortcuts_router
     from .templates.router import router as templates_router
 
@@ -526,6 +531,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(templates_router)
     app.include_router(shortcuts_router)
     app.include_router(custom_agent_types_router)
+    app.include_router(session_mode_order_router)
     app.include_router(ads_router)
 
     if config.enable_api_docs:

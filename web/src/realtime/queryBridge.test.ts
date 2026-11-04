@@ -450,6 +450,7 @@ describe('refresh on connect', () => {
       ['agents'],
       ['templates'],
       ['custom-agent-types'],
+      ['session-mode-order'],
     ]);
   });
 
@@ -594,6 +595,56 @@ describe('applyAgentEvent voice.changed', () => {
 
     expect(outcome).toEqual({ kind: 'dropped' });
     expect(client.getQueryData(voiceKey)).toMatchObject({ state: 'ready' });
+    expect(invalidated).toEqual([]);
+  });
+});
+
+describe('applyUserEvent session_mode_order.updated', () => {
+  const order = (version: number, modes: string[]) => ({
+    order: modes,
+    version,
+    updated_at: '2026-11-04T10:00:00Z',
+  });
+
+  it('writes the whole order into the cache instead of invalidating it', () => {
+    const outcome = applyUserEvent(
+      client,
+      frame('session_mode_order.updated', order(2, ['shell', 'claude'])),
+    );
+
+    expect(outcome).toEqual({
+      kind: 'patched',
+      type: 'session_mode_order.updated',
+      keys: [['session-mode-order']],
+    });
+    expect(client.getQueryData(queryKeys.sessionModeOrder())).toMatchObject({
+      order: ['shell', 'claude'],
+      version: 2,
+    });
+    expect(invalidated).toEqual([]);
+  });
+
+  it('touches no key when the push is older than the cache', () => {
+    client.setQueryData(queryKeys.sessionModeOrder(), order(5, ['codex']));
+
+    const outcome = applyUserEvent(
+      client,
+      frame('session_mode_order.updated', order(4, ['shell'])),
+    );
+
+    expect(outcome).toEqual({ kind: 'patched', type: 'session_mode_order.updated', keys: [] });
+    expect(client.getQueryData(queryKeys.sessionModeOrder())).toMatchObject({ version: 5 });
+    expect(invalidated).toEqual([]);
+  });
+
+  it('drops a payload its schema rejects', () => {
+    const outcome = applyUserEvent(
+      client,
+      frame('session_mode_order.updated', { order: 'shell', version: 1 }),
+    );
+
+    expect(outcome).toEqual({ kind: 'dropped' });
+    expect(client.getQueryData(queryKeys.sessionModeOrder())).toBeUndefined();
     expect(invalidated).toEqual([]);
   });
 });

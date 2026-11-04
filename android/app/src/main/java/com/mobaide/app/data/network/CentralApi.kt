@@ -26,10 +26,12 @@ import com.mobaide.app.data.network.dto.ResendVerificationRequest
 import com.mobaide.app.data.network.dto.ResendVerificationResponse
 import com.mobaide.app.data.network.dto.ResetPasswordRequest
 import com.mobaide.app.data.network.dto.ResetPasswordResponse
+import com.mobaide.app.data.network.dto.SessionModeOrderDto
 import com.mobaide.app.data.network.dto.ShortcutDto
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.network.dto.TrustPinResponse
 import com.mobaide.app.data.network.dto.UpdateCustomAgentTypeRequest
+import com.mobaide.app.data.network.dto.UpdateSessionModeOrderRequest
 import com.mobaide.app.data.network.dto.UpdateShortcutRequest
 import com.mobaide.app.data.network.dto.UpdateTemplateRequest
 import com.mobaide.app.data.network.dto.UserAuthResponse
@@ -509,6 +511,28 @@ class CentralApi(
             .header("Authorization", "Bearer $userToken")
             .build()
         executeNoContent(request)
+    }
+
+    // Mode picker order (per-user, JWT-authed via the user dashboard token).
+
+    suspend fun getSessionModeOrder(userToken: String): SessionModeOrderDto {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/session-mode-order")
+            .get()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun putSessionModeOrder(userToken: String, order: List<String>): SessionModeOrderDto {
+        val payload = json.encodeToString(UpdateSessionModeOrderRequest(order))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/session-mode-order")
+            .put(payload)
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
     }
 
     private suspend inline fun <reified T> execute(request: Request): T =

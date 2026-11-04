@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AssistChip
@@ -105,16 +104,6 @@ fun ProjectCard(
             }
         }
     }
-}
-
-@Composable
-fun DragHandleIcon(modifier: Modifier = Modifier) {
-    Icon(
-        imageVector = Icons.Default.DragHandle,
-        contentDescription = "Reorder",
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.size(22.dp),
-    )
 }
 
 @Composable

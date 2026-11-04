@@ -45,6 +45,7 @@ function renderStep(over: Overrides = {}) {
         recentPaths={over.recentPaths ?? []}
         onForgetRecent={(path) => forgotten.push(path)}
         onSelectProject={(project) => selected.push(project.name)}
+        onMoveProject={() => {}}
         onSelectRecentPath={(path) => picked.push(path)}
         onCreateProject={() => {
           createOpened += 1;
@@ -80,7 +81,7 @@ describe('ProjectStep project rows', () => {
     // mode step. The container is what navigates.
     renderStep({ projects: [project('alpha'), project('beta')] });
 
-    fireEvent.click(screen.getByRole('button', { name: /beta/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^beta/ }));
 
     expect(selected).toEqual(['beta']);
     expect(continued).toBe(0);
@@ -94,8 +95,8 @@ describe('ProjectStep project rows', () => {
       selection: { kind: 'stored', name: 'beta' },
     });
 
-    expect(screen.getByRole('button', { name: /beta/ })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: /^beta/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /^alpha/ })).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('drops the highlight while a one-off path is being typed', () => {
@@ -107,7 +108,7 @@ describe('ProjectStep project rows', () => {
       customPathDraft: '/srv/typed',
     });
 
-    expect(screen.getByRole('button', { name: /beta/ })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: /^beta/ })).toHaveAttribute('aria-pressed', 'false');
   });
 });
 

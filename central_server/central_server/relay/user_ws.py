@@ -29,6 +29,8 @@ of the shape ``{"type": "...", "payload": {...}}``. Current event types:
   already cascaded the type's kind-scoped saved shortcuts, so clients
   purge their local shortcut caches for ``custom_<id>`` on receipt (no
   companion ``shortcut.deleted`` events are sent)
+- ``session_mode_order.updated`` — payload: ``{"order": [str], "version":
+  int, "updated_at": str}``; the user's new create-session mode picker order
 - ``session.attention`` — payload: attention push mirror (see PROTOCOL.md)
 - ``account.first_agent_paired`` — payload: ``{"agent_id": str}``; sent once
   per account, when ``_complete_pairing`` stamps ``users.first_paired_at``

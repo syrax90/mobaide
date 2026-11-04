@@ -218,6 +218,17 @@ CREATE TABLE IF NOT EXISTS custom_agent_types (
     deleted_at    TEXT
 );
 
+-- The user's own order of the create-session mode picker's cards
+-- (built-in modes and ``custom_<id>`` types). ``mode_order`` is a JSON
+-- array of mode ids the server stores opaquely; ``version`` grows on every
+-- change so clients can drop a stale push.
+CREATE TABLE IF NOT EXISTS user_session_mode_orders (
+    user_id    TEXT PRIMARY KEY REFERENCES users(id),
+    mode_order TEXT NOT NULL,
+    version    INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL
+);
+
 -- Reversed-direction pairing: the browser mints a short typeable code,
 -- the operator retypes it on the agent host. ``code_hash`` is a peppered
 -- HMAC (the code is only ~34.6 bits). ``pairing_nonce_hash`` links to the
@@ -817,6 +828,12 @@ class Database:
             )
             await self._conn.execute("PRAGMA user_version = 22")
 
+        if version < 23:
+            # Additive: user_session_mode_orders table (the user's order of
+            # the create-session mode picker). Pure _SCHEMA re-run.
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 23")
+
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -1080,8 +1097,8 @@ class Database:
           4. Drop ``email_verification_tokens``, ``password_reset_tokens``,
              ``account_deletion_cancel_tokens``, ``user_refresh_tokens``,
              ``mobile_devices``, ``prompt_templates``, ``user_shortcuts``,
-             ``custom_agent_types`` and ``pairing_device_codes`` owned by
-             the user.
+             ``custom_agent_types``, ``user_session_mode_orders`` and
+             ``pairing_device_codes`` owned by the user.
           5. Drop the ``users`` row.
 
         ``deletion_audit`` rows are intentionally NOT cascaded — they have no
@@ -1138,6 +1155,10 @@ class Database:
         )
         await self.conn.execute(
             "DELETE FROM custom_agent_types WHERE owner_user_id = ?",
+            (user_id,),
+        )
+        await self.conn.execute(
+            "DELETE FROM user_session_mode_orders WHERE user_id = ?",
             (user_id,),
         )
         await self.conn.execute(
@@ -1658,6 +1679,42 @@ class Database:
         if cursor.rowcount != 1:
             return None
         return await self.get_user_shortcut(shortcut_id)
+
+    async def get_session_mode_order(self, user_id: str) -> dict | None:
+        """The user's stored mode-picker order row (``mode_order`` JSON
+        text, ``version``, ``updated_at``), or None if never set."""
+        cursor = await self.conn.execute(
+            "SELECT mode_order, version, updated_at "
+            "FROM user_session_mode_orders WHERE user_id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def set_session_mode_order(
+        self, user_id: str, mode_order: str
+    ) -> dict | None:
+        """Upsert the user's mode-picker order and bump ``version``.
+
+        Returns the written row, or None when ``mode_order`` equals the
+        stored value: the WHERE clause skips the no-op update, so a repeated
+        save neither bumps the version nor makes the caller re-broadcast."""
+        cursor = await self.conn.execute(
+            "INSERT INTO user_session_mode_orders "
+            "(user_id, mode_order, version, updated_at) VALUES (?, ?, 1, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "    mode_order = excluded.mode_order, "
+            "    version = user_session_mode_orders.version + 1, "
+            "    updated_at = excluded.updated_at "
+            "WHERE user_session_mode_orders.mode_order != excluded.mode_order "
+            "RETURNING mode_order, version, updated_at",
+            (user_id, mode_order, _now_iso()),
+        )
+        # RETURNING rows must be consumed before commit() resets the
+        # pending statement.
+        row = await cursor.fetchone()
+        await self.conn.commit()
+        return dict(row) if row else None
 
     _CUSTOM_TYPE_COLUMNS = (
         "id, owner_user_id, name, command, created_at, updated_at, deleted_at"

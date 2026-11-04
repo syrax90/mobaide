@@ -326,8 +326,8 @@ in-flight navigation and drops the replace. Browser Back therefore returns to
 the project step *as it was before the click*, while the wizard's own Back
 carries the selection forward.
 
-This is a deliberate divergence from Android's dropdown + Continue and iOS's
-list + Continue, tracked as #650 (Android) and #651 (iOS). The same applies to
+This is a deliberate divergence from the list + Continue that Android and iOS
+keep, tracked as #650 (Android) and #651 (iOS). The same applies to
 **creating a project**: the project list always ends with a "Create new
 project…" row, which opens `ProjectFormDialog` over the wizard, and saving
 advances the step like a row click. Android and iOS stay on the project step

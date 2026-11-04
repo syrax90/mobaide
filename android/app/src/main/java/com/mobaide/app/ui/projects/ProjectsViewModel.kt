@@ -65,7 +65,7 @@ class ProjectsViewModel @Inject constructor(
 
     /**
      * Emitted once per successful create. Lets in-context create flows
-     * (e.g. CreateSessionScreen's dropdown action) auto-select the new
+     * (e.g. CreateSessionScreen's "Create new project…" row) auto-select the new
      * project without waiting for the `projects.changed` bus event.
      */
     private val _projectCreated = MutableSharedFlow<ProjectInfo>(extraBufferCapacity = 1)

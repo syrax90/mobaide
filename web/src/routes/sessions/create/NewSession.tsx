@@ -10,13 +10,22 @@ import {
   deleteCustomAgentType,
   listCustomAgentTypes,
 } from '../../../api/customAgentTypeRepository';
-import { listProjects, type ProjectInfo } from '../../../api/projectRepository';
+import {
+  listProjects,
+  reorderProjects,
+  type ProjectInfo,
+} from '../../../api/projectRepository';
 import { createSession, type CreateSessionRequest } from '../../../api/sessionRepository';
+import {
+  getSessionModeOrder,
+  saveSessionModeOrder,
+} from '../../../api/sessionModeOrderRepository';
 import { ErrorState } from '../../../components/ErrorState';
 import { trimTrailingSeparator } from '../../../lib/pathCompletion';
 import { queryKeys, wsBackedQueryOptions } from '../../../lib/queryKeys';
 import type { SessionResponse } from '../../../protocol/dto/session';
 import { customSessionTypeId } from '../../../protocol/wireSchema';
+import { useSessionStore } from '../../../auth/sessionStore';
 import { useLastSessionStore } from '../../../stores/lastSessionStore';
 import {
   readLaunchPrefs,
@@ -32,7 +41,12 @@ import { useToastStore } from '../../../stores/toastStore';
 import { useAgentEvents } from '../../../realtime';
 import { upsertProject } from '../../../realtime/projectsCache';
 import { upsertSession } from '../../../realtime/sessionCache';
+import {
+  newerSessionModeOrder,
+  writeSessionModeOrder,
+} from '../../../realtime/sessionModeOrderCache';
 import { ProjectFormDialog } from '../../projects/ProjectFormDialog';
+import { moveAnnouncement, moveItem, reconcileOrder } from '../../projects/reorder';
 import { terminalPath } from '../terminalPath';
 import { CodexLoginDialog } from './CodexLoginDialog';
 import { ConfigStep } from './ConfigStep';
@@ -51,7 +65,7 @@ import {
   customTypeErrorMessage,
 } from './createErrors';
 import { applyLaunchPrefs, launchPrefsFromState } from './launchPrefs';
-import { buildModeCards } from './modeCatalog';
+import { applyModeOrder, buildModeCards } from './modeCatalog';
 import {
   INITIAL_WIZARD_STATE,
   isCustomMode,
@@ -106,6 +120,14 @@ function persistLaunchPrefs(
   }
 }
 
+function currentUserId(): string | null {
+  return useSessionStore.getState().session?.userId ?? null;
+}
+
+function sameOrder(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((item, index) => item === b[index]);
+}
+
 export function NewSession() {
   const { agentId } = useParams();
   const navigate = useNavigate();
@@ -152,6 +174,11 @@ export function NewSession() {
   // verbatim, and the prefs it should file are the original submit's.
   const pendingPrefs = useRef<LaunchPrefsSnapshot | null>(null);
   const setLastUsedSession = useLastSessionStore((state) => state.setLastUsedSession);
+  // Optimistic orders shown while a drag's save is in flight, and released once
+  // the saved order catches up (the `ProjectList` override pattern).
+  const [pendingProjectOrder, setPendingProjectOrder] = useState<string[] | null>(null);
+  const [pendingModeOrder, setPendingModeOrder] = useState<string[] | null>(null);
+  const [reorderAnnouncement, setReorderAnnouncement] = useState('');
 
   const resolvedAgentId = agentId ?? '';
 
@@ -179,6 +206,22 @@ export function NewSession() {
   const customTypes = useQuery({
     queryKey: queryKeys.customAgentTypes(),
     queryFn: listCustomAgentTypes,
+    ...wsBackedQueryOptions,
+  });
+
+  // Fetched with the first step, so the mode step already has it; the user
+  // channel keeps it fresh after that (`session_mode_order.updated`).
+  const modeOrder = useQuery({
+    queryKey: queryKeys.sessionModeOrder(),
+    // A connect-time refetch can race a save; never let the older answer win.
+    // The cache is read after the await, so a save that landed meanwhile counts.
+    queryFn: async () => {
+      const fetched = await getSessionModeOrder();
+      return newerSessionModeOrder(
+        queryClient.getQueryData(queryKeys.sessionModeOrder()),
+        fetched,
+      );
+    },
     ...wsBackedQueryOptions,
   });
 
@@ -227,6 +270,95 @@ export function NewSession() {
       }),
     [capabilities.data, project, customTypes.data],
   );
+
+  const orderedCards = useMemo(
+    () => applyModeOrder(cards, pendingModeOrder ?? modeOrder.data?.order ?? []),
+    [cards, pendingModeOrder, modeOrder.data],
+  );
+
+  const projectView = reconcileOrder(projects.data ?? [], pendingProjectOrder);
+  useEffect(() => {
+    if (pendingProjectOrder !== null && projectView.pendingOrder === null) {
+      setPendingProjectOrder(null);
+    }
+  }, [pendingProjectOrder, projectView.pendingOrder]);
+
+  // One save at a time per list, in the order the drops happened: a later drop
+  // can never be overtaken by an earlier one's slower round trip.
+  // The newest order each list asked for. A queued save that a later move
+  // replaced is skipped, so holding an arrow key on a handle costs two writes
+  // (the one in flight and the last), not one per row passed.
+  const latestProjectOrder = useRef<string[] | null>(null);
+  const latestModeOrder = useRef<string[] | null>(null);
+
+  const saveProjectOrder = useMutation({
+    mutationFn: (names: string[]) =>
+      latestProjectOrder.current === names
+        ? reorderProjects(resolvedAgentId, names)
+        : Promise.resolve(null),
+    scope: { id: `project-order:${resolvedAgentId}` },
+    onSuccess: (next, names) => {
+      if (next === null) return;
+      queryClient.setQueryData<ProjectInfo[]>(queryKeys.projects(resolvedAgentId), next);
+      setPendingProjectOrder((current) =>
+        current !== null && sameOrder(current, names) ? null : current,
+      );
+    },
+    onError: (_cause, names) => {
+      setPendingProjectOrder((current) =>
+        current !== null && sameOrder(current, names) ? null : current,
+      );
+      useToastStore.getState().show('Reorder failed — reverted.', 'error');
+    },
+  });
+
+  const saveModeOrder = useMutation({
+    mutationFn: ({ order, userId }: { order: string[]; userId: string | null }) =>
+      // Also skipped once the account changed: the queued save would otherwise
+      // write this account's order with the next account's token.
+      latestModeOrder.current === order && currentUserId() === userId
+        ? saveSessionModeOrder(order)
+        : Promise.resolve(null),
+    scope: { id: 'session-mode-order' },
+    onSuccess: (saved, { order, userId }) => {
+      if (saved === null || currentUserId() !== userId) return;
+      writeSessionModeOrder(queryClient, saved);
+      setPendingModeOrder((current) =>
+        current !== null && sameOrder(current, order) ? null : current,
+      );
+    },
+    onError: (_cause, { order }) => {
+      setPendingModeOrder((current) =>
+        current !== null && sameOrder(current, order) ? null : current,
+      );
+      useToastStore.getState().show('Reorder failed — reverted.', 'error');
+    },
+  });
+
+  const moveProject = (from: number, to: number) => {
+    const names = projectView.projects.map((entry) => entry.name);
+    const moved = names[from];
+    if (moved === undefined) return;
+    const next = moveItem(names, from, to);
+    setPendingProjectOrder(next);
+    setReorderAnnouncement(moveAnnouncement(moved, to, names.length));
+    latestProjectOrder.current = next;
+    saveProjectOrder.mutate(next);
+  };
+
+  const moveModeCard = (from: number, to: number) => {
+    const moved = orderedCards[from];
+    if (moved === undefined) return;
+    const next = moveItem(
+      orderedCards.map((card) => card.mode),
+      from,
+      to,
+    );
+    setPendingModeOrder(next);
+    setReorderAnnouncement(moveAnnouncement(moved.title, to, orderedCards.length));
+    latestModeOrder.current = next;
+    saveModeOrder.mutate({ order: next, userId: currentUserId() });
+  };
 
   const isModeSelectable = useCallback(
     (mode: WizardMode) => {
@@ -596,7 +728,7 @@ export function NewSession() {
       ) : location.step === 'project' ? (
         <ProjectStep
           agentId={resolvedAgentId}
-          projects={projects.data}
+          projects={projectView.projects}
           selection={location.selection}
           customPathDraft={state.customPathDraft}
           customPathError={state.customPathError}
@@ -630,6 +762,7 @@ export function NewSession() {
           onCreateProject={() => {
             setShowCreateProject(true);
           }}
+          onMoveProject={moveProject}
           // The custom-path field writes the reducer only. Per keystroke it
           // would be a router navigation and a `history.replaceState` per
           // character, which browsers rate-limit (Safari throws past 100 in
@@ -648,7 +781,7 @@ export function NewSession() {
         />
       ) : location.step === 'mode' ? (
         <ModeStep
-          cards={cards}
+          cards={orderedCards}
           onSelect={(mode) => {
             go({ step: 'config', mode });
           }}
@@ -664,6 +797,7 @@ export function NewSession() {
               setDeleteTarget({ id, name: match.name });
             }
           }}
+          onMoveCard={moveModeCard}
           onBack={() => {
             go({ step: 'project', mode: null });
           }}
@@ -685,6 +819,11 @@ export function NewSession() {
           }}
         />
       ) : null}
+
+      {/* Outside the steps, so a re-render of the rows cannot drop the region. */}
+      <p className="visually-hidden" role="status" aria-live="polite">
+        {reorderAnnouncement}
+      </p>
 
       {showCodexLogin && (
         <CodexLoginDialog

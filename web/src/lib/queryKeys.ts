@@ -26,6 +26,8 @@ export const queryKeys = {
   agents: () => ['agents'] as const,
   templates: () => ['templates'] as const,
   customAgentTypes: () => ['custom-agent-types'] as const,
+  /** The account's order of the create-session mode picker's cards. */
+  sessionModeOrder: () => ['session-mode-order'] as const,
   /**
    * One in-flight device-code pairing request.
    *

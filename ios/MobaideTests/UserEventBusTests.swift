@@ -49,6 +49,8 @@ final class UserEventBusTests: XCTestCase {
         func applyUpserted(_ type: CustomAgentTypeDto) async { record("typeUpsert:\(type.id)") }
         func applyDeleted(typeId: String) async { record("typeDelete:\(typeId)") }
         func refreshCustomTypes() async throws { record("refreshCustomTypes") }
+        func applyModeOrder(_ order: SessionModeOrderDto) async { record("modeOrder:\(order.version)") }
+        func refreshModeOrder() async throws { record("refreshModeOrder") }
         func clear() async { record("clear") }
     }
 
@@ -587,4 +589,58 @@ final class UserEventBusTests: XCTestCase {
         }
         XCTAssertEqual(info.reason, "protocol v9 required")
     }
+
+    // MARK: - Mode-picker order
+
+    func testSessionModeOrderFixtureDemux() throws {
+        for fixtureCase in try EnvelopeFixtures.cases(fixture: "dto/central/SessionModeOrderDto.json") {
+            let envelope = try EnvelopeFixtures.envelope(type: "session_mode_order.updated", payload: fixtureCase.wire)
+            guard case .sessionModeOrderUpdated(let order) = UserEnvelopeDemux.demux(envelope) else {
+                return XCTFail("case \(fixtureCase.name): expected sessionModeOrderUpdated")
+            }
+            XCTAssertGreaterThanOrEqual(order.version, 0)
+        }
+    }
+
+    func testMalformedSessionModeOrderPayloadsAreSilentlyIgnored() {
+        XCTAssertEqual(
+            UserEnvelopeDemux.demux(#"{"type":"session_mode_order.updated","payload":{"order":"shell","version":2}}"#),
+            .none
+        )
+        XCTAssertEqual(
+            UserEnvelopeDemux.demux(#"{"type":"session_mode_order.updated","payload":{"order":["shell"]}}"#),
+            .none,
+            "without a version the push cannot be ordered against the cache"
+        )
+    }
+
+    func testSessionModeOrderPushRoutesToHookAndReconcileRefreshes() async throws {
+        let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
+        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
+        let states = StreamCollector(harness.bus.connectionStates())
+
+        await harness.bus.start()
+        let connection = try await harness.transportFactory.connection(1)
+        connection.emit(.opened)
+        _ = try await states.next(where: { $0 == .connected })
+
+        connection.emit(.text(
+            #"{"type":"session_mode_order.updated","payload":{"order":["shell","custom_ab12cd34ef56"],"version":3,"updated_at":"2026-11-04T10:00:00Z"}}"#
+        ))
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline,
+              harness.customTypeSync.modeOrders.isEmpty || harness.customTypeSync.modeOrderRefreshCount == 0 {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertEqual(
+            harness.customTypeSync.modeOrderRefreshCount, 1,
+            "on-connect reconcile re-pulls the mode order, which a push missed while offline would otherwise lose"
+        )
+        XCTAssertEqual(
+            harness.customTypeSync.modeOrders,
+            [SessionModeOrderDto(order: ["shell", "custom_ab12cd34ef56"], version: 3, updated_at: "2026-11-04T10:00:00Z")]
+        )
+    }
 }
+

@@ -24,6 +24,9 @@ private struct CreateSessionContent: View {
     @State private var pathSuggestions: PathSuggestionsModel
     @State private var claudeAdvancedExpanded = false
     @State private var autoScanAdvancedExpanded = false
+    /// Reorder mode for the project and mode lists: rows show the native drag
+    /// handles and a tap no longer picks (the Projects screen's Edit pattern).
+    @State private var editMode: EditMode = .inactive
     @FocusState private var customPathFocused: Bool
 
     @Environment(Router.self) private var router
@@ -40,6 +43,7 @@ private struct CreateSessionContent: View {
             tokenStore: container.tokenStore,
             customAgentTypesRepository: container.customAgentTypesRepository,
             autoScanRepository: container.autoScanRepository,
+            projectsRepository: container.projectsRepository,
             autoScanProject: autoScanProject
         ))
         _pathSuggestions = State(initialValue: PathSuggestionsModel(repository: container.pathSuggestionRepository))
@@ -58,6 +62,7 @@ private struct CreateSessionContent: View {
             .pixelFormSection()
         }
         .pixelForm()
+        .environment(\.editMode, $editMode)
         .navigationTitle("New Session")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(model.step != .projectSelect)
@@ -69,6 +74,14 @@ private struct CreateSessionContent: View {
                     }
                 }
             }
+            if canReorder {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(isReordering ? "Done" : "Reorder") {
+                        withAnimation { editMode = isReordering ? .inactive : .active }
+                    }
+                    .fontWeight(isReordering ? .semibold : .regular)
+                }
+            }
         }
         .toast($toast)
         .sheet(item: $projectSheet) { mode in
@@ -76,8 +89,12 @@ private struct CreateSessionContent: View {
         }
         .task { await model.load() }
         .task { await model.observeCustomTypes() }
+        .task { await model.observeModeOrder() }
+        .task { await model.observeProjects() }
+        .task { await model.refreshModeOrder() }
         .task { await model.observeScans() }
         .onChange(of: model.step) { _, step in
+            editMode = .inactive
             if step == .modePick {
                 Task { await model.refreshCliAvailability() }
                 Task { await model.refreshCustomTypes() }
@@ -141,6 +158,24 @@ private struct CreateSessionContent: View {
         }
     }
 
+    private var isReordering: Bool { editMode.isEditing }
+
+    /// The project list needs two rows to reorder; the mode list always has
+    /// the five built-ins.
+    private var canReorder: Bool {
+        switch model.step {
+        case .projectSelect: return model.projects.count > 1
+        case .modePick: return true
+        case .config: return false
+        }
+    }
+
+    private var reorderFooter: String {
+        isReordering
+            ? "Drag ≡ to reorder, then tap Done. The order syncs to all your devices."
+            : "Tap Reorder to change the order — it syncs to all your devices."
+    }
+
     private var codexLoginPresented: Binding<Bool> {
         Binding(get: { model.showCodexLogin }, set: { if !$0 { model.cancelCodexLogin() } })
     }
@@ -156,11 +191,15 @@ private struct CreateSessionContent: View {
 
     @ViewBuilder
     private var projectSelectStep: some View {
-        Section(header: PixelSectionHeader("Project")) {
+        Section {
             ForEach(model.projects, id: \.name) { project in
                 selectableRow(project.name, selected: isStoredSelected(project.name)) {
+                    guard !isReordering else { return }
                     model.selectStoredProject(project.name)
                 }
+            }
+            .onMove { source, destination in
+                model.moveProjects(fromOffsets: source, toOffset: destination)
             }
             selectableRow(
                 "Custom path…",
@@ -173,6 +212,12 @@ private struct CreateSessionContent: View {
                 projectSheet = .create
             } label: {
                 Label("Create new project…", systemImage: "plus")
+            }
+        } header: {
+            PixelSectionHeader("Project")
+        } footer: {
+            if model.projects.count > 1 {
+                PixelSectionFooter(reorderFooter)
             }
         }
 
@@ -225,25 +270,18 @@ private struct CreateSessionContent: View {
 
     @ViewBuilder
     private var modePickStep: some View {
-        Section(header: PixelSectionHeader("Mode")) {
-            ForEach(CreateSessionModel.Mode.builtIn, id: \.self) { mode in
-                Button { model.selectMode(mode) } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(model.modeTitle(mode))
-                                .foregroundStyle(model.isEnabled(mode) ? colors.text : colors.gray)
-                            Text(model.reason(for: mode))
-                                .font(.caption)
-                                .foregroundStyle(model.isEnabled(mode) ? colors.textMuted : colors.warning)
-                        }
-                        Spacer()
-                        modeChevron
-                    }
+        Section {
+            // One list for built-in and custom cards, so a custom type can be
+            // dragged above a built-in mode.
+            ForEach(model.orderedModes, id: \.self) { mode in
+                if case .custom(let id) = mode, let type = model.customType(id: id) {
+                    customTypeRow(type)
+                } else {
+                    builtInModeRow(mode)
                 }
-                .disabled(!model.isEnabled(mode))
             }
-            ForEach(model.customTypes) { type in
-                customTypeRow(type)
+            .onMove { source, destination in
+                model.moveModes(fromOffsets: source, toOffset: destination)
             }
             Button {
                 // Always enabled — the 20-type cap is not gated client-side
@@ -259,7 +297,35 @@ private struct CreateSessionContent: View {
                         .foregroundStyle(colors.textMuted)
                 }
             }
+        } header: {
+            PixelSectionHeader("Mode")
+        } footer: {
+            PixelSectionFooter(reorderFooter)
         }
+    }
+
+    /// A built-in mode card. Kept enabled while reordering, so an unavailable
+    /// mode can still be dragged; the tap is ignored then instead.
+    private func builtInModeRow(_ mode: CreateSessionModel.Mode) -> some View {
+        Button {
+            guard !isReordering else { return }
+            model.selectMode(mode)
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(model.modeTitle(mode))
+                        .foregroundStyle(model.isEnabled(mode) ? colors.text : colors.gray)
+                    Text(model.reason(for: mode))
+                        .font(.caption)
+                        .foregroundStyle(model.isEnabled(mode) ? colors.textMuted : colors.warning)
+                }
+                Spacer()
+                if !isReordering {
+                    modeChevron
+                }
+            }
+        }
+        .disabled(!model.isEnabled(mode) && !isReordering)
     }
 
     /// Trailing disclosure chevron: tapping a mode row commits and moves on
@@ -278,6 +344,7 @@ private struct CreateSessionContent: View {
     /// custom modes are always launchable anyway.
     private func customTypeRow(_ type: CustomAgentTypeDto) -> some View {
         Button {
+            guard !isReordering else { return }
             model.selectMode(.custom(type.id))
         } label: {
             HStack {
@@ -290,7 +357,9 @@ private struct CreateSessionContent: View {
                         .lineLimit(1)
                 }
                 Spacer()
-                modeChevron
+                if !isReordering {
+                    modeChevron
+                }
             }
         }
         .contextMenu {

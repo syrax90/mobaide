@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CustomAgentType } from '../../../api/customAgentTypeRepository';
 import type { ProjectSummary } from '../../../api/projectRepository';
 import { agentVersionSchema, type AgentVersionInfo } from '../../../protocol/dto/agentVersion';
-import { buildModeCards, type ModeCard } from './modeCatalog';
+import { applyModeOrder, buildModeCards, type ModeCard } from './modeCatalog';
 
 const capabilities = (cli: Record<string, unknown>): AgentVersionInfo =>
   agentVersionSchema.parse({
@@ -122,5 +122,64 @@ describe('buildModeCards', () => {
     expect(card(missingBoth, 'auto_scan').disabledReason).toBe(
       "Auto Scan needs the Claude CLI, which isn't installed on the agent.",
     );
+  });
+});
+
+describe('applyModeOrder', () => {
+  const modes = (list: readonly { mode: string }[]): string[] => list.map((entry) => entry.mode);
+  const defaults = [
+    { mode: 'claude' },
+    { mode: 'codex' },
+    { mode: 'antigravity' },
+    { mode: 'auto_scan' },
+    { mode: 'shell' },
+    { mode: 'custom_aaaaaaaaaaaa' },
+    { mode: 'custom_bbbbbbbbbbbb' },
+  ];
+
+  it('keeps the default order when the account has never reordered', () => {
+    expect(modes(applyModeOrder(defaults, []))).toEqual(modes(defaults));
+  });
+
+  it('ranks every card the saved order names by its place there', () => {
+    const order = [
+      'custom_bbbbbbbbbbbb',
+      'shell',
+      'claude',
+      'auto_scan',
+      'codex',
+      'custom_aaaaaaaaaaaa',
+      'antigravity',
+    ];
+
+    expect(modes(applyModeOrder(defaults, order))).toEqual(order);
+  });
+
+  it('puts cards the order does not name after the named ones, in default order', () => {
+    // A custom type created after the last reorder, or a built-in a newer
+    // client added: neither may jump ahead of what the user arranged.
+    expect(modes(applyModeOrder(defaults, ['shell', 'codex']))).toEqual([
+      'shell',
+      'codex',
+      'claude',
+      'antigravity',
+      'auto_scan',
+      'custom_aaaaaaaaaaaa',
+      'custom_bbbbbbbbbbbb',
+    ]);
+  });
+
+  it('skips ids that match no card, such as a deleted custom type', () => {
+    expect(
+      modes(applyModeOrder(defaults.slice(0, 3), ['custom_gone00000000', 'codex', 'claude'])),
+    ).toEqual(['codex', 'claude', 'antigravity']);
+  });
+
+  it('returns a new array and leaves the input untouched', () => {
+    const input = defaults.slice(0, 2);
+    const result = applyModeOrder(input, ['codex']);
+
+    expect(modes(result)).toEqual(['codex', 'claude']);
+    expect(modes(input)).toEqual(['claude', 'codex']);
   });
 });

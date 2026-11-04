@@ -164,6 +164,7 @@ actor UserEventBus {
         try? await templateSync.refreshTemplates()
         try? await shortcutSync.refreshShortcuts()
         try? await customTypeSync.refreshCustomTypes()
+        try? await customTypeSync.refreshModeOrder()
         await conversion.reconcileAfterConnect()
     }
 
@@ -186,6 +187,8 @@ actor UserEventBus {
             // The server cascades the type's saved shortcuts in the same
             // transaction without per-shortcut events — mirror it locally.
             await shortcutSync.purgeKind("custom_\(typeId)")
+        case .sessionModeOrderUpdated(let order):
+            await customTypeSync.applyModeOrder(order)
         case .firstAgentPaired(let agentId):
             await conversion.firstAgentPaired(agentId: agentId)
         case .none:
@@ -248,6 +251,7 @@ enum UserEnvelopeDemux {
         case shortcutDeleted(shortcutId: String)
         case customTypeUpserted(CustomAgentTypeDto)
         case customTypeDeleted(typeId: String)
+        case sessionModeOrderUpdated(SessionModeOrderDto)
         case firstAgentPaired(agentId: String)
         case none
     }
@@ -292,6 +296,11 @@ enum UserEnvelopeDemux {
                 return .none
             }
             return .customTypeDeleted(typeId: payload.id)
+        case "session_mode_order.updated":
+            guard let order = try? WireJSON.decoder().decode(SessionModeOrderDto.self, from: data) else {
+                return .none
+            }
+            return .sessionModeOrderUpdated(order)
         case "account.first_agent_paired":
             guard let payload = try? WireJSON.decoder().decode(FirstAgentPairedPayload.self, from: data) else {
                 return .none

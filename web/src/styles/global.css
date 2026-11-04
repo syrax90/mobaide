@@ -2236,6 +2236,83 @@ input[type='radio']:checked {
   flex: none;
 }
 
+/*
+ * Drag-to-reorder rows in the wizard (`useDragReorder`). The handle sits left
+ * of the card, as on the Projects screen; a spacer keeps fixed rows aligned.
+ */
+.sortable-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.drag-handle,
+.drag-handle-spacer {
+  flex: none;
+  width: 32px;
+}
+
+.drag-handle {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: grab;
+  /* The browser must not scroll or zoom while a finger drags the row. */
+  touch-action: none;
+  user-select: none;
+}
+
+.drag-handle:hover {
+  color: var(--text);
+}
+
+.drag-handle:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+[data-sorting='true'] > [data-sortable-index]:not([data-dragging='true']) {
+  transition: transform 150ms ease-out;
+}
+
+[data-dragging='true'] {
+  position: relative;
+  z-index: 2;
+}
+
+[data-dragging='true'] .drag-handle {
+  color: var(--text);
+}
+
+[data-dragging='true'] .project-row,
+[data-dragging='true'] .mode-card {
+  background: var(--surface);
+  box-shadow:
+    inset 0 0 0 2px var(--brand-2),
+    var(--px) var(--px) 0 0 var(--modal-shadow);
+}
+
+body.sortable-dragging,
+body.sortable-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-sorting='true'] > [data-sortable-index]:not([data-dragging='true']) {
+    transition: none;
+  }
+}
+
 .recent-paths {
   display: flex;
   flex-direction: column;
