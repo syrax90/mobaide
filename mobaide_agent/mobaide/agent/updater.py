@@ -329,6 +329,10 @@ class StagedBinaryUpdater:
             return "no_change"
 
         async with self._lock:
+            # Re-check under the lock: a caller queued behind a stage of the
+            # same release must not rebuild it while the restart is pending.
+            if latest_version == self._staged_version:
+                return "staged"
             if not force and not self._is_idle():
                 self._note_deferred()
                 return "deferred"

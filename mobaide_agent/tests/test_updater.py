@@ -8,6 +8,7 @@ directly (no HTTP fetch in the relay-driven update path).
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
@@ -282,6 +283,43 @@ async def test_already_staged_version_is_not_staged_again(layout) -> None:
     forced = await updater.force_update_now(body, signature_b64, body["version"])
 
     assert (first, again, forced) == ("staged", "staged", "staged")
+    assert len(builds) == 1
+    assert exits == [75]
+
+
+async def test_queued_caller_does_not_restage_the_same_release(layout) -> None:
+    """A relay push and an "Install now" for the same release can overlap:
+    both pass the pre-lock check, and the second waits on the lock. Once the
+    first stages, the queued one must return "staged" without a rebuild."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    builds: list[Path] = []
+    exits: list[int] = []
+
+    def counting_builder(venv_dir: Path) -> None:
+        builds.append(venv_dir)
+        _fake_venv_builder(venv_dir)
+
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        venv_builder=counting_builder,
+        finalizer=_fake_finalizer,
+        exit_func=exits.append,
+    )
+    await updater._lock.acquire()
+    first = asyncio.create_task(
+        updater.consider_manifest(body, signature_b64, body["version"])
+    )
+    second = asyncio.create_task(
+        updater.force_update_now(body, signature_b64, body["version"])
+    )
+    # Let both callers pass the pre-lock check and queue on the lock.
+    await asyncio.sleep(0)
+    updater._lock.release()
+
+    assert await asyncio.gather(first, second) == ["staged", "staged"]
     assert len(builds) == 1
     assert exits == [75]
 
