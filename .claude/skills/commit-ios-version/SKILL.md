@@ -1,21 +1,23 @@
 ---
 name: commit-ios-version
-description: Commit, push, open a PR for, and immediately merge an iOS app version bump (MARKETING_VERSION / CURRENT_PROJECT_VERSION in ios/Mobaide.xcodeproj/project.pbxproj), then return to an up-to-date main. Use when the user asks to commit the current iOS version, commit the iOS version bump, or ship/merge the bumped iOS version.
+description: Commit, push, open a PR for, and immediately merge an iOS app version bump (MARKETING_VERSION / CURRENT_PROJECT_VERSION in ios/Config/Version.xcconfig), then return to an up-to-date main. Use when the user asks to commit the current iOS version, commit the iOS version bump, or ship/merge the bumped iOS version.
 ---
 
 # Commit the iOS version bump
 
-The user has already edited the version in `ios/Mobaide.xcodeproj/project.pbxproj` (`MARKETING_VERSION` and/or `CURRENT_PROJECT_VERSION` for the `Mobaide` target's Debug and Release configs). Ship that change end to end without pausing for confirmation, reviewers or CI.
+The user has already edited the version in `ios/Config/Version.xcconfig` (`MARKETING_VERSION` and/or `CURRENT_PROJECT_VERSION`). Ship that change end to end without pausing for confirmation, reviewers or CI.
+
+Normally release-please bumps both values in its release PR (see `docs/versioning-and-updates.md`). A manual `MARKETING_VERSION` bump must also set `"ios"` in `.release-please-manifest.json` to the same version, or release-please computes the next version from a stale base.
 
 ## 1. Check the change
 
 ```bash
 git status --short
-git diff -- ios/Mobaide.xcodeproj/project.pbxproj
+git diff -- ios/Config/Version.xcconfig .release-please-manifest.json
 ```
 
 - Read the new `MARKETING_VERSION` (e.g. `1.0.10`) and `CURRENT_PROJECT_VERSION` (build number) from the diff — call them `<version>` and `<build>`.
-- The pbxproj diff must contain only version lines. If it touches anything else, or there is no version change at all, stop and tell the user.
+- The diff must contain only version lines. If it touches anything else, or there is no version change at all, stop and tell the user.
 - Commit only the version bump. Leave unrelated modified files (e.g. `.claude/settings.local.json`) unstaged.
 
 ## 2. Branch, commit, push
@@ -23,7 +25,7 @@ git diff -- ios/Mobaide.xcodeproj/project.pbxproj
 If the current branch is `main`, first create a branch: `git checkout -b bump-ios-to-<version>` (dots replaced with dashes). Otherwise stay on the current branch.
 
 ```bash
-git add ios/Mobaide.xcodeproj/project.pbxproj
+git add ios/Config/Version.xcconfig .release-please-manifest.json
 git commit -m "Bump up iOS version to <version>"   # plus the attribution trailer
 git push -u origin HEAD
 ```
