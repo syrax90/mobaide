@@ -1,5 +1,14 @@
 # mobaide_agent Changelog
 
+## [0.3.22](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.21...agent-v0.3.22) (2026-11-04)
+
+
+### Bug Fixes
+
+* **agent:** recheck the staged version under the updater lock ([189161d](https://github.com/syrax90/claude_mobile/commit/189161d1b14bb9ad3478958daf9de4398ae50c96))
+* **agent:** restart the Windows agent after an update ([b25dd39](https://github.com/syrax90/claude_mobile/commit/b25dd39a27ff053301a2d9389bedee9b67cea04a))
+* **agent:** restart the Windows agent after an update ([95a7cde](https://github.com/syrax90/claude_mobile/commit/95a7cdea4f80358b29cb59ae4f4644d7232ae1ae))
+
 ## [0.3.21](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.20...agent-v0.3.21) (2026-11-04)
 
 
