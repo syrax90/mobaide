@@ -9,7 +9,7 @@
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubLocalStorage } from '../../../test/localStorageStub';
 import type { ProjectInfo } from '../../../api/projectRepository';
@@ -25,7 +25,11 @@ vi.mock('../../../auth/agentTokens', () => ({
 const api = vi.hoisted(
   (): {
     projects: string[];
+    /** The lists of agents other than `agent-1`, which lists `projects`. */
+    otherAgentProjects: Record<string, string[]>;
     reorders: string[][];
+    /** The agent each `reorders` entry was sent for. */
+    reorderAgents: string[];
     modeOrder: SessionModeOrder;
     modeSaves: string[][];
     /** While set, the matching save rejects as the server would on a 5xx. */
@@ -39,7 +43,9 @@ const api = vi.hoisted(
     settleGet: (() => void) | null;
   } => ({
     projects: [],
+    otherAgentProjects: {},
     reorders: [],
+    reorderAgents: [],
     modeOrder: { order: [], version: 0, updated_at: undefined },
     modeSaves: [],
     failProjectSave: false,
@@ -58,13 +64,16 @@ vi.mock('../../../api/projectRepository', async (importOriginal) => {
     names.map((name, order) => projectInfoSchema.parse({ name, path: `/srv/${name}`, order }));
   return {
     ...actual,
-    listProjects: () => Promise.resolve(rows(api.projects)),
+    listProjects: (agentId: string) =>
+      Promise.resolve(rows(api.otherAgentProjects[agentId] ?? api.projects)),
     // The 200 body is the agent's re-sorted list, which the wizard writes
     // straight into the cache — so the fake answers with it.
-    reorderProjects: (_agentId: string, names: readonly string[]) => {
+    reorderProjects: (agentId: string, names: readonly string[]) => {
       api.reorders.push([...names]);
+      api.reorderAgents.push(agentId);
       if (api.failProjectSave) return Promise.reject(new Error('agent unreachable'));
-      api.projects = [...names];
+      if (api.otherAgentProjects[agentId] === undefined) api.projects = [...names];
+      else api.otherAgentProjects[agentId] = [...names];
       const answer = rows(names);
       if (!api.holdSaves) return Promise.resolve(answer);
       return new Promise<ProjectInfo[]>((resolve) => {
@@ -156,8 +165,12 @@ const handle = (label: string): HTMLElement =>
 const toasts = (): string[] =>
   useToastStore.getState().toasts.map((toast) => toast.message);
 
-const cachedProjectNames = (): string[] | undefined =>
-  client.getQueryData<ProjectInfo[]>(queryKeys.projects('agent-1'))?.map((p) => p.name);
+const cachedProjectNames = (agentId = 'agent-1'): string[] | undefined =>
+  client.getQueryData<ProjectInfo[]>(queryKeys.projects(agentId))?.map((p) => p.name);
+
+/** Saves waiting in their list's queue for the one ahead of them. */
+const queuedSaves = (): number =>
+  client.getMutationCache().findAll({ predicate: (mutation) => mutation.state.isPaused }).length;
 
 /** Answer the oldest held save and let its `onSuccess` run. */
 async function releaseOldestSave() {
@@ -179,10 +192,25 @@ function signInAs(userId: string) {
   });
 }
 
+/** Moves the route to `agent-2` under the one wizard the router keeps mounted. */
+function SwitchAgent() {
+  const navigate = useNavigate();
+  return (
+    <button
+      type="button"
+      data-testid="switch-to-agent-2"
+      onClick={() => {
+        void navigate('/agents/agent-2/new-session');
+      }}
+    />
+  );
+}
+
 async function renderWizard(search: string) {
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[`/agents/agent-1/new-session${search}`]}>
+        <SwitchAgent />
         <Routes>
           <Route path="/agents/:agentId/new-session" element={<NewSession />} />
         </Routes>
@@ -202,7 +230,9 @@ async function renderModeStep() {
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   api.projects = ['alpha', 'beta', 'gamma'];
+  api.otherAgentProjects = {};
   api.reorders.length = 0;
+  api.reorderAgents.length = 0;
   api.modeOrder = { order: [], version: 0, updated_at: undefined };
   api.modeSaves.length = 0;
   api.failProjectSave = false;
@@ -296,6 +326,101 @@ describe('NewSession project reorder', () => {
     expect(handleOrder()).toEqual(['beta', 'gamma', 'delta', 'alpha']);
     expect(api.reorders).toHaveLength(2);
     expect(toasts()).toEqual([]);
+  });
+
+  it('keeps a save on the agent it was made on after the route moves to another agent', async () => {
+    // A pending save's options follow the current render, which after the
+    // move belongs to agent-2.
+    api.otherAgentProjects = { 'agent-2': ['delta', 'epsilon'] };
+    api.holdSaves = true;
+    await renderWizard('');
+
+    fireEvent.keyDown(handle('alpha'), { key: 'ArrowDown' });
+    await waitFor(() => {
+      expect(api.reorders).toHaveLength(1);
+    });
+    fireEvent.keyDown(handle('alpha'), { key: 'ArrowDown' });
+    await waitFor(() => {
+      expect(queuedSaves()).toBe(1);
+    });
+
+    fireEvent.click(screen.getByTestId('switch-to-agent-2'));
+    await waitFor(() => {
+      expect(handleOrder()).toEqual(['delta', 'epsilon']);
+    });
+
+    await releaseOldestSave();
+    await waitFor(() => {
+      expect(api.reorders).toHaveLength(2);
+    });
+    await releaseOldestSave();
+    await waitFor(() => {
+      expect(client.isMutating()).toBe(0);
+    });
+
+    expect(api.reorders).toEqual([
+      ['beta', 'alpha', 'gamma'],
+      ['beta', 'gamma', 'alpha'],
+    ]);
+    expect(api.reorderAgents).toEqual(['agent-1', 'agent-1']);
+    expect(cachedProjectNames()).toEqual(['beta', 'gamma', 'alpha']);
+    expect(cachedProjectNames('agent-2')).toEqual(['delta', 'epsilon']);
+    expect(handleOrder()).toEqual(['delta', 'epsilon']);
+    expect(toasts()).toEqual([]);
+  });
+
+  it('still sends a save queued on one agent after a drop on another', async () => {
+    // agent-1's second save waits behind its first; a drop on agent-2 must
+    // neither skip it nor strand it in the queue.
+    api.otherAgentProjects = { 'agent-2': ['delta', 'epsilon'] };
+    api.holdSaves = true;
+    await renderWizard('');
+
+    fireEvent.keyDown(handle('alpha'), { key: 'ArrowDown' });
+    await waitFor(() => {
+      expect(api.reorders).toHaveLength(1);
+    });
+    fireEvent.keyDown(handle('alpha'), { key: 'ArrowDown' });
+    await waitFor(() => {
+      expect(queuedSaves()).toBe(1);
+    });
+
+    fireEvent.click(screen.getByTestId('switch-to-agent-2'));
+    await waitFor(() => {
+      expect(handleOrder()).toEqual(['delta', 'epsilon']);
+    });
+    fireEvent.keyDown(handle('delta'), { key: 'ArrowDown' });
+    expect(handleOrder()).toEqual(['epsilon', 'delta']);
+
+    // One queue serves every agent: the agent-2 save waits behind both
+    // agent-1 saves, so only the first has reached the server so far.
+    await waitFor(() => {
+      expect(queuedSaves()).toBe(2);
+    });
+    expect(api.reorderAgents).toEqual(['agent-1']);
+
+    await releaseOldestSave();
+    await waitFor(() => {
+      expect(api.reorders).toHaveLength(2);
+    });
+    await releaseOldestSave();
+    await waitFor(() => {
+      expect(api.reorders).toHaveLength(3);
+    });
+    await releaseOldestSave();
+    await waitFor(() => {
+      expect(client.isMutating()).toBe(0);
+    });
+
+    expect(api.reorders).toEqual([
+      ['beta', 'alpha', 'gamma'],
+      ['beta', 'gamma', 'alpha'],
+      ['epsilon', 'delta'],
+    ]);
+    expect(api.reorderAgents).toEqual(['agent-1', 'agent-1', 'agent-2']);
+    expect(cachedProjectNames()).toEqual(['beta', 'gamma', 'alpha']);
+    expect(cachedProjectNames('agent-2')).toEqual(['epsilon', 'delta']);
+    expect(handleOrder()).toEqual(['epsilon', 'delta']);
   });
 
   it('offers no handle when there is only one project to order', async () => {

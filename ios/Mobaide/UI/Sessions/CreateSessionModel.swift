@@ -450,12 +450,9 @@ final class CreateSessionModel {
                 await refreshCliAvailability()
             }
         } catch {
-            // Non-fatal: the wizard still allows a custom path. `observeProjects()`
-            // skips the repository's replayed list, and the bus will not re-send
-            // an equal one, so fall back to that cached list rather than none.
-            if projects.isEmpty, let cached = projectsRepository?.currentProjects, !cached.isEmpty {
-                applyServerProjects(cached)
-            }
+            // Non-fatal: the wizard still allows a custom path. The repository's
+            // cached list is not a fallback — it is not scoped to this account
+            // or agent.
         }
     }
 

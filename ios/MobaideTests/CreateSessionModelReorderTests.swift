@@ -432,4 +432,14 @@ final class CreateSessionModelReorderTests: XCTestCase {
         await waitUntil { model.projects.map(\.name) == ["delta"] }
         XCTAssertEqual(model.projects.map(\.name), ["delta"])
     }
+
+    func testLoadFailureDoesNotFallBackToTheListTheRepositoryAlreadyHeld() async throws {
+        let (model, _) = try await modelOverAStaleRepository([("stale1", 0), ("stale2", 1)])
+        StubURLProtocol.enqueue(status: 500, body: #"{"detail":"boom"}"#)
+
+        await model.load()
+
+        XCTAssertEqual(StubURLProtocol.requests.map(\.url?.path), ["/api/projects"])
+        XCTAssertEqual(model.projects, [], "the repository's list can belong to another account or agent")
+    }
 }

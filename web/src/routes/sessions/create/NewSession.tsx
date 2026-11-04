@@ -288,23 +288,32 @@ export function NewSession() {
   // The newest order each list asked for. A queued save that a later move
   // replaced is skipped, so holding an arrow key on a handle costs two writes
   // (the one in flight and the last), not one per row passed.
-  const latestProjectOrder = useRef<string[] | null>(null);
   const latestModeOrder = useRef<string[] | null>(null);
+  // Keyed by agent: the router keeps this one component across a change of
+  // `:agentId`, and a save queued for one agent must not be skipped because the
+  // user then dropped on another.
+  const latestProjectOrder = useRef(new Map<string, string[]>());
 
+  // The save carries the agent it was made on: the options of a pending
+  // mutation follow the current render, so reading `resolvedAgentId` here could
+  // send one agent's names to another, or cache them under its key.
   const saveProjectOrder = useMutation({
-    mutationFn: (names: string[]) =>
-      latestProjectOrder.current === names
-        ? reorderProjects(resolvedAgentId, names)
+    mutationFn: ({ names, agentId }: { names: string[]; agentId: string }) =>
+      latestProjectOrder.current.get(agentId) === names
+        ? reorderProjects(agentId, names)
         : Promise.resolve(null),
-    scope: { id: `project-order:${resolvedAgentId}` },
-    onSuccess: (next, names) => {
+    // A constant id: TanStack copies the current options into a pending
+    // mutation on every render, so an id built from the route would move a
+    // queued save into another agent's queue and strand it there.
+    scope: { id: 'project-order' },
+    onSuccess: (next, { names, agentId }) => {
       if (next === null) return;
-      queryClient.setQueryData<ProjectInfo[]>(queryKeys.projects(resolvedAgentId), next);
+      queryClient.setQueryData<ProjectInfo[]>(queryKeys.projects(agentId), next);
       setPendingProjectOrder((current) =>
         current !== null && sameOrder(current, names) ? null : current,
       );
     },
-    onError: (_cause, names) => {
+    onError: (_cause, { names }) => {
       setPendingProjectOrder((current) =>
         current !== null && sameOrder(current, names) ? null : current,
       );
@@ -342,8 +351,8 @@ export function NewSession() {
     const next = moveItem(names, from, to);
     setPendingProjectOrder(next);
     setReorderAnnouncement(moveAnnouncement(moved, to, names.length));
-    latestProjectOrder.current = next;
-    saveProjectOrder.mutate(next);
+    latestProjectOrder.current.set(resolvedAgentId, next);
+    saveProjectOrder.mutate({ names: next, agentId: resolvedAgentId });
   };
 
   const moveModeCard = (from: number, to: number) => {

@@ -7,6 +7,7 @@ import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.SessionModeOrderDto
 import com.mobaide.app.data.network.dto.UpdateCustomAgentTypeRequest
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -78,7 +79,9 @@ class CustomAgentTypesRepository(
             pendingModeOrder = order
             publishModeOrderLocked()
         }
-        scope.async {
+        // UNDISPATCHED: the body runs here up to `withLock`, so saves queue at
+        // the mutex in call order rather than in Dispatchers.Default's order.
+        scope.async(start = CoroutineStart.UNDISPATCHED) {
             try {
                 val saved = saveMutex.withLock {
                     // A save queued before a sign-out must not run with the next

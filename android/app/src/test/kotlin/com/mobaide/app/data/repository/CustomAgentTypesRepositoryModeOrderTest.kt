@@ -167,6 +167,46 @@ class CustomAgentTypesRepositoryModeOrderTest {
     }
 
     @Test
+    fun saveModeOrder_twoDropsBehindASaveInFlight_reachTheServerInCallOrder() = runTest {
+        // The server bumps the version per PUT, as the real one does, so a
+        // later drop that reached it first would lose to the earlier one.
+        val (repo, api) = newFixture()
+        val a = listOf("codex", "claude", "shell")
+        val b = listOf("shell", "codex", "claude")
+        val c = listOf("claude", "shell", "codex")
+        val sent = Collections.synchronizedList(mutableListOf<List<String>>())
+        val firstSent = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        coEvery { api.putSessionModeOrder(any(), any()) } coAnswers {
+            val body = secondArg<List<String>>()
+            val version = synchronized(sent) {
+                sent += body
+                sent.size
+            }
+            if (version == 1) {
+                firstSent.complete(Unit)
+                releaseFirst.await()
+            }
+            order(version, *body.toTypedArray())
+        }
+
+        val first = async { repo.saveModeOrder(a) }
+        runCurrent()
+        firstSent.await()
+        val second = async { repo.saveModeOrder(b) }
+        val third = async { repo.saveModeOrder(c) }
+        runCurrent()
+
+        releaseFirst.complete(Unit)
+        first.await()
+        second.await()
+        third.await()
+
+        assertEquals(listOf(a, b, c), sent.toList())
+        assertEquals(c, repo.observeModeOrder().value)
+    }
+
+    @Test
     fun saveModeOrder_userChangedMidFlight_doesNotKeepTheAnswer() = runTest {
         val (repo, api, identity) = newFixture()
         every { identity.getUserId() } returnsMany listOf("user-1", "user-2")
