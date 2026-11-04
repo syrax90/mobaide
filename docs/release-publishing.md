@@ -18,6 +18,16 @@ see [`versioning-and-updates.md`](versioning-and-updates.md). This doc
 covers only the *bootstrap* path — how a brand-new host first downloads
 the agent.
 
+**On this page**
+
+- [Pipeline overview](#pipeline-overview)
+- [When to use the manual fallback](#when-to-use-the-manual-fallback)
+- [What to watch after a release](#what-to-watch-after-a-release)
+- [Manual fallback runbook](#manual-fallback-runbook)
+- [Verifying the publish](#verifying-the-publish)
+- [What lives on `gh-pages`](#what-lives-on-gh-pages)
+- [See also](#see-also)
+
 ## Pipeline overview
 
 ```
@@ -37,7 +47,7 @@ https://get.mobaide.com/    public CDN. The CNAME at the gh-pages root
                             provisions the custom domain.
 ```
 
-Three places hold copies of these files: `deploy/` on `main` and
+Two places hold copies of these files: `deploy/` on `main` and
 the root of the `gh-pages` branch. The second is auto-published from
 `deploy/` by `publish-gh-pages.yml` on every push to `main` that
 touches `deploy/install.{sh,ps1}` or `deploy/windows_launcher.py`.
@@ -47,12 +57,15 @@ touches `deploy/install.{sh,ps1}` or `deploy/windows_launcher.py`.
 `publish-gh-pages.yml` listens for `push: main` events that touch
 `deploy/install.{sh,ps1}` or `deploy/windows_launcher.py`. Direct PR
 merges trigger it cleanly under the default `GITHUB_TOKEN`, so the
-common path is fully automatic.
+common path is fully automatic. The "Owner-only protected branches" ruleset
+must let GitHub Actions update `gh-pages`, or the push step fails.
 
-Use the runbook below only when the workflow did not fire (transient
-Actions outage, paths filter mismatch from a partial revert), an
-emergency override is needed, or you need to reproduce the publish
-locally for debugging.
+Use the runbook below only when:
+
+- the workflow did not fire (transient Actions outage, paths filter mismatch
+  from a partial revert),
+- an emergency override is needed, or
+- you need to reproduce the publish locally for debugging.
 
 ## What to watch after a release
 

@@ -259,12 +259,12 @@ JWT_SECRET_KEY=${JWT_SECRET}
 # GOOGLE_ADS_OAUTH_REFRESH_TOKEN=
 # GOOGLE_ADS_CONVERSION_ACTION_ID=
 
-# Required only if you publish agent releases via release-agent.yml.
+# Required only if you publish agent releases with release_agent.py.
 # Without these, POST /api/internal/agent_manifest returns HTTP 503 and
-# the release workflow fails. RELEASE_AUTH_TOKEN must hold the SAME
-# string as the GitHub Actions secret CENTRAL_SERVER_RELEASE_TOKEN.
-# MANIFEST_SIGNING_PUBLIC_KEY must be the public half of the GitHub
-# Actions secret AGENT_MANIFEST_PRIVATE_KEY (base64 Ed25519).
+# the release script fails. RELEASE_AUTH_TOKEN must hold the SAME
+# string as agent/release-token in the operator's local release key
+# folder. MANIFEST_SIGNING_PUBLIC_KEY must be the public half of
+# agent/manifest-signing-key in that folder (base64 Ed25519).
 # RELEASE_AUTH_TOKEN=
 # MANIFEST_SIGNING_PUBLIC_KEY=
 

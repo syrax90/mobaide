@@ -6,50 +6,52 @@ typed two-schema API pipeline, the app-shell architecture, testing, CI, and
 how the web client fits the cross-platform parity policy. For day-to-day
 commands see `web/README.md`.
 
+On this page:
+
+- [Status and roadmap](#status-and-roadmap)
+- [Stack](#stack)
+- [Workspace layout](#workspace-layout)
+- [Typed API layer — two schemas by design](#typed-api-layer--two-schemas-by-design)
+- [Realtime layer (WEB-04)](#realtime-layer-web-04)
+- [Sessions (WEB-07)](#sessions-web-07)
+- [Agents and pairing (WEB-08)](#agents-and-pairing-web-08)
+- [Projects, git & templates (WEB-09)](#projects-git--templates-web-09)
+- [Terminal screen (WEB-05)](#terminal-screen-web-05)
+- [Desktop keyboard & shortcuts (WEB-06)](#desktop-keyboard--shortcuts-web-06)
+- [Auto Scan, notifications & settings (WEB-10)](#auto-scan-notifications--settings-web-10)
+- [Sign in with Apple (WEB-11)](#sign-in-with-apple-web-11)
+- [CI — `.github/workflows/web-ci.yml`](#ci--githubworkflowsweb-ciyml)
+- [App shell](#app-shell)
+- [Parity policy](#parity-policy)
+
 ## Status and roadmap
 
-Bootstrapped by WEB-01 (CLA-188): production-grade shell with routing,
-theming, error boundaries, toasts, state/data scaffolding, typed API
-clients, tests, and CI. WEB-03 (CLA-190) added the auth & account gate:
-login / register / verify-email / forgot-reset-password screens, a session
-that survives reload and refreshes silently, and the devices and account
-(incl. delete + 14-day cancel) screens. WEB-04 (CLA-191) added the realtime
-protocol core — WebSocket channel manager, binary terminal codec, the
-TypeScript arm of the cross-platform golden fixtures, and the WS-event →
-TanStack Query bridge. WEB-05 (CLA-192) added the terminal screen on
-xterm.js 6: replay, follow mode and the unread badge, desktop copy/paste,
-and the prompt-template picker (later re-homed behind the terminal
-header's Templates button once the composer that hosted it was removed —
-see WEB-06 below). WEB-07 (CLA-193) added the
-sessions area — the live list with auto-resume, and the six-branch create
-wizard. WEB-08 (CLA-194) added agents and pairing Phase 1 — the `/pair`
-route with its deep link and paste box, the `/agents` screen, and the
-pairing link the agent now prints under its QR. WEB-09 (CLA-195) added the
-three CRUD surfaces: projects with accessible reorder and three-state updates,
-the per-project git branch/worktree list with its deferred delete, and prompt
-template management. WEB-10 (CLA-196) added the last live surfaces: the
-Auto Scan monitor with its ANSI log pane, the attention-notification
-surface, and the settings hub. WEB-11 (CLA-198) added Sign in with Apple to
-login, register and the delete-account re-auth — the gate that lets an
-account created in the iOS app, private-relay address and no password, reach
-the web client at all, and the server's Apple audience check grew to accept
-the browser Services ID alongside the iOS bundle id. WEB-12 (CLA-199) added
-pairing phase 2: the
-reversed device-code direction at the guarded `/agents/pair` route,
-`/agents`'s new "Add an agent" / "Pair from a code" button pair, and the
-account-level `trust_key_fp` pin that outlives a wiped browser. The series
-is tracked in
-Linear project "Web Client (React)" (CLA-188…CLA-200): deploy/relay
-readiness (WEB-02), auth (WEB-03), WS protocol core (WEB-04), terminal
-(WEB-05), keyboard/shortcuts (WEB-06), sessions (WEB-07), pairing (WEB-08),
-projects/git/templates (WEB-09), autoscan/notifications/settings (WEB-10),
-Apple sign-in on web (WEB-11), pairing phase 2 (WEB-12), QR image decode
-(WEB-13).
+The series is tracked in Linear project "Web Client (React)"
+(CLA-188…CLA-200):
 
-Production serving model (WEB-02): `app.mobaide.com` as its own Caddy site
+| Milestone | Ticket | Scope |
+|---|---|---|
+| WEB-01 | CLA-188 | Shell: routing, theming, error boundaries, toasts, typed API clients, tests, CI |
+| WEB-02 | | Deploy/relay readiness |
+| WEB-03 | CLA-190 | Auth and account gate (incl. delete + 14-day cancel) |
+| WEB-04 | CLA-191 | Realtime protocol core |
+| WEB-05 | CLA-192 | Terminal screen on xterm.js 6 |
+| WEB-06 | | Keyboard and shortcuts |
+| WEB-07 | CLA-193 | Sessions list and six-branch create wizard |
+| WEB-08 | CLA-194 | Agents and pairing phase 1 |
+| WEB-09 | CLA-195 | Projects, git and templates |
+| WEB-10 | CLA-196 | Auto Scan, notifications, settings |
+| WEB-11 | CLA-198 | Sign in with Apple |
+| WEB-12 | CLA-199 | Pairing phase 2 |
+| WEB-13 | | QR image decode |
+
+### Production serving model
+
+**Production serving model (WEB-02):** `app.mobaide.com` as its own Caddy site
 block serving the SPA from disk and reverse-proxying `/api`, `/ws`,
-`/relay`, `/proxy` to the central server — fully same-origin, no CORS. The
-Vite dev server mirrors this with a proxy to `http://localhost:9000`; the
+`/relay`, `/proxy` to the central server — fully same-origin, no CORS.
+
+The Vite dev server mirrors this with a proxy to `http://localhost:9000`. The
 config-only `MOBAIDE_WEB_PROXY_TARGET` env var repoints all four routes at
 another host:port, which is how `tests/e2e/manual_stack.py up --web` serves
 the SPA against the manual stack (see
@@ -81,37 +83,21 @@ web/
 │   ├── main.tsx              # StrictMode > AppErrorBoundary > QueryClientProvider > ThemeProvider > RouterProvider + ToastViewport
 │   ├── app/                  # router + route guards, RootLayout/AuthLayout, AppGate, RouteError, AppErrorBoundary, ThemeProvider
 │   ├── routes/               # route components (sessions/*, auth/*, account/*, terminal/*)
-│   ├── terminal/             # framework-free terminal core (WEB-05): session model,
-│   │                         #   replay/follow/paste/key reducers, clipboard,
-│   │                         #   renderer ladder, theme, model store
-│   ├── auth/                 # session store + transport, user/agent token axes, single-flight refresh,
-│   │                         #   GIS + Sign in with Apple loaders
-│   ├── components/toast/     # zero-dependency toast primitives
-│   ├── components/form/      # react-hook-form fields (+ auth/ Google and Apple buttons,
-│   │                         #   account/ grace banner)
-│   ├── protocol/             # framework-free wire layer (WEB-04): terminal codec,
-│   │                         #   relay URL/path builder, wire JSON + Zod schemas,
-│   │                         #   autoscan frames, SGR parser, __fixtures__/ loader
-│   ├── autoscan/             # framework-free auto-scan core (WEB-10): frame reducer
-│   │                         #   with its reduction cursor, channel hook, display helpers
-│   ├── notifications/        # attention content/suppression/service + the event
-│   │                         #   bridge (WEB-10)
-│   ├── realtime/             # WS channel manager, close policy, connection store,
-│   │                         #   event→Query bridge, RealtimeProvider (WEB-04)
-│   ├── stores/               # Zustand stores (themeStore, toastStore, terminalPrefsStore,
-│   │                         #   selectedAgentStore, lastSessionStore,
-│   │                         #   notificationPrefsStore, visibleSessionStore) plus
-│   │                         #   recentPaths.ts, a plain module not a store (CLA-256)
-│   ├── lib/queryClient.ts    # TanStack Query defaults
-│   ├── lib/queryKeys.ts      # central query-key factory + wsBackedQueryOptions
+│   ├── terminal/             # framework-free terminal core (WEB-05)
+│   ├── auth/                 # session store + transport, user/agent token axes, single-flight refresh, GIS + Apple loaders
+│   ├── components/           # toast primitives; react-hook-form fields
+│   ├── protocol/             # framework-free wire layer (WEB-04): codec, relay URL builder, Zod schemas, __fixtures__/ loader
+│   ├── autoscan/             # framework-free auto-scan core (WEB-10)
+│   ├── notifications/        # attention content/suppression/service + event bridge (WEB-10)
+│   ├── realtime/             # WS channel manager, close policy, connection store, event→Query bridge (WEB-04)
+│   ├── stores/               # Zustand stores, plus recentPaths.ts, a plain module not a store (CLA-256)
+│   ├── lib/                  # queryClient.ts (TanStack defaults), queryKeys.ts (key factory + wsBackedQueryOptions)
 │   ├── api/
 │   │   ├── generated/*.ts    # committed openapi-typescript output — never hand-edited
 │   │   ├── auth.ts           # bearer-token provider seams (filled in by src/auth/install.ts)
 │   │   ├── clients.ts        # relayClient + createAgentClient(agentId), auth + 401-recovery middleware
-│   │   ├── errors.ts         # HTTP/network error normalisation
-│   │   └── *Repository.ts    # typed call wrappers (auth, devices) + anonymous bootstrap
-│   ├── styles/               # theme tokens (data-theme) + global styles
-│   └── test/                 # jest-dom matchers + the localStorage and matchMedia stand-ins
+│   │   └── errors.ts, *Repository.ts
+│   └── styles/               # theme tokens (data-theme) + global styles
 ├── e2e/                      # Playwright specs
 └── vite.config.ts, tsconfig*.json, eslint.config.js, playwright.config.ts
 ```
@@ -135,11 +121,10 @@ carries two generated type sets and two clients:
 The two axes authenticate differently, mirroring the Android split
 (`CentralAuthInterceptor` vs `AuthInterceptor`): the relay's `get_mobile_user`
 guard on `/proxy/...` accepts only the per-agent `mobile_access` JWT, while
-central `/api/*` routes take the dashboard/user JWT. `src/api/auth.ts`
-therefore exposes two seams — `setUserTokenProvider()` (consumed by
-`relayClient`) and `setAgentTokenProvider(agentId => token)` (consumed by
-each `createAgentClient(agentId)`) — both filled in at startup by
-`src/auth/install.ts` (WEB-03).
+central `/api/*` routes take the dashboard/user JWT. `src/api/auth.ts` exposes
+two seams — `setUserTokenProvider()` (for `relayClient`) and
+`setAgentTokenProvider(agentId => token)` (for each `createAgentClient`) — both
+filled in at startup by `src/auth/install.ts` (WEB-03).
 
 Caveat: the agent schema types the agent's **entire** REST surface, but the
 relay tunnel's agent-side dispatcher forwards only an allowlisted subset —
@@ -153,14 +138,11 @@ are hand-written in `src/protocol/` (see *Realtime layer* below).
 ### Schema pipeline
 
 `web/scripts/dump_openapi.py` builds both FastAPI apps **in-process** via
-`create_app(config)` + `app.openapi()` — no running server, no env vars. It
-injects minimal configs (the central server's admin-gated docs exposure is
-irrelevant to this path), points all store paths at a tempdir, and writes
-deterministic JSON (`sort_keys`, `indent=2`, trailing newline) with
-`info.version` pinned to `0.0.0` so component releases don't churn the
-committed schemas. Requires both packages installed editable
-(`pip install -e 'mobaide_agent[dev]' -e 'central_server[dev]'`, Python
-3.12 to match CI).
+`create_app(config)` + `app.openapi()` — no running server, no env vars — and
+writes deterministic JSON with `info.version` pinned to `0.0.0` so component
+releases don't churn the committed schemas. Requires both packages installed
+editable (`pip install -e 'mobaide_agent[dev]' -e 'central_server[dev]'`,
+Python 3.12 to match CI).
 
 Regeneration chain after changing agent or central-server routes:
 
@@ -173,12 +155,6 @@ cd web && npm run schema:dump && npm run schema:generate
 regenerated and checked via `git status` (openapi-typescript's own `--check`
 flag is a no-op whenever a `redocly.yaml` multi-schema config is present, so
 the git-based gate — the same one CI uses — is authoritative).
-
-The dump script also normalizes FastAPI's operationIds for multi-method
-routes (the relay's `/proxy` catch-all): FastAPI assigns all five methods
-one operationId whose embedded method suffix is drawn from a Python set, so
-raw dumps are both spec-invalid and nondeterministic across processes; the
-script rewrites them to `<base>_<method>`.
 
 ## Realtime layer (WEB-04)
 
@@ -199,10 +175,11 @@ the relay would reject it.
 
 **Lifecycle.** Ported from Android `WebSocketConnection` and iOS
 `WebSocketCore`: backoff sleeps the current ladder value then doubles it
-(1 s → 30 s), reset on open and on `forceReconnect()`; a generation counter
-— incremented only by `forceReconnect()` — drops events from a superseded
-socket; `buildUrl` is re-evaluated on every attempt so a rotated token is
-picked up, and resolving to `null` stops without burning the ladder.
+(1 s → 30 s), reset on open and on `forceReconnect()`. A generation counter,
+incremented only by `forceReconnect()`, drops events from a superseded socket.
+`buildUrl` is re-evaluated on every attempt so a rotated token is picked up,
+and resolving to `null` stops without burning the ladder.
+
 **Deliberate divergence from mobile:** web adds 50–100 % jitter on top of
 the ladder, because a browser user commonly has several tabs and a relay
 restart would otherwise bring them all back in lockstep.
@@ -214,21 +191,18 @@ per-agent tokens are always re-mintable — 4001 and 4003 additionally drop
 the cached token so the next connect re-mints. 4011, 4012 (the ordinary
 attach-to-an-offline-agent case) and 1013 always reconnect.
 
-The 4002 branch is parity, not a live path: no server route sends it to a
-user socket (it is the relay↔agent handshake only). What actually catches a
-redeploy landing mid-session is the reconnect itself — a redeploy drops the
-socket, and `refreshOnUserEventsConnect` invalidates `['server-info']`, whose
-query is otherwise pinned at `staleTime: Infinity`. Android re-probes on every
-launch for the same reason.
+The 4002 branch is parity, not a live path: no server route sends it to a user
+socket. A redeploy mid-session is caught by the reconnect itself, because
+`refreshOnUserEventsConnect` invalidates `['server-info']`, whose query is
+otherwise pinned at `staleTime: Infinity`.
 
 Because the relay only authenticates at handshake and a per-agent JWT minted
 while its TTL was 0 has no `exp`, a rejected agent credential is otherwise
-invisible and never rotated. Three consecutive failures to open an agent channel
-therefore drop the cached token so the next attempt re-mints. This is also
-why a null URL is treated differently per axis: on the user axis it means
-signed out and the channel stops, while on the agent axis it usually means the
-mint itself just failed, so the channel keeps backing off rather than
-stranding on a blip.
+invisible and never rotated. Three consecutive failures to open an agent
+channel therefore drop the cached token so the next attempt re-mints. A null
+URL is treated differently per axis: on the user axis it means signed out and
+the channel stops; on the agent axis it usually means the mint just failed, so
+the channel keeps backing off.
 
 **Known browser limitation:** the server sends 4001/4010 *before*
 `websocket.accept()`, ASGI turns that into an HTTP 403 handshake rejection,
@@ -240,46 +214,32 @@ Browsers also expose no ping API, unlike both mobile clients (CLA-219).
 
 **Resume hooks.** The session I/O channel re-asserts the cached PTY size on
 every open — the client is the sole size authority and the agent spawns at
-24×80. WEB-05's replay state machine owns two further re-assert points
-(first inbound binary while reconnecting, and `replayEnd` for this
-client's own attach handshake only) and drives them
-through `setSize`, because its model caches the measured grid *before* the
-resize debounce and can therefore be ahead of the channel's own cache. The
-auto-scan channel sends
-`{subscribe, resume_from_seq}` as the first thing on every open (the agent's
-grace window is 200 ms direct, 1 s through the relay), rebuilt from a live
-per-project cursor so a reconnect resumes at the true high-water mark; it
+24×80 (WEB-05's replay state machine owns two further re-assert points, driven
+through `setSize`). The auto-scan channel sends `{subscribe, resume_from_seq}`
+as the first thing on every open (the agent's grace window is 200 ms direct, 1 s
+through the relay), rebuilt from a live per-project cursor; it
 also drops `seq <= cursor` because the server's replay is best-effort.
 
-**Wire DTO policy.** `z.looseObject` everywhere, so unknown keys survive;
-kind strings stay open (proto-v7 `custom_<12hex>` and anything newer are
-preserved verbatim, only an explicit `null` falls back to `claude`); and
-`parseWireJson` promotes integer literals beyond 2^53 to `bigint` via the
-ES2026 `JSON.parse` source-access reviver, re-emitting them as bare JSON
-integers. No `lossless-json` dependency, and runtimes without source access
-degrade only above 2^53.
+**Wire DTO policy.** `z.looseObject` everywhere, so unknown keys survive; kind
+strings stay open (proto-v7 `custom_<12hex>` and anything newer are preserved
+verbatim, only an explicit `null` falls back to `claude`); and `parseWireJson`
+promotes integer literals beyond 2^53 to `bigint` via the ES2026 `JSON.parse`
+source-access reviver. Runtimes without source access degrade only above 2^53.
 
-**Event → Query bridge.** Refresh-on-connect invalidates agents / templates
-/ custom types on the user channel (Android `UserEventBus` order, minus
-the shortcuts leg — web dropped saved shortcuts entirely, so it neither
-subscribes to `shortcut.*` nor needs the `custom_type.deleted` cascade
-Android/iOS use to keep their shortcut lists in sync) and projects on an
-agent channel. Per event the default policy is `invalidateQueries`, never
-a hand-applied delta. Payloads are schema-validated before anything is
-written, and dropped rather than thrown on failure — this runs inside the
-socket's listener loop.
+**Event → Query bridge.** Refresh-on-connect invalidates agents / templates /
+custom types on the user channel and projects on an agent channel. Web dropped
+saved shortcuts entirely, so it neither subscribes to `shortcut.*` nor needs the
+`custom_type.deleted` cascade. Per event the default policy is
+`invalidateQueries`, never a hand-applied delta. Payloads are schema-validated
+before anything is written, and dropped rather than thrown on failure — this
+runs inside the socket's listener loop.
 
-The three agent-channel session events are the one exception, added by
-WEB-07 (`src/realtime/sessionCache.ts`): `sessions.changed` carries the
-agent's complete list and `session.updated` / `session.attention` carry a
-whole row each, so there is no delta that could drift, and they are written
-straight into the cache. A snapshot **may** seed a cache nothing has
-fetched; an upsert **must not**, or one row would masquerade as the whole
-list. Sessions are therefore absent from refresh-on-connect: the agent
-re-pushes its snapshot on every connect, and an extra REST GET would only
-race it. The remaining agent-channel payloads are still routed by `type`
-alone, their shapes belonging to WEB-09/10. Unknown envelope types are
-ignored.
+The three agent-channel session events are the one exception
+(`src/realtime/sessionCache.ts`): `sessions.changed` carries the agent's
+complete list and `session.updated` / `session.attention` carry a whole row
+each, so they are written straight into the cache. A snapshot **may** seed a
+cache nothing has fetched; an upsert **must not**, or one row would masquerade
+as the whole list.
 
 `onlineManager` is driven from reachability rather than `navigator.onLine`,
 conservatively: offline only after two consecutive pre-open failures of the
@@ -291,53 +251,50 @@ channel.
 
 ### Golden fixtures, TypeScript arm
 
-`src/protocol/*.test.ts` read repo-root `tests/protocol_fixtures/` off disk
-— the same files the iOS test target consumes — under
-`// @vitest-environment node`, asserting hex strings rather than typed
-arrays. `npm run test:protocol` runs just this suite, and
+`npm run test:protocol` runs just this suite, and
 `protocol-integrity.yml` runs it on every PR alongside the Python checks.
 
 Coverage is deliberately partial and declared in
-`src/protocol/__fixtures__/coverage.ts`: WEB-04 asserts the frame, relay and
-eight realtime DTO fixtures, and every other file is listed against the
-milestone that will claim it. The gate fails when a fixture file is neither
-asserted nor assigned an owner — the same drift protection iOS's
-bidirectional registry provides. One cross-arm constraint: Swift `Codable`
-drops unknown keys on re-encode while `z.looseObject` preserves them, so
-unknown-key round-trips are asserted in TypeScript-only tests, never added
-to a shared fixture.
+`src/protocol/__fixtures__/coverage.ts`. The gate fails when a fixture file is
+neither asserted nor assigned an owner. One cross-arm constraint: Swift
+`Codable` drops unknown keys on re-encode while `z.looseObject` preserves them,
+so unknown-key round-trips are asserted in TypeScript-only tests, never added to
+a shared fixture.
 
 ## Sessions (WEB-07)
 
 The index route `/` is the live session list; `/agents/:agentId/new-session`
 is the create wizard.
 
+### Session list and cards
+
 **Agent selection.** The list is agent-scoped, and web is the first client
 that can see more than one agent, so `GET /api/agents` backs a small picker
 (hidden when there is exactly one). The choice persists under `localStorage`
 key `mobaide-agent` and the resolution is written back, which makes the
 automatic pick sticky — otherwise an agent dropping offline would silently
-move the user's list. Full pairing is WEB-08. While the selected agent is
+move the user's list. Full pairing is WEB-08.
+
+While the selected agent is
 offline the events channel stays open (close code 4012 is the ordinary
 attach-to-an-offline-agent case and reconnects) but the REST query is
 disabled, since an offline agent 503s on every mount.
 
 **Auto-resume** ports `SessionListViewModel.maybeAutoResume` verbatim,
 including its asymmetry: a stored id that is *absent from the list* is left
-alone, and only one that is present but dead gets cleared. "Absent" only
-counts once `useSessionsSynced` confirms the connected agent has pushed a
-fresh `sessions.changed` snapshot — a list left over from a dropped channel
-is not evidence a session is gone, and resuming off one is what used to
-attach into an id the agent had already lost (Android
-`SessionRepository.observeSessionsSynced`, iOS
-`SessionRepository.sessionsSynced`). Two web-specific changes beyond the
-port. The once-per-attempt flag lives at module scope keyed by agent id,
-not on the component — a web route unmounts on navigate and remounts on
-Back, so component state would re-fire and trap the user in a loop. And the
-id is recorded **on open as well as on create** (`mobaide-sessions`, keyed
-per agent): mobile records it only on create, which on web would leave the
-feature dormant for anyone who starts sessions from their phone. Android and
-iOS follow in CLA-229 / CLA-230.
+alone, and only one that is present but dead gets cleared. "Absent" only counts
+once `useSessionsSynced` confirms the connected agent has pushed a fresh
+`sessions.changed` snapshot.
+
+Two web-specific changes go beyond the port:
+
+- The once-per-attempt flag lives at module scope keyed by agent id, because a
+  web route unmounts on navigate and remounts on Back.
+- The id is recorded **on open as well as on create** (`mobaide-sessions`, keyed
+  per agent), because mobile's create-only recording would leave the feature
+  dormant for anyone who starts sessions from their phone.
+
+Android and iOS follow in CLA-229 / CLA-230.
 
 **Cards** follow iOS: state dot, title, kind label, cwd, and the attention
 chip Android does not render (`awaiting_permission` → "Needs permission",
@@ -345,168 +302,181 @@ chip Android does not render (`awaiting_permission` → "Needs permission",
 `kind_label`, then the live custom-type registry, then "Custom" — never the
 raw wire token. Stopping uses iOS's Stop / Force Stop / Cancel confirmation.
 
-**The create wizard** is three steps (project → agent → options), iOS's
-shape rather than Android's seven. State is one reducer over **per-mode
-buckets**, and the request builder switches on mode, so a Codex request
-cannot name a Claude field — the alternative, one form with
-`shouldUnregister`, would make that a property of what happens to be
-mounted. Auto Scan gets its own Claude bucket, since its `skip_permissions`
-defaults the opposite way. Only `step`, `mode` and the project selection
-live in the URL; the ~30 option fields do not, so no prompt text reaches
-browser history.
+### Create wizard
+
+**The create wizard** is three steps (project → agent → options), iOS's shape
+rather than Android's seven. State is one reducer over **per-mode buckets**, and
+the request builder switches on mode, so a Codex request cannot name a Claude
+field. Auto Scan gets its own Claude bucket, since its `skip_permissions`
+defaults the opposite way. Only `step`, `mode` and the project selection live in
+the URL; the ~30 option fields do not, so no prompt text reaches browser
+history.
+
+#### Step advance behaviour
 
 **Every step advances on the click that decides it.** Picking a project row,
-picking a recent directory, or picking an agent card is one act: it writes the
-URL and moves on. The project step keeps a Continue button for the single choice
-with no row to click — a path typed into the one-off directory field — and it is
-enabled only while that field holds a valid absolute path, so a highlighted
-project row never enables it. The advance is a single **push**, never a replace
-of the project entry followed by a push of the agent entry: two
+a recent directory or an agent card writes the URL and moves on. The project
+step keeps a Continue button only for the one choice with no row to click — a
+path typed into the one-off directory field — enabled only while that field
+holds a valid absolute path.
+
+The advance is a single **push**, never a replace followed by a push: two
 `setSearchParams` calls in one handler race the data router, which aborts the
-in-flight navigation when the second arrives, and the dropped one would be the
-replace — while `MemoryRouter`, being declarative and synchronous, would not
-show it in the tests. The cost is stated rather than hidden: browser Back
-returns to the project step *as it was before the click*, which can name a
-different project than the one just picked, while the wizard's own Back carries
-the selection forward and re-highlights the row (or refills the picked
-directory). This is a deliberate divergence from Android's dropdown + Continue
-and iOS's list + Continue, which keep theirs — on web each step is a URL that
-already records the selection, so the confirm click adds a history entry
-carrying nothing the row click has not decided, whereas on a phone the same
-button doubles as the reachable, thumb-sized commit target. The mirrors are
-tracked per platform as #650 (Android) and #651 (iOS).
+in-flight navigation and drops the replace. Browser Back therefore returns to
+the project step *as it was before the click*, while the wizard's own Back
+carries the selection forward.
 
-**Creating a project** is reachable from the same step: the project list
-always ends with a "Create new project…" row, even when the agent has none,
-matching both mobile pickers. It opens the existing WEB-09
-`ProjectFormDialog` over the wizard; saving is treated as picking the
-project, so it advances the step exactly as a row click does. Android and
-iOS instead keep the new project selected but stay on the project step until
-their own Continue — the same divergence tracked as #650 (Android) and #651
-(iOS).
+This is a deliberate divergence from Android's dropdown + Continue and iOS's
+list + Continue, tracked as #650 (Android) and #651 (iOS). The same applies to
+**creating a project**: the project list always ends with a "Create new
+project…" row, which opens `ProjectFormDialog` over the wizard, and saving
+advances the step like a row click. Android and iOS stay on the project step
+until their own Continue.
 
-**The wizard opens where the last launch left off** (CLA-232), which is both
-mobile clients' behaviour and the one part of WEB-07 that shipped as defaults
-only. `localStorage` key `mobaide-launch-prefs` holds the four option buckets
-plus the last project name, and `launchPrefs.ts` is the seam in both
+#### Remembered launch options
+
+**The wizard opens where the last launch left off** (CLA-232), as both mobile
+clients do. `localStorage` key `mobaide-launch-prefs` holds the four option
+buckets plus the last project name, and `launchPrefs.ts` is the seam in both
 directions. The pre-fill only *highlights* the row; it never advances the step,
-which is what keeps a remembered project from launching the wizard past a
-screen the user never saw. Three things are load-bearing. The buckets are **global, not per
-agent** — mobile's scoping, kept because a model or an autonomy preset is a
-preference about how the user works rather than a fact about a machine, and
-because a global bucket has nothing to re-seed when the router keeps one
-wizard instance across a change of `:agentId` (the hazard that forces
-`recentPaths` into an effect). A bucket that was never launched stays `null`
-rather than being written out at its defaults, which is what keeps Auto Scan's
-`skipPermissions: true` alive for a fresh profile while letting a stored
-`false` win. And the values are **pinned by `submit` before the round trip**:
-the config step's controls are not disabled while a create is in flight (only
-Back, Create and Cancel are), so reading live state in `onSuccess` would file
-options the launch never carried — the mobile instance of that race is
-CLA-259. Rebuilding the blob from the request instead is not the way out,
-because `buildCreateRequest` drops a blank `append_system_prompt` and would
-turn `''` into `undefined` on the prefill path; only the *project* comes off
-the request, where its absence is exactly what keeps an ad-hoc directory a
-recent rather than the last-used project.
+so a remembered project cannot launch past a screen the user never saw.
 
-Two rules follow the storage precedents rather than the mobile source.
-Sanitising on read is `recentPaths`'s all-or-nothing rule applied per bucket: a
-missing key takes the mobile data-class default (Kotlin's `encodeDefaults`,
-Swift's `decodeIfPresent ?? default`), but a present-but-wrong value or an
-out-of-vocabulary enum voids that whole bucket back to `INITIAL_WIZARD_STATE`,
-because a typed `@Serializable`/`Codable` decode fails outright rather than
-salvaging the readable fields. And `codex.reasoningEffort` persists nullable
-where Kotlin and Swift store a plain `String` — the web control has a real
-third state (`null` renders "Agent default"), and nothing in this blob crosses
-a device boundary, so the wider type costs no interop. Restore re-applies the
-Antigravity `sandbox && !skipPermissions` interlock, as both mobile clients do
-(the server 422s the pair), and additionally clamps a restored effort through
-`effectiveClaudeEffort` — display-only, since `buildCreateRequest` already
-clamps through the same helper, but it avoids the blank picker Android and iOS
-render when the stored effort outruns the model's ladder. Worktree/branch,
-`add_dirs` and the Auto Scan initial prompt are per-session and are not
-persisted on any client.
+Three things are load-bearing:
 
-Not purged at sign-out, matching mobile and unlike the recents below — a
-decision worth stating with its cost rather than as a parity note. What
-survives is a project name and `append_system_prompt`, free text the user
-typed, which the agent puts on argv. Android and iOS store the same values in
+- **The buckets are global, not per agent**, as on mobile. A model or autonomy
+  preset is a preference about how the user works, and a global bucket has
+  nothing to re-seed when the router keeps one wizard instance across a change
+  of `:agentId`.
+- **A bucket that was never launched stays `null`** rather than being written
+  out at its defaults. This keeps Auto Scan's `skipPermissions: true` alive for
+  a fresh profile while letting a stored `false` win.
+- **The values are pinned by `submit` before the round trip.** The config step's
+  controls stay enabled while a create is in flight, so reading live state in
+  `onSuccess` would file options the launch never carried (the mobile instance
+  of that race is CLA-259).
+
+Sanitising on read is all-or-nothing per bucket: a missing key takes the mobile
+default, but a present-but-wrong value or out-of-vocabulary enum voids that
+whole bucket back to `INITIAL_WIZARD_STATE`. `codex.reasoningEffort` persists
+nullable (`null` renders "Agent default"). Restore re-applies the Antigravity
+`sandbox && !skipPermissions` interlock (the server 422s the pair) and clamps a
+restored effort through `effectiveClaudeEffort`. Worktree/branch, `add_dirs` and
+the Auto Scan initial prompt are per-session and are not persisted on any
+client.
+
+**Not purged at sign-out**, matching mobile and unlike the recents below. What
+survives is a project name and `append_system_prompt`, free text the user typed,
+which the agent puts on argv. Android and iOS store the same values in
 per-OS-user app storage, while `localStorage` is per *browser profile*, so on a
 shared profile the next account to sign in inherits both, pre-filled. The
-parity argument is therefore weaker here than it looks; the decision stands
-deliberately, not by default.
+decision stands deliberately.
 
-`skip_permissions` is the trap the wizard is built around: its **wire-absence
-default is `true`**, so an omitted field launches with
-`--dangerously-skip-permissions`. Requests are re-parsed through
-`createSessionRequestSchema` (a `z.strictObject`, unlike the inbound loose
-schemas) and typed as the *generated* request, whose booleans are required —
-so a dropped flag is a compile error rather than a silent escalation.
+> [!WARNING]
+> `skip_permissions` is the trap the wizard is built around: its **wire-absence
+> default is `true`**, so an omitted field launches with
+> `--dangerously-skip-permissions`.
+
+Requests are re-parsed through `createSessionRequestSchema` (a
+`z.strictObject`) and typed as the *generated* request, whose booleans are
+required — so a dropped flag is a compile error rather than a silent escalation.
+
+### Recent custom paths
 
 **Recent custom paths** (CLA-256) mirror the mobile stores exactly: up to 5
 per agent, newest first, deduped by exact string equality after one trailing
-separator (never a root) is trimmed, so `/a/b/` and `/a/b` are the same entry,
-with no `~` expansion — and never filtered against what is being typed.
-Picking one advances the step, exactly as a project row does; the container
-re-validates first, so a hand-edited blob holding a relative path fills the
-field with its inline error instead of pushing a URL the clamp would bounce
-back.
-A path is recorded in `create`'s `onSuccess` from the **mutation's variables**,
-not from live state: the wizard stays interactive during the POST, so
-re-reading afterwards could file a directory nobody launched. `cwd` is
-`undefined` for a stored project, which is what keeps stored launches out of
-the bucket. Each row can be forgotten individually, as on both mobile clients —
-swipe or long-press on iOS, a ✕ on the Android chip (CLA-255).
+separator (never a root) is trimmed, with no `~` expansion — and never filtered
+against what is being typed.
+
+Picking one advances the step, exactly as a project row does, after the
+container re-validates it. A path is recorded in `create`'s `onSuccess` from the
+**mutation's variables**, not from live state, because the wizard stays
+interactive during the POST. `cwd` is `undefined` for a stored project, which
+keeps stored launches out of the bucket. Each row can be forgotten individually
+(CLA-255).
+
+#### Storage key and shape
+
+The bucket is the only persisted key that does **not** carry the `mobaide-`
+prefix: `src/stores/recentPaths.ts` writes one raw `localStorage` key per
+agent, `recent_custom_paths::<agentId>`, holding a JSON array — Android's and
+iOS's key shape verbatim. It is a plain module rather than a zustand store.
+
+- An empty agent id is mobile's null `agentScopeKey` — reads and writes are both
+  skipped rather than sharing one unscoped bucket.
+- Any blank or non-string member voids the whole blob, matching the typed
+  mobile decoders.
+- Deleting an agent drops its bucket here, alongside its token and its
+  last-used session — mobile has no equivalent yet, which is a known parity gap.
+
+#### Storage key and shape
 
 The bucket is the only persisted key that does **not** carry the `mobaide-`
 prefix: `src/stores/recentPaths.ts` writes one raw `localStorage` key per
 agent, `recent_custom_paths::<agentId>`, holding a JSON array — Android's and
 iOS's key shape verbatim, so the concept stays recognisable across the three
-clients. It is a plain module rather than a zustand store, which costs a
-`useState` in the wizard to stay reactive; the try/catch around every storage
-call is not a new cost but the same idiom `auth/agentTokens.ts` and
-`auth/deviceIdentity.ts` already carry, minus their in-memory mirror (a lost
-suggestion is cosmetic, a lost token is not). One thing the key shape buys: the
-agent id is a *storage* key and never an object key, so none of the `__proto__`
-guards `lastSessionStore` needs apply. An empty agent id is mobile's null
-`agentScopeKey` — reads and writes are both skipped rather than sharing one
-unscoped bucket — and any blank or non-string member voids the whole blob,
-matching the typed mobile decoders rather than salvaging the readable entries.
-Deleting an agent drops its bucket here, alongside its token and its last-used
-session — mobile has no equivalent yet, which is a known parity gap. Signing
-out drops **every** agent's bucket, on all three clients
-(CLA-258): the paths name the user's own workstation, so they end with the
-identity that typed them. The purge is a prefix sweep driven from each
-client's identity teardown — `clearAllRecentPaths()` from
-`sessionStore.invalidateUserSession` and the peer-tab `logout` branch here,
-`PreferencesStore.removeAllRecentCustomPaths()` from
-`SessionManager.invalidateUserSession` on both mobile clients. It sweeps by
-prefix rather than by agent id because teardown clears the credentials that
-name the current agent in the same breath, and a current-key delete would
-strand every previously-connected agent's bucket. `agentDisconnect`
+clients.
+
+- It is a plain module rather than a zustand store, which costs a `useState` in
+  the wizard to stay reactive.
+- The try/catch around every storage call is not a new cost but the same idiom
+  `auth/agentTokens.ts` and `auth/deviceIdentity.ts` already carry, minus their
+  in-memory mirror (a lost suggestion is cosmetic, a lost token is not).
+- The key shape buys one thing: the agent id is a *storage* key and never an
+  object key, so none of the `__proto__` guards `lastSessionStore` needs apply.
+- An empty agent id is mobile's null `agentScopeKey` — reads and writes are both
+  skipped rather than sharing one unscoped bucket.
+- Any blank or non-string member voids the whole blob, matching the typed
+  mobile decoders rather than salvaging the readable entries.
+- Deleting an agent drops its bucket here, alongside its token and its
+  last-used session — mobile has no equivalent yet, which is a known parity gap.
+
+#### Sign-out purge of recents
+
+Signing out drops **every** agent's bucket, on all three clients (CLA-258): the
+paths name the user's own workstation, so they end with the identity that typed
+them.
+
+The purge is a prefix sweep driven from each client's identity teardown:
+
+- `clearAllRecentPaths()` from `sessionStore.invalidateUserSession` and the
+  peer-tab `logout` branch here.
+- `PreferencesStore.removeAllRecentCustomPaths()` from
+  `SessionManager.invalidateUserSession` on both mobile clients.
+
+It sweeps by prefix rather than by agent id because teardown clears the
+credentials that name the current agent in the same breath, and a current-key
+delete would strand every previously-connected agent's bucket. `agentDisconnect`
 deliberately does **not** purge: an agent switch is not an identity change.
 
-Which reasons count as an identity ending is decided by `endsIdentity` in
-`sessionStore.ts`, and the same question is asked separately, with different
-membership, by the branch that revokes the browser's refresh cookie. `manual`
-and `deletionScheduled` are in both — scheduling a deletion is as deliberate as
-pressing Sign out, and leaving it out of either would keep a revoked account's
-recents on disk or let its refresh cookie restore the session. `accountRemoved`
-ends the identity but does not revoke, and `tokenRejected` does neither: it also
-fires when a refresh merely failed to complete, so treating it as an ending would
-destroy un-re-mintable paths over a flaky connection. **A new
-`InvalidationReason` must be classified against both.**
+#### Which invalidation reasons end an identity
 
-Web's boot path used to be exempt for a reason that no longer holds — the
-session lived in `sessionStorage`, so closing every tab reached the
-no-session branch without the user ever signing out. With the refresh cookie
-that branch means something sharper, and the rule is now: **disk state follows
-the server's verdict, never the network's mood.** A boot whose cookie restore
-returns `terminal` (the server says the credential is dead) purges recents and
-agent tokens; one that returns `transient` — offline, timed out — touches
-neither, because a recent cannot be re-minted and a subway ride is not a
-sign-out. Without `navigator.locks`, concurrent boots can produce a spurious
-401, so the purge asks peers one final time before running.
+Which reasons count as an identity ending is decided by `endsIdentity` in
+`sessionStore.ts`. The same question is asked separately, with different
+membership, by the branch that revokes the browser's refresh cookie.
+
+- `manual` and `deletionScheduled` are in both. Scheduling a deletion is as
+  deliberate as pressing Sign out, and leaving it out of either would keep a
+  revoked account's recents on disk or let its refresh cookie restore the
+  session.
+- `accountRemoved` ends the identity but does not revoke.
+- `tokenRejected` does neither. It also fires when a refresh merely failed to
+  complete, so treating it as an ending would destroy un-re-mintable paths over
+  a flaky connection.
+
+**A new `InvalidationReason` must be classified against both.**
+
+At boot the rule is: **disk state follows the server's verdict, never the
+network's mood.**
+
+- A boot whose cookie restore returns `terminal` (the server says the credential
+  is dead) purges recents and agent tokens.
+- One that returns `transient` — offline, timed out — touches neither, because a
+  recent cannot be re-minted and a subway ride is not a sign-out.
+
+Without `navigator.locks`, concurrent boots can produce a spurious 401, so the
+purge asks peers one final time before running.
+
+### Custom agent types and Auto Scan launch
 
 Custom agent types are listed, launched, created and deleted here; editing
 is CLA-231. A launch sends only `cli: "custom_<id>"` — the relay resolves the
@@ -520,188 +490,172 @@ Three routes: `/agents` (guarded, in the app shell) lists and manages
 agents; `/pair` completes a pairing from a code printed elsewhere; the
 guarded `/agents/pair` (WEB-12) mints one instead.
 
+### Pairing phase 1: the `/pair` route
+
 **Why `/pair` sits outside both guards.** The payload rides in the URL
 *fragment*, and `requireAuthMiddleware` builds its `?next=` from
 `pathname + search` only, so a bounce through sign-in would drop it. Putting
 the nonce in a query string instead would put it in the relay's access log.
-So the route is public: it reads `useLocation().hash` in a mount effect,
-stashes the payload under `sessionStorage` key `mobaide-pairing`, scrubs the
-URL, and only then sends a signed-out visitor to `/login?next=/pair` —
-`useAfterAuth` brings them back. The scrub is `navigate({… hash: ''},
+`RequireAnonymous` is equally wrong, because a signed-in user must be able to
+open a pairing link.
+
+So the route is public. It does the following in order:
+
+1. Reads `useLocation().hash` in a mount effect.
+2. Stashes the payload under `sessionStorage` key `mobaide-pairing`.
+3. Scrubs the URL.
+4. Only then sends a signed-out visitor to `/login?next=/pair` — `useAfterAuth`
+   brings them back.
+
+The scrub is `navigate({… hash: ''},
 {replace: true})`, never `location.hash = ''`: assigning to `location.hash`
-*pushes* a history entry, so Back would re-expose the nonce, and a bare
-`history.replaceState` would desync the router's own location.
-`RequireAnonymous` is equally wrong for the route, because a signed-in user
-must be able to open a pairing link.
+*pushes* a history entry, so Back would re-expose the nonce.
 
-**The payload contract.** `src/protocol/pairingPayload.ts` is the fourth
-implementation of `MOBA1|{relay_url}|{nonce}|{trust_key_fp}|{exp_unix}`, and
-the first shared golden for it —
-`tests/protocol_fixtures/pairing/qr_payload.json` — now drives the Python,
-TypeScript and Swift arms (Android reads no fixtures at all; CLA-235).
-Building it surfaced that the agent's `parse_qr_payload` was *looser* than
-both mobile parsers: Python's `int()` strips surrounding whitespace, honours
-`_` digit separators and has no 64-bit ceiling, and its blank check missed
-whitespace-only fields. That was tightened rather than encoded into the
-golden. The web arm adds one documented divergence: an `exp_unix` outside
-IEEE-754 safe-integer range is rejected rather than silently rounded, which
-only matters 285 million years from now.
+**The payload contract.** `src/protocol/pairingPayload.ts` implements
+`MOBA1|{relay_url}|{nonce}|{trust_key_fp}|{exp_unix}`.
+`tests/protocol_fixtures/pairing/qr_payload.json` drives the Python, TypeScript
+and Swift arms (Android reads no fixtures at all; CLA-235). The agent's
+`parse_qr_payload` was tightened to match the stricter mobile parsers. The web
+arm adds one documented divergence: an `exp_unix` outside IEEE-754 safe-integer
+range is rejected rather than silently rounded.
 
-The paste box strips **all** whitespace before the anchored `^MOBA1|` test —
-the payload is printed on one unbroken line, but a terminal soft-wraps it and
-a copied soft-wrapped line carries the breaks. It also accepts the pairing
-link and a bare fragment, since the agent prints the payload and the link next
-to each other and either can end up on a clipboard.
+The paste box strips **all** whitespace before the anchored `^MOBA1|` test,
+because a copied soft-wrapped terminal line carries the breaks. It also accepts
+the pairing link and a bare fragment.
 
 **Order of operations** follows both mobile clients exactly: parse → expiry →
-trust pin → confirm → claim. Expiry before trust is load-bearing (Android pins
-it in `skipsTrustKeyCheck`) — a stale screenshot from before a legitimate key
-rotation must read as "expired", not as a MITM refusal. The confirm step is
-kept even on the deep link: it names the relay, which is the phishing
-mitigation for a clicked link exactly as it is for a scanned QR.
+trust pin → confirm → claim. Expiry before trust is load-bearing — a stale
+screenshot from before a legitimate key rotation must read as "expired", not as
+a MITM refusal. The confirm step is kept even on the deep link: it names the
+relay, which is the phishing mitigation for a clicked link exactly as it is for
+a scanned QR.
 
 **Trust pinning** is TOFS in `localStorage` (`mobaide-trust-pins`), keyed by
 the relay URL normalized the way `TrustKeyPinning` normalizes it — trim, strip
 every trailing slash, lowercase. A mismatch never overwrites and has no
 override affordance, matching the mobile rule.
 
-One deliberate split from mobile: both mobile clients fold the read and the
-write into a single `verifyOrPin` that pins on first sight, which is safe when
-the only input channel is a camera the user is aiming. Here the input is a URL,
-so `checkTrustPin` (read-only) runs during validation and `pinTrustKey` runs
-from the confirm button. Folded together, any link a user merely *opened* would
-write a permanent pin — and since a mismatch is a hard refusal with no
-override, a payload naming the real relay with a wrong fingerprint would lock
-that browser out of pairing for good, recoverable only by clearing site data.
+> [!WARNING]
+> One deliberate split from mobile: `checkTrustPin` (read-only) runs during
+> validation and `pinTrustKey` runs from the confirm button, instead of mobile's
+> single `verifyOrPin` that pins on first sight. Folded together, any link a
+> user merely *opened* would write a permanent pin — and since a mismatch is a
+> hard refusal with no override, a payload naming the real relay with a wrong
+> fingerprint would lock that browser out of pairing for good, recoverable only
+> by clearing site data.
 
-The confirm step also carries the RFC 8628 §5.4 remote-phishing instruction,
-which is what makes it a mitigation rather than a speed bump: a pairing link
-works for whoever opens it, an attacker can run `pair-qr` against the *real*
-relay on their own machine, and every field on that screen would look correct.
-Only the code the user can read off their own terminal separates the two cases,
-so the screen says to compare it. Mobile has the same dialog without the
-instruction, but its delivery channel is a camera pointed at the host, so the
-remote vector does not exist there.
+The confirm step also carries the RFC 8628 §5.4 remote-phishing instruction: a
+pairing link works for whoever opens it, an attacker can run `pair-qr` against
+the *real* relay on their own machine, and every field on that screen would look
+correct. Only the code the user can read off their own terminal separates the
+two cases, so the screen says to compare it. Mobile omits the instruction
+because its delivery channel is a camera pointed at the host.
 
-The browser is a weaker home
-for this than a phone and knowingly so: Safari caps script-written storage at
-7 days of no interaction, degrading the pin to trust-on-most-recent-scan (and
-regenerating the device UUID, which under last-login-wins orphans a device
-row). CLA-199 replaces it with an account-level server-side pin.
+The browser is a weaker home for the pin than a phone: Safari caps
+script-written storage at 7 days of no interaction, degrading the pin to
+trust-on-most-recent-scan (and regenerating the device UUID, which under
+last-login-wins orphans a device row). CLA-199 replaces it with an
+account-level server-side pin.
+
+### Waiting for the agent after claim
 
 **Waiting for the agent.** A claim's 200 only proves the relay persisted
 credentials; `ws_delivered` is tri-state diagnostic (`null` from an older
 relay must never collapse to `false`) and only refines the wait-timeout copy.
 The authoritative signal is `agent.status_changed` with `online: true`, and
 the push stays primary on all three clients — that event already invalidates
-`['agents']` and an invalidation refetches the mounted query. The safety net
-for a lost push is a bounded REST resync: a 5 s interval
-(`DEFENSIVE_REFETCH_SECONDS` on Android/iOS, web's existing
-`DEFENSIVE_REFETCH_MS`, now also running in background tabs via
-`refetchIntervalInBackground: true`) plus one final resync on the 60 s
-deadline tick before any verdict, so "not online" is never shown while the
-agent actually is. What web keeps is the reason mobile refreshes *twice* — a
-status event landing between the claim's refresh and the watcher's start
-would be rolled back by the in-flight stale snapshot. The timeout is no
-longer an error: all three clients render a shared "Agent not online yet"
-state with a "Keep waiting" action that restarts the 60 s wait, and the
-timeout copy is now shared word-for-word and platform-neutral about the
-agent host — the Windows-specific `Get-ScheduledTask` / `agent.err.log`
-enumeration is gone.
+`['agents']`. The safety net for a lost push is a bounded REST resync:
+
+- A 5 s interval (`DEFENSIVE_REFETCH_SECONDS` on Android/iOS, web's
+  `DEFENSIVE_REFETCH_MS`, also running in background tabs via
+  `refetchIntervalInBackground: true`).
+- One final resync on the 60 s deadline tick before any verdict, so "not
+  online" is never shown while the agent actually is.
+
+All three clients render a shared "Agent not online yet" state on timeout, with
+a "Keep waiting" action that restarts the 60 s wait.
+
+### The `/agents` screen
 
 **`/agents`** is full mobile parity: cards (status dot, name, Online/Offline,
 agent id, version, added, last seen), manual add, re-register, remove (with an
 "Also uninstall Mobaide from this computer" checkbox, on by default, offered
-when the agent advertises `supports_uninstall`), and the
-install-commands panel. Two web-only card fields, both because a browser is
-the first client that can hold several agents at once: the agent id, which is
-what each host's `.env` carries, and the agent version, which is the fastest
-way to spot a host that missed an auto-update. The per-OS `.env` table and the
-install one-liners are byte-identical to `AgentCredentialsSheet` on both
+when the agent advertises `supports_uninstall`), and the install-commands
+panel. The agent id and version are web-only card fields, because a browser is
+the first client that can hold several agents at once. The per-OS `.env` table
+and the install one-liners are byte-identical to `AgentCredentialsSheet` on both
 mobile clients, and are deliberately not OS-detected — the host is a different
 machine from the browser.
 
+#### First-run empty state
+
 **The first-run empty state** (`AgentsEmptyState`) is the web arm of Android
-and iOS `EmptyAgentsState`: install first, pair second, escape hatches last,
-because nothing is pairable until `mobaide-agent` runs somewhere. Mobile's
-step 2 is "scan the QR"; a browser has no camera, so the web equivalent is the
-two lines `pairing_qr.write_pairing_hints` prints *under* that QR — the
-`MOBA1|…` payload and the `/pair#…` link — which is why web's steps 2 and 3
-are alternatives rather than a sequence. Three divergences from mobile, all
-platform-convention: the install one-liners render inline rather than behind a
-bottom sheet (a sheet is a phone answer to a screen with no room), the guide
-quotes an example of the agent's stdout so a user can match it against their
-own scrollback, and it names `mobaide-agent show-qr` for a nonce that expired
-before they got back to the browser. `setupCopy.test.ts` reads
-`mobaide_agent/mobaide/agent/pairing_qr.py` and `__main__.py` off disk and
-holds the quoted labels and the subcommand to what the agent actually ships —
-nothing else fails when those drift, the guide just stops describing reality.
-The example payload carries `<placeholder>` fields that `parseMoba1` rejects,
-so it can never be mistaken for a live code. The link's origin is
-`window.location.origin`, never a hard-coded `app.mobaide.com`: the agent's
-`MOBAIDE_AGENT_PAIR_WEB_ORIGIN` means "origin of the web client the printed
-link points at", which is *this* client, so a self-hosted deployment that
-configured its agent prints the origin the reader is already browsing — and a
-hard-coded default would tell them to look for a line their agent never wrote.
-Every other varying field, the payload's relay URL included, is a
-`<placeholder>`. That one is the agent's own `PUBLIC_BASE_URL` and is *not*
-derivable here — the SPA reaches the relay same-origin through a proxy
-(`baseUrl: '/'`), so the browser only ever knows its own host — and not being
-able to show the right value is a reason to show a placeholder rather than a
-wrong one. What carries the recognition is the `[mobaide-agent]` labels and the
-`MOBA1|` prefix, neither of which varies by deployment. While the guide is up the flat
-four-button row is suppressed: every one of its actions appears in the guide in
-an order, and a flat row beside it would undo the ordering. The sessions and
-projects "No agents yet" lines now point at `/agents` rather than `/pair`, for
-the same reason — an account with nothing paired has no code to paste yet.
+and iOS `EmptyAgentsState`: install first, pair second, escape hatches last.
+Mobile's step 2 is "scan the QR"; a browser has no camera, so the web
+equivalent is the two lines `pairing_qr.write_pairing_hints` prints *under* that
+QR — the `MOBA1|…` payload and the `/pair#…` link — which is why web's steps 2
+and 3 are alternatives rather than a sequence.
+
+Three divergences from mobile, all platform-convention: the install one-liners
+render inline rather than behind a bottom sheet; the guide quotes an example of
+the agent's stdout so a user can match it against their own scrollback; and it
+names `mobaide-agent show-qr` for a nonce that expired before they got back to
+the browser.
+
+**The example payload and link.**
+
+- The example payload carries `<placeholder>` fields that `parseMoba1` rejects,
+  so it can never be mistaken for a live code.
+- The link's origin is `window.location.origin`, never a hard-coded
+  `app.mobaide.com`: the agent's `MOBAIDE_AGENT_PAIR_WEB_ORIGIN` means "origin of
+  the web client the printed link points at", which is *this* client.
+- Every other varying field, the payload's relay URL included, is a
+  `<placeholder>`. The relay URL is the agent's own `PUBLIC_BASE_URL` and is not
+  derivable here, because the SPA reaches the relay same-origin through a proxy
+  (`baseUrl: '/'`).
+
+While the guide is up the flat four-button row is suppressed. The sessions and
+projects "No agents yet" lines point at `/agents` rather than `/pair`, because
+an account with nothing paired has no code to paste yet.
+
+#### Guide paste-box hand-off
 
 **The guide's paste box hands off rather than pairing.** `/pair` owns the
-confirm → claim → wait machine and the expiry-before-trust ordering its tests
-pin, so a second copy on `/agents` is the kind of duplicate that drifts into a
-security bug. Instead the box runs `readPairingInput` (which already takes the
-payload, the whole link, or a bare fragment) and, on success, navigates to
-`/pair#…` with the payload re-encoded by `encodePairingFragment` — the new
-inverse of `decodePairingFragment`, pinned to the agent's own
-`format_pairing_link` by the shared golden's `link_cases`. base64url rather
-than `encodeURIComponent` so the fragment is `[A-Za-z0-9_-]` only and no layer
-in between can re-encode it into something the decoder reads back differently.
-That reuses the deep-link path verbatim, including its scrub, so the nonce
-still never survives in history.
+confirm → claim → wait machine and the expiry-before-trust ordering, so a second
+copy on `/agents` would drift into a security bug. Instead the box runs
+`readPairingInput` (which takes the payload, the whole link, or a bare
+fragment) and navigates to `/pair#…` with the payload re-encoded by
+`encodePairingFragment` — base64url, so the fragment is `[A-Za-z0-9_-]` only and
+no layer in between can re-encode it. That reuses the deep-link path verbatim,
+including its scrub, so the nonce still never survives in history.
 
-Routing a second flow through that path exposed a latent hole in it, now
-closed: the capture effect scrubs the fragment whether or not the
-`sessionStorage` write landed, so in a context that denies storage — a private
-window, a partitioned context — the payload was destroyed outright and the
-visitor was left on an empty paste box with a single-use nonce they could no
-longer produce. `Pair` now also holds it in a `handoffRef` and prefers that on
-read. A ref rather than module state because capture and consume are two
-effects on one mounted component, which is exactly the lifetime this needs;
-`sessionStorage` stays the arm that survives the sign-out bounce, which
-unmounts the component. Note for anyone testing this: `vi.spyOn(Storage
-.prototype, …)` silently intercepts nothing under Node >= 22, whose
-experimental `Storage` global shadows jsdom's — spy on
-`Object.getPrototypeOf(sessionStorage)` instead, or the test passes against
-unfixed code.
+In a context that denies storage (a private or partitioned window) the capture
+effect would scrub the fragment without the `sessionStorage` write landing, so
+`Pair` also holds the payload in a `handoffRef` and prefers that on read;
+`sessionStorage` stays the arm that survives the sign-out bounce.
+
+#### Removing an agent and the credentials panel
 
 Removing an agent calls `clearAgentToken(agentId)`, never
 `sessionStore.agentDisconnect()`, which clears *every* agent's tokens; it also
 drops the agent's events channel, its `mobaide-agent` / `mobaide-sessions`
-entries and its `recent_custom_paths::<agentId>` bucket. The credentials
-panel is an inline panel rather than a `<dialog>` precisely so no Escape
-handler or backdrop can dismiss the one and only showing of a token — the
-web analogue of Android's `confirmValueChange` and iOS's
-`interactiveDismissDisabled`. Android's `EXTRA_IS_SENSITIVE` clipboard
-flag has no browser equivalent, so a copied token lands in ordinary clipboard
-history; that is why the panel points at pairing instead.
+entries and its `recent_custom_paths::<agentId>` bucket.
 
-**Pairing phase 2 (WEB-12).** `/agents/pair` (`PairHost`) is guarded,
-unlike `/pair`: minting a code needs a session, and there is no URL
-payload for a bounce through sign-in to drop. It mints a code from
-`POST /api/pairing/device-code`, polls `GET .../device-code/{id}` for
-the agent's redeem, and confirms through `POST .../confirm` — the same
-completion path `/pair`'s claim uses. See [qr-pairing.md](qr-pairing.md)
-for the protocol and the account-level `trust_key_fp` pin referenced
-above.
+The credentials panel is an inline panel rather than a `<dialog>` so no Escape
+handler or backdrop can dismiss the one and only showing of a token. Android's
+`EXTRA_IS_SENSITIVE` clipboard flag has no browser equivalent, so a copied token
+lands in ordinary clipboard history; that is why the panel points at pairing
+instead.
+
+### Pairing phase 2 route
+
+**Pairing phase 2 (WEB-12).** `/agents/pair` (`PairHost`) is guarded, unlike
+`/pair`: minting a code needs a session, and there is no URL payload for a
+bounce through sign-in to drop. It mints a code from
+`POST /api/pairing/device-code`, polls `GET .../device-code/{id}` for the
+agent's redeem, and confirms through `POST .../confirm` — the same completion
+path `/pair`'s claim uses. See [qr-pairing.md](qr-pairing.md) for the protocol
+and the account-level `trust_key_fp` pin.
 
 ## Projects, git & templates (WEB-09)
 
@@ -711,120 +665,121 @@ Three routes: `/projects` (agent-scoped, with the same agent picker and
 git are agent-axis calls through `/proxy`; templates are central-server ones,
 so the templates screen works while every agent is offline.
 
+### Projects cache and snapshot events
+
 **`projects.changed` is written, not invalidated.** It carries the agent's
 complete list, republished after every mutation *and* on every events-socket
-connect — the relay sends `request_events_snapshot` and the agent answers by
-publishing the whole list again (`relay/client.py`). So it joins
-`sessions.changed` in `queryBridge`'s full-snapshot exception, via
-`src/realtime/projectsCache.ts`. That also closes CLA-234: TanStack only
-self-cancels a refetch once `dataUpdatedAt` is truthy, so an invalidation
-landing during a **cold** fetch was deduped into it, the older list resolved,
-and `staleTime: Infinity` pinned it. The general rule the bridge now states is
-that an event carrying the new state is written, an event carrying only a
-pointer to it is invalidated — and a pointer event's query must **not** pin
-`staleTime: Infinity`, which is why the git-items query keeps ordinary
-staleness. `git.changed` is the pointer case, and it now invalidates
-`['agent', id, 'git', projectName]` rather than the project list it used to
-hit. `refreshOnAgentEventsConnect` correspondingly swapped projects for the
+connect (the relay sends `request_events_snapshot`; `relay/client.py`). So it
+joins `sessions.changed` in `queryBridge`'s full-snapshot exception, via
+`src/realtime/projectsCache.ts`. That also closes CLA-234: an invalidation
+landing during a **cold** fetch was deduped into it and `staleTime: Infinity`
+pinned the older list.
+
+The general rule: an event carrying the new state is written; an event carrying
+only a pointer to it is invalidated, and a pointer event's query must **not**
+pin `staleTime: Infinity`. `git.changed` is the pointer case and invalidates
+`['agent', id, 'git', projectName]`. `refreshOnAgentEventsConnect` covers the
 git prefix: projects arrive in the connect snapshot, git items never do.
 
-Because both REST and the push write the same cache, the project list keeps
-its **wire shape** (`projectInfoSchema`) instead of a camelCase mapping — the
-rule `sessionRepository.ts` already documents. The wizard keeps a narrow
-`ProjectSummary = Pick<ProjectInfo, …>` of the seven fields it reads.
+Because both REST and the push write the same cache, the project list keeps its
+**wire shape** (`projectInfoSchema`) instead of a camelCase mapping.
+
+### Project reorder, delete and form
 
 **Reorder is buttons first, drag second.** Every row carries Move up / Move
 down plus a live region announcing `"<name> moved to position N of M"`; a
 native `draggable` handle is a desktop-mouse convenience on top. Pragmatic
-drag-and-drop was considered and rejected: it rides the HTML5 drag API, which
-is mouse-based and unreliable on touch, and a phone browser is a first-class
-target here. `PATCH /api/projects/order` takes the **complete** name set and
-400s on any mismatch, so the move is applied to the full list even when a row
-is hidden by an open undo window; the visible neighbour only names the
-destination. The optimistic order is an *override*, never a cache write, and
-is released only when the server's own order matches it exactly — Android's
-`combine` / iOS's `recompute`, which is what keeps the two-client case
-flicker-free.
+drag-and-drop was rejected: it rides the HTML5 drag API, which is unreliable on
+touch.
+
+`PATCH /api/projects/order` takes the **complete** name set and 400s on any
+mismatch, so the move is applied to the full list even when a row is hidden by
+an open undo window. The optimistic order is an *override*, never a cache write,
+and is released only when the server's own order matches it exactly.
 
 **Project delete is deferred-commit**, not mobile's immediate delete with a
-recreating Undo. The compensating `POST` cannot restore `linear_api_key` (the
-server never echoes it) or the project's `order`, and web already had the
-deferred model for git delete; one undo model beats two. Android and iOS
-follow in CLA-240 / CLA-241. Only one deletion is in flight at a time — there
-is no batch endpoint — so a second delete commits the first and opens a fresh
-window.
+recreating Undo: the compensating `POST` cannot restore `linear_api_key` (the
+server never echoes it) or the project's `order`. Android and iOS follow in
+CLA-240 / CLA-241. Only one deletion is in flight at a time — there is no batch
+endpoint — so a second delete commits the first and opens a fresh window.
 
 **The project form tracks the live snapshot.** React Hook Form's `values` +
 `resetOptions: { keepDirtyValues: true }` re-seed every untouched field while
 protecting the edited ones, and `buildProjectUpdate` diffs against that same
-snapshot, so the two agree by construction: untouched ⇒ equal ⇒ absent from
-the patch. Flags and the Auto Scan filter are arrays, where a field-level
-merge has no honest answer, so they carry their own touch gate instead. The
-three-state contract is `linear_api_key` and `conda_env` only — absent keeps,
-`""` clears, a value replaces; `name`/`path` have `min_length=1` server-side
-so `""` there is a 422, `default_flags` clears with `{}`, and
-`auto_scan_filter` has no clear state and is always replaced whole. Patches
-are built by conditional key insertion, so absence is asserted with
-`Object.hasOwn` rather than left to `JSON.stringify` dropping `undefined`.
-Dirty-field registries are deliberately not used: RHF reports a field edited
-and changed back, and misses one changed programmatically.
+snapshot, so untouched ⇒ equal ⇒ absent from the patch. Flags and the Auto Scan
+filter are arrays, so they carry their own touch gate instead.
+
+The three-state contract is `linear_api_key` and `conda_env` only:
+
+- Absent keeps, `""` clears, a value replaces.
+- `name`/`path` have `min_length=1` server-side, so `""` there is a 422.
+- `default_flags` clears with `{}`.
+- `auto_scan_filter` has no clear state and is always replaced whole.
 
 The Linear key gets the same handling as every other secret in the SPA: a
-masked `PasswordField` with a reveal toggle (labelled "key", matching both
-mobile clients' `SecretTextField`), and the save mutation pins `gcTime: 0` with
-`onSettled: save.reset()` — otherwise TanStack keeps the submitted variables,
-plaintext key included, readable app-wide through `getMutationCache()` for
-minutes after the dialog closes. `NewSession`'s Codex login mutation already
-does this for the same reason. Two related traps the form closes: `editing` is
-resolved by name, so a project deleted or renamed by another client would flip
-the dialog into *create* mode with the dirty fields intact — the editor now
-closes instead; and the Auto Scan filter is validated even while hidden, so its
-message renders precisely when the section is **not** shown, or emptying the
-filter and then clearing the key would disable Save with no reason on screen.
+masked `PasswordField` with a reveal toggle, and the save mutation pins
+`gcTime: 0` with `onSettled: save.reset()` — otherwise TanStack keeps the
+submitted variables, plaintext key included, readable app-wide through
+`getMutationCache()` for minutes after the dialog closes.
+
+Two related traps the form closes: `editing` is resolved by name, so a project
+deleted or renamed by another client closes the editor instead of flipping the
+dialog into *create* mode; and the Auto Scan filter is validated even while
+hidden, so Save is never disabled with no reason on screen.
+
+### Git delete and branch management
 
 **Git delete ports `GitScreenModel` whole**: rows hide immediately, the batch
-lives outside the timer so a coalescing restart cannot discard it, `results`
-map positionally onto the request, `force_required` restores the row *and*
+lives outside the timer so a coalescing restart cannot discard it, `results` map
+positionally onto the request, `force_required` restores the row *and*
 re-prompts, a short `results` array restores the unreported tail, and the busy
-409 restores the entire batch because the guard runs before anything is
-deleted. The one thing not ported is the overlapping-load guard: `git.changed`
-does arrive before the delete response, but the list lives in TanStack Query,
-whose invalidation cancels an in-flight refetch on a warm cache. The 409 body
-(`{"detail": {"busy_by": […]}}`) is in neither OpenAPI schema, so it has a
-hand-written Zod mirror and a shared parser in `src/api/conflicts.ts` —
-alongside the string-shaped project conflicts, which is the split
-`ConflictParsing.swift` makes and Android duplicates.
+409 restores the entire batch because the guard runs before anything is deleted.
+The overlapping-load guard is not ported, because the list lives in TanStack
+Query, whose invalidation cancels an in-flight refetch on a warm cache.
+
+The 409 body (`{"detail": {"busy_by": […]}}`) is in neither OpenAPI schema, so
+it has a hand-written Zod mirror and a shared parser in `src/api/conflicts.ts`.
 
 **Branch management (#677)** rides the same screen once
 `capabilities.git.branches` is advertised — probed with the terminal's
-`useSessionGitCapabilities`, which is per agent despite its name. The list
-always asks for `?remote=true` (the flag shields *older clients* from the
-`remote_branch` kind; an older agent ignores it) and renders both the local
-and remote rows as an A→Z folder tree (`gitTreeRows`: a branch name split on
-`/`, a remote row nested under a folder per remote), the remote rows inside a
-`<details className="advanced">` under the local ones, closed until opened or
-until the filter — a plain `type="search"` input that appears at eight rows —
-is non-empty, which also forces every matching folder open. Rows show the tip
-commit's subject and a
-`YYYY-MM-DD` prefix of `committed_at` (a slice, never a parse, so the day is
-the committer's own on all three clients). *New branch…* opens
-`GitNewBranchDialog` (name, a `SelectField` start point defaulting to the
-checked-out branch with `null` for the agent's `HEAD`, a checkout checkbox);
-Check out is a per-row button on `branch_only` and `remote_branch` rows behind
-an `alertdialog` confirmation whose initial focus is Cancel. Both mutations
-reuse `toSessionGitError` after the busy check: a `busy_by` 409 opens the
-existing "Item is in use" dialog, every coded detail becomes a
-`SessionGitError` whose copy `gitDisplay.ts` maps (`dirty`,
-`checked_out_elsewhere`, `operation_in_progress`, `job_running`,
-`ref_not_found`, and `exists` / `bad_branch_name` / `unknown_start_point`
-inline in the dialog). `isDeletable` is now a type guard gated on
-`capabilities.git.delete_remote` (an older agent answers the whole batch with
-a `422`): a remote row is deletable only behind it, and a batch holding one
-opens a "Delete on the remote?" confirmation before it enters the undo
-window. A `branch_with_worktree` row also gets a *Remove worktree* action
-that drops only the worktree and keeps the branch (`enqueueWorktreeRemoval`).
-The terminal's `⋯` menu gains *Branches…* after *Fetch / Pull / Push…* for a project-backed session,
-navigating to `/agents/:agentId/projects/:projectName/git`.
+`useSessionGitCapabilities`, which is per agent despite its name.
+
+The branch list always asks for `?remote=true` (an older agent ignores it) and
+renders local and remote rows as an A→Z folder tree (`gitTreeRows`). The remote
+rows sit inside a `<details className="advanced">` under the local ones, closed
+until opened or until the filter — a plain `type="search"` input that appears at
+eight rows — is non-empty. Rows show the tip commit's subject and a
+`YYYY-MM-DD` prefix of `committed_at` (a slice, never a parse, so the day is the
+committer's own on all three clients).
+- Shows the tip commit's subject and a `YYYY-MM-DD` prefix of `committed_at` on
+  each row (a slice, never a parse, so the day is the committer's own on all
+  three clients).
+
+Branch actions:
+
+- *New branch…* opens `GitNewBranchDialog` (name, a `SelectField` start point
+  defaulting to the checked-out branch with `null` for the agent's `HEAD`, a
+  checkout checkbox).
+- Check out is a per-row button on `branch_only` and `remote_branch` rows behind
+  an `alertdialog` confirmation whose initial focus is Cancel.
+- Both mutations reuse `toSessionGitError` after the busy check. A `busy_by` 409
+  opens the existing "Item is in use" dialog. Every coded detail becomes a
+  `SessionGitError` whose copy `gitDisplay.ts` maps (`dirty`,
+  `checked_out_elsewhere`, `operation_in_progress`, `job_running`,
+  `ref_not_found`, and `exists` / `bad_branch_name` / `unknown_start_point`
+  inline in the dialog).
+- `isDeletable` is now a type guard gated on `capabilities.git.delete_remote` (an
+  older agent answers the whole batch with a `422`). A remote row is deletable
+  only behind it, and a batch holding one opens a "Delete on the remote?"
+  confirmation before it enters the undo window.
+- A `branch_with_worktree` row also gets a *Remove worktree* action that drops
+  only the worktree and keeps the branch (`enqueueWorktreeRemoval`).
+
+The terminal's `⋯` menu gains *Branches…* after *Fetch / Pull / Push…* for a
+project-backed session, navigating to
+`/agents/:agentId/projects/:projectName/git`.
+
+### Templates and fixture coverage
 
 **Templates** add create/edit/delete to the picker's existing list/touch/
 favourite calls. The management grouping is Favorites then All, each sorted
@@ -837,12 +792,10 @@ creates mid-session through its optional `initialBody` (see *Terminal screen*
 below); `/templates` stays the only place one is edited or deleted.
 
 Fixture coverage: `ProjectInfo`, `BusyByResponse` and `BusyHolder` moved into
-`COVERED_FIXTURES` with Zod mirrors — the first because it crosses a socket
-into the cache, the other two because no schema documents them. The eleven
-remaining WEB-09 fixtures are REST request/response bodies and were re-pointed
-to `OWNER.generated`, the same call WEB-08 made for the pairing group; #677's
-`GitBranchCreateRequest`, `GitCheckoutRequest` and `GitBranchResponse` follow
-them there.
+`COVERED_FIXTURES` with Zod mirrors. The eleven remaining WEB-09 fixtures are
+REST request/response bodies and were re-pointed to `OWNER.generated`;
+#677's `GitBranchCreateRequest`, `GitCheckoutRequest` and `GitBranchResponse`
+follow them there.
 
 ## Terminal screen (WEB-05)
 
@@ -853,49 +806,49 @@ its WebGL addon outweigh the rest of the SPA, so they load on first attach
 rather than on the sign-in screen. It is reached from the sessions list at
 `/`, or from the sessions panel below.
 
+### Route and sessions panel
+
 **Sessions panel.** A `☰` "Sessions" button in `.terminal-bar` opens a panel
 listing the connected agent's sessions (state dot, title, kind · project,
 attention chip; the current row highlighted), a "New session" shortcut and the
 account's other agents (online → select it and go to `/`; offline rows
-disabled). Unpinned (or on a viewport under `(min-width: 901px)`, see
-`useWideViewport`) it is a `popover="auto"` overlay sliding in from the left,
-the UA backdrop serving as the scrim; pinned and wide it is a docked
-`<aside class="sessions-panel sessions-panel-docked">` beside `.terminal-page`
-(xterm refits once). The pin persists in `useSessionsPanelStore`
-(`localStorage` key `mobaide-sessions-panel`). Picking a session
-`navigate`s with `replace: true` (and records `setLastUsedSession`), so Back
-does not step through every switch; `TerminalView` is keyed on the channel key
-so per-session dialog state resets. Each running/starting row has a compact
-Stop icon button inside its frame (the `<li>` carries the frame, since a button
-cannot nest in the row button), as on Android, opening the same Stop / Force Stop / Cancel confirmation as the list;
-both surfaces share the mutation in `routes/sessions/useStopSession.ts`.
-Stopping another session folds its row out of the list ("Session stopped" toast);
-stopping the one on screen navigates to the nearest open (running/starting)
-session by panel position, below first then above, and to `/` only when none
-remains ("Session stopped." toast). The row dims while the stop is in flight.
-The switch hands off through `stores/stopHandOffStore.ts` because
-`TerminalView` remounts per session: the overlay stays open (no second
-slide-in), the stopped row folds out at its old position, the frame settles on
-the new current row and the terminal fades in; the next model is acquired
-before navigating so no "Attaching…" frame unmounts the panel.
+disabled).
+
+- **Unpinned** (or on a viewport under `(min-width: 901px)`, see
+  `useWideViewport`): a `popover="auto"` overlay sliding in from the left.
+- **Pinned and wide:** a docked
+  `<aside class="sessions-panel sessions-panel-docked">` beside `.terminal-page`
+  (xterm refits once). The pin persists in `useSessionsPanelStore`
+  (`localStorage` key `mobaide-sessions-panel`).
+
+Picking a session `navigate`s with `replace: true` (and records
+`setLastUsedSession`), so Back does not step through every switch.
+`TerminalView` is keyed on the channel key so per-session dialog state resets.
+
+**Stopping from the panel.** Each running/starting row has a compact Stop icon
+button, opening the same Stop / Force Stop / Cancel confirmation as the list
+(shared mutation in `routes/sessions/useStopSession.ts`). Stopping another
+session folds its row out of the list; stopping the one on screen navigates to
+the nearest open (running/starting) session by panel position, below first then
+above, and to `/` only when none remains. The switch hands off through
+`stores/stopHandOffStore.ts` because `TerminalView` remounts per session.
 Failures toast "Failed to stop session: …". Android and iOS open the same list
 from a left-edge swipe or the top-bar button.
 
+### Terminal model and layering
+
 **Layering.** `src/terminal/` is framework-free — pure reducers
-(`terminalReplay`, `terminalFollow`, `terminalPaste`,
-`terminalKeys`), the clipboard/renderer/theme adapters, and
-`TerminalSessionModel`, which owns the socket, the emulator and a per-model
-Zustand store the React tree reads. `src/routes/terminal/` is presentation
-only. Models live in `terminalStore` outside React so navigating away and
-back keeps the buffer instead of paying for a fresh replay; three stay
-resident, least-recently-acquired evicted (iOS keeps one per session until
-the session dies, a signal web has no list to deliver yet). Residency is not
-the same as streaming, though — see *Unwatched sessions* below: a retained
-model that is off screen, or in a hidden tab, closes its socket once it has
-both gone unread past the grace and spent a ring's worth of output, and
-resuming it does pay a fresh replay. Each model
-self-registers with `liveChannels`, so `stopAllRealtime()` on a session
-change tears it down — the screen re-acquires when its entry disappears.
+(`terminalReplay`, `terminalFollow`, `terminalPaste`, `terminalKeys`), the
+clipboard/renderer/theme adapters, and `TerminalSessionModel`, which owns the
+socket, the emulator and a per-model Zustand store the React tree reads.
+`src/routes/terminal/` is presentation only.
+
+Models live in `terminalStore` outside React so navigating away and back keeps
+the buffer instead of paying for a fresh replay; three stay resident,
+least-recently-acquired evicted
+(iOS keeps one per session until the session dies). Residency is not the same
+as streaming: see *Unwatched sessions* below. Each model self-registers with
+`liveChannels`, so `stopAllRealtime()` on a session change tears it down.
 
 **One Terminal in the DOM.** `open()` runs once, into a host `div` the model
 owns and views adopt; a hidden terminal is an *unmounted* one, never a
@@ -903,481 +856,405 @@ owns and views adopt; a hidden terminal is an *unmounted* one, never a
 mis-measures under it. `open()` is further deferred until the container has
 a non-zero size.
 
-**`.terminal-surface { isolation: isolate }` traps xterm's own
-z-indexes.** xterm numbers its layers only against each other — 2 for
-`addon-webgl`'s link canvas, 5 helpers, 6/7 decorations, 8 overview ruler,
-10 accessibility, 11 scrollbar — but nothing in its own tree opens a
-stacking context, so without this rule they escaped into the *root* one
-and outranked every `z-index: auto` app overlay in the stage below. The
-link canvas is the dangerous one — full-grid and hit-testing — and it
-silently ate clicks meant for the templates picker, the jump-to-bottom
-badge and the connection overlay's Reconnect button until this rule
-trapped it.
+**`.terminal-surface { isolation: isolate }` traps xterm's own z-indexes.**
+xterm numbers its layers only against each other (up to 11 for the scrollbar)
+but nothing in its own tree opens a stacking context, so without this rule they
+escape into the *root* one and outrank every `z-index: auto` app overlay. The
+link canvas silently ate clicks meant for the templates picker, the
+jump-to-bottom badge and the connection overlay's Reconnect button.
 
 **A session that ends while open stays readable.** `useSessionGone` treats
 "absent from a synced snapshot" as the same proof of death auto-resume uses
 (`useSessionsSynced`) and returns to `/` with "That session has ended." — but
 never for a session it has already seen alive, so a session ending or being
-stopped under the user leaves the output on screen instead (Android
-`TerminalViewModel.sessionEnded`, iOS
-`TerminalSessionModel.noteSessionSnapshot`). Because the route is directly
-reachable with no session list ever mounted, it holds the agent's events
-channel for its own lifetime rather than assuming one is already open. The
-terminal on screen is also exempt from `evictTerminalSessions`'s
-death-driven eviction, so navigating to a session that then dies cannot
-dispose the model out from under the user. Creating a session seeds this
-cache synchronously from the create response before navigating, so the gap
-before the agent's own `sessions.changed` echo cannot read as the brand new
-session already being gone.
+stopped under the user leaves the output on screen instead. Because the route
+is directly reachable with no session list ever mounted, it holds the agent's
+events channel for its own lifetime. The terminal on screen is also exempt from
+`evictTerminalSessions`'s death-driven eviction. Creating a session seeds the
+sessions cache synchronously from the create response before navigating, so the
+gap before the agent's own `sessions.changed` echo cannot read as the session
+already being gone.
+
+### In-session Git panel
+
+#### Menu button and Changes panel
 
 **In-session Git (`⋯` → Git → Changes…).** The header's `⋯` "More options"
 button (`components/MenuButton.tsx`, shown once the session row carries a
 `cwd`) is an APG menu button on the Popover API: `popover="auto"` puts the menu
-on the top layer, which is what lets it sit above xterm's canvases and outside
-the header's horizontal scroll clip with no portal, and gives light dismiss;
-roles, focus-on-open, the arrow-key walk and Escape are the component's own,
-and its open state is mirrored from `beforetoggle` (synchronous, unlike
-`toggle`) so a light dismiss or a modal dialog opening over it cannot desync
-`aria-expanded`. "Changes…" opens `routes/terminal/git/GitChangesPanel.tsx`, a
+on the top layer, so it sits above xterm's canvases and outside the header's
+horizontal scroll clip with no portal. Its open state is mirrored from
+`beforetoggle` so a light dismiss or a modal dialog opening over it cannot
+desync `aria-expanded`.
+
+"Changes…" opens `routes/terminal/git/GitChangesPanel.tsx`, a
 `popover="manual"` slide-over (`role="dialog" aria-modal="false"`) — not a
-`<dialog>`, because the terminal must stay live underneath and a non-modal
-`dialog.show()` is not on the top layer. It is the web mirror of the Android and
-iOS Changes/Diff screens (#669): the repo header, the Conflicts / Staged /
-Changes / Untracked list with status badges, and the diff pane with a
-line-number gutter and, only where it would change anything (a hunked text
-diff, not added/deleted/type-changed), a *Changes* / *Full file* switch.
-*Changes* is context 3; *Full file* is the agent's 5 000-line ceiling, where an
-untruncated diff is the whole file as one hunk (PROTOCOL.md). The layout is two
-panes from 900 px and stacked below that. #675 turned the viewer into an
-editor: per-row Stage / Unstage / Discard buttons (hover icons) and each
-section's Stage all / Unstage all, a checkbox multi-select with its own
-toolbar, and matching Stage / Unstage buttons on the diff pane too — every one
-gated on the matching `capabilities.git.{stage,discard,commit}` key, with
-Discard always behind a confirmation dialog. The panel header's `Commit…`
-button, and the terminal menu's own `⋯ → Git → Commit…` entry (which bumps a
-`commitRequest` counter so it can open the panel and the dialog together),
-open `GitCommitDialog.tsx`: Summary + Description, the author line and an
-Amend prefill both read from a `commit-context` query, and a Skip hooks
-(`--no-verify`) checkbox, with hook output shown on a `hook_failed` refusal.
+`<dialog>`, because the terminal must stay live underneath. It is the web mirror
+of the Android and iOS Changes/Diff screens (#669): the repo header, the
+Conflicts / Staged / Changes / Untracked list with status badges, and the diff
+pane with a line-number gutter and, only for a hunked text diff, a *Changes* /
+*Full file* switch. *Changes* is context 3; *Full file* is the agent's
+5 000-line ceiling (PROTOCOL.md). The layout is two panes from 900 px and
+stacked below that.
+
+#675 turned the viewer into an editor: per-row Stage / Unstage / Discard
+buttons and each section's Stage all / Unstage all, a checkbox multi-select with
+its own toolbar, and matching buttons on the diff pane. Every one is gated on
+the matching `capabilities.git.{stage,discard,commit}` key, with Discard always
+behind a confirmation dialog.
+
+#### Commit, sync and rebase dialogs
+
+The panel header's `Commit…` button, and the terminal menu's
+`⋯ → Git → Commit…` entry (a `commitRequest` counter), open
+`GitCommitDialog.tsx`: Summary + Description, an author line and Amend prefill
+read from a `commit-context` query, and a Skip hooks (`--no-verify`) checkbox,
+with hook output shown on a `hook_failed` refusal.
+
 #676 adds the network operations as agent-side jobs: the terminal menu's
-`⋯ → Git → Fetch / Pull / Push…` (a `syncRequest` counter, like
-`commitRequest`), the panel header's `Sync…` button and the repo header's
-now-clickable `↑n ↓m` line all open `GitSyncDialog.tsx` — three rows
-(Fetch always, Pull when behind, Push when ahead or *Publish branch*
-without an upstream) with the disabled reason under each, then the running
-job's `phase` / `percent` on a two-rectangle `.git-sync-bar` (no width
-transition: git's percentage restarts per phase) with Cancel, or the
-outcome with its follow-ups (Pull with rebase / merge after
-`not_fast_forward` when the branch still has a live upstream, Force push
-(with lease) after `rejected` or a non-fast-forward push), each behind a
-nested `alertdialog` whose initial focus sits on Cancel. The panel shows
-the same job as a `busy`-toned notice strip until its result is dismissed
-(a success clears itself after 6 s). #678 adds an in-progress **rebase**
-the same way: the terminal menu's `⋯ → Git → Rebase…` (gated on
-`capabilities.git.rebase`) opens `GitRebaseDialog.tsx` over the panel — a
-project-backed session picks the target from `listGitItems` (the project's
-local and remote-tracking branches, minus the session's own by name, each
-sent as a fully qualified `refs/heads/…` / `refs/remotes/…` ref so a
-same-named tag cannot shadow it), any other session or a list that fails to
-load types the ref instead, and nothing is preselected. While the status
-reports `state: rebasing` the panel shows a third strip; with a non-null
-`repo.rebase` (not a `git am` session, not an older agent) it carries
-Continue (disabled while any conflict remains), Skip… and Abort…, else it
-points to the terminal. The latter two sit behind an `alertdialog`
-confirmation with Cancel focused;
-`useSessionGitRebase` mirrors the sync mutations' shape. A conflict row's
-list entry and diff pane both gain a *Mark resolved* (✓) action, gated on
-`capabilities.git.{stage,resolve}` together, which stages the row the same
-way any other Stage does — only `resolve` certifies the agent refuses one
-still holding `<<<<<<<`/`>>>>>>>` markers. With `capabilities.git.conflicts`
-a conflict row opens `GitConflictPane.tsx` in the diff pane's place instead
-— pinned by path rather than the selected row, since the file leaves
-*Conflicts* the moment it is resolved here or in the terminal: a whole-file
-uncontrolled `<textarea wrap="off">` editor naming the two sides by label
-and role (never "ours"/"theirs"), a live conflicts-left counter with Next
-conflict, Apply & mark resolved (Ctrl/⌘+Enter) and Save draft, a ⋯ menu for
-the whole-file picks and Start over…/View diff, and an unsaved-edits guard
-on every way out (another row, View diff, Escape, Close, tab close via
-`useUnloadGuard`). A file resolved this way lists in a *Resolved* section
-under Conflicts with a confirmed *Restore conflict…*, and a conflict row's
-`HEAD` diff gains its own *Resolve…* button; `queryKeys.sessionGitConflict`
-deliberately sits outside the `session-git` prefix so neither `git.changed`
-nor the reconnect sweep re-reads the file under a draft. Job state is one holder per panel
-(`activeJobId`): the frames `git.job.progress` / `git.job.done` are
-*written* into `['agent', id, 'session-git', sid, 'job', jobId]` by
-`realtime/sessionGitJobCache.ts` (whole snapshots, monotonic — a `running`
-frame never overwrites a `done` one — plus a per-session `latest-job`
-pointer the panel adopts from, so a job another tab or client started
-shows too), `useSessionGitJob` polls `GET …/git/jobs/{id}` every 3 s under
-the status poll's visibility gate and only while the job runs (a finished
-one is disabled, so the `git.changed` invalidation that follows every job
-cannot refetch it into a `404` after the agent's retention window), and
-`busy` — which gates every staged-set write, because the agent answers
-`job_running` meanwhile — includes a running job.
+`⋯ → Git → Fetch / Pull / Push…` (a `syncRequest` counter), the panel header's
+`Sync…` button and the repo header's `↑n ↓m` line all open `GitSyncDialog.tsx`.
+It shows three rows, each with the disabled reason under it (Fetch always, Pull
+when behind, Push when ahead or *Publish branch* without an upstream), then the
+running job's `phase` / `percent` with Cancel, or the outcome with its
+follow-ups: Pull with rebase / merge after `not_fast_forward` when the branch
+still has a live upstream, and Force push (with lease) after `rejected` or a
+non-fast-forward push. Each follow-up sits behind a nested `alertdialog` whose
+initial focus is Cancel. The panel shows the same job as a notice strip until
+its result is dismissed (a success clears itself after 6 s).
+
+#678 adds an in-progress **rebase**: `⋯ → Git → Rebase…` (gated on
+`capabilities.git.rebase`) opens `GitRebaseDialog.tsx`. A project-backed session
+picks the target from `listGitItems`, each sent as a fully qualified
+`refs/heads/…` / `refs/remotes/…` ref so a same-named tag cannot shadow it; any
+other session, or a list that fails to load, types the ref instead. Nothing is
+preselected. While the status reports `state: rebasing` the panel shows a third
+strip; with a non-null `repo.rebase` (not a `git am` session, not an older
+agent) it carries Continue (disabled while any conflict remains), Skip… and
+Abort…, the latter two behind an `alertdialog` with Cancel focused. Otherwise it
+points to the terminal.
+
+#### Conflict resolution
+
+A conflict row's list entry and diff pane both gain a *Mark resolved* (✓)
+action, gated on `capabilities.git.{stage,resolve}` together; only `resolve`
+certifies the agent refuses a file still holding `<<<<<<<`/`>>>>>>>` markers.
+
+With `capabilities.git.conflicts` a conflict row opens `GitConflictPane.tsx` in
+the diff pane's place: a whole-file `<textarea wrap="off">` editor naming the two
+sides by label and role (never "ours"/"theirs"), a conflicts-left counter with
+Next conflict, Apply & mark resolved (Ctrl/⌘+Enter) and Save draft, and an
+unsaved-edits guard on every way out (`useUnloadGuard` covers tab close). A file
+resolved this way lists in a *Resolved* section with a confirmed *Restore
+conflict…*. `queryKeys.sessionGitConflict` deliberately sits outside the
+`session-git` prefix so neither `git.changed` nor the reconnect sweep re-reads
+the file under a draft.
+
+#### Job state and Escape handling
+
+Job state is one holder per panel (`activeJobId`). The frames `git.job.progress`
+/ `git.job.done` are *written* into
+`['agent', id, 'session-git', sid, 'job', jobId]` by
+`realtime/sessionGitJobCache.ts` as monotonic snapshots (a `running` frame never
+overwrites a `done` one). `useSessionGitJob` polls `GET …/git/jobs/{id}` every
+3 s, only while the job runs, so the `git.changed` invalidation after a job
+cannot refetch it into a `404` after the agent's retention window. `busy` —
+which gates every staged-set write, because the agent answers `job_running` —
+includes a running job.
+
 Because a top-layer `<dialog>` still bubbles its `Escape` keydown to this DOM
-parent, the panel's own handler only closes it when none of the commit sheet,
-the sync sheet, the rebase sheet, a pending rebase-step confirmation nor the
-discard confirmation is open, leaving those dialogs to handle their own
-Escape. The data layer is
-`api/sessionGitRepository.ts` on the generated
-client (REST-only shapes, so no Zod mirror — the golden fixtures stay
-`OWNER.generated`, except `GitJobResponse`, which also rides the socket and
-keeps `protocol/dto/gitJob.ts`), with the two 404s told apart by FastAPI's
-`detail` string exactly as on mobile — after a coded `detail` object has been
-checked first, so the job routes' `404 job_not_found` reads as a lost job,
-never as an outdated agent. Polling is one `enabled` gate on
-`useSessionGitStatus`: the 10 s interval runs only while the panel is open, the
-tab visible and the window focused, and re-enabling refetches because the data
-is kept always-stale — refresh on open, on focus (side-by-side windows too,
-which `visibilitychange` never reports) and silence when hidden, in one place;
-each poll carries the last `etag` and an `unchanged` answer hands the cached
-body back. Those queries live under `['agent', id, 'session-git', …]`, deliberately
-not the `gitItems` prefix; `git.changed` invalidates the viewers whose session
-`project_name`, `repo.toplevel` or `repo.common_dir` matches (the bridge's only
-client-aware lookup), the reconnect sweep covers the root, and `meta.silent`
-keeps their failures out of the global error toast, which paints below the top
-layer anyway. The four mutations settle by invalidating only the status key —
-the etag effect above and that same `git.changed` echo already re-read any
-open diff — and a commit also drops the `commit-context` key; their own
-outcome, success or failure, renders in the panel's own notice strip rather
-than a toast, for the same top-layer reason. Platform deviations from mobile:
-no 2 000-column cut (the diff
-pane scrolls on both axes; the mobile cut exists because their layout engines
-cap a pinned row width), gutters as CSS-generated content so a copy takes the
-code alone, and no watch hold — the unwatched-suspend governor below keys on
-`document.hidden` and the mounted-terminal pointer only, and the terminal stays
-mounted under the panel.
+parent, the panel's own handler closes the panel only when none of the commit,
+sync or rebase sheets, a pending rebase-step confirmation or the discard
+confirmation is open.
+
+#### Data layer and polling
+
+The data layer is `api/sessionGitRepository.ts` on the generated client. The two
+404s are told apart by FastAPI's `detail` string, after a coded `detail` object
+has been checked first, so the job routes' `404 job_not_found` reads as a lost
+job, never as an outdated agent. `GitJobResponse` also rides the socket and keeps
+`protocol/dto/gitJob.ts`.
+
+`useSessionGitStatus` polls every 10 s only while the panel is open, the tab
+visible and the window focused; each poll carries the last `etag`. The queries
+live under `['agent', id, 'session-git', …]`, deliberately not the `gitItems`
+prefix. `git.changed` invalidates the viewers whose session `project_name`,
+`repo.toplevel` or `repo.common_dir` matches, and the reconnect sweep covers the
+root. The four mutations settle by invalidating only the status key (a commit
+also drops `commit-context`), and their outcome renders in the panel's own
+notice strip rather than a toast, because toasts paint below the top layer.
+
+#### Platform deviations from mobile
+
+The diff pane scrolls on both axes with no 2 000-column cut (the mobile cut
+exists because their layout engines cap a pinned row width). Gutters are
+CSS-generated content so a copy takes the code alone. There is no watch hold:
+the unwatched-suspend governor below keys on `document.hidden` and the
+mounted-terminal pointer only, and the terminal stays mounted under the panel.
+
+### Replay, sizing and follow mode
 
 **Replay** follows the mobile state machine exactly: `'b'` feeds
 `ESC[H ESC[2J ESC[3J` **into the write stream** (never `Terminal.reset()`,
 which executes immediately, jumps queued writes and clears the program's
-DECSET modes), `'o'` chunks append, `'e'` is guarded on being in a span.
-Any inbound binary upgrades a reconnecting channel to live *before* the
-decode. The overlay is driven by socket state, not by the first frame
-(ttyd's stuck-overlay bug), and stays up past `'e'` until the replay writes
-report parsed through their `write` callbacks.
+DECSET modes), `'o'` chunks append, `'e'` is guarded on being in a span. Any
+inbound binary upgrades a reconnecting channel to live *before* the decode. The
+overlay is driven by socket state, not by the first frame, and stays up past
+`'e'` until the replay writes report parsed through their `write` callbacks.
 
 **Size authority.** The grid is cached before the 100 ms resize debounce and
-re-asserted at all four live triggers — socket open, first inbound binary
-of a cycle, `replayEnd` (only the one closing this client's own handshake,
-since the relay fans every attach replay out to all clients and a hidden
-retained tab must not resize the PTY back), and the tab-shown / window-focus
-switch-back edge (GH #631) — because the agent spawns every PTY at 24×80 and never reports
-back. The switch-edge trigger bypasses the same-size dedupe cache, since a
-peer client may have resized the shared PTY while this one sat idle, and
-fires only while already live — every non-live state already re-asserts on
-its own path into live.
+re-asserted at all four live triggers, because the agent spawns every PTY at
+24×80 and never reports back:
+
+1. Socket open.
+2. First inbound binary of a cycle.
+3. `replayEnd` — only the one closing this client's own handshake, since the
+   relay fans every attach replay out to all clients and a hidden retained tab
+   must not resize the PTY back.
+4. The tab-shown / window-focus switch-back edge (GH #631). It bypasses the
+   same-size dedupe cache, since a peer client may have resized the shared PTY
+   while this one sat idle, and fires only while already live.
 
 **Follow mode is derived, not commanded**: pinned ⇔ `viewportY === baseY`.
-That gets the CLA-184/CLA-178 fix for free — xterm scrolls to the tail on
-genuine user input only, so a program's own `ESC[6n` cannot un-pause a
-scrolled-up viewport, and the `isApplyingEmulatorOutput` discriminator both
-mobile clients needed must **not** be ported. The unread tally counts rows
-entering the scrollback as
-`max(0, ΔbaseY) + max(0, −ΔviewportY)`, which stays exact past the
-`scrollback` cap where `baseY` saturates (the web analogue of the iOS
-`yDisp` freeze). Wheel, viewport pointer-drag, Shift+paging keys, resize and
-the replay wipe re-baseline instead of accruing. Cap 9999, label `999+`,
-cleared by re-pinning — same rule as mobile, and like iOS it does not count
-DECSTBM region scrolls, because xterm shifts those in place; Android counts
-them because its Termux fork genuinely appends them.
+xterm scrolls to the tail on genuine user input only, so a program's own
+`ESC[6n` cannot un-pause a scrolled-up viewport, and the
+`isApplyingEmulatorOutput` discriminator both mobile clients needed must **not**
+be ported. The unread tally counts rows entering the scrollback as
+`max(0, ΔbaseY) + max(0, −ΔviewportY)`, which stays exact past the `scrollback`
+cap where `baseY` saturates. Wheel, viewport pointer-drag, Shift+paging keys,
+resize and the replay wipe re-baseline instead of accruing. Cap 9999, label
+`999+`, cleared by re-pinning — same rule as mobile; like iOS it does not count
+DECSTBM region scrolls, while Android does.
+
+### Scrollback slider
 
 **The scrollback slider** is the visible half of that state, and on a touch
 device the only way to reach it: xterm 6 scrolls through a VS Code
-`ScrollableElement` rather than a native scroller, and registers no touch
-gesture target of its own (`Gesture.addTarget` is never called, only
-`ignoreTarget`), so a finger swipe on the grid moves nothing.
+`ScrollableElement` and registers no touch gesture target of its own, so a
+finger swipe on the grid moves nothing.
 
-**Three scrollbars want the same 14 px gutter, and the slider is the only one
-that stays.** `FitAddon` reserves that gutter as the **constant**
-`options.overviewRuler?.width || 14` whenever `scrollback` is non-zero — it
-measures no bar, and xterm 6 has no `scrollBarWidth` at all — so the grid is
-inset by exactly that much regardless and the track costs no columns and forces
-no reflow, hence no `r` frame and no cleared selection.
+**One 14 px gutter, one scrollbar.** `FitAddon` reserves the gutter as the
+**constant** `options.overviewRuler?.width || 14` whenever `scrollback` is
+non-zero, so the track costs no columns and forces no reflow.
 `--terminal-scrollbar-width` is the other half of that pair; keep the two equal
-across an addon bump. The two that go: `.xterm-viewport` is a leftover layer
-whose scroll height equals its client height, so its `overflow-y: scroll` paints
-a permanently empty native bar wherever scrollbars are classic rather than
-overlay; and `ScrollableElement` renders its *own* 14 px slider into the same
-gutter at `z-index: 11`, held at `opacity: 0` until it fades in but with
-`pointer-events: auto` throughout — left in place it swallows every press, so
-the slider would paint here and be dragged there, losing the
-`role="scrollbar"`, the keyboard, the unread re-baseline and the coarse-pointer
-target. Only the widget is hidden; the wheel and the scroll APIs live on the
-scrollable element itself.
+across an addon bump. The `.xterm-viewport` native bar and the
+`ScrollableElement` slider (`z-index: 11`, `opacity: 0` but
+`pointer-events: auto`, so it swallows every press) are hidden; the wheel and
+scroll APIs live on the scrollable element itself.
 
-Geometry is `size = rows / (baseY + rows)`, `offset = viewportY / baseY`, and it
-lives in a **second Zustand store** on the model. `TerminalView` subscribes to
-the whole view store, so a field on `TerminalViewState` would re-render the
-header bar and every overlay once per row a busy PTY prints; only
-`TerminalScrollbar` reads this one, and the model quantizes to a thousandth of
-the track before writing it. The component renders from those two fractions as
-CSS custom properties and measures nothing, which is also what makes it testable
-where jsdom computes no layout. Every scroll command re-baselines the tally
-first, so the slider cannot light its own unread badge. Drag, track-click
-paging, the wheel over the track, and ↑/↓/PageUp/PageDown/Home/End on a focused
-`role="scrollbar"` all route through the same model methods. A pixel-mode wheel
-converts at one row per cell height with a carried sub-row remainder — a
-precision touchpad reports a stream of small deltas, and one notch apiece ran
-the scrollback many times faster over the track than over the grid, while
-damping them would run it slower. Nothing is scaled:
-`CoreMouseService.consumeWheelEvent` does damp small deltas, but its only two
-call sites are the mouse-tracking path and the no-scrollback arrow-key path, so
-it governs wheel-to-mouse *reporting* and not this. Presses are gated on the
-primary pointer's primary button, so a right-click opens the context menu
-without also grabbing the thumb, and both pointer paths cancel the press: the
-track is `tabIndex={0}`, so an un-cancelled click would move focus off the grid
-and swallow every following keystroke. `Tab` still reaches it. Drag start, drag
-move and drag end are all keyed on the pointer that began the drag, because
-capture is per-pointer and a second finger on the widened thumb is hit-tested
-normally — its `pointerup` would otherwise strand the finger still holding on.
-**The control has two forms, which is the web spelling of the mobile scroll
-ladder.** With scrollback it is the scrollbar above. Without — the alternate
-screen, or any program holding mouse tracking — there is no position to show,
-because the program owns its own viewport; it becomes a **grip** parked
-mid-track that reports travel and springs back. That case is not an edge: every
-full-screen TUI is there, so Claude Code and Codex are *only* ever there, and
-shipping the scrollback-only control meant the client had no visible scroll
-affordance in its entire workload. Scrollback wins over the program when both
-apply, because `scrollToLine` still works on the primary buffer and a visible
-thumb promises a position. Only when neither applies does the track go inert
-with `pointer-events: none` — it lies over the terminal, and events landing in
-that strip have to reach xterm.
+Geometry is `size = rows / (baseY + rows)`, `offset = viewportY / baseY`, in a
+**second Zustand store** on the model, so a busy PTY does not re-render the
+header bar and every overlay once per row; the model quantizes to a thousandth
+of the track. Every scroll command re-baselines the tally first, so the slider
+cannot light its own unread badge. Drag, track-click paging, the wheel over the
+track, and ↑/↓/PageUp/PageDown/Home/End on a focused `role="scrollbar"` all
+route through the same model methods. A pixel-mode wheel converts at one row per
+cell height with a carried sub-row remainder. Presses are gated on the primary
+button and cancelled (the track is `tabIndex={0}`, so an un-cancelled click
+would move focus off the grid); drag events are keyed on the pointer that began
+the drag.
 
-**The grip encodes nothing.** xterm already performs the whole ladder for a
-wheel event — a mouse report with buttons 64/65 in the *active* encoding while
-tracking is on, a DECCKM-correct `ESC O A`/`ESC [ A` on the alternate screen —
-so `relativeScroll` synthesizes a `WheelEvent` at a pinned anchor inside
-`.xterm-screen` and lets xterm encode it. That is not merely convenient:
-`IModes.mouseTrackingMode` does not expose the mouse *encoding* protocol, so
-hand-writing a report is not possible from public API. `deltaMode` is LINE with
-a unit delta, because on that path xterm's own accumulator is only a non-zero
-gate, making one event exactly one step; the per-call ceiling is one screen,
-matching iOS, because every step is a frame crossing a WebSocket where mobile's
-PTY is local. Where the primary
-pointer is coarse the thumb takes a 2.75rem transparent hit area reaching into
-the grid — 14 px is under half a fingertip and sits on the edge the browser's
-back gesture claims — and that widening is deliberately **not** on
-`any-pointer`, which would swallow mouse selections of the right-hand columns on
-a touchscreen laptop. Forced-colors rules live in their own block *after* the
-base ones: both selectors are one class, so the shared block earlier in the file
-would lose the cascade and leave the thumb the same Canvas white as its track.
+**The control has two forms**, the web spelling of the mobile scroll ladder.
+With scrollback it is the scrollbar above. Without — the alternate screen, or
+any program holding mouse tracking — it becomes a **grip** parked mid-track that
+reports travel and springs back; every full-screen TUI, so Claude Code and
+Codex, is *only* ever there. Scrollback wins over the program when both apply.
+Only when neither applies does the track go inert with `pointer-events: none`.
+
+**The grip encodes nothing.** `relativeScroll` synthesizes a `WheelEvent` at a
+pinned anchor inside `.xterm-screen` and lets xterm encode it (a mouse report
+with buttons 64/65, or a DECCKM-correct `ESC O A`/`ESC [ A` on the alternate
+screen), because `IModes.mouseTrackingMode` does not expose the mouse *encoding*
+protocol. `deltaMode` is LINE with a unit delta, so one event is exactly one
+step; the per-call ceiling is one screen, matching iOS, because every step is a
+frame crossing a WebSocket.
+
+Where the primary pointer is coarse the thumb takes a 2.75rem transparent hit
+area, deliberately **not** on `any-pointer`, which would swallow mouse
+selections of the right-hand columns on a touchscreen laptop. Forced-colors
+rules live in their own block *after* the base ones, or the shared block would
+lose the cascade.
+
+### Renderer, theme and clipboard
 
 **Renderer.** WebGL, with `onContextLoss` → dispose (which reverts to the DOM
 renderer with the buffer intact) → one bounded re-arm → stay on DOM after a
 second loss.
 
 **The grid is always dark**, whatever the app's theme preference — the same
-choice both mobile clients make. An ANSI palette is a matched set with its
-background, and pairing a dark 16-colour palette with the light app background
-puts white on near-white (~1.4:1, and ~1.1:1 for bright white), which Claude
-Code prints constantly. The 16 colours are spelled out as
-`MobaideColors.ansiColors`, the table Android and iOS render with, so a red is
-the same red everywhere: xterm's own built-in default is the **Tango** palette,
-a different set entirely.
+choice both mobile clients make. A dark 16-colour ANSI palette on the light app
+background puts white on near-white (~1.1:1 for bright white). The 16 colours
+are spelled out as `MobaideColors.ansiColors`, the table Android and iOS render
+with; xterm's own default is the **Tango** palette, a different set entirely.
 
-**Copy/paste is web-only design**, not a port: mobile has no physical
-keyboard, its `Ctrl+C` is unconditionally `0x03`, and copy/paste live on the
-long-press selection toolbar. The web client has no in-app selection surface
-at all — the browser already owns both the selection and the context menu
-that copies it — so Ctrl+C copies when there is a selection, Ctrl+Shift+C
-always copies (never SIGINT), and Ctrl+V, Ctrl+Shift+V and Cmd+V hand off to
-the browser's native paste — deliberately, since `clipboard.readText()` is
-prompt-gated in Firefox and Safari. A persisted
-"pass Ctrl+V to terminal" toggle sends `0x16` instead, for Claude Code's
-image paste. The resulting `paste` event is intercepted in the **capture**
-phase, ahead of xterm's own handler, which does the newline rewrite and the
-bracket wrap but no ESC/C1 strip. Paste encoding is the mobile encoder:
-strip ESC + C1 **first** (so a clipboard carrying `ESC[201~` degrades to a
-literal `[201~`), then `\r?\n` → `\r`, then wrap iff the program enabled
-DECSET 2004 — as **one** `i` frame (iOS's shape; three frames over a lossy
-WS + relay can strand the closing marker) and capped at 1 MiB, because one
-oversized frame trips the agent tunnel's 4 MB limit and drops *every*
-session on that agent. The toggle is the one piece of terminal state that
-outlives the tab: `terminalPrefsStore` persists it under `localStorage` key
-`mobaide-terminal`, the second persisted key after `mobaide-theme` (WEB-07
-adds `mobaide-agent` and `mobaide-sessions`, and CLA-232 the wizard's global
-`mobaide-launch-prefs`, and the sessions panel's pin `mobaide-sessions-panel`; the dismissible external-sessions notice above the
-sessions list adds `mobaide-external-sessions-notice`; CLA-256 adds the wizard's
-per-agent `recent_custom_paths::<agentId>`, deliberately unprefixed for
-mobile parity — the one prefix sweep in `src/` is CLA-258's
-`clearAllRecentPaths()`, which keys off `recent_custom_paths::` itself, so
-sitting outside the `mobaide-` namespace still costs nothing).
+**Copy/paste is web-only design**, not a port: mobile has no physical keyboard
+and its `Ctrl+C` is unconditionally `0x03`. The web client has no in-app
+selection surface — the browser already owns the selection and the context menu.
+
+- Ctrl+C copies when there is a selection; Ctrl+Shift+C always copies (never
+  SIGINT).
+- Ctrl+V, Ctrl+Shift+V and Cmd+V hand off to the browser's native paste, since
+  `clipboard.readText()` is prompt-gated in Firefox and Safari.
+- A persisted "pass Ctrl+V to terminal" toggle sends `0x16` instead, for Claude
+  Code's image paste.
+
+The `paste` event is intercepted in the **capture** phase, ahead of xterm's own
+handler, which does the newline rewrite and bracket wrap but no ESC/C1 strip.
+Paste encoding is the mobile encoder:
+
+1. Strip ESC + C1 **first** (so a clipboard carrying `ESC[201~` degrades to a
+   literal `[201~`).
+2. Then `\r?\n` → `\r`.
+3. Then wrap iff the program enabled DECSET 2004 — as **one** `i` frame (three
+   frames over a lossy WS + relay can strand the closing marker) capped at
+   1 MiB, because one oversized frame trips the agent tunnel's 4 MB limit and
+   drops *every* session on that agent.
+
+The toggle outlives the tab: `terminalPrefsStore` persists it under
+`localStorage` key `mobaide-terminal`. The other persisted keys are
+`mobaide-theme`, `mobaide-agent`, `mobaide-sessions`, `mobaide-launch-prefs`,
+`mobaide-sessions-panel`, `mobaide-external-sessions-notice` (the dismissible
+external-sessions notice above the sessions list), and the wizard's per-agent
+`recent_custom_paths::<agentId>`, deliberately unprefixed for mobile parity —
+CLA-258's `clearAllRecentPaths()` keys off `recent_custom_paths::` itself.
 
 **OSC 52**: live writes allowed, replayed writes and reads refused. Both
 refusals ride one handler registered *after* `ClipboardAddon` (xterm dispatches
 OSC handlers last-registered-first), so the sequence is swallowed rather than
-answered with an empty payload or acted on. The replay half exists because the
-agent replays its ring verbatim on every attach: a single vim/tmux yank left in
-that history would otherwise re-copy — and pop the OS clipboard chip — every
-time the session is opened. The gate is `isParsingReplay()`, i.e. `inReplay ||
-pendingReplayWrites > 0`; the second term because `term.write` is asynchronous,
-so on a multi-MiB ring the parser is still chewing through history well after
-`'e'`. All three clients gate this, and all three attribute a sequence to the
-span its *terminator* lands in, because each gates where its parser dispatches
-rather than scrubbing bytes — Android's flag additionally has to travel with the
-bytes through `TerminalSession.emitOutput`, since its append is posted to the
-main looper behind the frame handling that decided it.
+answered or acted on. The agent replays its ring verbatim on every attach, so a
+single vim/tmux yank left in that history would otherwise re-copy on every
+open. The gate is `isParsingReplay()`, i.e. `inReplay || pendingReplayWrites >
+0`, because `term.write` is asynchronous. All three clients gate this and
+attribute a sequence to the span its *terminator* lands in.
 
-Known gap in that rule, tracked in GitHub issue #634: a program can end its
-output *inside* `ESC]52;c;<base64>` with no terminator. The ring then ends
-mid-sequence, every parser holds the payload across the boundary, and the first
-live byte that terminates it dispatches the write as live — re-opening the
-hijack on every attach. On web and iOS a bare `ESC` is enough (both parsers'
-`OSC_END` set includes `0x1b`, and only `CAN`/`SUB` abort without dispatching);
-Android needs a real `BEL`/`ST`. Any keystroke echo supplies the byte — not the
-connect-time size assert, which raises no SIGWINCH and so repaints nothing when
-the geometry is unchanged. The fix is to abort any open sequence at the replay
-boundary —
-a `CAN` (`0x18`) fed through the replay-attributed path — not to change the
-attribution rule.
+Known gap, tracked in GitHub issue #634: a program can end its output *inside*
+`ESC]52;c;<base64>` with no terminator. The ring then ends mid-sequence, and
+the first live byte that terminates it dispatches the write as live —
+re-opening the hijack on every attach. On web and iOS a bare `ESC` is enough;
+Android needs a real `BEL`/`ST`. Any keystroke echo supplies the byte, but not
+the connect-time size assert. The fix is to abort any open sequence at the
+replay boundary with a `CAN` (`0x18`) fed through the replay-attributed path,
+not to change the attribution rule.
 
 No browser analogue of Android's `EXTRA_IS_SENSITIVE` or iOS's `localOnly` +
 60 s expiry exists — accepted divergence.
 
-**Synchronized output (DEC 2026) is native** in xterm 6, so neither iOS's
-byte scanner nor Android's deferred-paint timer is ported. Their *consumer*
-discipline is: while `terminal.modes.synchronizedOutputMode` is armed the
-painted screen lags the buffer, so a copy refuses and says so — otherwise it
-would hand back text the user cannot see. The mode is read at the instant of
-the copy, never cached in view state: xterm disarms it on a 1 s safety
-timeout inside `RenderService` with **no** event, so a sampled flag has a
-transition it can never observe and would keep refusing over a screen that is
-actually current.
+### Synchronized output, frames and divergences
 
-**Both copy paths carry that guard**, which takes a second interception.
-Ctrl+C is ours already, but the context menu's Copy never reaches
-`copySelection`: xterm stages `SelectionService.selectionText` into its helper
-textarea on `contextmenu` and answers the `copy` event from the buffer, wholly
-inside xterm. A capture-phase `copy` listener refuses it on an unsettled
-screen — capture because the staged textarea is a descendant, so the event
-targets it and passes us on the way down, where xterm's own listener sits on
-the terminal element and would otherwise win the target phase on registration
-order. A copy carrying no terminal selection is left alone: it belongs to
-whatever the user selected elsewhere on the page.
+**Synchronized output (DEC 2026) is native** in xterm 6, so neither iOS's byte
+scanner nor Android's deferred-paint timer is ported. While
+`terminal.modes.synchronizedOutputMode` is armed the painted screen lags the
+buffer, so a copy refuses and says so. The mode is read at the instant of the
+copy, never cached in view state: xterm disarms it on a 1 s safety timeout with
+**no** event.
+
+**Both copy paths carry that guard.** Ctrl+C is ours already, but the context
+menu's Copy never reaches `copySelection`: xterm answers the `copy` event from
+the buffer, wholly inside xterm. A capture-phase `copy` listener refuses it on
+an unsettled screen, and leaves a copy carrying no terminal selection alone.
 
 **Frames sent.** `i` from keystrokes, mouse reports (`onBinary`) and paste,
-carrying no trailing CR — the agent owns that timing (proto-v4). Web
-produces neither the `m` submit frame nor the `x` execute frame: the
-composer that built `m` was removed as redundant on a physical keyboard, and
-`x` went with the selection toolbar (below). Both stay in the protocol for
-Android and iOS. Keystrokes and paste are gated on `live && running`
-**plus a web-only third term: the replay write queue must have drained.**
-`'e'` flips the connection
+carrying no trailing CR — the agent owns that timing (proto-v4). Web produces
+neither the `m` submit frame nor the `x` execute frame; both stay in the
+protocol for Android and iOS.
+
+Keystrokes and paste are gated on `live && running` **plus a web-only third
+term: the replay write queue must have drained.** `'e'` flips the connection
 synchronously while `term.write` is asynchronous, so a DECRQM / XTVERSION /
-DECRQSS / OSC 4 query still sitting in the replayed history would otherwise
-be answered after the gate opened and land in the user's live prompt — the
-agent's ring scrub does not cover those, and mobile never sees it because
-its replay append finishes before its gate flips. Every outbound text frame
-is capped at 1 MiB, not just paste: the relay forwards a client frame to the
-agent's tunnel
-unchunked and that tunnel is opened with `max_size=4 MB`, so one oversized
-frame closes it with 1009 and drops *every* session on that agent.
+DECRQSS / OSC 4 query still sitting in the replayed history would otherwise be
+answered after the gate opened and land in the user's live prompt.
+
+Every outbound text frame is capped at 1 MiB, not just paste: the relay forwards
+a client frame to the agent's tunnel unchunked and that tunnel is opened with
+`max_size=4 MB`, so one oversized frame closes it with 1009 and drops *every*
+session on that agent.
 
 **Accepted divergences from mobile**, all under the CLAUDE.md
-platform-convention exemption: **Full display mode only** — no Static /
-forced-column mode and no horizontal pan, because a desktop window is wide
-and fit-to-window is the browser convention, where a phone at ~40 columns
-needs the forced grid; and the whole desktop keyboard surface above. **No
-in-app selection toolbar**: mobile's long-press bar (Send to Input · Copy ·
-Run) has no web counterpart. A selection here already carries the browser's
-own context menu, so an app-drawn bar over the grid duplicated Copy, stacked
-underneath that menu on right-click, and read as a mobile affordance in a
-desktop app. Removing it retires web's only "Send to input" path and its
-only producer of the `x` execute frame; the keyboard keeps Copy. **A
-draggable scrollback thumb**, which neither mobile client has and neither HIG
-asks for — Android exposes only the platform's fading indicator
-(`TerminalView.setVerticalScrollBarEnabled` plus `awakenScrollBars()`, not
-grabbable), iOS the transient `UIScrollView` one; both scroll by dragging the
-grid, which is exactly what xterm 6 does not offer. The *ladder* is not a
-divergence — web runs the same three arms mobile does, it just does not
-hand-encode them, and the control that drives them is a grip rather than a pan
-on the grid. Grid drag-to-scroll remains unported: under mouse reporting the
-program already claims the drag, and arbitrating that against xterm's text
-selection is the one risky piece; the grip reaches the same arms without it.
-The prompt-template picker is now a `Modal` — a native `<dialog>` on the
-browser top layer opened via `showModal()`, rather than the plain
-`position: fixed` div the isolation fix above made unnecessary — with the
-search field focused on open, Arrow-key row navigation, an Enter that
-picks the first match but steps into the list instead when the filter is
-empty (so nothing inserts blind), and Escape closing deterministically;
-focus returns to the terminal grid on dismissal. Messages raised *while the
-picker is open* render inline rather than as toasts, since `.toast-viewport`
-sits below the top layer; the clipboard-outcome toast below is outside that
-rule because it fires after the dialog has closed. Loading, load failure
-(with Retry), an empty account and a filter with no matches are each their
-own state, and rows disable with an explanation while the session refuses
-input. It lists, groups Recents/Favorites/All, filters, inserts and toggles a
-favourite; editing and deleting a template still belong to `/templates`.
+platform-convention exemption:
+
+- **Full display mode only** — no Static / forced-column mode and no horizontal
+  pan, because a desktop window is wide and fit-to-window is the browser
+  convention; and the whole desktop keyboard surface above.
+- **No in-app selection toolbar**: mobile's long-press bar (Send to Input · Copy
+  · Run) has no web counterpart; the browser's own context menu covers Copy.
+  Removing it retires web's only "Send to input" path and its only producer of
+  the `x` execute frame.
+- **A draggable scrollback thumb**, which neither mobile client has. The
+  *ladder* is not a divergence — web runs the same three arms mobile does, and
+  the control that drives them is a grip rather than a pan on the grid. Grid
+  drag-to-scroll remains unported: under mouse reporting the program already
+  claims the drag.
+
+### Prompt-template picker
+
+The prompt-template picker is a `Modal` — a native `<dialog>` on the browser top
+layer opened via `showModal()`. It has the search field focused on open,
+Arrow-key row navigation, an Enter that picks the first match but steps into the
+list instead when the filter is empty (so nothing inserts blind), Escape closing
+deterministically, and focus returning to the terminal grid on dismissal.
+
+Messages raised *while the picker is open* render inline rather than as toasts,
+since `.toast-viewport` sits below the top layer. Loading, load failure (with
+Retry), an empty account and a filter with no matches are each their own state,
+and rows disable with an explanation while the session refuses input. It lists,
+groups Recents/Favorites/All, filters, inserts and toggles a favourite; editing
+and deleting a template still belong to `/templates`.
+
+#### Creating a template from the session
 
 **Creating one without leaving the session.** A **New template** button sits
 beside Close in the picker's head and opens the same `TemplateEditorDialog`
-`/templates` uses, seeded through its optional `initialBody`. Three decisions
-hold it up.
+`/templates` uses, seeded through its optional `initialBody`.
 
-*The two dialogs are never co-mounted.* `TerminalView` keeps a single
-`TemplatePanel` union (`none` / `picker` / `editor`) rather than two booleans,
-so opening the editor unmounts the picker. The picker hangs its key handler on
-the ancestor of everything it renders, and an element on the top layer still
-propagates events through its DOM parent — paint order is what the top layer
-changes, not propagation — so an editor nested inside would lose ArrowUp and
-ArrowDown in its textarea to the row walk, and its draft to the Escape that
-dismisses the picker. The union also collapses the focus-restore condition to
-`panel.kind !== 'none'`, which is what keeps the picker-to-editor hop from
-reading as a dismissal and yanking focus out of the field it just opened.
+- **The two dialogs are never co-mounted.** `TerminalView` keeps a single
+  `TemplatePanel` union (`none` / `picker` / `editor`), so opening the editor
+  unmounts the picker. An element on the top layer still propagates events
+  through its DOM parent, so a nested editor would lose ArrowUp and ArrowDown
+  in its textarea to the picker's row walk, and its draft to the Escape that
+  dismisses the picker. The union also keeps the picker-to-editor hop from
+  reading as a dismissal and yanking focus.
+- **The body is the terminal selection, snapshotted when the picker opens**, in
+  the Templates button's own handler. WEB-06 removed the composer, so the
+  selection is the only in-session text source web has. PTY output keeps
+  arriving behind the modal and `SelectionService` clears on user input, so it
+  cannot be read later; the grid is inert while the dialog is up.
+- **The pre-fill declines `screenIsSettled()`**, which every other selection read
+  carries. That guard protects a copy onto the system clipboard; this text lands
+  in an editable field the user has to name and save.
 
-*The body is the terminal selection, snapshotted when the picker opens.* WEB-06
-removed the composer, so the selection is the only in-session text source web
-has. It is read in the Templates button's own handler rather than when the
-editor mounts: blur is not the risk — xterm holds the selection in its own
-model, not the document's — but PTY output keeps arriving behind the modal, and
-`SelectionService` clears on user input, on a row-count change, on an
-alternate-screen switch and on a mouse-protocol change, as does the replay
-wipe. There is no staleness to trade against, because the grid is inert while
-the dialog is up.
-
-*The pre-fill declines `screenIsSettled()`*, which every other selection read in
-`sessionModel` carries. That guard exists because a copy puts text the user may
-never have seen onto the system clipboard, silently and irreversibly; this text
-lands in an editable field they have to name and save, so the review is the
-guard. It also toasts on refusal, and that toast would be raised over an open
-`<dialog>`, where nothing can be read.
-
-The success toast is the one message here exempt from the inline rule above —
-the editor closes first, in the same commit, so the viewport is clear by the
-time it paints. A failed save stays inline and keeps the draft.
+The success toast is the one message here exempt from the inline rule: the
+editor closes first, so the viewport is clear by the time it paints. A failed
+save stays inline and keeps the draft.
 
 **Mobile's shape differs, deliberately.** Android and iOS put a *Save as
-template* button in the composer's action row (`SaveTemplateDialog.kt`,
-`TerminalScreen.swift`): the body is the composer text, rendered as a read-only
-preview, and the dialog dismisses optimistically. Web has no composer, so the
-body is the selection and stays editable, and — as with the management editor
+template* button in the composer's action row: the body is the composer text,
+rendered as a read-only preview. Web has no composer, so the body is the
+selection and stays editable, and — as with the management editor
 below — the dialog survives a failed save.
 
 ## Desktop keyboard & shortcuts (WEB-06)
 
-The input model on top of the terminal. Native keystrokes are the default and,
-since the removal below, the **only** input path: every chord types straight
-into the PTY, and the work here is limited to a few guards around that and to
-making the chords the browser steals reachable anyway.
+The input model on top of the terminal. Native keystrokes are the **only** input
+path: every chord types straight into the PTY, and the work here is a few guards
+around that and making the chords the browser steals reachable anyway.
 
-**The control-key bar, its saved-shortcut chips and picker, the command
-palette and the composer were removed.** A desktop has a physical keyboard, so
-the bar's built-in keys, the "…" chord recorder/chooser (`ShortcutBar.tsx`,
-`ShortcutPicker.tsx`, `RenameShortcutDialog.tsx`), `CommandPalette.tsx` and its
-Ctrl+Shift+P wiring, and the composer text box (`Composer.tsx`) are all
-redundant with typing the chord directly — the same reason mobile needs them
-and web no longer does. `terminal/controlKeys.ts`, `keyboard/appShortcuts.ts`,
+**The control-key bar, its saved-shortcut chips and picker, the command palette
+and the composer were removed** (`ShortcutBar.tsx`, `ShortcutPicker.tsx`,
+`RenameShortcutDialog.tsx`, `CommandPalette.tsx`, `Composer.tsx`, along with
+`terminal/controlKeys.ts`, `keyboard/appShortcuts.ts`,
 `keyboard/useAppShortcuts.ts`, `keyboard/chordConflicts.ts`,
-`routes/terminal/useSessionKind.ts` and `api/shortcutRepository.ts` went with
-them: web now has **no app-owned chords at all**. The prompt-template picker
-survived the cut — it is reachable from a **Templates** button in the
-terminal header instead of the composer, and picking a template pastes its
+`routes/terminal/useSessionKind.ts` and `api/shortcutRepository.ts`). A desktop
+has a physical keyboard, so web now has **no app-owned chords at all**.
+
+The prompt-template picker survived the cut — it is reachable from a
+**Templates** button in the terminal header, and picking a template pastes its
 body onto the running program's input line via the sanitized bracketed-paste
-path (insert for review, never auto-execute, mirroring mobile's
-insert-into-composer semantics) rather than filling a composer. Android and
-iOS keep their control-key bar, saved shortcuts and composer unchanged; the
-central server keeps `/api/shortcuts` and `shortcut.*` for them.
+path (insert for review, never auto-execute).
+
+Android and iOS keep their control-key bar, saved shortcuts and composer
+unchanged; the central server keeps `/api/shortcuts` and `shortcut.*` for them.
+
+### Clipboard copy on template pick
 
 **A pick also copies the body to the system clipboard**, and says so in a
 toast. Claude Code collapses a paste over 800 characters, or with more than
@@ -1385,69 +1262,59 @@ toast. Claude Code collapses a paste over 800 characters, or with more than
 nothing is lost, the full body is still submitted on Enter — and prints its
 own hint, `paste again to expand`. Expansion requires pasting text that
 normalises identically to the first paste, so without a clipboard copy that
-hint is unactionable and the template reads as truncated. That threshold is
-row-dependent and lives in a binary this repo does not pin, which is why the
-web client copies unconditionally instead of replicating the rule.
+hint is unactionable. That threshold is row-dependent and lives in a binary this
+repo does not pin, so the web client copies unconditionally.
 
 What goes on the clipboard is the body minus ESC and C1, via `stripControls`
 — **not** the fully sanitized `\r`-joined form, which would render as one
-run-on line everywhere outside a terminal. The wire bytes are unaffected
-either way: a browser paste re-enters the same `pasteText` → `sanitizePaste`
-encoder, and `stripControls` is idempotent, so
-`sanitizePaste(stripControls(b)) === sanitizePaste(b)` and both attempts
-converge inside the CLI. Stripping matters because the clipboard is a
-consumer the encoder's escape-injection defense cannot reach — a native
-terminal pasted into next receives those bytes live (the CVE-2021-31701
-class `terminalPaste.ts` documents). That covers this path only: OSC 52
-writes (`terminalClipboard.ts`) still copy the program's bytes verbatim, as
-Android and iOS do. The write is best-effort (`writeClipboardText`), fires
-only after `pasteText` reported the frame sent, and is issued without an
-intervening `await` so Safari and Firefox still see the click's transient
-user activation. As with terminal copies (see above), a
-picked body lands in the ordinary system clipboard and in whatever history or
+run-on line outside a terminal. The wire bytes are unaffected: a browser paste
+re-enters the same `pasteText` → `sanitizePaste` encoder, and `stripControls` is
+idempotent.
+
+Stripping matters because the clipboard is a consumer the encoder's
+escape-injection defense cannot reach — a native terminal pasted into next
+receives those bytes live (the CVE-2021-31701 class `terminalPaste.ts`
+documents). That covers this path only: OSC 52 writes (`terminalClipboard.ts`)
+still copy the program's bytes verbatim, as Android and iOS do. The write is
+best-effort (`writeClipboardText`), fires only after `pasteText` reported the
+frame sent, and is issued without an intervening `await` so Safari and Firefox
+still see the click's transient user activation.
+
+A picked body lands in the ordinary system clipboard and in whatever history or
 cross-device sync the OS keeps — the web has no `EXTRA_IS_SENSITIVE` or
 `localOnly` analogue — and it cannot be purged on sign-out. **Mobile needs no
-mirror** — a template there lands in the app's own composer, visible and
-editable, and is submitted immediately, so no placeholder is ever left for the
-user to expand.
+mirror**: a template there lands in the app's own composer, so no placeholder is
+ever left for the user to expand.
 
-**The shared chord contract is still a fixture, not three tables**, and
-outlives the bar: the token grammar (`ctrl+shift+i`: modifiers in ctrl, alt,
-shift order, at most two, over a–z / 0–9 / F1–F12 / tab / enter / space /
-backspace, Esc excluded) and the legacy-first encoder (C0 for Ctrl+letter,
-ESC-prefix for Alt over a single-byte core, xterm SS3 / CSI forms for F-keys,
-kitty CSI-u for everything legacy bytes cannot express) were pinned by
-hand-mirrored assertion tables in `KeyChordEncoderTest.kt` and
-`KeyChordEncoderTests.swift`. They are now
-`tests/protocol_fixtures/keys/key_chords.json`, read by all three clients:
-`web/src/protocol/keyChord.ts` (gated by `protocol-integrity.yml`, which is why
-the encoder lives under `protocol/` and not `terminal/` — the **only**
-CI-enforced arm of this golden, since iOS CI is push-to-main-only and
-Android's tests are not CI-gated), a new `KeyChordFixtureTests.swift`, and a
-new `KeyChordFixtureTest.kt` — Android's **first** fixture consumer, with the
-loader it never had (`testing/ProtocolFixtures.kt`; extending it to `dto/` is
-CLA-235). Kotlin stays the reference implementation: a disagreement means the
-fixture is wrong. The two suites keep only what a table cannot state — that
-Ctrl+Shift+I never collapses onto Ctrl+I's byte, that every chord in the
-domain encodes, and that no two chords share a CSI-u sequence.
-`keyboard/recordChord.ts` (physical-key capture off `event.code`) and
-`keyboard/reservedKeys.ts` also survive, now serving only the dev-only
-key-sweep screen below.
+### Shared chord contract
+
+**The shared chord contract is still a fixture, not three tables.** The token
+grammar (`ctrl+shift+i`: modifiers in ctrl, alt, shift order, at most two, over
+a–z / 0–9 / F1–F12 / tab / enter / space / backspace, Esc excluded) and the
+legacy-first encoder (C0 for Ctrl+letter, ESC-prefix for Alt over a single-byte
+core, xterm SS3 / CSI forms for F-keys, kitty CSI-u for everything legacy bytes
+cannot express) live in `tests/protocol_fixtures/keys/key_chords.json`, read by
+all three clients: `web/src/protocol/keyChord.ts` (gated by
+`protocol-integrity.yml` — the **only** CI-enforced arm, since iOS CI is
+push-to-main-only and Android's tests are not CI-gated),
+`KeyChordFixtureTests.swift`, and `KeyChordFixtureTest.kt` (Android's first
+fixture consumer; extending its loader to `dto/` is CLA-235). Kotlin stays the
+reference implementation: a disagreement means the fixture is wrong.
+`keyboard/recordChord.ts` and `keyboard/reservedKeys.ts` also survive, serving
+only the dev-only key-sweep screen below.
+
+### Passthrough, guards and immersive mode
 
 **Passthrough.** `attachCustomKeyEventHandler` remains the funnel for the WEB-05
-clipboard policy, and the send gate is still mirrored into `disableStdin` and
-never into the key handler. With no app-owned chord layer left, that clipboard
-routing is the only thing standing in front of xterm's own `keydown` handling.
+clipboard policy, and the send gate is mirrored into `disableStdin` and never
+into the key handler.
 
 **Reload and unload guards.** `useReloadGuard` is a **capture-phase**
-`preventDefault` on Ctrl/Cmd+R, its Shift form and F5, and nothing else: capture
-runs before xterm and `preventDefault` does not stop propagation, so a focused
-terminal still receives `0x12` exactly as before — what the guard adds is the
-case xterm cannot cover, focus parked anywhere outside the grid.
+`preventDefault` on Ctrl/Cmd+R, its Shift form and F5, and nothing else, so a
+focused terminal still receives `0x12`; it covers focus parked outside the grid.
 `useUnloadGuard` registers `beforeunload` only while the session is live *and*
-running; it needs sticky activation to produce a prompt at all, and in Firefox on
-Windows and Linux it is the only thing between an unsuppressable Ctrl+W and a
-closed tab.
+running; in Firefox on Windows and Linux it is the only thing between an
+unsuppressable Ctrl+W and a closed tab.
 
 **The reserved-key table** (`keyboard/reservedKeys.ts`) splits "what the browser
 does" from "whether the page can stop it", because only the first is documented.
@@ -1458,91 +1325,77 @@ results matrix are in docs/web-keyboard-reserved-keys.md; running it is CLA-251.
 **Immersive mode** is fullscreen plus `navigator.keyboard.lock()` — the only way
 Ctrl+W, Ctrl+T, Ctrl+N and F11 ever reach a web page. Chromium-only and
 feature-detected. The permission prompt Chrome announced for 131 was never
-launched, so there is none to design around. Tier-1 PWA widening is wired but conservative:
-a minimal `manifest.webmanifest` makes `display-mode: standalone` observable, and
-rows flagged `relaxedInStandalone` only *soften* their warning until the macOS
-Cmd+W probe settles whether the claim is true at all.
+launched, so there is none to design around.
+
+Tier-1 PWA widening is wired but conservative: a minimal `manifest.webmanifest`
+makes `display-mode: standalone` observable, and rows flagged
+`relaxedInStandalone` only *soften* their warning until the macOS Cmd+W probe
+settles whether the claim is true at all.
 
 ## Auto Scan, notifications & settings (WEB-10)
 
 The last live-surface milestone: the Auto Scan monitor, the attention
 surface, and a settings hub.
 
-**Monitor, two channels.** The card list rides the shared agent-events bus
-that `SessionList` already opened and mounts as an "Active Auto Scans"
-section above the sessions, which is where iOS puts it; only the detail
-screen at `agents/:agentId/autoscan/:projectName` opens the dedicated
-`ws/autoscan` channel. Both ids ride in the path for the same reason the git
-route's do — a scan is one project on one host, and the selected-agent store
-would make a shared link resolve elsewhere. That channel is capacity-limited:
-past its ten-subscription cap, or when the agent's send queue is full, the
-relay accepts the socket and then closes it with `1013`, which the screen
-latches into a declined banner with a manual retry rather than the close-code
-policy's default reconnect.
+### Auto Scan monitor and caches
 
-**The three `autoscan.*` events, judged by the snapshot-vs-pointer rule.**
-None of them is an invalidation. `autoscan.list.changed` carries the agent's
-entire `list_response()` and `autoscan.status` a complete
-`AutoScanInstanceDto`, so both are *written* (`realtime/autoscanCache.ts`) —
-the status upsert replaces a row and deliberately never inserts one, because
-the event carries no `capacity`/`max_scans`/`available_projects` and the
-`autoscan.list.changed` that every start publishes is what introduces it.
-`autoscan.event` is *ignored*: it is one scan event, the stream the detail
-screen reads from its own channel, and `AutoScanInstance._emit` publishes one
-per emitted log line — invalidating on it, as the bridge did before this
-milestone, cost a `/proxy` GET per line of output.
+**Monitor, two channels.** The card list rides the shared agent-events bus
+that `SessionList` already opened and mounts as an "Active Auto Scans" section
+above the sessions; only the detail screen at
+`agents/:agentId/autoscan/:projectName` opens the dedicated `ws/autoscan`
+channel. Both ids ride in the path, because a scan is one project on one host
+and the selected-agent store would make a shared link resolve elsewhere.
+
+That channel is capacity-limited: past its ten-subscription cap, or when the
+agent's send queue is full, the relay accepts the socket and then closes it with
+`1013`, which the screen latches into a declined banner with a manual retry
+rather than the close-code policy's default reconnect.
+
+**The three `autoscan.*` events, judged by the snapshot-vs-pointer rule.** None
+of them is an invalidation. `autoscan.list.changed` carries the agent's entire
+`list_response()` and `autoscan.status` a complete `AutoScanInstanceDto`, so
+both are *written* (`realtime/autoscanCache.ts`); the status upsert replaces a
+row and deliberately never inserts one, because the event carries no
+`capacity`/`max_scans`/`available_projects`. `autoscan.event` is *ignored*: it
+is one scan event, the stream the detail screen reads from its own channel, and
+`AutoScanInstance._emit` publishes one per emitted log line.
 
 The Auto Scan list is nonetheless the one written cache that also needs a
-connect-time refresh, and not for the usual reason. The agent *does* publish
-`autoscan.list.changed` as a connect snapshot, but only on the direct
-`ws/events` path; `relay/client.py::_handle_request_events_snapshot`
-republishes sessions and projects and stops there, and the relay is the only
-path a browser takes. `refreshOnAgentEventsConnect` covers the gap, which is
-also why the query must not pin `staleTime: Infinity` (CLA-234). Filed as
-CLA-249 for the agent; once that ships the refresh can go and the list can be
-treated exactly like sessions and projects. `GET /api/autoscan/status` has no
-relay handler at all, so detail state is seeded from the WS `snapshot` frame
-and never from REST.
+connect-time refresh: the agent publishes `autoscan.list.changed` as a connect
+snapshot only on the direct `ws/events` path, while
+`relay/client.py::_handle_request_events_snapshot` republishes sessions and
+projects and stops there, and the relay is the only path a browser takes.
+`refreshOnAgentEventsConnect` covers the gap, which is also why the query must
+not pin `staleTime: Infinity` (CLA-234). Filed as CLA-249 for the agent.
+`GET /api/autoscan/status` has no relay handler at all, so detail state is
+seeded from the WS `snapshot` frame and never from REST.
 
 **Two dedupe layers, both needed.** The wire cursor
-(`protocol/autoscanFrames.ts`, WEB-04) is rebuilt from the live high-water
-mark on every reopen and drops `seq <= cursor`, which is mandatory rather
-than an optimisation: when its ring has already rolled past the client's
-cursor the agent skips its trim filter and replays everything it still holds.
-The reduction cursor (`autoscan/autoscanModel.ts`) makes reducing the same
-frames twice idempotent, which is what a remount or a snapshot overlapping
-live events produces. Both are `bigint`; a `number` stops discriminating past
-2^53, and `seq` is an unbounded per-instance counter. Android has neither
-layer (CLA-119, still open in the code despite being closed).
+(`protocol/autoscanFrames.ts`, WEB-04) is rebuilt from the live high-water mark
+on every reopen and drops `seq <= cursor`, which is mandatory: when its ring has
+already rolled past the client's cursor the agent replays everything it still
+holds. The reduction cursor (`autoscan/autoscanModel.ts`) makes reducing the
+same frames twice idempotent, as a remount or a snapshot overlapping live events
+produces. Both are `bigint`, because `seq` is an unbounded per-instance counter
+and a `number` stops discriminating past 2^53. Android has neither layer
+(CLA-119, still open in the code despite being closed).
 
 **ANSI without a dependency.** `protocol/ansi.ts` is a port of the iOS
-`AnsiParser` — full 16-base palette, the 6×6×6 cube, the grayscale ramp,
-truecolor, background/bold/italic/underline — and it returns integer `[r,g,b]`
-runs, which is the shape `tests/protocol_fixtures/ansi/ansi_sgr.json` asserts.
-`ansi_up` was rejected on that ground alone: it emits an HTML string, so
-nothing of the right shape exists to assert. Colours ride React's `style`
-prop, a CSSOM write that CSP never gates — and the SPA's `style-src` carries
-`'unsafe-inline'` regardless, forced by Google Identity Services.
+`AnsiParser` that returns integer `[r,g,b]` runs, the shape
+`tests/protocol_fixtures/ansi/ansi_sgr.json` asserts; `ansi_up` was rejected
+because it emits an HTML string. Colours ride React's `style` prop, a CSSOM
+write that CSP never gates — and the SPA's `style-src` carries `'unsafe-inline'`
+regardless, forced by Google Identity Services.
 
-**The log pane is not virtualised, deliberately.** The ring caps at 2000
-lines, rows memoise on an id that is never recycled, and
-`content-visibility: auto` skips layout and paint for anything off screen.
-What that keeps over a windowing library is what a log reader actually needs:
-selecting and copying the whole buffer, and the browser's own scroll
-anchoring holding the view still when the ring trims its oldest line. Follow
-mode is derived from the viewport, not latched, and the released-at line id
-doubles as the unread watermark. Frames are buffered and flushed on an
-animation frame, so a verbose scan collapses into one render per frame.
+### Attention notifications
 
 **Notifications are edge-triggered only.** `attention` is *latched* on the
-agent — cleared only by a client PTY write, a `UserPromptSubmit` hook, or
-output resuming — so every full-state snapshot keeps reporting it and
+agent — cleared only by a client PTY write, a `UserPromptSubmit` hook, or output
+resuming — so every full-state snapshot keeps reporting it and
 `core/attention_gate.py` warns clients not to re-post from one. Web consumes
-only the one-shot `session.attention` edge, which is what makes Android
-correct by construction and what iOS needed a per-session seen-store to
-emulate. There is therefore no reconcile and no seen-store here: a closed tab
-shows nothing, which is honest, because there is no background delivery to
-reconcile against.
+only the one-shot `session.attention` edge, with no reconcile and no seen-store:
+a closed tab shows nothing, because there is no background delivery to reconcile
+against.
 
 It listens on the **user-events** channel, not the agent bus. That payload is
 the slim `{session_id, reason, title?, project_name?, exit_reason?, agent_id}`
@@ -1550,243 +1403,203 @@ and the channel is account-wide, so a browser — the first client that
 routinely holds several agents — is alerted about all of them rather than
 only the one whose list is open. Consuming both channels would double-post.
 
-*Clearing* an alert cannot be edge-triggered, though — the agent publishes no
-"attention resolved" event, only the full session row with the field gone. So
+*Clearing* an alert cannot be edge-triggered: the agent publishes no "attention
+resolved" event, only the full session row with the field gone. So
 `dismissResolvedAttention` watches `session.updated` and `sessions.changed` on
-the agent channel and closes the matching notification, which is the second
-collector Android runs (`SessionEventService` → `notifier.cancel`). Reading a
-snapshot to *dismiss* is safe in the way reading one to *post* is not: the trap
-`attention_gate.py` warns about is re-raising an alert from a latched field, and
-this only ever takes one away.
-`notifications/attentionContent.ts` is a byte-for-byte port of the same map
-iOS, Android and `central_server/push/content.py` carry, em dashes included;
-a phone and a browser watching one session must say the same thing.
+the agent channel and closes the matching notification. Reading a snapshot to
+*dismiss* is safe, because the trap `attention_gate.py` warns about is
+re-raising an alert from a latched field.
+
+`notifications/attentionContent.ts` is a byte-for-byte port of the same map iOS,
+Android and `central_server/push/content.py` carry, em dashes included.
 
 Delivery follows the rule both mobile clients share — never alert about the
 session already on screen — with the split a browser makes possible: a hidden
 tab gets a system notification (tagged with the session id, so it replaces
-rather than stacks, matching the APNs collapse id), a visible one gets an
-in-app toast. Permission is requested only from the button in Settings, never
-on load, and `e2e/settings.spec.ts` asserts that by counting
-`Notification.requestPermission()` calls from before any app code runs.
+rather than stacks), a visible one gets an in-app toast. Permission is requested
+only from the button in Settings, never on load.
 
-**Unwatched sessions: the PTY socket does not stay open.** The paragraph below
-is about `ws/user-events`, which is cheap and must keep delivering. A session's
-PTY stream is the opposite case, and it is gated on whether anything is actually
-reading it: *watched* means the tab is visible **and** this session is the
-terminal the route is rendering, so the two retained-but-off-screen models
-`MAX_RETAINED` allows are treated exactly like a hidden tab.
+### Unwatched sessions and tab lifecycle
 
-The session protocol has no pause frame — C→S is only `i`/`x`/`m`/`r`, and the
-relay routes `CH_SESSION_IO` solely to clients registered on `session_io:<sid>`
-— so closing the socket is the only way to stop the bytes, and every reopen
-costs a full ring replay (4 MiB by default, uncompressed, and it wipes the
-emulator). That rules out both obvious policies: suspending on a timer alone
-charges an idle session a replay to save nothing, and suspending on a byte
-budget alone fires on short absences where staying attached was already cheaper.
-`terminal/terminalSuspend.ts` is therefore a conjunction — suspend once the
+**Unwatched sessions: the PTY socket does not stay open.** *Watched* means the
+tab is visible **and** this session is the terminal the route is rendering, so
+the two retained-but-off-screen models `MAX_RETAINED` allows are treated exactly
+like a hidden tab.
+
+The session protocol has no pause frame (C→S is only `i`/`x`/`m`/`r`), so
+closing the socket is the only way to stop the bytes, and every reopen costs a
+full ring replay (4 MiB by default, uncompressed, and it wipes the emulator).
+`terminal/terminalSuspend.ts` is therefore a conjunction: suspend once the
 session has spent `RECOUP_BYTES` (4 MiB, one ring) **and** gone unwatched for
 `GRACE_MS` (60 s), with `FIREHOSE_BYTES` (32 MiB) cutting the grace short for
 `yes`-grade output. It is a pure predicate evaluated only as frames arrive, with
-no timers: a session that goes quiet after crossing a threshold is simply never
-re-examined and costs nothing. Android `TerminalSuspend` and iOS
-`TerminalSuspend` mirror the same three constants.
+no timers. Android `TerminalSuspend` and iOS `TerminalSuspend` mirror the same
+three constants.
 
-The two inputs come from `realtime/tabVisibility.ts` (its own
-`visibilitychange` listener, deliberately not `resumeOnFocus`'s: that module's
-verb is `forceReconnect()`, which no-ops on a channel `disconnect()` has already
-stopped, and it is imported from the eager bundle where reaching a model would
-drag xterm into the initial chunk) and `terminal/watchedTerminal.ts` (the
-mounted-terminal pointer, split out of `terminalStore` because `sessionModel`
-now reads it and the store already imports `sessionModel` — the same no-import
-shape as `terminalEviction`). A deliberate suspend lands in the connection store
-as `stopped` like any other, so the model publishes `channelStopped` only when
-it is *not* suspended and the overlay says **Paused** rather than offering a
-Reconnect button nobody needs. Replay spans are never charged and never
-interrupted, so a reconnect that lands while still unwatched cannot re-suspend
-itself into a loop.
+The two inputs come from `realtime/tabVisibility.ts` and
+`terminal/watchedTerminal.ts` (the mounted-terminal pointer). A deliberate
+suspend lands in the connection store as `stopped` like any other, so the model
+publishes `channelStopped` only when it is *not* suspended and the overlay says
+**Paused** rather than offering a Reconnect button. Replay spans are never
+charged and never interrupted, so a reconnect that lands while still unwatched
+cannot re-suspend itself into a loop.
 
 The auto-scan socket is paused on tab hide too, with no budget: its subscribe
 frame is rebuilt from the live wire cursor on every open, so a resume picks up
 at the high-water mark and costs one handshake rather than a replay.
 
 **Tab lifecycle: the user-events socket stays open when hidden.** Presence
-gating for APNs became per device rather than per account
+gating for APNs is per device rather than per account
 (`relay/agent_ws.py::_handle_user_event` excluding
-`routing.get_user_device_ids()`), so a browser tab no longer mutes a phone.
-Web deliberately sends no `device_id` hint on `ws/user-events`, exactly as
-Android does not: it registers no push token, so it can never be a
-`list_push_targets` row, and an unverifiable hint would only add log noise. A
-tab therefore never appears in the exclusion set — an iPhone receives its
-attention push whether this tab is open, hidden or closed — and keeping the
-socket open buys live badges in a background tab at no cost to the phone.
+`routing.get_user_device_ids()`), so a browser tab no longer mutes a phone. Web
+deliberately sends no `device_id` hint on `ws/user-events`, exactly as Android
+does not: it registers no push token, so it can never be a `list_push_targets`
+row. A tab therefore never appears in the exclusion set — an iPhone receives its
+attention push whether this tab is open, hidden or closed.
 
-Keeping it open that long has a cost of its own, though: a browser exposes no
-`ping()`, so a half-open socket (NAT rebind, Wi-Fi to cellular, a laptop waking)
-sits at `readyState === OPEN` with no data and no close event, where both mobile
-clients would have caught it with their 30 s application ping. `resumeOnFocus.ts`
-covers the two observable causes — `online`, and returning to a tab that was
-hidden longer than a minute — by force-reconnecting the events channels the
-registry owns, plus anything registered through its `onResume` seam. Not every
-`visibilitychange`: alt-tabbing is constant, and reconnecting on each would be
-its own handshake storm.
+A browser exposes no `ping()`, so a half-open socket (NAT rebind, Wi-Fi to
+cellular, a laptop waking) sits at `readyState === OPEN` with no data and no
+close event. `resumeOnFocus.ts` covers the two observable causes — `online`,
+and returning to a tab that was hidden longer than a minute — by
+force-reconnecting the events channels the registry owns, plus anything
+registered through its `onResume` seam. Not every `visibilitychange`:
+alt-tabbing is constant.
 
-The auto-scan monitor's socket uses that seam while it is open, and needs it
-most: at the default 300 s scan interval it is silent for most of every cycle,
-behind a screen a user deliberately leaves open, so a black-holed connection is
-indistinguishable from a healthy idle scan. A hidden tab is now the one case
-where the seam does not apply — the socket is closed after a minute, which
+The auto-scan monitor's socket uses that seam while it is open: at the default
+300 s scan interval it is silent for most of every cycle, so a black-holed
+connection is indistinguishable from a healthy idle scan. A hidden tab is the one
+case where the seam does not apply — the socket is closed after a minute, which
 leaves `shouldReconnect` false, so `onResume`'s `forceReconnect` no-ops until
-the visibility handler's own `connect()` re-arms it. Firing it blindly is safe in both directions — `forceReconnect`
-no-ops once `disconnect()` has cleared `shouldReconnect`, so a declined channel
-stays declined, and the replay a reconnect triggers is dropped by both cursors.
-The terminal is deliberately left out: it is user-driven, so a dead socket
-announces itself the moment someone types. The residual case (a path
+the visibility handler's own `connect()` re-arms it. The terminal is
+deliberately left out: it is user-driven. The residual case (a path
 black-holing while the tab stays visible) needs a heartbeat the browser can
 observe, which is a protocol change across all three clients and is not
 attempted here.
 
+### Settings hub
+
 **Settings** is a hub plus the preferences that had nowhere else to live: the
-Appearance picker, notification permission and the in-app opt-out, the Ctrl+V
+Appearance picker (the same `ThemePicker` the header carries, plus the OS
+appearance as body text, because the header's `title` is unreachable on a
+touchscreen), notification permission and the in-app opt-out, the Ctrl+V
 terminal preference, support and privacy links (the same constants iOS and
-Android carry), and sign out — no client shows a protocol or server version.
-The Appearance card mounts the same `ThemePicker` the header carries, and adds
-the one thing the header cannot: the OS appearance as body text, because the
-header's `title` is unreachable on a touchscreen. Settings links onward to
-agents, projects, templates, devices and the account danger zone, so someone
-who learned the app on a phone finds what they expect;
-`Devices` left the top nav in exchange. There is **no** terminal
-display-mode picker — web ships Full display only, the WEB-05 divergence
-above.
+Android carry), and sign out. It links onward to agents, projects, templates,
+devices and the account danger zone; `Devices` left the top nav in exchange.
+There is **no** terminal display-mode picker — web ships Full display only, the
+WEB-05 divergence above.
 
 ## Sign in with Apple (WEB-11)
 
 Accounts created with Sign in with Apple on iOS usually carry a private-relay
-address and **no password**, so before this milestone they could not reach the
-web client at all. The endpoint they need already existed — `POST
-/api/auth/apple`, the one iOS uses — but it verified the identity token
-against a single audience, the iOS bundle id, and browser tokens carry an
-Apple **Services ID** instead. The server now checks a *list*, so one endpoint
-serves both clients, and the two identifiers resolve to the same account
-because the Services ID is grouped under the bundle id as its primary App ID
-(the Apple-side setup, including domain verification, is in
-[deployment.md](deployment.md)).
+address and **no password**, so they can reach the web client only through
+Apple sign-in. `POST /api/auth/apple`, the endpoint iOS uses, verified the
+identity token against a single audience, the iOS bundle id, while browser
+tokens carry an Apple **Services ID**. The server now checks a *list*, and the
+two identifiers resolve to the same account because the Services ID is grouped
+under the bundle id as its primary App ID (the Apple-side setup, including
+domain verification, is in [deployment.md](deployment.md)).
 
 Three findings out of the shipped `appleid.auth.js` bundle shaped the client,
 none of them stated in Apple's docs:
 
 - **The SDK does not hash the nonce.** It URL-encodes the value onto the
-  authorize URL and Apple echoes the claim back verbatim — there is no
-  `crypto`, `subtle` or `sha256` symbol in the bundle. So the browser reuses
+  authorize URL and Apple echoes the claim back verbatim. So the browser reuses
   `generateNonce()` and the server's byte-for-byte `compare_digest` unchanged,
-  and the no-double-hash convention now spans all three clients.
+  and the no-double-hash convention spans all three clients.
 - **`usePopup: true` opens a real window, not an iframe**: the SDK appends
   `response_mode=web_message`, calls `window.open`, and resolves from a
   `postMessage` listener. That is why the SPA's CSP grows exactly one
-  `script-src` entry and no `frame-src`/`connect-src` — and why COOP
-  `same-origin-allow-popups` now protects two flows. Without the flag the SDK
-  calls `window.location.assign`, which would destroy SPA state and return as
-  a cross-site POST.
-- **`redirectURI` is mandatory even in popup mode**, where it is never
-  navigated to; Apple only matches it against the registered Return URLs. It
-  is derived from `window.location.origin`, so one Services ID covers every
-  host the SPA is deployed to.
+  `script-src` entry and no `frame-src`/`connect-src`, and why COOP
+  `same-origin-allow-popups` protects two flows. Without the flag the SDK calls
+  `window.location.assign`, which would destroy SPA state and return as a
+  cross-site POST.
+- **`redirectURI` is mandatory even in popup mode**, where it is never navigated
+  to; Apple only matches it against the registered Return URLs. It is derived
+  from `window.location.origin`, so one Services ID covers every host the SPA is
+  deployed to.
 
 The button is hand-drawn rather than `AppleID.auth.renderButton`: Apple's
-rendered button binds its own click handler to the *globally* initialised
-nonce and reports through document events, which leaves nowhere to bind a
-per-attempt nonce, and it cannot be disabled mid-request. Only the flow comes
-from the SDK. Two consequences shape `AppleSignInButton`: the SDK load, the
-`init` call and the nonce all happen **at mount**, because anything awaited
-inside the click spends the user activation and the popup gets blocked; and
-the button ships disabled until the SDK answers. Dismissing the popup
+rendered button leaves nowhere to bind a per-attempt nonce and cannot be
+disabled mid-request. Only the flow comes from the SDK. In `AppleSignInButton`
+the SDK load, the `init` call and the nonce all happen **at mount**, because
+anything awaited inside the click spends the user activation and the popup gets
+blocked; the button ships disabled until the SDK answers. Dismissing the popup
 resolves as `AppleSignInCancelledError` and is swallowed — only a
-browser-blocked popup produces a message, because it is the one the user can
-act on.
+browser-blocked popup produces a message.
 
-Drawing it by hand is also what lets the two providers match. GIS renders its
-button inside a cross-origin frame, so its only appearance levers are the
-`renderButton` options, and it has no light-on-dark fill. The pair is therefore
-chosen by resolved theme rather than fixed: `filled_black` beside Apple's black
-button on the light surface, `outline` beside Apple's white variant on the dark
-one. `GoogleSignInButton` reads `useResolvedTheme()` — the same value
-`ThemeProvider` stamps onto `data-theme` — and redraws when it flips, which
-clears the container first because GIS appends rather than replaces. The rest is
-matched by hand: the same 320×40 box, and a 14px/500 label, which is what GIS
-renders at `size: 'large'`.
+Drawing it by hand also lets the two providers match. GIS renders its button
+inside a cross-origin frame with no light-on-dark fill, so the pair is chosen by
+resolved theme: `filled_black` beside Apple's black button on the light surface,
+`outline` beside Apple's white variant on the dark one. `GoogleSignInButton`
+reads `useResolvedTheme()` and redraws when it flips, clearing the container
+first because GIS appends rather than replaces. Both use the same 320×40 box. GIS bleeds its opaque white frame past its layout
+box, which on the dark card framed the button in a white halo, so
+`.google-signin-slot` clips to its own 320×40 box and takes over the focus ring
+GIS drew in the margin. No `theme` option avoids this.
 
-That box is not the whole of what GIS paints. The browser gives the button's
-frame an opaque white canvas — the document inside is transparent, but it is
-out-of-process, so no rule here can recolour it — and GIS bleeds the frame past
-its own layout box with `width: 340px; height: 44px; margin: -2px -10px`. On the
-light card that white overhang is invisible; on the dark one it framed the
-button in a white halo — 10px down each side, 2px above and below — which read
-as the Google button simply being bigger than Apple's. `.google-signin-slot` therefore
-clips to its own box, which already is the button's 320×40, and takes over the
-focus ring GIS drew in the margin being cut. No `theme` option avoids this — the
-halo is there for `filled_black` and for the undocumented `outline_dark` too.
-
-That redraw is why `initGoogleIdentity` and `renderGoogleButton` are two calls
-rather than one. `initialize` binds the nonce that every popup's token will be
-minted against, so it is keyed on the client id alone; the theme can flip while
-a popup is open, and re-arming there would leave the returning credential
-paired with a nonce it does not carry — which the server compares and rejects.
-Appearance changes go through the renderer alone.
-
-The delete-account panel gains a third re-auth branch for the same reason the
-sign-in exists: an Apple-only account has no password and no Google identity,
-so without it this milestone would create users who can sign in and never
-delete themselves. Unlike Google it needs no `disableAutoSelect` equivalent —
-Apple's popup always runs a fresh authorization, so the token is inside the
-server's five-minute freshness window by construction.
+The delete-account panel has a third re-auth branch, because an Apple-only
+account has no password and no Google identity. Unlike Google it needs no
+`disableAutoSelect` equivalent — Apple's popup always runs a fresh
+authorization, so the token is inside the server's five-minute freshness window.
 
 ### Ad attribution at sign-up
 
 `web/src/auth/adAttribution.ts` reads the `mobaide_ads` cookie the central
 server issues on `.mobaide.com` after the marketing site's Google Ads consent
 banner is accepted (docs/website.md, *The consent-gated Google Ads tag*), and
-`authRepository.ts` spreads it into the register / Google / Apple bodies as
-the optional `ad_attribution` field — only those three, because only they can
-create an account, and only when the cookie exists, so the wire shape is
-unchanged for everyone else. The value is `<base64url(payload)>.<signature>`;
-the parser decodes it, mirrors the server's Pydantic bounds, forwards the
-fields, the network fingerprint and the signature verbatim, and returns
-`null` for anything off
-instead of throwing: any same-site host can plant a cookie, the server alone
-decides (by verifying the signature) whether it counts as consent, and
-forwarding garbage would turn a marketing cookie into a 422 on sign-up. The dev host never sees
-a `.mobaide.com` cookie, so the tests pass jar strings. Adding the field
-touched the committed OpenAPI snapshot and generated types (`npm run
-schema:dump && npm run schema:generate`).
+`authRepository.ts` spreads it into the register / Google / Apple bodies as the
+optional `ad_attribution` field — only those three, because only they can create
+an account, and only when the cookie exists.
+
+The value is `<base64url(payload)>.<signature>`. The parser decodes it, mirrors
+the server's Pydantic bounds, forwards the fields, the network fingerprint and
+the signature verbatim, and returns `null` for anything off instead of throwing:
+any same-site host can plant a cookie, the server alone decides (by verifying
+the signature) whether it counts as consent, and forwarding garbage would turn a
+marketing cookie into a 422 on sign-up. Adding the field touched the committed
+OpenAPI snapshot and generated types (`npm run schema:dump && npm run
+schema:generate`).
 
 **Parity mirror for the in-app conversion.** The mobile apps log a Firebase
 `agent_paired` conversion once per account (docs/app-conversion-measurement.md)
-off two server signals that web mirrors without acting on: the
-`account.first_agent_paired` user event (`firstAgentPairedSchema` in
-`protocol/dto/userEvents.ts`, a pointer rule in `queryBridge.ts` that
-invalidates the agent list — the first agent just appeared — pinned by
-`tests/protocol_fixtures/dto/central/FirstAgentPairedPayload.json`) and
-`GET /api/auth/me` (`authRepository.getMe()`, typed from the generated schema;
-`MeResponse.json` is deferred to `OWNER.generated`). Web carries no analytics
-SDK, so nothing here logs anything.
+off two server signals that web mirrors without acting on:
+
+- The `account.first_agent_paired` user event (`firstAgentPairedSchema` in
+  `protocol/dto/userEvents.ts`, a pointer rule in `queryBridge.ts` that
+  invalidates the agent list — the first agent just appeared — pinned by
+  `tests/protocol_fixtures/dto/central/FirstAgentPairedPayload.json`).
+- `GET /api/auth/me` (`authRepository.getMe()`, typed from the generated
+  schema; `MeResponse.json` is deferred to `OWNER.generated`).
+
+Web carries no analytics SDK, so nothing here logs anything.
 
 ## CI — `.github/workflows/web-ci.yml`
 
 Runs on every PR and push to main (no paths filter — schema drift is caused
 by `central_server/`/`mobaide_agent/` edits, not just `web/` ones). Single
-job: Python 3.12 + editable installs → **schema drift gate** (regenerate
-JSON, fail on `git status --porcelain` diff) → Node 22 + `npm ci` → **type
-drift gate** (regenerate TS, fail on diff) → typecheck → lint → Vitest →
-build → Playwright (`playwright install --with-deps chromium` + `npm run
-test:e2e`). Playwright joined the workflow with WEB-03, once real user
-flows existed to drive; the specs stub `/api/**` with `page.route`, so CI
-needs no relay.
+job, in this order:
+
+1. Python 3.12 + editable installs.
+2. **Schema drift gate** (regenerate JSON, fail on `git status --porcelain`
+   diff).
+3. Node 22 + `npm ci`.
+4. **Type drift gate** (regenerate TS, fail on diff).
+5. Typecheck.
+6. Lint.
+7. Vitest.
+8. Build.
+9. Playwright (`playwright install --with-deps chromium` + `npm run
+   test:e2e`).
+
+The Playwright specs stub `/api/**` with `page.route`, so CI needs no relay.
 
 A second workflow also gates `web/`: `protocol-integrity.yml` carries a
 `web-protocol-fixtures` job (Node 22, `npm ci`, `npm run test:protocol`) so
 a change to the shared fixtures fails on the PR that makes it, and its
 constants step compares `APP_PROTOCOL_VERSION` three ways — Android gradle,
 iOS xcconfig, and `web/src/api/bootstrap.ts`.
+
+### Release and SPA deploy
 
 Release integration: `web` is a release-please package (`release-type:
 node`, component `web`) and a release-bearing PR-title scope
@@ -1799,139 +1612,147 @@ restart, `--rollback` repoints at the previously-live release. Runbook: the
 
 ## App shell
 
-- **Theming** — `themeStore` persists `light | dark | system`
-  (`localStorage` key `mobaide-theme`); `ThemeProvider` resolves it to
-  `document.documentElement.dataset.theme` and tracks
-  `prefers-color-scheme` while in `system`. An inline pre-paint script in
-  `index.html` stamps `data-theme` before first paint (no theme flash).
-  The control is `ThemePicker`: a three-segment `radiogroup` of native radios
-  (Auto | Light | Dark), rendered by `RootLayout` and `AuthLayout` and again in
-  the Settings Appearance card, with the group `name` from `useId()` so two
-  mounted instances stay separate groups. It replaced a button that cycled
-  `system → light → dark`, where one step per lap was a **pixel no-op**:
-  `system` paints identically to whichever of light/dark the OS is, so under a
-  light OS the first click from the default `system` looked dead. Direct
-  selection cannot have that problem — the checked segment moves on every
-  choice, which is the only feedback a colour-neutral change has. Auto's
-  `title` and `aria-label` name the OS value, from `useSystemTheme()`; that
-  hook exists because what Auto *would* give you and what is *painted* diverge
-  the moment an explicit Light or Dark is selected.
-  All colors are CSS custom properties under `:root[data-theme=…]` in
-  `src/styles/theme.css`. The SPA ships the marketing "modern pixel"
-  design system (docs/website.md): the dark block mirrors `site.css`'s
-  tokens **verbatim** (`site.css` stays the source of truth — a token
-  change there must be mirrored here), the light block is a derived
-  variant that exists only in `theme.css`, and token names follow
-  `site.css` (`--bg`, `--surface`, `--accent`, …). The iOS app mirrors
-  **both** blocks in `ios/Mobaide/UI/Theme/Theme.swift` (docs/ios-client.md),
-  so a change to either must be carried there as well. Purple + grey stay the
-  identity in both themes: `--brand`/`--brand-2` are theme-invariant
-  fills, and the accent is `#d0bcff` on dark / `#6008ac` on light (the
-  "brand is never text" rule is a dark-surface contrast rationale;
-  on light the same hue measures 8.97:1). Departure Mono is self-hosted
-  at `web/public/fonts/` with its OFL license file, preloaded from
-  `index.html` with a URL that must stay byte-identical to the
-  `@font-face` `url()`. The terminal grid and the autoscan log pane stay
-  always-dark regardless of theme (an ANSI palette is a matched set with
-  its background). **CSP coupling:** the production Caddy site
-  block pins that inline script by `sha256` hash in `script-src` — in
-  BOTH `deploy/prod/Caddyfile.*` files. Editing the script means updating
-  both hashes; `deploy_web.py` hard-fails on drift (the escape hatch is
-  `--force`, at the cost of a theme flash). The font needs no Caddyfile
-  change: the SPA CSP has no `font-src`, so same-origin fonts ride
-  `default-src 'self'`.
-- **Brand mark and icons** — the mirror extends past tokens to the assets.
-  `web/public/wordmark.png`, `favicon.ico`, `apple-touch-icon.png` and both
-  `fonts/DepartureMono-*` files are **byte-for-byte copies** of
-  `central_server/static/site/`, and `brandAssets.test.ts` holds that list and
-  fails if any of the five diverges — the two origins deploy separately with no
-  shared asset pipeline, so copying is the only mechanism and the test is what
-  keeps it honest. The font pre-dates the icons in that set and is the one most
-  likely to be regenerated alone, under an unchanged filename. `.brand-mark` in
-  `global.css` mirrors `site.css`'s rule (light `--plate` chip,
-  `image-rendering: pixelated`) one step down the same ladder — 128 → 104px
-  where the site goes 152 → 128px, with the padding scaled to match: the
-  terminal renders inside `RootLayout`, so header height comes straight out of
-  the PTY row count. That is also why `.app-header` is `flex-wrap: nowrap` with
-  `.app-nav` absorbing overflow by scrolling, the shape `.terminal-bar` already
-  uses — a wrapping header silently doubled and cost ~3 rows. Both shells carry
-  the mark, and both link it — `RootLayout` to `/` (its `alt` alone supplies the
-  accessible name an e2e assertion pins), `AuthLayout` cross-origin to
-  `https://mobaide.com/`. The auth shell's mark used to be unlinked, on the
-  rationale that the marketing home was somewhere the SPA never sent anyone;
-  that stopped being true when mobaide.com's Sign in buttons started landing
-  here, so the shell also grew a footer carrying the site's own three links
-  (Home, Privacy policy, Account deletion) in the marketing `.foot-nav`
-  vocabulary. The signed-in `RootLayout` deliberately has no such footer —
-  Settings already carries those links, and a working surface does not need
-  marketing chrome. The mark stays named rather than decorative because four of
-  the auth shell's six routes head their card with something other than the app
-  name. `index.html`
-  declares the icons exactly as `marketing_landing.html` does, so the tab icon
-  matches across the crossing; the manifest carries the 180px PNG, which at
-  least avoids the known Chromium failure on an SVG-only `sizes: "any"` set.
-  Whether it clears Chrome's install bar is unverified — the published
-  criteria ask for 192 + 512, and closing that properly is CLA-252, so do not
-  treat the current icon set as evidence that `display-mode: standalone`
-  resolves true on Android.
-- **Errors, two tiers** — the router's `errorElement` (`RouteError`)
-  renders loader/render errors and doubles as the 404 page;
-  `AppErrorBoundary` (class component) wraps the providers as a last
-  resort.
-- **Toasts** — Zustand store + two presentational components, no
-  dependency; `ToastViewport` mounts as a sibling of `RouterProvider` so
-  toasts survive route errors.
-- **Auth & session (WEB-03)** — `src/auth/authState.ts` mirrors Android's
-  `SessionManager.AuthState` state-for-state (`unauthenticated`,
-  `userOnly`, `fullyConnected`, `incompatibleServer`). The user JWT lives
-  in `sessionStorage` — per-tab, never on disk, because the relay keeps no
-  JWT denylist — and a booting tab asks open peers to hand the session
-  over via `BroadcastChannel`; the always-re-mintable per-agent
-  `mobile_access` tokens live in `localStorage`. Sessions are minted with
-  the server's opt-in `refreshable: true` flag, so the access token is
-  short-lived (`USER_SESSION_ACCESS_EXPIRE_MINUTES`, default 15) and
-  rotates against `POST /api/auth/refresh`; refreshes are single-flighted
-  across tabs with `navigator.locks`, and a 401 is terminal (sign out)
-  while anything else is transient (keep the tokens).
-  The **refresh token is not in the page at all**: clients send
-  `session_transport: "cookie"` alongside `refreshable`, and the server
-  returns it as a `__Host-mobaide_refresh` HttpOnly cookie (see
-  docs/deployment.md). That is what lets a session survive closing the last
-  tab — the old per-tab model ended a session whenever the final tab
-  closed — and it caps an XSS at one tab's 15-minute token instead of a
-  30-day renewable session. Boot therefore has three legs, in order: this
-  tab's `sessionStorage`, a 300 ms peer handover, then
-  `restoreSessionFromCookie()`. A readable companion cookie
-  (`__Host-mobaide_signed_in`) gates only that last leg, so a visitor who never
-  signed in reaches the login form without a wasted request. It gates the
-  network leg rather than the handover on purpose: with cookies blocked,
-  sign-in still fills `sessionStorage`, so a peer can hold a real session while
-  no marker exists — checking the marker first would refuse that handover and
-  bounce a signed-in user to the login screen. The marker is read under **both**
-  names, because which one the server emits depends on its runtime
-  `USER_SESSION_COOKIE_SECURE` and a build-time guess would look for a cookie
-  that was never set; but only the `__Host-` name is *trusted*, since a sibling
-  host can plant the bare one. Presence licenses a restore attempt; only a
-  trusted marker licenses the `terminal` purge, so a planted cookie costs one
-  401 rather than a user's recents. The network
-  leg lives in `src/auth/userSessionApi.ts` rather than beside the rotation
-  in `userTokens.ts`, because `sessionStore` must be able to call it and
-  `userTokens` imports the store. Sign-out revokes server-side via
-  `POST /api/auth/logout`, and `POST /api/auth/logout/all` backs the
-  Account screen's "Sign out of all browsers" — browser-scoped by
-  construction, since mobile never opts into `refreshable`, and bounded by
-  the access-token TTL rather than instant, since there is still no JWT
-  denylist. Both cookie-reading routes require an `X-Mobaide-Session`
-  header: `SameSite=Strict` alone is not enough when a sibling host on the
-  same registrable domain is third-party-hosted. Route access is
-  enforced by React Router **middleware**, not loaders — loaders run in
-  parallel, a parent middleware short-circuits the whole match — and the
-  wanted path survives the bounce as `?next=`. `GET /api/version` is the
-  single anonymous bootstrap call: protocol gate *and* the
-  `google_client_id` and `apple_web_client_id` the two sign-in buttons
-  initialise with, so the SPA needs no build-time env var. Each button
-  mounts only when its id is present, so a deployment configures either
-  provider, both, or neither, entirely server-side.
+### Theming
+
+**Theming** — `themeStore` persists `light | dark | system`
+(`localStorage` key `mobaide-theme`); `ThemeProvider` resolves it to
+`document.documentElement.dataset.theme` and tracks
+`prefers-color-scheme` while in `system`. An inline pre-paint script in
+`index.html` stamps `data-theme` before first paint (no theme flash).
+
+The control is `ThemePicker`: a three-segment `radiogroup` of native radios
+(Auto | Light | Dark), rendered by `RootLayout` and `AuthLayout` and again in
+the Settings Appearance card, with the group `name` from `useId()` so two
+mounted instances stay separate groups. It is a direct selector rather than a
+cycling button because `system` paints identically to whichever of light/dark
+the OS is, so a cycle step from `system` looked dead.
+
+Auto's `title` and `aria-label` name the OS value, from `useSystemTheme()`.
+
+#### Design tokens and fonts
+
+All colors are CSS custom properties under `:root[data-theme=…]` in
+`src/styles/theme.css`. The SPA ships the marketing "modern pixel" design system
+(docs/website.md): the dark block mirrors `site.css`'s tokens **verbatim**
+(`site.css` stays the source of truth — a token change there must be mirrored
+here), the light block is a derived variant that exists only in `theme.css`, and
+token names follow `site.css`. The iOS app mirrors **both** blocks in
+`ios/Mobaide/UI/Theme/Theme.swift` (docs/ios-client.md), so a change to either
+must be carried there as well.
+
+Purple + grey stay the identity in both themes: `--brand`/`--brand-2` are
+theme-invariant fills, and the accent is `#d0bcff` on dark / `#6008ac` on light.
+Departure Mono is self-hosted at `web/public/fonts/` with its OFL license file,
+preloaded from `index.html` with a URL that must stay byte-identical to the
+`@font-face` `url()`. The terminal grid and the autoscan log pane stay
+always-dark regardless of theme.
+
+> [!WARNING]
+> **CSP coupling:** the production Caddy site block pins that inline script by
+> `sha256` hash in `script-src` — in BOTH `deploy/prod/Caddyfile.*` files.
+> Editing the script means updating both hashes; `deploy_web.py` hard-fails on
+> drift (the escape hatch is `--force`, at the cost of a theme flash).
+
+The font needs no Caddyfile change: the SPA CSP has no `font-src`, so
+same-origin fonts ride `default-src 'self'`.
+
+### Brand mark and icons
+
+**Brand mark and icons** — the mirror extends past tokens to the assets.
+`web/public/wordmark.png`, `favicon.ico`, `apple-touch-icon.png` and both
+`fonts/DepartureMono-*` files are **byte-for-byte copies** of
+`central_server/static/site/`, and `brandAssets.test.ts` fails if any of the
+five diverges — the two origins deploy separately with no shared asset
+pipeline. The font is the one most likely to be regenerated alone, under an
+unchanged filename.
+
+Both shells carry the mark and link it: `RootLayout` to `/`, `AuthLayout`
+cross-origin to `https://mobaide.com/`. The auth shell also has a footer with
+the site's own three links (Home, Privacy policy, Account deletion); the
+signed-in `RootLayout` has none, because Settings already carries those links.
+
+`index.html` declares the icons exactly as `marketing_landing.html` does; the
+manifest carries the 180px PNG, which avoids the known Chromium failure on an
+SVG-only `sizes: "any"` set.
+
+> [!NOTE]
+> Whether it clears Chrome's install bar is unverified — the published criteria
+> ask for 192 + 512, and closing that properly is CLA-252, so do not treat the
+> current icon set as evidence that `display-mode: standalone` resolves true on
+> Android.
+
+### Errors and toasts
+
+**Errors, two tiers** — the router's `errorElement` (`RouteError`)
+renders loader/render errors and doubles as the 404 page;
+`AppErrorBoundary` (class component) wraps the providers as a last
+resort.
+
+**Toasts** — Zustand store + two presentational components, no
+dependency; `ToastViewport` mounts as a sibling of `RouterProvider` so
+toasts survive route errors.
+
+### Auth and session (WEB-03)
+
+**Auth & session (WEB-03)** — `src/auth/authState.ts` mirrors Android's
+`SessionManager.AuthState` state-for-state (`unauthenticated`,
+`userOnly`, `fullyConnected`, `incompatibleServer`).
+
+#### Tokens and storage
+
+- The user JWT lives in `sessionStorage` — per-tab, never on disk, because the
+  relay keeps no JWT denylist — and a booting tab asks open peers to hand the
+  session over via `BroadcastChannel`.
+- The always-re-mintable per-agent `mobile_access` tokens live in
+  `localStorage`.
+- Sessions are minted with the server's opt-in `refreshable: true` flag, so the
+  access token is short-lived (`USER_SESSION_ACCESS_EXPIRE_MINUTES`, default 15)
+  and rotates against `POST /api/auth/refresh`.
+- Refreshes are single-flighted across tabs with `navigator.locks`, and a 401 is
+  terminal (sign out) while anything else is transient (keep the tokens).
+
+#### Refresh cookie and boot legs
+
+The **refresh token is not in the page at all**: clients send
+`session_transport: "cookie"` alongside `refreshable`, and the server returns it
+as a `__Host-mobaide_refresh` HttpOnly cookie (see docs/deployment.md). That
+lets a session survive closing the last tab and caps an XSS at one tab's
+15-minute token instead of a 30-day renewable session.
+
+Boot has three legs, in order: this tab's `sessionStorage`, a 300 ms peer
+handover, then `restoreSessionFromCookie()`. A readable companion cookie
+(`__Host-mobaide_signed_in`) gates only that last leg, so a visitor who never
+signed in reaches the login form without a wasted request. It gates the network
+leg rather than the handover on purpose: with cookies blocked, a peer can hold a
+real session while no marker exists.
+
+The marker is read under **both** names, because which one the server emits
+depends on its runtime `USER_SESSION_COOKIE_SECURE`; but only the `__Host-` name
+is *trusted*, since a sibling host can plant the bare one. Presence licenses a
+restore attempt; only a trusted marker licenses the `terminal` purge, so a
+planted cookie costs one 401 rather than a user's recents. The network leg lives
+in `src/auth/userSessionApi.ts` because `sessionStore` must be able to call it
+and `userTokens` imports the store.
+
+#### Sign-out, guards and bootstrap
+
+Sign-out revokes server-side via `POST /api/auth/logout`, and
+`POST /api/auth/logout/all` backs the Account screen's "Sign out of all
+browsers" — browser-scoped by construction, since mobile never opts into
+`refreshable`, and bounded by the access-token TTL rather than instant, since
+there is still no JWT denylist. Both cookie-reading routes require an
+`X-Mobaide-Session` header: `SameSite=Strict` alone is not enough when a sibling
+host on the same registrable domain is third-party-hosted.
+
+Route access is enforced by React Router **middleware**, not loaders — loaders
+run in parallel, a parent middleware short-circuits the whole match — and the
+wanted path survives the bounce as `?next=`.
+
+`GET /api/version` is the single anonymous bootstrap call: protocol gate *and*
+the `google_client_id` and `apple_web_client_id` the two sign-in buttons
+initialise with, so the SPA needs no build-time env var. Each button mounts only
+when its id is present, so a deployment configures either provider, both, or
+neither, entirely server-side.
 
 ## Parity policy
 
@@ -1939,36 +1760,28 @@ The web client participates in the three-way Cross-Platform Parity rule in
 the root `CLAUDE.md`: client-facing changes must be mirrored across
 Android, iOS, and web (or a Linear issue filed) — with the transition rule
 that feature areas not yet built on web are covered by their planned WEB-*
-issue rather than per-change issues. Terminal behavior parity references:
-the client is the sole PTY size authority and must re-assert size on every
-reconnect and on the switch-back-to-this-client edge (GH #631) (see
-`docs/ios-client.md` and PROTOCOL.md).
+issue rather than per-change issues.
+
+### Exempt divergences by milestone
 
 Web-only behaviour that needs **no** mirror issue is the platform-convention
-exemption the rule already carries: the desktop keyboard surface (Ctrl+C /
-Ctrl+V / Ctrl+Shift+C/V, the "pass Ctrl+V" toggle) and Full-only display
-mode both exist because a browser window has a physical keyboard and a wide
-viewport, neither of which a phone has. Each is listed in the WEB-05 section
-above with its reason.
+exemption the rule already carries. A browser has a physical keyboard and a wide
+viewport; a phone has neither:
 
-WEB-06 adds to that exempt set for the same reason: the reserved-key table,
-the reload and unload guards and immersive mode all answer "a physical
-keyboard exists and a browser competes for it", which is not a question
-either phone can be asked. The shared encoder fixture is the opposite of a
-divergence — it pulls all three clients onto one contract.
+- The desktop keyboard surface (Ctrl+C / Ctrl+V / Ctrl+Shift+C/V, the "pass
+  Ctrl+V" toggle) and Full-only display mode (WEB-05 section above).
+- WEB-06: the reserved-key table, the reload and unload guards and immersive
+  mode. The shared encoder fixture is the opposite of a divergence — it pulls
+  all three clients onto one contract.
+- **The control-key bar, saved shortcuts, command palette and composer
+  removal** is a deliberate divergence, not a gap to mirror. Android and iOS keep
+  them, and the central server keeps `/api/shortcuts` and `shortcut.*` serving
+  them. No Linear issue is needed in either direction.
+- The clipboard copy on a template pick: a template on mobile lands in the app's
+  own composer and is submitted immediately, so no collapsed placeholder is ever
+  left for the user to expand.
 
-**The control-key bar, saved shortcuts, command palette and composer removal
-is a deliberate, platform-convention-exempt divergence, not a gap to mirror.**
-A physical keyboard makes app-owned chord UI redundant on web — the mirror
-image of why mobile needs it. Android and iOS keep the bar, the shortcut
-picker and the composer, and the central server keeps `/api/shortcuts` and
-`shortcut.*` serving them. No Linear issue is needed for either direction:
-web is not "missing" what mobile has, and mobile is not "behind" what web
-dropped. The clipboard copy on a template pick is exempt for the same
-reason: a template on mobile lands in the app's own composer, visible and
-editable, and is submitted immediately, so no collapsed placeholder is ever
-left for the user to expand — copying there would clobber the clipboard for
-nothing. No Linear issue either direction.
+### Tracked divergences
 
 WEB-07's two divergences are **not** exempt and are tracked accordingly:
 recording the last-used session on open as well as on create is a behaviour
@@ -1976,31 +1789,24 @@ change mobile has to follow (CLA-229 / CLA-230), and the session-card
 attention chip is iOS parity that Android does not yet render.
 
 WEB-10's divergences are platform-convention exempt too: no reconcile and no
-seen-store, because a browser has no background delivery to reconcile against
-and consumes only the one-shot attention edge, as Android does; alerting from
-the account-wide user-events channel rather than the per-agent bus, because a
-browser is the first client that routinely holds several agents; requesting
-notification permission from a settings button, which is what a browser
-permission model requires; and no display-mode picker, which is the WEB-05
-exemption restated. The tab-lifecycle contract — the socket stays open when
-hidden, web sends no `device_id`, and a tab therefore never suppresses a push
-— is a cross-client contract rather than a divergence, and matches Android's
-existing choice not to send the hint. Two gaps this milestone found in other
+seen-store (a browser has no background delivery to reconcile against); alerting
+from the account-wide user-events channel rather than the per-agent bus;
+requesting notification permission from a settings button; and no display-mode
+picker. The tab-lifecycle contract — the socket stays open when hidden, web
+sends no `device_id`, and a tab therefore never suppresses a push — is a
+cross-client contract rather than a divergence. Two gaps found in other
 components are filed rather than fixed: the agent's relay events-snapshot
 handler omits `autoscan.list.changed` (CLA-249), and Android's ANSI parser is
 still a 16-colour subset with no fixture consumer (CLA-250).
 
-WEB-08's divergences are all platform-convention exempt: the paste box and
-the `/pair` deep link exist because a desktop browser has no camera — as does
-the setup guide's step 2, which reads the printed link where mobile scans the
-QR above it — the
-agent id and version on the card because a browser is the first client that
-can hold more than one agent, and the trust-mismatch copy's final sentence
-because a browser has no "clear app data". The `parse_qr_payload` tightening
-went the other way — it moved the agent's Python parser onto the mobile
-clients' stricter contract rather than away from it — and the shared golden
-now pins all four implementations, with the Android arm tracked in CLA-235
-and the duplicated `central_server` encoder in CLA-236.
+WEB-08's divergences are all platform-convention exempt: the paste box and the
+`/pair` deep link (a desktop browser has no camera, as does the setup guide's
+step 2), the agent id and version on the card (a browser is the first client
+that can hold more than one agent), and the trust-mismatch copy's final sentence
+(a browser has no "clear app data"). The `parse_qr_payload` tightening moved the
+agent's Python parser onto the mobile clients' stricter contract; the shared
+golden now pins all four implementations, with the Android arm tracked in
+CLA-235 and the duplicated `central_server` encoder in CLA-236.
 
 One item from the setup guide *is* mirrorable rather than exempt: the
 "expired? run `mobaide-agent show-qr` on the host" hint. A stale QR is a real

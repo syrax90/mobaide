@@ -16,21 +16,20 @@ jobs:
       pull-requests: write
     steps:
       - id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
         with:
-          # RELEASE_PLEASE_TOKEN must be a PAT with `workflow` scope so the tag
-          # push it makes triggers the downstream release-agent / release-server
-          # / release-android workflows. Falling back to GITHUB_TOKEN works for
-          # PR creation but tag-pushes from GITHUB_TOKEN will NOT fire other
-          # workflows — operators must push the tag manually in that case.
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN on purpose: the tags it pushes start no other
+          # workflow, so a merge never ships a release by itself. The operator
+          # ships each tag with deploy/prod/release_agent.py or
+          # release_android.py, which hold the signing keys locally.
+          token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
       - name: Delete empty source-repo Releases (keep tags)
         if: ${{ steps.release.outputs.releases_created == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PATHS_RELEASED: ${{ steps.release.outputs.paths_released }}
           ALL_OUTPUTS: ${{ toJSON(steps.release.outputs) }}
         # release-please-action v4 binds tag-push and GitHub Release creation
