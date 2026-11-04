@@ -395,7 +395,7 @@ class TestDeployRollbackBoundary:
         monkeypatch.setattr(deploy_central, "compose_up", lambda tls_mode, skip: 0)
         monkeypatch.setattr(deploy_central, "wait_http", _explodes_with(error))
 
-        assert deploy_central._run_deploy(self._args(), []) == 1
+        assert deploy_central._run_deploy(self._args(), []) == deploy_central.EXIT_HEALTH_UNCONFIRMED
 
         assert rollbacks == []
         out = capsys.readouterr().out

@@ -50,7 +50,7 @@ Every documentation file in this repository, grouped by topic. Read this first, 
 
 | File | What it covers |
 |---|---|
-| [deployment.md](deployment.md) | Central-server and web-SPA deploys, TLS certificates, capacity triggers, agent deployment per OS, agent uninstall, security headers and CSP, voice input operations, Google Ads conversion upload. |
+| [deployment.md](deployment.md) | `deploy_all.py` (ship several components in order), central-server and web-SPA deploys, TLS certificates, capacity triggers, agent deployment per OS, agent uninstall, security headers and CSP, voice input operations, Google Ads conversion upload. |
 | [bootstrap-mobaide.md](../deploy/prod/bootstrap-mobaide.md) | One-time VPS bootstrap before `deploy_central.py` runs: prerequisites, layout, `.env`, ufw, TLS mode, backups. |
 | [configuration-profiles.md](configuration-profiles.md) | One PowerShell command swaps env-specific files (agent `.env`, `android/local.properties`, TLS trust config) between named profiles. |
 | [central_server/CHANGELOG.md](../central_server/CHANGELOG.md) | `central_server` release notes, per `server-vX.Y.Z` tag. |
