@@ -766,11 +766,22 @@ Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
 * **Activity awareness** — defers the swap while any session is running, or
   while voice dictation is open or still being transcribed. Deferral retries
   after 30 minutes; a single pending update deferred for >24h logs a `WARN`.
-* **Supervisor restart** — the updater calls `sys.exit(75)`.
-  `RestartForceExitStatus=75` (systemd), the Windows `mobaide_launcher.py`
-  supervisor's exit-code-75 respawn loop, and Task Scheduler's outer
-  `-RestartCount` / `-RestartInterval` all restart it into the freshly-pinned
+* **Supervisor restart** — the running agent calls
+  `mobaide.agent.restart.request_restart`. It stops the uvicorn server
+  gracefully, and the process then exits with code `75`. A 60 s watchdog
+  hard-exits with `75` if the shutdown hangs. `RestartForceExitStatus=75`
+  (systemd), launchd `KeepAlive`, and the Windows `mobaide_launcher.py`
+  supervisor's exit-code-75 respawn loop restart it into the freshly-pinned
   release.
+  * The exit code must be exactly `75` on Windows. The supervisor respawns
+    only on `75`, and Task Scheduler does not restart a task whose process
+    exited by itself, whatever the code.
+  * Do not call `sys.exit(75)` in the running agent. During lifespan startup
+    (the HTTPS bootstrap below), uvicorn turns it into exit code `3`. In a
+    FastAPI background task (the "Install now" route), uvicorn logs it and
+    keeps serving. Both left a Windows agent stopped until the next logon.
+  * The `mobaide-agent update` CLI verb has no server, so it still uses
+    `sys.exit`.
 * **Rollback target** — on every boot, `_prune_old_releases` keeps the current
   version plus up to `MOBAIDE_AGENT_KEEP_RELEASES - 1` highest-versioned
   **complete** siblings (default: one previous release). Dirs that are

@@ -805,7 +805,11 @@ The agent's stderr is captured to `<prefix>\logs\agent.err.log` and its stdout (
 
 ##### Restart behaviour
 
-When the launcher subprocess exits with code 75 (`_EXIT_RESTART_REQUESTED` — emitted on successful pair or staged update), the supervisor re-resolves `current_version` and respawns immediately. Task Scheduler's outer `-RestartCount` / `-RestartInterval` (1-minute floor) catches the supervisor-level failure case.
+When the launcher subprocess exits with code 75 (`_EXIT_RESTART_REQUESTED` — emitted on successful pair or staged update), the supervisor re-resolves `current_version` and respawns immediately.
+
+- With any other code, the supervisor exits too. The agent then stays stopped until the next logon or a manual `Start-ScheduledTask`.
+- Task Scheduler's `-RestartCount` / `-RestartInterval` (1-minute floor) applies only when the task fails to start. It does not restart a supervisor that exited by itself, whatever the exit code.
+- So every restart request from the agent must end the process with exactly 75. The agent does this through `mobaide.agent.restart`.
 
 Task Scheduler settings:
 
