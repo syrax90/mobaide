@@ -210,6 +210,34 @@ class TestCodeFailureModes:
         with pytest.raises(VerificationAttemptsExhaustedError):
             await verify_service.verify_email("frank@example.com", real_code)
 
+    async def test_concurrent_guesses_cannot_exceed_attempt_cap(
+        self,
+        verify_service: AuthService,
+        verify_db: Database,
+        fake_sender: _FakeEmailSender,
+        verify_config: CentralServerConfig,
+    ):
+        await verify_service.register_user("ivan@example.com", "hunter22", None)
+        await asyncio.sleep(0)
+        _, real_code, _ = fake_sender.messages[-1]
+        wrong_codes = [f"{n:06d}" for n in range(30) if f"{n:06d}" != real_code]
+
+        results = await asyncio.gather(
+            *(
+                verify_service.verify_email("ivan@example.com", code)
+                for code in [*wrong_codes, real_code]
+            ),
+            return_exceptions=True,
+        )
+
+        invalid = [
+            r for r in results if isinstance(r, InvalidVerificationCodeError)
+        ]
+        assert len(invalid) == verify_config.email_verification_max_attempts
+        assert isinstance(results[-1], VerificationAttemptsExhaustedError)
+        user = await verify_db.get_user_by_email("ivan@example.com")
+        assert not user["email_verified"]
+
     async def test_expired_token_is_rejected(
         self,
         verify_config: CentralServerConfig,

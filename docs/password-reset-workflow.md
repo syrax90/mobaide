@@ -62,7 +62,7 @@ be used to enumerate either the address itself or its verification state.
 | Unverified user | `200 {"status":"ok"}` (silent) | Same generic message — never reveals state. |
 | Per-email cap hit | `200 {"status":"ok"}` (silent throttle, no email sent) | Same generic message. |
 | Per-IP cap hit | `429 {"detail":{"error":"reset_ip_rate_limited","retry_after_seconds":N}}` plus `Retry-After` header | "Too many requests from this network. Try again in Ns." |
-| Wrong code | `400 {"detail":{"error":"reset_code_invalid"}}` | "That code isn't right. Try again." Attempt counter bumps; after `PASSWORD_RESET_MAX_ATTEMPTS` the active token is invalidated. |
+| Wrong code | `400 {"detail":{"error":"reset_code_invalid"}}` | "That code isn't right. Try again." Every guess (right or wrong) bumps the attempt counter atomically; after `PASSWORD_RESET_MAX_ATTEMPTS` the active token is invalidated. |
 | Expired code | `410 {"detail":{"error":"reset_code_expired"}}` | "That code expired. Tap Resend to get a new one." |
 | Exhausted attempts | `429 {"detail":{"error":"reset_attempts_exhausted"}}` | "Too many attempts. Request a new code." |
 | New = current password | `400 {"detail":{"error":"new_password_same_as_old"}}` | "New password must differ from your current password." |
