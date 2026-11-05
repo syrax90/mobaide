@@ -441,7 +441,7 @@ Also load-bearing:
 
 - `JWT_SECRET_KEY` (derives the cookie HMAC key);
 - `USER_SESSION_COOKIE_SECURE` (the cookie's `Secure` flag);
-- the `trusted_proxies` block in `deploy/prod/Caddyfile.CloudflareOrigin`;
+- the `trusted_proxies` block and `client_ip_headers Cf-Connecting-Ip` line in `deploy/prod/Caddyfile.CloudflareOrigin`, and the `header_up X-Forwarded-For {client_ip}` override in both prod Caddyfiles;
 - schema `user_version = 20` with the six `users` columns (`ad_click_id`,
   `ad_click_kind`, `ad_click_at`, `ads_consent`, `ad_attribution_sig`,
   `first_paired_at`);
