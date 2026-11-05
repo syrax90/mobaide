@@ -71,6 +71,22 @@ final class RegisterModelTests: XCTestCase {
         XCTAssertEqual(model.error, PasswordRules.tooShortMessage)
     }
 
+    func testPasswordLengthCountsScalarsLikeTheServer() {
+        // Four emoji are four scalars on the server: too short.
+        XCTAssertEqual(PasswordRules.lengthError("😀😀😀😀"), PasswordRules.tooShortMessage)
+        XCTAssertNil(PasswordRules.lengthError(String(repeating: "😀", count: 8)))
+        // A family emoji is one grapheme but seven scalars.
+        XCTAssertNil(PasswordRules.lengthError("👨‍👩‍👧‍👦a"))
+    }
+
+    func testPasswordLengthEnforcesBothBounds() {
+        XCTAssertNil(PasswordRules.lengthError(String(repeating: "a", count: 128)))
+        XCTAssertEqual(
+            PasswordRules.lengthError(String(repeating: "a", count: 129)),
+            PasswordRules.tooLongMessage
+        )
+    }
+
     func testPasswordOfExactlyEightIsSent() async {
         StubURLProtocol.enqueue(status: 409, body: #"{"detail":"Email already registered"}"#)
         let model = makeModel()
@@ -93,6 +109,35 @@ final class RegisterModelTests: XCTestCase {
         await model.register()
 
         XCTAssertEqual(model.error, "An account with this email already exists")
+    }
+
+    func testInvalidEmail422MapsToSingleEmailCopy() async {
+        StubURLProtocol.enqueue(status: 422, body: #"{"detail":[{"msg":"Value error, Enter a single valid email address"}]}"#)
+        let model = makeModel()
+        model.email = "a@example.com, b@example.com"
+        model.password = "password-1"
+        model.confirmPassword = "password-1"
+
+        await model.register()
+
+        XCTAssertEqual(model.error, "Enter a single valid email address")
+        XCTAssertFalse(model.isLoading)
+    }
+
+    func testRateLimited429MapsToTooManyAttemptsCopy() async {
+        StubURLProtocol.enqueue(
+            status: 429,
+            body: #"{"detail":{"error":"resend_rate_limited","cooldown_seconds_remaining":1800}}"#
+        )
+        let model = makeModel()
+        model.email = "new@example.com"
+        model.password = "password-1"
+        model.confirmPassword = "password-1"
+
+        await model.register()
+
+        XCTAssertEqual(model.error, "Too many sign-up attempts. Wait a few minutes and try again.")
+        XCTAssertFalse(model.isLoading)
     }
 
     func testVerificationRequiredRoutesToVerifyEmail() async throws {

@@ -5,9 +5,8 @@ break the cooldown window. On process restart the dict is cleared and all
 cooldowns reset — acceptable for the current single-instance deployment;
 document the migration path (SQLite table or Redis) if we ever scale out.
 
-The key is the normalised email address (``email.strip().lower()``). Rate
-limits are per-email, not per-IP, which means an abuser can flood someone
-else's inbox. IP-based limiting is tracked as a follow-up.
+The key is normalised with ``strip().lower()``. Most callers key by email;
+the per-IP instances key by ``ip:<address>`` (see ``app.py``).
 """
 from __future__ import annotations
 

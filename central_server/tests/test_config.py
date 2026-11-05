@@ -71,6 +71,14 @@ def test_heartbeat_flush_interval_default_and_env(monkeypatch):
     assert CentralServerConfig.from_env().heartbeat_flush_interval_seconds == 15
 
 
+def test_email_verification_ip_hourly_cap_default_and_env(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.delenv("EMAIL_VERIFICATION_IP_HOURLY_CAP", raising=False)
+    assert CentralServerConfig.from_env().email_verification_ip_hourly_cap == 20
+    monkeypatch.setenv("EMAIL_VERIFICATION_IP_HOURLY_CAP", "0")
+    assert CentralServerConfig.from_env().email_verification_ip_hourly_cap == 0
+
+
 def test_ttl_env_vars_parse_positive_integers(monkeypatch):
     """Explicit positive TTLs override the finite defaults and are parsed as ints."""
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")

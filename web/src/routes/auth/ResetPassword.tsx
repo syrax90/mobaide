@@ -9,8 +9,7 @@ import { useToastStore } from '../../stores/toastStore';
 import {
   maskEmail,
   networkRateLimitedMessage,
-  PASSWORD_MIN_LENGTH,
-  PASSWORD_TOO_SHORT_MESSAGE,
+  passwordLengthError,
   resetPasswordMessage,
   shouldClearCode,
 } from './authCopy';
@@ -47,8 +46,9 @@ export function ResetPassword() {
       setError('Enter the 6-digit code we emailed you');
       return;
     }
-    if (values.newPassword.length < PASSWORD_MIN_LENGTH) {
-      setError(PASSWORD_TOO_SHORT_MESSAGE);
+    const lengthError = passwordLengthError(values.newPassword);
+    if (lengthError !== null) {
+      setError(lengthError);
       return;
     }
     if (values.newPassword !== values.confirmPassword) {

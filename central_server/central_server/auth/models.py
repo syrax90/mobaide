@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AfterValidator, BaseModel, Field, model_validator
+
+from .email_address import validate_single_mailbox
 
 # Applies where a password is chosen, never at login: accounts created before
 # the minimum existed must still be able to sign in.
@@ -192,7 +194,10 @@ class AdAttribution(BaseModel):
 
 
 class UserRegisterRequest(RefreshableSessionRequest):
-    email: str
+    # The only endpoint that stores a caller-chosen address, and every later
+    # email goes to the stored value — so this is where a list or header
+    # injection has to stop.
+    email: Annotated[str, AfterValidator(validate_single_mailbox)]
     password: str = Field(
         ..., min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH
     )

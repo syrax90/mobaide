@@ -32,7 +32,23 @@ export function maskEmail(email: string): string {
 /** The relay's rule for a chosen password (register, reset); login has none. */
 export const PASSWORD_MIN_LENGTH = 8;
 
+export const PASSWORD_MAX_LENGTH = 128;
+
 export const PASSWORD_TOO_SHORT_MESSAGE = `Password must be at least ${String(PASSWORD_MIN_LENGTH)} characters`;
+
+export const PASSWORD_TOO_LONG_MESSAGE = `Password must be at most ${String(PASSWORD_MAX_LENGTH)} characters`;
+
+/**
+ * The relay's length rule, counted in code points as the relay counts them,
+ * or `null` when `password` meets it. Checked before sending so a register
+ * 422 can only mean a bad email.
+ */
+export function passwordLengthError(password: string): string | null {
+  const length = [...password].length;
+  if (length < PASSWORD_MIN_LENGTH) return PASSWORD_TOO_SHORT_MESSAGE;
+  if (length > PASSWORD_MAX_LENGTH) return PASSWORD_TOO_LONG_MESSAGE;
+  return null;
+}
 
 /** `"1 minute"` / `"15 minutes"`: a wait rounded up to whole minutes. */
 function minutesPhrase(seconds: number): string {
@@ -114,6 +130,10 @@ export function loginMessage(error: unknown): string {
   return `Login failed: ${error.message}`;
 }
 
+const INVALID_EMAIL_MESSAGE = 'Enter a single valid email address';
+const SIGNUP_RATE_LIMITED_MESSAGE =
+  'Too many sign-up attempts. Wait a few minutes and try again.';
+
 export function registerMessage(error: unknown): string {
   if (!isApiError(error)) {
     return 'Registration failed. Check your connection and try again.';
@@ -121,5 +141,7 @@ export function registerMessage(error: unknown): string {
   if (error.status === 409) {
     return 'An account with this email already exists';
   }
+  if (error.status === 422) return INVALID_EMAIL_MESSAGE;
+  if (error.status === 429) return SIGNUP_RATE_LIMITED_MESSAGE;
   return `Registration failed: ${error.message}`;
 }

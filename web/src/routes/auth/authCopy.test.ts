@@ -3,6 +3,10 @@ import { ApiError } from '../../api/errors';
 import {
   loginMessage,
   maskEmail,
+  PASSWORD_TOO_LONG_MESSAGE,
+  PASSWORD_TOO_SHORT_MESSAGE,
+  passwordLengthError,
+  registerMessage,
   resetPasswordMessage,
   shouldClearCode,
   verificationMessage,
@@ -150,5 +154,40 @@ describe('loginMessage', () => {
 
   it('keeps the wrong-password copy for a 401', () => {
     expect(loginMessage(apiError(401))).toBe('Invalid email or password');
+  });
+});
+
+describe('registerMessage', () => {
+  it('maps each registration failure status to its own copy', () => {
+    expect(registerMessage(apiError(409))).toBe(
+      'An account with this email already exists',
+    );
+    expect(registerMessage(apiError(422))).toBe(
+      'Enter a single valid email address',
+    );
+    expect(registerMessage(apiError(429, 'resend_rate_limited', 1800))).toBe(
+      'Too many sign-up attempts. Wait a few minutes and try again.',
+    );
+  });
+
+  it('surfaces the server message for an unmapped status', () => {
+    expect(registerMessage(apiError(500))).toBe(
+      'Registration failed: server said so',
+    );
+  });
+});
+
+describe('passwordLengthError', () => {
+  it('counts code points like the relay, not UTF-16 units', () => {
+    // Four emoji are eight UTF-16 units but four code points: too short.
+    expect(passwordLengthError('😀😀😀😀')).toBe(PASSWORD_TOO_SHORT_MESSAGE);
+    expect(passwordLengthError('😀'.repeat(8))).toBeNull();
+  });
+
+  it('enforces both bounds', () => {
+    expect(passwordLengthError('a'.repeat(7))).toBe(PASSWORD_TOO_SHORT_MESSAGE);
+    expect(passwordLengthError('a'.repeat(8))).toBeNull();
+    expect(passwordLengthError('a'.repeat(128))).toBeNull();
+    expect(passwordLengthError('a'.repeat(129))).toBe(PASSWORD_TOO_LONG_MESSAGE);
   });
 });

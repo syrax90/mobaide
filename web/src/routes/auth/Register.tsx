@@ -14,8 +14,7 @@ import { GoogleSignInButton } from '../../components/auth/GoogleSignInButton';
 import { PasswordField } from '../../components/form/PasswordField';
 import { TextField } from '../../components/form/TextField';
 import {
-  PASSWORD_MIN_LENGTH,
-  PASSWORD_TOO_SHORT_MESSAGE,
+  passwordLengthError,
   registerMessage,
 } from './authCopy';
 import { useAfterAuth } from './useAfterAuth';
@@ -59,8 +58,9 @@ export function Register() {
       setError('Email and password are required');
       return;
     }
-    if (values.password.length < PASSWORD_MIN_LENGTH) {
-      setError(PASSWORD_TOO_SHORT_MESSAGE);
+    const lengthError = passwordLengthError(values.password);
+    if (lengthError !== null) {
+      setError(lengthError);
       return;
     }
     if (values.password !== values.confirmPassword) {

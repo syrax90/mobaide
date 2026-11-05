@@ -18,8 +18,27 @@ class AdminLoginNotSupportedException :
 /** The relay's rule for a chosen password (register, reset); login has none. */
 internal const val PASSWORD_MIN_LENGTH = 8
 
+internal const val PASSWORD_MAX_LENGTH = 128
+
 internal const val PASSWORD_TOO_SHORT_MESSAGE =
     "Password must be at least $PASSWORD_MIN_LENGTH characters"
+
+internal const val PASSWORD_TOO_LONG_MESSAGE =
+    "Password must be at most $PASSWORD_MAX_LENGTH characters"
+
+/**
+ * The relay's length rule, counted in code points as the relay counts them,
+ * or `null` when [password] meets it. Checked before sending so a register
+ * 422 can only mean a bad email.
+ */
+internal fun passwordLengthError(password: String): String? {
+    val length = password.codePointCount(0, password.length)
+    return when {
+        length < PASSWORD_MIN_LENGTH -> PASSWORD_TOO_SHORT_MESSAGE
+        length > PASSWORD_MAX_LENGTH -> PASSWORD_TOO_LONG_MESSAGE
+        else -> null
+    }
+}
 
 /**
  * Signal that `/api/auth/login` answered 429: too many wrong passwords for

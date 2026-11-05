@@ -208,8 +208,8 @@ final class RegisterModel {
             emitError("Email and password are required")
             return
         }
-        guard password.count >= PasswordRules.minLength else {
-            emitError(PasswordRules.tooShortMessage)
+        if let lengthError = PasswordRules.lengthError(password) {
+            emitError(lengthError)
             return
         }
         guard password == confirmPassword else {
@@ -223,9 +223,14 @@ final class RegisterModel {
         } catch is AdminLoginNotSupported {
             emitError(AdminLoginNotSupported.userMessage)
         } catch let apiError as APIError {
-            if apiError.code == 409 {
+            switch apiError.code {
+            case 409:
                 emitError("An account with this email already exists")
-            } else {
+            case 422:
+                emitError("Enter a single valid email address")
+            case 429:
+                emitError("Too many sign-up attempts. Wait a few minutes and try again.")
+            default:
                 emitError("Registration failed: \(apiError.description)")
             }
         } catch {

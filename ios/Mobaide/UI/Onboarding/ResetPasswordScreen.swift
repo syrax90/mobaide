@@ -186,8 +186,8 @@ final class ResetPasswordModel {
             emitError("Enter the 6-digit code we emailed you")
             return
         }
-        guard newPassword.count >= PasswordRules.minLength else {
-            emitError(PasswordRules.tooShortMessage)
+        if let lengthError = PasswordRules.lengthError(newPassword) {
+            emitError(lengthError)
             return
         }
         guard newPassword == confirmPassword else {

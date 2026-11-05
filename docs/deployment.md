@@ -593,9 +593,26 @@ The wildcard is safe here only because `central-server` is `expose`-only and nev
 
 In `CloudflareOrigin` mode there is a second hop: the proxied hosts (`mobaide.com`, `www`, `api`) reach Caddy from a Cloudflare edge. Caddy trusts no incoming `X-Forwarded-For` by default — it replaces it with the peer address, so uvicorn would attribute every apex request to Cloudflare.
 
-`Caddyfile.CloudflareOrigin` therefore opens with a global `servers { trusted_proxies static … }` block listing Cloudflare's published ranges (`https://www.cloudflare.com/ips-v4` and `/ips-v6`; refresh both when Cloudflare changes them). With the edge trusted, Caddy forwards `X-Forwarded-For: <visitor>, <edge>` and uvicorn reads the leftmost entry.
+`Caddyfile.CloudflareOrigin` therefore opens with a global `servers { … }` block:
 
-`app.mobaide.com` is gray-cloud in both modes and unaffected. `Caddyfile.LetsEncrypt` has no proxy in front and trusts nothing.
+- `trusted_proxies static …` lists Cloudflare's published ranges (`https://www.cloudflare.com/ips-v4` and `/ips-v6`; refresh both when Cloudflare changes them).
+- `client_ip_headers Cf-Connecting-Ip` makes Caddy take the visitor's address from `Cf-Connecting-Ip` when the peer is a trusted edge. Cloudflare always overwrites that header.
+
+#### One trusted address per request
+
+Every `reverse_proxy central-server:9000` block, in both Caddyfiles, sets `header_up X-Forwarded-For {client_ip}`. uvicorn with `FORWARDED_ALLOW_IPS=*` reads the **leftmost** `X-Forwarded-For` entry, so that header must hold exactly one address that Caddy resolved.
+
+| Peer that reaches Caddy | `{client_ip}` | `X-Forwarded-For` the relay sees |
+|---|---|---|
+| Cloudflare edge (orange-cloud hosts) | `Cf-Connecting-Ip` | `<visitor>` |
+| Visitor directly (`app.mobaide.com`, all of `LetsEncrypt` mode) | the TCP peer | `<visitor>` |
+
+Do not drop the `header_up` line or add `X-Forwarded-For` to `client_ip_headers`:
+
+- Cloudflare **appends** to an `X-Forwarded-For` the client sent. Caddy's default keeps that chain for a trusted peer. The leftmost entry is then whatever the client wrote.
+- With a spoofed address, a caller skips every per-IP limit (password reset, device-code redeem, pairing initiate) and the ad-consent network fingerprint. A caller can also use up a victim IP's budget.
+
+To check, send `curl -H 'X-Forwarded-For: 1.2.3.4' https://api.mobaide.com/api/version`. The relay's `http.request.received` log line must show your real address in `client_ip`, not `1.2.3.4`.
 
 ### Google Ads conversion upload ("Agent paired")
 
