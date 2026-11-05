@@ -98,6 +98,10 @@ export function loginMessage(error: unknown): string {
   return `Login failed: ${error.message}`;
 }
 
+const INVALID_EMAIL_MESSAGE = 'Enter a single valid email address';
+const SIGNUP_RATE_LIMITED_MESSAGE =
+  'Too many sign-up attempts. Wait a few minutes and try again.';
+
 export function registerMessage(error: unknown): string {
   if (!isApiError(error)) {
     return 'Registration failed. Check your connection and try again.';
@@ -105,5 +109,7 @@ export function registerMessage(error: unknown): string {
   if (error.status === 409) {
     return 'An account with this email already exists';
   }
+  if (error.status === 422) return INVALID_EMAIL_MESSAGE;
+  if (error.status === 429) return SIGNUP_RATE_LIMITED_MESSAGE;
   return `Registration failed: ${error.message}`;
 }

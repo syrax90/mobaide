@@ -60,6 +60,35 @@ final class RegisterModelTests: XCTestCase {
         XCTAssertEqual(model.error, "An account with this email already exists")
     }
 
+    func testInvalidEmail422MapsToSingleEmailCopy() async {
+        StubURLProtocol.enqueue(status: 422, body: #"{"detail":[{"msg":"Value error, Enter a single valid email address"}]}"#)
+        let model = makeModel()
+        model.email = "a@example.com, b@example.com"
+        model.password = "password-1"
+        model.confirmPassword = "password-1"
+
+        await model.register()
+
+        XCTAssertEqual(model.error, "Enter a single valid email address")
+        XCTAssertFalse(model.isLoading)
+    }
+
+    func testRateLimited429MapsToTooManyAttemptsCopy() async {
+        StubURLProtocol.enqueue(
+            status: 429,
+            body: #"{"detail":{"error":"resend_rate_limited","cooldown_seconds_remaining":1800}}"#
+        )
+        let model = makeModel()
+        model.email = "new@example.com"
+        model.password = "password-1"
+        model.confirmPassword = "password-1"
+
+        await model.register()
+
+        XCTAssertEqual(model.error, "Too many sign-up attempts. Wait a few minutes and try again.")
+        XCTAssertFalse(model.isLoading)
+    }
+
     func testVerificationRequiredRoutesToVerifyEmail() async throws {
         StubURLProtocol.enqueue(status: 200, body: """
         {"user_id":"u1","email":"new@example.com","role":"user","status":"verification_required"}

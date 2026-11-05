@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ApiError } from '../../api/errors';
 import {
   maskEmail,
+  registerMessage,
   resetPasswordMessage,
   shouldClearCode,
   verificationMessage,
@@ -121,6 +122,26 @@ describe('verificationMessage', () => {
   it('surfaces the server message for an unmapped status', () => {
     expect(verificationMessage(apiError(500))).toBe(
       'Verification failed: server said so',
+    );
+  });
+});
+
+describe('registerMessage', () => {
+  it('maps each registration failure status to its own copy', () => {
+    expect(registerMessage(apiError(409))).toBe(
+      'An account with this email already exists',
+    );
+    expect(registerMessage(apiError(422))).toBe(
+      'Enter a single valid email address',
+    );
+    expect(registerMessage(apiError(429, 'resend_rate_limited', 1800))).toBe(
+      'Too many sign-up attempts. Wait a few minutes and try again.',
+    );
+  });
+
+  it('surfaces the server message for an unmapped status', () => {
+    expect(registerMessage(apiError(500))).toBe(
+      'Registration failed: server said so',
     );
   });
 });

@@ -286,6 +286,10 @@ class CentralServerConfig:
     email_verification_max_attempts: int = 5
     email_verification_resend_cooldown_seconds: int = 60
     email_verification_resend_hourly_cap: int = 3
+    # /register and /resend-verification are anonymous and mail a caller-chosen
+    # address, so a per-email cap alone lets one client mail any number of
+    # strangers. Shared by both endpoints; 0 disables the cap.
+    email_verification_ip_hourly_cap: int = 20
 
     # Password reset (OTP-in-app flow; see docs/password-reset-workflow.md).
     # TTL chosen at 30 min per NIST SP 800-63-4 guidance (link/OTP ≤60 min).
@@ -533,6 +537,9 @@ class CentralServerConfig:
             ),
             email_verification_resend_hourly_cap=int(
                 os.getenv("EMAIL_VERIFICATION_RESEND_HOURLY_CAP", "3"),
+            ),
+            email_verification_ip_hourly_cap=int(
+                os.getenv("EMAIL_VERIFICATION_IP_HOURLY_CAP", "20"),
             ),
             password_reset_ttl_minutes=int(
                 os.getenv("PASSWORD_RESET_TTL_MINUTES", "30"),
