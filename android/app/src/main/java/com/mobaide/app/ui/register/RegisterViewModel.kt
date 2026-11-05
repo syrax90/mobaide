@@ -86,6 +86,8 @@ class RegisterViewModel @Inject constructor(
             } catch (e: ApiException) {
                 val message = when (e.code) {
                     409 -> "An account with this email already exists"
+                    422 -> "Enter a single valid email address"
+                    429 -> "Too many sign-up attempts. Wait a few minutes and try again."
                     else -> "Registration failed: ${e.message}"
                 }
                 emitError(message)

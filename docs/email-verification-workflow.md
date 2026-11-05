@@ -108,6 +108,7 @@ it is not forgotten if the server ever scales out.
 | `EMAIL_VERIFICATION_MAX_ATTEMPTS` | `5` | Wrong guesses allowed per code before the token is invalidated. |
 | `EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS` | `60` | Minimum gap between resends for the same email. |
 | `EMAIL_VERIFICATION_RESEND_HOURLY_CAP` | `3` | Max resends per email in any rolling 1-hour window. |
+| `EMAIL_VERIFICATION_IP_HOURLY_CAP` | `20` | Max `/register` + `/resend-verification` calls per client IP in any rolling 1-hour window (one shared bucket). `0` disables it. |
 | `SMTP_*` | see `.env.example` | SMTP connection. Swap to Resend / Postmark / SES in prod. |
 
 ## Disabling for CI

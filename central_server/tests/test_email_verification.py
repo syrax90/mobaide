@@ -910,6 +910,78 @@ class TestRouterIntegration:
         )
         assert replaced.status_code == 401
 
+    @pytest.mark.parametrize(
+        "email",
+        [
+            "r1@example.com, r2@example.com",
+            "Alice <r1@example.com>",
+            "r1@example.com\r\nBcc: r2@example.com",
+        ],
+    )
+    async def test_register_refuses_more_than_one_mailbox(
+        self,
+        verify_client,
+        verify_db: Database,
+        fake_sender: _FakeEmailSender,
+        email: str,
+    ):
+        resp = await verify_client.post(
+            "/api/auth/register",
+            json={"email": email, "password": "hunter22"},
+        )
+        assert resp.status_code == 422
+        assert "Enter a single valid email address" in resp.text
+
+        await asyncio.sleep(0)
+        assert fake_sender.messages == []
+        assert await verify_db.get_user_by_email(email) is None
+        assert await verify_db.get_user_by_email("r1@example.com") is None
+
+    async def test_ip_cap_is_shared_by_register_and_resend(
+        self,
+        verify_app,
+        verify_client,
+        verify_db: Database,
+        fake_sender: _FakeEmailSender,
+    ):
+        # ASGITransport reports one synthetic client host, so every call
+        # below lands in the same per-IP bucket.
+        verify_app.state.email_verification_ip_limiter = ResendRateLimiter(
+            cooldown_seconds=0, hourly_cap=2,
+        )
+        first = await verify_client.post(
+            "/api/auth/register",
+            json={"email": "s1@example.com", "password": "hunter22"},
+        )
+        assert first.status_code == 200
+        resend = await verify_client.post(
+            "/api/auth/resend-verification",
+            json={"email": "nobody@example.com"},
+        )
+        assert resend.status_code == 200
+
+        blocked = await verify_client.post(
+            "/api/auth/register",
+            json={"email": "s2@example.com", "password": "hunter22"},
+        )
+        assert blocked.status_code == 429
+        detail = blocked.json()["detail"]
+        assert detail["error"] == "resend_rate_limited"
+        assert detail["cooldown_seconds_remaining"] > 0
+        assert blocked.headers.get("Retry-After") == str(
+            detail["cooldown_seconds_remaining"]
+        )
+        await asyncio.sleep(0)
+        assert await verify_db.get_user_by_email("s2@example.com") is None
+        assert [m[0] for m in fake_sender.messages] == ["s1@example.com"]
+
+        blocked_resend = await verify_client.post(
+            "/api/auth/resend-verification",
+            json={"email": "s1@example.com"},
+        )
+        assert blocked_resend.status_code == 429
+        assert blocked_resend.json()["detail"]["error"] == "resend_rate_limited"
+
 # -- Mailpit integration (opt-in) ---------------------------------------------
 
 MAILPIT_URL = os.getenv("MAILPIT_REST_URL")

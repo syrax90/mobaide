@@ -21,6 +21,7 @@ import aiosmtplib
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..templates_dir import resolve_templates_dir
+from .email_address import is_single_mailbox
 
 if TYPE_CHECKING:
     from ..config import CentralServerConfig
@@ -94,6 +95,11 @@ class EmailSender:
         logs message bodies or OTP codes — only the recipient and the SMTP host.
         """
         cfg = self._config
+        if not is_single_mailbox(to):
+            # Accounts created before /register validated the address can
+            # still hold a list; never let one fan out into many recipients.
+            logger.warning("%s.refused_recipient", log_prefix)
+            return
         message = EmailMessage()
         message["From"] = f"{cfg.smtp_from_name} <{cfg.smtp_from_address}>"
         message["To"] = to
@@ -106,6 +112,7 @@ class EmailSender:
         try:
             await aiosmtplib.send(
                 message,
+                recipients=[to],
                 hostname=cfg.smtp_host,
                 port=cfg.smtp_port,
                 username=cfg.smtp_username,

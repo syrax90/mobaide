@@ -203,6 +203,42 @@ class RegisterViewModelTest {
         assertFalse(state.isLoading)
     }
 
+    @Test
+    fun register_on422_setsSingleEmailError_andClearsLoading() = runTest {
+        val vm = primed(RegisterViewModel(authRepository))
+        coEvery {
+            authRepository.register("alice@example.com", "secret")
+        } throws ApiException(422, """{"detail":[{"msg":"Value error"}]}""")
+
+        vm.register()
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertEquals("Enter a single valid email address", state.error)
+        assertFalse(state.isLoading)
+    }
+
+    @Test
+    fun register_on429_setsTooManyAttemptsError_andClearsLoading() = runTest {
+        val vm = primed(RegisterViewModel(authRepository))
+        coEvery {
+            authRepository.register("alice@example.com", "secret")
+        } throws ApiException(
+            429,
+            """{"detail":{"error":"resend_rate_limited","cooldown_seconds_remaining":1800}}""",
+        )
+
+        vm.register()
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertEquals(
+            "Too many sign-up attempts. Wait a few minutes and try again.",
+            state.error,
+        )
+        assertFalse(state.isLoading)
+    }
+
     // ---- Other ApiException -> "Registration failed: ..." -------------------
 
     @Test
