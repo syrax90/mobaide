@@ -8,6 +8,7 @@ import com.mobaide.app.data.repository.ADMIN_LOGIN_USER_MESSAGE
 import com.mobaide.app.data.repository.AdminLoginNotSupportedException
 import com.mobaide.app.data.repository.AuthRepository
 import com.mobaide.app.data.repository.AuthResult
+import com.mobaide.app.data.repository.LoginRateLimitedException
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -160,6 +161,26 @@ class LoginViewModelTest {
 
         val state = vm.uiState.value
         assertEquals("Invalid email or password", state.error)
+        assertFalse(state.isLoading)
+    }
+
+    // ---- LoginRateLimitedException → lockout copy ---------------------------
+
+    @Test
+    fun login_onRateLimited_setsLockoutErrorInMinutes_andClearsLoading() = runTest {
+        val vm = primed(newViewModel())
+        coEvery {
+            authRepository.loginWithPassword("alice@example.com", "secret")
+        } throws LoginRateLimitedException(900)
+
+        vm.loginWithPassword()
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertEquals(
+            "Too many sign-in attempts. Try again in 15 minutes, or reset your password.",
+            state.error,
+        )
         assertFalse(state.isLoading)
     }
 

@@ -57,6 +57,7 @@ real owner's social sign-in.
 | Resend too soon | 429 with `Retry-After` header. Android disables the "Resend" button for the returned seconds. |
 | Resend beyond hourly cap | 429 with a much longer `Retry-After`. |
 | Duplicate email on register | 409 as before. |
+| Register password too short or long | 422 unless the password is 8-128 characters, same rule as reset. Login has no length rule, so older short passwords still sign in. |
 | Re-register an abandoned signup | An unverified, password-only account (no Google/Apple link) whose code window is over (the TTL has elapsed, consumed codes included) is taken over by `POST /api/auth/register`: the password and sign-up ad attribution are replaced, a fresh code is sent, and the answer is `verification_required` like a first signup. While a code is still within its TTL, and for verified or Google/Apple-linked accounts, register still answers 409. The takeover uses the per-email resend limiter, so it can answer 429 `resend_rate_limited` with the same body and `Retry-After` as `/resend-verification`. |
 
 `POST /api/auth/verify-email` accepts an optional `password`. After a correct

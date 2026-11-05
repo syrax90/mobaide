@@ -11,6 +11,8 @@ struct AuthRepository: Sendable {
     static let roleAdmin = "admin"
     static let statusVerificationRequired = "verification_required"
     static let verificationRequiredError = "verification_required"
+    /// The relay's default lockout window, for a 429 without a body.
+    static let defaultLoginLockoutSeconds = 900
 
     let agentAPI: AgentAPI
     let centralAPI: CentralAPI
@@ -45,6 +47,11 @@ struct AuthRepository: Sendable {
                 let result = AuthResult.verificationRequired(email: pendingEmail)
                 pendingVerification.remember(result, password: password)
                 return result
+            }
+            if error.code == 429 {
+                throw LoginRateLimited(
+                    retryAfterSeconds: parseRetryAfterSeconds(error) ?? Self.defaultLoginLockoutSeconds
+                )
             }
             throw error
         }
@@ -103,7 +110,7 @@ struct AuthRepository: Sendable {
             _ = try await centralAPI.forgotPassword(email: email)
             return .sent
         } catch let error as APIError where error.code == 429 {
-            return .rateLimited(retryAfterSeconds: parseResetIpRetryAfter(error) ?? 60)
+            return .rateLimited(retryAfterSeconds: parseRetryAfterSeconds(error) ?? 60)
         }
     }
 
@@ -329,7 +336,7 @@ struct AuthRepository: Sendable {
         case (410, _):
             return .expiredCode
         case (429, "reset_ip_rate_limited"):
-            return .ipRateLimited(retryAfterSeconds: parseResetIpRetryAfter(error) ?? 60)
+            return .ipRateLimited(retryAfterSeconds: parseRetryAfterSeconds(error) ?? 60)
         case (429, _):
             return .attemptsExhausted
         case (400, "new_password_same_as_old"):
@@ -356,7 +363,7 @@ struct AuthRepository: Sendable {
         return cooldown
     }
 
-    private func parseResetIpRetryAfter(_ error: APIError) -> Int? {
+    private func parseRetryAfterSeconds(_ error: APIError) -> Int? {
         guard let wait = decodeErrorBody(ResetIpRateLimitedErrorBody.self, from: error)?
             .detail.retry_after_seconds, wait > 0
         else { return nil }

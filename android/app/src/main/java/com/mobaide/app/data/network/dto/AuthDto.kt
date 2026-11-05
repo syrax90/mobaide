@@ -132,7 +132,8 @@ data class ResetPasswordResponse(val status: String = "ok")
 
 /**
  * Represents the 429 error body from `/api/auth/forgot-password` or
- * `/api/auth/reset-password` when the per-IP cap is exhausted.
+ * `/api/auth/reset-password` when the per-IP cap is exhausted, and from
+ * `/api/auth/login` after too many wrong passwords.
  * Wrapped by FastAPI as `{"detail": {"error": ..., "retry_after_seconds": ...}}`.
  */
 @Serializable

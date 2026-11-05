@@ -18,9 +18,9 @@ import time
 class ResendRateLimiter:
     """Enforce per-email cooldown + hourly cap for verification resends."""
 
-    # Soft cap on the number of distinct emails we track. Prevents unbounded
-    # growth if an attacker sprays unique emails. Oldest-touched entries get
-    # pruned when exceeded.
+    # Default soft cap on the number of distinct keys we track (``max_keys``
+    # overrides it). Prevents unbounded growth if an attacker sprays unique
+    # keys; see ``_evict_if_full`` for what goes first.
     _MAX_EMAILS = 10_000
 
     def __init__(
@@ -29,10 +29,14 @@ class ResendRateLimiter:
         cooldown_seconds: int,
         hourly_cap: int,
         window_seconds: int = 3600,
+        max_keys: int | None = None,
     ) -> None:
         self._cooldown = max(0, cooldown_seconds)
         self._hourly_cap = max(0, hourly_cap)
         self._window = max(1, window_seconds)
+        # Eviction resets a key's history, so a limiter that guards secrets
+        # needs a bound an attacker cannot cheaply flush past.
+        self._max_keys = max_keys
         self._state: dict[str, list[float]] = {}
         self._last_access: dict[str, float] = {}
         self._lock = asyncio.Lock()
@@ -51,13 +55,26 @@ class ResendRateLimiter:
             self._state.pop(key, None)
             self._last_access.pop(key, None)
 
-    def _evict_if_full(self) -> None:
-        if len(self._state) <= self._MAX_EMAILS:
+    def _evict_if_full(self, now: float) -> None:
+        limit = self._max_keys if self._max_keys is not None else self._MAX_EMAILS
+        if len(self._state) <= limit:
             return
-        # Drop the quarter of entries that haven't been touched recently.
-        ordered = sorted(self._last_access.items(), key=lambda kv: kv[1])
-        to_drop = max(1, len(ordered) // 4)
-        for key, _ in ordered[:to_drop]:
+        for key in list(self._state):
+            self._prune_entry(key, now)
+        # Evict down to three quarters of the bound, not to the bound, so
+        # one full pass pays for many inserts instead of running on each.
+        target = limit - limit // 4
+        excess = len(self._state) - target
+        if excess <= 0:
+            return
+        # Emptiest buckets first, then the least recently touched: a spray
+        # of one-hit keys goes before a bucket near its cap, so a flood of
+        # junk keys cannot cheaply wipe a victim's count.
+        ordered = sorted(
+            self._last_access.items(),
+            key=lambda kv: (len(self._state.get(kv[0], ())), kv[1]),
+        )
+        for key, _ in ordered[:excess]:
             self._state.pop(key, None)
             self._last_access.pop(key, None)
 
@@ -92,7 +109,7 @@ class ResendRateLimiter:
             entry.append(now)
             self._state[key] = entry
             self._last_access[key] = now
-            self._evict_if_full()
+            self._evict_if_full(now)
             return None
 
     async def peek(self, email: str) -> int | None:
@@ -117,6 +134,24 @@ class ResendRateLimiter:
                 wait = int(self._window - (now - oldest))
                 return max(1, wait or 1)
             return None
+
+    async def refund(self, email: str) -> None:
+        """Give back one slot that ``try_acquire`` reserved for ``email``.
+
+        For a caller that charges only some outcomes: reserving up front and
+        refunding the rest keeps the check and the charge atomic, so a burst
+        of concurrent requests cannot all pass a ``peek`` before any of them
+        is charged.
+        """
+        key = self._normalise(email)
+        async with self._lock:
+            entry = self._state.get(key)
+            if not entry:
+                return
+            entry.pop()
+            if not entry:
+                self._state.pop(key, None)
+                self._last_access.pop(key, None)
 
     async def reset(self, email: str) -> None:
         """Clear the rate-limit state for an email."""

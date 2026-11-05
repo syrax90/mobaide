@@ -45,4 +45,4 @@ python tests/e2e/manual_stack.py stop            # restores android/local.proper
 
 In Git Bash, prefix `adb shell` commands with `MSYS_NO_PATHCONV=1` or `/sdcard/...` paths get mangled.
 
-Login shown in the READY banner: `dev@test.local` / `Qwe>123`.
+Login shown in the READY banner: `dev@test.local` / `Qwe>1234`.

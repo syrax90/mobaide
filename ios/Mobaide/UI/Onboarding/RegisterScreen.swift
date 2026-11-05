@@ -208,6 +208,10 @@ final class RegisterModel {
             emitError("Email and password are required")
             return
         }
+        guard password.count >= PasswordRules.minLength else {
+            emitError(PasswordRules.tooShortMessage)
+            return
+        }
         guard password == confirmPassword else {
             emitError("Passwords do not match")
             return

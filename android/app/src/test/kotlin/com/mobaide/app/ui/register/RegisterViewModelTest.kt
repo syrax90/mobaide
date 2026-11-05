@@ -7,6 +7,7 @@ import com.mobaide.app.data.repository.ADMIN_LOGIN_USER_MESSAGE
 import com.mobaide.app.data.repository.AdminLoginNotSupportedException
 import com.mobaide.app.data.repository.AuthRepository
 import com.mobaide.app.data.repository.AuthResult
+import com.mobaide.app.data.repository.PASSWORD_TOO_SHORT_MESSAGE
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -42,8 +43,8 @@ class RegisterViewModelTest {
 
     private fun primed(vm: RegisterViewModel) = vm.apply {
         updateEmail("alice@example.com")
-        updatePassword("secret")
-        updateConfirmPassword("secret")
+        updatePassword("secret-pass")
+        updateConfirmPassword("secret-pass")
     }
 
     // ---- Initial state ------------------------------------------------------
@@ -65,8 +66,8 @@ class RegisterViewModelTest {
     fun register_whenEmailBlank_setsError_andDoesNotCallRepository() = runTest {
         val vm = RegisterViewModel(authRepository)
         vm.updateEmail("   ")
-        vm.updatePassword("secret")
-        vm.updateConfirmPassword("secret")
+        vm.updatePassword("secret-pass")
+        vm.updateConfirmPassword("secret-pass")
 
         vm.register()
         advanceUntilIdle()
@@ -96,7 +97,7 @@ class RegisterViewModelTest {
     fun register_whenPasswordsDoNotMatch_setsError_andDoesNotCallRepository() = runTest {
         val vm = RegisterViewModel(authRepository)
         vm.updateEmail("alice@example.com")
-        vm.updatePassword("secret")
+        vm.updatePassword("secret-pass")
         vm.updateConfirmPassword("different")
 
         vm.register()
@@ -107,6 +108,53 @@ class RegisterViewModelTest {
         coVerify(exactly = 0) { authRepository.register(any(), any()) }
     }
 
+    // ---- Password length validation -----------------------------------------
+
+    @Test
+    fun register_whenPasswordShorterThanEight_setsError_andDoesNotCallRepository() = runTest {
+        val vm = RegisterViewModel(authRepository)
+        vm.updateEmail("alice@example.com")
+        vm.updatePassword("1234567")
+        vm.updateConfirmPassword("1234567")
+
+        vm.register()
+        advanceUntilIdle()
+
+        assertEquals("Password must be at least 8 characters", vm.uiState.value.error)
+        assertEquals(PASSWORD_TOO_SHORT_MESSAGE, vm.uiState.value.error)
+        assertFalse(vm.uiState.value.isLoading)
+        coVerify(exactly = 0) { authRepository.register(any(), any()) }
+    }
+
+    @Test
+    fun register_whenPasswordShortAndMismatched_reportsLengthFirst() = runTest {
+        val vm = RegisterViewModel(authRepository)
+        vm.updateEmail("alice@example.com")
+        vm.updatePassword("short")
+        vm.updateConfirmPassword("other")
+
+        vm.register()
+        advanceUntilIdle()
+
+        assertEquals(PASSWORD_TOO_SHORT_MESSAGE, vm.uiState.value.error)
+    }
+
+    @Test
+    fun register_whenPasswordExactlyEight_callsRepository() = runTest {
+        val vm = RegisterViewModel(authRepository)
+        vm.updateEmail("alice@example.com")
+        vm.updatePassword("12345678")
+        vm.updateConfirmPassword("12345678")
+        coEvery { authRepository.register("alice@example.com", "12345678") } returns
+            AuthResult.Success("alice@example.com")
+
+        vm.register()
+        advanceUntilIdle()
+
+        assertNull(vm.uiState.value.error)
+        coVerify(exactly = 1) { authRepository.register("alice@example.com", "12345678") }
+    }
+
     // ---- Loading -> success path --------------------------------------------
 
     @Test
@@ -114,7 +162,7 @@ class RegisterViewModelTest {
         val vm = primed(RegisterViewModel(authRepository))
         val gate = CompletableDeferred<Unit>()
         coEvery {
-            authRepository.register("alice@example.com", "secret")
+            authRepository.register("alice@example.com", "secret-pass")
         } coAnswers {
             gate.await()
             AuthResult.Success("alice@example.com")
@@ -139,7 +187,7 @@ class RegisterViewModelTest {
         }
         assertNull(vm.uiState.value.error)
         coVerify(exactly = 1) {
-            authRepository.register("alice@example.com", "secret")
+            authRepository.register("alice@example.com", "secret-pass")
         }
     }
 
@@ -147,9 +195,9 @@ class RegisterViewModelTest {
     fun register_happyPath_trimsEmail() = runTest {
         val vm = RegisterViewModel(authRepository)
         vm.updateEmail("  alice@example.com  ")
-        vm.updatePassword("secret")
-        vm.updateConfirmPassword("secret")
-        coEvery { authRepository.register("alice@example.com", "secret") } returns
+        vm.updatePassword("secret-pass")
+        vm.updateConfirmPassword("secret-pass")
+        coEvery { authRepository.register("alice@example.com", "secret-pass") } returns
             AuthResult.Success("alice@example.com")
 
         vm.navEvents.test {
@@ -160,7 +208,7 @@ class RegisterViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
         coVerify(exactly = 1) {
-            authRepository.register("alice@example.com", "secret")
+            authRepository.register("alice@example.com", "secret-pass")
         }
     }
 
@@ -168,7 +216,7 @@ class RegisterViewModelTest {
     fun register_whenVerificationRequired_emitsVerificationRequired_andNoError() = runTest {
         val vm = primed(RegisterViewModel(authRepository))
         coEvery {
-            authRepository.register("alice@example.com", "secret")
+            authRepository.register("alice@example.com", "secret-pass")
         } returns AuthResult.VerificationRequired("alice@example.com")
 
         vm.navEvents.test {
@@ -192,7 +240,7 @@ class RegisterViewModelTest {
     fun register_on409_setsAlreadyExistsError_andClearsLoading() = runTest {
         val vm = primed(RegisterViewModel(authRepository))
         coEvery {
-            authRepository.register("alice@example.com", "secret")
+            authRepository.register("alice@example.com", "secret-pass")
         } throws ApiException(409, """{"detail":"duplicate email"}""")
 
         vm.register()
@@ -210,7 +258,7 @@ class RegisterViewModelTest {
         val vm = primed(RegisterViewModel(authRepository))
         val boom = ApiException(500, "server exploded")
         coEvery {
-            authRepository.register("alice@example.com", "secret")
+            authRepository.register("alice@example.com", "secret-pass")
         } throws boom
 
         vm.register()
@@ -227,7 +275,7 @@ class RegisterViewModelTest {
     fun register_onGenericException_setsRegistrationFailedError() = runTest {
         val vm = primed(RegisterViewModel(authRepository))
         coEvery {
-            authRepository.register("alice@example.com", "secret")
+            authRepository.register("alice@example.com", "secret-pass")
         } throws java.net.UnknownHostException("example.com: nodename nor servname provided")
 
         vm.register()
@@ -375,7 +423,7 @@ class RegisterViewModelTest {
         // message (NOT the generic "Registration failed: ...").
         val vm = primed(RegisterViewModel(authRepository))
         coEvery {
-            authRepository.register("alice@example.com", "secret")
+            authRepository.register("alice@example.com", "secret-pass")
         } throws AdminLoginNotSupportedException()
 
         vm.register()
@@ -393,7 +441,7 @@ class RegisterViewModelTest {
     fun register_onAdminLoginNotSupported_alsoEmitsErrorEvent() = runTest {
         val vm = primed(RegisterViewModel(authRepository))
         coEvery {
-            authRepository.register("alice@example.com", "secret")
+            authRepository.register("alice@example.com", "secret-pass")
         } throws AdminLoginNotSupportedException()
 
         vm.errorEvents.test {
@@ -447,10 +495,10 @@ class RegisterViewModelTest {
         advanceUntilIdle()
         assertEquals("Email and password are required", vm.uiState.value.error)
 
-        vm.updatePassword("secret")
+        vm.updatePassword("secret-pass")
 
         assertNull(vm.uiState.value.error)
-        assertEquals("secret", vm.uiState.value.password)
+        assertEquals("secret-pass", vm.uiState.value.password)
     }
 
     @Test
@@ -460,10 +508,10 @@ class RegisterViewModelTest {
         advanceUntilIdle()
         assertEquals("Email and password are required", vm.uiState.value.error)
 
-        vm.updateConfirmPassword("secret")
+        vm.updateConfirmPassword("secret-pass")
 
         assertNull(vm.uiState.value.error)
-        assertEquals("secret", vm.uiState.value.confirmPassword)
+        assertEquals("secret-pass", vm.uiState.value.confirmPassword)
     }
 
 }

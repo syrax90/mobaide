@@ -59,3 +59,22 @@ struct AdminLoginNotSupported: Error, Equatable, Sendable {
     /// Android `ADMIN_LOGIN_USER_MESSAGE` parity.
     static let userMessage = "This app is for agent owners. Admins should use the web dashboard."
 }
+
+/// The relay's rule for a chosen password (register, reset); login has none.
+enum PasswordRules {
+    static let minLength = 8
+    static let tooShortMessage = "Password must be at least \(minLength) characters"
+}
+
+/// `/api/auth/login` answered 429: too many wrong passwords for this email
+/// or from this network.
+struct LoginRateLimited: Error, Equatable, Sendable {
+    let retryAfterSeconds: Int
+
+    /// Same wording as the Android and web login screens.
+    var userMessage: String {
+        let minutes = max(1, (retryAfterSeconds + 59) / 60)
+        let wait = minutes == 1 ? "1 minute" : "\(minutes) minutes"
+        return "Too many sign-in attempts. Try again in \(wait), or reset your password."
+    }
+}

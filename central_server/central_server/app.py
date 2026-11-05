@@ -271,6 +271,20 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             cooldown_seconds=0,
             hourly_cap=config.pairing_initiate_ip_hourly_cap,
         )
+        # Sized well past the default: eviction resets a bucket's count, so
+        # a spray of junk addresses must be large before it reaches one.
+        login_email_limiter = ResendRateLimiter(
+            cooldown_seconds=0,
+            hourly_cap=config.login_email_failure_cap,
+            window_seconds=config.login_failure_window_seconds,
+            max_keys=100_000,
+        )
+        login_ip_limiter = ResendRateLimiter(
+            cooldown_seconds=0,
+            hourly_cap=config.login_ip_failure_cap,
+            window_seconds=config.login_failure_window_seconds,
+            max_keys=100_000,
+        )
         app.state.email_sender = email_sender
         app.state.resend_limiter = resend_limiter
         app.state.reset_email_limiter = reset_email_limiter
@@ -286,6 +300,8 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             resend_limiter=resend_limiter,
             reset_email_limiter=reset_email_limiter,
             routing=app.state.routing,
+            login_email_limiter=login_email_limiter,
+            login_ip_limiter=login_ip_limiter,
         )
         await app.state.auth_service.seed_admin_user()
         app.state.pairing_service = PairingService(db)

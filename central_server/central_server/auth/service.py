@@ -130,6 +130,20 @@ class ResendRateLimitedError(Exception):
         self.cooldown_seconds_remaining = cooldown_seconds_remaining
 
 
+class LoginRateLimitedError(Exception):
+    """Too many wrong passwords for this email or from this IP address."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(f"Password sign-in blocked for {retry_after_seconds}s")
+        self.retry_after_seconds = retry_after_seconds
+
+
+def retry_after_phrase(seconds: int) -> str:
+    """``"1 minute"`` / ``"15 minutes"``: a wait rounded up to whole minutes."""
+    minutes = max(1, -(-seconds // 60))
+    return "1 minute" if minutes == 1 else f"{minutes} minutes"
+
+
 class InvalidResetCodeError(Exception):
     """Supplied reset code did not match the active token."""
 
@@ -202,12 +216,16 @@ class AuthService:
         resend_limiter: "ResendRateLimiter | None" = None,
         reset_email_limiter: "ResendRateLimiter | None" = None,
         routing: "RoutingTable | None" = None,
+        login_email_limiter: "ResendRateLimiter | None" = None,
+        login_ip_limiter: "ResendRateLimiter | None" = None,
     ) -> None:
         self._config = config
         self._db = db
         self._email_sender = email_sender
         self._resend_limiter = resend_limiter
         self._reset_email_limiter = reset_email_limiter
+        self._login_email_limiter = login_email_limiter
+        self._login_ip_limiter = login_ip_limiter
         self._routing = routing
         # Dedicated bounded executor for argon2 only: each hash pins ~64 MiB,
         # so a login stampede on the shared default executor could transiently
@@ -238,6 +256,54 @@ class AuthService:
             )
         except VerifyMismatchError:
             return False
+
+    async def _verify_password_throttled(
+        self,
+        email: str,
+        client_ip: str | None,
+        password_hash: str | None,
+        password: str,
+    ) -> bool:
+        """Verify ``password``, counting a wrong one against the sign-in throttle.
+
+        Raises ``LoginRateLimitedError`` before any verify while ``email`` or
+        ``client_ip`` is out of guesses. Slots are reserved first and refunded
+        unless the password is wrong, so a concurrent burst cannot all pass a
+        check-then-charge race.
+        """
+        buckets: list[tuple[ResendRateLimiter, str]] = []
+        if self._login_email_limiter is not None:
+            buckets.append((self._login_email_limiter, f"email:{email}"))
+        if self._login_ip_limiter is not None and client_ip is not None:
+            buckets.append((self._login_ip_limiter, f"ip:{client_ip}"))
+
+        reserved: list[tuple[ResendRateLimiter, str]] = []
+
+        async def refund() -> None:
+            for limiter, key in reserved:
+                await limiter.refund(key)
+
+        for limiter, key in buckets:
+            wait = await limiter.try_acquire(key)
+            if wait is not None:
+                await refund()
+                logger.warning(
+                    "login.rate_limited bucket=%s ip=%s retry_after=%s",
+                    key.split(":", 1)[0], client_ip, wait,
+                )
+                raise LoginRateLimitedError(wait)
+            reserved.append((limiter, key))
+
+        try:
+            ok = password_hash is not None and await self._verify_password(
+                password_hash, password
+            )
+        except Exception:
+            await refund()
+            raise
+        if ok:
+            await refund()
+        return ok
 
     def _hash_code(self, user_id: str, code: str) -> str:
         """HMAC-SHA256 of ``code`` peppered with the server's JWT secret.
@@ -461,7 +527,7 @@ class AuthService:
             logger.info("oauth_link.dropped_unverified_password user_id=%s", user["id"])
 
     async def login_user(
-        self, email: str, password: str
+        self, email: str, password: str, client_ip: str | None = None
     ) -> tuple[str, str, str, str | None]:
         """Authenticate a user by email+password.
 
@@ -470,13 +536,18 @@ class AuthService:
         scheduled for soft-delete purge, or ``None`` if not scheduled.
         Raises ValueError if credentials are invalid.
         Raises VerificationRequiredError if the user is unverified.
+        Raises LoginRateLimitedError while ``email`` or ``client_ip`` has
+        used up its wrong-password allowance.
         """
         user = await self._db.get_user_by_email(email)
-        if user is None or user["password_hash"] is None:
+        if not await self._verify_password_throttled(
+            email,
+            client_ip,
+            user["password_hash"] if user is not None else None,
+            password,
+        ):
             raise ValueError("Invalid email or password")
-
-        if not await self._verify_password(user["password_hash"], password):
-            raise ValueError("Invalid email or password")
+        assert user is not None
 
         # Opportunistically migrate hashes created with older argon2
         # parameters to the current ones (cheap string parse; the plaintext
@@ -699,6 +770,10 @@ class AuthService:
 
         if self._reset_email_limiter is not None:
             await self._reset_email_limiter.reset(email)
+        # The reset code proved ownership: let the owner sign in now rather
+        # than wait out a lockout someone else's guesses caused.
+        if self._login_email_limiter is not None:
+            await self._login_email_limiter.reset(f"email:{email}")
 
         if user["role"] == "admin":
             logger.info(
@@ -1341,7 +1416,18 @@ class AuthService:
                     "with Google instead."
                 )
             assert proof.password is not None
-            if not await self._verify_password(user["password_hash"], proof.password):
+            # Email bucket only: the caller already holds a session, and a
+            # stolen one must not turn this into an unthrottled oracle.
+            try:
+                ok = await self._verify_password_throttled(
+                    user["email"], None, user["password_hash"], proof.password
+                )
+            except LoginRateLimitedError as exc:
+                raise AccountDeletionAuthError(
+                    "Too many incorrect passwords. Try again in "
+                    f"{retry_after_phrase(exc.retry_after_seconds)}."
+                ) from exc
+            if not ok:
                 raise AccountDeletionAuthError("Incorrect password")
             return
 

@@ -22,7 +22,7 @@ export interface paths {
          *     can surface a meaningful toast. On ``"staged"`` the supervisor restart
          *     is scheduled as a FastAPI background task that runs *after* the HTTP
          *     response is flushed, so the client receives the 200 reliably before
-         *     the worker exits with code ``EXIT_RESTART_REQUESTED``.
+         *     the agent exits with code ``EXIT_RESTART_REQUESTED``.
          */
         post: operations["force_update_now_api_agent_update_force_now_post"];
         delete?: never;

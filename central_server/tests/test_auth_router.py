@@ -30,14 +30,49 @@ class TestRegisterEndpoint:
     async def test_register_duplicate_email_returns_409(self, client):
         await client.post(
             "/api/auth/register",
-            json={"email": "dup@example.com", "password": "pass1"},
+            json={"email": "dup@example.com", "password": "password1"},
         )
         resp = await client.post(
             "/api/auth/register",
-            json={"email": "dup@example.com", "password": "pass2"},
+            json={"email": "dup@example.com", "password": "password2"},
         )
         assert resp.status_code == 409
         assert "already registered" in resp.json()["detail"]
+
+    async def test_register_password_shorter_than_eight_returns_422(
+        self, client, app
+    ):
+        resp = await client.post(
+            "/api/auth/register",
+            json={"email": "short@example.com", "password": "1234567"},
+        )
+        assert resp.status_code == 422
+        assert await app.state.db.get_user_by_email("short@example.com") is None
+
+    async def test_register_password_of_exactly_eight_is_accepted(self, client):
+        resp = await client.post(
+            "/api/auth/register",
+            json={"email": "eight@example.com", "password": "12345678"},
+        )
+        assert resp.status_code == 200
+
+    async def test_register_password_longer_than_128_returns_422(self, client):
+        resp = await client.post(
+            "/api/auth/register",
+            json={"email": "long@example.com", "password": "a" * 129},
+        )
+        assert resp.status_code == 422
+
+    async def test_login_has_no_length_rule_for_legacy_short_password(
+        self, client, app
+    ):
+        # Accounts created before the minimum existed must still sign in.
+        await app.state.auth_service.register_user("legacy@example.com", "abc")
+        resp = await client.post(
+            "/api/auth/login",
+            json={"email": "legacy@example.com", "password": "abc"},
+        )
+        assert resp.status_code == 200
 
     async def test_register_seeded_admin_email_returns_409(self, client):
         """The admin seed email is taken during app startup."""
@@ -65,11 +100,11 @@ class TestLoginEndpoint:
     async def test_login_registered_user(self, client):
         await client.post(
             "/api/auth/register",
-            json={"email": "user@example.com", "password": "mypass"},
+            json={"email": "user@example.com", "password": "mypass123"},
         )
         resp = await client.post(
             "/api/auth/login",
-            json={"email": "user@example.com", "password": "mypass"},
+            json={"email": "user@example.com", "password": "mypass123"},
         )
         assert resp.status_code == 200
         body = resp.json()
@@ -79,7 +114,7 @@ class TestLoginEndpoint:
     async def test_login_wrong_password_returns_401(self, client):
         await client.post(
             "/api/auth/register",
-            json={"email": "user@example.com", "password": "correct"},
+            json={"email": "user@example.com", "password": "correct-horse"},
         )
         resp = await client.post(
             "/api/auth/login",

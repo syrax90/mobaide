@@ -38,6 +38,7 @@ from .service import (
     ExpiredVerificationCodeError,
     InvalidResetCodeError,
     InvalidVerificationCodeError,
+    LoginRateLimitedError,
     NewPasswordSameAsOldError,
     ResendRateLimitedError,
     ResetAttemptsExhaustedError,
@@ -188,7 +189,18 @@ async def login(
     auth_service = request.app.state.auth_service
     try:
         user_id, role, token, scheduled_deletion_at = await auth_service.login_user(
-            body.email, body.password
+            body.email,
+            body.password,
+            client_ip=request.client.host if request.client else None,
+        )
+    except LoginRateLimitedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "error": "login_rate_limited",
+                "retry_after_seconds": exc.retry_after_seconds,
+            },
+            headers={"Retry-After": str(exc.retry_after_seconds)},
         )
     except VerificationRequiredError as exc:
         raise HTTPException(

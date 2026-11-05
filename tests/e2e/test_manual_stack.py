@@ -314,12 +314,12 @@ def test_build_web_env_targets_the_stack_and_sanitizes(monkeypatch):
     monkeypatch.setenv("MOBAIDE_WEB_DEV_LOGIN_PASSWORD", "stale-pass")
     monkeypatch.setenv("NODE_ENV", "production")
     monkeypatch.setenv("MOBAIDE_ENV", "test")
-    state = {"email": "dev@test.local", "password": "Qwe>123"}
+    state = {"email": "dev@test.local", "password": "Qwe>1234"}
 
     env = ms.build_web_env(argparse.Namespace(host="0.0.0.0", port=9123), state)
     assert env["MOBAIDE_WEB_PROXY_TARGET"] == "http://127.0.0.1:9123"
     assert env["MOBAIDE_WEB_DEV_LOGIN_EMAIL"] == "dev@test.local"
-    assert env["MOBAIDE_WEB_DEV_LOGIN_PASSWORD"] == "Qwe>123"
+    assert env["MOBAIDE_WEB_DEV_LOGIN_PASSWORD"] == "Qwe>1234"
     assert "NODE_ENV" not in env
     assert "MOBAIDE_ENV" not in env
 

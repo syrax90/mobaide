@@ -143,7 +143,6 @@ private struct ResetPasswordContent: View {
 @Observable
 final class ResetPasswordModel {
     static let codeLength = 6
-    static let minPasswordLength = 8
     static let defaultCooldownSeconds = 60
 
     let email: String
@@ -187,8 +186,8 @@ final class ResetPasswordModel {
             emitError("Enter the 6-digit code we emailed you")
             return
         }
-        guard newPassword.count >= Self.minPasswordLength else {
-            emitError("Password must be at least 8 characters")
+        guard newPassword.count >= PasswordRules.minLength else {
+            emitError(PasswordRules.tooShortMessage)
             return
         }
         guard newPassword == confirmPassword else {

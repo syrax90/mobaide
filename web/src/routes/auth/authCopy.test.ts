@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../../api/errors';
 import {
+  loginMessage,
   maskEmail,
   resetPasswordMessage,
   shouldClearCode,
@@ -122,5 +123,32 @@ describe('verificationMessage', () => {
     expect(verificationMessage(apiError(500))).toBe(
       'Verification failed: server said so',
     );
+  });
+});
+
+describe('loginMessage', () => {
+  it('reports the sign-in lockout with the wait rounded up to minutes', () => {
+    expect(loginMessage(apiError(429, 'login_rate_limited', 900))).toBe(
+      'Too many sign-in attempts. Try again in 15 minutes, or reset your password.',
+    );
+    expect(loginMessage(apiError(429, 'login_rate_limited', 61))).toBe(
+      'Too many sign-in attempts. Try again in 2 minutes, or reset your password.',
+    );
+  });
+
+  it('says one minute, not one minutes, for a wait under a minute', () => {
+    expect(loginMessage(apiError(429, 'login_rate_limited', 30))).toBe(
+      'Too many sign-in attempts. Try again in 1 minute, or reset your password.',
+    );
+  });
+
+  it("falls back to the relay's 15-minute window when the 429 sends no wait", () => {
+    expect(loginMessage(apiError(429))).toBe(
+      'Too many sign-in attempts. Try again in 15 minutes, or reset your password.',
+    );
+  });
+
+  it('keeps the wrong-password copy for a 401', () => {
+    expect(loginMessage(apiError(401))).toBe('Invalid email or password');
   });
 });
