@@ -330,6 +330,38 @@ class TestResetPasswordFailures:
                 "frank@example.com", real_code, "newpass99", None,
             )
 
+    async def test_concurrent_guesses_cannot_exceed_attempt_cap(
+        self,
+        reset_service: AuthService,
+        reset_db: Database,
+        fake_sender: _FakeEmailSender,
+        reset_config: CentralServerConfig,
+    ):
+        user_id = await _make_verified_user(
+            reset_db, reset_service, "ivan@example.com",
+        )
+        await reset_service.request_password_reset("ivan@example.com", None)
+        await asyncio.sleep(0)
+        _to, real_code, _ttl, _ip = fake_sender.reset_messages[-1]
+        wrong_codes = [f"{n:06d}" for n in range(30) if f"{n:06d}" != real_code]
+        old_hash = (await reset_db.get_user_by_id(user_id))["password_hash"]
+
+        results = await asyncio.gather(
+            *(
+                reset_service.reset_password(
+                    "ivan@example.com", code, "newpass99", None,
+                )
+                for code in [*wrong_codes, real_code]
+            ),
+            return_exceptions=True,
+        )
+
+        invalid = [r for r in results if isinstance(r, InvalidResetCodeError)]
+        assert len(invalid) == reset_config.password_reset_max_attempts
+        assert isinstance(results[-1], ResetAttemptsExhaustedError)
+        user = await reset_db.get_user_by_id(user_id)
+        assert user["password_hash"] == old_hash
+
     async def test_expired_code_is_rejected(
         self,
         tmp_path,

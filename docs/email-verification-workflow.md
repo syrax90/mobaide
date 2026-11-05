@@ -159,8 +159,10 @@ other value) keeps the real-SMTP behaviour described above.
   let an attacker brute-force the hashes offline.
 * Consumption is a single atomic CAS (`UPDATE ... WHERE consumed_at IS NULL
   AND attempts < max AND expires_at > now`) — no TOCTOU, no double-use.
-* Wrong codes bump an `attempts` counter; once it reaches the configured max,
-  even the correct code is rejected and the user must request a new one.
+* Every guess, right or wrong, bumps an `attempts` counter in the same atomic
+  statement that checks the code, so the cap holds under concurrent requests.
+  Once it reaches the configured max, even the correct code is rejected and
+  the user must request a new one.
 * Raw codes appear only in the rendered email. Nothing in the logs, nothing
   in the database, nothing in error responses.
 * Rate limiting is per normalised email, which prevents an attacker from

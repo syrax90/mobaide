@@ -2694,58 +2694,95 @@ class Database:
         await self.conn.commit()
         return expires_at.isoformat()
 
-    async def consume_verification_token(
+    async def _consume_code_token(
         self,
+        table: str,
         user_id: str,
         code_hash: str,
         max_attempts: int,
     ) -> str:
-        """Atomically consume a verification token for ``user_id``.
+        """Spend one attempt on the user's live code and consume it on a match.
 
-        Returns one of:
-          - ``"ok"``        — code matched, token now consumed.
-          - ``"invalid"``   — no matching unconsumed unexpired token.
-          - ``"expired"``   — a token exists for the user but is past TTL.
-          - ``"exhausted"`` — the user's active token has hit ``max_attempts``.
+        Returns ``"ok"``, ``"invalid"``, ``"expired"`` or ``"exhausted"``.
 
-        On ``"invalid"`` we also bump the ``attempts`` counter of the user's
-        active token so that brute-force tries count toward the cap.
+        Runs as ONE job on the aiosqlite worker thread (``_execute`` is
+        private but backs every public aiosqlite call), so no other
+        coroutine's statement or rollback() can land between the counted
+        attempt and its commit. A second connection is not an option: its
+        commits make the shared connection's open reads stale, and the next
+        write there then fails with SQLITE_BUSY_SNAPSHOT.
+        """
+        return await self.conn._execute(
+            self._consume_code_token_sync,
+            self.conn._conn,
+            table,
+            user_id,
+            code_hash,
+            max_attempts,
+        )
+
+    @staticmethod
+    def _consume_code_token_sync(
+        conn: sqlite3.Connection,
+        table: str,
+        user_id: str,
+        code_hash: str,
+        max_attempts: int,
+    ) -> str:
+        """Count the attempt and match the code in ONE statement, then commit.
+
+        A separate check-then-increment let any number of concurrent guesses
+        pass the check before the first increment, so the cap did not hold.
         """
         now = _now_iso()
-        cursor = await self.conn.execute(
-            "UPDATE email_verification_tokens "
-            "SET consumed_at = ? "
-            "WHERE token_hash = ? AND user_id = ? "
-            "  AND consumed_at IS NULL AND expires_at > ? AND attempts < ?",
-            (now, code_hash, user_id, now, max_attempts),
-        )
-        await self.conn.commit()
-        if cursor.rowcount == 1:
+        spent = conn.execute(
+            f"UPDATE {table} "
+            "SET attempts = attempts + 1, "
+            "    consumed_at = CASE WHEN token_hash = ? THEN ? END "
+            "WHERE user_id = ? AND consumed_at IS NULL "
+            "  AND expires_at > ? AND attempts < ? "
+            "RETURNING consumed_at IS NOT NULL AS matched",
+            (code_hash, now, user_id, now, max_attempts),
+        ).fetchall()
+        conn.commit()
+        if any(row["matched"] for row in spent):
             return "ok"
+        if spent:
+            return "invalid"
 
-        # Miss — figure out why by looking at the active token (if any).
-        active_cursor = await self.conn.execute(
-            "SELECT expires_at, attempts FROM email_verification_tokens "
+        active = conn.execute(
+            f"SELECT expires_at, attempts FROM {table} "
             "WHERE user_id = ? AND consumed_at IS NULL "
             "ORDER BY created_at DESC LIMIT 1",
             (user_id,),
-        )
-        active = await active_cursor.fetchone()
+        ).fetchone()
         if active is None:
             return "invalid"
         if active["expires_at"] <= now:
             return "expired"
         if active["attempts"] >= max_attempts:
             return "exhausted"
-        # Token exists but the supplied hash doesn't match — count the attempt.
-        await self.conn.execute(
-            "UPDATE email_verification_tokens "
-            "SET attempts = attempts + 1 "
-            "WHERE user_id = ? AND consumed_at IS NULL",
-            (user_id,),
-        )
-        await self.conn.commit()
         return "invalid"
+
+    async def consume_verification_token(
+        self,
+        user_id: str,
+        code_hash: str,
+        max_attempts: int,
+    ) -> str:
+        """Atomically check a verification code for ``user_id``.
+
+        Returns one of:
+          - ``"ok"``        — code matched, token now consumed.
+          - ``"invalid"``   — no live token, or the code does not match.
+          - ``"expired"``   — a token exists for the user but is past TTL.
+          - ``"exhausted"`` — the user's active token has hit ``max_attempts``.
+
+        Every guess, right or wrong, spends one of ``max_attempts``.
+        """
+        return await self._consume_code_token(
+            "email_verification_tokens", user_id, code_hash, max_attempts
+        )
 
     _CODE_WINDOW_OPEN = (
         "EXISTS (SELECT 1 FROM email_verification_tokens t "
@@ -2815,45 +2852,14 @@ class Database:
         code_hash: str,
         max_attempts: int,
     ) -> str:
-        """Atomically consume a password-reset token for ``user_id``.
+        """Atomically check a password-reset code for ``user_id``.
 
-        Returns ``"ok"`` / ``"invalid"`` / ``"expired"`` / ``"exhausted"``
-        with the same semantics as ``consume_verification_token`` — single
-        atomic CAS, attempt counter bumped on miss, no TOCTOU.
+        Same outcomes and attempt accounting as
+        ``consume_verification_token``.
         """
-        now = _now_iso()
-        cursor = await self.conn.execute(
-            "UPDATE password_reset_tokens "
-            "SET consumed_at = ? "
-            "WHERE token_hash = ? AND user_id = ? "
-            "  AND consumed_at IS NULL AND expires_at > ? AND attempts < ?",
-            (now, code_hash, user_id, now, max_attempts),
+        return await self._consume_code_token(
+            "password_reset_tokens", user_id, code_hash, max_attempts
         )
-        await self.conn.commit()
-        if cursor.rowcount == 1:
-            return "ok"
-
-        active_cursor = await self.conn.execute(
-            "SELECT expires_at, attempts FROM password_reset_tokens "
-            "WHERE user_id = ? AND consumed_at IS NULL "
-            "ORDER BY created_at DESC LIMIT 1",
-            (user_id,),
-        )
-        active = await active_cursor.fetchone()
-        if active is None:
-            return "invalid"
-        if active["expires_at"] <= now:
-            return "expired"
-        if active["attempts"] >= max_attempts:
-            return "exhausted"
-        await self.conn.execute(
-            "UPDATE password_reset_tokens "
-            "SET attempts = attempts + 1 "
-            "WHERE user_id = ? AND consumed_at IS NULL",
-            (user_id,),
-        )
-        await self.conn.commit()
-        return "invalid"
 
     async def take_over_unverified_signup(
         self,
