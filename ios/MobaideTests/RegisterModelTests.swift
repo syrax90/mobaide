@@ -48,6 +48,57 @@ final class RegisterModelTests: XCTestCase {
         XCTAssertTrue(StubURLProtocol.requests.isEmpty)
     }
 
+    func testPasswordShorterThanEightIsRejectedWithoutARequest() async {
+        let model = makeModel()
+        model.email = "user@example.com"
+        model.password = "1234567"
+        model.confirmPassword = "1234567"
+
+        await model.register()
+
+        XCTAssertEqual(model.error, "Password must be at least 8 characters")
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
+    }
+
+    func testShortPasswordIsReportedBeforeAMismatch() async {
+        let model = makeModel()
+        model.email = "user@example.com"
+        model.password = "short"
+        model.confirmPassword = "other"
+
+        await model.register()
+
+        XCTAssertEqual(model.error, PasswordRules.tooShortMessage)
+    }
+
+    func testPasswordLengthCountsScalarsLikeTheServer() {
+        // Four emoji are four scalars on the server: too short.
+        XCTAssertEqual(PasswordRules.lengthError("😀😀😀😀"), PasswordRules.tooShortMessage)
+        XCTAssertNil(PasswordRules.lengthError(String(repeating: "😀", count: 8)))
+        // A family emoji is one grapheme but seven scalars.
+        XCTAssertNil(PasswordRules.lengthError("👨‍👩‍👧‍👦a"))
+    }
+
+    func testPasswordLengthEnforcesBothBounds() {
+        XCTAssertNil(PasswordRules.lengthError(String(repeating: "a", count: 128)))
+        XCTAssertEqual(
+            PasswordRules.lengthError(String(repeating: "a", count: 129)),
+            PasswordRules.tooLongMessage
+        )
+    }
+
+    func testPasswordOfExactlyEightIsSent() async {
+        StubURLProtocol.enqueue(status: 409, body: #"{"detail":"Email already registered"}"#)
+        let model = makeModel()
+        model.email = "user@example.com"
+        model.password = "12345678"
+        model.confirmPassword = "12345678"
+
+        await model.register()
+
+        XCTAssertEqual(StubURLProtocol.requests.count, 1)
+    }
+
     func testConflict409MapsToAlreadyExists() async {
         StubURLProtocol.enqueue(status: 409, body: #"{"detail":"Email already registered"}"#)
         let model = makeModel()

@@ -208,6 +208,10 @@ final class RegisterModel {
             emitError("Email and password are required")
             return
         }
+        if let lengthError = PasswordRules.lengthError(password) {
+            emitError(lengthError)
+            return
+        }
         guard password == confirmPassword else {
             emitError("Passwords do not match")
             return

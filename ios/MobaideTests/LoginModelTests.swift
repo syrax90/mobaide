@@ -69,6 +69,23 @@ final class LoginModelTests: XCTestCase {
         XCTAssertFalse(model.isLoading)
     }
 
+    func test429MapsToLockoutMessageInMinutes() async {
+        StubURLProtocol.enqueue(status: 429, body: """
+        {"detail":{"error":"login_rate_limited","retry_after_seconds":900}}
+        """)
+        let model = makeModel()
+        model.email = "user@example.com"
+        model.password = "wrong"
+
+        await model.loginWithPassword()
+
+        XCTAssertEqual(
+            model.error,
+            "Too many sign-in attempts. Try again in 15 minutes, or reset your password."
+        )
+        XCTAssertFalse(model.isLoading)
+    }
+
     func testVerificationRequired403RoutesToVerifyEmail() async throws {
         StubURLProtocol.enqueue(status: 403, body: """
         {"detail":{"error":"verification_required","email":"pending@example.com"}}

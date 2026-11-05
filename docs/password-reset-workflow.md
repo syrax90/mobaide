@@ -86,6 +86,9 @@ without the flag does NOT start it. Production deployments never bring it up.
 | `PASSWORD_RESET_EMAIL_COOLDOWN_SECONDS` | `60` | Minimum gap between reset emails for the same address. |
 | `PASSWORD_RESET_EMAIL_HOURLY_CAP` | `3` | Max resends per email in any rolling 1-hour window. |
 | `PASSWORD_RESET_IP_HOURLY_CAP` | `10` | Max reset requests from any one source IP per rolling hour. Hits `429`. |
+| `LOGIN_EMAIL_FAILURE_CAP` | `10` | Wrong sign-in passwords per email in the window before sign-in answers `429` `login_rate_limited`. `0` disables. A successful reset clears this lockout. |
+| `LOGIN_IP_FAILURE_CAP` | `50` | Same, per source IP. `0` disables. Needs `FORWARDED_ALLOW_IPS` behind a proxy. |
+| `LOGIN_FAILURE_WINDOW_SECONDS` | `900` | Sliding window for both sign-in failure caps. |
 
 ## Production notes
 

@@ -9,6 +9,8 @@ import com.mobaide.app.data.repository.ADMIN_LOGIN_USER_MESSAGE
 import com.mobaide.app.data.repository.AdminLoginNotSupportedException
 import com.mobaide.app.data.repository.AuthRepository
 import com.mobaide.app.data.repository.AuthResult
+import com.mobaide.app.data.repository.LoginRateLimitedException
+import com.mobaide.app.data.repository.loginRateLimitedMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -99,6 +101,8 @@ class LoginViewModel @Inject constructor(
                 }
             } catch (e: AdminLoginNotSupportedException) {
                 emitError(ADMIN_LOGIN_USER_MESSAGE)
+            } catch (e: LoginRateLimitedException) {
+                emitError(loginRateLimitedMessage(e.retryAfterSeconds))
             } catch (e: ApiException) {
                 val message = when (e.code) {
                     401 -> "Invalid email or password"

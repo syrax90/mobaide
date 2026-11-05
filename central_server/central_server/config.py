@@ -302,6 +302,13 @@ class CentralServerConfig:
     password_reset_email_hourly_cap: int = 3
     password_reset_ip_hourly_cap: int = 10
 
+    # Password sign-in throttle; only wrong passwords count, 0 disables. The
+    # per-email cap stops a guesser spreading across addresses; the per-IP cap
+    # slows credential stuffing across many accounts.
+    login_email_failure_cap: int = 10
+    login_ip_failure_cap: int = 50
+    login_failure_window_seconds: int = 900
+
     # Account self-deletion. Industry-norm soft-delete grace period
     # (X 30d, Spotify 7d, Pinterest 14d). Sweeper interval is a balance
     # between purge-latency SLA and steady-state load — 1h is plenty given
@@ -555,6 +562,15 @@ class CentralServerConfig:
             ),
             password_reset_ip_hourly_cap=int(
                 os.getenv("PASSWORD_RESET_IP_HOURLY_CAP", "10"),
+            ),
+            login_email_failure_cap=int(
+                os.getenv("LOGIN_EMAIL_FAILURE_CAP", "10"),
+            ),
+            login_ip_failure_cap=int(
+                os.getenv("LOGIN_IP_FAILURE_CAP", "50"),
+            ),
+            login_failure_window_seconds=int(
+                os.getenv("LOGIN_FAILURE_WINDOW_SECONDS", "900"),
             ),
             account_deletion_grace_days=int(
                 os.getenv("ACCOUNT_DELETION_GRACE_DAYS", "14"),

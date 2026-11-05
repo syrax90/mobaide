@@ -59,7 +59,7 @@ accepts a fresh credential proof, validated by `AuthService._verify_fresh_creden
 
 | Method | Proof | Server check |
 |---|---|---|
-| `password` | Current password | Argon2id verify against `users.password_hash`. |
+| `password` | Current password | Argon2id verify against `users.password_hash`. Wrong passwords are throttled per email (`LOGIN_EMAIL_FAILURE_CAP`); when blocked, the reply is `403 reauth_required` with "Too many incorrect passwords. Try again in N minutes." |
 | `google` | Fresh `id_token` + matching `nonce` | `verify_oauth2_token` (signature + audience), then `iat` within last 5 min, `sub` equals stored `google_sub`, and `nonce` claim matches the client-supplied value. |
 | `apple` | Fresh `id_token` + matching `nonce` | Signature verified against Apple's JWKS, audience matching either `APPLE_CLIENT_ID` (iOS bundle id) or `APPLE_WEB_CLIENT_ID` (Services ID, browser flow), then the same `iat` / `nonce` checks with `sub` equal to the stored `apple_sub`. Added in CLA-99 for the iOS app; the browser audience arrived with CLA-198. |
 

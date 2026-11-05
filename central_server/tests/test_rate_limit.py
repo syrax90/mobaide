@@ -180,6 +180,47 @@ class TestReset:
         assert await limiter.try_acquire("never-seen@x.com") is None
 
 
+class TestRefund:
+    async def test_refund_gives_back_the_reserved_slot(self, clock: _FakeClock):
+        limiter = ResendRateLimiter(cooldown_seconds=0, hourly_cap=2)
+        assert await limiter.try_acquire("a@x.com") is None
+        assert await limiter.try_acquire("a@x.com") is None
+        assert await limiter.try_acquire("a@x.com") is not None
+
+        await limiter.refund("a@x.com")
+        assert await limiter.try_acquire("a@x.com") is None
+        assert await limiter.try_acquire("a@x.com") is not None
+
+    async def test_refund_keeps_older_charges(self, clock: _FakeClock):
+        limiter = ResendRateLimiter(cooldown_seconds=0, hourly_cap=2)
+        await limiter.try_acquire("a@x.com")
+        await limiter.try_acquire("a@x.com")
+        await limiter.refund("a@x.com")
+
+        # One charge is still on the books, so only one more slot is free.
+        assert await limiter.try_acquire("a@x.com") is None
+        assert await limiter.try_acquire("a@x.com") is not None
+
+    async def test_refund_uses_normalised_key(self, clock: _FakeClock):
+        limiter = ResendRateLimiter(cooldown_seconds=0, hourly_cap=1)
+        await limiter.try_acquire("alice@x.com")
+        await limiter.refund("  ALICE@X.com  ")
+        assert await limiter.try_acquire("alice@x.com") is None
+
+    async def test_refund_for_unknown_key_is_noop(self, clock: _FakeClock):
+        limiter = ResendRateLimiter(cooldown_seconds=0, hourly_cap=1)
+        await limiter.refund("never-seen@x.com")
+        assert "never-seen@x.com" not in limiter._state  # noqa: SLF001
+        assert await limiter.try_acquire("never-seen@x.com") is None
+
+    async def test_refund_of_last_slot_drops_the_bucket(self, clock: _FakeClock):
+        limiter = ResendRateLimiter(cooldown_seconds=0, hourly_cap=3)
+        await limiter.try_acquire("a@x.com")
+        await limiter.refund("a@x.com")
+        assert "a@x.com" not in limiter._state  # noqa: SLF001
+        assert "a@x.com" not in limiter._last_access  # noqa: SLF001
+
+
 class TestEviction:
     async def test_prune_drops_entries_outside_window(self, clock: _FakeClock):
         limiter = ResendRateLimiter(
@@ -210,11 +251,168 @@ class TestEviction:
             clock.advance(1)  # ensure distinct last-access timestamps
             assert await limiter.try_acquire(email) is None
 
-        # One quarter of 5 is floor(1.25) -> 1, so the oldest entry should
-        # be evicted. ``len()`` settles at <= _MAX_EMAILS.
-        assert len(limiter._state) <= 4  # noqa: SLF001
+        # 5 keys is over the cap of 4, so eviction frees down to the
+        # low-water mark 4 - 4//4 = 3. The oldest entries go first.
+        assert len(limiter._state) == 3  # noqa: SLF001
         # The oldest (user0) is the most likely victim.
         assert "user0@x.com" not in limiter._state  # noqa: SLF001
+
+    async def test_max_keys_overrides_the_soft_cap(
+        self, clock: _FakeClock, monkeypatch
+    ):
+        monkeypatch.setattr(ResendRateLimiter, "_MAX_EMAILS", 4)
+        limiter = ResendRateLimiter(
+            cooldown_seconds=0, hourly_cap=1, window_seconds=3600, max_keys=10
+        )
+        await limiter.try_acquire("victim@x.com")
+        for i in range(8):
+            clock.advance(1)
+            await limiter.try_acquire(f"spray{i}@x.com")
+
+        # Nine keys is past the class cap but under ``max_keys``: the oldest
+        # bucket keeps its charge and is still blocked.
+        assert "victim@x.com" in limiter._state  # noqa: SLF001
+        assert await limiter.try_acquire("victim@x.com") is not None
+
+    async def test_max_keys_still_evicts_past_its_own_bound(
+        self, clock: _FakeClock
+    ):
+        limiter = ResendRateLimiter(
+            cooldown_seconds=0, hourly_cap=100, window_seconds=3600, max_keys=4
+        )
+        for i in range(5):
+            clock.advance(1)
+            await limiter.try_acquire(f"user{i}@x.com")
+
+        # Past max_keys=4 eviction drops to the low-water mark 3.
+        assert len(limiter._state) == 3  # noqa: SLF001
+        assert "user0@x.com" not in limiter._state  # noqa: SLF001
+
+    async def test_full_bucket_survives_a_spray_of_one_hit_keys(
+        self, clock: _FakeClock
+    ):
+        limiter = ResendRateLimiter(
+            cooldown_seconds=0, hourly_cap=3, window_seconds=3600, max_keys=4
+        )
+        for _ in range(3):
+            assert await limiter.try_acquire("victim@x.com") is None
+        assert await limiter.try_acquire("victim@x.com") is not None
+
+        # The victim is the least recently touched key, so a pure LRU
+        # eviction would drop it first and hand back a fresh quota.
+        for i in range(5):
+            clock.advance(1)
+            assert await limiter.try_acquire(f"spray{i}@x.com") is None
+
+        assert len(limiter._state["victim@x.com"]) == 3  # noqa: SLF001
+        assert await limiter.try_acquire("victim@x.com") is not None
+
+    async def test_expired_keys_are_dropped_before_any_live_key(
+        self, clock: _FakeClock
+    ):
+        limiter = ResendRateLimiter(
+            cooldown_seconds=0, hourly_cap=3, window_seconds=60, max_keys=4
+        )
+        # Stale buckets with more hits than any live key: the count-based
+        # pass alone would keep them and drop live one-hit keys instead.
+        stale = ["stale0@x.com", "stale1@x.com"]
+        for email in stale:
+            for _ in range(3):
+                await limiter.try_acquire(email)
+        clock.advance(120)
+
+        # Five keys against a bound of four; the low-water mark is three, so
+        # dropping both expired buckets is enough and no live key goes.
+        live = [f"live{i}@x.com" for i in range(3)]
+        for email in live:
+            clock.advance(1)
+            assert await limiter.try_acquire(email) is None
+
+        for email in stale:
+            assert email not in limiter._state  # noqa: SLF001
+            assert email not in limiter._last_access  # noqa: SLF001
+        assert sorted(limiter._state) == sorted(live)  # noqa: SLF001
+
+    async def test_equal_count_keys_evict_least_recently_touched_first(
+        self, clock: _FakeClock
+    ):
+        limiter = ResendRateLimiter(
+            cooldown_seconds=0, hourly_cap=100, window_seconds=3600, max_keys=8
+        )
+        keys = [f"k{i}@x.com" for i in range(8)]
+        for email in keys:
+            clock.advance(1)
+            await limiter.try_acquire(email)
+        # Second hit in reverse order: k7 was inserted last but is now the
+        # least recently touched of the two-hit keys.
+        for email in reversed(keys):
+            clock.advance(1)
+            await limiter.try_acquire(email)
+
+        clock.advance(1)
+        await limiter.try_acquire("new@x.com")
+
+        # Nine keys down to the low-water mark of six: the one-hit newcomer,
+        # then the two least recently touched two-hit keys. k7 and k6 were
+        # inserted last, so insertion order would have kept them.
+        assert "new@x.com" not in limiter._state  # noqa: SLF001
+        assert "k7@x.com" not in limiter._state  # noqa: SLF001
+        assert "k6@x.com" not in limiter._state  # noqa: SLF001
+        assert sorted(limiter._state) == sorted(keys[:6])  # noqa: SLF001
+
+    async def test_eviction_frees_down_to_the_low_water_mark(
+        self, clock: _FakeClock
+    ):
+        limiter = ResendRateLimiter(
+            cooldown_seconds=0, hourly_cap=100, window_seconds=3600, max_keys=8
+        )
+        keys = [f"k{i}@x.com" for i in range(9)]
+        for email in keys:
+            clock.advance(1)
+            assert await limiter.try_acquire(email) is None
+
+        # One pass past the bound of eight frees max_keys // 4 slots, not one.
+        assert len(limiter._state) <= 8 - 8 // 4  # noqa: SLF001
+        assert sorted(limiter._state) == sorted(keys[3:])  # noqa: SLF001
+
+        # The freed headroom absorbs the next inserts without another pass.
+        later = ["a@x.com", "b@x.com"]
+        for email in later:
+            clock.advance(1)
+            assert await limiter.try_acquire(email) is None
+        assert sorted(limiter._state) == sorted(keys[3:] + later)  # noqa: SLF001
+
+    async def test_ranking_uses_live_count_not_expired_history(
+        self, clock: _FakeClock
+    ):
+        limiter = ResendRateLimiter(
+            cooldown_seconds=0, hourly_cap=100, window_seconds=60, max_keys=4
+        )
+        for _ in range(3):
+            await limiter.try_acquire("noisy@x.com")  # t = 0, expires by t = 70
+        clock.advance(40)
+        for _ in range(2):
+            await limiter.try_acquire("pair@x.com")
+        fillers = ["f0@x.com", "f1@x.com"]
+        for email in fillers:
+            for _ in range(3):
+                await limiter.try_acquire(email)
+        clock.advance(10)
+        # Fresh hit while the old three are still in the window, so the
+        # bucket holds four timestamps and is touched after ``pair``.
+        await limiter.try_acquire("noisy@x.com")
+        assert len(limiter._state["noisy@x.com"]) == 4  # noqa: SLF001
+
+        clock.advance(20)
+        await limiter.try_acquire("trigger@x.com")
+
+        # ``noisy`` has one live hit and ``pair`` two. Ranking by stored
+        # length (4 vs 2) or by last access would both drop ``pair``.
+        assert "noisy@x.com" not in limiter._state  # noqa: SLF001
+        assert len(limiter._state["pair@x.com"]) == 2  # noqa: SLF001
+        assert sorted(limiter._state) == sorted(  # noqa: SLF001
+            ["pair@x.com", *fillers]
+        )
 
 
 class TestConstructorClamping:

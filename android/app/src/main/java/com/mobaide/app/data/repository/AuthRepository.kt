@@ -162,6 +162,11 @@ class AuthRepository(
             parseVerificationRequired(e)?.let { pending ->
                 return AuthResult.VerificationRequired(pending).alsoRememberPending(password)
             }
+            if (e.code == 429) {
+                throw LoginRateLimitedException(
+                    parseRetryAfterSeconds(e) ?: DEFAULT_LOGIN_LOCKOUT_SECONDS,
+                )
+            }
             throw e
         }
         return finaliseOrFlagVerification(email, response)
@@ -211,7 +216,7 @@ class AuthRepository(
             PasswordResetOutcome.Sent
         } catch (e: ApiException) {
             if (e.code == 429) {
-                val wait = parseResetIpRetryAfter(e) ?: 60
+                val wait = parseRetryAfterSeconds(e) ?: 60
                 return PasswordResetOutcome.RateLimited(wait)
             }
             throw e
@@ -240,7 +245,7 @@ class AuthRepository(
         return when {
             e.code == 410 -> ResetPasswordError.ExpiredCode
             e.code == 429 && errorTag == "reset_ip_rate_limited" -> {
-                val wait = parseResetIpRetryAfter(e) ?: 60
+                val wait = parseRetryAfterSeconds(e) ?: 60
                 ResetPasswordError.IpRateLimited(wait)
             }
             e.code == 429 -> ResetPasswordError.AttemptsExhausted
@@ -251,7 +256,7 @@ class AuthRepository(
         }
     }
 
-    private fun parseResetIpRetryAfter(e: ApiException): Int? {
+    private fun parseRetryAfterSeconds(e: ApiException): Int? {
         return try {
             errorJson
                 .decodeFromString<ResetIpRateLimitedErrorBody>(e.errorBody)
@@ -307,6 +312,9 @@ class AuthRepository(
         const val ROLE_ADMIN = "admin"
         const val STATUS_VERIFICATION_REQUIRED = "verification_required"
         const val VERIFICATION_REQUIRED_ERROR = "verification_required"
+
+        // The relay's default lockout window, for a 429 without a body.
+        const val DEFAULT_LOGIN_LOCKOUT_SECONDS = 900
     }
 
     fun isUserAuthenticated(): Boolean = sessionManager.isUserAuthenticated()

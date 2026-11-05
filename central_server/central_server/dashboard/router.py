@@ -9,7 +9,11 @@ from fastapi.templating import Jinja2Templates
 
 from ..auth.dependencies import require_role
 from ..auth.models import UserTokenPayload
-from ..auth.service import VerificationRequiredError
+from ..auth.service import (
+    LoginRateLimitedError,
+    VerificationRequiredError,
+    retry_after_phrase,
+)
 from ..relay.routing import (
     WS_CLOSE_ADMIN_FORCE_DISCONNECT,
     WS_CLOSE_ADMIN_REVOKED,
@@ -45,7 +49,20 @@ async def login_submit(request: Request):
 
     try:
         user_id, role, token, _scheduled = await auth_service.login_user(
-            str(email), str(password)
+            str(email),
+            str(password),
+            client_ip=request.client.host if request.client else None,
+        )
+    except LoginRateLimitedError as exc:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {
+                "error": "Too many sign-in attempts. Try again in "
+                f"{retry_after_phrase(exc.retry_after_seconds)}."
+            },
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            headers={"Retry-After": str(exc.retry_after_seconds)},
         )
     except VerificationRequiredError:
         return templates.TemplateResponse(

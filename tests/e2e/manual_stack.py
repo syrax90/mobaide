@@ -62,7 +62,8 @@ STATE_VERSION = 1
 DEFAULT_PORT = 9000
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_EMAIL = "dev@test.local"
-DEFAULT_PASSWORD = "Qwe>123"
+# Register needs 8+ characters. A saved state.json keeps its own password.
+DEFAULT_PASSWORD = "Qwe>1234"
 DEFAULT_AGENT_NAME = "manual-e2e-agent"
 DEFAULT_WEB_PORT = 5173
 DEFAULT_AVD = "Mobaide-E2E"

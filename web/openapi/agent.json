@@ -3285,7 +3285,7 @@
   "paths": {
     "/api/agent/update/force_now": {
       "post": {
-        "description": "Trigger the staged-binary updater immediately, bypassing idle deferral.\n\nReturns the updater outcome string verbatim (``\"staged\"``,\n``\"signature_failed\"``, ``\"no_change\"``, ``\"deferred\"``) so the client\ncan surface a meaningful toast. On ``\"staged\"`` the supervisor restart\nis scheduled as a FastAPI background task that runs *after* the HTTP\nresponse is flushed, so the client receives the 200 reliably before\nthe worker exits with code ``EXIT_RESTART_REQUESTED``.",
+        "description": "Trigger the staged-binary updater immediately, bypassing idle deferral.\n\nReturns the updater outcome string verbatim (``\"staged\"``,\n``\"signature_failed\"``, ``\"no_change\"``, ``\"deferred\"``) so the client\ncan surface a meaningful toast. On ``\"staged\"`` the supervisor restart\nis scheduled as a FastAPI background task that runs *after* the HTTP\nresponse is flushed, so the client receives the 200 reliably before\nthe agent exits with code ``EXIT_RESTART_REQUESTED``.",
         "operationId": "force_update_now_api_agent_update_force_now_post",
         "responses": {
           "200": {

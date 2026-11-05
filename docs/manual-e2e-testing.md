@@ -56,7 +56,7 @@ python tests/e2e/manual_stack.py up --host 127.0.0.1 --android-url emulator --em
 python tests/e2e/manual_stack.py stop
 ```
 
-Then open the app on the phone or simulator, **register or log in** with the credentials from the banner (email `dev@test.local`, password `Qwe>123` — both fixed, easy dev-testing defaults; override with `--email`/`--password`), pick the `manual-e2e-agent`, and start testing.
+Then open the app on the phone or simulator, **register or log in** with the credentials from the banner (email `dev@test.local`, password `Qwe>1234` — both fixed, easy dev-testing defaults; override with `--email`/`--password`), pick the `manual-e2e-agent`, and start testing.
 
 `Ctrl+C` stops the stack and **restores `android/local.properties` and `ios/Config/Local.xcconfig`** to their previous `CENTRAL_SERVER_URL` (e.g. `https://mobaide.com`), so the checkout is left as it was found.
 
@@ -239,7 +239,7 @@ The failure is asymmetric and confusing, which is why the script warns loudly ab
   - Same mitigation — it is restored on stop; after `--keep-ios` or a hard kill, run `ios --revert` before archiving.
   - The script never writes `Protocol.xcconfig` itself (`protocol-integrity.yml` parses the tracked file for the protocol constants).
 - The test server/agent state is fully isolated under the state dir; a co-installed production agent's `.env`, stores, and updater are never touched. Crash recovery kills only processes whose recorded pid **and** create time match a previous run of this script.
-- The account password is a fixed, trivial dev-testing value (`Qwe>123`), chosen for tester convenience over secrecy.
+- The account password is a fixed, trivial dev-testing value (`Qwe>1234`), chosen for tester convenience over secrecy.
   - Because the default `up` exposes the server on the LAN and the owner account fronts a real shell on this machine, this well-known password lets anyone on the same Wi-Fi open a terminal here.
   - So keep the stack on a trusted network, bind loopback (`--host 127.0.0.1`, e.g. the emulator flow), or pin your own `--password` when that matters.
 - If a shell still exports variables like `MOBAIDE_ENV`, `RELAY_*`, `JWT_SECRET_KEY`, the script sanitizes them out of the child processes.

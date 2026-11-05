@@ -13,7 +13,10 @@ import { AppleSignInButton } from '../../components/auth/AppleSignInButton';
 import { GoogleSignInButton } from '../../components/auth/GoogleSignInButton';
 import { PasswordField } from '../../components/form/PasswordField';
 import { TextField } from '../../components/form/TextField';
-import { registerMessage } from './authCopy';
+import {
+  passwordLengthError,
+  registerMessage,
+} from './authCopy';
 import { useAfterAuth } from './useAfterAuth';
 
 interface RegisterForm {
@@ -51,11 +54,13 @@ export function Register() {
 
   const onSubmit = handleSubmit(async (values) => {
     const email = values.email.trim();
-    // Deliberately no minimum length here — the server does not enforce one on
-    // register (only reset-password does), and inventing a client-side rule
-    // would reject passwords the account can legitimately hold.
     if (email === '' || values.password === '') {
       setError('Email and password are required');
+      return;
+    }
+    const lengthError = passwordLengthError(values.password);
+    if (lengthError !== null) {
+      setError(lengthError);
       return;
     }
     if (values.password !== values.confirmPassword) {

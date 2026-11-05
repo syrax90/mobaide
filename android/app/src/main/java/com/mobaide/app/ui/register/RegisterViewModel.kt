@@ -8,6 +8,7 @@ import com.mobaide.app.data.repository.ADMIN_LOGIN_USER_MESSAGE
 import com.mobaide.app.data.repository.AdminLoginNotSupportedException
 import com.mobaide.app.data.repository.AuthRepository
 import com.mobaide.app.data.repository.AuthResult
+import com.mobaide.app.data.repository.passwordLengthError
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,6 +64,10 @@ class RegisterViewModel @Inject constructor(
         val state = _uiState.value
         if (state.email.isBlank() || state.password.isBlank()) {
             emitError("Email and password are required")
+            return
+        }
+        passwordLengthError(state.password)?.let {
+            emitError(it)
             return
         }
         if (state.password != state.confirmPassword) {

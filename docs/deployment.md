@@ -584,7 +584,7 @@ Relay auth rides `?token=` bearers rather than cookies, so this is anti-CSWSH de
 
 `docker-compose.prod.yml` sets `FORWARDED_ALLOW_IPS=*` on `central-server`. Caddy runs as a separate container, so its bridge IP — not `127.0.0.1` — is the peer uvicorn sees. At uvicorn's default the `X-Forwarded-For` header is ignored and every request is attributed to Caddy. That has two effects:
 
-- It collapses the per-IP password-reset quota onto one shared bucket (locking out real users while doing nothing to an attacker).
+- It collapses the per-IP password-reset quota and the per-IP sign-in failure bucket (`LOGIN_IP_FAILURE_CAP`) onto one shared bucket (locking out real users while doing nothing to an attacker).
 - It fills the access log with `172.x` addresses.
 
 The wildcard is safe here only because `central-server` is `expose`-only and never published, so Caddy on the compose network is the only possible peer. Do not copy it to the dev `docker-compose.yml`, which publishes `9000:9000` directly.
