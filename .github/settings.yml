@@ -2,7 +2,7 @@
 # this is the source of truth for the keys below, applied on every push to the
 # default branch. If NOT installed, this file is documentation only -- the
 # authoritative apply is:
-#   gh api -X PATCH repos/syrax90/claude_mobile \
+#   gh api -X PATCH repos/syrax90/mobaide \
 #     -F allow_squash_merge=true -F allow_merge_commit=false \
 #     -F allow_rebase_merge=false -f squash_merge_commit_title=PR_TITLE \
 #     -f squash_merge_commit_message=BLANK

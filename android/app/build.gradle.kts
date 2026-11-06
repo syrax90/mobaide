@@ -79,8 +79,8 @@ val privacyPolicyUrl: String = run {
 // Help & Support destinations surfaced from the Support screen (reachable
 // from Settings and Login). Resolved at build time in the same priority order
 // as PRIVACY_POLICY_URL. SUPPORT_GITHUB_URL must point at a PUBLIC community
-// repo — GitHub Discussions inherit repo visibility, so it can never be the
-// private releases repo (`syrax90/claude_mobile`).
+// repo — GitHub Discussions inherit repo visibility, so it must never be the
+// source repo (`syrax90/mobaide`).
 val supportGithubUrl: String = run {
     val fromEnv = System.getenv("SUPPORT_GITHUB_URL")
     if (!fromEnv.isNullOrBlank()) return@run fromEnv
