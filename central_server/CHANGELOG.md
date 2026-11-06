@@ -1,5 +1,12 @@
 # central_server Changelog
 
+## [0.2.22](https://github.com/syrax90/mobaide/compare/server-v0.2.21...server-v0.2.22) (2026-11-06)
+
+
+### Features
+
+* **server:** add GitHub repo icon to the mobaide.com header ([#825](https://github.com/syrax90/mobaide/issues/825)) ([8a5ee7e](https://github.com/syrax90/mobaide/commit/8a5ee7ee268e5c4377e8fd11c36d3be18d3b82ed))
+
 ## [0.2.21](https://github.com/syrax90/claude_mobile/compare/server-v0.2.20...server-v0.2.21) (2026-11-05)
 
 
