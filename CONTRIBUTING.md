@@ -16,7 +16,7 @@ Thank you for helping to make Mobaide better. This page tells you how to set up 
 | You want to | Go to |
 |---|---|
 | Ask a question or share an idea | [Community discussions](https://github.com/syrax90/mobaide-community/discussions) |
-| Report a bug | A new [issue](https://github.com/syrax90/claude_mobile/issues) with the steps, the platform and the app and agent versions |
+| Report a bug | A new [issue](https://github.com/syrax90/mobaide/issues) with the steps, the platform and the app and agent versions |
 | Make a large change | An issue first, so that we agree on the approach before you write the code |
 
 Small fixes, such as typos and clear bugs, can go straight to a pull request.

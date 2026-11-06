@@ -576,9 +576,10 @@ be running. It is a small JSON document:
 
 ### Releases repo bootstrap
 
-The source repo (`syrax90/claude_mobile`) is private; anonymous installs
-cannot reach a private repo's GitHub Release assets. Release artifacts
-therefore live in a dedicated **public** sibling repo. One-time bootstrap:
+Release artifacts live in a dedicated **public** sibling repo, not in the
+source repo (`syrax90/mobaide`). Anonymous installs cannot reach a private
+repo's GitHub Release assets, so the sibling repo keeps installs working
+whatever the source repo's visibility is. One-time bootstrap:
 
 1. **Create the public repo** (e.g. `syrax90/mobaide-agent-releases`),
    Visibility = Public. A one-line README is enough; only release artifacts

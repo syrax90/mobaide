@@ -5,16 +5,16 @@ description: How to debug and troubleshoot the Claude Mobile project (Android Ko
 
 # Debugging & Troubleshooting — Claude Mobile
 
-This project has two sides: a **Python FastAPI server** (`server/`) and an **Android Kotlin client**. Most issues live at one of those ends or in the transport between them (WebSocket / cross-platform PTY). Diagnose accordingly.
+This project has two sides: a **Python FastAPI server** (`mobaide_agent/`) and an **Android Kotlin client**. Most issues live at one of those ends or in the transport between them (WebSocket / cross-platform PTY). Diagnose accordingly.
 
 ## 1. Run the server
 
 To reproduce server-side issues or watch live logs, run it directly so stdout/stderr land in your terminal:
 
 ```bash
-cd D:/ML/Projects/claude_mobile/server
+cd D:/ML/Projects/claude_mobile/mobaide_agent
 conda activate claude-mobile
-python -m claude_mobile
+python -m mobaide
 ```
 
 The `claude-mobile` conda env has the right Python and dependencies — don't try to invoke the module from the system Python.
@@ -48,4 +48,4 @@ Work in this order — it minimizes wasted effort:
 
 - Re-read the actual error/stack trace before guessing.
 - Confirm assumptions about which process and which env the failing code is running in (server vs. device, conda env vs. system Python).
-- If a tool seems "broken", verify the command itself with `adb devices` / `python -m claude_mobile --help` etc. before assuming a deeper bug.
+- If a tool seems "broken", verify the command itself with `adb devices` / `python -m mobaide --help` etc. before assuming a deeper bug.
