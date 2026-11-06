@@ -33,12 +33,12 @@ git push -u origin HEAD
 ## 3. Create the PR and merge it immediately
 
 ```bash
-gh pr create --base main --title "Bump up iOS version to <version>" --body "Bump the iOS app to <version> (build <build>)."   # plus the PR attribution line
-gh pr merge --merge
+gh pr create --base main --title "chore(ios): bump version to <version>" --body "Bump the iOS app to <version> (build <build>)."   # plus the PR attribution line
+gh pr merge --squash
 ```
 
-- Use `--merge` (the repo merges PRs with merge commits).
-- Do not wait for reviews or GitHub Actions, and do not use `--auto`. If the merge is refused because required checks or reviews are pending, retry with `gh pr merge --merge --admin` — the user explicitly asked for an immediate merge.
+- Use `--squash` (the repo allows squash merges only; the PR title becomes the commit subject on `main`).
+- Do not wait for reviews or GitHub Actions, and do not use `--auto`. If the merge is refused because required checks or reviews are pending, retry with `gh pr merge --squash --admin` — the user explicitly asked for an immediate merge.
 - Do not pass `--delete-branch` (it tries to check out `main` locally, which fails in a worktree).
 - Confirm with `gh pr view --json state,mergedAt` that the PR is `MERGED`.
 
