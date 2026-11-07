@@ -140,20 +140,24 @@ class BusyByResponse(BaseModel):
 class GitBranchCreateRequest(BaseModel):
     """``POST /branches``: create ``name`` at ``start_point`` (``HEAD`` of the
     project root when omitted); ``checkout`` switches the project root to
-    it in the same call and is subject to the checkout refusals."""
+    it in the same call and is subject to the checkout refusals; ``force``
+    skips the busy-holder refusal after the user confirmed it."""
 
     name: str
     start_point: str | None = None
     checkout: bool = False
+    force: bool = False
 
 
 class GitCheckoutRequest(BaseModel):
     """``POST /checkout``: ``ref`` is a local branch name or a
     ``<remote>/<name>`` remote-tracking branch as listed by ``GET /items``;
     a remote ref without a local branch of that name gets one created,
-    tracking it."""
+    tracking it. ``force`` skips the busy-holder refusal after the user
+    confirmed it; every other checkout refusal still applies."""
 
     ref: str
+    force: bool = False
 
 
 class GitBranchResponse(BaseModel):

@@ -188,8 +188,8 @@ class GitRepository(
         mapBranchRoute { restApi.createGitBranch(projectName, request) }
 
     /** `ref` is a row's `branch` verbatim — a local name or `<remote>/<name>`. */
-    suspend fun checkout(projectName: String, ref: String): GitBranchResponse =
-        mapBranchRoute { restApi.checkoutGitRef(projectName, GitCheckoutRequest(ref)) }
+    suspend fun checkout(projectName: String, ref: String, force: Boolean = false): GitBranchResponse =
+        mapBranchRoute { restApi.checkoutGitRef(projectName, GitCheckoutRequest(ref, force)) }
 
     suspend fun sessionGitStatus(sessionId: String, etag: String?): GitStatusResponse =
         mapSessionGit { restApi.getSessionGitStatus(sessionId, etag) }

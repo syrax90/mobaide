@@ -198,11 +198,11 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.map(\.httpMethod), ["POST", "POST"])
         XCTAssertEqual(
             try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0]),
-            ["name": "x", "start_point": "origin/main", "checkout": false]
+            ["name": "x", "start_point": "origin/main", "checkout": false, "force": false]
         )
         XCTAssertEqual(
             try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[1]),
-            ["ref": "x"]
+            ["ref": "x", "force": false]
         )
     }
 

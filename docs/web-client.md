@@ -763,7 +763,10 @@ Branch actions:
 - Check out is a per-row button on `branch_only` and `remote_branch` rows behind
   an `alertdialog` confirmation whose initial focus is Cancel.
 - Both mutations reuse `toSessionGitError` after the busy check. A `busy_by` 409
-  opens the existing "Item is in use" dialog. Every coded detail becomes a
+  opens the soft "Project folder in use" prompt. It lists the holders and offers
+  *Check out anyway*, which resends the request with `force: true`. A forced
+  request that still gets a `busy_by` 409 comes from an agent without `force`,
+  and a toast asks the user to update it. Every coded detail becomes a
   `SessionGitError` whose copy `gitDisplay.ts` maps (`dirty`,
   `checked_out_elsewhere`, `operation_in_progress`, `job_running`,
   `ref_not_found`, and `exists` / `bad_branch_name` / `unknown_start_point`

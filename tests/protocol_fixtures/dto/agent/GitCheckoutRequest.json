@@ -5,12 +5,27 @@
       "name": "local",
       "wire": {
         "ref": "feature/login"
+      },
+      "decoded_canonical": {
+        "ref": "feature/login",
+        "force": false
       }
     },
     {
       "name": "remote",
       "wire": {
         "ref": "origin/feature/login"
+      },
+      "decoded_canonical": {
+        "ref": "origin/feature/login",
+        "force": false
+      }
+    },
+    {
+      "name": "forced",
+      "wire": {
+        "ref": "feature/login",
+        "force": true
       }
     }
   ]

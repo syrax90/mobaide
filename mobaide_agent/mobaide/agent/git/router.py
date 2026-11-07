@@ -214,7 +214,7 @@ async def checkout_endpoint(
 
     Returns 409 with ``{busy_by: [...]}`` while a session or auto-scan work
     item runs in the project root (a linked worktree's session does not
-    count), and a coded 409 — ``dirty``, ``checked_out_elsewhere``,
+    count) unless ``force`` is set, and a coded 409 — ``dirty``, ``checked_out_elsewhere``,
     ``operation_in_progress``, ``job_running`` — for the states git or the
     agent refuse to switch in; ``404 ref_not_found`` for a ref that is
     neither a local nor a remote-tracking branch.

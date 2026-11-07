@@ -8,7 +8,8 @@
       },
       "decoded_canonical": {
         "name": "feature/login",
-        "checkout": false
+        "checkout": false,
+        "force": false
       }
     },
     {
@@ -17,6 +18,20 @@
         "name": "hotfix/1.2.1",
         "start_point": "origin/release/1.2",
         "checkout": true
+      },
+      "decoded_canonical": {
+        "name": "hotfix/1.2.1",
+        "start_point": "origin/release/1.2",
+        "checkout": true,
+        "force": false
+      }
+    },
+    {
+      "name": "forced_checkout",
+      "wire": {
+        "name": "hotfix/1.2.1",
+        "checkout": true,
+        "force": true
       }
     }
   ]

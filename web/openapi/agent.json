@@ -710,11 +710,16 @@
         "type": "object"
       },
       "GitBranchCreateRequest": {
-        "description": "``POST /branches``: create ``name`` at ``start_point`` (``HEAD`` of the\nproject root when omitted); ``checkout`` switches the project root to\nit in the same call and is subject to the checkout refusals.",
+        "description": "``POST /branches``: create ``name`` at ``start_point`` (``HEAD`` of the\nproject root when omitted); ``checkout`` switches the project root to\nit in the same call and is subject to the checkout refusals; ``force``\nskips the busy-holder refusal after the user confirmed it.",
         "properties": {
           "checkout": {
             "default": false,
             "title": "Checkout",
+            "type": "boolean"
+          },
+          "force": {
+            "default": false,
+            "title": "Force",
             "type": "boolean"
           },
           "name": {
@@ -764,8 +769,13 @@
         "type": "object"
       },
       "GitCheckoutRequest": {
-        "description": "``POST /checkout``: ``ref`` is a local branch name or a\n``<remote>/<name>`` remote-tracking branch as listed by ``GET /items``;\na remote ref without a local branch of that name gets one created,\ntracking it.",
+        "description": "``POST /checkout``: ``ref`` is a local branch name or a\n``<remote>/<name>`` remote-tracking branch as listed by ``GET /items``;\na remote ref without a local branch of that name gets one created,\ntracking it. ``force`` skips the busy-holder refusal after the user\nconfirmed it; every other checkout refusal still applies.",
         "properties": {
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
           "ref": {
             "title": "Ref",
             "type": "string"
@@ -3959,7 +3969,7 @@
     },
     "/api/projects/{name}/git/checkout": {
       "post": {
-        "description": "Check ``ref`` out in the project root.\n\nReturns 409 with ``{busy_by: [...]}`` while a session or auto-scan work\nitem runs in the project root (a linked worktree's session does not\ncount), and a coded 409 \u2014 ``dirty``, ``checked_out_elsewhere``,\n``operation_in_progress``, ``job_running`` \u2014 for the states git or the\nagent refuse to switch in; ``404 ref_not_found`` for a ref that is\nneither a local nor a remote-tracking branch.",
+        "description": "Check ``ref`` out in the project root.\n\nReturns 409 with ``{busy_by: [...]}`` while a session or auto-scan work\nitem runs in the project root (a linked worktree's session does not\ncount) unless ``force`` is set, and a coded 409 \u2014 ``dirty``, ``checked_out_elsewhere``,\n``operation_in_progress``, ``job_running`` \u2014 for the states git or the\nagent refuse to switch in; ``404 ref_not_found`` for a ref that is\nneither a local nor a remote-tracking branch.",
         "operationId": "checkout_endpoint_api_projects__name__git_checkout_post",
         "parameters": [
           {

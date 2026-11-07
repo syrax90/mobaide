@@ -181,15 +181,19 @@ export async function createGitBranch(
   return data;
 }
 
-/** `ref` is a row's `branch` verbatim — a local name or `<remote>/<name>`. */
+/**
+ * `ref` is a row's `branch` verbatim — a local name or `<remote>/<name>`.
+ * `force` skips the busy-holder refusal after the user confirmed it.
+ */
 export async function checkoutGitRef(
   agentId: string,
   projectName: string,
   ref: string,
+  force = false,
 ): Promise<GitBranchResult> {
   const { data, error, response } = await createAgentClient(agentId).POST(
     '/api/projects/{name}/git/checkout',
-    { params: { path: { name: projectName } }, body: { ref } },
+    { params: { path: { name: projectName } }, body: force ? { ref, force } : { ref } },
   );
   if (error !== undefined || data === undefined) {
     throw toBranchError(toApiError(response, error));

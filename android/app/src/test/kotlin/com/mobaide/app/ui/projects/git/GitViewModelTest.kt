@@ -834,16 +834,32 @@ class GitViewModelTest {
     }
 
     @Test
-    fun createBranch_busy_closesTheSheet_andShowsTheBusyDialog() = runTest {
+    fun createBranch_busy_closesTheSheet_andOffersAForcedRetry() = runTest {
         val f = branchesFixture()
         advanceUntilIdle()
         val holders = listOf(BusyHolder(kind = "session", session_id = "s-1", cwd = "/repo"))
-        coEvery { f.repo.createBranch("alpha", any()) } throws GitBusyException(holders)
+        val request = GitBranchCreateRequest(name = "feature/new", checkout = true)
+        coEvery { f.repo.createBranch("alpha", request) } throws GitBusyException(holders)
+        coEvery { f.repo.createBranch("alpha", request.copy(force = true)) } returns
+            GitBranchResponse("feature/new", checked_out = true, created = true)
         f.vm.openNewBranch()
         f.vm.createBranch("feature/new", null, true)
         advanceUntilIdle()
         assertNull(f.vm.uiState.value.newBranch)
-        assertEquals(holders, f.vm.uiState.value.busyDialog)
+        assertNull(f.vm.uiState.value.busyDialog)
+        assertEquals(
+            BusyCheckoutPrompt(holders, "feature/new", BusyCheckoutPrompt.Retry.Create(request)),
+            f.vm.uiState.value.busyCheckoutPrompt,
+        )
+
+        f.vm.events.test {
+            f.vm.confirmBusyCheckout()
+            advanceUntilIdle()
+            assertEquals(GitUiEvent.Message("Created and checked out feature/new"), awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertNull(f.vm.uiState.value.busyCheckoutPrompt)
+        coVerify(exactly = 1) { f.repo.createBranch("alpha", request.copy(force = true)) }
     }
 
     @Test
@@ -921,18 +937,82 @@ class GitViewModelTest {
     }
 
     @Test
-    fun confirmCheckout_busy_showsTheBusyDialog() = runTest {
+    fun confirmCheckout_busy_offersAForcedRetry() = runTest {
         val f = branchesFixture()
         advanceUntilIdle()
         val holders = listOf(
             BusyHolder(kind = "auto_scan", project_name = "alpha", worktree_path = "/repo"),
         )
-        coEvery { f.repo.checkout("alpha", "stale") } throws GitBusyException(holders)
+        coEvery { f.repo.checkout("alpha", "stale", false) } throws GitBusyException(holders)
         f.vm.requestCheckout(staleId)
         f.vm.confirmCheckout()
         advanceUntilIdle()
-        assertEquals(holders, f.vm.uiState.value.busyDialog)
+        assertNull(f.vm.uiState.value.busyDialog)
+        assertEquals(
+            BusyCheckoutPrompt(holders, "stale", BusyCheckoutPrompt.Retry.Checkout("stale")),
+            f.vm.uiState.value.busyCheckoutPrompt,
+        )
         assertFalse(f.vm.uiState.value.checkingOut)
+    }
+
+    @Test
+    fun confirmBusyCheckout_retriesWithForce() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        val holders = listOf(BusyHolder(kind = "session", session_id = "s-1", cwd = "/repo"))
+        coEvery { f.repo.checkout("alpha", "stale", false) } throws GitBusyException(holders)
+        coEvery { f.repo.checkout("alpha", "stale", true) } returns
+            GitBranchResponse(branch = "stale", checked_out = true, created = false)
+        f.vm.requestCheckout(staleId)
+        f.vm.confirmCheckout()
+        advanceUntilIdle()
+        f.vm.events.test {
+            f.vm.confirmBusyCheckout()
+            assertNull(f.vm.uiState.value.busyCheckoutPrompt)
+            assertTrue(f.vm.uiState.value.checkingOut)
+            advanceUntilIdle()
+            assertEquals(GitUiEvent.Message("Checked out stale"), awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertFalse(f.vm.uiState.value.checkingOut)
+        coVerify(exactly = 1) { f.repo.checkout("alpha", "stale", true) }
+    }
+
+    @Test
+    fun confirmBusyCheckout_anAgentWithoutForce_asksForAnUpdate() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        val holders = listOf(BusyHolder(kind = "session", session_id = "s-1", cwd = "/repo"))
+        coEvery { f.repo.checkout("alpha", "stale", any()) } throws GitBusyException(holders)
+        f.vm.requestCheckout(staleId)
+        f.vm.confirmCheckout()
+        advanceUntilIdle()
+        f.vm.events.test {
+            f.vm.confirmBusyCheckout()
+            advanceUntilIdle()
+            assertEquals(
+                GitUiEvent.Message("The project folder is still in use. Update the agent to check out anyway."),
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertNull(f.vm.uiState.value.busyCheckoutPrompt)
+    }
+
+    @Test
+    fun dismissBusyCheckoutPrompt_sendsNothing() = runTest {
+        val f = branchesFixture()
+        advanceUntilIdle()
+        val holders = listOf(BusyHolder(kind = "session", session_id = "s-1", cwd = "/repo"))
+        coEvery { f.repo.checkout("alpha", "stale", false) } throws GitBusyException(holders)
+        f.vm.requestCheckout(staleId)
+        f.vm.confirmCheckout()
+        advanceUntilIdle()
+        f.vm.dismissBusyCheckoutPrompt()
+        f.vm.confirmBusyCheckout()
+        advanceUntilIdle()
+        assertNull(f.vm.uiState.value.busyCheckoutPrompt)
+        coVerify(exactly = 0) { f.repo.checkout("alpha", "stale", true) }
     }
 
     @Test

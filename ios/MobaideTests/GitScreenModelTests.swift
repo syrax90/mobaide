@@ -499,7 +499,7 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertNil(model.newBranch)
     }
 
-    func testCreateBranchBusyClosesTheSheetAndShowsTheHolders() async throws {
+    func testCreateBranchBusyClosesTheSheetAndRetriesWithForceOnConfirm() async throws {
         let model = try await branchesModel()
         model.openNewBranch()
         StubURLProtocol.enqueue(
@@ -510,7 +510,21 @@ final class GitScreenModelTests: XCTestCase {
         await model.createBranch(name: "feature/new", startPoint: nil, checkout: true)
 
         XCTAssertNil(model.newBranch)
-        XCTAssertEqual(model.busyDialog?.map(\.session_id), ["s1"])
+        XCTAssertNil(model.busyDialog)
+        XCTAssertEqual(model.busyCheckoutPrompt?.holders.map(\.session_id), ["s1"])
+        XCTAssertEqual(model.busyCheckoutPrompt?.branch, "feature/new")
+
+        StubURLProtocol.enqueue(status: 200, body: #"{"branch":"feature/new","checked_out":true,"created":true}"#)
+        model.busyCheckoutPrompt = nil
+        model.confirmBusyCheckout()
+        await waitUntil { model.message != nil }
+
+        XCTAssertEqual(
+            try sentBody(GitBranchCreateRequest.self, at: 1),
+            GitBranchCreateRequest(name: "feature/new", checkout: true, force: true)
+        )
+        XCTAssertEqual(model.message, "Created and checked out feature/new")
+        XCTAssertFalse(model.isCheckingOut)
     }
 
     func testRequestCheckoutPromptsOnlyForRowsNothingHasCheckedOut() async throws {
@@ -558,20 +572,68 @@ final class GitScreenModelTests: XCTestCase {
         XCTAssertFalse(model.isCheckingOut)
     }
 
-    func testCheckoutBusyShowsTheHolders() async throws {
-        let model = try await branchesModel()
+    private func refuseCheckoutAsBusy(_ model: GitScreenModel) async throws {
         model.requestCheckout(try row(model, "stale"))
         StubURLProtocol.enqueue(
             status: 409,
             body: #"{"detail":{"busy_by":[{"kind":"auto_scan","project_name":"proj","worktree_path":"/repo"}]}}"#
         )
-
         model.confirmCheckout()
-        await waitUntil { model.busyDialog != nil }
+        await waitUntil { model.busyCheckoutPrompt != nil && !model.isCheckingOut }
+    }
 
-        XCTAssertEqual(model.busyDialog?.first?.kind, "auto_scan")
+    func testCheckoutBusyOffersToCheckOutAnyway() async throws {
+        let model = try await branchesModel()
+        try await refuseCheckoutAsBusy(model)
+
+        XCTAssertEqual(model.busyCheckoutPrompt?.holders.first?.kind, "auto_scan")
+        XCTAssertEqual(model.busyCheckoutPrompt?.branch, "stale")
+        XCTAssertNil(model.busyDialog)
         XCTAssertNil(model.message)
+    }
+
+    /// Like `confirmCheckout`, the confirm action must survive SwiftUI clearing
+    /// the prompt when the alert dismisses.
+    func testConfirmBusyCheckoutRetriesWithForce() async throws {
+        let model = try await branchesModel()
+        try await refuseCheckoutAsBusy(model)
+        StubURLProtocol.enqueue(status: 200, body: #"{"branch":"stale","checked_out":true,"created":false}"#)
+
+        model.busyCheckoutPrompt = nil
+        model.confirmBusyCheckout()
+        await waitUntil { model.message != nil }
+
+        XCTAssertEqual(try sentBody(GitCheckoutRequest.self, at: 0), GitCheckoutRequest(ref: "stale"))
+        XCTAssertEqual(try sentBody(GitCheckoutRequest.self, at: 1), GitCheckoutRequest(ref: "stale", force: true))
+        XCTAssertEqual(model.message, "Checked out stale")
         XCTAssertFalse(model.isCheckingOut)
+    }
+
+    func testConfirmBusyCheckoutOnAnAgentWithoutForceAsksForAnUpdate() async throws {
+        let model = try await branchesModel()
+        try await refuseCheckoutAsBusy(model)
+        StubURLProtocol.enqueue(
+            status: 409,
+            body: #"{"detail":{"busy_by":[{"kind":"auto_scan","project_name":"proj","worktree_path":"/repo"}]}}"#
+        )
+
+        model.confirmBusyCheckout()
+        await waitUntil { model.message != nil }
+
+        XCTAssertEqual(model.message, "The project folder is still in use. Update the agent to check out anyway.")
+        XCTAssertNil(model.busyCheckoutPrompt)
+    }
+
+    func testDismissBusyCheckoutPromptSendsNothing() async throws {
+        let model = try await branchesModel()
+        try await refuseCheckoutAsBusy(model)
+
+        model.dismissBusyCheckoutPrompt()
+        model.confirmBusyCheckout()
+        try await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertNil(model.busyCheckoutPrompt)
+        XCTAssertEqual(StubURLProtocol.bodies.count, 1)
     }
 
     func testCheckoutDirtyShowsTheDirtyCopy() async throws {

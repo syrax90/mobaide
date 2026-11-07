@@ -856,15 +856,19 @@ def _refuse_running_job(toplevel: str) -> None:
         raise GitRefusedError("job_running", active)
 
 
-async def _guard_checkout(ctx: _RepoContext, repo: ResolvedRepo) -> None:
+async def _guard_checkout(
+    ctx: _RepoContext, repo: ResolvedRepo, *, force: bool = False
+) -> None:
     """Refuse to move the project root's HEAD under a session or auto-scan
-    item working in it, while a fetch/pull/push job owns the repository, or
-    in the middle of a merge/rebase/cherry-pick/revert/bisect."""
-    worktrees = await ctx.manager.list_worktrees(ctx.project_root)
-    matches = _root_matcher(ctx.project_root, [wt.path for wt in worktrees])
-    busy = await _holders(ctx.session_manager, ctx.autoscan_manager, matches)
-    if busy:
-        raise GitItemBusyError(busy_by=busy)
+    item working in it (unless the user confirmed with ``force``), while a
+    fetch/pull/push job owns the repository, or in the middle of a
+    merge/rebase/cherry-pick/revert/bisect."""
+    if not force:
+        worktrees = await ctx.manager.list_worktrees(ctx.project_root)
+        matches = _root_matcher(ctx.project_root, [wt.path for wt in worktrees])
+        busy = await _holders(ctx.session_manager, ctx.autoscan_manager, matches)
+        if busy:
+            raise GitItemBusyError(busy_by=busy)
     _refuse_running_job(repo.toplevel)
     state = await repo_state(repo.toplevel)
     if state != "clean":
@@ -940,7 +944,7 @@ async def create_branch(
             if await _ref_exists(project_root, _REFS_HEADS + name):
                 raise GitRefusedError("exists", name)
             if request.checkout:
-                await _guard_checkout(ctx, repo)
+                await _guard_checkout(ctx, repo, force=request.force)
                 args = ["switch", "--no-guess", "-c", name, "--", start]
             else:
                 args = ["branch", "--", name, start]
@@ -953,6 +957,7 @@ async def create_branch(
         project=project_name,
         start_point=start,
         checkout=request.checkout,
+        force=request.force,
     )
     _publish_git_changed(
         event_bus, project_name, toplevel=repo.toplevel, common_dir=repo.common_dir
@@ -990,7 +995,7 @@ async def checkout_ref(
     )
     async with manager._lock_for(project_root):
         async with _lock_for(repo.toplevel):
-            await _guard_checkout(ctx, repo)
+            await _guard_checkout(ctx, repo, force=request.force)
             branch, start = await _resolve_checkout(project_root, ref)
             if start is None:
                 args = ["switch", "--no-guess", "--", branch]
@@ -1005,6 +1010,7 @@ async def checkout_ref(
         project=project_name,
         ref=ref,
         created=start is not None,
+        force=request.force,
     )
     _publish_git_changed(
         event_bus, project_name, toplevel=repo.toplevel, common_dir=repo.common_dir
