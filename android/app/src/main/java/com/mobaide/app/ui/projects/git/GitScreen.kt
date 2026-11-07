@@ -62,6 +62,7 @@ const val GIT_NEW_BRANCH_BUTTON_TAG = "git_new_branch_button"
 const val GIT_FILTER_TAG = "git_filter"
 const val GIT_REMOTE_HEADER_TAG = "git_remote_header"
 const val GIT_FOLDER_ROW_TAG = "git_folder_row"
+const val GIT_BUSY_CHECKOUT_CONFIRM_TAG = "git_busy_checkout_confirm"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -265,6 +266,29 @@ fun GitScreen(
         )
     }
 
+    val busyCheckout = state.busyCheckoutPrompt
+    if (busyCheckout != null) {
+        PixelAlertDialog(
+            onDismissRequest = viewModel::dismissBusyCheckoutPrompt,
+            title = { Text(BUSY_CHECKOUT_TITLE) },
+            text = {
+                Text(
+                    busyCheckoutMessage(busyCheckout.branch) + "\n\n" +
+                        busyCheckout.holders.joinToString("\n", transform = ::busyHolderLine),
+                )
+            },
+            confirmButton = {
+                PixelTextButton(
+                    onClick = viewModel::confirmBusyCheckout,
+                    modifier = Modifier.testTag(GIT_BUSY_CHECKOUT_CONFIRM_TAG),
+                ) { Text("Check out anyway") }
+            },
+            dismissButton = {
+                PixelTextButton(onClick = viewModel::dismissBusyCheckoutPrompt) { Text("Cancel") }
+            },
+        )
+    }
+
     val remotePrompt = state.remoteDeletePrompt
     if (remotePrompt != null) {
         val refs = remotePrompt.filter { it.kind == GitItem.KIND_REMOTE_BRANCH }.map(::primaryLabel)
@@ -445,6 +469,12 @@ private fun RemoteSectionHeader(
     }
 }
 
+private fun busyHolderLine(holder: BusyHolder): String = when (holder.kind) {
+    "session" -> "Session: ${holder.cwd ?: "?"}"
+    "auto_scan" -> "Auto-scan ${holder.project_name ?: "?"}: ${holder.worktree_path ?: "?"}"
+    else -> "${holder.kind}: ${holder.cwd ?: holder.worktree_path ?: "?"}"
+}
+
 @Composable
 private fun BusyConflictDialog(
     holders: List<BusyHolder>,
@@ -454,14 +484,7 @@ private fun BusyConflictDialog(
         onDismissRequest = onDismiss,
         title = { Text("Item is in use") },
         text = {
-            val lines = holders.map { holder ->
-                when (holder.kind) {
-                    "session" -> "Session: ${holder.cwd ?: "?"}"
-                    "auto_scan" -> "Auto-scan ${holder.project_name ?: "?"}: ${holder.worktree_path ?: "?"}"
-                    else -> "${holder.kind}: ${holder.cwd ?: holder.worktree_path ?: "?"}"
-                }
-            }
-            Text("Stop the holder, then try again.\n\n" + lines.joinToString("\n"))
+            Text("Stop the holder, then try again.\n\n" + holders.joinToString("\n", transform = ::busyHolderLine))
         },
         confirmButton = {
             PixelTextButton(onClick = onDismiss) { Text("OK") }

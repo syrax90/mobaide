@@ -75,15 +75,7 @@ private struct GitContent: View {
             } message: { prompt in
                 Text("These items have unmerged commits or uncommitted changes and can't be deleted normally: \(prompt.refs.joined(separator: ", ")). Force-delete permanently discards that work.")
             }
-            .alert(
-                "Item is in use",
-                isPresented: busyPresented,
-                presenting: model.busyDialog
-            ) { _ in
-                Button("OK") { model.dismissBusy() }
-            } message: { holders in
-                Text("Stop the holder, then try again.\n\n" + holders.map(Self.busyLine).joined(separator: "\n"))
-            }
+            .modifier(busyAlerts)
             .confirmationDialog(
                 "Check out \(model.checkoutPrompt.map(GitItemDisplay.primaryLabel) ?? "")?",
                 isPresented: checkoutPresented,
@@ -118,6 +110,10 @@ private struct GitContent: View {
             .onChange(of: model.hasDeletableItems) { _, newValue in
                 if !newValue { editMode = .inactive }
             }
+    }
+
+    private var busyAlerts: BusyAlerts {
+        BusyAlerts(model: model, busyPresented: busyPresented, busyCheckoutPresented: busyCheckoutPresented)
     }
 
     private var title: String {
@@ -374,6 +370,13 @@ private struct GitContent: View {
         )
     }
 
+    private var busyCheckoutPresented: Binding<Bool> {
+        Binding(
+            get: { model.busyCheckoutPrompt != nil },
+            set: { if !$0 { model.busyCheckoutPrompt = nil } }
+        )
+    }
+
     private var busyPresented: Binding<Bool> {
         Binding(
             get: { model.busyDialog != nil },
@@ -406,5 +409,41 @@ private struct GitContent: View {
         default:
             return "\(holder.kind): \(holder.cwd ?? holder.worktree_path ?? "?")"
         }
+    }
+}
+
+/// The hard busy dialog of a delete batch and the soft one of a checkout,
+/// which offers to retry with `force`.
+private struct BusyAlerts: ViewModifier {
+    let model: GitScreenModel
+    let busyPresented: Binding<Bool>
+    let busyCheckoutPresented: Binding<Bool>
+
+    func body(content: Content) -> some View {
+        content
+            .alert(
+                "Item is in use",
+                isPresented: busyPresented,
+                presenting: model.busyDialog
+            ) { _ in
+                Button("OK") { model.dismissBusy() }
+            } message: { holders in
+                Text(Self.text("Stop the holder, then try again.", holders))
+            }
+            .alert(
+                GitItemDisplay.busyCheckoutTitle,
+                isPresented: busyCheckoutPresented,
+                presenting: model.busyCheckoutPrompt
+            ) { _ in
+                Button("Check out anyway") { model.confirmBusyCheckout() }
+                Button("Cancel", role: .cancel) { model.dismissBusyCheckoutPrompt() }
+            } message: { prompt in
+                Text(Self.text(GitItemDisplay.busyCheckoutMessage(branch: prompt.branch), prompt.holders))
+            }
+    }
+
+    private static func text(_ lead: String, _ holders: [BusyHolder]) -> String {
+        let lines: [String] = holders.map(GitContent.busyLine)
+        return lead + "\n\n" + lines.joined(separator: "\n")
     }
 }
