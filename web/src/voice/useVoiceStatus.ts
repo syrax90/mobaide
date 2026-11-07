@@ -95,7 +95,8 @@ export function useVoiceActions(agentId: string) {
 /**
  * The agent's transcript-cleanup choice, stored on the agent so every client
  * of it shares one setting. The cached status changes at once and goes back
- * if the agent refuses; `voice.changed` brings changes from other clients.
+ * if the agent refuses, unless a newer snapshot replaced it meanwhile;
+ * `voice.changed` brings changes from other clients.
  */
 export function useVoiceCleanupSetting(agentId: string, status: VoiceStatus | undefined) {
   const queryClient = useQueryClient();
@@ -111,14 +112,19 @@ export function useVoiceCleanupSetting(agentId: string, status: VoiceStatus | un
       const key = queryKeys.voiceStatus(agentId);
       await queryClient.cancelQueries({ queryKey: key });
       const previous = queryClient.getQueryData<VoiceStatus>(key);
-      if (previous !== undefined) {
-        queryClient.setQueryData<VoiceStatus>(key, { ...previous, cleanup_enabled: enabled });
-      }
-      return { previous };
+      if (previous === undefined) return undefined;
+      // The stored object, not the argument: structural sharing copies it.
+      const optimistic = queryClient.setQueryData<VoiceStatus>(key, {
+        ...previous,
+        cleanup_enabled: enabled,
+      });
+      return { previous, optimistic };
     },
     onError: (_error, _enabled, context) => {
-      if (context?.previous !== undefined) {
-        queryClient.setQueryData<VoiceStatus>(queryKeys.voiceStatus(agentId), context.previous);
+      // A `voice.changed` that arrived meanwhile is newer than both: keep it.
+      const key = queryKeys.voiceStatus(agentId);
+      if (context !== undefined && queryClient.getQueryData<VoiceStatus>(key) === context.optimistic) {
+        queryClient.setQueryData<VoiceStatus>(key, context.previous);
       }
     },
     onSuccess: (next) => {
