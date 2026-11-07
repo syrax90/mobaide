@@ -6,7 +6,9 @@ import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.VoiceHostInfo
 import com.mobaide.app.data.network.dto.VoiceModelInfo
+import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.VoiceStatusResponse
+import com.mobaide.app.data.voice.VoiceApiException
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -22,7 +24,9 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -90,5 +94,42 @@ class VoiceRepositoryTest {
 
         assertEquals(older, refreshing.await())
         assertEquals(pushed, repo.status.value)
+    }
+
+    @Test
+    fun setCleanup_showsTheChoiceAtOnce_thenTheAgentsAnswer() = runTest {
+        val off = status(VoiceStatusResponse.STATE_READY)
+        val saved = off.copy(cleanup_enabled = true, speed_factor = 0.1)
+        val answer = CompletableDeferred<VoiceStatusResponse>()
+        coEvery { restApi.getVoiceStatus() } returns off
+        coEvery { restApi.setVoiceCleanupSettings(true) } coAnswers { answer.await() }
+        val repo = VoiceRepository(restApi, bus, sessionManager)
+        repo.refresh()
+
+        val saving = async { repo.setCleanup(true) }
+        runCurrent()
+        assertTrue(repo.status.value!!.cleanup_enabled)
+        answer.complete(saved)
+
+        assertEquals(saved, saving.await())
+        assertEquals(saved, repo.status.value)
+    }
+
+    @Test
+    fun setCleanup_refused_restoresTheOldValue() = runTest {
+        val off = status(VoiceStatusResponse.STATE_READY)
+        coEvery { restApi.getVoiceStatus() } returns off
+        coEvery { restApi.setVoiceCleanupSettings(true) } throws ApiException(503, "busy")
+        val repo = VoiceRepository(restApi, bus, sessionManager)
+        repo.refresh()
+
+        try {
+            repo.setCleanup(true)
+            fail("expected a VoiceApiException")
+        } catch (e: VoiceApiException) {
+            assertEquals(503, e.status)
+        }
+
+        assertFalse(repo.status.value!!.cleanup_enabled)
     }
 }

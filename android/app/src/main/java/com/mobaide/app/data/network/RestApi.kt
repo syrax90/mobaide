@@ -48,6 +48,7 @@ import com.mobaide.app.data.network.dto.TokenResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
 import com.mobaide.app.data.network.dto.VoiceCleanupRequest
 import com.mobaide.app.data.network.dto.VoiceCleanupResponse
+import com.mobaide.app.data.network.dto.VoiceCleanupSettingsRequest
 import com.mobaide.app.data.network.dto.VoiceDictationAudioRequest
 import com.mobaide.app.data.network.dto.VoiceDictationAudioResponse
 import com.mobaide.app.data.network.dto.VoiceDictationCreateRequest
@@ -478,6 +479,14 @@ class RestApi(
             Request.Builder()
                 .url(voiceUrl("cleanup").build())
                 .post(json.encodeToString(VoiceCleanupRequest(text)).toRequestBody(jsonMediaType))
+                .build(),
+        )
+
+    suspend fun setVoiceCleanupSettings(enabled: Boolean): VoiceStatusResponse =
+        execute(
+            Request.Builder()
+                .url(voiceUrl("cleanup", "settings").build())
+                .put(json.encodeToString(VoiceCleanupSettingsRequest(enabled)).toRequestBody(jsonMediaType))
                 .build(),
         )
 

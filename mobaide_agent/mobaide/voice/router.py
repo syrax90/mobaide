@@ -15,6 +15,7 @@ from .errors import VoiceError, http_error_for
 from .models import (
     VoiceCleanupRequest,
     VoiceCleanupResponse,
+    VoiceCleanupSettingsRequest,
     VoiceDictationAudioRequest,
     VoiceDictationAudioResponse,
     VoiceDictationCreateRequest,
@@ -121,5 +122,15 @@ async def voice_dictation_delete(dictation_id: str, request: Request) -> Respons
 async def voice_cleanup(body: VoiceCleanupRequest, request: Request) -> VoiceCleanupResponse:
     try:
         return await _service(request).cleanup_transcript(body.text)
+    except VoiceError as exc:
+        _raise_mapped(exc)
+
+
+@router.put("/cleanup/settings", response_model=VoiceStatusResponse)
+async def voice_cleanup_settings(
+    body: VoiceCleanupSettingsRequest, request: Request
+) -> VoiceStatusResponse:
+    try:
+        return _service(request).set_cleanup_enabled(body.enabled)
     except VoiceError as exc:
         _raise_mapped(exc)

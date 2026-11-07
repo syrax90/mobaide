@@ -91,6 +91,8 @@ class VoiceDtoFixtureTest {
             .assertCanonicalDecodesLikeWire(VoiceDictationResultResponse.serializer())
         fixture("VoiceCleanupRequest").assertCanonicalDecodesLikeWire(VoiceCleanupRequest.serializer())
         fixture("VoiceCleanupResponse").assertCanonicalDecodesLikeWire(VoiceCleanupResponse.serializer())
+        fixture("VoiceCleanupSettingsRequest")
+            .assertCanonicalDecodesLikeWire(VoiceCleanupSettingsRequest.serializer())
     }
 
     @Test
@@ -100,6 +102,26 @@ class VoiceDtoFixtureTest {
         fixture("VoiceDictationAudioRequest").assertEncodesToCanonical(VoiceDictationAudioRequest.serializer())
         fixture("VoiceDictationFinishRequest").assertEncodesToCanonical(VoiceDictationFinishRequest.serializer())
         fixture("VoiceCleanupRequest").assertEncodesToCanonical(VoiceCleanupRequest.serializer())
+        fixture("VoiceCleanupSettingsRequest").assertEncodesToCanonical(VoiceCleanupSettingsRequest.serializer())
+    }
+
+    @Test
+    fun cleanupSettings_carryTheAgentsChoice() {
+        val requests = fixture("VoiceCleanupSettingsRequest")
+        val statuses = fixture("VoiceStatusResponse")
+
+        assertTrue(requests.decode(VoiceCleanupSettingsRequest.serializer(), "on").enabled)
+        assertFalse(requests.decode(VoiceCleanupSettingsRequest.serializer(), "off").enabled)
+        assertTrue(statuses.decode(VoiceStatusResponse.serializer(), "ready").cleanup_enabled)
+        assertFalse(statuses.decode(VoiceStatusResponse.serializer(), "not_installed").cleanup_enabled)
+    }
+
+    @Test
+    fun status_fromAnAgentBeforeTheCleanupSetting_readsAsCleanupOff() {
+        val wire = fixture("VoiceStatusResponse").cases.first { it.name == "ready" }.wire
+        val older = JsonObject(wire - "cleanup_enabled")
+
+        assertFalse(json.decodeFromJsonElement(VoiceStatusResponse.serializer(), older).cleanup_enabled)
     }
 
     @Test

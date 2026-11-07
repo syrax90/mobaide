@@ -64,6 +64,8 @@ data class VoiceUiState(
     /** ...and this session's AI agent can do it: the setup sheet offers the toggle. */
     val cleanupOffered: Boolean = false,
     val cleanUp: Boolean = false,
+    /** The agent refused or missed the last cleanup change; the toggle shows its old value. */
+    val cleanupError: String? = null,
     /** "Got it" was pressed on the notice shown before the first opt-in. */
     val cleanupNoticeSeen: Boolean = false,
 )
@@ -104,6 +106,7 @@ class VoiceViewModel @Inject constructor(
     private val setupVisible = MutableStateFlow(false)
     private val actionState = MutableStateFlow(VoiceActionState())
     private val sessionKind = MutableStateFlow<SessionKind?>(null)
+    private val cleanupError = MutableStateFlow<String?>(null)
     private val _events = Channel<VoiceEvent>(Channel.BUFFERED)
     val events: Flow<VoiceEvent> = _events.receiveAsFlow()
 
@@ -113,14 +116,9 @@ class VoiceViewModel @Inject constructor(
     private val micHidden: Flow<Boolean> =
         agentKey?.let(preferencesStore::voiceMicHidden) ?: flowOf(false)
 
-    /** Eager: the controller reads it synchronously when a transcript arrives. */
-    private val cleanUp: StateFlow<Boolean> =
-        (agentKey?.let(preferencesStore::voiceCleanup) ?: flowOf(false))
-            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-
     private val cleanupPrefs: Flow<CleanupPrefs> =
-        combine(cleanUp, preferencesStore.voiceCleanupNoticeSeen, sessionKind) { on, seen, kind ->
-            CleanupPrefs(on, seen, kind)
+        combine(preferencesStore.voiceCleanupNoticeSeen, sessionKind, cleanupError) { seen, kind, error ->
+            CleanupPrefs(seen, kind, error)
         }
 
     private val agentName: Flow<String> = agentRepository.observeAgents().map { agents ->
@@ -171,7 +169,8 @@ class VoiceViewModel @Inject constructor(
             action = action,
             cleanupSupported = cleanupSupported,
             cleanupOffered = cleanupSupported && cleanup.kind.cleansUp(),
-            cleanUp = cleanup.on,
+            cleanUp = status?.cleanup_enabled == true,
+            cleanupError = cleanup.error,
             cleanupNoticeSeen = cleanup.noticeSeen,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), VoiceUiState())
@@ -242,6 +241,7 @@ class VoiceViewModel @Inject constructor(
     fun hideSetup() {
         setupVisible.value = false
         actionState.value = VoiceActionState()
+        cleanupError.value = null
     }
 
     fun refreshStatus() {
@@ -265,14 +265,19 @@ class VoiceViewModel @Inject constructor(
     }
 
     /**
-     * Turning cleanup on also records the notice as seen: the UI shows the
-     * notice first, and calls this only after "Got it".
+     * Stored on the agent, so every client of it shares the choice. Turning
+     * cleanup on also records the notice as seen on this device: the UI shows
+     * the notice first, and calls this only after "Got it".
      */
     fun setCleanUp(on: Boolean) {
-        val key = agentKey ?: return
+        cleanupError.value = null
         viewModelScope.launch {
             if (on) preferencesStore.setVoiceCleanupNoticeSeen()
-            preferencesStore.setVoiceCleanup(key, on)
+            try {
+                voiceRepository.setCleanup(on)
+            } catch (e: VoiceApiException) {
+                cleanupError.value = "Couldn't save this setting on ${uiState.value.agentName}. Try again."
+            }
         }
     }
 
@@ -303,7 +308,9 @@ class VoiceViewModel @Inject constructor(
             maxSeconds = capability.maxSeconds,
             scope = viewModelScope,
             cleaner = {
-                if (capability.cleanup && sessionKind.value.cleansUp() && cleanUp.value) {
+                if (capability.cleanup && sessionKind.value.cleansUp() &&
+                    voiceRepository.status.value?.cleanup_enabled == true
+                ) {
                     TranscriptCleaner { text -> voiceRepository.cleanup(text) }
                 } else {
                     null
@@ -342,7 +349,7 @@ class VoiceViewModel @Inject constructor(
         disposeController()
     }
 
-    private data class CleanupPrefs(val on: Boolean, val noticeSeen: Boolean, val kind: SessionKind?)
+    private data class CleanupPrefs(val noticeSeen: Boolean, val kind: SessionKind?, val error: String?)
 
     private data class Quad(
         val capability: Pair<Boolean, VoiceCapability?>,

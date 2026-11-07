@@ -198,6 +198,19 @@ cadence; they do **not** gate compatibility.
   * Golden fixtures: ``VoiceCleanupRequest.json`` and
     ``VoiceCleanupResponse.json``. The ``voice_capability`` case in
     ``VersionInfoResponse.json`` carries the new key.
+  * The setting is stored on the agent, so every client of it shares one
+    choice (2026-11-07):
+    * ``VoiceStatusResponse`` gains ``cleanup_enabled`` (bool, always
+      emitted; clients read a missing key as ``false``). It does not depend
+      on the install state and survives ``DELETE /api/voice/model``.
+    * ``PUT /api/voice/cleanup/settings`` ``{"enabled": bool}`` (strict
+      bool) → the full ``VoiceStatusResponse``. The agent stores it in
+      ``<voice root>/cleanup.json`` and publishes ``voice.changed``, so the
+      other clients update live. ``500 storage_error`` when the file cannot
+      be written; ``422`` validation. Both transports answer identically.
+    * The first-opt-in privacy notice stays per device.
+    * Golden fixtures: ``VoiceCleanupSettingsRequest.json``; every
+      ``VoiceStatusResponse.json`` case carries ``cleanup_enabled``.
 * Additive delta within proto-v7 (2026-10-19, Claude focus view toggle):
   **additive optional field, no version bump.** ``claude_options`` gains
   ``focus_mode`` — bool or null, default ``null``. The agent merges it into the

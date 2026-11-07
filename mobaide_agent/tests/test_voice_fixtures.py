@@ -24,6 +24,7 @@ from mobaide.voice.models import (
     VOICE_CAPABILITIES,
     VoiceCleanupRequest,
     VoiceCleanupResponse,
+    VoiceCleanupSettingsRequest,
     VoiceDictationAudioRequest,
     VoiceDictationAudioResponse,
     VoiceDictationCreateRequest,
@@ -52,6 +53,7 @@ _MODELS = {
     "VoiceDictationResultResponse": VoiceDictationResultResponse,
     "VoiceCleanupRequest": VoiceCleanupRequest,
     "VoiceCleanupResponse": VoiceCleanupResponse,
+    "VoiceCleanupSettingsRequest": VoiceCleanupSettingsRequest,
 }
 
 

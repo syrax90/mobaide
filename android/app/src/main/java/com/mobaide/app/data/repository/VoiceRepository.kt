@@ -83,6 +83,22 @@ class VoiceRepository(
         return install()
     }
 
+    /**
+     * The status shows [enabled] at once and goes back if the agent refuses,
+     * unless a newer snapshot replaced it meanwhile.
+     */
+    suspend fun setCleanup(enabled: Boolean): VoiceStatusResponse {
+        val previous = _status.value
+        val optimistic = previous?.copy(cleanup_enabled = enabled)
+        if (optimistic != null) _status.value = optimistic
+        return try {
+            write { restApi.setVoiceCleanupSettings(enabled) }
+        } catch (e: VoiceApiException) {
+            if (optimistic != null) _status.compareAndSet(optimistic, previous)
+            throw e
+        }
+    }
+
     /** The session's AI agent cleans up [text] on the connected agent's computer (within 20 s). */
     suspend fun cleanup(text: String): String = voiceCall { restApi.cleanupVoiceTranscript(text).text }
 

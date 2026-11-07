@@ -69,6 +69,8 @@ class VoiceStatusResponse(BaseModel):
     self-test) once ``ready``. ``repairing`` is true while an enabled voice
     keeps its verified model and only needs its runtime again (after a
     Python upgrade): cancelling then stops without deleting the model.
+    ``cleanup_enabled`` is the user's transcript-cleanup choice for this
+    agent, shared by every client; it does not depend on the install state.
     """
 
     state: str
@@ -79,6 +81,7 @@ class VoiceStatusResponse(BaseModel):
     host: VoiceHostInfo
     speed_factor: float | None
     error: VoiceErrorInfo | None
+    cleanup_enabled: bool
 
 
 class VoiceInstallRequest(BaseModel):
@@ -125,6 +128,13 @@ class VoiceDictationResultResponse(BaseModel):
 
 class VoiceCleanupRequest(BaseModel):
     text: str = Field(min_length=1, max_length=MAX_CLEANUP_CHARS)
+
+
+class VoiceCleanupSettingsRequest(BaseModel):
+    """``PUT /api/voice/cleanup/settings``: turn transcript cleanup on or off
+    for every client of this agent."""
+
+    enabled: bool = Field(strict=True)
 
 
 class VoiceCleanupResponse(BaseModel):

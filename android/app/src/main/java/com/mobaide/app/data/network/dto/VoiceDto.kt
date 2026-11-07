@@ -57,6 +57,8 @@ data class VoiceStatusResponse(
     val host: VoiceHostInfo,
     val speed_factor: Double? = null,
     val error: VoiceErrorInfo? = null,
+    /** Transcript cleanup, one choice on the agent shared by all its clients. */
+    val cleanup_enabled: Boolean = false,
 ) {
     companion object {
         const val STATE_UNSUPPORTED = "unsupported"
@@ -111,6 +113,12 @@ data class VoiceDictationFinishRequest(
 @Serializable
 data class VoiceCleanupRequest(
     val text: String,
+)
+
+/** `PUT /api/voice/cleanup/settings`; answers the full [VoiceStatusResponse]. */
+@Serializable
+data class VoiceCleanupSettingsRequest(
+    val enabled: Boolean,
 )
 
 /** The cleaned transcript; the input when there was nothing to clean. */

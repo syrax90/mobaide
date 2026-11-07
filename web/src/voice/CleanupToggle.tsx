@@ -21,6 +21,8 @@ interface CleanupToggleProps {
   onChange: (on: boolean) => void;
   className: string;
   disabled?: boolean;
+  /** The agent refused or missed the last change; the box shows its old value again. */
+  saveFailed?: boolean;
 }
 
 /**
@@ -34,6 +36,7 @@ export function CleanupToggle({
   onChange,
   className,
   disabled = false,
+  saveFailed = false,
 }: CleanupToggleProps) {
   const noticeSeen = useVoicePrefsStore((state) => state.cleanupNoticeSeen);
   const acknowledge = useVoicePrefsStore((state) => state.acknowledgeCleanupNotice);
@@ -58,6 +61,11 @@ export function CleanupToggle({
         />
         {CLEANUP_TOGGLE_LABEL}
       </label>
+      {saveFailed && (
+        <p className="voice-error" role="alert">
+          {`Couldn’t save this setting on ${agentName}. Try again.`}
+        </p>
+      )}
       {noticeOpen && (
         <Modal
           labelledBy={titleId}

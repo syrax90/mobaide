@@ -388,18 +388,27 @@ struct VoicePanel: View {
 private struct VoiceCleanupToggle: View {
     let voice: VoiceInputModel
 
+    @Environment(\.mobaideColors) private var colors
     @State private var noticeShown = false
 
     var body: some View {
-        Toggle(VoiceCleanupCopy.toggleLabel, isOn: binding)
-            .toggleStyle(.pixelCheckbox)
-            .accessibilityIdentifier("voice_cleanup_checkbox")
-            .alert(VoiceCleanupCopy.noticeTitle, isPresented: $noticeShown) {
-                Button("Got it") { voice.setCleanUp(true) }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(VoiceCleanupCopy.notice(agent: voice.agentName))
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(VoiceCleanupCopy.toggleLabel, isOn: binding)
+                .toggleStyle(.pixelCheckbox)
+                .accessibilityIdentifier("voice_cleanup_checkbox")
+                .alert(VoiceCleanupCopy.noticeTitle, isPresented: $noticeShown) {
+                    Button("Got it") { voice.setCleanUp(true) }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text(VoiceCleanupCopy.notice(agent: voice.agentName))
+                }
+            if let error = voice.cleanupSaveError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(colors.danger)
+                    .accessibilityIdentifier("voice_cleanup_error")
             }
+        }
     }
 
     private var binding: Binding<Bool> {
@@ -427,6 +436,10 @@ enum VoiceCleanupCopy {
         "The session's AI agent on \(agent) cleans up each transcript with its cheapest model, for example "
             + "Claude Code with Claude Haiku. It runs under your own account: the text goes to that agent's "
             + "provider and counts toward your usage. Mobaide doesn't store it."
+    }
+
+    static func saveFailed(agent: String) -> String {
+        "Couldn't save this setting on \(agent). Try again."
     }
 }
 

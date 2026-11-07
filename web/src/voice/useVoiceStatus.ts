@@ -5,6 +5,7 @@ import {
   getVoiceStatus,
   installVoice,
   removeVoice,
+  setVoiceCleanup,
   toVoiceApiError,
 } from '../api/voiceRepository';
 import { queryKeys, wsBackedQueryOptions } from '../lib/queryKeys';
@@ -89,4 +90,45 @@ export function useVoiceActions(agentId: string) {
     },
     meta: { silent: true },
   });
+}
+
+/**
+ * The agent's transcript-cleanup choice, stored on the agent so every client
+ * of it shares one setting. The cached status changes at once and goes back
+ * if the agent refuses; `voice.changed` brings changes from other clients.
+ */
+export function useVoiceCleanupSetting(agentId: string, status: VoiceStatus | undefined) {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: async (enabled: boolean): Promise<VoiceStatus> => {
+      try {
+        return await setVoiceCleanup(agentId, enabled);
+      } catch (error) {
+        throw toVoiceApiError(error);
+      }
+    },
+    onMutate: async (enabled) => {
+      const key = queryKeys.voiceStatus(agentId);
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<VoiceStatus>(key);
+      if (previous !== undefined) {
+        queryClient.setQueryData<VoiceStatus>(key, { ...previous, cleanup_enabled: enabled });
+      }
+      return { previous };
+    },
+    onError: (_error, _enabled, context) => {
+      if (context?.previous !== undefined) {
+        queryClient.setQueryData<VoiceStatus>(queryKeys.voiceStatus(agentId), context.previous);
+      }
+    },
+    onSuccess: (next) => {
+      queryClient.setQueryData<VoiceStatus>(queryKeys.voiceStatus(agentId), next);
+    },
+    meta: { silent: true },
+  });
+  return {
+    on: status?.cleanup_enabled === true,
+    set: mutation.mutate,
+    failed: mutation.isError,
+  };
 }

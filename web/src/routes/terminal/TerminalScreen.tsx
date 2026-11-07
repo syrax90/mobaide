@@ -46,14 +46,10 @@ import type { DictationState } from '../../voice/dictationController';
 import {
   useVoiceCapability,
   useVoiceCleanupCapability,
+  useVoiceCleanupSetting,
   useVoiceStatus,
 } from '../../voice/useVoiceStatus';
-import {
-  useCleanup,
-  useMicHidden,
-  useSkipReview,
-  useVoicePrefsStore,
-} from '../../voice/voicePrefsStore';
+import { useMicHidden, useSkipReview, useVoicePrefsStore } from '../../voice/voicePrefsStore';
 import { voiceMicMode } from '../../voice/voiceStatusView';
 import { useWideViewport } from './useWideViewport';
 
@@ -222,15 +218,14 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   // only Claude Code can do it so far, and there the CLI is known to be there.
   const cleanupAvailable =
     useVoiceCleanupCapability(model.agentId).data === true && session?.kind === 'claude';
-  const cleanUp = useCleanup(model.agentId);
-  const setCleanUp = useVoicePrefsStore((state) => state.setCleanup);
+  const cleanUp = useVoiceCleanupSetting(model.agentId, voiceStatus.data);
   // A capability only while voice is ready: any other state disposes the
   // controller, which cancels a recording the agent can no longer take.
   const dictation = useDictation(
     model.agentId,
     model.sessionId,
     micMode === 'ready' ? voiceCapability : null,
-    cleanupAvailable && cleanUp,
+    cleanupAvailable && cleanUp.on,
   );
   const [voiceSetupOpen, setVoiceSetupOpen] = useState(false);
   const agentName = useAgentName(model.agentId);
@@ -698,10 +693,9 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
               setSkipReview(model.agentId, skip);
             }}
             cleanupAvailable={cleanupAvailable}
-            cleanUp={cleanUp}
-            onCleanUpChange={(on) => {
-              setCleanUp(model.agentId, on);
-            }}
+            cleanUp={cleanUp.on}
+            cleanUpSaveFailed={cleanUp.failed}
+            onCleanUpChange={cleanUp.set}
             onCleanUpText={dictation.cleanUpText}
           />
         )}
