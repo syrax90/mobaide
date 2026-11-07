@@ -85,6 +85,24 @@ final class VoiceRepository {
         return try await install()
     }
 
+    /// Stores the cleanup choice on the agent for every client. The status
+    /// changes at once and goes back when the agent refuses; a snapshot that
+    /// arrives meanwhile wins over both the rollback and the answer.
+    @discardableResult
+    func setCleanup(_ on: Bool) async throws -> VoiceStatusResponse {
+        let previous = status
+        if let previous { status = previous.withCleanup(on) }
+        let before = events
+        do {
+            let answer = try await agentAPI.setVoiceCleanup(enabled: on)
+            if events == before { status = answer }
+            return answer
+        } catch {
+            if events == before { status = previous }
+            throw VoiceApiError.map(error)
+        }
+    }
+
     /// The session's AI agent cleans up `text` on the connected agent's
     /// computer (within 20 s).
     nonisolated func cleanup(text: String) async throws -> String {

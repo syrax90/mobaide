@@ -16,20 +16,14 @@ interface VoicePrefsState {
    */
   skipReviewAgents: Record<string, true>;
   /**
-   * Agents whose transcripts the session's AI agent cleans up before the
-   * review, in sessions that support it. Off by default: the text then leaves
-   * the computer for the AI agent's provider.
-   */
-  cleanupAgents: Record<string, true>;
-  /**
    * The user pressed "Got it" on the cleanup notice, which comes before the
    * first opt-in on this browser. Mirrors `voice_cleanup_notice_seen` on
-   * Android and iOS.
+   * Android and iOS. The cleanup choice itself is stored on the agent
+   * (`cleanup_enabled` in the voice status), shared by every client.
    */
   cleanupNoticeSeen: boolean;
   setMicHidden: (agentId: string, hidden: boolean) => void;
   setSkipReview: (agentId: string, skip: boolean) => void;
-  setCleanup: (agentId: string, on: boolean) => void;
   acknowledgeCleanupNotice: () => void;
   forgetAgent: (agentId: string) => void;
 }
@@ -79,7 +73,6 @@ export const useVoicePrefsStore = create<VoicePrefsState>()(
     (set) => ({
       hiddenAgents: {},
       skipReviewAgents: {},
-      cleanupAgents: {},
       cleanupNoticeSeen: false,
       setMicHidden: (agentId, hidden) => {
         safely(() => {
@@ -91,11 +84,6 @@ export const useVoicePrefsStore = create<VoicePrefsState>()(
           set((state) => ({ skipReviewAgents: withAgent(state.skipReviewAgents, agentId, skip) }));
         });
       },
-      setCleanup: (agentId, on) => {
-        safely(() => {
-          set((state) => ({ cleanupAgents: withAgent(state.cleanupAgents, agentId, on) }));
-        });
-      },
       acknowledgeCleanupNotice: () => {
         safely(() => {
           set({ cleanupNoticeSeen: true });
@@ -105,12 +93,10 @@ export const useVoicePrefsStore = create<VoicePrefsState>()(
         safely(() => {
           set((state) =>
             Object.hasOwn(state.hiddenAgents, agentId) ||
-            Object.hasOwn(state.skipReviewAgents, agentId) ||
-            Object.hasOwn(state.cleanupAgents, agentId)
+            Object.hasOwn(state.skipReviewAgents, agentId)
               ? {
                   hiddenAgents: withoutAgent(state.hiddenAgents, agentId),
                   skipReviewAgents: withoutAgent(state.skipReviewAgents, agentId),
-                  cleanupAgents: withoutAgent(state.cleanupAgents, agentId),
                 }
               : state,
           );
@@ -125,14 +111,12 @@ export const useVoicePrefsStore = create<VoicePrefsState>()(
           ...current,
           hiddenAgents: cleanAgentMap(stored?.hiddenAgents),
           skipReviewAgents: cleanAgentMap(stored?.skipReviewAgents),
-          cleanupAgents: cleanAgentMap(stored?.cleanupAgents),
           cleanupNoticeSeen: stored?.cleanupNoticeSeen === true,
         };
       },
       partialize: (state) => ({
         hiddenAgents: state.hiddenAgents,
         skipReviewAgents: state.skipReviewAgents,
-        cleanupAgents: state.cleanupAgents,
         cleanupNoticeSeen: state.cleanupNoticeSeen,
       }),
     },
@@ -145,8 +129,4 @@ export function useMicHidden(agentId: string): boolean {
 
 export function useSkipReview(agentId: string): boolean {
   return useVoicePrefsStore((state) => Object.hasOwn(state.skipReviewAgents, agentId));
-}
-
-export function useCleanup(agentId: string): boolean {
-  return useVoicePrefsStore((state) => Object.hasOwn(state.cleanupAgents, agentId));
 }

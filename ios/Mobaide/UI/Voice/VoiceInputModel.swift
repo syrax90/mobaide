@@ -19,7 +19,8 @@ final class VoiceInputModel {
     private(set) var permissionFailure: DictationState?
     private(set) var actionBusy = false
     private(set) var actionError: String?
-    private(set) var cleanUp = false
+    /// The agent did not store the last cleanup change.
+    private(set) var cleanupSaveError: String?
     /// "Got it" was pressed on the notice shown before the first cleanup opt-in.
     private(set) var cleanupNoticeSeen = false
     var setupVisible = false
@@ -49,7 +50,6 @@ final class VoiceInputModel {
         agentId = container.tokenStore.getAgentId()
         self.sessionId = sessionId
         micHidden = agentKey.map { preferences.isVoiceMicHidden(agentKey: $0) } ?? false
-        cleanUp = agentKey.map { preferences.isVoiceCleanupOn(agentKey: $0) } ?? false
         cleanupNoticeSeen = preferences.isVoiceCleanupNoticeSeen()
         if let agentId, let agent = agentRepository.currentAgents.first(where: { $0.agent_id == agentId }) {
             agentName = agent.name
@@ -57,6 +57,9 @@ final class VoiceInputModel {
     }
 
     var status: VoiceStatusResponse? { repository.status }
+
+    /// Stored on the agent, so every client of it shares the choice.
+    var cleanUp: Bool { status?.cleanup_enabled == true }
 
     var micMode: VoiceMicMode {
         VoiceStatusView.micMode(capability: capability, status: status, hiddenByUser: micHidden)
@@ -146,6 +149,7 @@ final class VoiceInputModel {
     func hideSetup() {
         setupVisible = false
         actionError = nil
+        cleanupSaveError = nil
     }
 
     func install() { runAction { try await $0.install() } }
@@ -163,13 +167,18 @@ final class VoiceInputModel {
     /// Turning cleanup on also records the notice as seen: the UI shows the
     /// notice first, and calls this only after "Got it".
     func setCleanUp(_ on: Bool) {
-        guard let agentKey else { return }
         if on {
             preferences.setVoiceCleanupNoticeSeen()
             cleanupNoticeSeen = true
         }
-        preferences.setVoiceCleanup(agentKey: agentKey, on: on)
-        cleanUp = on
+        cleanupSaveError = nil
+        Task {
+            do {
+                try await repository.setCleanup(on)
+            } catch {
+                cleanupSaveError = VoiceCleanupCopy.saveFailed(agent: agentName)
+            }
+        }
     }
 
     private func runAction(_ action: @escaping (VoiceRepository) async throws -> VoiceStatusResponse) {

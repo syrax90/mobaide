@@ -61,6 +61,8 @@ struct VoiceStatusResponse: Codable, Equatable, Sendable {
     let host: VoiceHostInfo
     let speed_factor: Double?
     let error: VoiceErrorInfo?
+    /// The agent's transcript-cleanup choice, shared by every client.
+    let cleanup_enabled: Bool
 
     init(
         state: String,
@@ -70,7 +72,8 @@ struct VoiceStatusResponse: Codable, Equatable, Sendable {
         progress: VoiceProgress? = nil,
         host: VoiceHostInfo,
         speed_factor: Double? = nil,
-        error: VoiceErrorInfo? = nil
+        error: VoiceErrorInfo? = nil,
+        cleanup_enabled: Bool = false
     ) {
         self.state = state
         self.enabled = enabled
@@ -80,6 +83,7 @@ struct VoiceStatusResponse: Codable, Equatable, Sendable {
         self.host = host
         self.speed_factor = speed_factor
         self.error = error
+        self.cleanup_enabled = cleanup_enabled
     }
 
     init(from decoder: any Decoder) throws {
@@ -92,6 +96,21 @@ struct VoiceStatusResponse: Codable, Equatable, Sendable {
         host = try container.decode(VoiceHostInfo.self, forKey: .host)
         speed_factor = try container.decodeIfPresent(Double.self, forKey: .speed_factor)
         error = try container.decodeIfPresent(VoiceErrorInfo.self, forKey: .error)
+        cleanup_enabled = try container.decodeIfPresent(Bool.self, forKey: .cleanup_enabled) ?? false
+    }
+
+    func withCleanup(_ on: Bool) -> VoiceStatusResponse {
+        VoiceStatusResponse(
+            state: state,
+            enabled: enabled,
+            repairing: repairing,
+            model: model,
+            progress: progress,
+            host: host,
+            speed_factor: speed_factor,
+            error: error,
+            cleanup_enabled: on
+        )
     }
 }
 
@@ -137,6 +156,11 @@ struct VoiceDictationFinishRequest: Codable, Equatable, Sendable {
 /// `POST /api/voice/cleanup`: 1–6000 characters.
 struct VoiceCleanupRequest: Codable, Equatable, Sendable {
     let text: String
+}
+
+/// `PUT /api/voice/cleanup/settings`: the cleanup choice for every client of the agent.
+struct VoiceCleanupSettingsRequest: Codable, Equatable, Sendable {
+    let enabled: Bool
 }
 
 /// The cleaned transcript; the input when there was nothing to clean.

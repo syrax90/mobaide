@@ -360,6 +360,14 @@ struct AgentAPI: Sendable {
         try await execute(method: "POST", url: "\(try await base())/api/voice/cleanup", body: VoiceCleanupRequest(text: text))
     }
 
+    func setVoiceCleanup(enabled: Bool) async throws -> VoiceStatusResponse {
+        try await execute(
+            method: "PUT",
+            url: "\(try await base())/api/voice/cleanup/settings",
+            body: VoiceCleanupSettingsRequest(enabled: enabled)
+        )
+    }
+
     func getAutoScanList() async throws -> AutoScanListResponse {
         try await execute(method: "GET", url: "\(try await base())/api/autoscan/list")
     }

@@ -62,9 +62,6 @@ class PreferencesStore(private val context: Context) {
     private fun keyVoiceMicHidden(agentKey: String) =
         booleanPreferencesKey("$VOICE_MIC_HIDDEN_PREFIX$agentKey")
 
-    private fun keyVoiceCleanup(agentKey: String) =
-        booleanPreferencesKey("$VOICE_CLEANUP_PREFIX$agentKey")
-
     private fun keyRecentShortcutChords(sessionKindKey: String) =
         stringPreferencesKey("recent_shortcut_chords::$sessionKindKey")
 
@@ -107,21 +104,6 @@ class PreferencesStore(private val context: Context) {
         context.dataStore.edit { prefs ->
             if (hidden) prefs[keyVoiceMicHidden(agentKey)] = true
             else prefs.remove(keyVoiceMicHidden(agentKey))
-        }
-    }
-
-    /**
-     * Whether the session's AI agent cleans up this agent's transcripts before
-     * they reach the composer. Off by default: the text then leaves the
-     * computer for the AI agent's provider.
-     */
-    fun voiceCleanup(agentKey: String): Flow<Boolean> =
-        context.dataStore.data.map { it[keyVoiceCleanup(agentKey)] ?: false }
-
-    suspend fun setVoiceCleanup(agentKey: String, on: Boolean) {
-        context.dataStore.edit { prefs ->
-            if (on) prefs[keyVoiceCleanup(agentKey)] = true
-            else prefs.remove(keyVoiceCleanup(agentKey))
         }
     }
 
@@ -384,7 +366,6 @@ class PreferencesStore(private val context: Context) {
     companion object {
         const val RECENT_CUSTOM_PATHS_PREFIX: String = "recent_custom_paths::"
         const val VOICE_MIC_HIDDEN_PREFIX: String = "voice_mic_hidden::"
-        const val VOICE_CLEANUP_PREFIX: String = "voice_cleanup::"
         const val MAX_RECENT_CUSTOM_PATHS: Int = 5
         const val MAX_RECENT_SHORTCUT_CHORDS: Int = 10
     }

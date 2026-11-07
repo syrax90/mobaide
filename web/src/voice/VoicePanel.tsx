@@ -1,10 +1,15 @@
 import { useState, type ReactNode } from 'react';
 import { VOICE_RECOMMENDATION_LOW, VOICE_STATE, type VoiceStatus } from '../protocol/dto/voice';
 import { CleanupToggle } from './CleanupToggle';
-import { useVoiceActions, useVoiceCleanupCapability, type VoiceAction } from './useVoiceStatus';
+import {
+  useVoiceActions,
+  useVoiceCleanupCapability,
+  useVoiceCleanupSetting,
+  type VoiceAction,
+} from './useVoiceStatus';
 import { isVoiceApiError } from './voiceApi';
 import { installErrorCopy, voiceActionErrorCopy } from './voiceErrorCopy';
-import { useCleanup, useMicHidden, useSkipReview, useVoicePrefsStore } from './voicePrefsStore';
+import { useMicHidden, useSkipReview, useVoicePrefsStore } from './voicePrefsStore';
 import {
   formatBytes,
   languageNames,
@@ -54,8 +59,7 @@ export function VoicePanel({
   const setSkipReview = useVoicePrefsStore((state) => state.setSkipReview);
   const settings = variant === 'settings';
   const cleanupSupported = useVoiceCleanupCapability(agentId, settings).data === true;
-  const cleanUp = useCleanup(agentId);
-  const setCleanUp = useVoicePrefsStore((state) => state.setCleanup);
+  const cleanUp = useVoiceCleanupSetting(agentId, status);
   const [confirmRemove, setConfirmRemove] = useState(false);
 
   if (status === undefined) {
@@ -327,10 +331,9 @@ export function VoicePanel({
         <CleanupToggle
           className="voice-toggle"
           agentName={agentName}
-          checked={cleanUp}
-          onChange={(on) => {
-            setCleanUp(agentId, on);
-          }}
+          checked={cleanUp.on}
+          saveFailed={cleanUp.failed}
+          onChange={cleanUp.set}
         />
       )}
       {settings && status.model.notice !== undefined && status.model.notice !== '' && (

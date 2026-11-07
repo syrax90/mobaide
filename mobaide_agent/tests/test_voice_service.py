@@ -1207,6 +1207,41 @@ class TestCleanup:
             await running
 
 
+class TestCleanupSetting:
+    async def test_off_by_default(self, make_service):
+        assert make_service().status().cleanup_enabled is False
+
+    async def test_stored_announced_and_shared_by_a_new_service(self, make_service):
+        events = _Events()
+        service = make_service(publish=events)
+
+        status = service.set_cleanup_enabled(True)
+
+        assert status.cleanup_enabled is True
+        assert events.payloads[-1]["cleanup_enabled"] is True
+        assert make_service().status().cleanup_enabled is True
+
+        assert service.set_cleanup_enabled(False).cleanup_enabled is False
+        assert events.payloads[-1]["cleanup_enabled"] is False
+
+    async def test_survives_model_removal(self, make_service):
+        service = make_service()
+        await service.install()
+        await _installed(service)
+        service.set_cleanup_enabled(True)
+
+        status = await service.remove()
+
+        assert status.state == "not_installed"
+        assert status.cleanup_enabled is True
+
+    async def test_corrupt_file_reads_as_off(self, make_service, voice_dir):
+        voice_dir.mkdir(parents=True, exist_ok=True)
+        (voice_dir / "cleanup.json").write_text("{not json", encoding="utf-8")
+
+        assert make_service().status().cleanup_enabled is False
+
+
 class TestUnsupportedHost:
     @pytest.fixture(autouse=True)
     def _no_runtime(self, monkeypatch):

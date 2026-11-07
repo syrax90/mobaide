@@ -22,43 +22,20 @@ beforeEach(() => {
   useVoicePrefsStore.setState({
     hiddenAgents: {},
     skipReviewAgents: {},
-    cleanupAgents: {},
     cleanupNoticeSeen: false,
   });
   window.localStorage.clear();
 });
 
 describe('transcript cleanup', () => {
-  it('is off until turned on, per agent, and persisted', () => {
-    const { setCleanup } = useVoicePrefsStore.getState();
-
-    setCleanup('a1', true);
-    setCleanup('a2', true);
-    setCleanup('a2', false);
-
-    expect(useVoicePrefsStore.getState().cleanupAgents).toEqual({ a1: true });
-    expect(stored()['cleanupAgents']).toEqual({ a1: true });
-  });
-
-  it('restores only real opt-ins', async () => {
-    // Untrusted storage: a truthy string hand-edited in must not send text to
-    // the AI agent's provider on its own.
-    seed({ cleanupAgents: { a1: true, a2: 'yes', '': true, a3: 1 } });
+  it('is not kept in the browser: the agent stores it for every client', async () => {
+    seed({ cleanupAgents: { a1: true }, cleanupNoticeSeen: true });
 
     await useVoicePrefsStore.persist.rehydrate();
+    useVoicePrefsStore.getState().setMicHidden('a1', true);
 
-    expect(useVoicePrefsStore.getState().cleanupAgents).toEqual({ a1: true });
-  });
-
-  it('is forgotten with the agent, even when it was the agent\'s only preference', () => {
-    const { setCleanup, forgetAgent } = useVoicePrefsStore.getState();
-    setCleanup('a1', true);
-    setCleanup('a2', true);
-
-    forgetAgent('a1');
-
-    expect(useVoicePrefsStore.getState().cleanupAgents).toEqual({ a2: true });
-    expect(stored()['cleanupAgents']).toEqual({ a2: true });
+    expect(useVoicePrefsStore.getState()).not.toHaveProperty('cleanupAgents');
+    expect(stored()).not.toHaveProperty('cleanupAgents');
   });
 });
 

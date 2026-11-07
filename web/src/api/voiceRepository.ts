@@ -102,6 +102,14 @@ export async function removeVoice(agentId: string): Promise<VoiceStatus> {
   return decodeStatus(body);
 }
 
+/** Turn transcript cleanup on or off for every client of this agent. */
+export async function setVoiceCleanup(agentId: string, enabled: boolean): Promise<VoiceStatus> {
+  const body = await call(() =>
+    createAgentClient(agentId).PUT('/api/voice/cleanup/settings', { body: { enabled } }),
+  );
+  return decodeStatus(body);
+}
+
 /**
  * Tidies a transcript with Claude Code on the agent (fillers, self-corrections,
  * punctuation, technical terms). The agent answers within 20 s.

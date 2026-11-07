@@ -46,6 +46,10 @@ class VoicePaths:
         return self.root / "settings.json"
 
     @property
+    def cleanup_file(self) -> Path:
+        return self.root / "cleanup.json"
+
+    @property
     def lock_file(self) -> Path:
         return self.root / ".lock"
 
@@ -108,6 +112,24 @@ def load_settings(paths: VoicePaths) -> VoiceSettings:
 
 def save_settings(paths: VoicePaths, settings: VoiceSettings) -> None:
     atomic_write(paths.settings_file, json.dumps(asdict(settings), indent=2) + "\n")
+
+
+def load_cleanup_enabled(paths: VoicePaths) -> bool:
+    """The transcript-cleanup choice; a missing or corrupt file means off.
+    Kept apart from ``settings.json`` so install writes never race it and
+    removing the model keeps it."""
+    try:
+        raw = json.loads(paths.cleanup_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as exc:
+        logger.warning("voice.cleanup_unreadable path=%s: %s", paths.cleanup_file, exc)
+        return False
+    return isinstance(raw, dict) and raw.get("enabled") is True
+
+
+def save_cleanup_enabled(paths: VoicePaths, enabled: bool) -> None:
+    atomic_write(paths.cleanup_file, json.dumps({"enabled": enabled}, indent=2) + "\n")
 
 
 def _read_marker(directory: Path) -> dict[str, Any] | None:

@@ -326,6 +326,7 @@ fun VoiceSetupSheet(
                 micHidden = state.micHidden,
                 cleanupAvailable = state.cleanupOffered,
                 cleanUp = state.cleanUp,
+                cleanupError = state.cleanupError,
                 cleanupNoticeSeen = state.cleanupNoticeSeen,
                 onEnable = onEnable,
                 onCancelInstall = onCancelInstall,
@@ -359,6 +360,7 @@ fun VoicePanel(
     modifier: Modifier = Modifier,
     cleanupAvailable: Boolean = false,
     cleanUp: Boolean = false,
+    cleanupError: String? = null,
     cleanupNoticeSeen: Boolean = false,
     onEnable: () -> Unit = {},
     onCancelInstall: () -> Unit = {},
@@ -519,6 +521,16 @@ fun VoicePanel(
                 agentName = agentName,
                 onCheckedChange = onCleanUpChange,
             )
+            cleanupError?.let { error ->
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier
+                        .semantics { liveRegion = LiveRegionMode.Polite }
+                        .testTag("voice_cleanup_error"),
+                )
+            }
         }
         if (settings && !status.model.notice.isNullOrBlank()) {
             PixelTextButton(onClick = { showLicense = true }) { Text("Model license") }
@@ -721,6 +733,7 @@ fun VoiceSettingsSection(
                 micHidden = state.micHidden,
                 cleanupAvailable = state.cleanupSupported,
                 cleanUp = state.cleanUp,
+                cleanupError = state.cleanupError,
                 cleanupNoticeSeen = state.cleanupNoticeSeen,
                 onEnable = onEnable,
                 onCancelInstall = onCancelInstall,

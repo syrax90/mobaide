@@ -1,11 +1,17 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stubLocalStorage } from '../test/localStorageStub';
 
 // Before importing the store, so zustand's
 // `createJSONStorage(() => window.localStorage)` captures the stand-in.
 stubLocalStorage();
+
+const setVoiceCleanup = vi.fn();
+vi.mock('../api/voiceRepository', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/voiceRepository')>()),
+  setVoiceCleanup: (agentId: string, enabled: boolean) => setVoiceCleanup(agentId, enabled) as unknown,
+}));
 
 vi.mock('../api/agentCapabilities', () => ({
   fetchAgentCapabilities: () => Promise.reject(new Error('the capability comes from the seeded cache')),
@@ -88,10 +94,13 @@ beforeEach(() => {
   useVoicePrefsStore.setState({
     hiddenAgents: {},
     skipReviewAgents: {},
-    cleanupAgents: {},
     cleanupNoticeSeen: false,
   });
   window.localStorage.clear();
+  setVoiceCleanup.mockReset();
+  setVoiceCleanup.mockImplementation((_agentId: string, enabled: boolean) =>
+    Promise.resolve(voiceStatusSchema.parse({ ...READY_WIRE, cleanup_enabled: enabled })),
+  );
 });
 
 afterEach(() => {
@@ -99,17 +108,51 @@ afterEach(() => {
 });
 
 describe('VoicePanel transcript cleanup', () => {
-  it('offers the toggle in the settings, and turns it on after the notice', () => {
+  it('offers the toggle in the settings, and stores it on the agent after the notice', async () => {
     mount('settings', { ...VOICE, cleanup: true });
     const toggle = screen.getByRole('checkbox', { name: LABEL });
     expect(toggle).not.toBeChecked();
 
     fireEvent.click(toggle);
-    expect(useVoicePrefsStore.getState().cleanupAgents).toEqual({});
+    expect(setVoiceCleanup).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Got it' }));
 
-    expect(toggle).toBeChecked();
-    expect(useVoicePrefsStore.getState().cleanupAgents).toEqual({ [AGENT]: true });
+    await waitFor(() => {
+      expect(setVoiceCleanup).toHaveBeenCalledWith(AGENT, true);
+    });
+    expect(useVoicePrefsStore.getState().cleanupNoticeSeen).toBe(true);
+  });
+
+  it('shows the choice the agent stored, from any client', () => {
+    mount('settings', { ...VOICE, cleanup: true }, {
+      status: voiceStatusSchema.parse({ ...READY_WIRE, cleanup_enabled: true }),
+    });
+
+    expect(screen.getByRole('checkbox', { name: LABEL })).toBeChecked();
+  });
+
+  it('turns it off on the agent without a notice', async () => {
+    mount('settings', { ...VOICE, cleanup: true }, {
+      status: voiceStatusSchema.parse({ ...READY_WIRE, cleanup_enabled: true }),
+    });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: LABEL }));
+
+    await waitFor(() => {
+      expect(setVoiceCleanup).toHaveBeenCalledWith(AGENT, false);
+    });
+    expect(screen.queryByRole('button', { name: 'Got it' })).toBeNull();
+  });
+
+  it('says so when the agent does not store the change', async () => {
+    setVoiceCleanup.mockRejectedValue(new Error('offline'));
+    useVoicePrefsStore.setState({ cleanupNoticeSeen: true });
+    mount('settings', { ...VOICE, cleanup: true });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: LABEL }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t save this setting on laptop.');
+    expect(screen.getByRole('checkbox', { name: LABEL })).not.toBeChecked();
   });
 
   it('names no single AI agent and drops the old explanation under the toggle', () => {

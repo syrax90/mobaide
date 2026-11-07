@@ -42,6 +42,8 @@ interface DictationDialogProps {
   /** The agent can clean up transcripts in this session. */
   cleanupAvailable: boolean;
   cleanUp: boolean;
+  /** The agent did not store the last change of `cleanUp`. */
+  cleanUpSaveFailed?: boolean;
   onCleanUpChange: (cleanUp: boolean) => void;
   /** Cleans up the review's text, when cleanup is turned on from the review. */
   onCleanUpText: (text: string, abort: AbortController) => Promise<CleanupOutcome>;
@@ -106,6 +108,7 @@ export function DictationDialog({
   onSkipReviewChange,
   cleanupAvailable,
   cleanUp,
+  cleanUpSaveFailed = false,
   onCleanUpChange,
   onCleanUpText,
 }: DictationDialogProps) {
@@ -372,6 +375,7 @@ export function DictationDialog({
               className="voice-review-skip"
               agentName={agentName}
               checked={cleanUp}
+              saveFailed={cleanUpSaveFailed}
               disabled={reviewCleaning}
               onChange={(on) => {
                 onCleanUpChange(on);

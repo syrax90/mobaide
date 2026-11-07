@@ -36,6 +36,7 @@ INSTALL = "/api/voice/install"
 MODEL = "/api/voice/model"
 DICTATIONS = "/api/voice/dictations"
 CLEANUP = "/api/voice/cleanup"
+CLEANUP_SETTINGS = "/api/voice/cleanup/settings"
 ONE_SECOND_B64 = base64.b64encode(b"\x10\x27" * 16000).decode()
 
 
@@ -316,6 +317,26 @@ class TestCleanup:
     async def test_invalid_bodies_are_422_on_both_transports(self, http, headers, relay, claude, body):
         resp = await http.post(CLEANUP, headers=headers, json=body)
         dispatched = await relay._dispatch_voice("POST", CLEANUP, body)
+
+        assert resp.status_code == dispatched["status"] == 422
+
+
+class TestCleanupSettings:
+    async def test_stored_on_both_transports(self, http, headers, relay):
+        resp = await _assert_parity(http, headers, relay, "PUT", CLEANUP_SETTINGS, {"enabled": True})
+
+        assert resp.status_code == 200
+        assert resp.json()["cleanup_enabled"] is True
+        assert (await http.get(STATUS, headers=headers)).json()["cleanup_enabled"] is True
+
+        resp = await _assert_parity(http, headers, relay, "PUT", CLEANUP_SETTINGS, {"enabled": False})
+
+        assert resp.json()["cleanup_enabled"] is False
+
+    @pytest.mark.parametrize("body", [{}, {"enabled": "yes"}], ids=["missing", "not_bool"])
+    async def test_invalid_bodies_are_422_on_both_transports(self, http, headers, relay, body):
+        resp = await http.put(CLEANUP_SETTINGS, headers=headers, json=body)
+        dispatched = await relay._dispatch_voice("PUT", CLEANUP_SETTINGS, body)
 
         assert resp.status_code == dispatched["status"] == 422
 
