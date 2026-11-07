@@ -218,8 +218,8 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
   const voiceStatus = useVoiceStatus(model.agentId, voiceCapability !== null);
   const micHidden = useMicHidden(model.agentId);
   const micMode = voiceMicMode(voiceCapability, voiceStatus.data, micHidden);
-  // Transcript cleanup runs Claude Code on the agent, so it is offered in
-  // Claude Code sessions only, where the CLI is known to be there.
+  // Transcript cleanup runs the session's AI agent on the agent's computer;
+  // only Claude Code can do it so far, and there the CLI is known to be there.
   const cleanupAvailable =
     useVoiceCleanupCapability(model.agentId).data === true && session?.kind === 'claude';
   const cleanUp = useCleanup(model.agentId);
@@ -671,6 +671,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
             agentName={agentName}
             status={voiceStatus.data}
             loadFailed={voiceStatus.isError}
+            cleanupOffered={cleanupAvailable}
             onClose={() => {
               setVoiceSetupOpen(false);
             }}
@@ -687,7 +688,6 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
             onStop={dictation.stop}
             onCancel={dictation.cancel}
             onRetry={dictation.retry}
-            onSkipCleanup={dictation.skipCleanup}
             onRecordAgain={dictation.toggle}
             onDismiss={dictation.dismiss}
             onContinue={dictation.continueFrom}
@@ -702,6 +702,7 @@ function TerminalView({ model, headerLabel, session }: TerminalViewProps) {
             onCleanUpChange={(on) => {
               setCleanUp(model.agentId, on);
             }}
+            onCleanUpText={dictation.cleanUpText}
           />
         )}
 

@@ -134,6 +134,16 @@ struct VoiceDictationFinishRequest: Codable, Equatable, Sendable {
     let last_seq: Int
 }
 
+/// `POST /api/voice/cleanup`: 1–6000 characters.
+struct VoiceCleanupRequest: Codable, Equatable, Sendable {
+    let text: String
+}
+
+/// The cleaned transcript; the input when there was nothing to clean.
+struct VoiceCleanupResponse: Codable, Equatable, Sendable {
+    let text: String
+}
+
 /// `state` is `done` (`text` set) or `transcribing` (call finish again).
 struct VoiceDictationResultResponse: Codable, Equatable, Sendable {
     let dictation_id: String

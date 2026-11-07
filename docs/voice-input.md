@@ -54,15 +54,17 @@ While `queued`, clients also poll the status every 4 s, because agents older tha
   - **Mobile:** the transcript goes at the composer's cursor, with a space added where needed, and the composer is focused. On iOS 17 it is appended, because SwiftUI exposes the selection only from iOS 18.
   - **Web:** an editable review field, then **Insert**, which uses the Templates paste path (a sanitized bracketed paste, never Enter). Claude Code may display long text as `[Pasted text]`. The review's mic button records again; the new transcript goes in at the field's cursor (replacing a selection), a space apart from the words around it, and a cancel, an empty result or a failure returns to the review. Its **Insert dictated text directly** checkbox skips the review for that agent from then on (stored per agent in the browser, `skipReviewAgents` in `mobaide-voice-prefs`): the transcript is pasted the same way as soon as it arrives, and only a paste the session refuses still opens the review. The agent's Voice input settings turn the review back on. Once the session has ended, the toolbar mic and **Record again** are disabled, because a transcript can only be pasted into a running session (an unknown status, such as while connecting, keeps them enabled).
 
-## Transcript cleanup (web, Claude Code sessions)
+## Transcript cleanup
 
-An opt-in, per-agent setting, off by default: **Clean up dictated text with Claude Haiku**. Before the review, Claude Code on the agent tidies each transcript: fillers, stutters and false starts go, self-corrections keep the final version ("twenty, no wait, thirty" → "thirty"), and punctuation and technical terms are fixed ("package dot json" → `package.json`). The speaker's language and wording are kept.
+An opt-in, per-agent setting, off by default: **Clean up dictated text with the session's AI agent: remove filler words, fix punctuation and technical terms**. Before the text reaches the user, the session's own AI agent tidies each transcript with its cheapest model: fillers, stutters and false starts go, self-corrections keep the final version ("twenty, no wait, thirty" → "thirty"), and punctuation and technical terms are fixed ("package dot json" → `package.json`). The speaker's language and wording are kept. Only Claude Code (with Claude Haiku) can do it so far; the copy is kept agent-neutral so other session kinds can join.
 
 - **Where it is offered.**
   - Only when the agent advertises `capabilities.voice.cleanup`.
-  - Only in Claude Code sessions (`kind == "claude"`), where the CLI is known to be installed.
-  - The toggle sits in the review dialog and in the agent's Voice input settings. It is stored per agent in the browser (`cleanupAgents` in `mobaide-voice-prefs`).
-  - The setting is read when a transcript arrives, so changing it applies to the next dictation.
+  - Settings: mobile **Settings → Voice input** and the web agent card's **Voice input**, for any agent that supports it.
+  - In a session, only where it works: Claude Code sessions (`kind == "claude"`), where the CLI is known to be installed. There the setup sheet (mobile) or dialog (web) offers the toggle once voice is downloading or ready, so the first dictation can already be cleaned up, and the web review offers it too.
+  - Storage: per agent. Web: `cleanupAgents` in `mobaide-voice-prefs`. Android and iOS: `voice_cleanup::<agent>`.
+- **The notice.** The first time the toggle is turned on in a browser or app install, a notice says where the text goes: the session's AI agent on the computer, its cheapest model (for example Claude Code with Claude Haiku), the user's own account and usage, nothing stored by Mobaide. The setting changes only after **Got it**; **Cancel** leaves it off. The acknowledgement is stored once per device (`cleanupNoticeSeen` in `mobaide-voice-prefs`; `voice_cleanup_notice_seen` on Android and iOS). Shared copy: web `voice/CleanupToggle.tsx`, Android `VoiceCleanupCopy` (`ui/voice/VoiceComponents.kt`), iOS `VoiceCleanupCopy` (`UI/Voice/VoiceViews.swift`).
+- **When the setting is read.** When a transcript arrives, so a change made while recording applies to that transcript. On the web, turning it on from the review also cleans up the text already in the review (the field is read-only meanwhile), unless that text was cleaned up already.
 - **Agent side.** `POST /api/voice/cleanup` (`mobaide_agent/mobaide/voice/cleanup.py`, `TranscriptCleaner`) runs one hidden `claude -p --model haiku --effort low --safe-mode --no-session-persistence --tools= --system-prompt-file cleanup-prompt.md --output-format json`:
   - The transcript goes on stdin, wrapped in `<transcript>` tags; the system prompt says to clean it, never answer it.
   - It uses the same binary resolution as sessions (`MOBAIDE_CLAUDE_BIN`, PATH, npm fallbacks).
@@ -73,12 +75,13 @@ An opt-in, per-agent setting, off by default: **Clean up dictated text with Clau
   - No session is created, persisted or shown.
   - Typical latency is 2–4 s. The call has a 20 s budget and runs at most two at once.
   - The text is never logged.
-- **Web flow.**
-  - The dialog shows **Cleaning up** with the transcript as heard, and offers **Cancel** and **Skip cleanup**.
-  - The review then says "Cleaned up by Claude Haiku" and offers **Show original**.
-  - Any failure (no Claude CLI, CLI older than 2.1.169, not logged in, timeout, an answer that is not a cleanup) shows the transcript as heard, with the reason. With **Insert dictated text directly** on, a failed cleanup still opens the review, so the user sees why.
-- **Cost and privacy.** The transcript goes to Anthropic under the user's own Claude Code login: a Pro/Max subscription's usage limits, or the API key's billing (fractions of a cent per dictation). Mobaide never stores or logs it; in relay mode the request crosses the central server in memory only, like the rest of the dictation traffic. Both toggles say so.
-- **Mobile.** Not yet: Android #803 and iOS #804 mirror it.
+- **Client flow (same controller state on all three: `cleaning`).**
+  - The cleanup is part of transcribing to the user: the web dialog keeps its **Transcribing** title and the mobile dictation bar stays in place; only the status line changes to "Cleaning up the text…". **Cancel** throws the dictation away, as it does while transcribing. There is no separate cleanup window and no skip button.
+  - Clients give up after 35 s (above the agent's 20 s budget and the relay's 30 s wait).
+  - Web: the review then says "Cleaned up by the session's AI agent." and offers **Show original**.
+  - Mobile: the cleaned text goes into the composer like any transcript; the composer is the review, so there is no **Show original**.
+  - Any failure (no Claude CLI, CLI older than 2.1.169, not logged in, timeout, an answer that is not a cleanup) keeps the transcript as heard and says why: in the web review (with **Insert dictated text directly** on, a failed cleanup still opens the review), or in a snackbar (Android) or toast (iOS) after the text is inserted.
+- **Cost and privacy.** The transcript goes to the AI agent's provider under the user's own login — for Claude Code, Anthropic: a Pro/Max subscription's usage limits, or the API key's billing (fractions of a cent per dictation). Mobaide never stores or logs it; in relay mode the request crosses the central server in memory only, like the rest of the dictation traffic. The notice says so.
 
 ## Permissions, privacy and stores
 
@@ -91,7 +94,7 @@ An opt-in, per-agent setting, off by default: **Clean up dictated text with Clau
   - The browser prompts the first time; when denied, the app shows per-browser instructions.
   - Only the SPA origin allows `microphone=(self)` (both Caddyfiles); central_server pages keep `microphone=()` (docs/deployment.md).
   - The AudioWorklet is a static same-origin file, because the CSP is `script-src 'self'` with no `blob:`.
-- **Privacy policy** (`central_server/legal/privacy.md` §3.4, §3.7, §4): audio is used only while dictating, sent over TLS to the user's own agent (relayed in memory, or directly in mobile direct-connection mode), never stored or logged. The opt-in transcript cleanup above is the one path where the text leaves the computer, through the user's own Claude Code; §3.4 says so.
+- **Privacy policy** (`central_server/legal/privacy.md` §3.4, §3.7, §4): audio is used only while dictating, sent over TLS to the user's own agent (relayed in memory, or directly in mobile direct-connection mode), never stored or logged. The opt-in transcript cleanup above is the one path where the text leaves the computer, through the session's own AI agent (today Claude Code); §3.4 says so. The public `/voice-input` page says so too (*Where your voice goes* and the FAQ).
 
 ## Release checklist (manual steps)
 

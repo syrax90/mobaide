@@ -2,8 +2,7 @@
  * User-facing copy keyed by `error.code`. The agent's own `message` can carry
  * host details (a worker traceback tail), so it is only ever shown behind
  * "Details". Unknown codes get the generic line. Android and iOS
- * `VoiceErrorCopy` hold the same table, except `cleanupErrorCopy`, which is
- * web-only for now.
+ * `VoiceErrorCopy` hold the same table.
  */
 import { VOICE_CODE } from './voiceApi';
 

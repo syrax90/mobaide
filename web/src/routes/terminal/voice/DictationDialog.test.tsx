@@ -1,9 +1,17 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
-import type { DictationState } from '../../../voice/dictationController';
-import { spliceTranscript, type CarriedText } from '../../../voice/useDictation';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { stubLocalStorage } from '../../../test/localStorageStub';
+import type { CleanupOutcome, DictationState } from '../../../voice/dictationController';
+import type { CarriedText } from '../../../voice/useDictation';
 import { VOICE_CODE } from '../../../voice/voiceApi';
-import { DictationDialog } from './DictationDialog';
+
+// Before importing the store, so zustand's
+// `createJSONStorage(() => window.localStorage)` captures the stand-in.
+stubLocalStorage();
+
+const { useVoicePrefsStore } = await import('../../../voice/voicePrefsStore');
+const { spliceTranscript } = await import('../../../voice/useDictation');
+const { DictationDialog } = await import('./DictationDialog');
 
 type DialogState = Exclude<DictationState, { kind: 'idle' }>;
 
@@ -22,11 +30,12 @@ interface Calls {
   dismiss: number;
   discard: number;
   cancel: number;
-  skipCleanup: number;
   continued: CarriedText[];
   inserted: string[];
   skip: boolean[];
   cleanUp: boolean[];
+  /** The review's own cleanups; each settles when the test calls `settle`. */
+  cleanUpText: { text: string; abort: AbortController; settle: (outcome: CleanupOutcome) => void }[];
 }
 
 /** Counts the callbacks the footer buttons reach. */
@@ -55,9 +64,6 @@ const dialog = (
     onRetry={() => {
       calls.retry += 1;
     }}
-    onSkipCleanup={() => {
-      calls.skipCleanup += 1;
-    }}
     onRecordAgain={() => {
       calls.recordAgain += 1;
     }}
@@ -83,6 +89,11 @@ const dialog = (
     onCleanUpChange={(on) => {
       calls.cleanUp.push(on);
     }}
+    onCleanUpText={(text, abort) =>
+      new Promise<CleanupOutcome>((settle) => {
+        calls.cleanUpText.push({ text, abort, settle });
+      })
+    }
   />
 );
 
@@ -92,11 +103,11 @@ const newCalls = (): Calls => ({
   dismiss: 0,
   discard: 0,
   cancel: 0,
-  skipCleanup: 0,
   continued: [],
   inserted: [],
   skip: [],
   cleanUp: [],
+  cleanUpText: [],
 });
 
 const renderDialog = (state: DialogState, canRecord: boolean) => {
@@ -106,6 +117,13 @@ const renderDialog = (state: DialogState, canRecord: boolean) => {
 };
 
 const recordAgain = (): HTMLElement => screen.getByRole('button', { name: 'Record again' });
+
+const CLEANUP_LABEL =
+  'Clean up dictated text with the session’s AI agent: remove filler words, fix punctuation and technical terms';
+
+beforeEach(() => {
+  useVoicePrefsStore.setState({ cleanupNoticeSeen: true });
+});
 
 afterEach(() => {
   cleanup();
@@ -253,13 +271,13 @@ describe('DictationDialog cleanup', () => {
   const textField = (): HTMLTextAreaElement => screen.getByRole('textbox');
   const cleaned = (text: string, original: string): DialogState => ({ kind: 'result', text, original });
 
-  it('shows the transcript as heard while cleaning up, and offers Cancel and Skip cleanup', () => {
+  it('stays the Transcribing dialog while cleaning up, saying so, with Cancel only', () => {
     const calls = renderDialog({ kind: 'cleaning', text: 'um fix the uh bug' }, true);
 
-    expect(screen.getByRole('heading', { name: 'Cleaning up' })).toBeInTheDocument();
-    expect(screen.getByText('um fix the uh bug')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Skip cleanup' }));
-    expect(calls.skipCleanup).toBe(1);
+    expect(screen.getByRole('heading', { name: 'Transcribing' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Cleaning up the text…');
+    expect(screen.queryByText('um fix the uh bug')).toBeNull();
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Cancel']);
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(calls.cancel).toBe(1);
   });
@@ -277,7 +295,7 @@ describe('DictationDialog cleanup', () => {
     const calls = newCalls();
     render(dialog(calls, cleaned('Fix the bug.', 'um fix the uh bug'), true, { canSend: true }));
     expect(textField().value).toBe('Fix the bug.');
-    expect(screen.getByText(/Cleaned up by Claude Haiku/)).toBeInTheDocument();
+    expect(screen.getByText(/Cleaned up by the session’s AI agent\./)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Show original' }));
 
@@ -384,45 +402,138 @@ describe('DictationDialog cleanup', () => {
     rerender(
       dialog(calls, { kind: 'result', text: 'hello' }, true, { canSend: true, cleanupAvailable: true }),
     );
-    const cleanUp = screen.getByRole('checkbox', {
-      name: 'Clean up dictated text with Claude Haiku from now on',
-    });
+    const cleanUp = screen.getByRole('checkbox', { name: CLEANUP_LABEL });
     expect(cleanUp).not.toBeChecked();
     fireEvent.click(cleanUp);
 
     expect(calls.cleanUp).toEqual([true]);
   });
 
-  it('says where the text would go while cleanup is available but off, and stops once it is on', () => {
+  it('turns cleanup on from the review only after the notice, then cleans up the text in it', () => {
+    useVoicePrefsStore.setState({ cleanupNoticeSeen: false });
     const calls = newCalls();
-    const hello: DialogState = { kind: 'result', text: 'hello' };
-    const { rerender } = render(dialog(calls, hello, true, { canSend: true }));
-    expect(screen.queryByText(/sent to Anthropic/)).toBeNull();
+    render(dialog(calls, { kind: 'result', text: 'hello' }, true, { canSend: true, cleanupAvailable: true }));
 
-    rerender(dialog(calls, hello, true, { canSend: true, cleanupAvailable: true }));
-    expect(
-      screen.getByText(
-        'Each transcript is then sent to Anthropic through Claude Code on laptop and counts toward that Claude account’s usage.',
-      ),
-    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: CLEANUP_LABEL }));
+    expect(screen.getByRole('dialog', { name: 'Clean up dictated text' })).toBeInTheDocument();
+    expect(calls.cleanUp).toEqual([]);
+    expect(calls.cleanUpText).toEqual([]);
 
-    rerender(dialog(calls, hello, true, { canSend: true, cleanupAvailable: true, cleanUp: true }));
-    expect(screen.queryByText(/sent to Anthropic/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Got it' }));
+
+    expect(calls.cleanUp).toEqual([true]);
+    expect(calls.cleanUpText.map((call) => call.text)).toEqual(['hello']);
   });
 
-  it('describes the cleanup checkbox with where the text would go while it is off, and not once it is on', () => {
+  it('closes only the notice on Esc there, keeping the review text and cleanup off', () => {
+    useVoicePrefsStore.setState({ cleanupNoticeSeen: false });
     const calls = newCalls();
-    const hello: DialogState = { kind: 'result', text: 'hello' };
-    const cleanUpBox = (): HTMLElement =>
-      screen.getByRole('checkbox', { name: 'Clean up dictated text with Claude Haiku from now on' });
-    const { rerender } = render(dialog(calls, hello, true, { canSend: true, cleanupAvailable: true }));
+    render(dialog(calls, { kind: 'result', text: 'hello' }, true, { canSend: true, cleanupAvailable: true }));
+    fireEvent.click(screen.getByRole('checkbox', { name: CLEANUP_LABEL }));
 
-    expect(cleanUpBox()).toHaveAccessibleDescription(
-      'Each transcript is then sent to Anthropic through Claude Code on laptop and counts toward that Claude account’s usage.',
+    fireEvent(
+      screen.getByRole('dialog', { name: 'Clean up dictated text' }),
+      new Event('cancel', { cancelable: true }),
     );
 
-    rerender(dialog(calls, hello, true, { canSend: true, cleanupAvailable: true, cleanUp: true }));
-    expect(cleanUpBox()).not.toHaveAccessibleDescription();
+    expect(screen.queryByRole('dialog', { name: 'Clean up dictated text' })).toBeNull();
+    expect(calls.discard).toBe(0);
+    expect(textField().value).toBe('hello');
+    expect(calls.cleanUp).toEqual([]);
+    expect(calls.cleanUpText).toEqual([]);
+  });
+});
+
+describe('DictationDialog cleanup from the review', () => {
+  const textField = (): HTMLTextAreaElement => screen.getByRole('textbox');
+
+  /** A review of `text` with cleanup available and off, then turned on from the review. */
+  function turnOnFromReview(state: DialogState, edited?: string): Calls {
+    const calls = newCalls();
+    const { rerender } = render(dialog(calls, state, true, { canSend: true, cleanupAvailable: true }));
+    if (edited !== undefined) fireEvent.change(textField(), { target: { value: edited } });
+    fireEvent.click(screen.getByRole('checkbox', { name: CLEANUP_LABEL }));
+    rerender(dialog(calls, state, true, { canSend: true, cleanupAvailable: true, cleanUp: true }));
+    return calls;
+  }
+
+  async function settle(calls: Calls, outcome: CleanupOutcome): Promise<void> {
+    await act(async () => {
+      calls.cleanUpText[0]?.settle(outcome);
+      await Promise.resolve();
+    });
+  }
+
+  it('cleans up the text as edited, holding the review still until it is done', () => {
+    const calls = turnOnFromReview({ kind: 'result', text: 'um fix the uh bug' }, 'um fix the uh login bug');
+
+    expect(calls.cleanUpText.map((call) => call.text)).toEqual(['um fix the uh login bug']);
+    expect(screen.getByRole('status')).toHaveTextContent('Cleaning up the text…');
+    expect(textField()).toHaveAttribute('readonly');
+    expect(screen.getByRole('button', { name: 'Insert' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Dictate more at the cursor' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: /without this review/ })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: CLEANUP_LABEL })).toBeDisabled();
+  });
+
+  it('swaps in the cleaned-up text, with the text as edited one tap away', async () => {
+    const calls = turnOnFromReview({ kind: 'result', text: 'um fix the uh bug' }, 'um fix the uh login bug');
+
+    await settle(calls, { kind: 'cleaned', text: 'Fix the login bug.' });
+
+    expect(textField().value).toBe('Fix the login bug.');
+    expect(textField()).not.toHaveAttribute('readonly');
+    expect(screen.getByText(/Cleaned up by the session’s AI agent\./)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show original' }));
+    expect(textField().value).toBe('um fix the uh login bug');
+    fireEvent.click(screen.getByRole('button', { name: 'Show cleaned up' }));
+    expect(textField().value).toBe('Fix the login bug.');
+    fireEvent.click(screen.getByRole('button', { name: 'Insert' }));
+    expect(calls.inserted).toEqual(['Fix the login bug.']);
+  });
+
+  it('leaves the text and says nothing when there was nothing to clean up', async () => {
+    const calls = turnOnFromReview({ kind: 'result', text: 'Fix the bug.' });
+
+    await settle(calls, { kind: 'unchanged' });
+
+    expect(textField().value).toBe('Fix the bug.');
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show original' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Insert' })).toBeEnabled();
+  });
+
+  it('says why a failed cleanup left the text as it was', async () => {
+    const calls = turnOnFromReview({ kind: 'result', text: 'um fix the bug' });
+
+    await settle(calls, { kind: 'failed', error: { code: VOICE_CODE.cleanupTimeout, message: null } });
+
+    expect(textField().value).toBe('um fix the bug');
+    expect(screen.getByRole('status')).toHaveTextContent('Couldn’t clean up the text');
+    expect(screen.getByRole('status')).toHaveTextContent('Claude Code took too long.');
+    expect(screen.getByRole('button', { name: 'Insert' })).toBeEnabled();
+  });
+
+  it('leaves a cleaned-up result alone: it is not cleaned up twice', () => {
+    const calls = turnOnFromReview({ kind: 'result', text: 'Fix the bug.', original: 'um fix the uh bug' });
+
+    expect(calls.cleanUp).toEqual([true]);
+    expect(calls.cleanUpText).toEqual([]);
+  });
+
+  it('sends nothing when the review is empty', () => {
+    const calls = turnOnFromReview({ kind: 'result', text: 'hello' }, '  ');
+
+    expect(calls.cleanUp).toEqual([true]);
+    expect(calls.cleanUpText).toEqual([]);
+  });
+
+  it('drops a cleanup still running when the dialog closes', () => {
+    const calls = turnOnFromReview({ kind: 'result', text: 'um fix the bug' });
+
+    cleanup();
+
+    expect(calls.cleanUpText[0]?.abort.signal.aborted).toBe(true);
   });
 });
 

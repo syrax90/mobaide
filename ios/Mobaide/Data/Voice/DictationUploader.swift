@@ -445,7 +445,7 @@ final class DictationUploader {
 
     /// The operation's value, or nil when `seconds` pass first (the
     /// operation is then cancelled).
-    nonisolated private static func withTimeout<T: Sendable>(
+    nonisolated static func withTimeout<T: Sendable>(
         _ seconds: Double,
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T? {

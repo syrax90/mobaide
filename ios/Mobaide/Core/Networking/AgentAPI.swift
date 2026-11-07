@@ -356,6 +356,10 @@ struct AgentAPI: Sendable {
         )
     }
 
+    func cleanupVoiceTranscript(text: String) async throws -> VoiceCleanupResponse {
+        try await execute(method: "POST", url: "\(try await base())/api/voice/cleanup", body: VoiceCleanupRequest(text: text))
+    }
+
     func getAutoScanList() async throws -> AutoScanListResponse {
         try await execute(method: "GET", url: "\(try await base())/api/autoscan/list")
     }

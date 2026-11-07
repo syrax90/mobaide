@@ -13,6 +13,7 @@ import {
 import {
   DictationController,
   RecorderError,
+  runCleanup,
   type DictationState,
   type TranscriptCleaner,
 } from './dictationController';
@@ -244,7 +245,7 @@ describe('DictationController', () => {
   });
 });
 
-/** Claude Code on the agent, answering `reply`; every request is kept. */
+/** The session's AI agent on the agent's computer, answering `reply`; every request is kept. */
 class FakeCleaner {
   readonly calls: { text: string; signal: AbortSignal }[] = [];
   reply: Reply<string> = { ok: 'Hello, world.' };
@@ -338,17 +339,6 @@ describe('DictationController cleanup', () => {
     }
   });
 
-  it('skips a cleanup: the transcript as heard at once, the request aborted', async () => {
-    cleaner.reply = { hold: new Held<string>() };
-    const dictation = await cleaning();
-
-    dictation.skipCleanup();
-    await settle();
-
-    expect(cleaner.calls[0]?.signal.aborted).toBe(true);
-    expect(dictation.current).toStrictEqual({ kind: 'result', text: 'hello world' });
-  });
-
   it('cancels a cleanup: back to idle, the request aborted', async () => {
     cleaner.reply = { hold: new Held<string>() };
     const dictation = await cleaning();
@@ -422,5 +412,63 @@ describe('DictationController cleanup', () => {
 
     expect(dictation.current).toEqual({ kind: 'empty' });
     expect(cleaner.calls).toEqual([]);
+  });
+});
+
+describe('runCleanup', () => {
+  let cleaner: FakeCleaner;
+
+  beforeEach(() => {
+    cleaner = new FakeCleaner();
+  });
+
+  it('hands back the cleaned-up text, trimmed', async () => {
+    cleaner.reply = { ok: '  Fix the bug.\n' };
+
+    const outcome = await runCleanup(cleaner.clean, 'um fix the uh bug', new AbortController());
+
+    expect(outcome).toEqual({ kind: 'cleaned', text: 'Fix the bug.' });
+    expect(cleaner.calls.map((call) => call.text)).toEqual(['um fix the uh bug']);
+  });
+
+  it.each([
+    ['the text as it was, padded differently', ' hello world ', 'hello world'],
+    ['nothing', 'hello world', '  '],
+  ])('reads %s as unchanged', async (_label, text, cleaned) => {
+    cleaner.reply = { ok: cleaned };
+
+    const outcome = await runCleanup(cleaner.clean, text, new AbortController());
+
+    expect(outcome).toStrictEqual({ kind: 'unchanged' });
+  });
+
+  it('turns a refusal into a failure instead of throwing', async () => {
+    cleaner.reply = { fail: refusal(409, 'cleanup_busy', { detailMessage: 'Two cleanups are running.' }) };
+
+    const outcome = await runCleanup(cleaner.clean, 'hello world', new AbortController());
+
+    expect(outcome).toEqual({
+      kind: 'failed',
+      error: { code: 'cleanup_busy', message: 'Two cleanups are running.' },
+    });
+  });
+
+  it('gives up at 35 s, aborting the request it was given', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      cleaner.reply = { hold: new Held<string>() };
+      const abort = new AbortController();
+      const outcome = runCleanup(cleaner.clean, 'hello world', abort);
+
+      await vi.advanceTimersByTimeAsync(35_000);
+
+      expect(abort.signal.aborted).toBe(true);
+      await expect(outcome).resolves.toEqual({
+        kind: 'failed',
+        error: { code: 'cleanup_timeout', message: null },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

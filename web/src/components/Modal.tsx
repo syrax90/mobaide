@@ -61,6 +61,9 @@ export function Modal({
       role={role}
       aria-labelledby={labelledBy}
       onCancel={(event) => {
+        // React passes a nested dialog's `cancel` up to this handler too; the
+        // native event does not bubble, so Esc closes only the topmost dialog.
+        if (event.target !== event.currentTarget) return;
         event.preventDefault();
         if (dismissible) onClose();
       }}

@@ -19,10 +19,17 @@ final class VoiceInputModel {
     private(set) var permissionFailure: DictationState?
     private(set) var actionBusy = false
     private(set) var actionError: String?
+    private(set) var cleanUp = false
+    /// "Got it" was pressed on the notice shown before the first cleanup opt-in.
+    private(set) var cleanupNoticeSeen = false
     var setupVisible = false
+    /// The terminal's session; nil on Settings, where nothing is cleaned up.
+    var sessionKind: SessionKind?
 
     /// Puts a transcript into the composer; never sends it.
     @ObservationIgnored var onTranscript: ((String) -> Void)?
+    /// Says why a transcript was inserted as heard, for a toast.
+    @ObservationIgnored var onNotice: ((String) -> Void)?
 
     @ObservationIgnored private let repository: VoiceRepository
     @ObservationIgnored private let preferences: PreferencesStore
@@ -42,6 +49,8 @@ final class VoiceInputModel {
         agentId = container.tokenStore.getAgentId()
         self.sessionId = sessionId
         micHidden = agentKey.map { preferences.isVoiceMicHidden(agentKey: $0) } ?? false
+        cleanUp = agentKey.map { preferences.isVoiceCleanupOn(agentKey: $0) } ?? false
+        cleanupNoticeSeen = preferences.isVoiceCleanupNoticeSeen()
         if let agentId, let agent = agentRepository.currentAgents.first(where: { $0.agent_id == agentId }) {
             agentName = agent.name
         }
@@ -54,6 +63,13 @@ final class VoiceInputModel {
     }
 
     var dictation: DictationState { permissionFailure ?? controller?.state ?? .idle }
+
+    /// The agent can clean up transcripts (`capabilities.voice.cleanup`).
+    var cleanupSupported: Bool { capability?.cleanup == true }
+
+    /// ...and this session's AI agent can do it. Only Claude Code so far: the
+    /// agent runs its CLI.
+    var cleanupOffered: Bool { cleanupSupported && sessionKind == .claude }
 
     /// Probe the agent once per screen visit; run from the view's `.task`.
     func load() async {
@@ -144,6 +160,18 @@ final class VoiceInputModel {
         if hidden { setupVisible = false }
     }
 
+    /// Turning cleanup on also records the notice as seen: the UI shows the
+    /// notice first, and calls this only after "Got it".
+    func setCleanUp(_ on: Bool) {
+        guard let agentKey else { return }
+        if on {
+            preferences.setVoiceCleanupNoticeSeen()
+            cleanupNoticeSeen = true
+        }
+        preferences.setVoiceCleanup(agentKey: agentKey, on: on)
+        cleanUp = on
+    }
+
     private func runAction(_ action: @escaping (VoiceRepository) async throws -> VoiceStatusResponse) {
         guard !actionBusy else { return }
         actionBusy = true
@@ -166,13 +194,20 @@ final class VoiceInputModel {
             api: repository.dictationApi(sessionId: sessionId),
             makeRecorder: { AudioEngineRecorder() },
             sampleRate: capability.sampleRate,
-            maxSeconds: capability.maxSeconds
+            maxSeconds: capability.maxSeconds,
+            cleaner: { [weak self] in self?.activeCleaner() }
         )
         created.onTransition = { [weak self, weak created] state in
             self?.handleTransition(state, controller: created)
         }
         controller = created
         return created
+    }
+
+    private func activeCleaner() -> TranscriptCleaner? {
+        guard cleanupOffered, cleanUp else { return nil }
+        let repository = repository
+        return { text in try await repository.cleanup(text: text) }
     }
 
     private func handleTransition(_ state: DictationState, controller: DictationController?) {
@@ -188,9 +223,15 @@ final class VoiceInputModel {
         if case .failed(let code, _, _, _) = state, code == VoiceCodes.notReady {
             Task { _ = try? await repository.refresh() }
         }
-        if case .result(let text) = state {
+        if case .result(let text, let cleanupError) = state {
             onTranscript?(text)
             AccessibilityNotification.Announcement("Transcript inserted").post()
+            if let cleanupError {
+                onNotice?(
+                    "Couldn't clean up the text, so it's inserted as heard. "
+                        + VoiceErrorCopy.cleanup(cleanupError.code, agent: agentName)
+                )
+            }
             Task { controller?.dismiss() }
         }
     }

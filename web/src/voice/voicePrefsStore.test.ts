@@ -19,7 +19,12 @@ function stored(): Record<string, unknown> {
 }
 
 beforeEach(() => {
-  useVoicePrefsStore.setState({ hiddenAgents: {}, skipReviewAgents: {}, cleanupAgents: {} });
+  useVoicePrefsStore.setState({
+    hiddenAgents: {},
+    skipReviewAgents: {},
+    cleanupAgents: {},
+    cleanupNoticeSeen: false,
+  });
   window.localStorage.clear();
 });
 
@@ -37,7 +42,7 @@ describe('transcript cleanup', () => {
 
   it('restores only real opt-ins', async () => {
     // Untrusted storage: a truthy string hand-edited in must not send text to
-    // Anthropic on its own.
+    // the AI agent's provider on its own.
     seed({ cleanupAgents: { a1: true, a2: 'yes', '': true, a3: 1 } });
 
     await useVoicePrefsStore.persist.rehydrate();
@@ -54,5 +59,31 @@ describe('transcript cleanup', () => {
 
     expect(useVoicePrefsStore.getState().cleanupAgents).toEqual({ a2: true });
     expect(stored()['cleanupAgents']).toEqual({ a2: true });
+  });
+});
+
+describe('cleanup notice', () => {
+  it('is unseen until acknowledged, then remembered for every agent', () => {
+    expect(useVoicePrefsStore.getState().cleanupNoticeSeen).toBe(false);
+
+    useVoicePrefsStore.getState().acknowledgeCleanupNotice();
+
+    expect(useVoicePrefsStore.getState().cleanupNoticeSeen).toBe(true);
+    expect(stored()['cleanupNoticeSeen']).toBe(true);
+  });
+
+  it.each([
+    ['true', true, true],
+    ['a truthy string', 'yes', false],
+    ['1', 1, false],
+    ['nothing', undefined, false],
+  ])('restores %s as seen: %s', async (_label, value, seen) => {
+    // Skipping the notice skips telling the user where the text goes, so
+    // only an explicit `true` counts.
+    seed({ cleanupNoticeSeen: value });
+
+    await useVoicePrefsStore.persist.rehydrate();
+
+    expect(useVoicePrefsStore.getState().cleanupNoticeSeen).toBe(seen);
   });
 });

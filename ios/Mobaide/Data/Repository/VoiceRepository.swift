@@ -85,6 +85,16 @@ final class VoiceRepository {
         return try await install()
     }
 
+    /// The session's AI agent cleans up `text` on the connected agent's
+    /// computer (within 20 s).
+    nonisolated func cleanup(text: String) async throws -> String {
+        do {
+            return try await agentAPI.cleanupVoiceTranscript(text: text).text
+        } catch {
+            throw VoiceApiError.map(error)
+        }
+    }
+
     /// The dictation routes of the connected agent, for the uploader.
     nonisolated func dictationApi(sessionId: String?) -> any VoiceApi {
         AgentVoiceApi(agentAPI: agentAPI, sessionId: sessionId)

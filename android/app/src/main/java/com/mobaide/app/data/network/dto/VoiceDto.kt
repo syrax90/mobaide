@@ -107,6 +107,18 @@ data class VoiceDictationFinishRequest(
     val last_seq: Int,
 )
 
+/** `POST /api/voice/cleanup`: 1–6000 characters. */
+@Serializable
+data class VoiceCleanupRequest(
+    val text: String,
+)
+
+/** The cleaned transcript; the input when there was nothing to clean. */
+@Serializable
+data class VoiceCleanupResponse(
+    val text: String,
+)
+
 /** `state` is `done` (text set) or `transcribing` (call finish again). */
 @Serializable
 data class VoiceDictationResultResponse(

@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Modal } from '../../../components/Modal';
-import type { DictationState, InterruptReason } from '../../../voice/dictationController';
+import { CleanupToggle } from '../../../voice/CleanupToggle';
+import type {
+  CleanupError,
+  CleanupOutcome,
+  DictationState,
+  InterruptReason,
+} from '../../../voice/dictationController';
 import { VOICE_CODE } from '../../../voice/voiceApi';
 import { cleanupErrorCopy, dictationErrorCopy } from '../../../voice/voiceErrorCopy';
 import { spliceTranscript, type CarriedText } from '../../../voice/useDictation';
@@ -22,8 +28,6 @@ interface DictationDialogProps {
   onStop: () => void;
   onCancel: () => void;
   onRetry: () => void;
-  /** Shows the transcript as heard instead of waiting for the cleanup. */
-  onSkipCleanup: () => void;
   onRecordAgain: () => void;
   /** Leaves an empty result or a failure (back to the review if text is carried). */
   onDismiss: () => void;
@@ -35,11 +39,20 @@ interface DictationDialogProps {
   onInsert: (text: string) => boolean;
   skipReview: boolean;
   onSkipReviewChange: (skip: boolean) => void;
-  /** The agent can clean up transcripts and this is a Claude Code session. */
+  /** The agent can clean up transcripts in this session. */
   cleanupAvailable: boolean;
   cleanUp: boolean;
   onCleanUpChange: (cleanUp: boolean) => void;
+  /** Cleans up the review's text, when cleanup is turned on from the review. */
+  onCleanUpText: (text: string, abort: AbortController) => Promise<CleanupOutcome>;
 }
+
+/** The review's own cleanup, run when the toggle is turned on there. */
+type ReviewCleanup =
+  | { kind: 'running' }
+  | { kind: 'cleaned'; original: string; cleaned: string }
+  | { kind: 'unchanged' }
+  | { kind: 'failed'; error: CleanupError };
 
 function interruptionNote(reason: InterruptReason | null): string | null {
   switch (reason) {
@@ -68,8 +81,10 @@ const PERMISSION_HELP =
  * The review's mic records again; the new transcript goes in at the text's
  * cursor, and a cancel, an empty result or a failure returns to the review.
  *
- * With cleanup on, Claude Code tidies the transcript first; the review can
- * swap back to the transcript as heard, and a failed cleanup shows it as heard.
+ * With cleanup on, the session's AI agent cleans up the transcript while the
+ * dialog still reads "Transcribing"; the review can swap back to the
+ * transcript as heard, and a failed cleanup shows it as heard. Turning
+ * cleanup on from the review cleans up the text already in it.
  *
  * Esc cancels a recording or a transcription, and discards a result.
  */
@@ -82,7 +97,6 @@ export function DictationDialog({
   onStop,
   onCancel,
   onRetry,
-  onSkipCleanup,
   onRecordAgain,
   onDismiss,
   onContinue,
@@ -93,6 +107,7 @@ export function DictationDialog({
   cleanupAvailable,
   cleanUp,
   onCleanUpChange,
+  onCleanUpText,
 }: DictationDialogProps) {
   const titleId = useId();
   const [draft, setDraft] = useState(() => {
@@ -101,6 +116,8 @@ export function DictationDialog({
   });
   const [insertRefused, setInsertRefused] = useState(false);
   const [showingOriginal, setShowingOriginal] = useState(false);
+  const [reviewCleanup, setReviewCleanup] = useState<ReviewCleanup | null>(null);
+  const reviewCleanupAbortRef = useRef<AbortController | null>(null);
   const resultText = state.kind === 'result' ? state.text : null;
   const textRef = useRef<HTMLTextAreaElement>(null);
   // Where the cursor goes once a spliced transcript is in the field.
@@ -130,8 +147,43 @@ export function DictationDialog({
       otherDraftRef.current = null;
       setShowingOriginal(false);
       setInsertRefused(false);
+      setReviewCleanup(null);
     }
   }, [resultText, placeTranscript]);
+
+  // Closing the dialog drops a cleanup of the review's text.
+  useEffect(
+    () => () => {
+      const abort = reviewCleanupAbortRef.current;
+      reviewCleanupAbortRef.current = null;
+      abort?.abort();
+    },
+    [],
+  );
+
+  const cleanUpReview = (text: string) => {
+    const abort = new AbortController();
+    reviewCleanupAbortRef.current = abort;
+    setReviewCleanup({ kind: 'running' });
+    void onCleanUpText(text, abort).then((outcome) => {
+      if (reviewCleanupAbortRef.current !== abort) return;
+      reviewCleanupAbortRef.current = null;
+      switch (outcome.kind) {
+        case 'cleaned':
+          setDraft(outcome.text);
+          otherDraftRef.current = null;
+          setShowingOriginal(false);
+          setReviewCleanup({ kind: 'cleaned', original: text, cleaned: outcome.text });
+          break;
+        case 'unchanged':
+          setReviewCleanup({ kind: 'unchanged' });
+          break;
+        case 'failed':
+          setReviewCleanup({ kind: 'failed', error: outcome.error });
+          break;
+      }
+    });
+  };
 
   useLayoutEffect(() => {
     const caret = caretRef.current;
@@ -218,29 +270,34 @@ export function DictationDialog({
       break;
     }
     case 'cleaning':
-      title = 'Cleaning up';
-      body = (
-        <>
-          <p role="status">Cleaning up the text with Claude Code on {agentName}…</p>
-          <p className="voice-heard">{state.text}</p>
-        </>
-      );
+      // Part of transcribing to the user: the same dialog, one line changed.
+      title = 'Transcribing';
+      body = <p role="status">Cleaning up the text…</p>;
       actions = (
-        <>
-          <button type="button" className="button" onClick={onCancel}>
-            Cancel
-          </button>
-          <button type="button" className="button" onClick={onSkipCleanup}>
-            Skip cleanup
-          </button>
-        </>
+        <button type="button" className="button" onClick={onCancel}>
+          Cancel
+        </button>
       );
       break;
     case 'idle':
     case 'result': {
       const more = draft.trim() !== '';
-      const original = state.kind === 'result' ? (state.original ?? null) : null;
-      const failedCleanup = state.kind === 'result' ? (state.cleanupError ?? null) : null;
+      const reviewCleaning = reviewCleanup?.kind === 'running';
+      // The cleaned-up version and the text as heard, as whole review texts
+      // when the review's own cleanup made them; else from the result.
+      const reviewVersions = reviewCleanup?.kind === 'cleaned' ? reviewCleanup : null;
+      const original =
+        reviewVersions !== null
+          ? reviewVersions.original
+          : reviewCleanup === null && state.kind === 'result'
+            ? (state.original ?? null)
+            : null;
+      const failedCleanup =
+        reviewCleanup?.kind === 'failed'
+          ? reviewCleanup.error
+          : reviewCleanup === null && state.kind === 'result'
+            ? (state.cleanupError ?? null)
+            : null;
       const micLabel = more ? 'Dictate more at the cursor' : 'Dictate again';
       title = 'Review';
       body = (
@@ -255,22 +312,30 @@ export function DictationDialog({
             className="field-input field-textarea"
             rows={5}
             value={draft}
+            readOnly={reviewCleaning}
             autoFocus
             onChange={(event) => {
               setDraft(event.target.value);
             }}
           />
-          {original !== null && resultText !== null && (
+          {reviewCleaning && <p role="status">Cleaning up the text…</p>}
+          {original !== null && (reviewVersions !== null || resultText !== null) && (
             <p className="page-note">
-              {showingOriginal ? 'Showing the text as heard.' : 'Cleaned up by Claude Haiku.'}{' '}
+              {showingOriginal
+                ? 'Showing the text as heard.'
+                : 'Cleaned up by the session’s AI agent.'}{' '}
               <button
                 type="button"
                 className="link-button"
                 onClick={() => {
                   const other = otherDraftRef.current;
                   otherDraftRef.current = draft;
-                  if (other === null) placeTranscript(showingOriginal ? resultText : original);
-                  else setDraft(other);
+                  if (other !== null) setDraft(other);
+                  else if (reviewVersions !== null) {
+                    setDraft(showingOriginal ? reviewVersions.cleaned : reviewVersions.original);
+                  } else if (resultText !== null) {
+                    placeTranscript(showingOriginal ? resultText : original);
+                  }
                   setShowingOriginal(!showingOriginal);
                 }}
               >
@@ -303,27 +368,23 @@ export function DictationDialog({
             </p>
           )}
           {cleanupAvailable && (
-            <label className="voice-review-skip">
-              <input
-                type="checkbox"
-                checked={cleanUp}
-                aria-describedby={cleanUp ? undefined : `${titleId}-cleanup-note`}
-                onChange={(event) => {
-                  onCleanUpChange(event.target.checked);
-                }}
-              />
-              Clean up dictated text with Claude Haiku from now on
-            </label>
-          )}
-          {cleanupAvailable && !cleanUp && (
-            <p className="page-note" id={`${titleId}-cleanup-note`}>
-              Each transcript is then sent to Anthropic through Claude Code on {agentName} and counts
-              toward that Claude account&rsquo;s usage.
-            </p>
+            <CleanupToggle
+              className="voice-review-skip"
+              agentName={agentName}
+              checked={cleanUp}
+              disabled={reviewCleaning}
+              onChange={(on) => {
+                onCleanUpChange(on);
+                // The text in the review has not been cleaned up yet: do it
+                // now, not only from the next dictation on.
+                if (on && original === null && draft.trim() !== '') cleanUpReview(draft);
+              }}
+            />
           )}
           <label className="voice-review-skip">
             <input
               type="checkbox"
+              disabled={reviewCleaning}
               checked={skipReview}
               onChange={(event) => {
                 onSkipReviewChange(event.target.checked);
@@ -345,7 +406,7 @@ export function DictationDialog({
             className="button voice-dictate-more"
             aria-label={micLabel}
             title={micLabel}
-            disabled={!canRecord}
+            disabled={!canRecord || reviewCleaning}
             onClick={() => {
               // The field keeps its selection after losing focus to this button.
               const field = textRef.current;
@@ -362,7 +423,7 @@ export function DictationDialog({
           <button
             type="button"
             className="button button-primary"
-            disabled={!canSend || draft.trim() === ''}
+            disabled={!canSend || draft.trim() === '' || reviewCleaning}
             onClick={() => {
               if (!onInsert(draft)) setInsertRefused(true);
             }}
@@ -444,7 +505,7 @@ export function DictationDialog({
           : state.kind === 'transcribing'
             ? 'Recording stopped. Transcribing'
             : state.kind === 'cleaning'
-              ? 'Cleaning up'
+              ? 'Cleaning up the text'
               : ''}
       </p>
       {body}

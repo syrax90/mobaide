@@ -16,14 +16,21 @@ interface VoicePrefsState {
    */
   skipReviewAgents: Record<string, true>;
   /**
-   * Agents whose transcripts Claude Code tidies before the review, in Claude
-   * Code sessions ("Clean up dictated text with Claude Haiku"). Off by
-   * default: the text then leaves the computer for Anthropic.
+   * Agents whose transcripts the session's AI agent cleans up before the
+   * review, in sessions that support it. Off by default: the text then leaves
+   * the computer for the AI agent's provider.
    */
   cleanupAgents: Record<string, true>;
+  /**
+   * The user pressed "Got it" on the cleanup notice, which comes before the
+   * first opt-in on this browser. Mirrors `voice_cleanup_notice_seen` on
+   * Android and iOS.
+   */
+  cleanupNoticeSeen: boolean;
   setMicHidden: (agentId: string, hidden: boolean) => void;
   setSkipReview: (agentId: string, skip: boolean) => void;
   setCleanup: (agentId: string, on: boolean) => void;
+  acknowledgeCleanupNotice: () => void;
   forgetAgent: (agentId: string) => void;
 }
 
@@ -73,6 +80,7 @@ export const useVoicePrefsStore = create<VoicePrefsState>()(
       hiddenAgents: {},
       skipReviewAgents: {},
       cleanupAgents: {},
+      cleanupNoticeSeen: false,
       setMicHidden: (agentId, hidden) => {
         safely(() => {
           set((state) => ({ hiddenAgents: withAgent(state.hiddenAgents, agentId, hidden) }));
@@ -86,6 +94,11 @@ export const useVoicePrefsStore = create<VoicePrefsState>()(
       setCleanup: (agentId, on) => {
         safely(() => {
           set((state) => ({ cleanupAgents: withAgent(state.cleanupAgents, agentId, on) }));
+        });
+      },
+      acknowledgeCleanupNotice: () => {
+        safely(() => {
+          set({ cleanupNoticeSeen: true });
         });
       },
       forgetAgent: (agentId) => {
@@ -113,12 +126,14 @@ export const useVoicePrefsStore = create<VoicePrefsState>()(
           hiddenAgents: cleanAgentMap(stored?.hiddenAgents),
           skipReviewAgents: cleanAgentMap(stored?.skipReviewAgents),
           cleanupAgents: cleanAgentMap(stored?.cleanupAgents),
+          cleanupNoticeSeen: stored?.cleanupNoticeSeen === true,
         };
       },
       partialize: (state) => ({
         hiddenAgents: state.hiddenAgents,
         skipReviewAgents: state.skipReviewAgents,
         cleanupAgents: state.cleanupAgents,
+        cleanupNoticeSeen: state.cleanupNoticeSeen,
       }),
     },
   ),
