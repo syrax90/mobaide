@@ -29,7 +29,7 @@ describe('ExternalSessionsNotice', () => {
     expect(
       screen.getByRole('heading', { name: /Sessions started outside Mobaide/ }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/can only open sessions its own agent started/)).toBeInTheDocument();
+    expect(screen.getByText(/lists only sessions its own agent started/)).toBeInTheDocument();
     expect(gotIt()).toBeInTheDocument();
   });
 

@@ -16,6 +16,11 @@ export interface MenuItem {
   label: string;
   onSelect: () => void;
   disabled?: boolean;
+  /** A second, muted line under the label. */
+  description?: string;
+  /** Set to make the item a `menuitemradio` (or `menuitemcheckbox` with `toggle`). */
+  checked?: boolean;
+  toggle?: boolean;
 }
 
 export interface MenuGroup {
@@ -32,11 +37,15 @@ interface MenuButtonProps {
   /** Exposed so whatever an item opens can hand focus back when it closes. */
   triggerRef?: RefObject<HTMLButtonElement | null>;
   className?: string;
+  /** Extra class on the menu itself. */
+  menuClassName?: string;
+  /** Open under the trigger's right edge (default) or above its left edge. */
+  placement?: 'below' | 'above';
   /** The trigger's visible content. */
   children: ReactNode;
 }
 
-const ITEM_SELECTOR = '[role="menuitem"]:not(:disabled)';
+const ITEM_SELECTOR = '[role^="menuitem"]:not(:disabled)';
 
 /**
  * The APG menu button, on the Popover API and nothing else.
@@ -53,7 +62,15 @@ const ITEM_SELECTOR = '[role="menuitem"]:not(:disabled)';
  * leave the first frame of an open menu empty — so a light dismiss, or a modal
  * dialog opening over it, cannot desynchronise the trigger's `aria-expanded`.
  */
-export function MenuButton({ label, groups, triggerRef, className, children }: MenuButtonProps) {
+export function MenuButton({
+  label,
+  groups,
+  triggerRef,
+  className,
+  menuClassName,
+  placement = 'below',
+  children,
+}: MenuButtonProps) {
   const menuId = useId();
   const fallbackRef = useRef<HTMLButtonElement>(null);
   const trigger = triggerRef ?? fallbackRef;
@@ -75,7 +92,11 @@ export function MenuButton({ label, groups, triggerRef, className, children }: M
     if (rect !== undefined) {
       // Anchored under the trigger's right edge. `getBoundingClientRect`
       // rather than CSS anchor positioning, which is not yet in every engine.
-      setPosition({ top: rect.bottom + 4, right: Math.max(0, window.innerWidth - rect.right) });
+      setPosition(
+        placement === 'above'
+          ? { bottom: window.innerHeight - rect.top + 4, left: Math.max(0, rect.left) }
+          : { top: rect.bottom + 4, right: Math.max(0, window.innerWidth - rect.right) },
+      );
     }
     pendingFocus.current = focus;
     menuRef.current?.showPopover();
@@ -190,7 +211,7 @@ export function MenuButton({ label, groups, triggerRef, className, children }: M
         popover="auto"
         role="menu"
         aria-label={label}
-        className="menu"
+        className={menuClassName === undefined ? 'menu' : `menu ${menuClassName}`}
         style={position}
         onBeforeToggle={(event: ToggleEvent<HTMLDivElement>) => {
           setOpen(event.newState === 'open');
@@ -236,15 +257,34 @@ function MenuGroupView({ group, separated, onPick }: MenuGroupViewProps) {
           <button
             key={item.id}
             type="button"
-            role="menuitem"
-            className="menu-item"
+            role={
+              item.checked === undefined
+                ? 'menuitem'
+                : item.toggle === true
+                  ? 'menuitemcheckbox'
+                  : 'menuitemradio'
+            }
+            aria-checked={item.checked}
+            className={item.checked === undefined ? 'menu-item' : 'menu-item menu-item-checkable'}
             tabIndex={-1}
             disabled={item.disabled === true}
             onClick={() => {
               onPick(item);
             }}
           >
-            {item.label}
+            {item.checked !== undefined && (
+              <span className="menu-item-check" aria-hidden="true">
+                {item.checked ? '✓' : ''}
+              </span>
+            )}
+            {item.description === undefined ? (
+              item.label
+            ) : (
+              <span className="menu-item-text">
+                <span>{item.label}</span>
+                <span className="menu-item-description">{item.description}</span>
+              </span>
+            )}
           </button>
         ))}
       </div>

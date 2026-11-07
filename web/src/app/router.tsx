@@ -93,13 +93,13 @@ export const router = createBrowserRouter([
                 // The only lazy route. xterm.js and its WebGL addon are ~740 KB
                 // raw, which is more than the rest of the SPA put together —
                 // eager-loading them would put the whole emulator on the
-                // critical path of the sign-in screen.
+                // critical path of the sign-in screen. `SessionRoute` then picks
+                // the chat or the terminal screen by the row's `ui`, each its
+                // own chunk.
                 path: 'agents/:agentId/sessions/:sessionId',
                 lazy: async () => {
-                  const { TerminalScreen } = await import(
-                    '../routes/terminal/TerminalScreen'
-                  );
-                  return { Component: TerminalScreen };
+                  const { SessionRoute } = await import('../routes/chat/SessionRoute');
+                  return { Component: SessionRoute };
                 },
               },
               // The reserved-key sweep harness. Both the route and the module

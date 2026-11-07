@@ -124,12 +124,14 @@ def parse_env_file(source: Path | str) -> dict[str, str]:
     return out
 
 
-def atomic_write(path: Path, content: str) -> None:
+def atomic_write(path: Path, content: str, *, mode: int | None = None) -> None:
     """Write ``content`` to ``path`` atomically.
 
     Writes to ``<path>.tmp`` first (in the same directory so the rename is
     a single inode operation on POSIX), fsyncs the file, then ``os.replace``s
-    onto the target. The parent directory is created if missing.
+    onto the target. The parent directory is created if missing. ``mode``,
+    when given, is applied to the new file before the rename (the temp file
+    is created ``0o600``).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_fd, tmp_name = tempfile.mkstemp(
@@ -142,6 +144,8 @@ def atomic_write(path: Path, content: str) -> None:
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
+        if mode is not None:
+            os.chmod(tmp_name, mode)
         os.replace(tmp_name, path)
     except Exception:
         try:

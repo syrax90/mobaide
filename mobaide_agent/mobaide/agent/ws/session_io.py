@@ -8,6 +8,12 @@ from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
 from mobaide import __version__
+from mobaide.acp.wire import (
+    FRAME_CHAT,
+    FRAME_CHAT_COMMAND,
+    LEGACY_CLIENT_NOTICE,
+    is_chat_session,
+)
 from mobaide.core.models import SessionEvent, SessionState
 from mobaide.relay.envelope import (
     PROTOCOL_VERSION,
@@ -138,8 +144,14 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
     # on at least one output frame between the start and end markers.
     # The ring is already DA-stripped at write time (``session._append_ring``)
     # so the snapshot inside ``iter_ring_chunks`` is the only allocation here.
+    chat = is_chat_session(session)
     await websocket.send_bytes(FRAME_REPLAY)
     emitted_any = False
+    if chat:
+        # Chat clients ask for the timeline with a ``sync`` command; a client
+        # without chat support shows this notice in its terminal instead.
+        await websocket.send_bytes(FRAME_OUTPUT + LEGACY_CLIENT_NOTICE)
+        emitted_any = True
     for chunk in session.iter_ring_chunks():
         await websocket.send_bytes(FRAME_OUTPUT + chunk)
         emitted_any = True
@@ -168,7 +180,11 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
                     continue
                 frame_type = data[:1]
                 payload = data[1:]
-                if frame_type == FRAME_INPUT:
+                if frame_type == FRAME_CHAT_COMMAND:
+                    counters["msg_count"] += 1
+                    if chat and payload:
+                        await session.handle_command(payload)
+                elif frame_type == FRAME_INPUT:
                     counters["bytes_in"] += len(payload)
                     counters["msg_count"] += 1
                     if payload:
@@ -207,6 +223,9 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
                 if event.event_type == "output" and event.data:
                     counters["bytes_out"] += len(event.data)
                     await websocket.send_bytes(FRAME_OUTPUT + event.data)
+                elif event.event_type == "chat" and event.data:
+                    counters["bytes_out"] += len(event.data)
+                    await websocket.send_bytes(FRAME_CHAT + event.data)
                 elif event.event_type in _EVENT_TO_STATUS:
                     await websocket.send_bytes(
                         _state_frame(_EVENT_TO_STATUS[event.event_type], session.pid),

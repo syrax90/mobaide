@@ -69,6 +69,8 @@ export interface ClaudeBucket {
   noMemory: boolean;
   planMode: boolean;
   initialPrompt: string;
+  /** Claude Code only: the classic terminal instead of the chat view. */
+  terminalUi: boolean;
 }
 
 export interface CodexBucket {
@@ -130,6 +132,7 @@ const CLAUDE_DEFAULTS: ClaudeBucket = {
   noMemory: false,
   planMode: false,
   initialPrompt: '',
+  terminalUi: false,
 };
 
 export const INITIAL_WIZARD_STATE: WizardState = {
@@ -298,7 +301,8 @@ export type WizardAction =
         | 'focusMode'
         | 'skipPermissions'
         | 'noMemory'
-        | 'planMode';
+        | 'planMode'
+        | 'terminalUi';
       value: boolean;
     }
   | {

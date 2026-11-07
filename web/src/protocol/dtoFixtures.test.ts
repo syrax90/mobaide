@@ -8,6 +8,7 @@ import {
   autoScanInstanceSchema,
   autoScanListResponseSchema,
 } from './dto/autoscan';
+import { chatStoredSessionsResponseSchema } from './dto/chatSessions';
 import { createCustomAgentTypeRequestSchema } from './dto/customAgentTypes';
 import { busyByResponseSchema, busyHolderSchema } from './dto/gitConflict';
 import { gitJobSchema } from './dto/gitJob';
@@ -57,6 +58,7 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   FirstAgentPairedPayload: firstAgentPairedSchema,
   SessionModeOrderDto: sessionModeOrderSchema,
   VoiceStatusResponse: voiceStatusSchema,
+  ChatStoredSessionsResponse: chatStoredSessionsResponseSchema,
 };
 
 const dtoFiles = COVERED_FIXTURES.filter((path) => path.startsWith('dto/'));

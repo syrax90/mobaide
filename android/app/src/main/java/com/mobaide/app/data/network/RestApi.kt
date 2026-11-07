@@ -2,6 +2,7 @@ package com.mobaide.app.data.network
 
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.network.dto.AutoScanListResponse
+import com.mobaide.app.data.network.dto.ChatStoredSessionsResponse
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexLoginRequest
 import com.mobaide.app.data.network.dto.CodexLoginResponse
@@ -149,6 +150,21 @@ class RestApi(
             .get()
             .build()
         return execute(request)
+    }
+
+    /** Cancellable: the resume picker supersedes a page when the folder scope changes. */
+    suspend fun listChatSessions(kind: String, cwd: String?, cursor: String?): ChatStoredSessionsResponse {
+        val url = baseUrl().toHttpUrl().newBuilder()
+            .addPathSegment("api")
+            .addPathSegment("chat")
+            .addPathSegment(kind)
+            .addPathSegment("sessions")
+            .apply {
+                if (cwd != null) addQueryParameter("cwd", cwd)
+                if (cursor != null) addQueryParameter("cursor", cursor)
+            }
+            .build()
+        return executeCancellable(Request.Builder().url(url).get().build())
     }
 
     /** Authenticate the host's Codex CLI with an OpenAI API key (stdin-piped,

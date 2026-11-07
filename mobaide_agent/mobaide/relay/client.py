@@ -150,6 +150,17 @@ from mobaide.voice.models import (
     VoiceInstallRequest,
 )
 from mobaide.voice.service import VoiceService
+from mobaide.acp.agents import ChatAgentUnavailableError, build_chat_capabilities
+from mobaide.acp.wire import (
+    FRAME_CHAT,
+    chat_request_error,
+    is_valid_chat_resume_id,
+    FRAME_CHAT_COMMAND,
+    LEGACY_CLIENT_NOTICE,
+    is_chat_session,
+    list_chat_sessions,
+    match_chat_sessions_route,
+)
 
 from mobaide import __version__
 from .config import RelayConfig
@@ -219,6 +230,7 @@ def _build_relay_ssl_context(
 # requests cannot pile up tasks.
 _VOICE_PATH_PREFIX = "/api/voice/"
 MAX_VOICE_PROXY_TASKS = 32
+MAX_CHAT_PROXY_TASKS = 8
 _VOICE_ROUTE = re.compile(r"^/api/voice/(status|install|install/cancel|model|dictations)$")
 _VOICE_DICTATION_ROUTE = re.compile(r"^/api/voice/dictations/([^/]+)(?:/(audio|finish))?$")
 
@@ -454,6 +466,9 @@ class RelayClient:
         # (the reply goes out on whichever tunnel is live when they finish)
         # and are cancelled only by ``stop()``.
         self._voice_proxy_tasks: set[asyncio.Task] = set()
+        # In-flight ``/api/chat/{kind}/sessions`` listings, run aside for the
+        # same reason (the first one starts the agent process).
+        self._chat_proxy_tasks: set[asyncio.Task] = set()
 
         # Latest manifest pointer received from central_server (auth_ok or a
         # mid-connection ``agent_manifest_update`` control frame). Consumed by
@@ -493,7 +508,7 @@ class RelayClient:
         """Gracefully shut down the relay client."""
         self._stopping = True
         self._cancel_all_subtasks()
-        for task in list(self._voice_proxy_tasks):
+        for task in [*self._voice_proxy_tasks, *self._chat_proxy_tasks]:
             task.cancel()
         if self._task and not self._task.done():
             self._task.cancel()
@@ -805,8 +820,11 @@ class RelayClient:
             await self._handle_stop_session(ctrl, ws)
 
         elif msg_type == "proxy_request":
-            if str(ctrl.get("path", "")).startswith(_VOICE_PATH_PREFIX):
+            path = str(ctrl.get("path", ""))
+            if path.startswith(_VOICE_PATH_PREFIX):
                 self._spawn_voice_proxy(ctrl)
+            elif match_chat_sessions_route(path) is not None:
+                self._spawn_chat_proxy(ctrl)
             else:
                 await self._handle_proxy_request(ctrl, ws)
 
@@ -1180,6 +1198,23 @@ class RelayClient:
             await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
             return
         resolved_name = ctrl.get("resolved_name")
+        raw_resume = ctrl.get("chat_resume_id")
+        chat_resume_id = raw_resume if isinstance(raw_resume, str) else None
+        chat_error = chat_request_error(
+            ctrl.get("ui"), kind, chat_resume_id, self._session_manager
+        ) or (
+            "Invalid chat_resume_id"
+            if chat_resume_id is not None and not is_valid_chat_resume_id(chat_resume_id)
+            else None
+        )
+        if chat_error is not None:
+            resp = {
+                "type": "session_create_failed",
+                "session_id": session_id,
+                "error": chat_error,
+            }
+            await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+            return
         config = SessionConfig(
             session_id=session_id,
             command=spawn_command,
@@ -1199,6 +1234,8 @@ class RelayClient:
                 if isinstance(kind, str) and isinstance(resolved_name, str)
                 else None
             ),
+            ui="chat" if ctrl.get("ui") == "chat" else "terminal",
+            chat_resume_id=chat_resume_id,
         )
         try:
             session = await self._session_manager.create_session(config)
@@ -1223,6 +1260,17 @@ class RelayClient:
                 # for Codex. Lets the mobile client surface a CLI-specific hint.
                 f"{exc.cli_name}_cli_missing": True,
                 "searched_paths": list(exc.searched_paths),
+            }
+        except ChatAgentUnavailableError as exc:
+            logger.warning(
+                "relay.create_session_chat_unavailable session_id=%s kind=%s",
+                session_id, exc.kind,
+            )
+            resp = {
+                "type": "session_create_failed",
+                "session_id": session_id,
+                "error": str(exc),
+                "chat_unavailable": True,
             }
         except CliAuthRequiredError as exc:
             logger.warning(
@@ -1349,6 +1397,17 @@ class RelayClient:
                     "searched_paths": list(exc.searched_paths),
                 },
             }
+        except ChatAgentUnavailableError as exc:
+            logger.warning(
+                "relay.proxy_request_chat_unavailable path=%s kind=%s",
+                path, exc.kind,
+            )
+            resp = {
+                "type": "proxy_response",
+                "request_id": request_id,
+                "status": 503,
+                "body": {"detail": str(exc), "chat_unavailable": True},
+            }
         except CliAuthRequiredError as exc:
             logger.warning(
                 "relay.proxy_request_auth_required path=%s cli=%s",
@@ -1461,6 +1520,10 @@ class RelayClient:
                         "git": GIT_CAPABILITIES,
                         "voice": VOICE_CAPABILITIES,
                         "fs": FS_CAPABILITIES,
+                        "chat": await asyncio.to_thread(
+                            build_chat_capabilities,
+                            getattr(self._app_state, "chat_agents", None) or {},
+                        ),
                     },
                     "latest_agent_version": (manifest or {}).get("version"),
                 },
@@ -1562,6 +1625,11 @@ class RelayClient:
                 # inject resolved_command — a clean 400, never the generic
                 # 500 from _handle_proxy_request's catch-all.
                 return {"status": 400, "body": {"detail": str(exc)}}
+            chat_error = chat_request_error(
+                parsed.ui, kind, parsed.chat_resume_id, self._session_manager
+            )
+            if chat_error is not None:
+                return {"status": 400, "body": {"detail": chat_error}}
             config = SessionConfig(
                 session_id=session_id,
                 command=spawn_command,
@@ -1579,6 +1647,8 @@ class RelayClient:
                 kind_label=(
                     parsed.resolved_name if isinstance(kind, str) else None
                 ),
+                ui=parsed.ui or "terminal",
+                chat_resume_id=parsed.chat_resume_id,
             )
             session = await self._session_manager.create_session(config)
             self._bridge_session(session, ws)
@@ -2185,6 +2255,45 @@ class RelayClient:
         self._voice_proxy_tasks.add(task)
         task.add_done_callback(self._voice_proxy_tasks.discard)
 
+    def _spawn_chat_proxy(self, ctrl: dict) -> None:
+        """Run a stored-chat-sessions listing aside from the tunnel reader:
+        its first call starts the agent process, which takes seconds."""
+        if len(self._chat_proxy_tasks) >= MAX_CHAT_PROXY_TASKS:
+            coro = self._send_proxy_result(
+                ctrl,
+                {"status": 503, "body": {"detail": "Too many requests in flight"}},
+            )
+        else:
+            coro = self._run_chat_proxy(ctrl)
+        task = asyncio.create_task(coro, name="relay-chat-proxy")
+        self._chat_proxy_tasks.add(task)
+        task.add_done_callback(self._chat_proxy_tasks.discard)
+
+    async def _run_chat_proxy(self, ctrl: dict) -> None:
+        method = str(ctrl.get("method", "GET")).upper()
+        path = str(ctrl.get("path", ""))
+        query = ctrl.get("query") or {}
+        kind = match_chat_sessions_route(path)
+        try:
+            if method != "GET" or kind is None:
+                result = {
+                    "status": 405,
+                    "body": {"detail": f"Unknown proxy route: {method} {path}"},
+                }
+            else:
+                status, body = await list_chat_sessions(
+                    getattr(self._app_state, "chat_catalog", None),
+                    self._session_manager,
+                    kind,
+                    cwd=query.get("cwd"),
+                    cursor=query.get("cursor"),
+                )
+                result = {"status": status, "body": body}
+        except Exception as exc:
+            logger.warning("relay.proxy_request_failed path=%s: %s", path, exc)
+            result = {"status": 500, "body": {"detail": str(exc)}}
+        await self._send_proxy_result(ctrl, result)
+
     async def _run_voice_proxy(self, ctrl: dict) -> None:
         method = str(ctrl.get("method", "GET")).upper()
         path = str(ctrl.get("path", ""))
@@ -2205,7 +2314,7 @@ class RelayClient:
         # by request_id, so an answer that outlived a reconnect still lands.
         ws = self._ws
         if ws is None:
-            logger.info("relay.voice_proxy_dropped path=%s", ctrl.get("path"))
+            logger.info("relay.aside_proxy_dropped path=%s", ctrl.get("path"))
             return
         resp = {
             "type": "proxy_response",
@@ -2216,7 +2325,7 @@ class RelayClient:
         try:
             await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
         except Exception as exc:
-            logger.info("relay.voice_proxy_send_failed path=%s: %s", ctrl.get("path"), exc)
+            logger.info("relay.aside_proxy_send_failed path=%s: %s", ctrl.get("path"), exc)
 
     async def _dispatch_voice(
         self, method: str, path: str, body: dict | None
@@ -2455,7 +2564,10 @@ class RelayClient:
         frame_type = payload[:1]
         frame_data = payload[1:]
 
-        if frame_type == FRAME_INPUT:
+        if frame_type == FRAME_CHAT_COMMAND:
+            if is_chat_session(session) and frame_data:
+                await session.handle_command(frame_data)
+        elif frame_type == FRAME_INPUT:
             if frame_data:
                 await session.write(frame_data)
         elif frame_type == FRAME_EXECUTE:
@@ -2527,6 +2639,20 @@ class RelayClient:
             await ws.send(encode(CH_SESSION_IO, session_id, state))
 
             await ws.send(encode(CH_SESSION_IO, session_id, FRAME_REPLAY))
+            if is_chat_session(session):
+                # Chat clients ask for the timeline with a ``sync`` command;
+                # a client without chat support shows this notice instead.
+                await ws.send(
+                    encode(
+                        CH_SESSION_IO,
+                        session_id,
+                        FRAME_OUTPUT + LEGACY_CLIENT_NOTICE,
+                    ),
+                )
+                await ws.send(
+                    encode(CH_SESSION_IO, session_id, FRAME_REPLAY_END),
+                )
+                return
 
             # The ring is DA-stripped at write time inside ``_append_ring``;
             # ``iter_ring_chunks`` takes a single snapshot of the (already
@@ -2596,6 +2722,14 @@ class RelayClient:
                             FRAME_OUTPUT + event.data,
                         )
                         await ws.send(envelope)
+                    elif event.event_type == "chat" and event.data:
+                        await ws.send(
+                            encode(
+                                CH_SESSION_IO,
+                                session_id,
+                                FRAME_CHAT + event.data,
+                            )
+                        )
                     elif event.event_type in _EVENT_TO_STATUS:
                         session = await self._session_manager.get_session(
                             session_id

@@ -44,6 +44,8 @@ export interface ClaudeLaunchPrefs {
   planMode: boolean;
   debug: boolean;
   focusMode: boolean;
+  /** Claude Code's "Terminal UI" toggle; a blob from before it existed reads as off. */
+  terminalUi: boolean;
 }
 
 /** Android `CodexLaunchPrefs`, iOS `CodexLaunchPrefs`. */
@@ -121,6 +123,7 @@ export const CLAUDE_PREFS_DEFAULTS: ClaudeLaunchPrefs = {
   debug: false,
   // On for both buckets, so a blob saved before the toggle existed restores focus view.
   focusMode: true,
+  terminalUi: false,
 };
 
 export const CODEX_PREFS_DEFAULTS: CodexLaunchPrefs = {
@@ -220,6 +223,7 @@ function sanitizeClaudePrefs(raw: unknown): ClaudeLaunchPrefs | null {
   const planMode = field(raw, 'planMode', CLAUDE_PREFS_DEFAULTS.planMode, isBoolean);
   const debug = field(raw, 'debug', CLAUDE_PREFS_DEFAULTS.debug, isBoolean);
   const focusMode = field(raw, 'focusMode', CLAUDE_PREFS_DEFAULTS.focusMode, isBoolean);
+  const terminalUi = field(raw, 'terminalUi', CLAUDE_PREFS_DEFAULTS.terminalUi, isBoolean);
   if (
     model === undefined ||
     effort === undefined ||
@@ -230,7 +234,8 @@ function sanitizeClaudePrefs(raw: unknown): ClaudeLaunchPrefs | null {
     noMemory === undefined ||
     planMode === undefined ||
     debug === undefined ||
-    focusMode === undefined
+    focusMode === undefined ||
+    terminalUi === undefined
   ) {
     return null;
   }
@@ -245,6 +250,7 @@ function sanitizeClaudePrefs(raw: unknown): ClaudeLaunchPrefs | null {
     planMode,
     debug,
     focusMode,
+    terminalUi,
   };
 }
 

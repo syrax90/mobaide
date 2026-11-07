@@ -62,10 +62,13 @@ afterEach(() => {
   cleanup();
 });
 
+/** Focus view and Debug logging exist only for a session that opens in the terminal. */
+const TERMINAL_STATE: WizardState = { ...STATE, claude: { ...STATE.claude, terminalUi: true } };
+
 describe('ConfigStep — Claude Code layout', () => {
   it('puts Focus view above Skip permissions and Advanced after the worktree section', () => {
     // The branch field only appears once a worktree is requested.
-    renderStep('claude', { ...STATE, git: { worktree: true, branchName: '' } });
+    renderStep('claude', { ...TERMINAL_STATE, git: { worktree: true, branchName: '' } });
 
     expectInOrder(
       screen.getByLabelText('Focus view'),
@@ -76,15 +79,15 @@ describe('ConfigStep — Claude Code layout', () => {
     );
   });
 
-  it('opens with focus view on and Advanced collapsed, No memory its first item', () => {
-    renderStep('claude');
+  it('opens with focus view on and Advanced collapsed, Terminal UI its first item', () => {
+    renderStep('claude', TERMINAL_STATE);
 
     expect(screen.getByLabelText('Focus view')).toBeChecked();
     const details = advancedSummary().closest('details');
     expect(details).not.toBeNull();
     expect(details).not.toHaveAttribute('open');
     const first = details?.querySelector('input');
-    expect(first).toBe(screen.getByLabelText('No memory'));
+    expect(first).toBe(screen.getByLabelText('Terminal UI'));
   });
 
   it('offers no Plan mode control for a Claude Code launch', () => {
@@ -94,7 +97,7 @@ describe('ConfigStep — Claude Code layout', () => {
   });
 
   it('writes the Focus view toggle to the Claude bucket', () => {
-    const actions = renderStep('claude');
+    const actions = renderStep('claude', TERMINAL_STATE);
 
     fireEvent.click(screen.getByLabelText('Focus view'));
 

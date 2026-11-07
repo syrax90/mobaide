@@ -16,6 +16,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from mobaide import __version__
+from mobaide.acp.agents import build_chat_agents, build_chat_capabilities
+from mobaide.acp.catalog import ChatCatalog
 from mobaide.core import (
     AntigravityLauncher,
     ClaudeLauncher,
@@ -66,6 +68,7 @@ from .logging import bind_request_context, clear_request_context, get_logger
 from .logging_setup import configure_logging, shutdown_logging
 from .projects.router import router as projects_router
 from .restart import restart_requested
+from .sessions.router import chat_router
 from .sessions.router import router as sessions_router
 from .events import EventBus
 from .fs.models import FS_CAPABILITIES
@@ -615,6 +618,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         for fanout in app.state.fanouts.values():
             fanout.stop()
         await app.state.session_manager.shutdown()
+        await app.state.chat_catalog.close()
         shutdown_logging()
 
     # Default-deny on the doc routes: the agent binds every interface, so
@@ -783,6 +787,14 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         "codex": app.state.codex_launcher,
         "antigravity": app.state.antigravity_launcher,
     }
+    # Agents that can also run in the structured chat UI (over ACP), and the
+    # lister of their stored sessions (continue a session started elsewhere).
+    app.state.chat_agents = build_chat_agents(
+        app.state.cli_launchers,
+        test_mode=config.is_test_mode,
+        command_overrides={"claude": config.acp_claude_command},
+    )
+    app.state.chat_catalog = ChatCatalog(app.state.chat_agents)
 
     # event_bus / broadcaster / fanouts must exist before SessionManager
     # so the on_session_created hook can attach a SessionEventFanout
@@ -819,6 +831,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         # MOBAIDE_ENV=test → in-process echo backend (no real shells); the
         # default real backend is byte-for-byte unchanged in production.
         backend_factory=FakePtyBackend if config.is_test_mode else create_pty_backend,
+        chat_agents=app.state.chat_agents,
     )
     app.state.jwt_service = JwtService(
         secret_key=config.jwt_secret_key,
@@ -846,6 +859,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(sessions_router)
+    app.include_router(chat_router)
     app.include_router(codex_router)
     app.include_router(hooks_router)
     app.include_router(projects_router)
@@ -909,6 +923,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 "git": GIT_CAPABILITIES,
                 "voice": VOICE_CAPABILITIES,
                 "fs": FS_CAPABILITIES,
+                "chat": await asyncio.to_thread(
+                    build_chat_capabilities, app.state.chat_agents
+                ),
             },
             "latest_agent_version": (manifest or {}).get("version"),
         }

@@ -188,6 +188,33 @@ extension VersionInfoResponse {
     }
 }
 
+/// `capabilities.chat.<kind>`: whether the agent can run that kind in the chat UI.
+enum ChatCapability: Equatable, Sendable {
+    /// No `capabilities.chat` at all: an agent older than the chat UI.
+    case unsupportedAgent
+    /// `capabilities.chat` without this kind: the PC cannot run it (no Node.js).
+    case unavailable
+    case available(resume: Bool)
+
+    var isAvailable: Bool {
+        if case .available = self { return true }
+        return false
+    }
+
+    var canResume: Bool {
+        if case .available(true) = self { return true }
+        return false
+    }
+}
+
+extension VersionInfoResponse {
+    func chatCapability(_ kind: String) -> ChatCapability {
+        guard let chat = capabilities["chat"]?.objectValue else { return .unsupportedAgent }
+        guard let entry = chat[kind] else { return .unavailable }
+        return .available(resume: entry["resume"]?.boolValue == true)
+    }
+}
+
 /// One entry of `capabilities.cli.<id>.model_details`: the reasoning efforts a
 /// model supports and (when the catalog names one) its default effort. Built
 /// only by the loose walk in `cliModelDetails` — never decoded directly.

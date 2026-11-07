@@ -101,7 +101,16 @@ data class SessionResponse(
     // human-readable end cause, set when a session ends.
     val attention: String? = null,
     val exit_reason: String? = null,
-)
+    // "chat" opens the structured chat screen; absent or anything else is the PTY terminal.
+    val ui: String? = null,
+) {
+    val isChat: Boolean get() = ui == UI_CHAT
+
+    companion object {
+        const val UI_CHAT = "chat"
+        const val UI_TERMINAL = "terminal"
+    }
+}
 
 @Serializable
 data class CreateSessionRequest(
@@ -125,6 +134,10 @@ data class CreateSessionRequest(
     // instead carry worktree intent inside their own options block.
     val worktree: Boolean = false,
     val branch_name: String? = null,
+    // "chat" | "terminal"; null keeps the request byte-identical to older clients.
+    val ui: String? = null,
+    // Chat only: continue the agent's stored session with this id instead of a new one.
+    val chat_resume_id: String? = null,
 )
 
 @Serializable

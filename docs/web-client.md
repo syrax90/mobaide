@@ -806,6 +806,10 @@ its WebGL addon outweigh the rest of the SPA, so they load on first attach
 rather than on the sign-in screen. It is reached from the sessions list at
 `/`, or from the sessions panel below.
 
+The same route renders the chat view instead of xterm for sessions whose
+`ui` is `chat` (`routes/chat/SessionRoute.tsx` picks by `ui`); see *Chat
+Sessions* in `features.md`.
+
 ### Route and sessions panel
 
 **Sessions panel.** A `☰` "Sessions" button in `.terminal-bar` opens a panel

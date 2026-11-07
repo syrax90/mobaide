@@ -33,7 +33,7 @@ class ExternalSessionsNoticeTest {
         // The headline alone reads as a defect report; the body is what tells
         // the user what to do instead.
         composeRule.onNodeWithText(
-            "Mobaide can only open sessions its own agent started",
+            "Mobaide lists only sessions its own agent started",
             substring = true,
         ).assertIsDisplayed()
     }

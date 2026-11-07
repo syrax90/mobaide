@@ -35,9 +35,15 @@ export const sessionResponseSchema = z.looseObject({
   kind_label: optionalWireString(),
   attention: optionalWireString(),
   exit_reason: optionalWireString(),
+  /** `chat` for a structured chat session; absent or anything else is the terminal. */
+  ui: optionalWireString(),
 });
 
 export type SessionResponse = z.infer<typeof sessionResponseSchema>;
+
+export function isChatSession(session: Pick<SessionResponse, 'ui'>): boolean {
+  return session.ui === 'chat';
+}
 
 /**
  * `sessions.changed` — the agent's complete session list, rebuilt from

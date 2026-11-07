@@ -24,6 +24,8 @@ private struct CreateSessionContent: View {
     @State private var pathSuggestions: PathSuggestionsModel
     @State private var claudeAdvancedExpanded = false
     @State private var autoScanAdvancedExpanded = false
+    @State private var showContinueSession = false
+    @State private var pendingContinue: ChatStoredSession?
     /// Reorder mode for the project and mode lists: rows show the native drag
     /// handles and a tap no longer picks (the Projects screen's Edit pattern).
     @State private var editMode: EditMode = .inactive
@@ -102,6 +104,17 @@ private struct CreateSessionContent: View {
         }
         .sheet(item: $model.typeEditorTarget) { target in
             CustomAgentTypeEditorSheet(model: model, target: target.type)
+        }
+        // The pick runs after the sheet is gone, so the push it may cause
+        // never races the dismissal.
+        .sheet(isPresented: $showContinueSession, onDismiss: {
+            guard let stored = pendingContinue else { return }
+            pendingContinue = nil
+            Task { await model.continueSession(stored) }
+        }) {
+            ContinueSessionSheet(agentAPI: container.agentAPI, folder: model.continueFolder) { stored in
+                pendingContinue = stored
+            }
         }
         .alert(
             "Delete agent type?",
@@ -444,6 +457,8 @@ private struct CreateSessionContent: View {
 
         claudeAdvancedOptions(
             isExpanded: $autoScanAdvancedExpanded,
+            terminalUI: nil,
+            showsDebug: true,
             noMemory: $model.autoScanNoMemory,
             fastMode: $model.autoScanClaudeFastMode,
             ultracode: $model.autoScanClaudeUltracode,
@@ -489,8 +504,40 @@ private struct CreateSessionContent: View {
                 fastMode: model.claudeFastMode,
                 ultracode: model.claudeUltracode
             )
-            focusViewToggle($model.focusMode)
+            // Focus view only shapes Claude Code's terminal TUI.
+            if !model.claudeUsesChat {
+                focusViewToggle($model.focusMode)
+            }
             Toggle("Skip permissions", isOn: $model.skipPermissions)
+        }
+        if model.canContinueSession {
+            Section {
+                Button {
+                    showContinueSession = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundStyle(colors.accent)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Continue a session")
+                                .foregroundStyle(colors.text)
+                            Text("Open a Claude Code session started on your PC, for example in a terminal.")
+                                .font(.caption)
+                                .foregroundStyle(colors.textMuted)
+                        }
+                        Spacer()
+                        if model.submitting {
+                            PixelLoadingBlock(width: 7, height: 13)
+                        } else {
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(colors.gray)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .disabled(model.submitting)
+            }
         }
     }
 
@@ -500,6 +547,11 @@ private struct CreateSessionContent: View {
         @Bindable var model = model
         claudeAdvancedOptions(
             isExpanded: $claudeAdvancedExpanded,
+            terminalUI: Binding(
+                get: { model.terminalUI || model.chatUnavailable },
+                set: { model.terminalUI = $0 }
+            ),
+            showsDebug: !model.claudeUsesChat,
             noMemory: $model.noMemory,
             fastMode: $model.claudeFastMode,
             ultracode: $model.claudeUltracode,
@@ -540,10 +592,14 @@ private struct CreateSessionContent: View {
     }
 
     /// Collapsed-by-default "Advanced" section shared by the Claude Code and
-    /// Auto Scan steps (Android: `ClaudeAdvancedOptions`).
+    /// Auto Scan steps (Android: `ClaudeAdvancedOptions`). `terminalUI` is the
+    /// Claude Code step's chat / terminal choice; Auto Scan always runs in the
+    /// terminal and passes nil.
     @ViewBuilder
     private func claudeAdvancedOptions(
         isExpanded: Binding<Bool>,
+        terminalUI: Binding<Bool>?,
+        showsDebug: Bool,
         noMemory: Binding<Bool>,
         fastMode: Binding<Bool>,
         ultracode: Binding<Bool>,
@@ -552,13 +608,22 @@ private struct CreateSessionContent: View {
     ) -> some View {
         Section {
             DisclosureGroup("Advanced", isExpanded: isExpanded) {
+                if let terminalUI {
+                    Toggle("Terminal UI", isOn: terminalUI)
+                        .disabled(model.chatUnavailable)
+                    Text(model.chatUnavailableReason ?? "Use the classic terminal instead of the chat view.")
+                        .font(.footnote)
+                        .foregroundStyle(model.chatUnavailable ? colors.warning : colors.textMuted)
+                }
                 Toggle("No memory", isOn: noMemory)
                 Toggle("Fast mode (Opus only)", isOn: fastMode)
                 Toggle("Ultracode", isOn: ultracode)
-                Toggle("Debug logging", isOn: debug)
-                Text("Claude Code prints verbose diagnostics into the terminal.")
-                    .font(.footnote)
-                    .foregroundStyle(colors.textMuted)
+                if showsDebug {
+                    Toggle("Debug logging", isOn: debug)
+                    Text("Claude Code prints verbose diagnostics into the terminal.")
+                        .font(.footnote)
+                        .foregroundStyle(colors.textMuted)
+                }
                 TextField("Append system prompt", text: appendSystemPrompt, axis: .vertical)
                     .lineLimit(1...4)
                     .autocorrectionDisabled()

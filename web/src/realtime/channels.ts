@@ -27,6 +27,7 @@ import { useConnectionStore } from './connectionStore';
 import { registerDisposable, unregisterDisposable } from './liveChannels';
 import {
   WebSocketChannel,
+  type ChannelSend,
   type ChannelState,
   type WebSocketChannelOptions,
 } from './webSocketChannel';
@@ -133,6 +134,21 @@ export function sessionChannelName(agentId: string, sessionId: string): string {
   return `session:${agentId}:${sessionId}`;
 }
 
+/** The per-session socket's URL builder, shared by the PTY and chat channels. */
+function sessionSocketUrl(agentId: string, sessionId: string): () => Promise<string | null> {
+  return async () => {
+    const token = await ensureAgentToken(agentId);
+    if (token === null) return null;
+    return buildWebSocketUrl({
+      base: originBase(),
+      mode: 'relay',
+      path: `ws/session/${encodeURIComponent(sessionId)}`,
+      agentId: encodeURIComponent(agentId),
+      token,
+    });
+  };
+}
+
 /**
  * Binary PTY channel.
  *
@@ -155,17 +171,7 @@ export class SessionIoChannel {
       name: sessionChannelName(agentId, sessionId),
       axis: 'agent',
       binary: true,
-      buildUrl: async () => {
-        const token = await ensureAgentToken(agentId);
-        if (token === null) return null;
-        return buildWebSocketUrl({
-          base: originBase(),
-          mode: 'relay',
-          path: `ws/session/${encodeURIComponent(sessionId)}`,
-          agentId: encodeURIComponent(agentId),
-          token,
-        });
-      },
+      buildUrl: sessionSocketUrl(agentId, sessionId),
       onOpen: () => {
         this.resendCachedSize();
       },
@@ -193,6 +199,49 @@ export class SessionIoChannel {
   private resendCachedSize(): void {
     if (this.rows <= 0 || this.cols <= 0) return;
     this.send({ kind: 'resize', rows: this.rows, cols: this.cols });
+  }
+
+  dispose(): void {
+    disposeChannel(this, this.channel);
+  }
+}
+
+/** Distinct from {@link sessionChannelName}: a chat model and a PTY model never share a key. */
+export function chatChannelName(agentId: string, sessionId: string): string {
+  return `chat:${agentId}:${sessionId}`;
+}
+
+/**
+ * The same per-session socket as {@link SessionIoChannel}, carrying chat
+ * commands and frames instead of PTY bytes. No resize is ever sent on it;
+ * `onOpen` is where the owner puts its `sync` so it is the first frame out.
+ */
+export class ChatSessionChannel {
+  readonly channel: WebSocketChannel;
+
+  constructor(
+    agentId: string,
+    sessionId: string,
+    onOpen: (send: ChannelSend) => void,
+    overrides: ChannelOverrides = {},
+  ) {
+    this.channel = new WebSocketChannel({
+      name: chatChannelName(agentId, sessionId),
+      axis: 'agent',
+      binary: true,
+      buildUrl: sessionSocketUrl(agentId, sessionId),
+      onOpen,
+      onStateChange: publishState,
+      onClearAgentToken: () => {
+        clearAgentToken(agentId);
+      },
+      ...overrides,
+    });
+    registerDisposable(this);
+  }
+
+  send(frame: Uint8Array): boolean {
+    return this.channel.send(frame);
   }
 
   dispose(): void {

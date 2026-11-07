@@ -28,6 +28,7 @@ const claudePrefs = (over: Partial<ClaudeLaunchPrefs> = {}): ClaudeLaunchPrefs =
   planMode: false,
   debug: false,
   focusMode: true,
+  terminalUi: false,
   ...over,
 });
 

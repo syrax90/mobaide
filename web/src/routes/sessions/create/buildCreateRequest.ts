@@ -16,6 +16,8 @@
  */
 import type { components } from '../../../api/generated/agent';
 import type { ProjectSummary } from '../../../api/projectRepository';
+import type { ChatSupport } from '../../../protocol/dto/agentVersion';
+import type { ChatStoredSession } from '../../../protocol/dto/chatSessions';
 import {
   effectiveClaudeEffort,
   effectiveClaudeModel,
@@ -35,6 +37,19 @@ export interface BuildContext {
   mode: WizardMode;
   /** The stored project the selection names, once resolved. The only source of `is_git`. */
   project: ProjectSummary | null;
+  /** `capabilities.chat` for Claude Code; absent reads as not known yet. */
+  chat?: ChatSupport;
+}
+
+/**
+ * Whether a Claude Code launch starts in the chat view: the Terminal UI toggle
+ * is off and the PC is not known to lack chat support. While the probe is
+ * still out the server decides; a known "unavailable" never sends `chat`.
+ */
+export function claudeUsesChat(bucket: ClaudeBucket, chat: ChatSupport | undefined): boolean {
+  if (bucket.terminalUi) return false;
+  const kind = chat?.kind ?? 'unknown';
+  return kind === 'available' || kind === 'unknown';
 }
 
 /** Blank-after-trim omits the key; otherwise the value goes untrimmed (a prompt's trailing newline is intentional). */
@@ -111,6 +126,7 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
       // Managed CLIs carry worktree intent inside their own options block; the
       // top-level flag is only read on the shell path.
       worktree: false,
+      ui: claudeUsesChat(state.claude, context.chat) ? 'chat' : 'terminal',
     };
   }
 
@@ -157,6 +173,30 @@ export function buildCreateRequest(context: BuildContext): CreateSessionRequest 
     cli: isCustomMode(mode) ? mode : undefined,
     worktree: place.worktree,
     branch_name: place.branchName,
+  };
+}
+
+/**
+ * Continue a Claude Code session stored on the PC in a new chat session, with
+ * the current Claude options but never a worktree: the conversation belongs to
+ * the folder it was recorded in. That folder is the selected project when the
+ * paths match, else a plain `cwd`.
+ */
+export function buildResumeRequest(
+  { state, project }: BuildContext,
+  stored: ChatStoredSession,
+): CreateSessionRequest {
+  const sameFolder = project !== null && project.path === stored.cwd;
+  return {
+    project_name: sameFolder ? project.name : undefined,
+    cwd: sameFolder ? undefined : stored.cwd,
+    rows: 24,
+    cols: 80,
+    cli: 'claude',
+    claude_options: claudeOptions(state.claude, { worktree: false, branchName: undefined }),
+    worktree: false,
+    ui: 'chat',
+    chat_resume_id: stored.session_id,
   };
 }
 

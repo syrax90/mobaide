@@ -10,12 +10,16 @@ import com.mobaide.app.data.local.CodexLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.AntigravityOptionsModel
+import com.mobaide.app.data.network.dto.ChatStoredSession
+import com.mobaide.app.data.network.dto.ChatSupport
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.CliModelDetail
 import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.ProjectInfo
+import com.mobaide.app.data.network.dto.SessionResponse
+import com.mobaide.app.data.network.dto.chatSupport
 import com.mobaide.app.data.network.dto.cliAvailable
 import com.mobaide.app.data.network.dto.cliModelDetails
 import com.mobaide.app.data.network.dto.cliModels
@@ -170,6 +174,10 @@ data class CreateSessionUiState(
     val claudeDebug: Boolean = false,
     val focusMode: Boolean = true,
     val claudeAppendSystemPrompt: String = "",
+    // Claude Code only: start the classic terminal instead of the chat view.
+    val claudeTerminalUi: Boolean = false,
+    // capabilities.chat for Claude from the ModePick probe; null = not probed yet.
+    val claudeChat: ChatSupport? = null,
     // Auto Scan's own copies of the Claude controls: each kind remembers its
     // own persisted defaults, and in-flight edits must not bleed between the
     // Standard and Auto Scan config steps within one wizard run.
@@ -269,6 +277,33 @@ fun CreateSessionUiState.codexEffortsFor(model: String?): List<String> =
     model?.let { m -> codexModelDetails?.firstOrNull { it.id == m }?.efforts }
         ?: CreateSessionViewModel.REASONING_EFFORTS
 
+/**
+ * Whether a Claude Code session starts in the chat view: the Terminal UI toggle
+ * is off and the PC is not known to lack chat support (unknown = the agent decides).
+ */
+val CreateSessionUiState.claudeUsesChat: Boolean
+    get() = !claudeTerminalUi && (claudeChat == null || claudeChat is ChatSupport.Available)
+
+/** Why the Terminal UI toggle is locked on, or null while the chat view is possible. */
+val CreateSessionUiState.claudeChatUnavailableHint: String?
+    get() = when (claudeChat) {
+        ChatSupport.AgentOutdated -> "Update Mobaide on your PC to use the chat view."
+        ChatSupport.Unavailable -> "The chat view needs Node.js on your PC."
+        else -> null
+    }
+
+/** "Continue a session" is offered: chat view, and the agent can list stored sessions. */
+val CreateSessionUiState.claudeResumeAvailable: Boolean
+    get() = claudeUsesChat && (claudeChat as? ChatSupport.Available)?.resume == true
+
+/** The folder "This folder" lists: the selected project's path, or the custom path. */
+val CreateSessionUiState.selectedFolder: String?
+    get() = when (val sel = selection) {
+        is ProjectSelection.Stored -> projects.firstOrNull { it.name == sel.name }?.path
+        is ProjectSelection.CustomPath -> sel.path.takeIf { it.isNotBlank() }
+        ProjectSelection.None -> null
+    }
+
 /** Snapshot of the Claude reasoning controls for persistence / re-defaulting. */
 private fun CreateSessionUiState.toClaudeLaunchPrefs() = ClaudeLaunchPrefs(
     model = claudeModel,
@@ -280,6 +315,7 @@ private fun CreateSessionUiState.toClaudeLaunchPrefs() = ClaudeLaunchPrefs(
     noMemory = noMemory,
     debug = claudeDebug,
     focusMode = focusMode,
+    terminalUi = claudeTerminalUi,
 )
 
 /** Snapshot of the Auto Scan launch controls for its own per-kind bucket. */
@@ -386,6 +422,7 @@ class CreateSessionViewModel @Inject constructor(
                         noMemory = saved.noMemory,
                         claudeDebug = saved.debug,
                         focusMode = saved.focusMode,
+                        claudeTerminalUi = saved.terminalUi,
                     )
                 }
             }
@@ -801,6 +838,7 @@ class CreateSessionViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         claudeAvailable = version.cliAvailable("claude"),
+                        claudeChat = version.chatSupport("claude"),
                         codexAvailable = version.cliAvailable("codex"),
                         antigravityAvailable = version.cliAvailable("antigravity"),
                         codexModels = version.cliModels("codex"),
@@ -996,6 +1034,7 @@ class CreateSessionViewModel @Inject constructor(
     fun toggleNoMemory(v: Boolean) = _uiState.update { it.copy(noMemory = v) }
     fun toggleSkipPermissions(v: Boolean) = _uiState.update { it.copy(skipPermissions = v) }
     fun toggleFocusMode(v: Boolean) = _uiState.update { it.copy(focusMode = v) }
+    fun toggleTerminalUi(v: Boolean) = _uiState.update { it.copy(claudeTerminalUi = v) }
     fun setClaudeModel(v: String?) = _uiState.update {
         // Clamp the effort if the new model doesn't support the current level
         // (e.g. xhigh/max → high when switching to haiku, the only capped model).
@@ -1112,6 +1151,7 @@ class CreateSessionViewModel @Inject constructor(
     fun submit() {
         val state = _uiState.value
         if (state.submitting) return
+        val ui = if (state.claudeUsesChat) SessionResponse.UI_CHAT else SessionResponse.UI_TERMINAL
         val claudeOptions = ClaudeOptionsModel(
             no_memory = state.noMemory,
             skip_permissions = state.skipPermissions,
@@ -1131,6 +1171,7 @@ class CreateSessionViewModel @Inject constructor(
                 request = CreateSessionRequest(
                     project_name = sel.name,
                     claude_options = claudeOptions,
+                    ui = ui,
                 ),
             )
             is ProjectSelection.CustomPath -> {
@@ -1141,12 +1182,52 @@ class CreateSessionViewModel @Inject constructor(
                         project_name = null,
                         cwd = sel.path,
                         claude_options = claudeOptions.copy(worktree = false, branch_name = null),
+                        ui = ui,
                     ),
                 )
             }
             ProjectSelection.None -> Unit
         }
     }
+
+    /**
+     * Continue a stored Claude Code session in a new chat session: the current
+     * Claude options without a worktree, in the selected project when its folder
+     * is the row's folder, otherwise in the row's folder itself.
+     */
+    fun resumeChatSession(row: ChatStoredSession) {
+        val state = _uiState.value
+        if (state.submitting) return
+        val project = (state.selection as? ProjectSelection.Stored)?.let { sel ->
+            state.projects.firstOrNull { it.name == sel.name }
+        }?.takeIf { samePath(it.path, row.cwd) }
+        val options = ClaudeOptionsModel(
+            no_memory = state.noMemory,
+            skip_permissions = state.skipPermissions,
+            model = state.claudeModel,
+            effort = state.claudeEffort,
+            fast_mode = state.claudeFastMode,
+            ultracode = state.claudeUltracode,
+            debug = state.claudeDebug,
+            focus_mode = state.focusMode,
+            append_system_prompt = state.claudeAppendSystemPrompt.takeIf { it.isNotBlank() },
+            worktree = false,
+        )
+        submitSession(
+            selection = if (project != null) ProjectSelection.Stored(project.name) else ProjectSelection.None,
+            request = CreateSessionRequest(
+                project_name = project?.name,
+                cwd = if (project == null) row.cwd else null,
+                cli = "claude",
+                claude_options = options,
+                ui = SessionResponse.UI_CHAT,
+                chat_resume_id = row.session_id,
+            ),
+        )
+    }
+
+    private fun samePath(a: String, b: String): Boolean =
+        a.trimEnd('/', '\\') == b.trimEnd('/', '\\')
 
     fun submitCodex() {
         val state = _uiState.value
@@ -1490,6 +1571,15 @@ class CreateSessionViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(submitting = false, codexLoginVisible = true, codexLoginError = null)
                     }
+                } else if (e is ApiException && isChatUnavailable(e.errorBody)) {
+                    val detail = chatUnavailableDetail(e.errorBody)?.trim()?.trimEnd('.')?.takeIf { it.isNotEmpty() }
+                        ?: "The chat view cannot start on your PC"
+                    _uiState.update {
+                        it.copy(
+                            submitting = false,
+                            error = "$detail. Turn on Terminal UI under Advanced to use the classic terminal.",
+                        )
+                    }
                 } else if (e is ApiException && isAgentUpdateRequired(e.errorBody)) {
                     // Relay-side gate: the agent's live tunnel negotiated a
                     // protocol too old to launch custom agent types.
@@ -1540,6 +1630,22 @@ class CreateSessionViewModel @Inject constructor(
 
     private fun JsonObject.hasCodexAuthMarker(): Boolean =
         this["codex_auth_required"]?.jsonPrimitive?.booleanOrNull == true
+
+    /** The `chat_unavailable` 503: flat through the relay, nested under `detail` on direct REST. */
+    private fun chatUnavailableBody(body: String): JsonObject? = runCatching {
+        val obj = Json.parseToJsonElement(body).jsonObject
+        when {
+            obj["chat_unavailable"]?.jsonPrimitive?.booleanOrNull == true -> obj
+            (obj["detail"] as? JsonObject)?.get("chat_unavailable")?.jsonPrimitive?.booleanOrNull == true ->
+                obj["detail"] as JsonObject
+            else -> null
+        }
+    }.getOrNull()
+
+    private fun isChatUnavailable(body: String): Boolean = chatUnavailableBody(body) != null
+
+    private fun chatUnavailableDetail(body: String): String? =
+        chatUnavailableBody(body)?.get("detail")?.jsonPrimitive?.contentOrNull
 
     /**
      * True when an error body carries the `agent_update_required` marker the

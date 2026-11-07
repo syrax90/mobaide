@@ -8,10 +8,39 @@ For the short overview, see the [README](../README.md). The wire contract itself
 
 | Area | Features |
 |---|---|
-| Sessions | [Remote Terminal](#remote-terminal) · [Multi-Session](#multi-session) · [Managed CLI agents](#managed-cli-agents) · [Terminal Sessions](#terminal-sessions) · [Custom Path Sessions](#custom-path-sessions) · [Reorderable New-Session Lists](#reorderable-new-session-lists) · [External Sessions Notice](#external-sessions-notice) · [Auto Scan Mode](#auto-scan-mode) · [1-hour Prompt Cache](#1-hour-prompt-cache) |
+| Sessions | [Chat Sessions](#chat-sessions) · [Remote Terminal](#remote-terminal) · [Multi-Session](#multi-session) · [Managed CLI agents](#managed-cli-agents) · [Terminal Sessions](#terminal-sessions) · [Custom Path Sessions](#custom-path-sessions) · [Reorderable New-Session Lists](#reorderable-new-session-lists) · [External Sessions Notice](#external-sessions-notice) · [Auto Scan Mode](#auto-scan-mode) · [1-hour Prompt Cache](#1-hour-prompt-cache) |
 | Terminal input and display | [Terminal Display Modes](#terminal-display-modes) · [Explicit Keyboard & Direct TUI Input](#explicit-keyboard--direct-tui-input) · [Prompt Templates](#prompt-templates) · [Reconnection](#reconnection) |
 | Git | [Git Management](#git-management) · [In-session Git Changes](#in-session-git-changes) |
 | Account and platform | [Secure Access](#secure-access) · [Cross-Platform](#cross-platform) · [Account Self-Deletion](#account-self-deletion) · [Device Management](#device-management) · [Session Notifications](#session-notifications) · [Help & Support](#help--support) |
+
+## Chat Sessions
+
+Claude Code sessions open in a **chat view** by default: messages, tool calls, diffs, plans, permission prompts and questions are native UI on Android, iOS and the web, instead of a terminal.
+
+- **How it works.** The agent runs the coding agent over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP) and streams a structured timeline. For Claude Code it uses the ACP adapter `@agentclientprotocol/claude-agent-acp`, which drives the PC's own `claude` binary, so login, settings and CLI version are the same as in a terminal session.
+- **Agent-agnostic.** The chat UI renders only ACP concepts (messages, tool kinds, config options, slash commands). Another ACP agent needs only a launch spec in `mobaide_agent/mobaide/acp/agents.py`.
+- **Requirements on the PC.** `claude-agent-acp` on PATH, or Node.js 22+ for `npx`. Otherwise the wizard shows why and creates a terminal session. `MOBAIDE_ACP_CLAUDE_COMMAND` in the agent's env file overrides the command.
+- **Adapter safety.** The `npx` adapter runs with `--ignore-scripts`, in the PC's home folder.
+- **Folder trust.** Before a chat session opens a folder Claude Code has not trusted, the chat asks **Trust this folder?**. Trust is recorded in `~/.claude.json`, like the CLI. For the home folder, a folder above it, or a root, trust lasts for this session only. Parent folders count only up to the enclosing git repo root. Declining ends the start; Restart offers the choice again.
+
+### What the chat view offers
+
+| Area | Behaviour |
+|---|---|
+| Timeline | Markdown answers, collapsible thinking, one compact card per tool call (icon by kind, status, `+N −M` for edits; tap for the diff, output and input). |
+| Approvals | Permission prompts and multiple-choice questions appear as a card above the composer, with the agent's own options. The first answer from any device wins. |
+| Composer | Slash-command suggestions, image attachments (when the agent accepts images), voice input, prompt templates. Messages sent while the agent works are queued and can be removed. |
+| Controls | Stop, and chips for the mode, model, effort and other agent options. Context usage and cost in the top bar. Plan progress above the composer. |
+| Sync | Every open device shows the same state; a reconnect fetches only what it missed. |
+
+The terminal's control-key bar and custom keyboard shortcuts are not part of the chat view: they send raw terminal bytes. Stop and the mode chip replace Esc / Ctrl+C and Shift+Tab.
+
+### Terminal UI and continuing sessions
+
+- **Terminal UI.** The Claude Code page of the new-session wizard has a **Terminal UI** toggle under Advanced, off by default. On, the session runs in the classic terminal (needed for TUI-only features such as Rewind). Focus view and Debug logging apply only to terminal sessions.
+- **Continue a session.** The same page offers **Continue a session**: a list of the Claude Code sessions stored on the PC, for this folder or all folders, including sessions started outside Mobaide (for example by running `claude` in a terminal). Picking one opens it in the chat view with its history. Close it in the other terminal first: two writers on one session interleave.
+
+The wire details are in [PROTOCOL.md](../PROTOCOL.md).
 
 ## Remote Terminal
 
@@ -163,9 +192,9 @@ A one-time, dismissible explainer sits above the sessions list on all three clie
 
 > **Sessions started outside Mobaide won't appear here**
 >
-> Mobaide can only open sessions its own agent started. To control a session from here, start it from Mobaide instead of launching it yourself on the agent machine.
+> Mobaide lists only sessions its own agent started. To continue a Claude Code session from your PC, start a new Claude Code session and choose Continue a session.
 
-It names no specific CLI because the limit applies to every session kind: Claude, Codex, Antigravity, custom agent types, and plain terminal sessions alike. The agent's `SessionManager` spawns every PTY itself and has no attach or `--resume` path.
+The list itself never shows outside sessions: the agent's `SessionManager` owns every session it lists. Claude Code sessions started elsewhere can be continued in the chat view through [Continue a session](#terminal-ui-and-continuing-sessions); there is no live attach to a running TUI.
 
 Dismissal is permanent and device-local (Android DataStore, iOS `UserDefaults`, web `localStorage`), and it survives app restart and sign-out.
 

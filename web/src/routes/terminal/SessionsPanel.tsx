@@ -10,7 +10,6 @@ import { useSessionsSynced } from '../../realtime';
 import { useLastSessionStore } from '../../stores/lastSessionStore';
 import { useSelectedAgentStore } from '../../stores/selectedAgentStore';
 import { type DepartingSession, useStopHandOffStore } from '../../stores/stopHandOffStore';
-import { acquireTerminal } from '../../terminal/terminalStore';
 import { useToastStore } from '../../stores/toastStore';
 import { StopSessionDialog } from '../sessions/StopSessionDialog';
 import {
@@ -40,6 +39,12 @@ interface SessionsPanelProps {
    * current row.
    */
   handOff?: { departing: DepartingSession | null } | null;
+  /**
+   * Attach the session about to replace a stopped one ahead of the route, so
+   * its screen renders on the first frame instead of a placeholder that would
+   * unmount this panel. Owned by the screen, which knows its own store.
+   */
+  onPrepareSession?: (session: SessionResponse) => void;
 }
 
 /**
@@ -58,6 +63,7 @@ export function SessionsPanel({
   onPinnedChange,
   onClose,
   handOff = null,
+  onPrepareSession,
 }: SessionsPanelProps) {
   const navigate = useNavigate();
   const synced = useSessionsSynced(agentId);
@@ -111,9 +117,8 @@ export function SessionsPanel({
             departing: stopped,
             overlayOpen: !docked,
           });
-          // Acquired ahead of the route so the next terminal renders on its
-          // first frame instead of "Attaching…", which would unmount the panel.
-          acquireTerminal(agentId, next);
+          const nextRow = (sessions.data ?? []).find((s) => s.session_id === next);
+          if (nextRow !== undefined) onPrepareSession?.(nextRow);
           setLastUsedSession(agentId, next);
           void navigate(terminalPath(agentId, next), { replace: true });
         } else {

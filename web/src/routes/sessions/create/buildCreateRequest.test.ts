@@ -42,6 +42,7 @@ const POPULATED: WizardState = {
     noMemory: true,
     planMode: true,
     initialPrompt: 'claude prompt',
+    terminalUi: false,
   },
   autoScan: {
     model: 'haiku',
@@ -55,6 +56,7 @@ const POPULATED: WizardState = {
     noMemory: false,
     planMode: false,
     initialPrompt: 'scan the backlog',
+    terminalUi: false,
   },
   codex: {
     model: 'gpt-5.4',

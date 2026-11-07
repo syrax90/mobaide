@@ -34,11 +34,11 @@ import com.mobaide.app.ui.theme.chromeCaps
 import com.mobaide.app.ui.theme.pixel
 
 /**
- * The three web button variants: [Primary] = brand fill (the screen's main
- * CTA), [Ghost] = transparent with a brand-2 ring (everything else),
- * [Danger] = destructive fill.
+ * The web button variants: [Primary] = brand fill (the screen's main CTA),
+ * [Ghost] = transparent with a brand-2 ring (everything else), [Danger] =
+ * destructive fill, [DangerOutline] = a destructive choice beside a primary one.
  */
-enum class PixelButtonStyle { Primary, Ghost, Danger }
+enum class PixelButtonStyle { Primary, Ghost, Danger, DangerOutline }
 
 /**
  * The web `.button`: square, hard-shadowed, and on press the content travels
@@ -90,6 +90,12 @@ fun PixelButton(
                 fill = pixel.dangerFill
                 contentColor = Color.White
                 ring = pixel.dangerFillShadow
+                shadow = pixel.dangerFillShadow
+            }
+            PixelButtonStyle.DangerOutline -> {
+                fill = Color.Transparent
+                contentColor = pixel.danger
+                ring = pixel.danger
                 shadow = pixel.dangerFillShadow
             }
         }
@@ -203,6 +209,7 @@ private fun PixelButtonPreviewContent() {
         PixelButton(text = "New session", onClick = {}, style = PixelButtonStyle.Primary)
         PixelButton(text = "Refresh", onClick = {})
         PixelButton(text = "Delete", onClick = {}, style = PixelButtonStyle.Danger)
+        PixelButton(text = "Reject", onClick = {}, style = PixelButtonStyle.DangerOutline)
         PixelButton(text = "Disabled", onClick = {}, enabled = false)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PixelButton(text = "Esc", onClick = {}, compact = true)

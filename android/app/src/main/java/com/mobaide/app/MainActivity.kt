@@ -29,6 +29,7 @@ import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.local.ThemeMode
 import com.mobaide.app.data.repository.AgentSwitchCoordinator
 import com.mobaide.app.data.repository.ServerCompatibility
+import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.VersionGateRepository
 import com.mobaide.app.data.review.ReviewPromptCoordinator
 import com.mobaide.app.notifications.SessionEventService
@@ -52,6 +53,12 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var agentEventBus: AgentEventBus
+
+    // Injected only to exist before agentEventBus.start(): the bus does not
+    // replay, so a repository created later misses the connect-time
+    // sessions.changed snapshot and shows an empty list until the next change.
+    @Inject
+    lateinit var sessionRepository: SessionRepository
 
     @Inject
     lateinit var userEventBus: UserEventBus

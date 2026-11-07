@@ -288,6 +288,85 @@
         "title": "AutoScanListResponse",
         "type": "object"
       },
+      "ChatStoredSession": {
+        "description": "One session the agent stored on the host (``session/list``).",
+        "properties": {
+          "cwd": {
+            "title": "Cwd",
+            "type": "string"
+          },
+          "open_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Session Id"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "session_id",
+          "cwd"
+        ],
+        "title": "ChatStoredSession",
+        "type": "object"
+      },
+      "ChatStoredSessionsResponse": {
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/ChatStoredSession"
+            },
+            "title": "Sessions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions"
+        ],
+        "title": "ChatStoredSessionsResponse",
+        "type": "object"
+      },
       "ClaudeOptionsModel": {
         "description": "Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).\n\n``effort`` is ``Literal``-typed so an invalid level is rejected with a 422 at\nthe wire boundary; ``model`` stays free-form (the client curates the alias\nlist). ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for\nthe legitimately-named ``model`` field.",
         "properties": {
@@ -560,6 +639,19 @@
             ],
             "title": "Branch Name"
           },
+          "chat_resume_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9._:-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Resume Id"
+          },
           "claude_options": {
             "anyOf": [
               {
@@ -672,6 +764,21 @@
             "default": 24,
             "title": "Rows",
             "type": "integer"
+          },
+          "ui": {
+            "anyOf": [
+              {
+                "enum": [
+                  "terminal",
+                  "chat"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ui"
           },
           "worktree": {
             "default": false,
@@ -2773,6 +2880,11 @@
               }
             ],
             "title": "Title"
+          },
+          "ui": {
+            "default": "terminal",
+            "title": "Ui",
+            "type": "string"
           }
         },
         "required": [
@@ -3582,6 +3694,96 @@
         "summary": "Stop Scan",
         "tags": [
           "autoscan"
+        ]
+      }
+    },
+    "/api/chat/{kind}/sessions": {
+      "get": {
+        "description": "Sessions the agent stored on this host, newest first.\n\nIncludes sessions started outside Mobaide, which a chat session can\ncontinue (``chat_resume_id`` on create).",
+        "operationId": "list_stored_chat_sessions_api_chat__kind__sessions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cwd",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cwd"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatStoredSessionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "Invalid cwd or cursor"
+          },
+          "404": {
+            "description": "No chat agent of this kind"
+          },
+          "409": {
+            "description": "The agent cannot list its sessions"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "description": "The agent failed"
+          },
+          "503": {
+            "description": "The agent cannot run on this host"
+          }
+        },
+        "summary": "List Stored Chat Sessions",
+        "tags": [
+          "chat"
         ]
       }
     },

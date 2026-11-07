@@ -23,6 +23,7 @@ export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export const CODEX_SANDBOXES = ['read-only', 'workspace-write', 'danger-full-access'] as const;
 export const CODEX_APPROVALS = ['untrusted', 'on-request', 'never'] as const;
 export const CODEX_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high'] as const;
+export const SESSION_UIS = ['terminal', 'chat'] as const;
 
 export const claudeOptionsSchema = z.strictObject({
   plan_mode: z.boolean().default(false),
@@ -131,6 +132,17 @@ export const createSessionRequestSchema = z.strictObject({
   /** Terminal/custom worktree intent. Managed CLIs carry theirs inside their options block. */
   worktree: z.boolean().default(false),
   branch_name: optionalWireString(),
+  ui: z
+    .enum(SESSION_UIS)
+    .nullish()
+    .transform((value) => value ?? undefined),
+  /** Chat only: the agent's stored session to continue instead of starting a new one. */
+  chat_resume_id: z
+    .string()
+    .max(200)
+    .regex(/^[A-Za-z0-9._:-]+$/)
+    .nullish()
+    .transform((value) => value ?? undefined),
 });
 
 export type ClaudeOptionsWire = z.infer<typeof claudeOptionsSchema>;

@@ -65,7 +65,9 @@ class SessionConfig:
     session_id: str
     command: list[str]
     cwd: str | None = None
-    env: dict[str, str] | None = None
+    # Kept out of repr: create_session logs the config, and the launch env
+    # carries the user's secrets and the per-session hook token.
+    env: dict[str, str] | None = field(default=None, repr=False)
     rows: int = 24
     cols: int = 80
     scrollback_size: int = 10_000
@@ -112,6 +114,13 @@ class SessionConfig:
     # takes ``ATTENTION_QUIET_SECONDS``; ``0`` alerts without waiting; tests set
     # an explicit value to avoid sleeping.
     attention_quiet_seconds: float | None = None
+    # ``"chat"`` runs the agent over ACP (``mobaide.acp``) and renders the
+    # structured chat UI; ``"terminal"`` is the classic PTY session.
+    ui: str = "terminal"
+    # Chat sessions only: an earlier session the agent stored (for example
+    # one started by running the CLI in a terminal) to open instead of a new
+    # one. The value is the agent's own session id from ``session/list``.
+    chat_resume_id: str | None = None
 
 
 @dataclass
@@ -139,13 +148,16 @@ class SessionInfo:
     # cause (Claude Code ``SessionEnd`` reason, or ``process_exited`` on crash).
     attention: str | None = None
     exit_reason: str | None = None
+    # ``"terminal"`` (PTY) or ``"chat"`` (ACP); clients pick the screen by it.
+    ui: str = "terminal"
 
 
 @dataclass
 class SessionEvent:
-    event_type: str  # "output", "started", "stopped", "error", "title", "attention"
+    event_type: str  # "output", "chat", "started", "stopped", "error", "title", "attention"
     session_id: str
-    # Output events carry raw PTY bytes; other event types leave this None.
+    # Output events carry raw PTY bytes and chat events one encoded chat
+    # frame payload; other event types leave this None.
     data: bytes | None = None
     timestamp: float = field(default_factory=time.time)
     # For ``attention`` events: the trigger reason (``awaiting_permission`` |
@@ -293,4 +305,5 @@ def session_to_wire_dict(info: SessionInfo) -> dict[str, Any]:
         "kind_label": info.kind_label,
         "attention": info.attention,
         "exit_reason": info.exit_reason,
+        "ui": info.ui,
     }

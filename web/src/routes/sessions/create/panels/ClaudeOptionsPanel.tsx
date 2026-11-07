@@ -17,6 +17,8 @@ interface ClaudeOptionsPanelProps {
   dispatch: (action: WizardAction) => void;
   /** Auto Scan explains what turning it off costs; the Claude branch does not. */
   skipPermissionsHint?: string;
+  /** False when the session opens in the chat view, which has no Focus view. */
+  showTerminalOptions?: boolean;
 }
 
 /**
@@ -59,6 +61,7 @@ export function ClaudeOptionsPanel({
   models,
   dispatch,
   skipPermissionsHint,
+  showTerminalOptions = true,
 }: ClaudeOptionsPanelProps) {
   const efforts = claudeEffortsFor(effectiveClaudeModel(bucket));
 
@@ -96,14 +99,16 @@ export function ClaudeOptionsPanel({
           }}
         />
       )}
-      <CheckboxField
-        label="Focus view"
-        checked={bucket.focusMode}
-        hint="Claude Code shows only your last prompt, a one-line summary of tool calls, and the final response."
-        onChange={(value) => {
-          dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'focusMode', value });
-        }}
-      />
+      {showTerminalOptions && (
+        <CheckboxField
+          label="Focus view"
+          checked={bucket.focusMode}
+          hint="Claude Code shows only your last prompt, a one-line summary of tool calls, and the final response."
+          onChange={(value) => {
+            dispatch({ type: 'setClaudeFlag', bucket: bucketId, flag: 'focusMode', value });
+          }}
+        />
+      )}
       <CheckboxField
         label="Skip permissions"
         checked={bucket.skipPermissions}

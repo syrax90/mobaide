@@ -4,11 +4,15 @@ import SwiftUI
 /// hard 4pt shadow; pressing moves the box into its shadow with no easing.
 struct PixelButtonStyle: ButtonStyle {
     enum Variant {
-        case ghost, primary, danger
+        /// `dangerGhost`: the ghost button in the danger colour, for a
+        /// destructive choice that is not the primary action.
+        case ghost, primary, danger, dangerGhost
     }
 
     enum Size {
-        case regular, small
+        /// `compact`: the small box with the body face, for an icon button
+        /// whose label must stay mixed case for VoiceOver.
+        case regular, small, compact
     }
 
     var variant: Variant = .ghost
@@ -23,8 +27,8 @@ struct PixelButtonStyle: ButtonStyle {
         return label(configuration.label)
             .foregroundStyle(foreground)
             .frame(maxWidth: fullWidth ? .infinity : nil)
-            .frame(minHeight: size == .small ? 28 : 36)
-            .padding(size == .small ? PixelMetrics.smallButtonInsets : PixelMetrics.buttonInsets)
+            .frame(minHeight: size == .regular ? 36 : 28)
+            .padding(size == .regular ? PixelMetrics.buttonInsets : PixelMetrics.smallButtonInsets)
             .background(fill)
             .pixelRing(ring)
             .offset(x: pressed ? PixelMetrics.px : 0, y: pressed ? PixelMetrics.px : 0)
@@ -36,7 +40,7 @@ struct PixelButtonStyle: ButtonStyle {
     @ViewBuilder
     private func label(_ label: Configuration.Label) -> some View {
         switch size {
-        case .regular:
+        case .regular, .compact:
             label.font(MobaideTypography.bodyLarge)
         case .small:
             label.chromeText()
@@ -47,6 +51,7 @@ struct PixelButtonStyle: ButtonStyle {
         guard isEnabled else { return colors.gray }
         switch variant {
         case .ghost: return colors.accent
+        case .dangerGhost: return colors.danger
         case .primary, .danger: return .white
         }
     }
@@ -54,7 +59,7 @@ struct PixelButtonStyle: ButtonStyle {
     private var fill: Color {
         guard isEnabled else { return colors.surface2 }
         switch variant {
-        case .ghost: return .clear
+        case .ghost, .dangerGhost: return .clear
         case .primary: return MobaideColorScheme.brand
         case .danger: return MobaideColorScheme.dangerFill
         }
@@ -64,6 +69,7 @@ struct PixelButtonStyle: ButtonStyle {
         guard isEnabled else { return colors.rule }
         switch variant {
         case .ghost: return MobaideColorScheme.brand2
+        case .dangerGhost: return colors.danger
         case .primary, .danger: return .clear
         }
     }
@@ -71,7 +77,7 @@ struct PixelButtonStyle: ButtonStyle {
     private var shadow: Color {
         switch variant {
         case .ghost, .primary: return MobaideColorScheme.btnShadow
-        case .danger: return MobaideColorScheme.dangerFillShadow
+        case .danger, .dangerGhost: return MobaideColorScheme.dangerFillShadow
         }
     }
 }
@@ -86,4 +92,5 @@ extension ButtonStyle where Self == PixelButtonStyle {
     static var pixelBlock: PixelButtonStyle { PixelButtonStyle(fullWidth: true) }
     static var pixelPrimaryBlock: PixelButtonStyle { PixelButtonStyle(variant: .primary, fullWidth: true) }
     static var pixelDangerBlock: PixelButtonStyle { PixelButtonStyle(variant: .danger, fullWidth: true) }
+    static var pixelDangerGhostBlock: PixelButtonStyle { PixelButtonStyle(variant: .dangerGhost, fullWidth: true) }
 }

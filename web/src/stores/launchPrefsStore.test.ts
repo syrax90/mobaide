@@ -20,6 +20,7 @@ const CLAUDE_BLOB = {
   planMode: true,
   debug: true,
   focusMode: true,
+  terminalUi: true,
 };
 
 const CODEX_BLOB = {
@@ -43,6 +44,7 @@ const CLAUDE_DEFAULTS = {
   planMode: false,
   debug: false,
   focusMode: true,
+  terminalUi: false,
 } as const;
 
 async function rehydrateWith(state: Record<string, unknown>) {

@@ -2,12 +2,19 @@ package com.mobaide.app.ui.navigation
 
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
@@ -23,6 +30,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import com.mobaide.app.ui.agents.AgentListScreen
 import com.mobaide.app.ui.autoscan.AutoScanDetailScreen
+import com.mobaide.app.ui.chat.ChatScreen
+import com.mobaide.app.ui.common.LoadingIndicator
+import com.mobaide.app.ui.common.pixel.PixelScaffold
+import com.mobaide.app.ui.common.pixel.PixelTopBar
 import com.mobaide.app.ui.connections.ConnectionsScreen
 import com.mobaide.app.ui.devices.DevicesScreen
 import com.mobaide.app.ui.login.ForgotPasswordScreen
@@ -304,64 +315,77 @@ fun AppNavigation(
                 if (targetState.isStopHandOff()) ExitTransition.None else null
             },
         ) { entry ->
-            TerminalScreen(
-                viewModel = hiltViewModel(),
-                voiceViewModel = hiltViewModel(),
-                stoppedSessionId = entry.arguments?.getString("stopped"),
-                onBack = { navController.popBackStack() },
-                // The session list is not always behind us — a notification tap
-                // or a restored back stack can land here directly — so fall back
-                // to navigating there when there is nothing to pop back to.
-                onSessionEnded = {
-                    if (!navController.popBackStack(Routes.SESSION_LIST, false)) {
-                        navController.navigate(Routes.SESSION_LIST) {
-                            popUpTo(Routes.AGENT_LIST)
-                            launchSingleTop = true
-                        }
-                    }
-                },
-                onOpenGitChanges = {
-                    entry.arguments?.getString("sessionId")?.let { sessionId ->
-                        navController.navigate(Routes.sessionGitChanges(sessionId))
-                    }
-                },
-                onOpenGitCommit = {
-                    entry.arguments?.getString("sessionId")?.let { sessionId ->
-                        navController.navigate(Routes.sessionGitChanges(sessionId, commit = true))
-                    }
-                },
-                onOpenGitSync = {
-                    entry.arguments?.getString("sessionId")?.let { sessionId ->
-                        navController.navigate(Routes.sessionGitChanges(sessionId, sync = true))
-                    }
-                },
-                onOpenGitBranches = { name ->
-                    navController.navigate(Routes.gitManagement(name))
-                },
-                onOpenGitRebase = {
-                    entry.arguments?.getString("sessionId")?.let { sessionId ->
-                        navController.navigate(Routes.sessionGitChanges(sessionId, rebase = true))
-                    }
-                },
-                // Replace, never stack: Back from the new terminal still returns
-                // to the sessions list. `launchSingleTop` alone would keep this
-                // entry (and its ViewModel, bound to the old session id).
-                onSwitchSession = { sessionId ->
-                    navController.navigate(Routes.sessionDetail(sessionId)) {
-                        popUpTo(Routes.SESSION_DETAIL) { inclusive = true }
+            val routeViewModel: SessionRouteViewModel = hiltViewModel()
+            val screenKind by routeViewModel.kind.collectAsStateWithLifecycle()
+            val sessionId = entry.arguments?.getString("sessionId")
+            val stoppedSessionId = entry.arguments?.getString("stopped")
+            val onBack: () -> Unit = { navController.popBackStack() }
+            // The session list is not always behind us — a notification tap
+            // or a restored back stack can land here directly — so fall back
+            // to navigating there when there is nothing to pop back to.
+            val onSessionEnded: () -> Unit = {
+                if (!navController.popBackStack(Routes.SESSION_LIST, false)) {
+                    navController.navigate(Routes.SESSION_LIST) {
+                        popUpTo(Routes.AGENT_LIST)
                         launchSingleTop = true
                     }
-                },
-                onSwitchAfterStop = { sessionId, stoppedSessionId ->
-                    navController.navigate(Routes.sessionDetail(sessionId, stoppedSessionId)) {
-                        popUpTo(Routes.SESSION_DETAIL) { inclusive = true }
-                        launchSingleTop = true
-                    }
-                },
-                onCreateSession = {
-                    navController.navigate(Routes.CREATE_SESSION)
-                },
-            )
+                }
+            }
+            val openGitChanges: (commit: Boolean, sync: Boolean, rebase: Boolean) -> Unit = { commit, sync, rebase ->
+                sessionId?.let {
+                    navController.navigate(Routes.sessionGitChanges(it, commit = commit, sync = sync, rebase = rebase))
+                }
+            }
+            val onOpenGitBranches: (String) -> Unit = { name -> navController.navigate(Routes.gitManagement(name)) }
+            // Replace, never stack: Back from the new session still returns
+            // to the sessions list. `launchSingleTop` alone would keep this
+            // entry (and its ViewModel, bound to the old session id).
+            val onSwitchSession: (String) -> Unit = { id ->
+                navController.navigate(Routes.sessionDetail(id)) {
+                    popUpTo(Routes.SESSION_DETAIL) { inclusive = true }
+                    launchSingleTop = true
+                }
+            }
+            val onSwitchAfterStop: (String, String) -> Unit = { id, stopped ->
+                navController.navigate(Routes.sessionDetail(id, stopped)) {
+                    popUpTo(Routes.SESSION_DETAIL) { inclusive = true }
+                    launchSingleTop = true
+                }
+            }
+            val onCreateSession: () -> Unit = { navController.navigate(Routes.CREATE_SESSION) }
+            when (screenKind) {
+                SessionScreenKind.Chat -> ChatScreen(
+                    viewModel = hiltViewModel(),
+                    voiceViewModel = hiltViewModel(),
+                    stoppedSessionId = stoppedSessionId,
+                    onBack = onBack,
+                    onSessionEnded = onSessionEnded,
+                    onOpenGitChanges = { openGitChanges(false, false, false) },
+                    onOpenGitCommit = { openGitChanges(true, false, false) },
+                    onOpenGitSync = { openGitChanges(false, true, false) },
+                    onOpenGitBranches = onOpenGitBranches,
+                    onOpenGitRebase = { openGitChanges(false, false, true) },
+                    onSwitchSession = onSwitchSession,
+                    onSwitchAfterStop = onSwitchAfterStop,
+                    onCreateSession = onCreateSession,
+                )
+                SessionScreenKind.Terminal -> TerminalScreen(
+                    viewModel = hiltViewModel(),
+                    voiceViewModel = hiltViewModel(),
+                    stoppedSessionId = stoppedSessionId,
+                    onBack = onBack,
+                    onSessionEnded = onSessionEnded,
+                    onOpenGitChanges = { openGitChanges(false, false, false) },
+                    onOpenGitCommit = { openGitChanges(true, false, false) },
+                    onOpenGitSync = { openGitChanges(false, true, false) },
+                    onOpenGitBranches = onOpenGitBranches,
+                    onOpenGitRebase = { openGitChanges(false, false, true) },
+                    onSwitchSession = onSwitchSession,
+                    onSwitchAfterStop = onSwitchAfterStop,
+                    onCreateSession = onCreateSession,
+                )
+                null -> SessionRouteLoading(onBack = onBack)
+            }
         }
 
         composable(
@@ -534,3 +558,23 @@ private fun NavController.navigateFromCreate(route: String) {
 
 private fun NavBackStackEntry.isStopHandOff(): Boolean =
     destination.route == Routes.SESSION_DETAIL && arguments?.getString("stopped") != null
+
+/** Shown for the moment a cold-started session route needs to learn which screen it is. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SessionRouteLoading(onBack: () -> Unit) {
+    PixelScaffold(
+        topBar = {
+            PixelTopBar(
+                title = {},
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        LoadingIndicator(modifier = Modifier.padding(padding))
+    }
+}

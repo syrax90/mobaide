@@ -53,9 +53,9 @@ The open outing lives in memory only.
 | Healthy-time span counter | `data/review/HealthyTimeMeter.kt` | `Data/Review/HealthyTimeMeter.swift` |
 | Outing, counters, request | `data/review/ReviewPromptCoordinator.kt` (`di/ReviewModule.kt`) | `Data/Review/ReviewPromptCoordinator.swift` (`AppContainer`) |
 | Launch count | `MainActivity.onCreate` → `recordLaunch()` | `AppContainer.start()` → `recordLaunch()` |
-| Visit report | `TerminalViewModel.markScreenVisible()` / `markScreenHidden()`; `markEndedByUser()` from the sessions-panel stop | `TerminalSessionModel.markVisible()` / `markHidden()`; `markEndedByUser()` from `stopSession` |
+| Visit report | `TerminalViewModel` and `ChatViewModel` `markScreenVisible()` / `markScreenHidden()`; `markEndedByUser()` from the sessions-panel stop | `TerminalSessionModel` and `ChatSessionModel` `markVisible()` / `markHidden()`; `markEndedByUser()` from `stopSession` |
 | Settle and close | `SessionListViewModel.onScreenResumed()` (cancelled on pause) | `SessionListScreen` `.task` (cancelled on disappear) |
-| Error signal | `SessionListViewModel` failure paths and `TerminalScreen` `StopFailed` → `noteError()` | `SessionListScreen` `model.error` and the `stopSession` failure → `noteError()` |
+| Error signal | `SessionListViewModel` failure paths and `TerminalScreen` `StopFailed`; the same hook in `ChatViewModel` → `noteError()` | `SessionListScreen` `model.error` and the `stopSession` failure; the same hook in `ChatSessionModel` → `noteError()` |
 | Store call | `MainActivity` collects `requests` while resumed → `ui/review/InAppReviewManager.kt` (re-checks `isReviewMoment(visit)`, then `markReviewLaunched()`) | `RootView` observes `requestCount` → `requestReview()` |
 
 ## Testing

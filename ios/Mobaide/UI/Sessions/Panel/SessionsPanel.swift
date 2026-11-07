@@ -206,6 +206,7 @@ private struct SessionsPanelRow: View {
             Spacer(minLength: 4)
             if let attention = SessionDisplay.attention(session.attention) {
                 PixelChip(attention.text, .status(attention.tone))
+                    .fixedSize()
             }
             if SessionDisplay.canStop(session.state) {
                 Button(action: onStop) {

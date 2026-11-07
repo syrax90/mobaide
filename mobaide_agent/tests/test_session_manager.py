@@ -24,6 +24,22 @@ def _make_config(session_id: str) -> SessionConfig:
     )
 
 
+class TestSessionConfigRepr:
+    def test_repr_hides_the_launch_env(self) -> None:
+        """``create_session`` logs its config; the launch env holds the
+        user's secrets."""
+        config = SessionConfig(
+            session_id="s1",
+            command=["claude"],
+            env={"ANTHROPIC_API_KEY": "sk-ant-secret"},
+        )
+
+        text = repr(config)
+
+        assert "session_id='s1'" in text
+        assert "sk-ant-secret" not in text
+
+
 @pytest.mark.timeout(20)
 class TestSessionManager:
     async def test_create_and_list(self) -> None:
