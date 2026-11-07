@@ -60,7 +60,7 @@ export interface ChatViewState {
   /** The reconnect loop gave up; only a user retry re-arms it. */
   channelStopped: boolean;
   suspended: boolean;
-  /** The agent said the session is gone (`'s'` frame `stopped`). */
+  /** The session is over: `'s'` frame `stopped`, or it left the agent's list. */
   gone: boolean;
   /** A `restart` is waiting for its result. */
   restarting: boolean;
@@ -200,6 +200,7 @@ export class ChatSessionModel {
   /** The session left the agent's list while this model was on screen. */
   markEvicted(): void {
     this.evicted = true;
+    this.patch({ gone: true });
   }
 
   prompt(text: string, images: readonly ChatImage[]): Promise<ChatResult> {

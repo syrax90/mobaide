@@ -413,7 +413,7 @@ Headers are applied with `setdefault`, so a route that sets its own value still 
 | `/portal/*`, `/dashboard/*` | `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'` (note 2) |
 | everything else — `/api/*`, `/proxy/*`, `/relay/*`, `/static/*`, 404s | `default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
 | `/docs`, `/redoc` | **no CSP** — see below |
-| `app.mobaide.com` static SPA (served by **Caddy**, not the app) | `default-src 'self'; script-src 'self' 'sha256-<theme-boot hash>' https://accounts.google.com/gsi/client https://appleid.cdn-apple.com/…/appleid.auth.js; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self'; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` |
+| `app.mobaide.com` static SPA (served by **Caddy**, not the app) | `default-src 'self'; script-src 'self' 'sha256-<theme-boot hash>' https://accounts.google.com/gsi/client https://appleid.cdn-apple.com/…/appleid.auth.js; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' data: blob:; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` |
 
 **Notes on the table**
 
@@ -443,7 +443,7 @@ The SPA is the **only** Google Sign-In popup surface (`web/src/auth/googleSignIn
 - The Google Identity Services client appends an inline `<style>` to the parent document and `renderButton({width})` emits an inline `style=` attribute. The SPA's policy is static (Caddy cannot see the server config), so it carries the Google origins unconditionally; the button never mounts when `GET /api/version` reports no client id.
 - xterm.js injects a `<style>` element at runtime for the terminal screen, so tightening `style-src` on the app host would break the terminal.
 
-`img-src` stays `'self'`: the button and its Google logo render inside a cross-origin iframe, governed by Google's policy rather than ours.
+`img-src` adds only `data:` and `blob:`: the chat view draws agent images from `data:` URLs and attachment previews from `blob:` URLs, both made in the page, and neither makes a network request. The sign-in button and its Google logo render inside a cross-origin iframe, governed by Google's policy rather than ours.
 
 #### CSP exemption for /docs and /redoc
 

@@ -40,7 +40,9 @@ class ChatImageEncoder @Inject constructor(
     private fun encodeBlocking(uri: Uri): EncodedChatImage? {
         val resolver = context.contentResolver
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) } ?: return null
+        // A bounds-only decode always returns null; the result is in `bounds`.
+        val header = resolver.openInputStream(uri) ?: return null
+        header.use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
         var sample = 1

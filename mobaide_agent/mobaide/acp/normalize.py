@@ -139,8 +139,11 @@ def unified_diff(path: str, old_text: str | None, new_text: str) -> dict[str, An
     out: list[str] = []
     size = 0
     added = removed = 0
-    for line in difflib.unified_diff(old_lines, new_lines, n=3, lineterm=""):
-        if line.startswith("---") or line.startswith("+++"):
+    diff = difflib.unified_diff(old_lines, new_lines, n=3, lineterm="")
+    for index, line in enumerate(diff):
+        # Only the first two lines are the file header; a removed "-- x" or
+        # an added "++x" line also starts with three marks.
+        if index < 2:
             continue
         if line.startswith("+"):
             added += 1

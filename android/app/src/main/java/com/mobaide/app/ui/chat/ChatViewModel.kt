@@ -199,6 +199,9 @@ class ChatViewModel @Inject constructor(
                         sessionEndedEmitted = true
                         sessionRepository.notifySessionEnded(sessionId)
                         _sessionEnded.trySend(Unit)
+                    } else if (synced && everSeenAlive) {
+                        // Left the agent's list while open: closed, timeline kept.
+                        _ui.update { it.copy(sessionClosed = true, answering = emptyMap()) }
                     }
                 }
         }

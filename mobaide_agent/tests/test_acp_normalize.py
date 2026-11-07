@@ -61,6 +61,28 @@ class TestUnifiedDiff:
         assert "-b" in lines and "+B" in lines and "+d" in lines
         assert not any(line.startswith(("---", "+++")) for line in lines)
 
+    def test_removed_sql_comment_is_kept_and_counted(self):
+        """A removed ``-- note`` line reads ``--- note`` in the diff, the same
+        three marks as the old-file header."""
+        part = nz.unified_diff(
+            "/p/q.sql", "select 1;\n-- old note\nselect 2;\n", "select 1;\nselect 2;\n"
+        )
+
+        assert (part["added"], part["removed"]) == (0, 1)
+        lines = part["diff"].splitlines()
+        assert lines[0].startswith("@@")
+        assert "--- old note" in lines
+
+    def test_markdown_rule_lines_are_kept_and_counted(self):
+        """``---`` moved within a file: removed reads ``----``, added reads
+        ``+---``, and an added ``++x`` reads ``+++x`` like the new-file header."""
+        part = nz.unified_diff("/p/doc.md", "---\na\nb\nc\n", "a\nb\nc\n---\n++x\n")
+
+        assert (part["added"], part["removed"]) == (2, 1)
+        lines = part["diff"].splitlines()
+        assert lines[0].startswith("@@")
+        assert "----" in lines and "+---" in lines and "+++x" in lines
+
     def test_long_diff_is_cut_but_counts_stay_exact(self):
         new_text = "".join(f"line {i}\n" for i in range(nz.DIFF_LINES_MAX + 50))
         part = nz.unified_diff("/p/big.txt", "", new_text)

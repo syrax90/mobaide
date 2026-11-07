@@ -81,9 +81,11 @@
         # gone, so security_headers.py names no third-party origin at all. The
         # style-src 'unsafe-inline' is not optional: the GIS client appends
         # an inline <style> to <head> as it loads, and renderButton({width})
-        # emits an inline style= attribute. img-src stays 'self' — the
-        # button and its Google logo render inside a cross-origin iframe, so
-        # they are governed by Google's policy, not ours.
+        # emits an inline style= attribute. img-src adds only data: and
+        # blob: — the chat view draws agent images from data: URLs and
+        # attachment previews from blob: URLs, both made in the page; the
+        # sign-in button and its Google logo render inside a cross-origin
+        # iframe, so they are governed by Google's policy, not ours.
         #
         # The appleid.cdn-apple.com entry is the Sign in with Apple JS
         # bundle, and it is the whole cost of that provider: under usePopup
@@ -111,7 +113,7 @@
         # new). Only this origin gets it; central_server's pages keep
         # microphone=(). Changing this header takes a Caddy reload.
         header {
-            Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-DQjnNfb9BFsBDwtrOfOC9aSi5NaqDDr+KkPgo0PMtbY=' https://accounts.google.com/gsi/client https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self'; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+            Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-DQjnNfb9BFsBDwtrOfOC9aSi5NaqDDr+KkPgo0PMtbY=' https://accounts.google.com/gsi/client https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' data: blob:; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
             Cross-Origin-Opener-Policy "same-origin-allow-popups"
             X-Frame-Options "DENY"
             X-Content-Type-Options "nosniff"

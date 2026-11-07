@@ -15,6 +15,7 @@ final class ChatSessionStore {
     private let reviewPrompt: ReviewPromptCoordinator
     private var models: [String: ChatSessionModel] = [:]
     private var recency: [String] = []
+    private var listedIds: Set<String> = []
     private var subscription: Task<Void, Never>?
 
     init(
@@ -72,7 +73,13 @@ final class ChatSessionStore {
 
     private func retain(_ ids: Set<String>) {
         for id in models.keys where !ids.contains(id) {
+            // Only a session that was listed and is now gone is closed: a
+            // list never removes an entry except on an authoritative snapshot.
+            if listedIds.contains(id) {
+                models[id]?.markSessionClosed()
+            }
             evict(id)
         }
+        listedIds = ids
     }
 }

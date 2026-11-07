@@ -143,6 +143,16 @@ describe('ChatSessionModel commands', () => {
     await expect(first).resolves.toEqual({ ok: true, data: undefined });
     expect(model.state().restarting).toBe(false);
   });
+
+  it('a session that left the agent list while on screen reads as gone', async () => {
+    const { model } = await harness();
+    expect(model.state().gone).toBe(false);
+
+    model.markEvicted();
+
+    expect(model.state().gone).toBe(true);
+    expect(model.isGone()).toBe(true);
+  });
 });
 
 describe('ChatSessionModel deadlines', () => {

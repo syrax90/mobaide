@@ -55,7 +55,8 @@ final class ChatSessionModel {
     private(set) var connection: Connection = .connecting {
         didSet { syncReviewMeter() }
     }
-    /// The `s` frame said `stopped`: the session is gone for good.
+    /// The `s` frame said `stopped`, or the session left the agent's list:
+    /// the session is gone for good.
     private(set) var sessionClosed = false {
         didSet { syncReviewMeter() }
     }
@@ -288,6 +289,12 @@ final class ChatSessionModel {
         connection = .detached
         dropInFlight()
         Task { await core.disconnect() }
+    }
+
+    /// The session left the agent's session list: show it as closed, not as
+    /// reconnecting, and keep the timeline readable.
+    func markSessionClosed() {
+        sessionClosed = true
     }
 
     func disconnect() {
