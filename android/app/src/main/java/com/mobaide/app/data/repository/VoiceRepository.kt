@@ -84,15 +84,16 @@ class VoiceRepository(
     }
 
     /**
-     * The status shows [enabled] at once and goes back if the agent refuses,
-     * unless a newer snapshot replaced it meanwhile.
+     * The status shows [enabled] at once and goes back if the agent refuses.
+     * A snapshot that arrives meanwhile wins over both the rollback and the answer.
      */
     suspend fun setCleanup(enabled: Boolean): VoiceStatusResponse {
         val previous = _status.value
         val optimistic = previous?.copy(cleanup_enabled = enabled)
         if (optimistic != null) _status.value = optimistic
         return try {
-            write { restApi.setVoiceCleanupSettings(enabled) }
+            voiceCall { restApi.setVoiceCleanupSettings(enabled) }
+                .also { _status.compareAndSet(optimistic, it) }
         } catch (e: VoiceApiException) {
             if (optimistic != null) _status.compareAndSet(optimistic, previous)
             throw e

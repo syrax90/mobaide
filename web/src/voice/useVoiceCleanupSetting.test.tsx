@@ -83,4 +83,44 @@ describe('useVoiceCleanupSetting', () => {
     });
     expect(cached()).toEqual(status('ready'));
   });
+
+  it('keeps a voice.changed snapshot that arrived before the answer', async () => {
+    let answer!: (value: ReturnType<typeof status>) => void;
+    setVoiceCleanup.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    client.setQueryData(queryKeys.voiceStatus(AGENT), status('downloading'));
+    const { result } = renderHook(() => useVoiceCleanupSetting(AGENT, cached()), { wrapper });
+
+    act(() => {
+      result.current.set(true);
+    });
+    await waitFor(() => {
+      expect(cached()?.cleanup_enabled).toBe(true);
+    });
+    client.setQueryData(queryKeys.voiceStatus(AGENT), status('ready', true));
+    act(() => {
+      answer(status('downloading', true));
+    });
+
+    await waitFor(() => {
+      expect(setVoiceCleanup).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(cached()).toEqual(status('ready', true));
+  });
+
+  it('writes the answer when nothing newer came first', async () => {
+    setVoiceCleanup.mockResolvedValue(status('ready', true));
+    client.setQueryData(queryKeys.voiceStatus(AGENT), status('ready'));
+    const { result } = renderHook(() => useVoiceCleanupSetting(AGENT, cached()), { wrapper });
+
+    act(() => {
+      result.current.set(true);
+    });
+
+    await waitFor(() => {
+      expect(cached()).toEqual(status('ready', true));
+    });
+  });
 });

@@ -86,17 +86,20 @@ final class VoiceRepository {
     }
 
     /// Stores the cleanup choice on the agent for every client. The status
-    /// changes at once and goes back when the agent refuses.
+    /// changes at once and goes back when the agent refuses; a snapshot that
+    /// arrives meanwhile wins over both the rollback and the answer.
     @discardableResult
     func setCleanup(_ on: Bool) async throws -> VoiceStatusResponse {
         let previous = status
-        let optimistic = previous?.withCleanup(on)
-        if let optimistic { status = optimistic }
+        if let previous { status = previous.withCleanup(on) }
+        let before = events
         do {
-            return try await write { try await $0.setVoiceCleanup(enabled: on) }
+            let answer = try await agentAPI.setVoiceCleanup(enabled: on)
+            if events == before { status = answer }
+            return answer
         } catch {
-            if status == optimistic { status = previous }
-            throw error
+            if events == before { status = previous }
+            throw VoiceApiError.map(error)
         }
     }
 

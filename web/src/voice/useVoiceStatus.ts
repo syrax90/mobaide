@@ -95,7 +95,8 @@ export function useVoiceActions(agentId: string) {
 /**
  * The agent's transcript-cleanup choice, stored on the agent so every client
  * of it shares one setting. The cached status changes at once and goes back
- * if the agent refuses, unless a newer snapshot replaced it meanwhile;
+ * if the agent refuses; a snapshot that arrives meanwhile wins over both
+ * the rollback and the answer;
  * `voice.changed` brings changes from other clients.
  */
 export function useVoiceCleanupSetting(agentId: string, status: VoiceStatus | undefined) {
@@ -127,8 +128,12 @@ export function useVoiceCleanupSetting(agentId: string, status: VoiceStatus | un
         queryClient.setQueryData<VoiceStatus>(key, context.previous);
       }
     },
-    onSuccess: (next) => {
-      queryClient.setQueryData<VoiceStatus>(queryKeys.voiceStatus(agentId), next);
+    onSuccess: (next, _enabled, context) => {
+      // Same rule: the answer may be older than a snapshot that came first.
+      const key = queryKeys.voiceStatus(agentId);
+      if (queryClient.getQueryData<VoiceStatus>(key) === context?.optimistic) {
+        queryClient.setQueryData<VoiceStatus>(key, next);
+      }
     },
     meta: { silent: true },
   });

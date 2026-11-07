@@ -132,4 +132,25 @@ class VoiceRepositoryTest {
 
         assertFalse(repo.status.value!!.cleanup_enabled)
     }
+
+    @Test
+    fun setCleanup_neverOverwritesAVoiceChangedThatArrivedWhileItWasInFlight() = runTest {
+        val downloading = status(VoiceStatusResponse.STATE_DOWNLOADING)
+        val pushed = status(VoiceStatusResponse.STATE_READY).copy(cleanup_enabled = true)
+        val answer = CompletableDeferred<VoiceStatusResponse>()
+        coEvery { restApi.getVoiceStatus() } returns downloading
+        coEvery { restApi.setVoiceCleanupSettings(true) } coAnswers { answer.await() }
+        val repo = VoiceRepository(restApi, bus, sessionManager)
+        onWallTime { eventFlow.subscriptionCount.first { it > 0 } }
+        repo.refresh()
+        val saving = async { repo.setCleanup(true) }
+        runCurrent()
+
+        eventFlow.emit(AgentEvent.VoiceChanged(pushed))
+        onWallTime { repo.status.first { it == pushed } }
+        answer.complete(downloading.copy(cleanup_enabled = true))
+        saving.await()
+
+        assertEquals(pushed, repo.status.value)
+    }
 }
