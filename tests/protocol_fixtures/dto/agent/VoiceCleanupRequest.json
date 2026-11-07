@@ -1,0 +1,11 @@
+{
+  "type": "VoiceCleanupRequest",
+  "cases": [
+    {
+      "name": "transcript_as_heard",
+      "wire": {
+        "text": "um so rename use session model to uh use the shared hook"
+      }
+    }
+  ]
+}

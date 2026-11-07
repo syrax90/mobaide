@@ -20,7 +20,7 @@ const { VoicePanel } = await import('./VoicePanel');
 const AGENT = 'a1';
 const VOICE = { dictation: true, sample_rate: 16000, max_seconds: 120, max_chunk_bytes: 65536 };
 
-const READY = voiceStatusSchema.parse({
+const READY_WIRE = {
   state: 'ready',
   enabled: true,
   repairing: false,
@@ -37,11 +37,28 @@ const READY = voiceStatusSchema.parse({
   host: { recommendation: 'ok', reasons: [] },
   speed_factor: null,
   error: null,
-});
+};
+const READY = voiceStatusSchema.parse(READY_WIRE);
+
+const status = (state: string) =>
+  voiceStatusSchema.parse({
+    ...READY_WIRE,
+    state,
+    enabled: state !== 'not_installed',
+    progress: state === 'downloading' ? { done_bytes: 1, total_bytes: 2 } : null,
+    error: state === 'failed' ? { code: 'download_failed', message: 'boom' } : null,
+  });
+
+const LABEL =
+  'Clean up dictated text with the session’s AI agent: remove filler words, fix punctuation and technical terms';
 
 let client: QueryClient;
 
-function mount(variant: 'setup' | 'settings', voice: Record<string, unknown>): void {
+function mount(
+  variant: 'setup' | 'settings',
+  voice: Record<string, unknown>,
+  options: { status?: ReturnType<typeof status>; cleanupOffered?: boolean } = {},
+): void {
   client.setQueryData(
     queryKeys.agentCapabilities(AGENT),
     agentVersionSchema.parse({
@@ -54,14 +71,26 @@ function mount(variant: 'setup' | 'settings', voice: Record<string, unknown>): v
   );
   render(
     <QueryClientProvider client={client}>
-      <VoicePanel agentId={AGENT} agentName="laptop" variant={variant} status={READY} loadFailed={false} />
+      <VoicePanel
+        agentId={AGENT}
+        agentName="laptop"
+        variant={variant}
+        status={options.status ?? READY}
+        loadFailed={false}
+        cleanupOffered={options.cleanupOffered}
+      />
     </QueryClientProvider>,
   );
 }
 
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  useVoicePrefsStore.setState({ hiddenAgents: {}, skipReviewAgents: {}, cleanupAgents: {} });
+  useVoicePrefsStore.setState({
+    hiddenAgents: {},
+    skipReviewAgents: {},
+    cleanupAgents: {},
+    cleanupNoticeSeen: false,
+  });
   window.localStorage.clear();
 });
 
@@ -70,32 +99,44 @@ afterEach(() => {
 });
 
 describe('VoicePanel transcript cleanup', () => {
-  it('offers the toggle in the settings, described by where the text goes', () => {
+  it('offers the toggle in the settings, and turns it on after the notice', () => {
     mount('settings', { ...VOICE, cleanup: true });
-    const toggle = screen.getByRole('checkbox', {
-      name: 'Clean up dictated text with Claude Haiku in Claude Code sessions',
-    });
-
+    const toggle = screen.getByRole('checkbox', { name: LABEL });
     expect(toggle).not.toBeChecked();
-    expect(toggle).toHaveAccessibleDescription(
-      'Removes filler words and false starts and fixes punctuation and technical terms before the ' +
-        'text is inserted. Each transcript is sent to Anthropic through Claude Code on laptop and ' +
-        'counts toward that Claude account’s usage.',
-    );
 
     fireEvent.click(toggle);
+    expect(useVoicePrefsStore.getState().cleanupAgents).toEqual({});
+    fireEvent.click(screen.getByRole('button', { name: 'Got it' }));
 
     expect(toggle).toBeChecked();
     expect(useVoicePrefsStore.getState().cleanupAgents).toEqual({ [AGENT]: true });
   });
 
+  it('names no single AI agent and drops the old explanation under the toggle', () => {
+    mount('settings', { ...VOICE, cleanup: true });
+
+    expect(screen.queryByText(/Claude Haiku/)).toBeNull();
+    expect(screen.queryByText(/Removes filler words/)).toBeNull();
+    expect(screen.queryByText(/sent to Anthropic/)).toBeNull();
+  });
+
+  it.each(['queued', 'downloading', 'verifying', 'ready'])(
+    'offers the toggle in the setup sheet of a session that can clean up, while %s',
+    (state) => {
+      mount('setup', VOICE, { status: status(state), cleanupOffered: true });
+
+      expect(screen.getByRole('checkbox', { name: LABEL })).not.toBeChecked();
+    },
+  );
+
   it.each([
-    ['settings of an agent without capabilities.voice.cleanup', 'settings', VOICE],
-    ['setup sheet', 'setup', { ...VOICE, cleanup: true }],
-  ] as const)('leaves the toggle out of the %s', (_label, variant, voice) => {
-    mount(variant, voice);
+    ['settings of an agent without capabilities.voice.cleanup', 'settings', VOICE, false, 'ready'],
+    ['setup sheet of a session that cannot clean up', 'setup', { ...VOICE, cleanup: true }, false, 'ready'],
+    ['setup sheet before voice is installed', 'setup', VOICE, true, 'not_installed'],
+    ['setup sheet of a failed install', 'setup', VOICE, true, 'failed'],
+  ] as const)('leaves the toggle out of the %s', (_label, variant, voice, cleanupOffered, state) => {
+    mount(variant, voice, { status: status(state), cleanupOffered });
 
     expect(screen.queryByRole('checkbox', { name: /Clean up dictated text/ })).toBeNull();
-    expect(screen.queryByText(/sent to Anthropic/)).toBeNull();
   });
 });

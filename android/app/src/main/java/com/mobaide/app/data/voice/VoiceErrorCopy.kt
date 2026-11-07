@@ -23,6 +23,16 @@ object VoiceErrorCopy {
         else -> "Voice input failed."
     }
 
+    /** Why a cleanup failed; the transcript is inserted as heard. */
+    fun cleanup(code: String, agent: String): String = when (code) {
+        VoiceCodes.CLEANUP_UNAVAILABLE -> "Claude Code isn't installed on $agent."
+        VoiceCodes.CLEANUP_OUTDATED -> "Claude Code on $agent is too old. Run \"claude update\" there."
+        VoiceCodes.CLEANUP_BUSY -> "Another cleanup was still running."
+        VoiceCodes.CLEANUP_TIMEOUT -> "Claude Code took too long."
+        VoiceCodes.NETWORK -> "The connection dropped."
+        else -> "Claude Code reported an error."
+    }
+
     /** Why an install ended `failed` (`VoiceStatusResponse.error.code`). */
     fun install(code: String, repairing: Boolean): String = when (code) {
         "interrupted" ->

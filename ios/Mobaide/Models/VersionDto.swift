@@ -165,6 +165,8 @@ struct VoiceCapability: Equatable, Sendable {
     let sampleRate: Int
     let maxSeconds: Int
     let maxChunkBytes: Int
+    /// `cleanup`: `POST /api/voice/cleanup` exists (explicit `true` only).
+    var cleanup = false
 }
 
 extension VersionInfoResponse {
@@ -184,7 +186,14 @@ extension VersionInfoResponse {
         else {
             return nil
         }
-        return VoiceCapability(sampleRate: sampleRate, maxSeconds: maxSeconds, maxChunkBytes: maxChunkBytes)
+        var cleanup = false
+        if case .bool(true)? = capabilities["voice"]?["cleanup"] { cleanup = true }
+        return VoiceCapability(
+            sampleRate: sampleRate,
+            maxSeconds: maxSeconds,
+            maxChunkBytes: maxChunkBytes,
+            cleanup: cleanup
+        )
     }
 }
 

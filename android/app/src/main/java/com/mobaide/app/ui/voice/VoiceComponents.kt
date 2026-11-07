@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -48,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -110,9 +112,9 @@ fun VoiceMicButton(
 
 /**
  * Replaces the composer's action buttons while a dictation runs: cancel,
- * timer, level meter and stop while recording; progress while transcribing;
- * the reason with Retry after a failure. The status line is a polite live
- * region, so TalkBack announces "Recording" and "Transcribing".
+ * timer, level meter and stop while recording; progress while transcribing
+ * and cleaning up; the reason with Retry after a failure. The status line is
+ * a polite live region, so TalkBack announces "Recording" and "Transcribing".
  */
 @Composable
 fun VoiceDictationBar(
@@ -179,6 +181,12 @@ fun VoiceDictationBar(
                     text = transcribingLine(state, agentName),
                     modifier = Modifier.weight(1f),
                 )
+                CancelButton(onCancel)
+            }
+            // Part of transcribing to the user: the same bar, one line changed.
+            is DictationState.Cleaning -> {
+                PixelBlinkCursor()
+                StatusText(text = "Cleaning up the text…", modifier = Modifier.weight(1f))
                 CancelButton(onCancel)
             }
             DictationState.Empty -> {
@@ -291,6 +299,7 @@ fun VoiceSetupSheet(
     onCancelInstall: () -> Unit,
     onRetry: () -> Unit,
     onHideMic: () -> Unit,
+    onCleanUpChange: (Boolean) -> Unit = {},
 ) {
     PixelBottomSheet(
         onDismissRequest = onDismiss,
@@ -315,11 +324,15 @@ fun VoiceSetupSheet(
                 settings = false,
                 action = state.action,
                 micHidden = state.micHidden,
+                cleanupAvailable = state.cleanupOffered,
+                cleanUp = state.cleanUp,
+                cleanupNoticeSeen = state.cleanupNoticeSeen,
                 onEnable = onEnable,
                 onCancelInstall = onCancelInstall,
                 onRetry = onRetry,
                 onNotNow = onDismiss,
                 onHideMic = onHideMic,
+                onCleanUpChange = onCleanUpChange,
             )
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -331,6 +344,10 @@ fun VoiceSetupSheet(
  * the agent reports. [settings] adds remove, reinstall, the mic toggle and
  * the model's license (Settings → Voice input); without it, this is the
  * enable sheet.
+ *
+ * [cleanupAvailable] offers the transcript cleanup toggle: in Settings for
+ * an agent that supports it, in the enable sheet once voice is enabled in a
+ * session that can use it, so the first dictation is already cleaned up.
  */
 @Composable
 fun VoicePanel(
@@ -340,6 +357,9 @@ fun VoicePanel(
     action: VoiceActionState,
     micHidden: Boolean,
     modifier: Modifier = Modifier,
+    cleanupAvailable: Boolean = false,
+    cleanUp: Boolean = false,
+    cleanupNoticeSeen: Boolean = false,
     onEnable: () -> Unit = {},
     onCancelInstall: () -> Unit = {},
     onRetry: () -> Unit = {},
@@ -348,6 +368,7 @@ fun VoicePanel(
     onNotNow: () -> Unit = {},
     onHideMic: () -> Unit = {},
     onShowMicChange: (Boolean) -> Unit = {},
+    onCleanUpChange: (Boolean) -> Unit = {},
 ) {
     var confirmRemove by rememberSaveable { mutableStateOf(false) }
     var showLicense by rememberSaveable { mutableStateOf(false) }
@@ -474,14 +495,30 @@ fun VoicePanel(
             ModelFacts(status.model)
         }
         if (settings && status.state != VoiceStatusResponse.STATE_UNSUPPORTED) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                PixelCheckbox(
-                    checked = !micHidden,
-                    onCheckedChange = { onShowMicChange(it) },
-                    modifier = Modifier.testTag("voice_show_mic_checkbox"),
-                )
+            // The whole row is one target, like the cleanup row below it.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .toggleable(value = !micHidden, role = Role.Checkbox, onValueChange = onShowMicChange)
+                    .testTag("voice_show_mic_checkbox"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PixelCheckbox(checked = !micHidden, onCheckedChange = null)
                 Text("Show the mic in the command field", style = MaterialTheme.typography.bodyMedium)
             }
+        }
+        val cleanupToggleShown = cleanupAvailable && if (settings) {
+            status.state != VoiceStatusResponse.STATE_UNSUPPORTED
+        } else {
+            status.state in CLEANUP_SETUP_STATES
+        }
+        if (cleanupToggleShown) {
+            VoiceCleanupToggle(
+                checked = cleanUp,
+                noticeSeen = cleanupNoticeSeen,
+                agentName = agentName,
+                onCheckedChange = onCleanUpChange,
+            )
         }
         if (settings && !status.model.notice.isNullOrBlank()) {
             PixelTextButton(onClick = { showLicense = true }) { Text("Model license") }
@@ -534,6 +571,81 @@ fun VoicePanel(
     }
 }
 
+/** The enable sheet offers cleanup once voice is on its way or ready. */
+private val CLEANUP_SETUP_STATES = setOf(
+    VoiceStatusResponse.STATE_QUEUED,
+    VoiceStatusResponse.STATE_DOWNLOADING,
+    VoiceStatusResponse.STATE_VERIFYING,
+    VoiceStatusResponse.STATE_READY,
+)
+
+/**
+ * The transcript cleanup checkbox, the whole row one target. The first time
+ * it is turned on, a notice says where the text goes, and [onCheckedChange]
+ * gets `true` only after "Got it".
+ */
+@Composable
+fun VoiceCleanupToggle(
+    checked: Boolean,
+    noticeSeen: Boolean,
+    agentName: String,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var noticeOpen by rememberSaveable { mutableStateOf(false) }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = checked,
+                role = Role.Checkbox,
+                onValueChange = { on ->
+                    when {
+                        !on -> onCheckedChange(false)
+                        noticeSeen -> onCheckedChange(true)
+                        else -> noticeOpen = true
+                    }
+                },
+            )
+            .testTag("voice_cleanup_checkbox"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PixelCheckbox(checked = checked, onCheckedChange = null)
+        Text(VoiceCleanupCopy.TOGGLE_LABEL, style = MaterialTheme.typography.bodyMedium)
+    }
+    if (noticeOpen) {
+        PixelAlertDialog(
+            onDismissRequest = { noticeOpen = false },
+            title = { Text(VoiceCleanupCopy.NOTICE_TITLE) },
+            text = { Text(VoiceCleanupCopy.notice(agentName)) },
+            confirmButton = {
+                PixelButton(
+                    text = "Got it",
+                    style = PixelButtonStyle.Primary,
+                    onClick = {
+                        noticeOpen = false
+                        onCheckedChange(true)
+                    },
+                    modifier = Modifier.testTag("voice_cleanup_notice_confirm"),
+                )
+            },
+            dismissButton = { PixelTextButton(onClick = { noticeOpen = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+object VoiceCleanupCopy {
+    const val TOGGLE_LABEL =
+        "Clean up dictated text with the session's AI agent: remove filler words, fix punctuation " +
+            "and technical terms"
+    const val NOTICE_TITLE = "Clean up dictated text"
+
+    fun notice(agentName: String): String =
+        "The session's AI agent on $agentName cleans up each transcript with its cheapest model, " +
+            "for example Claude Code with Claude Haiku. It runs under your own account: the text " +
+            "goes to that agent's provider and counts toward your usage. Mobaide doesn't store it."
+}
+
 @Composable
 private fun LowResourcesWarning(reasons: List<VoiceHostReason>) {
     Column(
@@ -580,6 +692,7 @@ fun VoiceSettingsSection(
     onReinstall: () -> Unit,
     onShowMicChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    onCleanUpChange: (Boolean) -> Unit = {},
 ) {
     Column(
         modifier = modifier
@@ -606,12 +719,16 @@ fun VoiceSettingsSection(
                 settings = true,
                 action = state.action,
                 micHidden = state.micHidden,
+                cleanupAvailable = state.cleanupSupported,
+                cleanUp = state.cleanUp,
+                cleanupNoticeSeen = state.cleanupNoticeSeen,
                 onEnable = onEnable,
                 onCancelInstall = onCancelInstall,
                 onRetry = onRetry,
                 onRemove = onRemove,
                 onReinstall = onReinstall,
                 onShowMicChange = onShowMicChange,
+                onCleanUpChange = onCleanUpChange,
             )
         }
     }
@@ -722,6 +839,11 @@ private fun VoicePreviewContent() {
             onStop = {}, onCancel = {}, onRetry = {}, onDismiss = {}, onRecordAgain = {},
         )
         VoiceDictationBar(
+            state = DictationState.Cleaning("um can you uh check the off service"),
+            agentName = "MacBook-Pro",
+            onStop = {}, onCancel = {}, onRetry = {}, onDismiss = {}, onRecordAgain = {},
+        )
+        VoiceDictationBar(
             state = DictationState.Failed(VoiceCodes.NETWORK, retryable = true, message = null, hasAudio = true),
             agentName = "MacBook-Pro",
             onStop = {}, onCancel = {}, onRetry = {}, onDismiss = {}, onRecordAgain = {},
@@ -746,6 +868,8 @@ private fun VoicePreviewContent() {
         VoiceSettingsSection(
             state = previewUiState.copy(
                 status = previewStatus.copy(state = VoiceStatusResponse.STATE_READY),
+                cleanupSupported = true,
+                cleanUp = true,
             ),
             onEnable = {}, onCancelInstall = {}, onRetry = {}, onRemove = {}, onReinstall = {},
             onShowMicChange = {},
@@ -756,7 +880,7 @@ private fun VoicePreviewContent() {
 private val previewUiState = VoiceUiState(
     micMode = VoiceMicMode.Off,
     capabilityKnown = true,
-    capability = VoiceCapability(sampleRate = 16_000, maxSeconds = 120, maxChunkBytes = 65_536),
+    capability = VoiceCapability(sampleRate = 16_000, maxSeconds = 120, maxChunkBytes = 65_536, cleanup = true),
     status = previewStatus,
     agentName = "MacBook-Pro",
 )

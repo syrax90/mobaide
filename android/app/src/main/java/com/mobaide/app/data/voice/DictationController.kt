@@ -2,12 +2,14 @@ package com.mobaide.app.data.voice
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.ceil
 
 sealed interface DictationState {
@@ -24,7 +26,12 @@ sealed interface DictationState {
     ) : DictationState
 
     data class Transcribing(val interruptedBy: InterruptReason?, val lagging: Boolean) : DictationState
-    data class Result(val text: String) : DictationState
+
+    /** The session's AI agent is cleaning up [text], the transcript as heard. */
+    data class Cleaning(val text: String) : DictationState
+
+    /** [cleanupError] says why a cleanup failed; [text] is then the transcript as heard. */
+    data class Result(val text: String, val cleanupError: CleanupError? = null) : DictationState
     data object Empty : DictationState
     data class Failed(
         val code: String,
@@ -36,11 +43,22 @@ sealed interface DictationState {
     ) : DictationState
 }
 
+data class CleanupError(val code: String, val message: String?)
+
+/** Cleans up a transcript; throws a [VoiceApiException]. */
+fun interface TranscriptCleaner {
+    suspend fun clean(text: String): String
+}
+
 /**
  * One dictation at a time, as the UI sees it: microphone → buffer → uploader
  * → transcript. Confined to [scope]'s thread (main in the app); recorder
  * callbacks are hopped onto it. Elapsed time is counted in samples, so the
  * countdown and the agent's `max_seconds` agree exactly.
+ *
+ * [cleaner] is read when a transcript arrives, so a setting changed while
+ * recording applies to that transcript: how to clean it up, or null to hand
+ * it over as heard.
  */
 class DictationController(
     private val api: VoiceApi,
@@ -49,6 +67,7 @@ class DictationController(
     private val maxSeconds: Int,
     private val scope: CoroutineScope,
     private val clock: DictationUploader.Clock = DictationUploader.Clock.System,
+    private val cleaner: () -> TranscriptCleaner? = { null },
 ) {
     private val _state = MutableStateFlow<DictationState>(DictationState.Idle)
     val state: StateFlow<DictationState> = _state.asStateFlow()
@@ -58,6 +77,7 @@ class DictationController(
     private var recorder: VoiceRecorder? = null
     private var buffer: PcmBuffer? = null
     private var uploader: DictationUploader? = null
+    private var cleanupJob: Job? = null
     private var level = 0f
     private var lagging = false
     private var disposed = false
@@ -67,7 +87,7 @@ class DictationController(
         when (_state.value) {
             is DictationState.Recording -> stop()
             DictationState.Starting -> cancel()
-            is DictationState.Transcribing -> Unit
+            is DictationState.Transcribing, is DictationState.Cleaning -> Unit
             else -> start()
         }
     }
@@ -95,7 +115,13 @@ class DictationController(
 
                 override fun done(text: String) {
                     if (generation != this@DictationController.generation) return
-                    finishWith(if (text.isEmpty()) DictationState.Empty else DictationState.Result(text))
+                    val active = if (text.isEmpty()) null else cleaner()
+                    if (active == null) {
+                        finishWith(if (text.isEmpty()) DictationState.Empty else DictationState.Result(text))
+                        return
+                    }
+                    finishWith(DictationState.Cleaning(text))
+                    cleanUp(generation, text, active)
                 }
 
                 override fun failed(failure: UploadFailure) {
@@ -240,8 +266,37 @@ class DictationController(
     }
 
     private fun isActive(): Boolean = when (_state.value) {
-        DictationState.Starting, is DictationState.Recording, is DictationState.Transcribing -> true
+        DictationState.Starting,
+        is DictationState.Recording,
+        is DictationState.Transcribing,
+        is DictationState.Cleaning,
+        -> true
         else -> false
+    }
+
+    /** A cleanup that fails in any way hands over the transcript as heard. */
+    private fun cleanUp(generation: Int, text: String, cleaner: TranscriptCleaner) {
+        cleanupJob = scope.launch {
+            val next = try {
+                val cleaned = withTimeoutOrNull(CLEANUP_TIMEOUT_MS) { cleaner.clean(text).trim() }
+                when {
+                    cleaned == null -> DictationState.Result(text, CleanupError(VoiceCodes.CLEANUP_TIMEOUT, null))
+                    cleaned.isEmpty() || cleaned == text.trim() -> DictationState.Result(text)
+                    else -> DictationState.Result(cleaned)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                DictationState.Result(text, cleanupError(e))
+            }
+            if (generation != this@DictationController.generation ||
+                _state.value !is DictationState.Cleaning
+            ) {
+                return@launch
+            }
+            cleanupJob = null
+            _state.value = next
+        }
     }
 
     private fun fail(failure: UploadFailure) {
@@ -269,6 +324,8 @@ class DictationController(
     }
 
     private fun discard() {
+        cleanupJob?.cancel()
+        cleanupJob = null
         val recorder = recorder
         this.recorder = null
         release(recorder)
@@ -313,5 +370,16 @@ class DictationController(
 
     private companion object {
         const val COUNTDOWN_SECONDS = 15
+
+        /** Above the agent's 20 s budget and the relay's 30 s wait. */
+        const val CLEANUP_TIMEOUT_MS = 35_000L
     }
+}
+
+private fun cleanupError(error: Exception): CleanupError = when (error) {
+    is VoiceApiException -> CleanupError(
+        code = if (error.network) VoiceCodes.NETWORK else error.code ?: VoiceCodes.GENERIC,
+        message = error.detailMessage ?: error.message,
+    )
+    else -> CleanupError(VoiceCodes.GENERIC, error.message)
 }

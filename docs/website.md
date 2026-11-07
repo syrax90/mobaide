@@ -476,8 +476,10 @@ lists it.
   (languages, download size, ~700 MB while transcribing), `host.py` (the
   12 GB / 4 cores / 2 GB recommendation and the unsupported cases),
   `dictation.py` (the two-minute cap), `helper.py` (the three-minute idle
-  exit), and the *Voice input* section of [`docs/deployment.md`](deployment.md)
-  (disk, download hosts, the CLI). Change the page when any of them changes.
+  exit), `cleanup.py` (the opt-in transcript cleanup through the session's AI
+  agent, stated in *Where your voice goes* and the FAQ), and the *Voice input*
+  section of [`docs/deployment.md`](deployment.md) (disk, download hosts, the
+  CLI). Change the page when any of them changes.
 - **The hero is a drawn mock; the real captures are in `#screens`.** The mock
   shows what no single capture can — recording, then the transcript waiting in
   the command field — as HTML/CSS (`.voice-demo`, `.dict-*` in `site.css`)

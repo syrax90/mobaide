@@ -19,7 +19,7 @@ export type DictationState =
       lagging: boolean;
     }
   | { kind: 'transcribing'; interruptedBy: InterruptReason | null; lagging: boolean }
-  /** Claude Code is tidying `text`, the transcript as heard. */
+  /** The session's AI agent is cleaning up `text`, the transcript as heard. */
   | { kind: 'cleaning'; text: string }
   | {
       kind: 'result';
@@ -44,8 +44,14 @@ export interface CleanupError {
   message: string | null;
 }
 
-/** Tidies a transcript; rejects with a `VoiceApiError`. */
+/** Cleans up a transcript; rejects with a `VoiceApiError`. */
 export type TranscriptCleaner = (text: string, signal: AbortSignal) => Promise<string>;
+
+/** `unchanged` also covers an empty answer: the text stays as it was. */
+export type CleanupOutcome =
+  | { kind: 'cleaned'; text: string }
+  | { kind: 'unchanged' }
+  | { kind: 'failed'; error: CleanupError };
 
 export interface RecorderSink {
   samples(samples: Int16Array): void;
@@ -85,8 +91,8 @@ export interface DictationControllerOptions {
   onChange: (state: DictationState) => void;
   clock?: UploaderClock;
   /**
-   * Read when a transcript arrives, so a setting changed mid-dictation applies
-   * to the next one: how to clean it up, or null to show it as heard.
+   * Read when a transcript arrives, so a setting changed while recording
+   * applies to that transcript: how to clean it up, or null to show it as heard.
    */
   cleaner?: () => TranscriptCleaner | null;
 }
@@ -96,10 +102,34 @@ const COUNTDOWN_SECONDS = 15;
 const CLEANUP_TIMEOUT_MS = 35_000;
 
 /**
+ * One cleanup request, bounded by `CLEANUP_TIMEOUT_MS`; aborting `abort`
+ * stops it. It never throws: a failure is an outcome, and the caller keeps
+ * the text as it was.
+ */
+export async function runCleanup(
+  cleaner: TranscriptCleaner,
+  text: string,
+  abort: AbortController,
+): Promise<CleanupOutcome> {
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    abort.abort();
+  }, CLEANUP_TIMEOUT_MS);
+  try {
+    const cleaned = (await cleaner(text, abort.signal)).trim();
+    return cleaned === '' || cleaned === text.trim() ? { kind: 'unchanged' } : { kind: 'cleaned', text: cleaned };
+  } catch (error) {
+    return { kind: 'failed', error: cleanupError(error, timedOut) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * One dictation at a time, as the UI sees it: microphone → buffer →
  * uploader → transcript. Android `DictationController.kt` and iOS
- * `DictationController.swift` have the same states and transitions, except
- * `cleaning`, which is web-only for now.
+ * `DictationController.swift` have the same states and transitions.
  *
  * The transcript is handed to the UI as `result`; nothing here ever sends it.
  * Elapsed time is counted in samples, so the countdown and the agent's
@@ -280,15 +310,6 @@ export class DictationController {
     }
   }
 
-  /** Stop a cleanup in progress and show the transcript as heard. */
-  skipCleanup(): void {
-    const state = this.state;
-    if (state.kind !== 'cleaning') return;
-    this.cleanupAbort?.abort();
-    this.cleanupAbort = null;
-    this.set({ kind: 'result', text: state.text });
-  }
-
   /** Leave a result, an empty result or a failure. */
   dismiss(): void {
     const kind = this.state.kind;
@@ -316,26 +337,20 @@ export class DictationController {
   private async cleanUp(generation: number, text: string, cleaner: TranscriptCleaner): Promise<void> {
     const controller = new AbortController();
     this.cleanupAbort = controller;
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, CLEANUP_TIMEOUT_MS);
-    let next: DictationState;
-    try {
-      const cleaned = (await cleaner(text, controller.signal)).trim();
-      next =
-        cleaned === '' || cleaned === text
-          ? { kind: 'result', text }
-          : { kind: 'result', text: cleaned, original: text };
-    } catch (error) {
-      next = { kind: 'result', text, cleanupError: cleanupError(error, timedOut) };
-    } finally {
-      clearTimeout(timer);
-      if (this.cleanupAbort === controller) this.cleanupAbort = null;
-    }
+    const outcome = await runCleanup(cleaner, text, controller);
+    if (this.cleanupAbort === controller) this.cleanupAbort = null;
     if (generation !== this.generation || this.kindNow() !== 'cleaning') return;
-    this.set(next);
+    switch (outcome.kind) {
+      case 'cleaned':
+        this.set({ kind: 'result', text: outcome.text, original: text });
+        break;
+      case 'unchanged':
+        this.set({ kind: 'result', text });
+        break;
+      case 'failed':
+        this.set({ kind: 'result', text, cleanupError: outcome.error });
+        break;
+    }
   }
 
   private async fail(failure: UploadFailure): Promise<void> {

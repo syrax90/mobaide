@@ -24,6 +24,18 @@ enum VoiceErrorCopy {
         }
     }
 
+    /// Why a cleanup failed; the transcript is inserted as heard.
+    static func cleanup(_ code: String, agent: String) -> String {
+        switch code {
+        case VoiceCodes.cleanupUnavailable: return "Claude Code isn't installed on \(agent)."
+        case VoiceCodes.cleanupOutdated: return "Claude Code on \(agent) is too old. Run \"claude update\" there."
+        case VoiceCodes.cleanupBusy: return "Another cleanup was still running."
+        case VoiceCodes.cleanupTimeout: return "Claude Code took too long."
+        case VoiceCodes.network: return "The connection dropped."
+        default: return "Claude Code reported an error."
+        }
+    }
+
     /// Why an install ended `failed` (`VoiceStatusResponse.error.code`).
     static func install(_ code: String, repairing: Bool) -> String {
         switch code {

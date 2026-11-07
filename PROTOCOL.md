@@ -158,11 +158,12 @@ cadence; they do **not** gate compatibility.
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
 * Additive delta within proto-v7 (2026-11-03, voice transcript cleanup —
-  web first; Android #803 and iOS #804 mirror it): **one additive REST route,
-  one additive capability key, no version bump.** An opt-in, per-agent client
-  setting, offered in Claude Code sessions only, tidies a dictated transcript
-  before the review: fillers, stutters and false starts go, self-corrections
-  keep the final version, and punctuation and technical terms are fixed.
+  web, Android and iOS): **one additive REST route, one additive capability
+  key, no version bump.** An opt-in, per-agent client setting, offered in
+  Claude Code sessions only for now, has the session's AI agent tidy a
+  dictated transcript before the review: fillers, stutters and false starts
+  go, self-corrections keep the final version, and punctuation and technical
+  terms are fixed.
   * ``capabilities.voice`` gains ``"cleanup": true`` (the route exists;
     whether Claude Code is installed is only known when it runs). Clients
     offer the setting only when the key is present.
@@ -191,14 +192,12 @@ cadence; they do **not** gate compatibility.
       the input plus 200 characters, which means the model replied to the
       text instead of cleaning it.
     * ``422`` validation.
-  * Clients fall back to the raw transcript on any failure, let the user
-    skip a cleanup in progress, and keep the original one tap away in the
-    review.
-  * No golden fixtures yet for ``VoiceCleanupRequest`` /
-    ``VoiceCleanupResponse``: the iOS registry fails on fixture types it
-    does not decode, so they land with the mobile mirrors. The
-    ``voice_capability`` case in ``VersionInfoResponse.json`` carries the
-    new key.
+  * Clients fall back to the raw transcript on any failure and say why. The
+    web review keeps the original one tap away. Clients wait at most 35 s
+    for the answer.
+  * Golden fixtures: ``VoiceCleanupRequest.json`` and
+    ``VoiceCleanupResponse.json``. The ``voice_capability`` case in
+    ``VersionInfoResponse.json`` carries the new key.
 * Additive delta within proto-v7 (2026-10-19, Claude focus view toggle):
   **additive optional field, no version bump.** ``claude_options`` gains
   ``focus_mode`` — bool or null, default ``null``. The agent merges it into the

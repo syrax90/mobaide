@@ -2,8 +2,8 @@ import XCTest
 @testable import Mobaide
 
 /// `DictationController`'s transitions with a fake microphone and the scripted
-/// agent: idle → starting → recording → transcribing → result | empty |
-/// failed, plus cancel, retry, dismiss and dispose.
+/// agent: idle → starting → recording → transcribing → (cleaning →) result |
+/// empty | failed, plus cancel, retry, dismiss and dispose.
 @MainActor
 final class DictationControllerTests: XCTestCase {
     private var api: FakeVoiceApi!
@@ -16,21 +16,40 @@ final class DictationControllerTests: XCTestCase {
         recorder = FakeVoiceRecorder()
     }
 
-    private func controller(maxSeconds: Int = 120) -> DictationController {
+    private func controller(
+        maxSeconds: Int = 120,
+        cleaner: @escaping @MainActor () -> TranscriptCleaner? = { nil }
+    ) -> DictationController {
         let recorder = recorder!
         return DictationController(
             api: api,
             makeRecorder: { recorder },
             sampleRate: 16_000,
             maxSeconds: maxSeconds,
-            clock: FakeVoiceClock()
+            clock: FakeVoiceClock(),
+            cleaner: cleaner
         )
     }
 
-    private func recording(maxSeconds: Int = 120) async -> DictationController {
-        let dictation = controller(maxSeconds: maxSeconds)
+    private func recording(
+        maxSeconds: Int = 120,
+        cleaner: @escaping @MainActor () -> TranscriptCleaner? = { nil }
+    ) async -> DictationController {
+        let dictation = controller(maxSeconds: maxSeconds, cleaner: cleaner)
         dictation.start()
         await waitUntil { if case .recording = dictation.state { return true } else { return false } }
+        return dictation
+    }
+
+    /// A recorded second, stopped and transcribed as "hello world", with
+    /// `cleaner` asked to clean it up; waits until the cleanup has an answer
+    /// or is still running.
+    private func cleaning(_ cleaner: FakeCleaner) async -> DictationController {
+        let dictation = await recording(cleaner: { cleaner.clean })
+        recorder.speak(seconds: 1)
+        await waitUntil { self.elapsedMs(dictation) == 1_000 }
+        dictation.stop()
+        await waitUntil { !dictation.state.isActive || cleaner.entered }
         return dictation
     }
 
@@ -232,4 +251,174 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(api.count("create"), 1)
         XCTAssertEqual(api.log.last, "remove d1")
     }
+
+    func testCleansTheTranscriptUpBeforeHandingItBack() async {
+        let held = HeldReply<String>()
+        let cleaner = FakeCleaner(.hold(held))
+        let dictation = await cleaning(cleaner)
+
+        XCTAssertEqual(dictation.state, .cleaning("hello world"))
+        held.resolve("Hello, world.")
+        await waitUntil { dictation.state.isResult }
+
+        XCTAssertEqual(dictation.state, .result("Hello, world."))
+        XCTAssertEqual(cleaner.calls, ["hello world"])
+    }
+
+    func testACleanupThatComesBackUnchangedOrEmptyHandsBackAPlainResult() async {
+        for answer in ["hello world", "  hello world\n", "  "] {
+            let dictation = await cleaning(FakeCleaner(.ok(answer)))
+            await waitUntil { dictation.state.isResult }
+
+            XCTAssertEqual(dictation.state, .result("hello world"), "answer: \(answer)")
+            dictation.dismiss()
+        }
+    }
+
+    func testACleanupThatFailsHandsOverTheTranscriptAsHeardSayingWhy() async {
+        let failures: [(any Error, VoiceCleanupError)] = [
+            (
+                voiceRefusal(503, VoiceCodes.cleanupOutdated, detailMessage: "Run claude update."),
+                VoiceCleanupError(code: VoiceCodes.cleanupOutdated, message: "Run claude update.")
+            ),
+            (voiceRefusal(502, nil), VoiceCleanupError(code: VoiceCodes.generic, message: "HTTP 502")),
+            (voiceNetworkError(), VoiceCleanupError(code: VoiceCodes.network, message: "offline")),
+            (Boom(), VoiceCleanupError(code: VoiceCodes.generic, message: "boom")),
+        ]
+        for (error, expected) in failures {
+            let dictation = await cleaning(FakeCleaner(.fail(error)))
+            await waitUntil { dictation.state.isResult }
+
+            XCTAssertEqual(dictation.state, .result("hello world", cleanupError: expected))
+            dictation.dismiss()
+        }
+    }
+
+    func testCancelWhileCleaningUpReturnsToIdleAndAbortsTheRequest() async {
+        let held = HeldReply<String>()
+        let dictation = await cleaning(FakeCleaner(.hold(held)))
+        await waitUntil { held.entered }
+
+        dictation.cancel()
+        await waitUntil { held.aborted }
+
+        XCTAssertTrue(held.aborted)
+        XCTAssertEqual(dictation.state, .idle)
+    }
+
+    func testTheMicIsIgnoredWhileCleaningUp() async {
+        let dictation = await cleaning(FakeCleaner(.hold(HeldReply<String>())))
+
+        dictation.toggle()
+        dictation.start()
+        try? await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(dictation.state, .cleaning("hello world"))
+        XCTAssertEqual(api.count("create"), 1)
+    }
+
+    func testAnAbandonedCleanupAnswerNeverReachesTheNextDictation() async {
+        // A reply already on its way when the user cancels ignores the abort.
+        let deaf = DeafCleaner()
+        let dictation = await recording(cleaner: { deaf.clean })
+        recorder.speak(seconds: 1)
+        await waitUntil { self.elapsedMs(dictation) == 1_000 }
+        dictation.stop()
+        await waitUntil { deaf.count == 1 }
+        dictation.cancel()
+        dictation.start()
+        await waitUntil { if case .recording = dictation.state { return true } else { return false } }
+        recorder.speak(seconds: 1)
+        await waitUntil { self.elapsedMs(dictation) == 1_000 }
+        dictation.stop()
+        await waitUntil { deaf.count == 2 }
+
+        deaf.answer(0, "Stale.")
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(dictation.state, .cleaning("hello world"))
+
+        deaf.answer(1, "Fresh.")
+        await waitUntil { dictation.state.isResult }
+        XCTAssertEqual(dictation.state, .result("Fresh."))
+    }
+
+    func testTheCleanupSettingIsReadWhenTheTranscriptArrivesNotWhenRecordingStarts() async {
+        let cleaner = FakeCleaner(.ok("Hello, world."))
+        let setting = CleanupSetting()
+        let dictation = await recording(cleaner: { setting.on ? cleaner.clean : nil })
+        recorder.speak(seconds: 1)
+        await waitUntil { self.elapsedMs(dictation) == 1_000 }
+
+        setting.on = true
+        dictation.stop()
+        await waitUntil { dictation.state.isResult }
+
+        XCTAssertEqual(dictation.state, .result("Hello, world."))
+    }
+
+    func testNothingHeardSendsNothingToCleanUp() async {
+        api.configure(text: "")
+        let cleaner = FakeCleaner(.ok("Hello, world."))
+        let dictation = await cleaning(cleaner)
+        await waitUntil { dictation.state == .empty }
+
+        XCTAssertEqual(dictation.state, .empty)
+        XCTAssertEqual(cleaner.calls, [])
+    }
+}
+
+/// The session's AI agent on the agent's computer, answering `reply`; every
+/// transcript is kept.
+private final class FakeCleaner: @unchecked Sendable {
+    private let lock = NSLock()
+    private let reply: VoiceReply<String>
+    private var texts: [String] = []
+
+    init(_ reply: VoiceReply<String>) {
+        self.reply = reply
+    }
+
+    var calls: [String] { lock.withLock { texts } }
+    var entered: Bool { !calls.isEmpty }
+
+    var clean: TranscriptCleaner {
+        { [self] text in
+            lock.withLock { texts.append(text) }
+            switch reply {
+            case .ok(let value): return value
+            case .fail(let error): throw error
+            case .hold(let held): return try await held.wait()
+            }
+        }
+    }
+}
+
+/// A cleaner whose answers ignore cancellation, as one already on its way does.
+private final class DeafCleaner: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [CheckedContinuation<String, any Error>] = []
+
+    var count: Int { lock.withLock { waiting.count } }
+
+    var clean: TranscriptCleaner {
+        { [self] _ in
+            try await withCheckedThrowingContinuation { continuation in
+                lock.withLock { waiting.append(continuation) }
+            }
+        }
+    }
+
+    func answer(_ index: Int, _ text: String) {
+        let continuation = lock.withLock { waiting[index] }
+        continuation.resume(returning: text)
+    }
+}
+
+@MainActor
+private final class CleanupSetting {
+    var on = false
+}
+
+private struct Boom: LocalizedError {
+    var errorDescription: String? { "boom" }
 }

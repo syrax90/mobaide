@@ -15,6 +15,7 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyTerminalDisplayMode = "terminal_display_mode"
     static let keyTerminalStaticColumns = "terminal_static_columns"
     static let keyExternalSessionsNoticeDismissed = "external_sessions_notice_dismissed"
+    static let keyVoiceCleanupNoticeSeen = "voice_cleanup_notice_seen"
     // Device-local, not account-scoped (device backups carry them): no sign-out
     // sweep touches them, since the store's quota follows the device's store
     // account, not the Mobaide one.
@@ -27,6 +28,7 @@ struct PreferencesStore: @unchecked Sendable {
     static let attentionSeenPrefix = "attention_seen::"
     static let recentCustomPathsPrefix = "recent_custom_paths::"
     static let voiceMicHiddenPrefix = "voice_mic_hidden::"
+    static let voiceCleanupPrefix = "voice_cleanup::"
     /// Outside every sign-out sweep on purpose: the `agent_paired` conversion
     /// is once per account, so signing back in must find the outcome.
 
@@ -39,6 +41,7 @@ struct PreferencesStore: @unchecked Sendable {
     static func recentShortcutChordsKey(kindKey: String) -> String { "recent_shortcut_chords::\(kindKey)" }
     static func attentionSeenKey(agentKey: String) -> String { "\(attentionSeenPrefix)\(agentKey)" }
     static func voiceMicHiddenKey(agentKey: String) -> String { "\(voiceMicHiddenPrefix)\(agentKey)" }
+    static func voiceCleanupKey(agentKey: String) -> String { "\(voiceCleanupPrefix)\(agentKey)" }
 
     // UserDefaults is documented thread-safe; this struct holds no other
     // mutable state, hence @unchecked Sendable.
@@ -170,6 +173,31 @@ struct PreferencesStore: @unchecked Sendable {
         } else {
             defaults.removeObject(forKey: Self.voiceMicHiddenKey(agentKey: agentKey))
         }
+    }
+
+    /// Whether the session's AI agent cleans up this agent's transcripts before
+    /// they reach the composer. Off by default: the text then leaves the
+    /// computer for the AI agent's provider.
+    func isVoiceCleanupOn(agentKey: String) -> Bool {
+        defaults.bool(forKey: Self.voiceCleanupKey(agentKey: agentKey))
+    }
+
+    func setVoiceCleanup(agentKey: String, on: Bool) {
+        if on {
+            defaults.set(true, forKey: Self.voiceCleanupKey(agentKey: agentKey))
+        } else {
+            defaults.removeObject(forKey: Self.voiceCleanupKey(agentKey: agentKey))
+        }
+    }
+
+    /// The user pressed "Got it" on the notice shown before the first cleanup
+    /// opt-in on this device.
+    func isVoiceCleanupNoticeSeen() -> Bool {
+        defaults.bool(forKey: Self.keyVoiceCleanupNoticeSeen)
+    }
+
+    func setVoiceCleanupNoticeSeen() {
+        defaults.set(true, forKey: Self.keyVoiceCleanupNoticeSeen)
     }
 
     func getCachedLinearLabels(projectName: String) -> [LinearLabelDto] {

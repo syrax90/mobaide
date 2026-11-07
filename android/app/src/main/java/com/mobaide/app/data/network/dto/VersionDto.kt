@@ -2,6 +2,7 @@ package com.mobaide.app.data.network.dto
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -132,6 +133,8 @@ data class VoiceCapability(
     val sampleRate: Int,
     val maxSeconds: Int,
     val maxChunkBytes: Int,
+    /** `cleanup`: `POST /api/voice/cleanup` exists (explicit JSON `true` only). */
+    val cleanup: Boolean = false,
 )
 
 /**
@@ -149,6 +152,8 @@ fun VersionInfoResponse.voiceCapability(): VoiceCapability? = runCatching {
         sampleRate = positive("sample_rate") ?: return@runCatching null,
         maxSeconds = positive("max_seconds") ?: return@runCatching null,
         maxChunkBytes = positive("max_chunk_bytes") ?: return@runCatching null,
+        // A malformed key must not cost the whole capability.
+        cleanup = (voice["cleanup"] as? JsonPrimitive)?.let { !it.isString && it.booleanOrNull == true } == true,
     )
 }.getOrNull()
 

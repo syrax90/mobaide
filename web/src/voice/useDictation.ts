@@ -4,7 +4,12 @@ import { listAgents } from '../api/agentRepository';
 import { cleanupTranscript, createVoiceApi } from '../api/voiceRepository';
 import { queryKeys, wsBackedQueryOptions } from '../lib/queryKeys';
 import type { VoiceCapability } from '../protocol/dto/agentVersion';
-import { DictationController, type DictationState } from './dictationController';
+import {
+  DictationController,
+  runCleanup,
+  type CleanupOutcome,
+  type DictationState,
+} from './dictationController';
 import { VOICE_CODE } from './voiceApi';
 import { WebAudioRecorder } from './recorder';
 
@@ -39,8 +44,9 @@ export function spliceTranscript(
  * The actions call into the controller synchronously, which keeps the
  * click's user activation alive for the AudioContext.
  *
- * `cleanUp` sends each transcript through Claude Code on the agent before it
- * is shown; it is read when the transcript arrives.
+ * `cleanUp` sends each transcript to the session's AI agent on the agent's
+ * computer before it is shown; it is read when the transcript arrives.
+ * `cleanUpText` does the same for the review's text, on request.
  */
 export function useDictation(
   agentId: string,
@@ -108,9 +114,11 @@ export function useDictation(
   const retry = useCallback(() => {
     controllerRef.current?.retry();
   }, []);
-  const skipCleanup = useCallback(() => {
-    controllerRef.current?.skipCleanup();
-  }, []);
+  const cleanUpText = useCallback(
+    (text: string, abort: AbortController): Promise<CleanupOutcome> =>
+      runCleanup((input, signal) => cleanupTranscript(agentId, input, signal), text, abort),
+    [agentId],
+  );
   const dismiss = useCallback(() => {
     controllerRef.current?.dismiss();
   }, []);
@@ -134,7 +142,7 @@ export function useDictation(
     stop,
     cancel,
     retry,
-    skipCleanup,
+    cleanUpText,
     dismiss,
     continueFrom,
     finish,

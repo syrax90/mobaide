@@ -83,6 +83,9 @@ class VoiceRepository(
         return install()
     }
 
+    /** The session's AI agent cleans up [text] on the connected agent's computer (within 20 s). */
+    suspend fun cleanup(text: String): String = voiceCall { restApi.cleanupVoiceTranscript(text).text }
+
     /** The dictation routes of the connected agent, for the uploader. */
     fun dictationApi(sessionId: String?): VoiceApi = object : VoiceApi {
         override suspend fun create(): VoiceDictationOpened = voiceCall {

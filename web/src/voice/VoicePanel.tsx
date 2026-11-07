@@ -1,5 +1,6 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { VOICE_RECOMMENDATION_LOW, VOICE_STATE, type VoiceStatus } from '../protocol/dto/voice';
+import { CleanupToggle } from './CleanupToggle';
 import { useVoiceActions, useVoiceCleanupCapability, type VoiceAction } from './useVoiceStatus';
 import { isVoiceApiError } from './voiceApi';
 import { installErrorCopy, voiceActionErrorCopy } from './voiceErrorCopy';
@@ -22,6 +23,12 @@ interface VoicePanelProps {
   variant: 'setup' | 'settings';
   status: VoiceStatus | undefined;
   loadFailed: boolean;
+  /**
+   * The setup variant's session can clean up transcripts, so the cleanup
+   * toggle is offered once voice is enabled: the first dictation can use it.
+   * The settings variant reads the agent's capability instead.
+   */
+  cleanupOffered?: boolean;
   /** "Not now" / "Hide the mic" in the setup variant. */
   onDismiss?: () => void;
 }
@@ -37,6 +44,7 @@ export function VoicePanel({
   variant,
   status,
   loadFailed,
+  cleanupOffered = false,
   onDismiss,
 }: VoicePanelProps) {
   const actions = useVoiceActions(agentId);
@@ -48,7 +56,6 @@ export function VoicePanel({
   const cleanupSupported = useVoiceCleanupCapability(agentId, settings).data === true;
   const cleanUp = useCleanup(agentId);
   const setCleanUp = useVoicePrefsStore((state) => state.setCleanup);
-  const cleanupNoteId = useId();
   const [confirmRemove, setConfirmRemove] = useState(false);
 
   if (status === undefined) {
@@ -67,6 +74,13 @@ export function VoicePanel({
   const actionError = actions.error;
   const languages = languageNames(status.model.languages);
   const lowResources = status.host.recommendation === VOICE_RECOMMENDATION_LOW;
+  const cleanupToggleShown = settings
+    ? cleanupSupported && status.state !== VOICE_STATE.unsupported
+    : cleanupOffered &&
+      (status.state === VOICE_STATE.queued ||
+        status.state === VOICE_STATE.downloading ||
+        status.state === VOICE_STATE.verifying ||
+        status.state === VOICE_STATE.ready);
 
   const removeControls = settings && (
     <>
@@ -309,25 +323,15 @@ export function VoicePanel({
           Review dictated text before it is inserted
         </label>
       )}
-      {settings && cleanupSupported && status.state !== VOICE_STATE.unsupported && (
-        <>
-          <label className="voice-toggle">
-            <input
-              type="checkbox"
-              checked={cleanUp}
-              aria-describedby={cleanupNoteId}
-              onChange={(event) => {
-                setCleanUp(agentId, event.target.checked);
-              }}
-            />
-            Clean up dictated text with Claude Haiku in Claude Code sessions
-          </label>
-          <p className="page-note" id={cleanupNoteId}>
-            Removes filler words and false starts and fixes punctuation and technical terms before
-            the text is inserted. Each transcript is sent to Anthropic through Claude Code on{' '}
-            {agentName} and counts toward that Claude account&rsquo;s usage.
-          </p>
-        </>
+      {cleanupToggleShown && (
+        <CleanupToggle
+          className="voice-toggle"
+          agentName={agentName}
+          checked={cleanUp}
+          onChange={(on) => {
+            setCleanUp(agentId, on);
+          }}
+        />
       )}
       {settings && status.model.notice !== undefined && status.model.notice !== '' && (
         <details className="voice-details">

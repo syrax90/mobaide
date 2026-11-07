@@ -49,6 +49,13 @@ object VoiceCodes {
     const val CHUNK_TOO_LARGE = "chunk_too_large"
     const val BAD_AUDIO = "bad_audio"
     const val TRANSCRIPTION_FAILED = "transcription_failed"
+    const val CLEANUP_UNAVAILABLE = "cleanup_unavailable"
+    const val CLEANUP_OUTDATED = "cleanup_outdated"
+    const val CLEANUP_BUSY = "cleanup_busy"
+
+    /** Also the client's own code when the agent's answer never arrives. */
+    const val CLEANUP_TIMEOUT = "cleanup_timeout"
+    const val CLEANUP_FAILED = "cleanup_failed"
 
     /** Client-side codes, never sent by the agent. */
     const val NETWORK = "network"

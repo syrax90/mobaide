@@ -637,7 +637,7 @@ mobaide-agent voice benchmark           # dictation latency on this PC (needs vo
 
 The CLI works on the same files and lock as the running agent; the apps see the result on their next status read.
 
-**Privacy.** Audio is held in memory only, transcribed, and dropped; neither audio nor transcript text is logged or written to disk — logs carry only sizes, durations, timings and error codes. The one way the text leaves the PC is the opt-in transcript cleanup (web, Claude Code sessions): the agent hands the transcript to the user's own Claude Code CLI, which sends it to Anthropic under that login; the agent still never logs or stores it (docs/voice-input.md, *Transcript cleanup*).
+**Privacy.** Audio is held in memory only, transcribed, and dropped; neither audio nor transcript text is logged or written to disk — logs carry only sizes, durations, timings and error codes. The one way the text leaves the PC is the opt-in transcript cleanup (web, Android and iOS; Claude Code sessions for now): the agent hands the transcript to the user's own Claude Code CLI, which sends it to Anthropic under that login; the agent still never logs or stores it (docs/voice-input.md, *Transcript cleanup*).
 
 **Testing without the model.** `MOBAIDE_VOICE_FAKE=1` swaps in a tiny generated model and a deterministic engine (transcripts read `fake transcript <n> ms`) under `<state prefix>/voice-fake/`; the install state machine and helper process are real. `tests/e2e/manual_stack.py up --fake-voice` sets it.
 

@@ -8,6 +8,8 @@ interface VoiceSetupDialogProps {
   agentName: string;
   status: VoiceStatus | undefined;
   loadFailed: boolean;
+  /** This session can clean up transcripts: the setup offers the toggle. */
+  cleanupOffered: boolean;
   onClose: () => void;
 }
 
@@ -22,6 +24,7 @@ export function VoiceSetupDialog({
   agentName,
   status,
   loadFailed,
+  cleanupOffered,
   onClose,
 }: VoiceSetupDialogProps) {
   const titleId = useId();
@@ -34,6 +37,7 @@ export function VoiceSetupDialog({
         variant="setup"
         status={status}
         loadFailed={loadFailed}
+        cleanupOffered={cleanupOffered}
         onDismiss={onClose}
       />
       <div className="button-row voice-dialog-footer">

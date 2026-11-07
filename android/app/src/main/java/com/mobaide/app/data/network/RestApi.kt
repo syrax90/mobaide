@@ -46,6 +46,8 @@ import com.mobaide.app.data.network.dto.StopScanRequest
 import com.mobaide.app.data.network.dto.TokenRequest
 import com.mobaide.app.data.network.dto.TokenResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
+import com.mobaide.app.data.network.dto.VoiceCleanupRequest
+import com.mobaide.app.data.network.dto.VoiceCleanupResponse
 import com.mobaide.app.data.network.dto.VoiceDictationAudioRequest
 import com.mobaide.app.data.network.dto.VoiceDictationAudioResponse
 import com.mobaide.app.data.network.dto.VoiceDictationCreateRequest
@@ -469,6 +471,15 @@ class RestApi(
 
     suspend fun deleteVoiceDictation(dictationId: String) =
         executeRaw(Request.Builder().url(voiceUrl("dictations", dictationId).build()).delete().build())
+
+    // Cancellable: a cancelled dictation stops waiting for its cleanup at once.
+    suspend fun cleanupVoiceTranscript(text: String): VoiceCleanupResponse =
+        executeCancellable(
+            Request.Builder()
+                .url(voiceUrl("cleanup").build())
+                .post(json.encodeToString(VoiceCleanupRequest(text)).toRequestBody(jsonMediaType))
+                .build(),
+        )
 
     private fun voiceUrl(vararg segments: String): HttpUrl.Builder =
         baseUrl().toHttpUrl().newBuilder()
