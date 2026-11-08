@@ -82,9 +82,26 @@ The test is flaky on CI, can you check the GitHub Actions log?
 
 _PROMPT_FILE = "cleanup-prompt.md"
 # ``strict`` makes every tool action, file reads included, need an approval
-# that headless ``agy`` cannot get, so each one is denied.
+# that headless ``agy`` cannot get, so each one is denied. It is only a
+# backstop: the cleanup agent below has no tools to call.
 _ANTIGRAVITY_SETTINGS_FILE = "antigravity-settings.json"
 _ANTIGRAVITY_SETTINGS = '{"toolPermission": "strict"}\n'
+# A project custom agent, found in the run's cwd. ``excludeDefaultComponents``
+# drops agy's coding-agent system prompt and built-in tools, so the rules are
+# the whole system prompt. Under the default agent, Gemini Flash sometimes
+# took a chatty transcript ("Hi, how are you?") as a message to itself and
+# ran ``ls``, which ``strict`` denied, so the cleanup failed.
+_ANTIGRAVITY_AGENT = "mobaide-voice-cleanup"
+_ANTIGRAVITY_AGENT_FILE = f".agents/agents/{_ANTIGRAVITY_AGENT}.md"
+_ANTIGRAVITY_AGENT_DEFINITION = f"""\
+---
+name: {_ANTIGRAVITY_AGENT}
+description: Cleans up one speech-to-text transcript.
+tools: []
+excludeDefaultComponents: true
+---
+
+{CLEANUP_PROMPT}"""
 _TAG = re.compile(r"<[\s/]*transcript\b[^<>]*>", re.IGNORECASE)
 
 
@@ -416,13 +433,17 @@ class CodexCleanup(CleanupCli):
 
 
 class AntigravityCleanup(CleanupCli):
-    """``agy`` has no system-prompt option and reads a plain prompt only from
-    argv, so the rules and the transcript go in one stream-json user message
-    on stdin. It keeps the run in its own conversation history; no flag turns
-    that off. ``models`` reads the launcher's cached ``agy models`` lines."""
+    """``agy`` has no system-prompt option, so the rules are the system prompt
+    of a tool-less custom agent. It reads a plain prompt only from argv, so
+    the transcript goes in one stream-json user message on stdin. It keeps
+    the run in its own conversation history; no flag turns that off.
+    ``models`` reads the launcher's cached ``agy models`` lines."""
 
     name = "Antigravity"
-    files: ClassVar[Mapping[str, str]] = {_ANTIGRAVITY_SETTINGS_FILE: _ANTIGRAVITY_SETTINGS}
+    files: ClassVar[Mapping[str, str]] = {
+        _ANTIGRAVITY_SETTINGS_FILE: _ANTIGRAVITY_SETTINGS,
+        _ANTIGRAVITY_AGENT_FILE: _ANTIGRAVITY_AGENT_DEFINITION,
+    }
 
     def __init__(
         self,
@@ -437,6 +458,7 @@ class AntigravityCleanup(CleanupCli):
         model = antigravity_cleanup_model(self._models())
         argv = shim_safe_argv(
             binary,
+            "--agent", _ANTIGRAVITY_AGENT,
             "--model", model,
             "--input-format", "stream-json",
             "--output-format", "stream-json",
@@ -445,8 +467,7 @@ class AntigravityCleanup(CleanupCli):
         )
         # An empty answer is an error to ``agy``, which then asks the model
         # again without end; the prompt's fillers rule avoids one.
-        content = f"{CLEANUP_PROMPT}\nNow clean up this transcript:\n{_wrap(source)}"
-        message = {"event": "user", "message": {"content": content}}
+        message = {"event": "user", "message": {"content": _wrap(source)}}
         stdin = (json.dumps(message) + "\n").encode()
         return CleanupCommand(argv=argv, env=_cli_env(binary), stdin=stdin, model=model)
 

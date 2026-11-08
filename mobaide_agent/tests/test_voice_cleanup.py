@@ -924,6 +924,7 @@ class TestAntigravityCommand:
         (call,) = run.calls
         assert call["argv"] == [
             agy_binary,
+            "--agent", "mobaide-voice-cleanup",
             "--model", "gemini-3.8-flash-low",
             "--input-format", "stream-json",
             "--output-format", "stream-json",
@@ -936,7 +937,24 @@ class TestAntigravityCommand:
         assert settings == {"toolPermission": "strict"}
         assert call["env"]["PATH"].split(os.pathsep)[0] == os.path.dirname(agy_binary)
 
-    async def test_rules_and_transcript_go_in_one_user_message_on_stdin(self, work_dir, agy_binary):
+    async def test_rules_are_the_system_prompt_of_a_tool_less_agent(self, work_dir, agy_binary):
+        run = _Claude(_agy_answer("Hi, how are you?"))
+
+        await self._cleaner(run, work_dir, agy_binary).clean("hi how are you", "antigravity")
+
+        definition = (work_dir / ".agents" / "agents" / "mobaide-voice-cleanup.md").read_text(
+            encoding="utf-8"
+        )
+        _, frontmatter, body = definition.split("---\n", 2)
+        assert frontmatter.splitlines() == [
+            "name: mobaide-voice-cleanup",
+            "description: Cleans up one speech-to-text transcript.",
+            "tools: []",
+            "excludeDefaultComponents: true",
+        ]
+        assert body.strip() == CLEANUP_PROMPT.strip()
+
+    async def test_transcript_goes_in_one_user_message_on_stdin(self, work_dir, agy_binary):
         run = _Claude(_agy_answer("Переименуй ридми."))
 
         await self._cleaner(run, work_dir, agy_binary).clean(
@@ -947,9 +965,7 @@ class TestAntigravityCommand:
         assert stdin.endswith("\n") and stdin.count("\n") == 1
         message = json.loads(stdin)
         assert message["event"] == "user"
-        content = message["message"]["content"]
-        assert content.startswith(CLEANUP_PROMPT)
-        assert content.endswith("<transcript>\nпереименуй  ридми\n</transcript>")
+        assert message["message"]["content"] == "<transcript>\nпереименуй  ридми\n</transcript>"
         assert all("ридми" not in arg for arg in run.calls[0]["argv"])
 
     async def test_missing_agy_is_cleanup_unavailable(self, work_dir, agy_binary):
