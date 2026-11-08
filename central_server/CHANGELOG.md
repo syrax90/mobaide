@@ -1,5 +1,18 @@
 # central_server Changelog
 
+## [0.2.22](https://github.com/syrax90/mobaide/compare/server-v0.2.21...server-v0.2.22) (2026-11-08)
+
+
+### Features
+
+* **agent,web,android,ios,server:** AI cleanup of dictated text ([#835](https://github.com/syrax90/mobaide/issues/835)) ([596856d](https://github.com/syrax90/mobaide/commit/596856d50924c51145047a58f6e2f97e3d3a2306))
+* **server:** add GitHub repo icon to the mobaide.com header ([#825](https://github.com/syrax90/mobaide/issues/825)) ([8a5ee7e](https://github.com/syrax90/mobaide/commit/8a5ee7ee268e5c4377e8fd11c36d3be18d3b82ed))
+
+
+### Documentation
+
+* show any CLI AI agent on the README and OG card ([#830](https://github.com/syrax90/mobaide/issues/830)) ([272eff9](https://github.com/syrax90/mobaide/commit/272eff9ea042f2bac2883750c74d95ab151769cf))
+
 ## [0.2.21](https://github.com/syrax90/claude_mobile/compare/server-v0.2.20...server-v0.2.21) (2026-11-05)
 
 
