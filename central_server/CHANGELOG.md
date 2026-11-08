@@ -1,5 +1,17 @@
 # central_server Changelog
 
+## [0.2.23](https://github.com/syrax90/mobaide/compare/server-v0.2.22...server-v0.2.23) (2026-11-08)
+
+
+### Features
+
+* **server:** host agent release files on the relay ([#836](https://github.com/syrax90/mobaide/issues/836)) ([17e9f12](https://github.com/syrax90/mobaide/commit/17e9f12d2fae077bc45e24bbb62edbe19228e0cd))
+
+
+### Bug Fixes
+
+* **agent,server:** download the voice model from our R2 mirror, not GitHub ([#839](https://github.com/syrax90/mobaide/issues/839)) ([04c4c6c](https://github.com/syrax90/mobaide/commit/04c4c6c65ac65b29fccceae9defc8764a2bd543e))
+
 ## [0.2.22](https://github.com/syrax90/mobaide/compare/server-v0.2.21...server-v0.2.22) (2026-11-08)
 
 
