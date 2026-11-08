@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.19](https://github.com/syrax90/mobaide/compare/web-v0.1.18...web-v0.1.19) (2026-11-08)
+
+
+### Bug Fixes
+
+* **web:** always send force on git branch create and checkout ([#838](https://github.com/syrax90/mobaide/issues/838)) ([bbd2301](https://github.com/syrax90/mobaide/commit/bbd230138349b98d1075946aeb318ff870228be5))
+
 ## [0.1.18](https://github.com/syrax90/mobaide/compare/web-v0.1.17...web-v0.1.18) (2026-11-08)
 
 
