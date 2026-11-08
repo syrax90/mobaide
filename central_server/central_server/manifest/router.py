@@ -25,7 +25,12 @@ from pydantic import BaseModel, Field
 from ..monitoring import record_send_queue_drop
 from ..relay.envelope import CH_CONTROL, encode
 from ..relay.routing import RoutingTable
-from .release_files import MAX_RELEASE_FILE_BYTES, ReleaseFileError, valid_key
+from .release_files import (
+    MAX_RELEASE_FILE_BYTES,
+    ReleaseFileError,
+    ReleaseStorageFullError,
+    valid_key,
+)
 from .store import (
     ManifestSignatureError,
     ManifestValidationError,
@@ -181,6 +186,8 @@ async def upload_release_file(
         )
     except ReleaseFileError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ReleaseStorageFullError as exc:
+        raise HTTPException(status_code=507, detail=str(exc)) from exc
     return ReleaseFileUploadResponse(sha256=sha256, filename=filename, created=created)
 
 

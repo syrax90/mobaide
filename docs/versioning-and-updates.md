@@ -587,9 +587,17 @@ update path no longer depends on GitHub.
   can keep it. A 404 carries `no-store`, so a miss is never cached.
 * **Storage.** Files live in `AGENT_RELEASE_DIR` (default
   `data/agent_releases`, inside the `central-server-data` volume in
-  production). Each upload keeps the newest 20 files and the files of the live
-  manifest, and deletes older ones. This leaves room to roll back about 10
-  releases. One file can be at most 32 MiB.
+  production). A release adds about 0.8 MB (tarball + wheel). Each upload
+  enforces these limits:
+  * at most 20 files and 128 MiB in total. The newest files stay, and so do the
+    files of the live manifest. This leaves room to roll back about 10
+    releases;
+  * at most 16 MiB for one file (HTTP 413);
+  * at least 1 GiB of free disk after the write, or the upload fails with
+    HTTP 507 and writes nothing;
+  * temp files from a killed upload are deleted after 1 hour.
+
+  Only the release token can write. Anonymous downloads never write to disk.
 * **Clients.** Agents and the install scripts download whatever URL the signed
   manifest names, and check the SHA-256. They need no change, and older agents
   work too.

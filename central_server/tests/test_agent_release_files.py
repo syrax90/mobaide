@@ -131,22 +131,93 @@ def _blob(i: int) -> tuple[str, bytes]:
     return hashlib.sha256(data).hexdigest(), data
 
 
+def _seed(store, tmp_path, blobs, name="f.whl"):
+    """Save blobs with strictly increasing mtimes, oldest first."""
+    for i, (sha, data) in enumerate(blobs):
+        store.save(sha, name, data)
+        os.utime(tmp_path / sha / name, (1000 + i, 1000 + i))
+
+
 def test_prune_keeps_newest_and_protected(tmp_path, monkeypatch):
     store = ReleaseFileStore(tmp_path)
     blobs = [_blob(i) for i in range(5)]
-    for i, (sha, data) in enumerate(blobs[:4]):
-        store.save(sha, "f.whl", data)
-        os.utime(tmp_path / sha, (1000 + i, 1000 + i))
+    _seed(store, tmp_path, blobs[:4])
     monkeypatch.setattr(release_files, "KEEP_RELEASE_FILES", 3)
 
     oldest = blobs[0][0]
     second = blobs[1][0]
     store.save(blobs[4][0], "f.whl", blobs[4][1], protected={oldest})
 
-    assert store.path_for(oldest, "f.whl") is not None
-    assert store.path_for(second, "f.whl") is None
-    for sha, _ in blobs[2:]:
-        assert store.path_for(sha, "f.whl") is not None
+    # The cap counts protected files too: oldest (protected), the new upload,
+    # and the newest remaining file make three.
+    kept = sorted(p.parent.name for p in tmp_path.glob("*/f.whl"))
+    assert kept == sorted([oldest, blobs[3][0], blobs[4][0]])
+    assert not (tmp_path / second).exists()
+
+
+def test_prune_enforces_total_byte_budget(tmp_path, monkeypatch):
+    store = ReleaseFileStore(tmp_path)
+    blobs = [
+        (hashlib.sha256(data).hexdigest(), data)
+        for data in (bytes([i]) * 100 for i in range(4))
+    ]
+    _seed(store, tmp_path, blobs[:3])
+    monkeypatch.setattr(release_files, "MAX_RELEASE_TOTAL_BYTES", 250)
+
+    store.save(blobs[3][0], "f.whl", blobs[3][1])
+
+    kept = sorted(p.parent.name for p in tmp_path.glob("*/f.whl"))
+    assert kept == sorted([blobs[2][0], blobs[3][0]])
+    assert sum(p.stat().st_size for p in tmp_path.rglob("*") if p.is_file()) <= 250
+
+
+def test_prune_counts_every_name_under_one_digest(tmp_path, monkeypatch):
+    store = ReleaseFileStore(tmp_path)
+    sha, data = _blob(0)
+    for i in range(5):
+        store.save(sha, f"name{i}.whl", data)
+        os.utime(tmp_path / sha / f"name{i}.whl", (1000 + i, 1000 + i))
+    monkeypatch.setattr(release_files, "KEEP_RELEASE_FILES", 2)
+
+    other_sha, other = _blob(1)
+    store.save(other_sha, "f.whl", other)
+
+    assert sorted(p.name for p in (tmp_path / sha).iterdir()) == ["name4.whl"]
+
+
+def test_prune_drops_stale_temp_files_only(tmp_path):
+    store = ReleaseFileStore(tmp_path)
+    sha, data = _blob(0)
+    store.save(sha, "f.whl", data)
+    stale = tmp_path / sha / ".upload-stale"
+    fresh = tmp_path / sha / ".upload-fresh"
+    stale.write_bytes(b"x" * 10)
+    fresh.write_bytes(b"x" * 10)
+    os.utime(stale, (1000, 1000))
+
+    other_sha, other = _blob(1)
+    store.save(other_sha, "f.whl", other)
+
+    assert not stale.exists()
+    assert fresh.exists()
+
+
+def test_save_refuses_when_disk_would_run_low(tmp_path, monkeypatch):
+    store = ReleaseFileStore(tmp_path)
+    free = release_files.shutil.disk_usage(tmp_path).free
+    monkeypatch.setattr(release_files, "MIN_FREE_BYTES", free + 1)
+    sha, data = _blob(0)
+
+    with pytest.raises(release_files.ReleaseStorageFullError):
+        store.save(sha, "f.whl", data)
+    assert not (tmp_path / sha).exists()
+
+
+@pytest.mark.asyncio
+async def test_upload_507_when_disk_would_run_low(client, release_app, monkeypatch):
+    monkeypatch.setattr(release_files, "MIN_FREE_BYTES", 1 << 62)
+    resp = await _put(client)
+    assert resp.status_code == 507
 
 
 def test_save_rejects_mismatch_without_writing(tmp_path):
